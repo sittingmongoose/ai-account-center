@@ -1184,9 +1184,11 @@ export component AccountSection inherits Plate {
     // reads probes only, never the rendered button, so it cannot oscillate.
     property <bool> hist-short: root.touch && root.section.kind == "claude"
         && 28px + 10px + meta-probe.preferred-width + 8px + 40px + 4px + hist-probe.preferred-width > root.inner-w;
-    meta-probe := RunsFlow {
+    // A single-line Runs, not the wrapping flow: its preferred width is the meta's true
+    // one-line need (a flex layout never reports max-content).
+    meta-probe := Runs {
         visible: false;
-        words: root.section.meta-words;
+        runs: root.section.meta-runs;
         size: Type.small;
         strong-weight: 600;
     }
