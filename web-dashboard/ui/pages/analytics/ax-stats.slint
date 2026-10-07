@@ -508,11 +508,13 @@ component TokSection inherits VerticalLayout {
                 min-height: 19px;
                 Text { text: t.tok; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; AxPress { tip: t.tok-tip; long-tip: t.tok-tip; } }
                 Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
-                VerticalLayout { alignment: center; ValueUnit { value: t.tok-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                VerticalLayout { alignment: center; horizontal-stretch: 0; ValueUnit { value: t.tok-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
                 Text { text: "and"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
                 Text { text: t.cost; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
                 if t.cost-share != "": Text { text: "·"; font-size: Type.small; color: Theme.ink-4; vertical-alignment: center; }
-                if t.cost-share != "": VerticalLayout { alignment: center; ValueUnit { value: t.cost-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                if t.cost-share != "": VerticalLayout { alignment: center; horizontal-stretch: 0; ValueUnit { value: t.cost-share; size: Type.small; weight: 400; ink: Theme.ink-2; unit-scale: 0.96; } }
+                // spare width goes here, never between the runs (task 9 O6)
+                Rectangle { horizontal-stretch: 1; }
             }
         }
     }
