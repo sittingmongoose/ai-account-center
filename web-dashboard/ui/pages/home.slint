@@ -867,6 +867,9 @@ export component AccountRow inherits Rectangle {
                             root.activate(root.account.activate-kind, root.account.profile);
                         }
                     }
+                    // 12 px under the grid: the sub-line clears the divider (H2) and the
+                    // highlight box (H4, O1). Line A and the open confirm box self-pad.
+                    if root.has-cells && !root.confirming: Rectangle { height: 12px; }
                 }
                 }
             }
