@@ -120,6 +120,23 @@ mode and timestamps through a new inode, and both accept that restored state.
 
 ## Manual and automatic control
 
+Coding plans are normalized only from reported plan/tier values; unknown values
+stay unchanged. The optional `antigravityPlan` account field describes the plan,
+model availability at the sample time and quota policy. Free and Google AI Plus
+have weekly quota only; Pro trial, paid Pro and Ultra have 5-hour and weekly
+windows. Ultra 5x and 20x remain distinct when explicitly reported. Workspace
+alone and Code Assist plans have no bundled Antigravity coding quota; Code
+Assist's Gemini CLI quota is separate and AAC does not read it. Enterprise
+Standard/Plus use pooled 7-day project credit; pay-as-you-go is metered.
+
+The dashboard shows Gemini and Claude/GPT pools separately, with `Weekly only`
+or `Not on plan` for known missing windows. AI credits are labelled
+`AI credits (overage)` and are used only after plan quota runs out when AI Credit
+Overages is on. AAC does not assume that setting is enabled. Details include
+the plan summary, available models and a reminder that family members sharing
+a Pro/Ultra plan may share one quota pool. Retired Claude 4.6 and GPT-OSS models
+leave the plan model list for samples from 2026-11-02 onward.
+
 Manual activation requires two separately verified saved account identities and
 supported native continuity. When the CLI is running, an explicit, one-use
 confirmation binds the exact reviewed processes and saved target account.

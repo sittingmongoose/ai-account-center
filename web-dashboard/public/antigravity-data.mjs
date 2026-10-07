@@ -1,6 +1,73 @@
 import { usageView, timeLabel } from './accounts-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
 
+const ANTIGRAVITY_COLUMNS = [
+  { key: 'gemini-5h', label: 'Gemini 5-hour' },
+  { key: 'gemini-weekly', label: 'Gemini weekly' },
+  { key: '3p-5h', label: 'Claude and GPT 5-hour' },
+  { key: '3p-weekly', label: 'Claude and GPT weekly' },
+];
+export function antigravityWindowLabel(window) {
+  return window?.key === 'google-ai-credits' ? 'AI credits (overage)'
+    : ANTIGRAVITY_COLUMNS.find(column => column.key === window?.key)?.label || window?.label || 'Usage';
+}
+/** Canonical provider bucket IDs identify display columns; extra windows keep their own labels. */
+export function antigravityColumns(accounts) {
+  const windows = accounts.flatMap(account => visibleUsageWindows('antigravity', account.windows))
+    .filter(window => !['balance', 'spend', 'extra_usage'].includes(window.kind) && window.unlimited !== true);
+  const canonical = windows.some(window => ANTIGRAVITY_COLUMNS.some(column => column.key === window.key));
+  const columns = canonical ? ANTIGRAVITY_COLUMNS.map(column => ({ ...column })) : [];
+  for (const window of windows)
+    if (!columns.some(column => column.key === window.key)) columns.push({ key: window.key, label: antigravityWindowLabel(window) });
+  return columns;
+}
+export function antigravityMissingWindow(account, key) {
+  const plan = account?.antigravityPlan;
+  if (['3p-5h', '3p-weekly'].includes(key) && plan?.thirdPartyModels === false) return 'Not on plan';
+  if (['gemini-5h', '3p-5h'].includes(key) && plan?.quotaPolicy === 'weekly') return 'Weekly only';
+  return 'Unavailable';
+}
+export function antigravityNoQuota(account) {
+  return account?.provider === 'antigravity' && account.antigravityPlan?.quotaPolicy === 'none'
+    && (!Array.isArray(account.windows) || account.windows.length === 0);
+}
+export function antigravityPlanFacts(account) {
+  const plan = account?.provider === 'antigravity' ? account.antigravityPlan : null;
+  if (!Array.isArray(plan?.models)) return [];
+  const models = plan.models.filter(model => typeof model === 'string');
+  const versions = [...new Set(models.flatMap(model => model.match(/^Claude (?:Sonnet|Opus) (\d+\.\d+)$/)?.[1] || []))].sort();
+  const groups = [
+    ...(models.some(model => model.startsWith('Gemini ')) ? ['Gemini'] : []),
+    ...(versions.length ? [`Claude ${versions.join('/')}`] : []),
+    ...(models.includes('GPT-OSS-120B') ? ['GPT-OSS'] : []),
+    ...models.filter(model => !model.startsWith('Gemini ') && !/^Claude (?:Sonnet|Opus) \d+\.\d+$/.test(model) && model !== 'GPT-OSS-120B'),
+  ];
+  return [{ label: 'Models', value: groups.length === 1 && groups[0] === 'Gemini' ? 'Gemini only' : groups.join('; ') || 'None', mono: false }];
+}
+export function antigravityPlanNote(account) {
+  const plan = account?.provider === 'antigravity' ? account.antigravityPlan : null;
+  if (!plan || typeof plan !== 'object') return '';
+  const paragraphs = [
+    typeof plan.summary === 'string' ? plan.summary : '',
+    Array.isArray(plan.models) ? `Models: ${plan.models.filter(model => typeof model === 'string').join(', ') || 'None'}` : '',
+    ['pro', 'ultra', 'ultra-5x', 'ultra-20x'].includes(plan.class) ? 'Family members sharing this plan may share one quota pool.' : '',
+  ].filter(Boolean);
+  // Explicit short lines give the existing Slint note its full height at narrow pane widths.
+  return paragraphs.flatMap(paragraph => {
+    const lines = [''];
+    for (const word of paragraph.split(/\s+/)) {
+      const last = lines.length - 1;
+      if (lines[last] && lines[last].length + word.length + 1 > 40) lines.push(word);
+      else lines[last] += `${lines[last] ? ' ' : ''}${word}`;
+    }
+    return lines;
+  }).join('\n');
+}
+export function antigravityCreditsHint(account) {
+  return account?.antigravityPlan?.creditsOverage === false ? 'Not usable for Antigravity on this plan.'
+    : 'Used only after the plan quota runs out, when AI Credit Overages is on.';
+}
+
 const profileId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value);
 const publicId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/.test(value);
 const date = value => typeof value === 'string' ? Date.parse(value) : NaN;
@@ -112,6 +179,7 @@ export function antigravityView(data, inventory, autoStatus, now = Date.now()) {
       const windows = allPools[index].get(previewId) || [];
       const five = windows.find(window => window.windowMinutes === 300), weekly = windows.find(window => window.windowMinutes === 10080);
       return { id: row.account.id, profile: row.profile.id, email: row.profile.email, plan: row.account.plan || row.profile.plan || '',
+        ...(row.account.antigravityPlan ? { antigravityPlan: row.account.antigravityPlan } : {}),
         selected: row.profile.selected, runtimeVerified: row.profile.runtimeVerified,
         canActivate: nativeAvailable(row, inventory) && !row.profile.selected && status?.activationInProgress !== true,
         status: (row.profile.selected ? row.profile.runtimeVerified ? 'Selected · running verified' : 'Selected · runtime unverified' : row.account.status === 'needs_sign_in' ? 'Sign-in needed' : row.profile.available ? 'Saved login' : 'Login unavailable') + ({ cached: ' · Cached', needs_sign_in: ' · Sign-in needed', unavailable: ' · Usage unavailable', error: ' · Refresh failed' }[row.account.status] || ''),
