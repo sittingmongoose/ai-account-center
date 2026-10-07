@@ -13,7 +13,8 @@ var CACHE = AacSwRoute.cacheName(BUILD_ID);
 var OFFLINE_PAGE =
   '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
   '<meta name="viewport" content="width=device-width,initial-scale=1">' +
-  '<meta name="theme-color" content="#ECF0F3">' +
+  '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ECF0F3">' +
+  '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0C1217">' +
   '<title>AI Account Center</title>' +
   '<style>html,body{margin:0;height:100%}body{display:flex;align-items:center;justify-content:center;' +
   'background:#ECF0F3;color:#15202B;font:15px/1.5 system-ui,sans-serif;text-align:center}' +
