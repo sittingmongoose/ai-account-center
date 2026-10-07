@@ -320,7 +320,7 @@ describe('additional account usage service', () => {
     expect(unavailable.windows).toEqual(initial.windows);
     expect(unavailable.fetchedAt).toBe(initial.fetchedAt);
     expect(unavailable.sampledAt).toBe(initial.sampledAt);
-    expect(unavailable.message).toContain('last successful Muse usage reading');
+    expect(unavailable.message).toBeNull();
     expect(museCalls).toBe(3);
     setTime(39_999);
     await service.get({ refresh: true });
@@ -456,6 +456,17 @@ describe('additional account usage service', () => {
     expect(account.status).toBe('cached');
     expect(account.message).toBe('Showing the last saved Muse usage sample.');
     expect(JSON.stringify(account)).not.toContain('PRIVATE_PASSWORD');
+  });
+
+  it('serves a message-less Muse cached reading without inventing an explanation', async () => {
+    const { service } = fixture({
+      runSource: async () => payload({ status: 'cached', message: null }),
+    });
+    const account = (await service.get()).find((row) => row.provider === 'muse')!;
+    expect(account.status).toBe('cached');
+    expect(account.message).toBeNull();
+    expect(account.sampledAt).toBe('2026-10-01T02:00:00.000Z');
+    expect(account.windows[0]?.usedPercent).toBe(23.5);
   });
 
   it('projects only safe fields and refuses all helper-selected capabilities and identifiers', async () => {
