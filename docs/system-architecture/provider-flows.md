@@ -80,7 +80,7 @@ app's own `Claude` folder, in any case) is never removed from the dashboard: Rem
 answers 409 `account_protected` whether the host steps are on or off.
 
 Claude desktop launch mappings remain in `claude-desktop-profiles.json`, using
-the existing `platyr`, `gmail`, `party` and `me` profile IDs. The optional
+the existing profile IDs. The optional
 `opencode-console-wallet-source.json` selects a distinct workspace wallet source.
 These configuration files contain private deployment state and are not shipped
 with the package. Bridges for [Muse/OpenCode](../../browser-bridge/opencode-muse/README.md)

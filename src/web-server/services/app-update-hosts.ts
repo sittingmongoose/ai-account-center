@@ -7,9 +7,16 @@ import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/n
 
 /**
  * How the dashboard reaches each computer's fixed update helper: the local
- * Ubuntu run, ssh to jared-mac and jared-windows, live progress streaming and
- * the checksum-gated helper sync. No configurable hosts, commands or paths.
+ * Ubuntu run, ssh to the fixed Mac and Windows aliases below, live progress
+ * streaming and the checksum-gated helper sync. No configurable hosts,
+ * commands or paths.
  */
+
+/** The fixed ssh aliases of the Mac and Windows computers. */
+export const APP_UPDATE_SSH_HOSTS: Readonly<Record<'mac' | 'windows', string>> = Object.freeze({
+  mac: 'jared-mac',
+  windows: 'jared-windows',
+});
 
 /** Total progress output accepted from one host; a runaway helper is stopped. */
 const MAX_STREAM = 1024 * 1024;
@@ -44,7 +51,7 @@ export function appUpdateInvocation(
         ...(review ? ['--agy-reviewed', review] : []),
       ],
     };
-  const host = platform === 'mac' ? 'jared-mac' : 'jared-windows';
+  const host = platform === 'mac' ? APP_UPDATE_SSH_HOSTS.mac : APP_UPDATE_SSH_HOSTS.windows;
   const reviewArgument = review ? ` --agy-reviewed '${review}'` : '';
   // AAC_UPDATE_PROGRESS asks the helper for line-by-line progress; a helper
   // that predates it ignores the variable and prints one final document.
@@ -331,7 +338,7 @@ function pushHelpers(host: string, extract: string): Promise<void> {
 export async function syncRemoteHelpers(platform: UpdatePlatform): Promise<void> {
   if (platform === 'ubuntu') return;
   const local = localHelperChecksums();
-  const host = platform === 'mac' ? 'jared-mac' : 'jared-windows';
+  const host = platform === 'mac' ? APP_UPDATE_SSH_HOSTS.mac : APP_UPDATE_SSH_HOSTS.windows;
   let deployed = '';
   try {
     deployed =

@@ -55,10 +55,10 @@ enum SignInCheck {
   // MARK: Every state, light and dark
 
   private static func renders() {
-    let address = URL(string: "http://192.168.50.10:3000")!
+    let address = URL(string: "http://192.168.10.10:3000")!
     let expected: [SignInState: [String]] = [
       .firstRun: ["Connect this Mac", "Dashboard address", "Continue", "home network"],
-      .password: ["Sign in to pair", "192.168.50.10:3000", "Change", "Username", "Password", "Pair this Mac", "mode 0600"],
+      .password: ["Sign in to pair", "192.168.10.10:3000", "Change", "Username", "Password", "Pair this Mac", "mode 0600"],
       .setupCode: ["Set up sign-in", "has no sign-in yet", "Confirm password", "Setup code", "Create sign-in and pair"],
       .pairing: ["Pairing this Mac", "Password checked", "Device key issued", "Saving the key", "Forgetting the password"],
       .notLocal: ["This address isn't on your local network", "Use the dashboard's local address", "home VPN", "Try again", "Nothing was sent"],
@@ -110,12 +110,12 @@ enum SignInCheck {
       && signIn.address.isEmpty && model.menuBarReading(TrayPreferences(defaults: UserDefaults(suiteName: "aac.signin.check") ?? .standard, persist: false)) == nil)
 
     // The refresh timer never resets what the person is typing, and never polls behind the screen.
-    signIn.address = "192.168.50.10:30"
+    signIn.address = "192.168.10.10:30"
     let ticked = Holder(false)
     Task { @MainActor in await model.tick(); ticked.value = true }
     wait { ticked.value }
     record("a refresh tick leaves the sign-in screen and its fields alone", signIn.active && signIn.state == .firstRun
-      && signIn.address == "192.168.50.10:30" && fake.count == 0)
+      && signIn.address == "192.168.10.10:30" && fake.count == 0)
 
     // 4: a public address is refused by the tray itself; nothing is sent.
     let sent = fake.count
@@ -151,17 +151,17 @@ enum SignInCheck {
 
     // 5: pairing turned off.
     fake.set { $0.trust = false }
-    signIn.address = "192.168.50.10:3000"
+    signIn.address = "192.168.10.10:3000"
     signIn.submit()
     wait { !signIn.busy && signIn.state != .wrongAddress }
     let off = read(signIn)
     record("5 trust off gives Pairing is turned off, read on screen", signIn.state == .pairingOff
-      && shows(off.text, ["Pairing is turned off for remote computers", "192.168.50.10:3000"]))
+      && shows(off.text, ["Pairing is turned off for remote computers", "192.168.10.10:3000"]))
     fake.set { $0.trust = true }
     signIn.submit()
     wait { !signIn.busy && signIn.state != .pairingOff }
     record("5 Try again after the owner turns it on goes to the password step", signIn.state == .password
-      && signIn.verified?.absoluteString == "http://192.168.50.10:3000")
+      && signIn.verified?.absoluteString == "http://192.168.10.10:3000")
 
     // 6: wrong password with tries left.
     signIn.username = "owner"
@@ -261,7 +261,7 @@ enum SignInCheck {
     wait { signIn.active }
     let gone = try? BarConnection.load(from: file)
     record("Disconnect revokes on the dashboard and shows the first run with the address", signIn.state == .firstRun
-      && signIn.disconnectedAt != nil && signIn.address == "http://192.168.50.10:3000" && gone?.isSignedOut == true
+      && signIn.disconnectedAt != nil && signIn.address == "http://192.168.10.10:3000" && gone?.isSignedOut == true
       && fake.paths.last == "/api/auth/devices/me" && shows(read(signIn).text, ["Disconnected at"]))
 
     // 7: the fifth failure pauses pairing; the countdown returns to the password step.
@@ -282,7 +282,7 @@ enum SignInCheck {
     // 2: a fresh dashboard asks for the setup code, then pairs.
     fake.set { $0.mode = "setup" }
     signIn.changeAddress()
-    signIn.address = "192.168.50.10:3000"
+    signIn.address = "192.168.10.10:3000"
     signIn.submit()
     wait { !signIn.busy && signIn.state == .setupCode }
     record("2 a dashboard without a sign-in asks for the setup code", signIn.state == .setupCode && signIn.codeRequired)
@@ -305,7 +305,7 @@ enum SignInCheck {
     let writer = makeSession(deployedFile)
     let deployed = Holder(false)
     Task { @MainActor in
-      if case .paired = await writer.pair(url: URL(string: "http://192.168.50.10:3000")!, username: "owner", password: "check-pass-1") {
+      if case .paired = await writer.pair(url: URL(string: "http://192.168.10.10:3000")!, username: "owner", password: "check-pass-1") {
         deployed.value = true
       }
     }
@@ -319,7 +319,7 @@ enum SignInCheck {
 
     // 9: a stored version 1 password is traded for a key by itself.
     let migrated = directory.appendingPathComponent("v1/accounts-connection.json")
-    try? ConnectionStore.save(BarConnection(baseURL: URL(string: "http://192.168.50.10:3000")!, username: "owner",
+    try? ConnectionStore.save(BarConnection(baseURL: URL(string: "http://192.168.10.10:3000")!, username: "owner",
       password: "summit-ledger-42"), to: migrated)
     let older = AccountsViewModel(preview: nil, session: makeSession(migrated))
     older.signIn.stepInterval = 0.02
@@ -334,7 +334,7 @@ enum SignInCheck {
     // 9 later: "Trust this local network" was off at launch, so the password login stayed. Once it is on, the refresh
     // path trades the password for a key within the hour, with no restart and no sign-in screen.
     let late = directory.appendingPathComponent("v1-late/accounts-connection.json")
-    try? ConnectionStore.save(BarConnection(baseURL: URL(string: "http://192.168.50.10:3000")!, username: "owner",
+    try? ConnectionStore.save(BarConnection(baseURL: URL(string: "http://192.168.10.10:3000")!, username: "owner",
       password: "summit-ledger-42"), to: late)
     fake.set { $0.trust = false }
     let lateSession = makeSession(late)
@@ -400,7 +400,7 @@ final class CheckDashboard: @unchecked Sendable {
     switch (method, url.path) {
     case ("GET", "/api/auth/check"), ("GET", "/api/auth/setup"):
       return (200, ["accessMode": mode, "configured": mode != "setup", "setupCodeRequired": mode == "setup",
-        "secureTransport": false, "trustedLocalNetwork": trust, "connection": ["peer": "192.168.50.23", "trusted": trust]])
+        "secureTransport": false, "trustedLocalNetwork": trust, "connection": ["peer": "192.168.10.23", "trusted": trust]])
     case ("POST", "/api/auth/setup"):
       guard mode == "setup" else { return (409, ["code": "already_configured"]) }
       guard (body["setupCode"] as? String)?.uppercased() == "K7QF-2MXD" else { return (403, ["code": "setup_code_invalid", "triesLeft": 4]) }

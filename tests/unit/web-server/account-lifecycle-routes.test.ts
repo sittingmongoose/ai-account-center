@@ -64,9 +64,9 @@ beforeEach(() => {
     JSON.stringify({
       version: 1,
       sources: [
-        { provider: 'cursor', platform: 'mac', sshHost: 'jared-mac' },
-        { provider: 'qwen', platform: 'windows', sshHost: 'jared-windows' },
-        { provider: 'kimi-code', platform: 'mac', sshHost: 'jared-mac' },
+        { provider: 'cursor', platform: 'mac', sshHost: 'mac-host' },
+        { provider: 'qwen', platform: 'windows', sshHost: 'windows-host' },
+        { provider: 'kimi-code', platform: 'mac', sshHost: 'mac-host' },
       ],
     })
   );
@@ -595,7 +595,7 @@ describe('API keys', () => {
 });
 
 describe('trusted local network (CONTRACT-auth-devices 2a rule 4)', () => {
-  const LAN = { 'x-test-peer': '192.168.50.20' };
+  const LAN = { 'x-test-peer': '192.168.10.20' };
   const MAPPED = { 'x-test-peer': '::ffff:10.6.0.2' };
   const PUBLIC = { 'x-test-peer': '203.0.113.9' };
   const trust = (enabled: boolean) =>
@@ -1181,7 +1181,7 @@ describe('sign-in and guides', () => {
       path.join(ccsDir, 'account-usage-sources.json'),
       JSON.stringify({
         version: 1,
-        sources: [{ provider: 'muse', platform: 'mac', sshHost: 'jared-mac' }],
+        sources: [{ provider: 'muse', platform: 'mac', sshHost: 'mac-host' }],
       })
     );
     const off = await fixture();
@@ -1236,7 +1236,7 @@ describe('sign-in and guides', () => {
       registry.accounts.find((entry: { id: string }) => entry.id === 'cursor:usage')
     ).toMatchObject({
       platform: 'mac',
-      sshHost: 'jared-mac',
+      sshHost: 'mac-host',
       createdBy: null,
     });
   });
@@ -1313,7 +1313,7 @@ describe('registry, re-check, open, label and trash', () => {
     expect((await f.request('POST', '/cursor:usage/open', { platform: 'mac' })).body).toEqual({
       opened: true,
     });
-    expect(f.opened).toEqual(['jared-mac']);
+    expect(f.opened).toEqual(['mac-host']);
     const windows = await f.request('POST', '/cursor:usage/open', { platform: 'windows' });
     expect([windows.status, windows.body.code]).toEqual([409, 'not_configured']);
     const label = await f.request('PATCH', '/zai:usage', { label: 'Work' });
@@ -1347,12 +1347,12 @@ describe('registry, re-check, open, label and trash', () => {
             launcherPath: '/Applications/Claude.app',
             profilePath: '/fake/mac/Claude',
             isDefault: true,
-            sshHost: 'jared-mac',
+            sshHost: 'mac-host',
           },
           windows: {
             launcherName: 'h',
             profilePath: 'C:\\x\\Claude-home',
-            sshHost: 'jared-windows',
+            sshHost: 'windows-host',
           },
         },
       ],
@@ -1398,7 +1398,7 @@ describe('registry, re-check, open, label and trash', () => {
               launcherPath: '/Applications/Claude.app',
               profilePath: '/fake/mac/Claude',
               isDefault: true,
-              sshHost: 'jared-mac',
+              sshHost: 'mac-host',
             },
           },
         ],
@@ -1426,12 +1426,12 @@ describe('registry, re-check, open, label and trash', () => {
               launcherName: 'p',
               launcherPath: '/a',
               profilePath: '/fake/mac/Claude-party',
-              sshHost: 'jared-mac',
+              sshHost: 'mac-host',
             },
             windows: {
               launcherName: 'p',
               profilePath: 'C:\\x\\Claude-party',
-              sshHost: 'jared-windows',
+              sshHost: 'windows-host',
             },
           },
         ],
@@ -1493,12 +1493,12 @@ describe('registry, re-check, open, label and trash', () => {
               launcherName: 'p',
               launcherPath: '/a',
               profilePath: '/fake/mac/Claude-party',
-              sshHost: 'jared-mac',
+              sshHost: 'mac-host',
             },
             windows: {
               launcherName: 'p',
               profilePath: 'C:\\x\\Claude-party',
-              sshHost: 'jared-windows',
+              sshHost: 'windows-host',
             },
           },
         ],
@@ -1546,12 +1546,12 @@ describe('registry, re-check, open, label and trash', () => {
               launcherName: 'p',
               launcherPath: '/a',
               profilePath: '/fake/mac/Claude-party',
-              sshHost: 'jared-mac',
+              sshHost: 'mac-host',
             },
             windows: {
               launcherName: 'p',
               profilePath: 'C:\\x\\Claude-party',
-              sshHost: 'jared-windows',
+              sshHost: 'windows-host',
             },
           },
         ],

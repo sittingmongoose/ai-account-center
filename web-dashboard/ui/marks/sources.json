@@ -351,7 +351,7 @@
      "png256": "out/png/kimi-code-light@256.png"
     }
    },
-   "decision": "2026-10-01 Jared: use the official Kimi Code app icon with its plate (docs Kimi.png); the bare K glyph is retired."
+   "decision": "2026-10-01 owner decision: use the official Kimi Code app icon with its plate (docs Kimi.png); the bare K glyph is retired."
   },
   "qwen": {
    "scale": 0.93,

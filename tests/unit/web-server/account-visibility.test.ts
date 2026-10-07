@@ -49,7 +49,7 @@ describe('account visibility store', () => {
     });
     const saved = await writeAccountVisibility(dir, {
       hiddenProviders: ['kimi-code'],
-      hiddenAccountIds: ['codex:lexxmariah', 'plan-opencode-go-console-mac-0123456789ab'],
+      hiddenAccountIds: ['codex:lime', 'plan-opencode-go-console-mac-0123456789ab'],
       trayHiddenProviders: ['qwen'],
       trayHiddenAccountIds: ['codex:party'],
     });
@@ -341,7 +341,7 @@ describe('GET and PUT /api/accounts/visibility', () => {
     const { dir, url, put, audits, changes } = await fixture();
     const body = {
       hiddenProviders: ['kimi-code'],
-      hiddenAccountIds: ['codex:lexxmariah'],
+      hiddenAccountIds: ['codex:lime'],
       trayHiddenProviders: ['qwen'],
       trayHiddenAccountIds: ['codex:party'],
     };
@@ -358,7 +358,7 @@ describe('GET and PUT /api/accounts/visibility', () => {
     expect(audits).toEqual([
       { hiddenProviders: 1, hiddenAccountIds: 1, trayHiddenProviders: 1, trayHiddenAccountIds: 1 },
     ]);
-    expect(JSON.stringify(audits)).not.toContain('lexxmariah');
+    expect(JSON.stringify(audits)).not.toContain('lime');
     expect(JSON.stringify(audits)).not.toContain('party');
   });
 
@@ -383,17 +383,17 @@ describe('GET and PUT /api/accounts/visibility', () => {
       trayHiddenProviders: ['qwen', 'zai'],
       trayHiddenAccountIds: [],
     });
-    expect((await put({ hiddenAccountIds: ['codex:lexxmariah'] })).status).toBe(200);
+    expect((await put({ hiddenAccountIds: ['codex:lime'] })).status).toBe(200);
     expect(await get()).toEqual({
       hiddenProviders: ['kimi-code'],
-      hiddenAccountIds: ['codex:lexxmariah'],
+      hiddenAccountIds: ['codex:lime'],
       trayHiddenProviders: ['qwen', 'zai'],
       trayHiddenAccountIds: [],
     });
     expect((await put({ trayHiddenAccountIds: ['codex:party'] })).status).toBe(200);
     expect(await get()).toEqual({
       hiddenProviders: ['kimi-code'],
-      hiddenAccountIds: ['codex:lexxmariah'],
+      hiddenAccountIds: ['codex:lime'],
       trayHiddenProviders: ['qwen', 'zai'],
       trayHiddenAccountIds: ['codex:party'],
     });
@@ -401,7 +401,7 @@ describe('GET and PUT /api/accounts/visibility', () => {
     expect((await put({ trayHiddenProviders: [] })).status).toBe(200);
     expect(await get()).toEqual({
       hiddenProviders: ['kimi-code'],
-      hiddenAccountIds: ['codex:lexxmariah'],
+      hiddenAccountIds: ['codex:lime'],
       trayHiddenProviders: [],
       trayHiddenAccountIds: ['codex:party'],
     });

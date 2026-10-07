@@ -148,7 +148,7 @@ describe('Codex native profile quota DTO', () => {
       listProfiles: async () => [
         { name: 'gmail', authValid: true },
         { name: 'party', authValid: false },
-        { name: 'lexxmariah', authValid: true },
+        { name: 'lime', authValid: true },
       ],
       getRows: async () => [
         row('gmail', { quotaStatus: 'error', needsReauth: true, quotaWindows: [] }),

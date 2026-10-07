@@ -21,8 +21,8 @@ import {
   type Harness,
 } from './dashboard-auth-harness';
 
-const PRIVATE_PEER = '192.168.50.20';
-const PRIVATE_HOST = '192.168.50.10:3000';
+const PRIVATE_PEER = '192.168.10.20';
+const PRIVATE_HOST = '192.168.10.10:3000';
 const PUBLIC_PEER = '203.0.113.9';
 const NEW_PASSWORD = 'second-fixture-password';
 const ON = { trust_local_network: true };
@@ -137,7 +137,7 @@ describe('sensitive auth routes from a private peer', () => {
     harness = await startAuthHarness({ mode: 'setup' });
     const code = await prepareFirstRunSetupCode(() => undefined);
     atPeer(harness, PRIVATE_PEER);
-    const body = { username: 'jared-admin', password: NEW_PASSWORD };
+    const body = { username: 'owner-admin', password: NEW_PASSWORD };
     const off = await new Client(harness).send('POST', '/api/auth/setup', {
       ...body,
       setupCode: code,
@@ -191,7 +191,7 @@ describe('peers the switch never trusts', () => {
   it('a reverse proxy on the LAN, for the clients behind it', async () => {
     harness = await startAuthHarness({ dashboardNetwork: ON });
     const token = String((await pairTray(harness)).body.token);
-    atPeer(harness, '192.168.50.2');
+    atPeer(harness, '192.168.10.2');
     for (const headers of [
       { 'x-forwarded-for': PUBLIC_PEER },
       { forwarded: `for=${PUBLIC_PEER};proto=http` },
@@ -205,7 +205,7 @@ describe('peers the switch never trusts', () => {
       expect([headers, check.body.secureTransport, check.body.connection]).toEqual([
         headers,
         false,
-        { peer: '192.168.50.2', trusted: false },
+        { peer: '192.168.10.2', trusted: false },
       ]);
       const pair = await pairTray(harness, { deviceName: 'fixture-proxied', platform: 'mac' });
       expect([headers, pair.status, pair.body.code]).toEqual([
@@ -224,7 +224,7 @@ describe('peers the switch never trusts', () => {
     harness.peer.headers = {};
     expect((await new Client(harness).send('GET', '/api/auth/check')).body).toMatchObject({
       secureTransport: true,
-      connection: { peer: '192.168.50.2', trusted: true },
+      connection: { peer: '192.168.10.2', trusted: true },
     });
   });
 });

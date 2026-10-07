@@ -39,7 +39,7 @@ test('Slint optical scales match the published sources.json scales', () => {
   for (const [id, entry] of Object.entries(sources.providers)) {
     assert.ok(id in SCALES, `no Slint scale for "${id}"`);
     if (id === 'kimi-code') {
-      // Jared's pick: the official app icon on its own plate, drawn 14% smaller than the
+      // the owner's pick: the official app icon on its own plate, drawn 14% smaller than the
       // measured scale so it carries the same visual mass as the open glyphs.
       assert.equal(SCALES[id], '0.97 * 0.86', `Kimi plate correction changed: ${SCALES[id]}`);
       continue;

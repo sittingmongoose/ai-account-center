@@ -411,7 +411,7 @@ describe('remote command quoting', () => {
     ({
       provider: 'zai',
       platform: 'mac',
-      sshHost: 'jared-mac',
+      sshHost: 'mac-host',
       account: {
         id: 'zai:acct:9f2c41d0',
         label: null,
@@ -421,7 +421,7 @@ describe('remote command quoting', () => {
     }) as AdditionalUsageSource;
 
   it('keeps the version 1 commands byte for byte', () => {
-    expect(remoteCommand({ provider: 'zai', platform: 'mac', sshHost: 'jared-mac' })).toBe(
+    expect(remoteCommand({ provider: 'zai', platform: 'mac', sshHost: 'mac-host' })).toBe(
       `/usr/bin/python3 "$HOME/.ccs/account-usage/plan_usage.py" --provider 'zai' --platform 'mac'`
     );
     const windows = remoteCommand({ provider: 'qwen', platform: 'windows', sshHost: 'w' });
@@ -447,8 +447,8 @@ describe('remote command quoting', () => {
 
   it('throws for a provider or platform value outside the pattern', () => {
     for (const source of [
-      { provider: "zai'; id; '", platform: 'mac', sshHost: 'jared-mac' },
-      { provider: 'zai', platform: 'mac os', sshHost: 'jared-mac' },
+      { provider: "zai'; id; '", platform: 'mac', sshHost: 'mac-host' },
+      { provider: 'zai', platform: 'mac os', sshHost: 'mac-host' },
     ]) {
       expect(() => remoteCommand(source as unknown as AdditionalUsageSource)).toThrow(
         AdditionalUsageTransportError
@@ -484,7 +484,7 @@ describe('the shared helper credential fixture', () => {
         const command = remoteCommand({
           provider: provider as AdditionalUsageSource['provider'],
           platform: 'mac',
-          sshHost: 'jared-mac',
+          sshHost: 'mac-host',
         });
         expect({ provider, command }).toEqual({
           provider,
