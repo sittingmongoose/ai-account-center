@@ -145,7 +145,7 @@ installer's logon task), Keyboard shortcut, read-only facts from the dashboard (
 auto-switch, providers hidden in the trays, address) and About (version, third-party notices, Quit).
 
 **Connection** reads "Paired as Windows tray, last synced 20s ago", then this PC and the saved address, then "This
-connection: 192.168.50.31, trusted local network" (or "not trusted"), as the dashboard sees this computer right now
+connection: 192.168.10.31, trusted local network" (or "not trusted"), as the dashboard sees this computer right now
 (`GET /api/auth/check`, read when Settings opens), so you can confirm once that the home VPN counts. **Re-pair** opens
 the password step with Cancel: the current key keeps working until Pair is pressed, and pairing again with the same
 install id revokes the old key. **Disconnect** asks inline, then calls `DELETE /api/auth/devices/me`, forgets the

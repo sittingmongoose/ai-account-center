@@ -87,7 +87,7 @@ public static partial class Checks
             }
             report.Checks["signin_public_address_refused_before_anything_is_sent"] = view.Model.State == SignInState.NotLocal && view.TitleText == "This address isn't on your local network"
                 && view.LedeText.Contains("is a public address", StringComparison.Ordinal) && view.RegionOpen("guide") && view.Addr.Bad && fixture.Requests.Count == 0;
-            report.Checks["local_network_ranges_match_the_dashboard"] = new[] { "10.6.0.9", "192.168.50.20", "172.16.0.1", "172.31.255.255", "127.0.0.1", "fd00::5", "::ffff:192.168.1.4", "localhost", "ubuntu-vm", "dash.local", "dash.lan", "dash.home.arpa" }.All(LocalNetwork.IsLocalHostName)
+            report.Checks["local_network_ranges_match_the_dashboard"] = new[] { "10.6.0.9", "192.168.10.20", "172.16.0.1", "172.31.255.255", "127.0.0.1", "fd00::5", "::ffff:192.168.1.4", "localhost", "ubuntu-vm", "dash.local", "dash.lan", "dash.home.arpa" }.All(LocalNetwork.IsLocalHostName)
                 && !new[] { "203.0.113.5", "100.64.1.2", "169.254.3.4", "172.32.0.1", "2001:db8::1", "fe80::1", "home.example.net", "0.0.0.0" }.Any(LocalNetwork.IsLocalHostName);
             view.Addr.Value = ClosedLoopbackOrigin();
             await Submit(first);
@@ -184,7 +184,7 @@ public static partial class Checks
             report.Checks["settings_connection_paired_lines"] = whoText.StartsWith("Paired as Windows tray, last synced", StringComparison.Ordinal) && via?.Text == "This connection: 192.168.1.31, trusted local network"
                 && first.SettingsElement("settings-repair") is not null && first.SettingsElement("settings-disconnect") is not null;
             report.Checks["this_connection_line_forms"] = MainWindow.ConnectionLine(new AuthCheck { Connection = new AuthConnection { Peer = "10.6.0.3", Trusted = true } }) == "This connection: 10.6.0.3, trusted local network"
-                && MainWindow.ConnectionLine(new AuthCheck { Connection = new AuthConnection { Peer = "192.168.50.31", Trusted = false } }) == "This connection: 192.168.50.31, not trusted"
+                && MainWindow.ConnectionLine(new AuthCheck { Connection = new AuthConnection { Peer = "192.168.10.31", Trusted = false } }) == "This connection: 192.168.10.31, not trusted"
                 && MainWindow.ConnectionLine(new AuthCheck { SecureTransport = true, Connection = new AuthConnection { Peer = "127.0.0.1" } }) == "This connection: this computer"
                 && MainWindow.ConnectionLine(new AuthCheck()) == "This connection: not reported by this dashboard";
             first.CloseSettings(animate: false);

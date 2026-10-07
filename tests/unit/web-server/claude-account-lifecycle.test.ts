@@ -138,9 +138,9 @@ function setup(enabled = true) {
           launcherName: 'Claude-gmail',
           launcherPath: '/fake/mac/Claude (gmail@example.com).app',
           profilePath: '/fake/mac/Claude-gmail',
-          sshHost: 'jared-mac',
+          sshHost: 'mac-host',
         },
-        windows: { launcherName: 'Claude', isDefault: true, sshHost: 'jared-windows' },
+        windows: { launcherName: 'Claude', isDefault: true, sshHost: 'windows-host' },
       },
       {
         id: 'party',
@@ -149,13 +149,13 @@ function setup(enabled = true) {
           launcherName: 'Claude-party',
           launcherPath: '/fake/mac/Claude (party@example.com).app',
           profilePath: '/fake/mac/Claude-party',
-          sshHost: 'jared-mac',
+          sshHost: 'mac-host',
         },
         windows: {
           launcherName: 'Claude (party)',
           launcherPath: 'C:\\Users\\x\\Desktop\\Claude (party@example.com).lnk',
           profilePath: 'C:\\Users\\x\\AppData\\Roaming\\Claude-party',
-          sshHost: 'jared-windows',
+          sshHost: 'windows-host',
         },
       },
     ],
@@ -195,8 +195,8 @@ describe('Claude Add', () => {
       label: 'Work 2',
       createdAt: '2026-10-02T08:00:00Z',
     });
-    expect(profile.mac.sshHost).toBe('jared-mac');
-    expect(profile.windows.sshHost).toBe('jared-windows');
+    expect(profile.mac.sshHost).toBe('mac-host');
+    expect(profile.windows.sshHost).toBe('windows-host');
     expect(hosts.calls).toEqual(['create:mac', 'create:windows']);
     const pending = path.join(ccsDir, 'accounts', 'claude-pending.json');
     expect(fs.statSync(pending).mode & 0o777).toBe(0o600);
@@ -278,7 +278,7 @@ describe('Claude Add', () => {
       ['party', 'party@example.com'],
       ['work2', 'work2@example.com'],
     ]);
-    expect(parsed[2].mac?.sshHost).toBe('jared-mac');
+    expect(parsed[2].mac?.sshHost).toBe('mac-host');
     expect(await lifecycle.confirmPending('work2', 'work2@example.com')).toBe(false);
   });
 
@@ -335,7 +335,7 @@ describe('Pending profiles open on both hosts', () => {
       launcherName: 'Claude (work2)',
       launcherPath: '/fake/mac/Claude (work2).app',
       profilePath: '/fake/mac/Claude-work2',
-      sshHost: 'jared-mac',
+      sshHost: 'mac-host',
     });
     await openClaudeDesktopProfile('work2', 'windows');
     expect(windowsOpen).toHaveBeenCalledTimes(1);
@@ -344,7 +344,7 @@ describe('Pending profiles open on both hosts', () => {
         launcherName: 'Claude (work2)',
         launcherPath: '/fake/windows/Claude (work2).app',
         profilePath: '/fake/windows/Claude-work2',
-        sshHost: 'jared-windows',
+        sshHost: 'windows-host',
       },
       'work2',
       // The launcher's account list is rebuilt from the current profiles in the same call:
@@ -393,12 +393,12 @@ describe('Claude Remove and trash', () => {
       mac: {
         launcherName: 'Claude',
         profilePath: '/Users/x/Library/Application Support/Claude/',
-        sshHost: 'jared-mac',
+        sshHost: 'mac-host',
       },
       windows: {
         launcherName: 'Claude (desk)',
         profilePath: 'C:\\Users\\x\\AppData\\Roaming\\Claude-desk',
-        sshHost: 'jared-windows',
+        sshHost: 'windows-host',
       },
     });
     fs.writeFileSync(
@@ -438,14 +438,14 @@ describe('Claude Remove and trash', () => {
     const launcher = (profilePath: string) => ({
       launcherName: 'Claude',
       profilePath,
-      sshHost: 'jared-mac',
+      sshHost: 'mac-host',
     });
     expect(
       inventoryRecord({
         id: 'desk',
         windows: {
           ...launcher('C:\\Users\\x\\AppData\\Roaming\\Claude'),
-          sshHost: 'jared-windows',
+          sshHost: 'windows-host',
         },
       })?.isDefault
     ).toBe(true);
@@ -461,7 +461,7 @@ describe('Claude Remove and trash', () => {
         id: 'odd',
         label: null,
         mac: launcher('/x/claude'),
-        windows: { ...launcher('C:\\x\\Claude-odd'), sshHost: 'jared-windows' },
+        windows: { ...launcher('C:\\x\\Claude-odd'), sshHost: 'windows-host' },
         createdAt: '2026-10-02T08:00:00Z',
       }).isDefault
     ).toBe(true);
@@ -470,7 +470,7 @@ describe('Claude Remove and trash', () => {
         id: 'work2',
         label: null,
         mac: launcher('/x/Claude-work2'),
-        windows: { ...launcher('C:\\x\\Claude-work2'), sshHost: 'jared-windows' },
+        windows: { ...launcher('C:\\x\\Claude-work2'), sshHost: 'windows-host' },
         createdAt: '2026-10-02T08:00:00Z',
       }).isDefault
     ).toBe(false);

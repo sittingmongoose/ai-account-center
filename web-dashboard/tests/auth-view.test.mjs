@@ -20,7 +20,7 @@ test('password strength is a hint with the concept levels', () => {
 });
 
 test('the first-run form checks the username, password, confirmation and code', () => {
-  const ok = { username: 'jared', password: 'summit-ledger-42', confirm: 'summit-ledger-42', code: 'K7QF-2MXD' };
+  const ok = { username: 'operator', password: 'summit-ledger-42', confirm: 'summit-ledger-42', code: 'K7QF-2MXD' };
   assert.equal(validateSetup(ok), null);
   assert.equal(validateSetup(ok, { codeRequired: true }), null);
   assert.equal(validateSetup({ ...ok, username: '1x' })[0], 'user');

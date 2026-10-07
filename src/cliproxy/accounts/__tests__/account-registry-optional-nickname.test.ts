@@ -119,39 +119,39 @@ describe('registerAccount optional nickname flow', () => {
 
   it('treats duplicate Codex emails as distinct accounts and rejects bare-email lookups', async () => {
     const result = await withIsolatedHome(async (homeDir) => {
-      writeTokenFile(homeDir, 'codex-04a0f049-kaidu.kd@gmail.com-team.json');
-      writeTokenFile(homeDir, 'codex-kaidu.kd@gmail.com-free.json');
+      writeTokenFile(homeDir, 'codex-04a0f049-shared.user@example.com-team.json');
+      writeTokenFile(homeDir, 'codex-shared.user@example.com-free.json');
       const { registerAccount, getProviderAccounts, findAccountByQuery } =
         await loadAccountManager();
       const team = registerAccount(
         'codex',
-        'codex-04a0f049-kaidu.kd@gmail.com-team.json',
-        'kaidu.kd@gmail.com'
+        'codex-04a0f049-shared.user@example.com-team.json',
+        'shared.user@example.com'
       );
       const free = registerAccount(
         'codex',
-        'codex-kaidu.kd@gmail.com-free.json',
-        'kaidu.kd@gmail.com'
+        'codex-shared.user@example.com-free.json',
+        'shared.user@example.com'
       );
 
       return {
         team,
         free,
         accounts: getProviderAccounts('codex'),
-        ambiguousLookup: findAccountByQuery('codex', 'kaidu.kd@gmail.com'),
-        teamLookup: findAccountByQuery('codex', 'kaidu.kd@gmail.com#04a0f049-team'),
+        ambiguousLookup: findAccountByQuery('codex', 'shared.user@example.com'),
+        teamLookup: findAccountByQuery('codex', 'shared.user@example.com#04a0f049-team'),
         freeLookup: findAccountByQuery('codex', free.id),
       };
     });
 
-    expect(result.team.id).toBe('kaidu.kd@gmail.com');
-    expect(result.free.id).toBe('kaidu.kd@gmail.com#free');
+    expect(result.team.id).toBe('shared.user@example.com');
+    expect(result.free.id).toBe('shared.user@example.com#free');
     expect(result.accounts.map((account) => account.id).sort()).toEqual([
-      'kaidu.kd@gmail.com#04a0f049-team',
-      'kaidu.kd@gmail.com#free',
+      'shared.user@example.com#04a0f049-team',
+      'shared.user@example.com#free',
     ]);
     expect(result.ambiguousLookup).toBeNull();
-    expect(result.teamLookup?.id).toBe('kaidu.kd@gmail.com#04a0f049-team');
-    expect(result.freeLookup?.id).toBe('kaidu.kd@gmail.com#free');
+    expect(result.teamLookup?.id).toBe('shared.user@example.com#04a0f049-team');
+    expect(result.freeLookup?.id).toBe('shared.user@example.com#free');
   });
 });

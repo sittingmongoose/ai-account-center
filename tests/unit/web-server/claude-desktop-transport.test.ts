@@ -83,7 +83,7 @@ describe('Claude desktop transport', () => {
     expect(command).not.toContain('credentials');
   });
 
-  it.each(['gmail', 'platyr', 'party', 'me', 'work', 'added-profile'])(
+  it.each(['gmail', 'plum', 'party', 'me', 'work', 'added-profile'])(
     'starts only the fixed same-user limited interactive Windows task for %s',
     async (id) => {
       const exec = mockSsh();

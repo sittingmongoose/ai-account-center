@@ -671,7 +671,7 @@ test('Muse Sign in opens a device-code job on the Mac once the server offers it'
 test('the Sign-in & connection block: other browsers, network trust, devices and sign out all devices', async () => {
   const session = { username: 'owner', otherBrowsers: 2, managedBy: 'config', secureTransport: true };
   const devices = [{ id: 'dev_0123456789abcdef', name: 'Mac tray', platform: 'mac' }, { id: 'dev_fedcba9876543210', name: 'Windows tray', platform: 'windows' }];
-  const network = { trustLocalNetwork: true, trustedNetworks: [], connection: { peer: '192.168.50.20', trusted: true }, canTurnOn: false };
+  const network = { trustLocalNetwork: true, trustedNetworks: [], connection: { peer: '192.168.10.20', trusted: true }, canTurnOn: false };
   const h = harness({ routes: {
     'GET /api/auth/session': session, 'GET /api/auth/devices': { devices }, 'GET /api/auth/network': network,
     'POST /api/auth/sessions/revoke-others': { signedOutBrowsers: 2 },
@@ -711,7 +711,7 @@ test('the Sign-in & connection block: other browsers, network trust, devices and
 
 test('Turn off hands the saved trust to the bridge, so the sign-in page note follows it', async () => {
   const seen = [];
-  const network = { trustLocalNetwork: true, trustedNetworks: [], connection: { peer: '192.168.50.20', trusted: true }, canTurnOn: false };
+  const network = { trustLocalNetwork: true, trustedNetworks: [], connection: { peer: '192.168.10.20', trusted: true }, canTurnOn: false };
   const h = harness({ networkChanged: async view => { seen.push(view); }, routes: {
     'PUT /api/auth/network': body => ({ ...network, trustLocalNetwork: body.trustLocalNetwork, connection: { ...network.connection, trusted: body.trustLocalNetwork } }),
     'GET /api/auth/session': {}, 'GET /api/auth/devices': { devices: [] }, 'GET /api/auth/network': { ...network, trustLocalNetwork: false, connection: { ...network.connection, trusted: false } },

@@ -28,6 +28,23 @@ Preserve authentication/origin/session checks, target-bound activation approvals
 idle-only auto-switch, identity-bound caches, private atomic writes, migrations
 and rollback. Polling and startup must not launch app updates or mutate accounts.
 
+### No personal details in the repository
+
+The repository is public. Docs, comments, fixtures and examples use neutral
+placeholders: profile names such as `work`, `personal`, `alt` or `plum`, hosts
+such as `mac-host` and `windows-host`, emails such as `user@example.com`,
+private addresses such as `192.168.10.x`, and `192.0.2.x` for documentation
+addresses. Never use a real account, computer, email, home path or home-network
+address.
+
+[personal-detail-guard](../scripts/personal-detail-guard.js) enforces this. It
+keeps only SHA-256 hashes of the blocked lowercased words and IPv4 /24 prefixes,
+hashes every word and address prefix in each tracked text file (binary files and
+`node_modules` are skipped) and fails on a match. It runs in the pre-push CI
+parity gate and in CI (`bun run check:personal`, about 2 s). To block another
+value, add its hash; never write the value itself. Product code that still
+depends on a value is listed in the guard's allowlist with an exact count.
+
 ## Verification
 
 Run focused offline tests and the relevant TypeScript gate. Dashboard changes

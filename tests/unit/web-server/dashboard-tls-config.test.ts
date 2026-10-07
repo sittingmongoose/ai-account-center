@@ -270,7 +270,7 @@ describe('dashboard_tls', () => {
     };
     config.dashboard_auth = {
       enabled: true,
-      username: 'jared',
+      username: 'operator',
       password_hash: '$2b$04$abcdefghijklmnopqrstuuJ8bS1kq5v2yHq9w1Ue2o0m6Yt1yF6xK',
       session_timeout_hours: 24,
       password_changed_at: '2026-10-02T12:00:00.000Z',

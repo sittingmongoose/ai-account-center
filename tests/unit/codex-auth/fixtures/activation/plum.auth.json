@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "id_token": "eyJhbGciOiAibm9uZSIsICJ0eXAiOiAiSldUIn0.eyJlbWFpbCI6ICJwbHVtQGV4YW1wbGUudGVzdCIsICJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOiB7ImNoYXRncHRfcGxhbl90eXBlIjogInBybyIsICJjaGF0Z3B0X2FjY291bnRfaWQiOiAiZml4dHVyZS1wbHVtIn19.fakesig",
+    "access_token": "fake-access-plum",
+    "refresh_token": "fake-refresh-plum"
+  },
+  "last_refresh": "2026-09-30T00:00:00Z"
+}

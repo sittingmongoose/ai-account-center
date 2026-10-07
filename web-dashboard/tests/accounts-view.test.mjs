@@ -1431,7 +1431,7 @@ test('connection facts and the sign-in block say only what the browser and serve
   assert.equal(
     transportNote('http', {
       trustedLocalNetwork: true,
-      connection: { peer: '192.168.50.20', trusted: true },
+      connection: { peer: '192.168.10.20', trusted: true },
     }),
     TRUSTED_NOTE
   );
@@ -1475,7 +1475,7 @@ test('connection facts and the sign-in block say only what the browser and serve
     network: {
       trustLocalNetwork: true,
       trustedNetworks: ['192.168.0.0/16'],
-      connection: { peer: '192.168.50.20', trusted: true },
+      connection: { peer: '192.168.10.20', trusted: true },
       canTurnOn: false,
     },
     pw: {
@@ -1521,7 +1521,7 @@ test('connection facts and the sign-in block say only what the browser and serve
     vm.signin.devices[0].sub,
     /^Mac · version 2\.1 · last seen 2m ago from 192\.0\.2\.20$/
   );
-  assert.equal(vm.signin.network.line, 'This connection: 192.168.50.20, trusted local network');
+  assert.equal(vm.signin.network.line, 'This connection: 192.168.10.20, trusted local network');
   assert.equal(vm.signin.network.note, TRUSTED_NOTE);
   assert.deepEqual(
     [vm.signin.network.act, vm.signin.network.actLabel],
@@ -1534,13 +1534,13 @@ test('connection facts and the sign-in block say only what the browser and serve
   const turnedOff = accountsViewModel(data([account()]), {
     now,
     transport: 'http',
-    check: { trustedLocalNetwork: true, connection: { peer: '192.168.50.20', trusted: true } },
+    check: { trustedLocalNetwork: true, connection: { peer: '192.168.10.20', trusted: true } },
     signin: {
       ...signin,
       network: {
         ...signin.network,
         trustLocalNetwork: false,
-        connection: { peer: '192.168.50.20', trusted: false },
+        connection: { peer: '192.168.10.20', trusted: false },
       },
     },
   });
@@ -1549,14 +1549,14 @@ test('connection facts and the sign-in block say only what the browser and serve
   const turnedOffFlow = accountsViewModel(data([account()]), {
     now,
     transport: 'http',
-    check: { trustedLocalNetwork: true, connection: { peer: '192.168.50.20', trusted: true } },
+    check: { trustedLocalNetwork: true, connection: { peer: '192.168.10.20', trusted: true } },
     flows: { zai: { type: 'key-add', step: 'key' } },
     signin: {
       ...signin,
       network: {
         ...signin.network,
         trustLocalNetwork: false,
-        connection: { peer: '192.168.50.20', trusted: false },
+        connection: { peer: '192.168.10.20', trusted: false },
       },
     },
   });
@@ -1564,7 +1564,7 @@ test('connection facts and the sign-in block say only what the browser and serve
   const stillOn = accountsViewModel(data([account()]), {
     now,
     transport: 'http',
-    check: { trustedLocalNetwork: true, connection: { peer: '192.168.50.20', trusted: true } },
+    check: { trustedLocalNetwork: true, connection: { peer: '192.168.10.20', trusted: true } },
     flows: { zai: { type: 'key-add', step: 'key' } },
   });
   assert.equal(provider(stillOn, 'zai').flow.note, TRUSTED_NOTE);
@@ -1578,14 +1578,14 @@ test('connection facts and the sign-in block say only what the browser and serve
       network: {
         ...signin.network,
         trustLocalNetwork: false,
-        connection: { peer: '192.168.50.20', trusted: false },
+        connection: { peer: '192.168.10.20', trusted: false },
       },
     },
   });
   assert.equal(untrusted.signin.passwordCan, false);
   assert.equal(untrusted.signin.passwordOpen, false);
   assert.match(untrusted.signin.passwordNote, /trusted connection/);
-  assert.equal(untrusted.signin.network.line, 'This connection: 192.168.50.20, not trusted');
+  assert.equal(untrusted.signin.network.line, 'This connection: 192.168.10.20, not trusted');
   assert.equal(untrusted.signin.network.act, '');
   // managed by environment variables: no form
   assert.match(
@@ -1598,7 +1598,7 @@ test('connection facts and the sign-in block say only what the browser and serve
   // nothing on the page is an example value: no example devices, no example addresses
   assert.doesNotMatch(
     JSON.stringify(vm),
-    /example (devices|values|address)|192\.0\.2\.10:4317|jared-mac/
+    /example (devices|values|address)|192\.0\.2\.10:4317|mac-host/
   );
   // no server facts yet: the block says so instead of inventing them
   const none = accountsViewModel(data([account()]), { now });
@@ -1638,7 +1638,7 @@ test('the trusted local network line: this computer, trusted, not trusted, and T
   const lan = networkView(
     {
       trustLocalNetwork: false,
-      connection: { peer: '192.168.50.20', trusted: false },
+      connection: { peer: '192.168.10.20', trusted: false },
       canTurnOn: false,
     },
     null,
@@ -1657,7 +1657,7 @@ test('the trusted local network line: this computer, trusted, not trusted, and T
   assert.equal(networkView(null, null, 'http').known, false);
   assert.equal(
     networkView(
-      { trustLocalNetwork: true, connection: { peer: '192.168.50.20', trusted: true } },
+      { trustLocalNetwork: true, connection: { peer: '192.168.10.20', trusted: true } },
       null,
       'http',
       'network'

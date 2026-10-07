@@ -19,7 +19,7 @@ function entry(over: Partial<RegistryAccount> = {}): RegistryAccount {
     id: 'muse:usage',
     provider: 'muse',
     platform: 'mac',
-    sshHost: 'jared-mac',
+    sshHost: 'mac-host',
     label: null,
     credential: { kind: 'discover' },
     createdAt: '2026-10-02T08:00:00Z',
@@ -63,7 +63,7 @@ describe('muse sign-in flow', () => {
       '-o',
       'ServerAliveCountMax=1',
       '--',
-      'jared-mac',
+      'mac-host',
       'PATH="$HOME/.local/bin:$PATH" muse login',
     ]);
     expect(command.pty).toBe(false);
@@ -116,7 +116,7 @@ describe('muse sign-in flow', () => {
       plan: null,
     });
     expect(seen).toHaveLength(1);
-    expect(seen[0][0]).toBe('jared-mac');
+    expect(seen[0][0]).toBe('mac-host');
   });
 
   it('fails write_failed when the login email is missing or unreadable', async () => {

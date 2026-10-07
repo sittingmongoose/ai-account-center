@@ -880,7 +880,7 @@ export function transportNote(transport, check = null) {
 const networkKnown = net => !!net && typeof net === 'object' && typeof net.trustLocalNetwork === 'boolean';
 
 /**
- * "This connection: 192.168.1.20, trusted local network" (GET /api/auth/network or /check). Behind the
+ * "This connection: 192.168.10.20, trusted local network" (GET /api/auth/network or /check). Behind the
  * LAN HTTPS proxy (`connection.proxied`) the peer is the client the proxy saw, never LAN-trusted.
  */
 export function networkView(net, check, transport, busyAct = '') {

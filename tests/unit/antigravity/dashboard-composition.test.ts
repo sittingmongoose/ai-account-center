@@ -80,7 +80,7 @@ function antigravity(id: string): AntigravityDashboardAccount {
   };
 }
 function deps(extra: AccountDashboardDeps = {}): AccountDashboardDeps {
-  const codexProfiles = ['gmail', 'party', 'lexxmariah'];
+  const codexProfiles = ['gmail', 'party', 'lime'];
   return {
     getCodexSummary: async () => ({
       active: { name: 'party', source: 'default', codexHome: '/fixture' },
@@ -99,7 +99,7 @@ function deps(extra: AccountDashboardDeps = {}): AccountDashboardDeps {
     getCodexRows: async () => [],
     getCachedCodexRows: () => [],
     listClaudeProfiles: async () =>
-      ['platyr', 'gmail', 'party', 'me'].map((id) => ({
+      ['plum', 'gmail', 'party', 'me'].map((id) => ({
         id,
         email: `${id}@example.com`,
         mac: {

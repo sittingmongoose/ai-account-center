@@ -50,7 +50,19 @@ import * as usageTransport from '../../src/web-server/services/additional-usage-
 const USERNAME = 'e2e-admin';
 const PASSWORD = 'first-password-123';
 const NEW_PASSWORD = 'second-password-456';
-const LAN_ADDRESS = '192.168.50.179';
+// This computer's own home-network address (the trusted-network cases need a
+// 192.168.0.0/16 peer). Read from the interfaces, never written down; on a
+// computer without one the LAN cases find it unreachable and skip.
+const LAN_ADDRESS =
+  Object.values(os.networkInterfaces())
+    .flat()
+    .find(
+      (entry) =>
+        entry !== undefined &&
+        entry.family === 'IPv4' &&
+        !entry.internal &&
+        entry.address.startsWith('192.168.')
+    )?.address ?? '192.0.2.10';
 
 const ENVIRONMENT = [
   'HOME',

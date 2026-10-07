@@ -389,12 +389,12 @@ describe('usage hub transport rule (the dashboard isSecureTransport)', () => {
       })
     ).toBe(true);
     expect(
-      isSecureTransport(request('192.168.50.20', { host: '192.168.50.179:3000' }), {
+      isSecureTransport(request('192.168.10.20', { host: '192.168.10.179:3000' }), {
         localNetworkTrust: lan,
       })
     ).toBe(true);
     expect(
-      isSecureTransport(request('192.168.50.20', { host: '192.168.50.179:3000' }), {
+      isSecureTransport(request('192.168.10.20', { host: '192.168.10.179:3000' }), {
         localNetworkTrust: off,
       })
     ).toBe(false);
@@ -405,7 +405,7 @@ describe('usage hub transport rule (the dashboard isSecureTransport)', () => {
       isSecureTransport(request('203.0.113.9', { host: 'x:3000' }), { localNetworkTrust: lan })
     ).toBe(false);
     expect(
-      isSecureTransport(request('192.168.50.20', { 'x-forwarded-for': '203.0.113.9' }), {
+      isSecureTransport(request('192.168.10.20', { 'x-forwarded-for': '203.0.113.9' }), {
         localNetworkTrust: lan,
       })
     ).toBe(false);
