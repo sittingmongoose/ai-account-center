@@ -1,0 +1,572 @@
+// Mobile chrome for the P/F/T tiers and the short-height modifier (DESIGN-MOBILE.md 3.1-3.4):
+// the P top bar plus bottom tab bar, the F two-row header, the T one-row touch header and the
+// 48 px short row. Desktop (D) keeps the Header in dashboard.slint untouched. Every control is a
+// touch target (at least 44 x 44 centred on its visual); the Status popover, the Appearance menu
+// (F/T) and the Account menu (a popover on F/T and short, a sheet on P) are hosted by
+// dashboard.slint, which receives the anchor rectangle of the control that asked for them.
+import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
+import { ChromeView, UpdateView } from "../models.slint";
+import { Icon } from "../components/icon.slint";
+import { AppLogo } from "../components/logo.slint";
+import { IconButton } from "../components/icon-button.slint";
+import { UpdateButton } from "../components/update-button.slint";
+import { NavBar } from "../components/nav.slint";
+import { ProbeMark } from "../components/probe.slint";
+
+// The status line as one right-hugging eliding run: "Updated 2m ago · cached readings". Three Texts
+// (lead, strong age, more) as in the desktop header: StyledText cannot elide, and a plain Text cannot
+// mix weights. When the row is narrow every part shares the shortage and elides at its own end.
+component StatusLine inherits Rectangle {
+    in property <ChromeView> chrome;
+    in property <length> max-w: 340px;
+    in property <string> probe: "status-line";
+    callback tapped(Point, length, length);
+
+    height: 44px;
+    property <length> fit-w: min(root.max-w, row.preferred-width);
+    min-width: fit-w;
+    preferred-width: fit-w;
+    clip: true;
+    row := HorizontalLayout {
+        x: 0px;
+        width: min(self.preferred-width, parent.width);
+        spacing: 4px;
+        Text {
+            text: root.chrome.status-lead;
+            font-family: Type.tab;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        if root.chrome.status-strong != "": Text {
+            text: root.chrome.status-strong;
+            font-family: Type.tab;
+            font-size: Type.small;
+            font-weight: 580;
+            color: Theme.ink-2;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        if root.chrome.status-more != "": Text {
+            text: "· " + root.chrome.status-more;
+            font-size: Type.small;
+            color: Theme.ink-3;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.tapped(root.absolute-position, root.width, root.height); }
+    }
+    ProbeMark {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        id: root.probe;
+    }
+}
+
+
+component TabCell inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    // The accessible name stays full even when the drawn label is the short "Accounts" (Q3).
+    in property <string> name: root.label;
+    in property <string> probe;
+    in property <bool> selected;
+    callback tapped();
+
+    Icon {
+        x: (parent.width - 22px) / 2;
+        y: 7px;
+        width: 22px;
+        height: 22px;
+        name: root.icon;
+        tint: root.selected ? Theme.ink : Theme.ink-3;
+        transform-scale: ta.pressed ? 0.92 : 1;
+        animate transform-scale { duration: Motion.fast; }
+    }
+    Text {
+        y: 31px;
+        width: parent.width;
+        height: 16px;
+        horizontal-alignment: center;
+        text: root.label;
+        font-size: 12px;
+        font-weight: root.selected ? 600 : 500;
+        color: root.selected ? Theme.ink : Theme.ink-3;
+        overflow: elide;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.tapped(); }
+    }
+    accessible-role: tab;
+    accessible-label: root.name;
+    accessible-action-default => { root.tapped(); }
+    ProbeMark {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        id: root.probe;
+    }
+}
+
+// The P bottom tab bar (DESIGN-MOBILE.md 3.1): three equal cells, a 32 x 3 accent indicator that
+// glides between them, and the whole cell as the hit area. The bar is 52 px of cells plus
+// max(safe-bottom, 8) of background under the home indicator; the page scroll ends above it.
+export component TabBar inherits Rectangle {
+    in property <string> page;
+    callback navigate(string);
+
+    height: 52px + max(Device.safe-bottom, 8px);
+    background: Theme.paper;
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: 1px;
+        background: Theme.rule;
+    }
+    property <length> cell-w: root.width / 3;
+    indicator := Rectangle {
+        y: 0px;
+        width: 32px;
+        height: 3px;
+        border-radius: 1.5px;
+        background: Theme.accent;
+        x: (root.page == "analytics" ? root.cell-w : root.page == "accounts" ? 2 * root.cell-w : 0px) + (root.cell-w - 32px) / 2;
+        animate x { duration: Motion.on ? Motion.tab-glide : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+    }
+    cells := HorizontalLayout {
+        y: 0px;
+        height: 52px;
+        TabCell {
+            icon: "home";
+            label: "Home";
+            probe: "tab-home";
+            selected: root.page == "home";
+            tapped => { root.navigate("home"); }
+        }
+        TabCell {
+            icon: "chart";
+            label: "Analytics";
+            probe: "tab-analytics";
+            selected: root.page == "analytics";
+            tapped => { root.navigate("analytics"); }
+        }
+        TabCell {
+            icon: "users";
+            label: Breakpoints.width < 384px ? "Accounts" : "Accounts & Settings";
+            name: "Accounts & Settings";
+            probe: "tab-accounts";
+            selected: root.page == "accounts";
+            tapped => { root.navigate("accounts"); }
+        }
+    }
+}
+
+
+// The P/F/T header and the short row. One component so a rotation or fold re-flows between the
+// layouts without recreating state; the tier branches are pure functions of the window size.
+export component MobileHeader inherits Rectangle {
+    in property <string> page;
+    in property <ChromeView> chrome;
+    in property <UpdateView> update;
+    in property <bool> busy;
+    in property <bool> shown;
+    callback navigate(string);
+    callback refresh();
+    callback update-apps();
+    // The P and short logo taps scroll the page to the top; F and T keep the desktop's navigate home.
+    callback logo-tapped();
+    callback status-tapped(Point, length, length);
+    callback theme-tapped(Point, length, length);
+    callback account-tapped(Point, length, length);
+
+    height: Device.safe-top + (Breakpoints.short ? 48px : Breakpoints.tier-p ? 52px : Breakpoints.tier-f ? 108px : 60px);
+    background: Theme.paper;
+    // The background paints from y = 0 through safe-top + the rows (2.4); the hairline closes it.
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.rule;
+    }
+
+    bar := Rectangle {
+        y: root.shown ? 0px : -8px;
+        opacity: root.shown ? 1 : 0;
+        animate y { duration: Motion.on ? 460ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+        animate opacity { duration: Motion.on ? 380ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+        width: parent.width;
+        height: parent.height;
+
+        // ---- P (3.1): one 52 px row: logo box, status block, Refresh, Update apps, Account ----
+        if Breakpoints.tier-p && !Breakpoints.short: HorizontalLayout {
+            y: Device.safe-top;
+            height: 52px;
+            padding-left: 12px + Device.safe-left;
+            padding-right: 12px + Device.safe-right;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    AppLogo {
+                        x: (parent.width - 24px) / 2;
+                        y: (parent.height - 24px) / 2;
+                        size: 24px;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.logo-tapped(); }
+                    }
+                }
+            }
+            Rectangle { width: 8px; }
+            // The status block: line 1 "Updated 2m ago" (body 14), line 2 the rest of today's
+            // status line, both eliding. The whole block is the 44 tall hit (3.1).
+            status-block := Rectangle {
+                horizontal-stretch: 1;
+                height: 44px;
+                min-width: 0px;
+                clip: true;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: root.chrome.status-lead;
+                            font-size: 14px;
+                            color: Theme.ink-2;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        if root.chrome.status-strong != "": Text {
+                            text: root.chrome.status-strong;
+                            font-size: 14px;
+                            font-weight: 580;
+                            color: Theme.ink-2;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if root.chrome.status-more != "": Text {
+                        text: root.chrome.status-more;
+                        font-size: Type.small;
+                        color: Theme.ink-3;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.status-tapped(status-block.absolute-position, status-block.width, status-block.height); }
+                }
+                ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "status-block"; }
+            }
+            Rectangle { width: 8px; }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                IconButton {
+                    icon: "refresh";
+                    hint: "Refresh usage now";
+                    spinning: root.chrome.refreshing;
+                    enabled: !root.busy || root.chrome.refreshing;
+                    clicked => { root.refresh(); }
+                }
+            }
+            Rectangle { width: 4px; }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                UpdateButton {
+                    data: root.update;
+                    enabled: !root.busy;
+                    phone: true;
+                    show-label: false;
+                    show-run-word: false;
+                    clicked => { root.update-apps(); }
+                    ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "update-apps"; }
+                }
+            }
+            Rectangle { width: 4px; }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                account-btn := IconButton {
+                    icon: "user";
+                    hint: "Signed-in user";
+                    clicked => { root.account-tapped(account-btn.absolute-position, account-btn.width, account-btn.height); }
+                }
+            }
+        }
+
+        // ---- F (3.2): row 1 brand and controls, row 2 NavBar and the status line ----
+        if Breakpoints.tier-f && !Breakpoints.short: VerticalLayout {
+            y: Device.safe-top;
+            height: 108px;
+            HorizontalLayout {
+                height: 56px;
+                padding-left: 20px + Device.safe-left;
+                padding-right: 20px + Device.safe-right;
+                spacing: 6px;
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Rectangle {
+                        min-width: brand-row.preferred-width;
+                        brand-row := HorizontalLayout {
+                            spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                AppLogo { size: 26px; }
+                            }
+                            Text {
+                                text: "AI Account Center";
+                                font-size: 16px;
+                                font-weight: 600;
+                                color: Theme.ink;
+                                vertical-alignment: center;
+                            }
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.navigate("home"); }
+                        }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    IconButton {
+                        icon: "refresh";
+                        hint: "Refresh usage now";
+                        spinning: root.chrome.refreshing;
+                        enabled: !root.busy || root.chrome.refreshing;
+                        clicked => { root.refresh(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    UpdateButton {
+                        data: root.update;
+                        enabled: !root.busy;
+                        show-label: Breakpoints.width >= 760px;
+                        show-run-word: Breakpoints.width >= 760px;
+                        clicked => { root.update-apps(); }
+                        ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "update-apps"; }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    theme-btn := IconButton {
+                        icon: Theme.mode == 1 ? "sun" : Theme.mode == 2 ? "moon" : "monitor";
+                        chevron: true;
+                        hint: "Appearance";
+                        clicked => { root.theme-tapped(theme-btn.absolute-position, theme-btn.width, theme-btn.height); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    account-btn-f := IconButton {
+                        icon: "user";
+                        chevron: true;
+                        hint: "Signed-in user";
+                        clicked => { root.account-tapped(account-btn-f.absolute-position, account-btn-f.width, account-btn-f.height); }
+                    }
+                }
+            }
+            HorizontalLayout {
+                height: 52px;
+                padding-left: 20px + Device.safe-left;
+                padding-right: 20px + Device.safe-right;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                StatusLine {
+                    horizontal-stretch: 0;
+                    chrome: root.chrome;
+                    tapped(anchor, w, h) => { root.status-tapped(anchor, w, h); }
+                }
+            }
+        }
+
+        // ---- T (3.3): one 60 px row as on desktop, with touch targets ----
+        if Breakpoints.tier-t && !Breakpoints.short: HorizontalLayout {
+            y: Device.safe-top;
+            height: 60px;
+            padding-left: 24px + Device.safe-left;
+            padding-right: 24px + Device.safe-right;
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Rectangle {
+                    min-width: brand-row-t.preferred-width;
+                    brand-row-t := HorizontalLayout {
+                        spacing: 10px;
+                        VerticalLayout {
+                            alignment: center;
+                            AppLogo { size: 26px; }
+                        }
+                        if Breakpoints.width >= 1100px: Text {
+                            text: "AI Account Center";
+                            font-size: 15.5px;
+                            font-weight: 640;
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.navigate("home"); }
+                    }
+                }
+            }
+            Rectangle { width: 10px; }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            StatusLine {
+                horizontal-stretch: 0;
+                chrome: root.chrome;
+                max-w: 320px;
+                tapped(anchor, w, h) => { root.status-tapped(anchor, w, h); }
+            }
+            Rectangle { width: 6px; }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                IconButton {
+                    icon: "refresh";
+                    hint: "Refresh usage now";
+                    spinning: root.chrome.refreshing;
+                    enabled: !root.busy || root.chrome.refreshing;
+                    clicked => { root.refresh(); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                UpdateButton {
+                    data: root.update;
+                    enabled: !root.busy;
+                    show-label: Breakpoints.width >= 1100px;
+                    show-run-word: Breakpoints.width >= 1100px;
+                    clicked => { root.update-apps(); }
+                    ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "update-apps"; }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                theme-btn-t := IconButton {
+                    icon: Theme.mode == 1 ? "sun" : Theme.mode == 2 ? "moon" : "monitor";
+                    chevron: true;
+                    hint: "Appearance";
+                    clicked => { root.theme-tapped(theme-btn-t.absolute-position, theme-btn-t.width, theme-btn-t.height); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                account-btn-t := IconButton {
+                    icon: "user";
+                    chevron: true;
+                    hint: "Signed-in user";
+                    clicked => { root.account-tapped(account-btn-t.absolute-position, account-btn-t.width, account-btn-t.height); }
+                }
+            }
+        }
+
+        // ---- Short (3.4): one 48 px row, NavBar compact, no bottom bar, no Appearance ----
+        if Breakpoints.short: HorizontalLayout {
+            y: Device.safe-top;
+            height: 48px;
+            padding-left: Breakpoints.gutter + Device.safe-left;
+            padding-right: Breakpoints.gutter + Device.safe-right;
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    AppLogo {
+                        x: (parent.width - 24px) / 2;
+                        y: (parent.height - 24px) / 2;
+                        size: 24px;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.logo-tapped(); }
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                NavBar { compact: true; page: root.page; navigate(p) => { root.navigate(p); } }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            StatusLine {
+                horizontal-stretch: 0;
+                chrome: root.chrome;
+                max-w: 300px;
+                tapped(anchor, w, h) => { root.status-tapped(anchor, w, h); }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                IconButton {
+                    icon: "refresh";
+                    hint: "Refresh usage now";
+                    spinning: root.chrome.refreshing;
+                    enabled: !root.busy || root.chrome.refreshing;
+                    clicked => { root.refresh(); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                UpdateButton {
+                    data: root.update;
+                    enabled: !root.busy;
+                    phone: true;
+                    show-label: false;
+                    show-run-word: false;
+                    clicked => { root.update-apps(); }
+                    ProbeMark { x: 0px; y: 0px; width: parent.width; height: parent.height; id: "update-apps"; }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                account-btn-s := IconButton {
+                    icon: "user";
+                    hint: "Signed-in user";
+                    clicked => { root.account-tapped(account-btn-s.absolute-position, account-btn-s.width, account-btn-s.height); }
+                }
+            }
+        }
+    }
+}
