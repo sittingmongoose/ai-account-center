@@ -603,11 +603,18 @@ component CacheSection inherits VerticalLayout {
                 Rectangle { horizontal-stretch: 1; }
             }
             Rectangle { height: 3px; }
-            if AxData.cache.ccost-share != "": HorizontalLayout {
+            if AxData.cache.ccost-share != "" && Breakpoints.tier-d: HorizontalLayout {
                 spacing: 0px;
                 alignment: start;
                 ValueUnit { value: AxData.cache.ccost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; horizontal-stretch: 0; }
                 Text { text: " of the estimated cost for this range"; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+            }
+            // below D one wrapping line: "84.5% of the estimated cost for this range" (task 9 A7)
+            if AxData.cache.ccost-share != "" && Breakpoints.below-d: Text {
+                text: AxData.cache.ccost-share + "% of the estimated cost for this range";
+                font-size: Type.small;
+                color: Theme.ink-3;
+                wrap: word-wrap;
             }
         }
     }
@@ -685,11 +692,12 @@ component CacheSection inherits VerticalLayout {
                 Rectangle { horizontal-stretch: 1; }
             }
             Rectangle { height: 3px; }
-            if AxData.cache.ccost-share != "": HorizontalLayout {
-                spacing: 0px;
-                alignment: start;
-                ValueUnit { value: AxData.cache.ccost-share; size: 12px; weight: 400; ink: Theme.ink-3; unit-scale: 0.96; horizontal-stretch: 0; }
-                Text { text: " of the estimated cost for this range"; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+            // one wrapping line (task 9 A7); this branch is below-D-only (gauge-side is always true on D)
+            if AxData.cache.ccost-share != "": Text {
+                text: AxData.cache.ccost-share + "% of the estimated cost for this range";
+                font-size: Type.small;
+                color: Theme.ink-3;
+                wrap: word-wrap;
             }
         }
     }
