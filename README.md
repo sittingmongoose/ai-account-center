@@ -128,7 +128,9 @@ signed out from another browser.
   replaces them. Turning trust on is allowed only from the dashboard computer
   itself (loopback) or by editing the config file; turning it off is allowed
   from any signed-in browser. The page shows "This connection: \<peer\>,
-  trusted local network", "not trusted", or "this computer" on loopback.
+  trusted local network", "not trusted", "this computer" on loopback,
+  "\<peer\>, encrypted" over direct HTTPS, or "\<client\>, encrypted
+  through the HTTPS proxy" behind the HTTPS reverse proxy below.
 - **Plain HTTP and WireGuard.** The dashboard stays on plain HTTP at its LAN
   address; there is no HTTPS. The risk, stated plainly: when trust is on,
   passwords, keys and sign-in codes cross the home network without
@@ -136,7 +138,111 @@ signed out from another browser.
   private range (for example the router's 10.6.0.x client subnet) or
   translated to the router's private address; an unusual VPN subnet can be
   added to `trusted_networks`. Public, link-local, CGNAT and unknown peers
-  stay refused unless listed, and proxy headers never carry trust.
+  stay refused unless listed, and proxy headers never carry trust (except
+  from the HTTPS reverse proxy below, and even then never LAN trust).
+- **HTTPS reverse proxy on another computer.** To reach the dashboard from
+  the internet without a VPN, put an HTTPS reverse proxy (for example SWAG
+  on a NAS, behind Cloudflare) in front of it and tell the dashboard the
+  proxy's exact LAN address, on the dashboard computer:
+
+  ```sh
+  ai-account-center dashboard proxy set --address 192.168.1.20 --origin https://aac.example.test
+  ai-account-center dashboard proxy status
+  ai-account-center dashboard proxy off
+  ```
+
+  `set` checks the values, saves the previous config.yaml next to it as
+  `config.yaml.bak-proxy-<UTC time>` (0600) and writes `dashboard_tls`
+  (`trusted_proxy: lan-https-proxy`, `trusted_proxy_addresses`,
+  `public_origin`). The running dashboard applies it to its next request;
+  no restart is needed. The address must be one exact private LAN address
+  (up to 8, repeat `--address`): `set` refuses a range, loopback,
+  `0.0.0.0`/`::`, a public address or one of the dashboard computer's own
+  addresses, and if config.yaml holds one anyway the proxy stays off (fail
+  closed, with one log line) while the usage hub keeps answering on
+  loopback.
+
+  What the dashboard then does with requests from that address:
+
+  - They count as secure only with `X-Forwarded-Proto: https` and a valid IP
+    address as the last `X-Forwarded-For` entry, which is taken as the
+    client. Entries further left are ignored. They are never LAN-trusted and
+    never count as the dashboard computer, and a password is taken only
+    over their HTTPS side.
+  - Their sign-in limits use their own keys (`proxy:<client>`), so nothing
+    on the proxy's computer can spend the budget of the browser on the
+    dashboard computer or of a LAN computer, whatever `X-Forwarded-For` it
+    sends. All forwarded sign-ins also share 30 refusals per hour; anyone on
+    the internet can use those up, but LAN and loopback sign-in never
+    depend on them.
+  - A browser session or tray key that ever crossed the LAN over plain HTTP
+    does not work through the proxy: sign in again there. LAN and tray use
+    over plain HTTP work as before.
+  - `/v0/management` (the T3 usage hub) answers 404, and anonymous visitors
+    are not shown the local network or session settings.
+
+  A SWAG server block for this, with placeholders (`aac.example.test` for
+  the public name, `192.168.1.10` for the dashboard computer). It accepts
+  only Cloudflare, takes the client from `CF-Connecting-IP`, overwrites
+  `X-Forwarded-For` with that one address, sends security headers on every
+  answer and blocks the usage hub. It does not include `proxy.conf`, which
+  would send a second `Host` header and make every change fail with 403.
+
+  ```nginx
+  # The TCP peer must be Cloudflare. $realip_remote_addr is the peer before
+  # the real client is restored (allow/deny would see the client instead).
+  # One line per range in https://www.cloudflare.com/ips-v4 and /ips-v6.
+  geo $realip_remote_addr $aac_peer_is_cloudflare {
+      default 0;
+      198.51.100.0/24 1;                # placeholder: each Cloudflare range
+  }
+
+  server {
+      listen 443 ssl;
+      listen [::]:443 ssl;
+      server_name aac.example.test;
+      include /config/nginx/ssl.conf;
+      client_max_body_size 4m;
+
+      if ($aac_peer_is_cloudflare = 0) { return 444; }
+      set_real_ip_from 198.51.100.0/24; # placeholder: each Cloudflare range
+      real_ip_header CF-Connecting-IP;
+
+      add_header Strict-Transport-Security "max-age=31536000" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header Referrer-Policy "no-referrer" always;
+
+      # The T3 usage hub never faces the internet (any letter case).
+      location ~* ^/v0/management { return 404; }
+
+      location /ws {
+          proxy_pass http://192.168.1.10:3000;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For $remote_addr;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Forwarded-Host "";
+          proxy_read_timeout 1h;
+      }
+
+      location / {
+          proxy_pass http://192.168.1.10:3000;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For $remote_addr;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Forwarded-Host "";
+      }
+  }
+  ```
+
+  Before going live: check that the request log shows the real public client
+  as `remoteAddress` and the proxy as `via` for proxied requests (not a
+  Docker gateway, a Cloudflare address or 127.0.0.1), use Cloudflare's SSL
+  mode Full (strict), and consider Cloudflare Access in front of the name,
+  so the dashboard password is the second lock rather than the only one.
 
 ## Native trays
 

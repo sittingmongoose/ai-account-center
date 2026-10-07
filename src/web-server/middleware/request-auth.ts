@@ -1,4 +1,5 @@
 import type { Request } from 'express';
+import type { CredentialTransport } from './secure-transport';
 
 /**
  * Who made a request (CONTRACT-auth-devices section 6): a signed-in browser
@@ -25,6 +26,13 @@ declare module 'express-session' {
     epoch: number;
     /** Set when "sign out other browsers" ended this session; cleared by the next sign-in. */
     revoked: boolean;
+    /**
+     * How the sign-in that started this session reached the dashboard
+     * (secure-transport.ts `CredentialTransport`). Through the LAN HTTPS proxy
+     * only `encrypted` and `loopback` sessions are accepted; a missing value
+     * (a session from before this field) counts as plain.
+     */
+    signedInOver: CredentialTransport;
   }
 }
 

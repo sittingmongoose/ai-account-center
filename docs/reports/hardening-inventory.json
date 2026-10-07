@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1218,
-    "filesAffected": 121,
-    "hotpathOccurrences": 585,
-    "hotpathFilesAffected": 70,
+    "totalOccurrences": 1221,
+    "filesAffected": 122,
+    "hotpathOccurrences": 588,
+    "hotpathFilesAffected": 71,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -522,16 +522,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 668,
-      "typedThrows": 166,
+      "totalThrows": 670,
+      "typedThrows": 168,
       "plainThrows": 72,
       "otherThrows": 430,
-      "adoptionRatio": 0.2485,
+      "adoptionRatio": 0.2507,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 312,
-          "typed": 104,
+          "count": 313,
+          "typed": 105,
           "plain": 10
         },
         {
@@ -548,8 +548,8 @@
         },
         {
           "subdomain": "commands",
-          "count": 40,
-          "typed": 38,
+          "count": 41,
+          "typed": 39,
           "plain": 0
         },
         {
@@ -603,9 +603,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 37,
-      "totalSourceFiles": 406,
-      "coverageRatio": 0.0911,
+      "filesWithCreateLogger": 38,
+      "totalSourceFiles": 408,
+      "coverageRatio": 0.0931,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,8 +632,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 151,
-          "withLogger": 21
+          "count": 152,
+          "withLogger": 22
         },
         {
           "subdomain": "utils",
@@ -647,7 +647,7 @@
         },
         {
           "subdomain": "commands",
-          "count": 33,
+          "count": 34,
           "withLogger": 1
         },
         {
@@ -751,7 +751,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 47,
+      "countOver400": 48,
       "countOver600": 20,
       "topOver400": [
         {

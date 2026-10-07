@@ -22,12 +22,15 @@ import {
   createSessionMiddleware,
   isApiRequestPath,
   loginRateLimiter,
+  resetLoginRateLimitForTests,
 } from '../../../src/web-server/middleware/auth-middleware';
 import { requestLoggingMiddleware } from '../../../src/web-server/middleware/request-logging-middleware';
 import {
   setLocalNetworkTrustResolver,
+  setTrustedProxyAddressesResolver,
   setTrustedProxyResolver,
 } from '../../../src/web-server/middleware/secure-transport';
+import { setThisComputerAddressesForTests } from '../../../src/web-server/services/dashboard-tls-config';
 import { configureDashboardTransport } from '../../../src/web-server/dashboard-auth-runtime';
 import { apiRoutes } from '../../../src/web-server/routes';
 import { resetAuthRateLimitsForTests } from '../../../src/web-server/routes/auth-rate-limits';
@@ -44,6 +47,8 @@ export const USERNAME = 'aac-test-admin';
 export const PASSWORD = 'first-fixture-password';
 export const LAN_PEER = '192.0.2.21';
 export const LAN_HOST = '192.0.2.10:3000';
+/** The dashboard computer's own addresses as the proxy-address check sees them in the fixture. */
+export const THIS_COMPUTER = ['127.0.0.1', '::1', '192.168.1.10'];
 
 const FIXTURE_ENVIRONMENT = [
   'CCS_HOME',
@@ -114,6 +119,7 @@ export async function startAuthHarness(options: HarnessOptions = {}): Promise<Ha
   resetSetupCodeForTests();
   setAuthClockForTests(null);
   setPasswordHashCostForTests(4);
+  setThisComputerAddressesForTests(THIS_COMPUTER);
   invalidateConfigCache();
 
   const config = createEmptyUnifiedConfig();
@@ -189,6 +195,7 @@ export async function startAuthHarness(options: HarnessOptions = {}): Promise<Ha
   for (const key of [peer.address, `::ffff:${peer.address}`, LAN_PEER, '::1']) {
     loginRateLimiter.resetKey(key);
   }
+  await resetLoginRateLimitForTests();
   await resetAuthRateLimitsForTests();
 
   return {
@@ -207,12 +214,15 @@ export async function startAuthHarness(options: HarnessOptions = {}): Promise<Ha
       for (const key of ['127.0.0.1', '::ffff:127.0.0.1', LAN_PEER, '::1']) {
         loginRateLimiter.resetKey(key);
       }
+      await resetLoginRateLimitForTests();
       await resetAuthRateLimitsForTests();
       await settleAuthWrites();
       setAuthClockForTests(null);
       setPasswordHashCostForTests(null);
       setTrustedProxyResolver(() => null);
+      setTrustedProxyAddressesResolver(null);
       setLocalNetworkTrustResolver(null);
+      setThisComputerAddressesForTests(null);
       resetDashboardAuthStateForTests();
       resetDeviceStoreForTests();
       resetSetupCodeForTests();

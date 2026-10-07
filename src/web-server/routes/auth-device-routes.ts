@@ -6,6 +6,7 @@ import {
   triesLeft,
 } from '../middleware/auth-middleware';
 import { authKind, requestDevice } from '../middleware/request-auth';
+import { credentialTransport, requestClientAddress } from '../middleware/secure-transport';
 import { authNow, isoTime } from '../services/dashboard-auth-files';
 import { bumpSessionEpoch, countOtherSessions } from '../services/dashboard-auth-state';
 import {
@@ -132,7 +133,8 @@ async function pair(req: Request, res: Response): Promise<void> {
   if (!usernameMatch || !passwordMatch || !passwordHashUnchanged(state.passwordHash)) {
     markCredentialsRejected(res);
     audit('auth.login.failed', 'Tray pairing sign-in failed', {
-      remoteAddress: req.socket.remoteAddress ?? null,
+      // The client behind a trusted proxy hop, else the peer address.
+      remoteAddress: requestClientAddress(req),
       reason: 'invalid_credentials',
     });
     sendAuthError(res, 401, 'invalid_credentials', 'Invalid credentials', {
@@ -152,7 +154,8 @@ async function pair(req: Request, res: Response): Promise<void> {
       platform: request.platform,
       installId: request.installId,
       appVersion: request.appVersion,
-      address: req.ip ?? req.socket.remoteAddress ?? null,
+      address: requestClientAddress(req),
+      transport: credentialTransport(req),
     });
     if (replacedDeviceId) {
       audit('auth.device.revoked', 'Tray device revoked', {
@@ -305,7 +308,7 @@ async function rotateMe(req: Request, res: Response): Promise<void> {
   if (!readOptionalEmptyBody(req, res, 'absent-or-same')) return;
   const presented = requestDevice(req)?.tokenSha256 ?? '';
   try {
-    const rotated = await rotateDeviceToken(device.id, presented);
+    const rotated = await rotateDeviceToken(device.id, presented, credentialTransport(req));
     audit('auth.device.rotated', 'Tray device token rotated', { deviceId: device.id });
     res.json({ token: rotated.token, rotateAfter: isoTime(rotateAfter(rotated.device)) });
   } catch (error) {

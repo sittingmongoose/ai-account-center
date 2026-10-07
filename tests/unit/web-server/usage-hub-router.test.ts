@@ -355,6 +355,24 @@ describe('usage hub POST /v0/management/api-call', () => {
     expect((await get('/config', { authorization: `Bearer ${KEY}` })).status).toBe(404);
     expect((await get('/usage', { authorization: `Bearer ${KEY}` })).status).toBe(404);
   });
+
+  it('answers 404 to a request through the LAN HTTPS proxy, before anything else', async () => {
+    await start({ isProxied: () => true });
+    for (const response of [
+      await get('/auth-files', { authorization: `Bearer ${KEY}` }),
+      await apiCall(t3Request(codexAccount, CODEX_USAGE_URL)),
+    ]) {
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ code: 'not_found' });
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    }
+    expect(reads).toBe(0);
+  });
+
+  it('serves a direct request with the same key', async () => {
+    await start({ isProxied: () => false });
+    expect((await get('/auth-files', { authorization: `Bearer ${KEY}` })).status).toBe(200);
+  });
 });
 
 describe('usage hub transport rule (the dashboard isSecureTransport)', () => {
