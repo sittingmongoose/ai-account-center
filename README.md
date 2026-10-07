@@ -156,9 +156,11 @@ signed out from another browser.
   (`trusted_proxy: lan-https-proxy`, `trusted_proxy_addresses`,
   `public_origin`). The running dashboard applies it to its next request;
   no restart is needed. The address must be one exact private LAN address
-  (up to 8): a range, loopback, `0.0.0.0`/`::`, a public address or one of
-  the dashboard computer's own addresses turns the proxy off (fail closed,
-  with one log line), and the usage hub keeps answering on loopback.
+  (up to 8, repeat `--address`): `set` refuses a range, loopback,
+  `0.0.0.0`/`::`, a public address or one of the dashboard computer's own
+  addresses, and if config.yaml holds one anyway the proxy stays off (fail
+  closed, with one log line) while the usage hub keeps answering on
+  loopback.
 
   What the dashboard then does with requests from that address:
 
