@@ -1,4 +1,5 @@
 import { AntigravityError } from './errors';
+import { antigravityPlanDisplay } from './plan';
 import type {
   AntigravityPoolWindow,
   AntigravityDashboardAccount,
@@ -102,7 +103,10 @@ export function poolWindow(value: unknown): AntigravityPoolWindow | null {
     : [];
   return {
     key: value.key,
-    label: displayText(value.label, 80) ?? 'Model quota',
+    label:
+      value.key === 'google-ai-credits'
+        ? 'AI credits (overage)'
+        : (displayText(value.label, 80) ?? 'Model quota'),
     usedPercent: usedPercent ?? (remainingPercent === null ? null : 100 - remainingPercent),
     remainingPercent: remainingPercent ?? (usedPercent === null ? null : 100 - usedPercent),
     resetAt,
@@ -137,7 +141,7 @@ export function publicProfile(profile: AntigravityUsageProfile): AntigravityPubl
   return {
     id: profile.id,
     email: email(profile.email) as string,
-    plan: displayText(profile.plan, 80),
+    plan: antigravityPlanDisplay(displayText(profile.plan, 80), profile.verifiedAt).plan,
     available: profile.identityVerified === true && profile.available === true,
     selected: profile.identityVerified === true && profile.selected === true,
     runtimeVerified: profile.identityVerified === true && profile.runtimeVerified === true,
@@ -173,7 +177,10 @@ export function publicDashboardAccount(
     providerLabel: 'Antigravity',
     label: email(value.email) as string,
     email: email(value.email),
-    plan: displayText(value.plan, 80),
+    ...antigravityPlanDisplay(
+      displayText(value.plan, 80),
+      timestamp(value.sampledAt) ?? timestamp(value.fetchedAt)
+    ),
     platform: 'ubuntu',
     source: 'Antigravity saved login on Ubuntu',
     status,

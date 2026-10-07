@@ -1,4 +1,5 @@
 import type { CodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
+import { antigravityPlanDisplay } from '../../antigravity/plan';
 import type { BarSummaryRow } from '../routes/bar-routes';
 import {
   canOpenClaudeMacProfile,
@@ -332,7 +333,12 @@ export function additionalAccounts(
       providerLabel,
       label: text(row.label) ?? providerLabel,
       email: email(row.email),
-      plan: text(row.plan, 80),
+      ...(provider === 'antigravity'
+        ? antigravityPlanDisplay(
+            text(row.plan, 80),
+            timestamp(row.sampledAt) ?? timestamp(row.fetchedAt)
+          )
+        : { plan: text(row.plan, 80) }),
       platform: row.platform === 'mac' || row.platform === 'windows' ? row.platform : 'ubuntu',
       source: text(row.source, 80) ?? fallback.source,
       status: ['ok', 'cached', 'unavailable', 'error', 'needs_sign_in'].includes(row.status)
@@ -342,7 +348,17 @@ export function additionalAccounts(
       fetchedAt: timestamp(row.fetchedAt),
       sampledAt: timestamp(row.sampledAt),
       isActive: false,
-      windows: Array.isArray(row.windows) ? row.windows.slice(0, 256).map(quotaWindow) : [],
+      windows: Array.isArray(row.windows)
+        ? row.windows
+            .slice(0, 256)
+            .map((window) =>
+              quotaWindow(
+                provider === 'antigravity' && window.key === 'google-ai-credits'
+                  ? { ...window, label: 'AI credits (overage)' }
+                  : window
+              )
+            )
+        : [],
       capabilities: emptyCapabilities(),
     };
   };
