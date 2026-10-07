@@ -631,7 +631,7 @@ enum PreviewRenderer {
       let frames = AlignmentProbe.frames
       let codexIDs = dashboard.visibleAccounts.filter { $0.provider == "codex" }.map(\.id)
       check(!codexIDs.isEmpty, "the fixture needs at least one visible Codex account")
-      check(dashboard.codexAutoSwitch != nil, "the fixture needs a codexAutoSwitch status")
+      // `codexAutoSwitch` is a required dashboard key: a fixture without one fails decoding, not this check.
       guard let toggle = frames["codex-auto|toggle"], let threshold = frames["codex-auto|threshold"],
         let pill = frames["codex-auto|header"]
       else {
