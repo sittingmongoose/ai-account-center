@@ -1602,15 +1602,16 @@ export component AccountSection inherits Plate {
                     spacing: root.col-gap;
                     if root.table: Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
                     for col in root.section.columns: Caps {
-                        // crowded table heads grow to two lines (shorts break cleanly);
-                        // one line everywhere else, D exactly as before
-                        height: min(self.preferred-height, root.table && root.touch ? 30px : 15px);
+                        // crowded below-D table heads grow to two lines at most (shorts break
+                        // cleanly); D and the stacked heads size naturally, exactly as before
+                        min-height: 15px;
+                        max-height: root.table && root.touch ? 30px : 1000000px;
                         min-width: root.table ? (root.touch ? 0px : 108px) : 0px;
                         preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
                         horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
                         text: (root.short-heads && col.short-label != "" ? col.short-label : col.label).to-uppercase();
                         wrap: word-wrap;
-                        overflow: elide;
+                        overflow: root.table && root.touch ? elide : clip;
                         vertical-alignment: bottom;
                     }
                     if root.table: Rectangle { width: root.slot-w; }
