@@ -207,6 +207,7 @@ struct FootDto {
 struct ColumnDto {
     key: String,
     label: String,
+    short_label: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -587,6 +588,7 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 .map(|c| ColumnView {
                     key: c.key.into(),
                     label: c.label.into(),
+                    short_label: c.short_label.into(),
                 })
                 .collect(),
             |c: &ColumnView| c.key.clone(),

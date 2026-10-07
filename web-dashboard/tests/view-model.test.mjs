@@ -1158,3 +1158,35 @@ test('sections carry words next to runs for the touch layouts', () => {
   assert.deepEqual(claudeSection.foot.words, []);
   assert.deepEqual(claudeSection.rows[0].confirmWords, []);
 });
+
+test('antigravity columns carry single-line short labels for the stacked 2x2 grid', () => {
+  const agWindow = (key, label, windowMinutes) =>
+    window({ key, label, windowMinutes, usedPercent: 10, remainingPercent: 90 });
+  const vm = dashboardViewModel(
+    data([
+      account({
+        id: 'antigravity:a',
+        provider: 'antigravity',
+        email: 'ag@example.test',
+        capabilities: {},
+        windows: [
+          agWindow('gemini-5h', 'Gemini Models · 5-hour', 300),
+          agWindow('gemini-weekly', 'Gemini Models · Weekly', 10080),
+          agWindow('claude-5h', 'Claude and GPT models · 5-hour', 300),
+          agWindow('claude-weekly', 'Claude and GPT models · Weekly', 10080),
+        ],
+      }),
+    ]),
+    { now }
+  );
+  const columns = section(vm, 'antigravity').columns;
+  assert.deepEqual(
+    columns.map((col) => col.shortLabel),
+    ['Gemini 5hr', 'Gemini wk', 'Claude+GPT 5hr', 'Claude+GPT wk']
+  );
+  // the full labels stay for the table heads and Details
+  assert.deepEqual(
+    columns.map((col) => col.label),
+    ['Gemini 5-hour', 'Gemini weekly', 'Claude and GPT 5-hour', 'Claude and GPT weekly']
+  );
+});

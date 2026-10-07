@@ -232,6 +232,18 @@ export function windowLabel(provider, w) {
     return PERIOD_LABEL[p] || text(w.label) || 'Usage';
   return text(w.label) || 'Usage';
 }
+/**
+ * H3: single-line column heads for the stacked Antigravity grid. Only Antigravity
+ * has its own shorts; every other provider keeps its full window label.
+ */
+export function shortWindowLabel(provider, w) {
+  if (provider !== 'antigravity') return windowLabel(provider, w);
+  const family = /^gemini/i.test(text(w?.key)) ? 'Gemini' : 'Claude+GPT';
+  const p = period(w);
+  if (p === '5h') return `${family} 5hr`;
+  if (p === 'week') return `${family} wk`;
+  return windowLabel(provider, w);
+}
 export function fullWindowLabel(provider, w) {
   if (isFable(w)) return 'Fable weekly';
   if (provider === 'codex')
@@ -862,7 +874,7 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
         keys.push({ key: w.key, w });
   const order = (w) => (/^gemini/i.test(text(w.key)) ? 0 : 2) + (period(w) === '5h' ? 0 : 1);
   keys.sort((a, b) => order(a.w) - order(b.w) || a.key.localeCompare(b.key));
-  const columns = keys.map(({ key, w }) => ({ key, label: windowLabel('antigravity', w) }));
+  const columns = keys.map(({ key, w }) => ({ key, label: windowLabel('antigravity', w), shortLabel: shortWindowLabel('antigravity', w) }));
   const rows = accounts.map((account) => {
     const nativeRow = bound.get(account.id);
     const active = nativeRow?.selected === true;

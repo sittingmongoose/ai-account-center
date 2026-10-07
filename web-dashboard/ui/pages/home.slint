@@ -495,6 +495,8 @@ export component AccountRow inherits Rectangle {
     in property <AccountRowView> account;
     in property <SectionView> section;
     in property <bool> table: true;
+    // H3: the section's 2x2 call, so heads and rows never disagree
+    in property <bool> grid-2x2: false;
     in property <length> ident-w;
     in property <length> slot-w;
     in property <length> gap: 20px;
@@ -560,8 +562,10 @@ export component AccountRow inherits Rectangle {
     // stacked meter cells under 100 px wide stack "used" under the number (4.1.2): derived from
     // the tier-fed grid width (not self.width), like the table/stacked switch, to stay out of the
     // layout's width cycle. The 260 px switchable cap never binds here (it is above 100).
+    // H3: the 2x2 grid lays two cells per row, so each cell measures half the row, not a quarter.
+    property <int> grid-cols: root.grid-2x2 ? 2 : max(1, root.account.cells.length);
     property <bool> narrow-cells: !root.table
-        && (root.grid-w - 2 * root.pad-x - 12px * max(0, root.account.cells.length - 1)) / max(1, root.account.cells.length) < 100px;
+        && (root.grid-w - 2 * root.pad-x - 12px * (root.grid-cols - 1)) / root.grid-cols < 100px;
     public pure function cell-key(at: int) -> string {
         return at < root.account.cells.length ? root.account.cells[at].key : "";
     }
@@ -824,7 +828,7 @@ export component AccountRow inherits Rectangle {
                     // the meter grid: N equal columns (Claude) or two capped columns (switchable),
                     // gap 12; an account without a window keeps its empty cell
                     if root.has-cells: Rectangle { height: 10px; }
-                    if root.has-cells: HorizontalLayout {
+                    if root.has-cells && !root.grid-2x2: HorizontalLayout {
                         padding-left: root.pad-x;
                         padding-right: root.pad-x;
                         spacing: 12px;
@@ -837,6 +841,37 @@ export component AccountRow inherits Rectangle {
                             min-height: cell.key != "" ? sm.preferred-height : 0px;
                             preferred-height: self.min-height;
                             sm := Meter {
+                                y: 0px;
+                                width: parent.width;
+                                height: self.preferred-height;
+                                visible: cell.key != "";
+                                cell: true;
+                                stack-used: root.narrow-cells;
+                                data: cell;
+                                played: root.played;
+                                delay: root.delay + c * 16ms;
+                                hot: root.hovered && Device.hover;
+                                notch-override: root.notch-at;
+                                owner-label: root.section.label + " · " + root.account.email;
+                                clicked => { root.open-details(root.account.id); }
+                                value-changed => { root.flash(); }
+                            }
+                        }
+                    }
+                    // H3: two cells per row (mirrors the 2x2 heads: same columns, same gaps)
+                    if root.has-cells && root.grid-2x2: GridLayout {
+                        padding-left: root.pad-x;
+                        padding-right: root.pad-x;
+                        spacing-horizontal: 12px;
+                        spacing-vertical: 12px;
+                        for cell[c] in root.account.cells: Rectangle {
+                            row: floor(c / 2);
+                            col: mod(c, 2);
+                            preferred-width: (root.grid-w - 2 * root.pad-x - 12px) / 2;
+                            horizontal-stretch: 1;
+                            min-height: cell.key != "" ? sm2.preferred-height : 0px;
+                            preferred-height: self.min-height;
+                            sm2 := Meter {
                                 y: 0px;
                                 width: parent.width;
                                 height: self.preferred-height;
@@ -1097,6 +1132,11 @@ export component AccountSection inherits Plate {
     property <length> slot-w: max(root.slot-max, root.section.switchable ? 80px : root.touch ? 84px : 62px);
     // the stacked switchable meter grid caps each column at 260 px, extra space to the right (4.1.3)
     property <length> cell-w: max(0px, min(260px, (root.inner-w - 12px * max(0, root.section.columns.length - 1)) / max(1, root.section.columns.length)));
+    // H3: stacked switchable heads with more than two columns (Antigravity) use the short
+    // labels; when one row of them no longer fits (~116 px a column), the heads and the
+    // meter grid both become a 2x2 grid (at most 3 meters per row on P).
+    property <bool> short-heads: !root.table && root.section.switchable && root.section.columns.length > 2;
+    property <bool> grid-2x2: root.short-heads && root.cell-w < 116px;
 
     // the stepper's value before it is saved; -1 when nothing is pending
     property <int> pending: -1;
@@ -1247,7 +1287,9 @@ export component AccountSection inherits Plate {
                     }
                 }
             }
-            Rectangle { horizontal-stretch: 1; }
+            // O3: below D the title group already stretches, so a second stretch-1
+            // spacer would halve its width and wrap the meta early
+            if !root.touch: Rectangle { horizontal-stretch: 1; }
             // Claude: the meter legend and History
             if root.section.kind == "claude": HorizontalLayout {
                 spacing: 8px;
@@ -1532,24 +1574,48 @@ export component AccountSection inherits Plate {
             Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.rule; }
             // the concept's .colhead: 8 px padding inside its two hairlines and an 11 px line at line-height 1.35.
             // Table: ACCOUNT over the account column. Stacked (4.1.2): one head per meter grid column.
-            colhead := HorizontalLayout {
-                padding-left: root.pad-x;
-                padding-right: root.pad-x;
-                padding-top: 9px;
-                padding-bottom: 9px;
-                spacing: root.col-gap;
-                if root.table: Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
-                for col in root.section.columns: Caps {
-                    min-height: 15px;
-                    min-width: root.table ? (Breakpoints.below-d ? 120px : 108px) : 0px;
-                    preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
-                    horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
-                    text: col.label.to-uppercase();
-                    wrap: word-wrap;
-                    overflow: clip;
-                    vertical-alignment: bottom;
+            // The wrapper keeps the band's height source while the one-row and 2x2 heads swap (H3).
+            colhead := VerticalLayout {
+                spacing: 0px;
+                if !root.grid-2x2: HorizontalLayout {
+                    padding-left: root.pad-x;
+                    padding-right: root.pad-x;
+                    padding-top: 9px;
+                    padding-bottom: 9px;
+                    spacing: root.col-gap;
+                    if root.table: Caps { width: root.ident-w; min-height: 15px; text: "ACCOUNT"; vertical-alignment: bottom; }
+                    for col in root.section.columns: Caps {
+                        min-height: 15px;
+                        min-width: root.table ? (Breakpoints.below-d ? 120px : 108px) : 0px;
+                        preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
+                        horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
+                        text: (root.short-heads && col.short-label != "" ? col.short-label : col.label).to-uppercase();
+                        wrap: word-wrap;
+                        overflow: clip;
+                        vertical-alignment: bottom;
+                    }
+                    if root.table: Rectangle { width: root.slot-w; }
                 }
-                if root.table: Rectangle { width: root.slot-w; }
+                // H3: the 2x2 heads mirror the 2x2 meter grid (same two columns, same gap)
+                if root.grid-2x2: GridLayout {
+                    padding-left: root.pad-x;
+                    padding-right: root.pad-x;
+                    padding-top: 9px;
+                    padding-bottom: 9px;
+                    spacing-horizontal: 12px;
+                    spacing-vertical: 4px;
+                    for col[i] in root.section.columns: Caps {
+                        row: floor(i / 2);
+                        col: mod(i, 2);
+                        min-height: 15px;
+                        preferred-width: (root.inner-w - 12px) / 2;
+                        horizontal-stretch: 1;
+                        text: (col.short-label != "" ? col.short-label : col.label).to-uppercase();
+                        wrap: word-wrap;
+                        overflow: clip;
+                        vertical-alignment: bottom;
+                    }
+                }
             }
         }
         rows-box := Rectangle {
@@ -1579,6 +1645,7 @@ export component AccountSection inherits Plate {
                     account: row;
                     section: root.section;
                     table: root.table;
+                    grid-2x2: root.grid-2x2;
                     ident-w: root.ident-w;
                     slot-w: root.slot-w;
                     gap: root.col-gap;
