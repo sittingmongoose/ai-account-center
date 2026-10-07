@@ -783,6 +783,8 @@ function donutView(A, state, shades) {
     mode: cost ? 'cost' : 'tokens', segs: rows, lut, legend,
     centre: cost ? allNone ? NOT_LOGGED : allFree ? FREE : money(total) : tokC(total),
     centreLabel: cost ? allFree ? 'estimated cost, free models' : `estimated cost, ${partial ? 'partial' : rows.length > 1 ? 'all models' : '1 model'}` : `tokens, ${rows.length > 1 ? 'all models' : '1 model'}`,
+    // task 9 A5: the centre label that fits a small donut hole on phones
+    centreShort: cost ? 'cost' : 'tokens',
     unit: cost ? '' : ' tokens', empty: !rows.length && !allNone && !allFree,
     emptyText: allNone ? 'No model in these logs has a logged cost.' : 'No model activity in the logs.',
   };

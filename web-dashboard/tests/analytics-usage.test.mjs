@@ -421,3 +421,14 @@ test('cache footnote (task 9 A3): the view carries the hit-rate note', () => {
   const cache = usageView(payload(), state(), { now }).cache;
   assert.equal(cache.note, 'Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.');
 });
+
+test('donut centre (task 9 A5): a short label that fits a small hole, per mode', () => {
+  const tokens = usageView(payload(), state({ donut: 'tokens' }), { now }).donut;
+  assert.equal(tokens.mode, 'tokens');
+  assert.equal(tokens.centreShort, 'tokens');
+  assert.match(tokens.centreLabel, /^tokens, /);
+  const cost = usageView(payload(), state({ donut: 'cost' }), { now }).donut;
+  assert.equal(cost.mode, 'cost');
+  assert.equal(cost.centreShort, 'cost');
+  assert.match(cost.centreLabel, /^estimated cost, /);
+});

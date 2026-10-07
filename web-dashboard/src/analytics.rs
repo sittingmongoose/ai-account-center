@@ -756,6 +756,8 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         mode: s(donut, "mode"),
         centre: s(donut, "centre"),
         centre_label: s(donut, "centreLabel"),
+        // task 9 A5 (analytics1): the centre label that fits a small donut hole
+        centre_short: s(donut, "centreShort"),
         unit: s(donut, "unit"),
         empty: b(donut, "empty"),
         empty_text: s(donut, "emptyText"),

@@ -148,7 +148,9 @@ export struct AxDonutSeg {
 // A legend row: kind seg (one arc), group (opens into its models: the models under 1%, or by cost the models with
 // no arc) or child (a model inside an open group; it opens the model's detail). arc: the arc it lights, or -1.
 export struct AxDonutLeg { seg: AxDonutSeg, kind: string, open: bool, arc: int }
-export struct AxDonut { sub: string, note: string, mode: string, centre: string, centre-label: string, unit: string, empty: bool, empty-text: string }
+export struct AxDonut { sub: string, note: string, mode: string, centre: string, centre-label: string, unit: string, empty: bool, empty-text: string,
+// task 9 analytics1: the centre label that fits a small hole ("tokens" or "cost")
+centre-short: string }
 
 // ---- session stats, token breakdown, cache efficiency ----
 export struct AxStat { key: string, label: string, num: float, has: bool, fmt: string, text: string }
