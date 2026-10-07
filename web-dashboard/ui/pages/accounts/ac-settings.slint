@@ -257,9 +257,40 @@ global AcFormat {
     }
 }
 
+// The "at N% used" half of a policy row (4.3.7): beside the [mark name switch] group when the row's
+// width fits both, stacked under it otherwise (the wrap is decided from measured widths, PolicyRow).
+component PolicyAtRow inherits HorizontalLayout {
+    in property <int> shown;
+    in property <int> min: 50;
+    in property <int> max: 99;
+    in property <bool> known: true;
+    in property <bool> enabled: true;
+    in property <bool> wait: false;
+    callback step(int);
+    spacing: 8px;
+    alignment: start;
+    opacity: root.wait ? 0.5 : 1;
+    Text { text: "at"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+    VerticalLayout {
+        alignment: center;
+        Stepper {
+            value: root.shown;
+            min: root.min;
+            max: root.max;
+            known: root.known;
+            enabled: root.enabled;
+            step(d) => { root.step(d); }
+        }
+    }
+    Text { text: "used"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+}
+
 component PolicyRow inherits VerticalLayout {
     in property <AcPolicy> policy;
     in property <bool> busy;
+    // the row's inner width (the settings card's width less the item's padding), passed down from the
+    // settings column: the wrap below must be decided ahead of layout
+    in property <length> avail: 0px;
     callback act(string, string);
     property <int> pending: -1;
     property <int> shown: root.pending >= 0 ? root.pending : root.policy.threshold;
@@ -267,6 +298,12 @@ component PolicyRow inherits VerticalLayout {
     changed reported => { if root.pending == root.reported { root.pending = -1; } }
     // below D a tap on the dimmed row's toggle opens its reason under the row (5.2.2)
     property <bool> show-reason: false;
+    function queue-step(d: int) {
+        root.pending = clamp(root.shown + d, root.policy.min, root.policy.max);
+        release.running = false;
+        send.running = false;
+        send.running = true;
+    }
     send := Timer {
         interval: 600ms;
         running: false;
@@ -282,16 +319,22 @@ component PolicyRow inherits VerticalLayout {
     spacing: 2px;
     opacity: root.policy.toggle-enabled ? 1 : 0.55;
     animate opacity { duration: Motion.on ? Motion.med : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
-    // below D the control wraps as two whole groups: [mark name switch] and [at stepper used] (4.3.7)
-    if Breakpoints.below-d: FlexboxLayout {
-        spacing-horizontal: 8px;
-        spacing-vertical: 8px;
-        alignment: start;
+    // below D the control wraps as two whole groups: [mark name switch] and [at stepper used] (4.3.7).
+    // Not a FlexboxLayout: a wrapping FlexboxLayout reports a one-line preferred height, so the card
+    // measured too short and its last row ran past the card's bottom edge (task 9 O9). Plain rows
+    // measure exactly, so the wrap is a measured choice between one row and two: the groups' natural
+    // width (mark 20, switch and stepper are fixed; the texts report their preferred-width) against
+    // the row's inner width.
+    if Breakpoints.below-d: pol := VerticalLayout {
+        spacing: 8px;
+        property <bool> one-line: root.avail > 0px
+            && 20px + 8px + max(76px, pname.preferred-width) + 8px + pt.preferred-width
+                + 8px + at-m.preferred-width + 8px + 130px + 8px + used-m.preferred-width <= root.avail;
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
             VerticalLayout { alignment: center; ProviderMark { provider: root.policy.provider; size: 20px; } }
-            Text { min-width: 76px; text: root.policy.name; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; overflow: elide; }
+            pname := Text { min-width: 76px; text: root.policy.name; font-size: 13px; color: Theme.ink; vertical-alignment: center; horizontal-stretch: 0; overflow: elide; }
             TipArea {
                 owner: "policy:" + root.policy.provider;
                 tip: root.policy.tip;
@@ -305,31 +348,31 @@ component PolicyRow inherits VerticalLayout {
                     enabled: root.policy.toggle-enabled && !root.busy;
                     toggled(on) => { root.act(root.policy.provider == "antigravity" ? "antigravity-automatic" : "automatic", on ? "true" : "false"); }
                 }
+                // measurers for the wrap decision (never drawn, never hit-tested): visible:false still
+                // takes layout space in Slint 1.18, so they are zero-sized (88e3b13a) and only their
+                // preferred-width is read. They live in this TouchArea, not in a layout, whose spacing
+                // would count a zero-sized child.
+                at-m := Text { x: 0px; y: 0px; visible: false; width: 0px; height: 0px; text: "at"; font-size: 13px; }
+                used-m := Text { x: 0px; y: 0px; visible: false; width: 0px; height: 0px; text: "used"; font-size: 13px; }
+            }
+            if pol.one-line: PolicyAtRow {
+                shown: root.shown;
+                min: root.policy.min;
+                max: root.policy.max;
+                known: root.policy.threshold >= 0;
+                enabled: root.policy.step-enabled && !root.busy;
+                wait: root.policy.wait;
+                step(d) => { root.queue-step(d); }
             }
         }
-        HorizontalLayout {
-            spacing: 8px;
-            horizontal-stretch: 0;
-            alignment: start;
-            opacity: root.policy.wait ? 0.5 : 1;
-            Text { text: "at"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
-            VerticalLayout {
-                alignment: center;
-                Stepper {
-                    value: root.shown;
-                    min: root.policy.min;
-                    max: root.policy.max;
-                    known: root.policy.threshold >= 0;
-                    enabled: root.policy.step-enabled && !root.busy;
-                    step(d) => {
-                        root.pending = clamp(root.shown + d, root.policy.min, root.policy.max);
-                        release.running = false;
-                        send.running = false;
-                        send.running = true;
-                    }
-                }
-            }
-            Text { text: "used"; font-size: 13px; color: Theme.ink-3; vertical-alignment: center; }
+        if !pol.one-line: PolicyAtRow {
+            shown: root.shown;
+            min: root.policy.min;
+            max: root.policy.max;
+            known: root.policy.threshold >= 0;
+            enabled: root.policy.step-enabled && !root.busy;
+            wait: root.policy.wait;
+            step(d) => { root.queue-step(d); }
         }
     }
     if !Breakpoints.below-d: HorizontalLayout {
@@ -1047,6 +1090,9 @@ component SigninGroup inherits SetGroup {
 component SettingsGroup inherits SetGroup {
     in property <string> theme-value;
     in property <bool> busy;
+    // the width of the column this group sits in (like SigninGroup's): the policy rows must decide
+    // their wrap ahead of layout
+    in property <length> col-w: 360px;
     callback theme-picked(string);
     callback act(string, string);
     title: "Settings";
@@ -1141,6 +1187,8 @@ component SettingsGroup inherits SetGroup {
             for p in AcData.policies: PolicyRow {
                 policy: p;
                 busy: root.busy;
+                // the row's inner width: the card's width less this item's 16 px (P) / 20 px (F and T) padding
+                avail: root.col-w - (Breakpoints.tier-p ? 32px : 40px);
                 act(kind, value) => { root.act(kind, value); }
             }
         }
@@ -1470,6 +1518,7 @@ export component SettingsColumn inherits VerticalLayout {
         SettingsGroup {
             theme-value: root.theme-value;
             busy: root.busy;
+            col-w: root.col-inner;
             theme-picked(v) => { root.theme-picked(v); }
             act(k, v) => { root.act(k, v); }
         }
@@ -1507,6 +1556,7 @@ export component SettingsColumn inherits VerticalLayout {
             SettingsGroup {
                 theme-value: root.theme-value;
                 busy: root.busy;
+                col-w: root.col-half;
                 theme-picked(v) => { root.theme-picked(v); }
                 act(k, v) => { root.act(k, v); }
             }
