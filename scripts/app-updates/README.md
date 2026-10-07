@@ -136,7 +136,7 @@ detected official directory. Unrelated Muse shims remain unsupported.
 
 ### Live verification after deployment
 
-Only Jared's explicitly authorized Update apps click should exercise real
+Only the owner's explicitly authorized Update apps click should exercise real
 installers. Before that, read-only `--inventory --platform <host>` should show
 eight rows, full T3 nightly versions and Windows Muse's native manager/version.
 After an authorized click, confirm 24 result rows and simultaneous host progress.

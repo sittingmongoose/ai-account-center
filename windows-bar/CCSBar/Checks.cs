@@ -995,7 +995,7 @@ public static partial class Checks
     };
 
     /// <summary>
-    /// The visible refresh's rest (Jared's gray Open icons): the N6 single pass renders while still busy, so the tree
+    /// The visible refresh's rest (the reported gray Open icons): the N6 single pass renders while still busy, so the tree
     /// was born disabled, and the closing walk must wake it without a second rebuild — while a failed refresh keeps
     /// everything resting until a fresh read. Then the action slot rule: a press on the slot (a resting icon, or the
     /// gaps around it) never expands the row, and an enabled icon's click reaches the Open flow (one POST against a
