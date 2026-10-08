@@ -735,6 +735,37 @@ describe('remove with a confirmation token', () => {
     expect([late.status, late.body.code]).toEqual([409, 'confirmation_stale']);
   });
 
+  it('names the computer a source is read from, Nas1 for ubuntu plus its alias', async () => {
+    const f = await fixture();
+    fs.writeFileSync(
+      path.join(ccsDir, 'account-usage-sources.json'),
+      JSON.stringify({
+        version: 1,
+        sources: [
+          { provider: 'cursor', platform: 'ubuntu', sshHost: 'nas1-agent' },
+          { provider: 'muse', platform: 'mac', sshHost: 'mac-host' },
+          { provider: 'antigravity', platform: 'ubuntu' },
+        ],
+      })
+    );
+    const effects = async (id: string) =>
+      ((await f.request('POST', `/${id}/remove`, {})).body.confirmation as { effects: string[] })
+        .effects;
+    for (const [id, computer] of [
+      ['cursor:usage', 'Nas1'],
+      ['muse:usage', 'Mac'],
+      ['antigravity:usage', 'Ubuntu'],
+    ]) {
+      expect([id, await effects(id)]).toEqual([
+        id,
+        [
+          'The account is no longer read by the dashboard.',
+          `Its sign-in on ${computer} is not changed.`,
+        ],
+      ]);
+    }
+  });
+
   it('refuses the active, default and last Codex profile at prepare and at commit', async () => {
     const f = await fixture();
     codexProfile('gmail');

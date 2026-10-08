@@ -18,6 +18,8 @@ import { ClaudeLifecycleError } from './claude-account-lifecycle';
 import { TRASH_ID } from './claude-account-stores';
 import { CodexLifecycleError } from './codex-account-lifecycle';
 import { AntigravityLifecycleError } from '../../antigravity/account-lifecycle';
+import { sourceHost } from './additional-account-service';
+import { HOST_LABELS } from './dashboard-hosts';
 import {
   deleteOpencodeWalletSource,
   readOpencodeWalletSource,
@@ -33,7 +35,6 @@ import {
  * state. A refusal check that cannot run refuses (500 `remove_failed`), never
  * passes.
  */
-const PLATFORM_NAMES = { ubuntu: 'Ubuntu', mac: 'Mac', windows: 'Windows' } as const;
 const STATUS: Record<string, number> = {
   unknown_account: 404,
   remove_failed: 500,
@@ -160,13 +161,15 @@ function planFor(env: LifecycleEnv, account: ResolvedAccount): RemovePlan {
   if (account.kind === 'additional') {
     const entry = account.entry;
     const keyed = entry.credential.kind === 'aac-key' && isKeyProvider(account.provider);
+    // Nas1 is stored as ubuntu plus its alias; the accounts page words it the same way.
+    const computer = HOST_LABELS[sourceHost(entry)];
     return {
       kind: keyed ? 'api-key' : entry.credential.kind,
       effects: keyed
-        ? [`The stored key is deleted from ${PLATFORM_NAMES[entry.platform]}.`]
+        ? [`The stored key is deleted from ${computer}.`]
         : [
             'The account is no longer read by the dashboard.',
-            `Its sign-in on ${PLATFORM_NAMES[entry.platform]} is not changed.`,
+            `Its sign-in on ${computer} is not changed.`,
           ],
       refusal: async () => (running() ? 'signin_running' : null),
       fingerprint: async () => reviewedEntry(entry),

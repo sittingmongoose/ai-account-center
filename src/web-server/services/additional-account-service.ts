@@ -1,6 +1,10 @@
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
-import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
+import type {
+  DashboardAccount,
+  DashboardAccountWindow,
+  DashboardPlatform,
+} from './account-dashboard-types';
 import {
   antigravityPlanDisplay,
   cloneAntigravityPlan,
@@ -184,9 +188,13 @@ function usageWindow(value: unknown, index: number): DashboardAccountWindow | nu
 /**
  * The computer a source runs on. Nas1, the second Ubuntu computer, is stored as
  * platform 'ubuntu' plus its fixed ssh alias and never as a platform of its
- * own, so registry files and older packages read it unchanged.
+ * own, so registry files and older packages read it unchanged. Sources and
+ * registry entries both fit, so the account removal wording shares this.
  */
-function sourceHost(source: AdditionalUsageSource): DashboardHost {
+export function sourceHost(source: {
+  platform: DashboardPlatform;
+  sshHost?: string | null;
+}): DashboardHost {
   return source.platform === 'ubuntu' && source.sshHost === NAS1_SSH_ALIAS
     ? 'nas1'
     : source.platform;
