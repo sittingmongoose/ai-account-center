@@ -15,6 +15,43 @@ The web dashboard is Slint 1.18.1 compiled through Rust to WebAssembly. The
 backend remains TypeScript; native bars remain Swift/WPF. The primary CLI command
 is `ai-account-center dashboard`, with `ccs config` compatibility.
 
+## Computers
+
+AI Account Center reaches four computers. Hosts and aliases are fixed in
+source; there is no configurable host list.
+
+| Computer | How it is reached | What AI Account Center does there |
+| --- | --- | --- |
+| Ubuntu | Local; runs the dashboard | Dashboard, account state, guarded Codex activation and auto-switch, Antigravity, local collectors and log scans, app updates |
+| Mac | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native bar |
+| Windows | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native tray |
+| Nas1 | Fixed SSH alias `nas1-agent` | App updates and the Analytics scan only |
+
+Nas1 is a second Ubuntu computer. Its fixed helpers run with `--platform
+ubuntu`, and the dashboard files their results under their own computer, Nas1.
+Nas1 runs no dashboard and holds no account state: AI Account Center is not
+installed there, and no account switching, Codex or Antigravity activation,
+key storage, sign-in or Claude desktop flow targets it (those APIs take host
+types that exclude it). The dashboard computer runs exactly these fixed
+commands on Nas1, each built only from fixed strings:
+
+1. A `sha256sum` hash query of the update helpers in `~/.ccs/app-updates`.
+2. A `tar` extract of the update helpers into that folder, only when a
+   checksum differs.
+3. The update helper, `/usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py"
+   --apply --platform ubuntu`.
+4. The pinned, read-only analytics helper streamed over SSH stdin to
+   `/usr/bin/python3 -c`; it writes nothing on Nas1.
+5. Only for a quota source saved for Nas1, the usage collector helper with
+   `--platform ubuntu`; the helpers never write account tokens or change the
+   selected account.
+
+A quota reading belongs to a provider account, not to a computer, and Nas1
+signs in to the same provider accounts as the dashboard computer, so by default
+no source moves there. A source runs on Nas1 when it is saved as
+`platform: "ubuntu"` with `sshHost: "nas1-agent"`; persisted usage-source and
+registry files keep their schema, and the account reads "on Nas1".
+
 ## API and data ownership
 
 [Server middleware](../../src/web-server/index.ts) owns session/origin/auth
@@ -47,12 +84,17 @@ Claude Code, Codex, the Muse CLI and Antigravity are their own provider, OMP and
 record a route per call (Qwen, Z.ai, Kimi Code, OpenCode Go, Cursor, Muse Code,
 Antigravity), and a route no provider claims is `other`. Every model with usage
 is published. Ubuntu logs are parsed in bounded worker
-scans with per-file checkpoints; the Mac and Windows contribute per-model,
+scans with per-file checkpoints; the Mac, Windows and Nas1 contribute per-model,
 per-hour aggregates through one packaged Python helper streamed over the
 existing ssh channel ([remote transport](../../src/web-server/services/analytics-remote-transport.ts)),
-never raw events. Beside its hourly rows each answer carries per-session
-aggregates whose key is a digest derived on the host that read the log — the
-same key the server's own readers derive at ingest — so sessions from all three
+never raw events. Nas1, a second Ubuntu computer, is scanned the same way: the
+same pinned, read-only helper, with nothing installed or written there, through
+its fixed alias (no Claude desktop launcher names it). Each remote computer
+keeps its own scan cache. On Nas1 the helper reads the Claude Code, Codex (T3
+shadow homes included), OMP, Muse, zcode and Antigravity roots under its home
+folder, plus any extra usage-log roots saved for Nas1 (POSIX paths). Beside its
+hourly rows each answer carries per-session aggregates whose key is a digest derived on the host that read the log — the
+same key the server's own readers derive at ingest — so sessions from all four
 hosts count in Session stats and Recent sessions while no session id, path or
 directory ever leaves that host.
 OMP rows use the logged cost when nonzero, else list rates
@@ -60,11 +102,11 @@ under the provider that served the call (a logged 0 is "not logged"); logged
 and unlogged events never share a compact row. Muse and zcode input exclude
 cache reads. A resumed OMP session copied into a second root counts once. A
 remote scan that does not answer keeps the last remote aggregates in the
-totals. `activity.sources` lists each tool and host as `ok`, `cached`,
-`unavailable` or `not_installed`, each measured by that host's own scan; only
-Cursor is a fixed "no local usage log" entry, being the one tool that keeps no
-local usage log on any host. Antigravity is read by the same packaged helper on
-every host, the VM included ([reader](../../src/web-server/usage/antigravity-native-usage-collector.ts)):
+totals. `activity.sources` lists each tool and host (Ubuntu, Mac, Windows and
+Nas1) as `ok`, `cached`, `unavailable` or `not_installed`, each measured by that
+host's own scan; only Cursor is a fixed "no local usage log" entry, being the
+one tool that keeps no local usage log on any host. Antigravity is read by the
+same packaged helper on every host, the VM included ([reader](../../src/web-server/usage/antigravity-native-usage-collector.ts)):
 a port of T3 Code's reader over the conversation databases under `~/.gemini`,
 `~/.config/antigravity` and T3 Code's Antigravity instance folders, usage
 fields only, each record once across databases and copies. A live database
@@ -77,7 +119,9 @@ writer overlapped is dropped and done again on the next scan.
 [guarded activation/rollback](../../src/codex-auth/activate-codex-profile.ts) and idle-only
 [auto-switch](../../src/web-server/services/codex-auto-switch-service.ts).
 [App updates](../../src/web-server/services/app-update-service.ts) are allowlisted
-jobs triggered explicitly, never from startup or routine polling.
+jobs triggered explicitly, never from startup or routine polling. One job covers
+the four computers above (32 result rows: four computers x eight apps); each
+computer updates its own apps while the others run in parallel.
 
 The dashboard response lists every supported provider in `providers[]` (labels,
 order, sign-in kind, live availability and capabilities) from one

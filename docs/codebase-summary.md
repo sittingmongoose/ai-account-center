@@ -12,11 +12,11 @@ contracts from the original CCS fork.
 | Account projection | [account dashboard service](../src/web-server/services/account-dashboard-service.ts) |
 | Codex controls | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [activation](../src/codex-auth/activate-codex-profile.ts), [auto-switch](../src/web-server/services/codex-auto-switch-service.ts) |
 | Analytics | [analytics service](../src/web-server/services/account-analytics-service.ts) |
-| Explicit app updates | [app-update service](../src/web-server/services/app-update-service.ts) |
+| Explicit app updates | [app-update service](../src/web-server/services/app-update-service.ts), [host invocation and helper sync](../src/web-server/services/app-update-hosts.ts), [update helpers](../scripts/app-updates/) |
 | Slint scenes/bindings | [dashboard.slint](../web-dashboard/ui/dashboard.slint), [analytics.slint](../web-dashboard/ui/analytics.slint), [lib.rs](../web-dashboard/src/lib.rs); map of pages, components, view models and rendering rules: [UI architecture](../web-dashboard/ui/README-ARCHITECTURE.md) |
 | Browser API bridge | [bridge.js](../web-dashboard/public/bridge.js) |
 | Native clients | [macos-bar](../macos-bar/), [windows-bar](../windows-bar/) |
-| Existing-host usage | [Python collectors](../scripts/account-usage/), [browser bridges](../browser-bridge/) |
+| Existing-host usage | [Python collectors](../scripts/account-usage/), [browser bridges](../browser-bridge/), [remote analytics scan](../src/web-server/services/analytics-remote-transport.ts) |
 | Private paths | [config-manager](../src/utils/config-manager.ts) |
 
 `ai-account-center dashboard` and compatible `ccs config` reach the same
@@ -24,9 +24,19 @@ authenticated dashboard. Retired runtime bins provide guidance rather than
 profile dispatch. Existing stored profile names, session aliases, provider IDs,
 native messaging identities and `CCS_*` environment names remain compatible.
 
+Four computers are fixed in source: the Ubuntu computer that runs the dashboard
+and the Mac, Windows and Nas1 reached over fixed SSH aliases. Nas1 is a second
+Ubuntu computer (its helpers run with `--platform ubuntu`) that takes part in
+app updates (32 result rows across the four computers) and the Analytics scan
+only. It runs no dashboard and holds no account state, and a quota source runs
+there only when saved as `platform: "ubuntu"` plus the Nas1 `sshHost`. The
+[computers table](system-architecture/index.md#computers) lists what runs where
+and names the alias.
+
 The root TypeScript build compiles `src/` into `dist/` and
 [bundles](../scripts/build-codex-update-runtime.js) the Codex stop/start runtime
-that the update helpers carry to Linux hosts without AAC into `dist/app-updates/`. The
+into `dist/app-updates/`; the update helpers carry that bundle to Linux hosts
+without AAC, such as Nas1. The
 [Slint builder](../scripts/build-ui.js) fingerprints the crate manifest/lock,
 Rust, Slint and public browser inputs, builds locked WASM and stages `dist/ui/`.
 The [validator](../scripts/validate-ui.js) and

@@ -3,15 +3,17 @@
 The dashboard's authenticated `POST /api/app-updates/start` accepts exactly `{}`.
 It starts one asynchronous, persisted job and returns immediately. Authenticated
 `GET /api/app-updates/status` reads state only. Duplicate active jobs are rejected.
-The server invokes only Ubuntu locally and the fixed Mac and Windows
+The server invokes only Ubuntu locally and the fixed Mac, Windows and Nas1
 SSH aliases (`APP_UPDATE_SSH_HOSTS`); callers cannot supply hosts, commands, app IDs, paths or download URLs.
+Nas1 is a second Ubuntu computer reached as `nas1-agent` (see [Nas1](#nas1-the-fourth-computer)).
 
 ## Every computer at once, and never stuck
 
-Ubuntu, Mac and Windows run **at the same time**; each computer still updates
-its own apps one at a time (one installer per host). The job ends when the
-slowest computer finishes, so a busy or unreachable host never holds the others
-back. Per-computer progress is live: the helper prints one JSON line per event
+Ubuntu, Mac, Windows and Nas1 run **at the same time**; each computer still
+updates its own apps one at a time (one installer per host). The job ends when
+the slowest computer finishes, so a busy or unreachable host never holds the
+others back. Four computers x eight apps give 32 result rows. Per-computer
+progress is live: the helper prints one JSON line per event
 (`{"event":"app","appId":...,"phase":"checking"|"updating"}` and
 `{"event":"result","result":{...}}`) when the dashboard sets
 `AAC_UPDATE_PROGRESS=1`, then the usual final `{"results":[...]}` line; an older
@@ -46,13 +48,18 @@ modify or export account credentials/configuration.
 | App | Detected installation and supported update |
 | --- | --- |
 | Antigravity CLI | Active native `agy update`, only to a build in the switching review set (held otherwise, see below) |
-| Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Mac, PowerShell on Windows |
+| Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix |
 | Claude Code | Active native `claude update` |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only; Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
 | T3 Code | One `t3-code` row per host covers its nightly desktop/bundled server and any installed standalone runtime; Ubuntu uses the native updater and a detached delayed server restart; Mac verifies SHA512, codesign and notarization before a bundle swap; Windows verifies SHA512 and the T3 Tools Inc Authenticode publisher before the silent NSIS installer |
+
+Nas1 is a second Ubuntu computer: wherever this table or the text below names
+Ubuntu for an installation or an update method, Nas1 uses the same one, because
+its helper runs with `--platform ubuntu`. [Nas1](#nas1-the-fourth-computer)
+below lists what differs.
 
 Official methods: [Antigravity installer](https://antigravity.google/cli/install.sh),
 [Meta installer](https://dev.meta.ai/install.sh),
@@ -94,7 +101,8 @@ On Ubuntu, `t3 update <version> --channel nightly` runs with empty, non-TTY stdi
 and **without `--yes`**. Its native updater verifies the runtime and rewrites the
 service definition while leaving the running server on its old version. T3 is
 the last app on each host, and Ubuntu schedules a separate transient user service
-that waits for the update helper to exit, every dashboard host to finish and the
+that waits for the update helper to exit, every computer in the dashboard job
+(Nas1 included) to finish and the
 dashboard job lock to be released, then waits 30 seconds. AAC passes its resolved
 `app-updates` state directory explicitly, including custom `--config-dir`,
 `CCS_DIR` and legacy `CCS_HOME` configuration. Without that argument the helper
@@ -139,14 +147,19 @@ detected official directory. Unrelated Muse shims remain unsupported.
 Only the owner's explicitly authorized Update apps click should exercise real
 installers. Before that, read-only `--inventory --platform <host>` should show
 eight rows, full T3 nightly versions and Windows Muse's native manager/version.
-After an authorized click, confirm 24 result rows and simultaneous host progress.
+After an authorized click, confirm 32 result rows and simultaneous host progress.
 When T3 updates, verify Mac/Windows bundle versions and port 3773 health, then
 wait until the completed job's scheduled Ubuntu restart has finished; inspect
 `t3 service status`, the detached unit journal, port 3773 and that
 `ccs-dashboard.service` remained active. Do not run this live check while agent
-work that must survive a T3 restart is in progress.
+work that must survive a T3 restart is in progress. For Nas1 (inventory there
+runs with `--platform ubuntu`) confirm its eight rows, that a T3 update there
+scheduled the restart of Nas1's own `t3code.service`, that
+`~/.ccs/app-updates/` on Nas1 holds the 12 synced helper files, and that Nas1
+has no AI Account Center package, command or service and no `~/.ccs` content
+beyond `app-updates/`.
 
-**Antigravity CLI review hold (all three computers).** Account switching works only
+**Antigravity CLI review hold (all four computers).** Account switching works only
 with native builds listed in `scripts/antigravity/runtime/release.json`
 (`reviewedNatives`), and `agy update` always installs the newest build. Before it
 runs, the helper reads the official release manifest for this computer (the fixed
@@ -222,7 +235,7 @@ sync instead of sending a partial set). It carries no account activation code;
 installed package.
 
 The native client reconnect behavior was checked read-only in installed app.asar
-bundles on all three hosts and the [version-pinned proxy](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/stdio-to-uds/src/lib.rs)
+bundles on the Ubuntu, Mac and Windows hosts and the [version-pinned proxy](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/stdio-to-uds/src/lib.rs)
 and [startup lock](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/app-server-transport/src/transport/unix_socket.rs)
 implementations. Updating Codex can restart its coupled local desktop/server
 family even when only one Codex package changed.
@@ -230,8 +243,9 @@ family even when only one Codex package changed.
 ## Deployment and setup
 
 The server syncs every `app_update_*.py`, `app_updates.py`, and
-`app_update_codex.cjs` from its own build into `~/.ccs/app-updates` on
-Mac/Windows before each run, checksum-gated so up-to-date hosts only answer one
+`app_update_codex.cjs` from its own build, plus the generated
+`app_update_codex_runtime.cjs` from `dist/app-updates`, into `~/.ccs/app-updates` on
+Mac, Windows and Nas1 before each run, checksum-gated so up-to-date hosts only answer one
 hash query; a sync failure leaves the deployed helpers untouched. Python must be
 available. On Windows register `install-windows-task.ps1` once as the signed-in
 user: its fixed `CCS App Updates` InteractiveToken/Limited task runs the private
@@ -239,9 +253,11 @@ helper. Registration does **not** run an update. The helper queues that task
 from SSH session zero, so the user's interactive session must be signed in.
 Existing CCS Bar tasks are untouched.
 
-The Mac sync extracts with `/bin/mkdir`, `/bin/chmod` and `/usr/bin/tar`
+The Mac and Nas1 syncs extract with `/bin/mkdir`, `/bin/chmod` and `/usr/bin/tar`
 (macOS has no `/usr/bin/chmod`; that path silently broke every Mac sync until
-2026-10-06, so Mac kept running its Oct-2 helpers).
+2026-10-06, so Mac kept running its Oct-2 helpers). Ubuntu's `/bin` is the same
+folder as `/usr/bin`, so the three paths work on Nas1 too. The hash query differs
+by system: the Mac uses `/usr/bin/shasum -a 256`, Nas1 uses `/usr/bin/sha256sum`.
 
 Results are `updated`, `current`, `not_installed`, `failed`, `restart_failed`,
 `skipped`, `unknown`, or `action_required`, with bounded versions, fixed message
@@ -269,6 +285,47 @@ Windows npm updates first ask the registry whether anything is newer, then run
 `node npm-cli.js` directly (never through `cmd /s /c`, which mangles spaced
 paths) after stopping mapped instances first, since Windows cannot replace a
 running npm tree.
+
+## Nas1, the fourth computer
+
+Nas1 is a second Ubuntu computer reached over the fixed alias `nas1-agent`
+(label "Nas1"). Its rows are filed under their own computer, so one run returns
+4 computers x 8 apps = 32 result rows, with Nas1's progress beside the other
+three. It follows the Ubuntu rows of this guide except where noted here.
+
+- **Command.** `ssh nas1-agent` runs
+  `AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform ubuntu`
+  plus `--agy-reviewed '<versions>'` when the reviewed list is readable. The
+  helper checks `--platform` against its own operating system, so Nas1 runs as
+  `ubuntu` and the dashboard files the rows under Nas1. Nas1 gets neither
+  `--state-dir` nor `--dashboard-job`; those belong to the dashboard's own
+  Ubuntu run.
+- **Helper sync.** The `sha256sum` hash query and POSIX `tar` extract above fill
+  `~/.ccs/app-updates` (mode 0700) with 12 files: the 11 source helpers and the
+  generated Codex runtime below.
+- **Codex runtime.** Nas1 has no AI Account Center, so its Codex bridge loads
+  the bundled `app_update_codex_runtime.cjs` that the sync ships beside the
+  helpers (described with the Ubuntu Codex updates above). Codex Desktop and a
+  Codex CLI daemon therefore update on Nas1 as on Ubuntu. The runtime only
+  signals and launches Codex processes and manages the
+  `~/.codex/app-server-control/` socket; it never writes `auth.json` or any
+  other login.
+- **T3.** A T3 update on Nas1 schedules its own deferred restart: a detached
+  user service waits for the helper to exit and 30 seconds, then restarts only
+  Nas1's `t3code.service` and checks its health. Run without `--dashboard-job`,
+  it needs no dashboard job or lock.
+- **Antigravity.** Nas1 has no AI Account Center managed Antigravity runtime
+  (that update branch needs `~/.ccs/antigravity-switching/runtime-installation.json`,
+  which is never created there), so the CLI updates through the generic
+  `agy update` behind the same reviewed-version hold.
+- **Only fixed commands.** For updates the dashboard runs three fixed commands
+  on Nas1: the hash query, the extract and this helper. None reads or writes
+  `auth.json`, `.credentials.json` or a saved profile, and restarts reuse each
+  process's own environment. Account switching, activation, key storage,
+  sign-in and Claude desktop flows never target Nas1.
+- **Rollback.** An older package ignores Nas1's rows and progress entry in a
+  saved job and does not restore a job with more than 24 result rows, so the
+  last result may not show after a rollback. It never replays an update.
 
 ## Fixture verification
 

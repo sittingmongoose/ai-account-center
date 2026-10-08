@@ -9,6 +9,11 @@ explicit, allowlisted updates of the installed provider apps. The browser
 dashboard is Slint 1.18.1 compiled to WebAssembly; the backend remains
 TypeScript.
 
+It reaches four computers: the Ubuntu computer that runs the dashboard, a Mac,
+a Windows computer and Nas1, a second Ubuntu computer reached over a fixed SSH
+alias. Nas1 takes part in Update apps and Analytics only; it runs no dashboard
+and holds no account state ([details](#nas1-the-fourth-computer)).
+
 This is the continuing fork of [CCS](https://github.com/kaitranntt/ccs), now at
 [sittingmongoose/ai-account-center](https://github.com/sittingmongoose/ai-account-center).
 Repository history, original authorship, copyright and the [MIT license](LICENSE)
@@ -39,12 +44,14 @@ sign-in page when its own login is configured.
   logs provide token and activity charts with API-equivalent cost estimates;
   those estimates are not subscription charges or billing attribution.
 - **Included usage** in the Analytics header lists every CLI log source behind
-  the Usage totals and each source's state and last scan. Besides Claude Code
-  and Codex on Ubuntu, the totals count OMP, Muse Code and zcode logs from
-  Ubuntu, Mac and Windows, merged by model only. They are sources, never a
-  provider, filter or legend; the per-provider session rows and daily chart
-  stay Claude Code and Codex. Cost with no logged amount and no listed rate
-  reads "Not logged", never $0.00, and totals that leave it out say "partial".
+  the Usage totals and each source's state and last scan, per computer
+  (Ubuntu, Mac, Windows and Nas1). Besides Claude Code and Codex on Ubuntu,
+  the totals count OMP, Muse Code and zcode logs from Ubuntu, Mac, Windows and
+  Nas1, merged by model only. They are sources, never a provider, filter or
+  legend; the per-provider session rows and daily chart stay Claude Code and
+  Codex. Cost with no logged amount and no listed rate reads "Not logged",
+  never $0.00, and totals that leave it out say "partial". Settings can add
+  extra usage-log roots per computer; Nas1 takes POSIX paths.
 - **Accounts & Settings** lists every provider with its accounts: status,
   last sample, how it signs in, and fixed action slots. Codex and Antigravity
   Activate, Claude Open on Mac or Windows, the Codex and Antigravity
@@ -103,6 +110,10 @@ keeps them off, so those controls read "coming" there. The default-profile
 refusal (409 `account_protected`) holds either way. A just-added pending
 Claude profile cannot be opened from its row; open "Claude (\<id\>)" from
 Applications or the Start menu.
+
+None of these controls, and no account switching, activation, key storage,
+sign-in or Claude desktop flow, targets Nas1: it holds no AI Account Center
+account state.
 
 ## Dashboard sign-in, devices and pairing
 
@@ -305,8 +316,9 @@ rollback.
 starts one allowlisted, asynchronous job for the installed provider apps:
 Antigravity CLI, Muse Code, OMP, Codex CLI, Claude Code, Codex Desktop,
 Claude Desktop and T3 Code with its installed server runtime. Ubuntu runs
-locally; the remote targets are the existing
-fixed Mac and Windows SSH aliases in `APP_UPDATE_SSH_HOSTS`. Helper deployment and the
+locally; the remote targets are the fixed Mac, Windows and Nas1 SSH aliases
+in `APP_UPDATE_SSH_HOSTS`, so one run covers four computers x eight apps = 32
+result rows. Helper deployment and the
 existing Windows interactive task are required for remote updates. Absent
 apps are skipped; per-app readiness checks tell unknown from failure, and an
 unreachable computer reports Unknown rows. No update runs merely by opening
@@ -317,6 +329,37 @@ the dashboard or reading its status. See
 running computer's batch always finishes (installers are never killed) and
 the queued computers are skipped ("Skipped: cancelled"). Cancel granularity
 is one computer's batch, and Cancel never promises an undo.
+
+## Nas1, the fourth computer
+
+Nas1 is a second Ubuntu computer. AI Account Center reaches it only over the
+fixed SSH alias `nas1-agent` and labels it "Nas1"; hosts and aliases are not
+configurable. The dashboard's user needs that alias (reachable without a
+prompt) and `/usr/bin/python3` on Nas1. AI Account Center is not installed on
+Nas1 and no dashboard runs there.
+
+- **Update apps.** Nas1 runs the same fixed helper as Ubuntu with
+  `--platform ubuntu`. The helpers are synced, checksum-gated, to
+  `~/.ccs/app-updates/` on Nas1 (a `sha256sum` hash query and a POSIX `tar`
+  extract). The sync also ships a self-contained Codex stop/start runtime, so
+  Codex Desktop and a Codex CLI daemon update on Nas1 without AI Account Center
+  installed there. A T3 update on Nas1 schedules its own deferred restart of
+  `t3code.service`.
+- **Analytics.** Nas1 is scanned with the same pinned, read-only helper that
+  the dashboard streams over SSH to the Mac and Windows (Claude Code, Codex,
+  T3 shadow homes, OMP, Muse Code, zcode and Antigravity), and appears as a
+  fourth computer beside Ubuntu, Mac and Windows. Extra usage-log roots can be
+  set for Nas1 in Settings (POSIX paths).
+- **Accounts.** A quota source belongs to a provider account, not to a
+  computer. It runs on Nas1 only when it is saved as `platform: "ubuntu"` with
+  `sshHost: "nas1-agent"`; its row then reads "on Nas1". By default no source
+  moves there: Nas1 signs in to the same provider accounts as the dashboard
+  computer, so a second reading would repeat the first.
+- **Never on Nas1.** Account switching, Codex and Antigravity activation, key
+  storage, sign-in and Claude desktop flows do not run there. The dashboard
+  computer runs exactly these fixed commands on Nas1: the helper hash query,
+  the helper extract, the update helper, the read-only analytics helper and,
+  only for a source moved to Nas1, the usage collectors.
 
 ## Antigravity switching
 
@@ -363,6 +406,7 @@ preserved. See
 | Windows tray | Native .NET 10 WPF, Windows x64; source builds require an existing .NET 10 SDK |
 | Shared Codex activation / auto-switch | Existing configured Ubuntu Codex runtime and saved logins |
 | Usage collectors / app updates | Existing credentials and installed apps on the configured owner host; Python and approved SSH transport where needed |
+| Nas1 (fourth computer) | A second Ubuntu computer with `/usr/bin/python3`, reached over its fixed SSH alias for app updates and Analytics only; no AI Account Center install, dashboard or account state |
 
 Cross-platform source support does not make every account action available on
 every host. The dashboard reports available capabilities. A container does not
@@ -452,7 +496,9 @@ Additional provider collectors run on the host that owns the corresponding login
 Their source selection is the private `account-usage-sources.json` configuration,
 or the newer `account-usage-accounts.json` (registry v2, several accounts per
 provider) when that file exists; existing approved SSH aliases select remote
-Mac/Windows collectors. Missing
+Mac/Windows collectors, and a source saved as `platform: "ubuntu"` with
+`sshHost: "nas1-agent"` runs on Nas1 and reads "on Nas1" (see
+[Nas1](#nas1-the-fourth-computer)). Missing
 credentials or collector setup yields unavailable usage. Follow the
 [provider boundaries](docs/system-architecture/provider-flows.md),
 [collector requirements](scripts/account-usage/README.md),
@@ -541,6 +587,20 @@ read safely" until its next full save, so save the visibility once from the
 rolled-back page if that matters. Local changes should be reviewed before pulling.
 `ai-account-center update` is retired and cannot update from the upstream package.
 
+Adding Nas1 touches no account data. A rollback to a build without it loses
+display data, and Settings only if a Nas1 extra usage-log root was saved. An
+older build never opens the new analytics cache
+`cache/analytics-remote-v1/nas1.json`. It does not restore a saved update job
+(`app-updates/dashboard-job.json`) with more than 24 result rows (a finished
+four-computer run has 32), so the last result is not shown and no update is
+replayed. It treats a `dashboard-preferences.json` that holds a Nas1 extra
+usage-log root as invalid as a whole: the defaults apply in memory, with a
+warning and without overwriting the file, until the next save of Settings. The
+usage source and registry files (`account-usage-sources.json`,
+`account-usage-accounts.json`) keep their format, because a Nas1 source is
+stored as `ubuntu` plus `sshHost`, which every earlier build reads and collects
+the same way.
+
 ## Existing CCS installations
 
 Preserve `~/.ccs/`, `CCS_HOME`, profile/provider IDs, session aliases, native
@@ -612,6 +672,12 @@ issues and screenshots. See [Security](SECURITY.md) for reporting boundaries.
   "Not logged" for cost, never a guessed price.
 - Update apps Cancel granularity is one computer's batch: the running
   computer's apps finish and the queued computers are skipped.
+- Nas1 adds no quota rows by default and has no add, sign-in, key or switching
+  control. Claude quota stays with the Mac and Windows Claude desktop apps,
+  Codex quota with the dashboard computer's saved logins and the OpenCode
+  console wallet with the Mac. A usage collector runs on Nas1 only for a source
+  saved for it, and the usage helpers are copied to a computer by hand, not
+  synced like the update helpers.
 - Claude add, remove and restore read "coming" while the server's Claude host
   steps are off (the live service keeps them off); the default-profile
   refusal holds either way.
