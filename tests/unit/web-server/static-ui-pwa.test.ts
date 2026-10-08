@@ -218,6 +218,15 @@ describe('PWA shell serving while signed out', () => {
     for (const route of [
       '/apple-touch-icon.png',
       '/apple-touch-icon-precomposed.png',
+      '/apple-touch-icon-180x180.png',
+      '/apple-touch-icon-180x180-precomposed.png',
+      '/apple-touch-icon-120x120.png',
+      '/apple-touch-icon-120x120-precomposed.png',
+      '/apple-touch-icon-152x152.png',
+      '/apple-touch-icon-152x152-precomposed.png',
+      '/apple-touch-icon-167x167.png',
+      '/apple-touch-icon-167x167-precomposed.png',
+      '/apple-touch-icon-180.png',
       '/favicon.ico',
     ]) {
       const response = await raw('GET', route);

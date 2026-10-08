@@ -59,9 +59,18 @@ const UNSERVED = new Set(['ui-build-manifest.json']);
  * Served directly from icons/ without requiring session auth.
  */
 const STATIC_ICON_ALIASES: ReadonlyMap<string, string> = new Map<string, string>([
-  ['/apple-touch-icon.png', 'icons/apple-touch-icon-180.png'],
-  ['/apple-touch-icon-precomposed.png', 'icons/apple-touch-icon-180.png'],
-  ['/favicon.ico', 'icons/apple-touch-icon-180.png'],
+  ['/apple-touch-icon.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-precomposed.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-180x180.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-180x180-precomposed.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-120x120.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-120x120-precomposed.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-152x152.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-152x152-precomposed.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-167x167.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-167x167-precomposed.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/apple-touch-icon-180.png', 'icons/apple-touch-icon-180-v2.png'],
+  ['/favicon.ico', 'icons/apple-touch-icon-180-v2.png'],
 ]);
 
 const PAGES = new Set(['/', '/login', '/analytics', '/accounts']);
