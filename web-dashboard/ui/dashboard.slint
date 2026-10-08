@@ -359,7 +359,8 @@ export component Dashboard inherits Window {
     in-out property <string> current-page: "home";
     in-out property <bool> data-ready: false;
     in-out property <ChromeView> chrome: { status-lead: "Waiting for account data" };
-    in-out property <UpdateView> update: { total: 21 };
+    // 8 apps on each of the 4 computers until the first status names the job's expectedResults
+    in-out property <UpdateView> update: { total: 32 };
     in-out property <[SectionView]> sections;
     in-out property <[ProviderCardView]> cards;
     in-out property <[RegistryView]> registry;

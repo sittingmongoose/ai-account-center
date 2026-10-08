@@ -1197,7 +1197,8 @@ pub fn set_update_status(json: &str) -> Result<(), JsValue> {
             running: v.running,
             done: v.done,
             count: v.count.max(0),
-            total: if v.total > 0 { v.total } else { 21 },
+            // view-model.mjs updateTotal: 8 apps on each of the 4 computers when the job names no count
+            total: if v.total > 0 { v.total } else { 32 },
             tip: v.tip.into(),
             summary: v.summary.into(),
         })

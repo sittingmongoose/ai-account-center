@@ -713,6 +713,20 @@ test('Antigravity: the live login gets a refuse control that says why, and the t
   assert.match(expired.body, /watch has lapsed/);
 });
 
+test('an account whose readings come from Nas1 says so, while its platform stays ubuntu', () => {
+  const accounts = [
+    account({ id: 'zai:acct:nas', provider: 'zai', email: null, label: 'Nas', platform: 'ubuntu', host: 'nas1', capabilities: {} }),
+    account({ id: 'kimi-code:acct:nas', provider: 'kimi-code', email: 'k@example.test', label: 'Kimi', platform: 'ubuntu', host: 'nas1', capabilities: {} }),
+  ];
+  const r = registry([
+    reg('zai:acct:nas', 'zai', { credential: { kind: 'aac-key', last4: 'n4s1', fingerprint: 'sha256:0' }, actions: { replaceKey: true } }),
+    reg('kimi-code:acct:nas', 'kimi-code', { credential: { kind: 'discover' }, actions: { recheck: true } }),
+  ]);
+  const vm = accountsViewModel(data(accounts, { providers: providers() }), { now, registry: r });
+  assert.equal(row(vm, 'zai:acct:nas').srcSub, 'stored on Nas1');
+  assert.equal(row(vm, 'kimi-code:acct:nas').srcSub, 'Nas1');
+});
+
 test('API-key, browser and app providers: keys show their last 4, Replace key and Remove are live, sessions sign in and re-check', () => {
   const accounts = [
     account({
@@ -1090,7 +1104,13 @@ test('Update apps results are grouped by computer, never invented', () => {
   assert.equal(done.headRuns.map((r) => r.text).join(''), 'Last run 20m ago · 3 results, 1 failed');
   assert.deepEqual(
     done.hosts.map((h) => h.id),
-    ['mac', 'windows', 'ubuntu']
+    ['mac', 'windows', 'ubuntu', 'nas1']
+  );
+  // Nas1 is a second Ubuntu computer: its own row, labelled Nas1, with the Ubuntu glyph.
+  assert.deepEqual([done.hosts[3].label, done.hosts[3].platform], ['Nas1', 'ubuntu']);
+  assert.deepEqual(
+    done.hosts[3].items.map((i) => i.app),
+    ['No results from this computer']
   );
   assert.deepEqual(
     done.hosts[0].items.map((i) => [i.app, i.result, i.tone]),
@@ -1115,10 +1135,11 @@ test('Update apps results are grouped by computer, never invented', () => {
     },
     now
   );
-  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 1 of 21 done');
+  // A job that names no expectedResults counts 8 apps on each of the 4 computers.
+  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 1 of 32 done');
   assert.deepEqual(
     running.hosts.map((h) => h.items.map((i) => i.result)),
-    [['Running'], [''], ['Already current']]
+    [['Running'], [''], ['Already current'], ['']]
   );
   assert.equal(running.hosts[0].items[0].running, true);
   assert.equal(running.hosts[1].items[0].app, 'Waiting for its turn');
@@ -1220,14 +1241,16 @@ test('A held Antigravity update reads as a warning that names the build waiting 
           message:
             'Update held: the newest Antigravity version could not be checked against the switching review, so nothing was installed.',
         }),
+        row('nas1', { heldVersion: '1.3.0' }),
       ],
     },
     now
   );
-  assert.equal(done.headRuns.map((r) => r.text).join(''), 'Last run 20m ago · 3 results, 3 held');
+  assert.equal(done.headRuns.map((r) => r.text).join(''), 'Last run 20m ago · 4 results, 4 held');
   assert.deepEqual(
     done.hosts.map((host) => host.items.map((i) => [i.app, i.result, i.tone])),
     [
+      [['Antigravity CLI', 'Update held', 'warn']],
       [['Antigravity CLI', 'Update held', 'warn']],
       [['Antigravity CLI', 'Update held', 'warn']],
       [['Antigravity CLI', 'Update held', 'warn']],
@@ -1355,15 +1378,18 @@ test('Update apps shows every computer working at once, each on its own app', ()
         ubuntu: { state: 'running', currentApp: 'codex-cli', phase: 'updating' },
         mac: { state: 'running', currentApp: null, phase: 'checking' },
         windows: { state: 'done', currentApp: null, phase: null },
+        nas1: { state: 'running', currentApp: 'claude-code', phase: 'checking' },
       },
-      expectedResults: 21,
+      expectedResults: 32,
       results: [
         result('ubuntu', 'OMP', 'current'),
         result('windows', 'Codex CLI', 'updated', { previousVersion: '1.0.0', version: '1.1.0' }),
+        result('nas1', 'OMP', 'updated', { previousVersion: '2.0.0', version: '2.1.0' }),
       ],
     },
     now
   );
+  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 3 of 32 done');
   const byId = Object.fromEntries(running.hosts.map((h) => [h.id, h.items]));
   // Ubuntu: its finished row, then the app it is updating right now.
   assert.deepEqual(
@@ -1384,6 +1410,15 @@ test('Update apps shows every computer working at once, each on its own app', ()
     byId.windows.map((i) => i.result),
     ['Updated to 1.1.0']
   );
+  // Nas1 runs alongside the others: its finished row, then the app it is checking now.
+  assert.deepEqual(
+    byId.nas1.map((i) => [i.app, i.result, i.running]),
+    [
+      ['OMP', 'Updated to 2.1.0', false],
+      ['Claude Code', 'Checking', true],
+    ]
+  );
+  assert.equal(byId.nas1[1].tip, 'Nas1 is checking Claude Code now');
   const timedOut = updateResultsView(
     {
       state: 'failed',
@@ -1394,8 +1429,10 @@ test('Update apps shows every computer working at once, each on its own app', ()
         ubuntu: { state: 'done', currentApp: null, phase: null },
         mac: { state: 'done', currentApp: null, phase: null },
         windows: { state: 'done', currentApp: null, phase: null },
+        nas1: { state: 'done', currentApp: null, phase: null },
       },
       results: [
+        result('nas1', 'OMP', 'unknown', { message: 'Unknown: this computer is not reachable.' }),
         result('ubuntu', 'OMP', 'unknown', { message: 'Check timed out: the app did not answer in time.' }),
         result('ubuntu', 'Muse Code', 'unknown', { message: 'Timed out: this computer did not finish in time.' }),
         result('ubuntu', 'Codex CLI', 'action_required', {
@@ -1419,6 +1456,10 @@ test('Update apps shows every computer working at once, each on its own app', ()
   assert.deepEqual(
     timedOut.hosts[0].items.map((i) => i.app),
     ['No results from this computer']
+  );
+  assert.deepEqual(
+    timedOut.hosts[3].items.map((i) => i.result),
+    ['Unknown: Nas1 not reachable']
   );
 });
 
@@ -2213,21 +2254,29 @@ test('the log sources control lists saved extras with labels and waits without p
       snapshotCleanup: { auto: true },
       usageLogSources: [
         { id: 'a', tool: 'omp', host: 'mac', path: '/Users/u/extra' },
+        { id: 'c', tool: 'codex', host: 'nas1', path: '/home/u/.codex-extra' },
         { id: 'b', tool: 'jsonl', host: 'ubuntu', path: '/var/log/h', fieldMapping: { timestamp: 'ts', model: 'm' } },
       ],
     },
     busy: '',
   };
   const vm = accountsViewModel(data([account()]), { now, prefs });
-  assert.equal(vm.logSources.sources.length, 2);
-  assert.deepEqual(vm.logSources.sources[0], { id: 'a', tool: 'omp', toolLabel: 'OMP', host: 'mac', path: '/Users/u/extra', mapping: '' });
-  assert.equal(vm.logSources.sources[1].toolLabel, 'Generic JSONL');
-  assert.equal(vm.logSources.sources[1].mapping, 'timestamp: ts, model: m');
+  assert.equal(vm.logSources.sources.length, 3);
+  assert.deepEqual(vm.logSources.sources[0], { id: 'a', tool: 'omp', toolLabel: 'OMP', host: 'mac', hostLabel: 'Mac', path: '/Users/u/extra', mapping: '' });
+  assert.deepEqual([vm.logSources.sources[1].host, vm.logSources.sources[1].hostLabel], ['nas1', 'Nas1']);
+  assert.equal(vm.logSources.sources[2].toolLabel, 'Generic JSONL');
+  assert.equal(vm.logSources.sources[2].mapping, 'timestamp: ts, model: m');
   assert.equal(vm.logSources.enabled, true);
   assert.equal(vm.logSources.busy, false);
   assert.equal(vm.logSources.error, '');
-  assert.deepEqual(vm.logSources.hosts.omp, ['ubuntu', 'mac', 'windows']);
+  assert.deepEqual(vm.logSources.hosts.omp, ['ubuntu', 'mac', 'windows', 'nas1']);
+  assert.deepEqual(vm.logSources.hosts.muse, ['ubuntu', 'mac', 'nas1']);
   assert.deepEqual(vm.logSources.hosts.jsonl, ['ubuntu']);
+  // the Settings host select shows labels, from the same list
+  assert.deepEqual(vm.logSources.hostLabels.omp, ['Ubuntu', 'Mac', 'Windows', 'Nas1']);
+  assert.deepEqual(vm.logSources.hostLabels.zcode, ['Ubuntu', 'Mac', 'Nas1']);
+  assert.deepEqual(vm.logSources.hostLabels.jsonl, ['Ubuntu']);
+  assert.deepEqual(Object.keys(vm.logSources.hostLabels), Object.keys(vm.logSources.hosts));
   const waiting = accountsViewModel(data([account()]), { now, prefs: { data: null, busy: '' } });
   assert.deepEqual(waiting.logSources.sources, []);
   assert.equal(waiting.logSources.enabled, false);

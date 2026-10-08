@@ -160,9 +160,10 @@ Month, All and custom ranges request the covering window (`apiRangeFor`) and are
 fetched window differs from the range, cost by model, the donut and session stats say which logs they cover.
 
 Usage sources (activity `scope: multi-host-cli`): the server reads Claude Code and Codex on Ubuntu plus OMP,
-Muse Code and zcode on Ubuntu, Mac and Windows, and groups every row under the dashboard provider that served it
-(`src/web-server/services/account-analytics-attribution.ts`): Claude Code, Codex and the Muse Code CLI are their
-own provider; OMP and zcode record a route per call (`alibaba-token-plan` is Qwen, `zai` and zcode's
+Muse Code and zcode on Ubuntu, Mac, Windows and Nas1 (a second Ubuntu computer), and groups every row under the
+dashboard provider that served it (`src/web-server/services/account-analytics-attribution.ts`): Claude Code,
+Codex and the Muse Code CLI are their own provider; OMP and zcode record a route per call (`alibaba-token-plan`
+is Qwen, `zai` and zcode's
 `builtin:zai-coding-plan` are Z.ai, `kimi-code`, `opencode-go` and `opencode-zen` (OpenCode Go), `cursor`,
 `muse-code` (Muse Code), `google-antigravity` (Antigravity), `anthropic` and `openai`). A route no provider
 claims (a local vLLM server, OpenRouter) is `other`, never a guess. So every activity `provider` is a dashboard
@@ -175,7 +176,9 @@ rate); for every provider, including Claude and Codex, the page leaves it out, s
 is logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`). A model with no known
 rate is never priced at a guess. "Included usage" in the header (`includedView`,
 from `activity.sources`) is a disclosure with one sentence and a tool x computer grid of each source's state and
-last scan. The states are honest end to end (FW4-N10): `ok` (read, with its age), `no usage in range` (scanned,
+last scan: a 660 px popover on D whose four computer columns (Ubuntu, Mac, Windows, Nas1) never elide; below D it
+is as wide as the content allows, and a body too narrow for 120 px columns (always on P) lists the cells grouped by
+tool instead. The states are honest end to end (FW4-N10): `ok` (read, with its age), `no usage in range` (scanned,
 nothing logged in the window), `cached` (the last scan failed or was cut short; older numbers are shown, with
 their age and the reason), `scanning` (a scan is working on the tool, or ran out of time before it reached or
 finished it - a truncated cold scan never says "unavailable"), `not installed` (the host was scanned and the
@@ -193,7 +196,7 @@ group and child rows; a child lights its group's arc and opens its model detail)
 Codex and the other providers together (a picked provider alone, in its hue), and its readout lists each
 provider's cost. With other providers in range the trend readout names each one's tokens in the bucket
 (`byProvider`), and a model's detail says who served it and which logs hold it ("Muse Code · OMP and Muse Code
-logs"). Sessions under All are the server's distinct total; the Mac and Windows logs add usage but no sessions.
+logs"). Sessions under All are the server's distinct total; the remote computers' logs add usage but no sessions.
 
 Motion: sections play their first view when they first scroll on screen (`AxReveal` reads its absolute
 position against the page scroll). The trend draws on through a clip; on a range, filter or toggle change
@@ -269,8 +272,10 @@ policies, Update apps hosts and their lines).
   in; paired trays from `GET /api/auth/devices` with Revoke and Sign out all devices, each with an inline
   confirmation; Sign out), Settings (Light/Dark/Auto, the usage refresh slider: any whole number of seconds from 30
   to 3600 on a log scale that snaps within 3.5% of its marks, saved on release; the auto-switch policies in %
-  used), Update apps results by computer (Mac, Windows, Ubuntu; "Waiting for its turn" and a running bar while a
-  job runs), Connection (read only) and About with `AboutSlint`.
+  used; the extra usage-log host select lists each tool's hosts by label from `LOG_SOURCE_HOSTS` through
+  `AcData.log-source-hosts`), Update apps results by computer (Mac, Windows, Ubuntu, Nas1; the Nas1 row uses the
+  Ubuntu glyph; "N of `expectedResults` done", 32 when a job names no count; "Waiting for its turn" and a running
+  bar while a job runs), Connection (read only) and About with `AboutSlint`.
 
 ### Sign-in (shell/signin.slint)
 

@@ -348,6 +348,11 @@ test('the header names the remote hosts a refresh waits on', () => {
   assert.equal(usageHead(both, state(), { now }).updateNote, 'Updating · refreshing Mac and Windows…');
   const one = payload({}, { status: 'cached', refreshing: true, refreshingRemote: ['windows'] });
   assert.equal(usageHead(one, state(), { now }).updateNote, 'Updating · refreshing Windows…');
+  // Nas1 is named after the Mac and Windows
+  const all = payload({}, { status: 'cached', refreshing: true, refreshingRemote: ['nas1', 'windows', 'mac'] });
+  assert.equal(usageHead(all, state(), { now }).updateNote, 'Updating · refreshing Mac, Windows and Nas1…');
+  const nas1 = payload({}, { status: 'cached', refreshing: true, refreshingRemote: ['nas1'] });
+  assert.equal(usageHead(nas1, state(), { now }).updateNote, 'Updating · refreshing Nas1…');
   // settled answers carry no note and no pill
   const settled = usageHead(payload(), state(), { now });
   assert.equal(settled.updating, false);

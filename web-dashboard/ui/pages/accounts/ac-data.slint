@@ -174,11 +174,23 @@ export struct AcPolicy {
     warn: bool,
 }
 
+// The extra usage-log host select's options per tool, as labels ("Ubuntu", "Nas1"); the one list is
+// accounts-view.mjs LOG_SOURCE_HOSTS, and the controller maps a label back to its host id.
+export struct AcLogHosts {
+    omp: [string],
+    muse: [string],
+    zcode: [string],
+    claude-code: [string],
+    codex: [string],
+    jsonl: [string],
+}
+
 export struct AcLogSource {
     id: string,
     tool: string,
     tool-label: string,
     host: string,
+    host-label: string,
     path: string,
     mapping: string,
 }
@@ -286,6 +298,7 @@ export global AcData {
     in-out property <bool> log-sources-busy: false;
     in-out property <string> log-sources-error: "";
     in-out property <string> log-sources-tip: "";
+    in-out property <AcLogHosts> log-source-hosts;
     in-out property <bool> update-shown: false;
     in-out property <bool> update-running: false;
     in-out property <bool> update-cancelling: false;

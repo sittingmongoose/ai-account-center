@@ -924,7 +924,7 @@ test('extra usage-log locations add, validate and remove through one preferences
   assert.match(h.ctl.state.prefs.logSourcesError, /absolute path/);
   await h.ctl.handle('logsource-add', 'muse\nwindows\nC:\\muse\n');
   assert.equal(h.sent.length, count);
-  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on ubuntu, mac/);
+  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on Ubuntu, Mac and Nas1\./);
   await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n');
   assert.equal(h.sent.length, count);
   assert.match(h.ctl.state.prefs.logSourcesError, /field mapping/);
@@ -949,11 +949,26 @@ test('extra usage-log locations add, validate and remove through one preferences
   const afterRemove = h.sent.length;
   await h.ctl.handle('logsource-remove', 'log-unknown');
   assert.equal(h.sent.length, afterRemove);
+  // the Settings host select sends a label: "Nas1" saves as the host id nas1
+  await h.ctl.handle('logsource-add', 'codex\nNas1\n/home/u/.codex-extra\n');
+  assert.equal(h.ctl.state.prefs.logSourcesError ?? '', '');
+  body = last(h.sent).body;
+  assert.deepEqual({ ...body.usageLogSources.at(-1), id: 'x' }, { id: 'x', tool: 'codex', host: 'nas1', path: '/home/u/.codex-extra' });
+  // a label a tool is not scanned on still refuses
+  const beforeLabel = h.sent.length;
+  await h.ctl.handle('logsource-add', 'jsonl\nNas1\n/var/log/h\n{"timestamp":"ts","model":"m"}');
+  assert.equal(h.sent.length, beforeLabel);
+  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on Ubuntu\./);
 });
 
 test('the log source check mirrors the server path and mapping rules', async () => {
   const { logSourceProblem } = await import('../public/accounts-controller.mjs');
   assert.equal(logSourceProblem('omp', 'mac', '/Users/u/x', undefined), '');
+  // Nas1 is a second Ubuntu computer: POSIX paths only, and never for a generic JSONL log
+  assert.equal(logSourceProblem('codex', 'nas1', '/home/u/.codex', undefined), '');
+  assert.equal(logSourceProblem('zcode', 'nas1', '/home/u/z.db', undefined), '');
+  assert.ok(logSourceProblem('omp', 'nas1', 'C:\\x', undefined));
+  assert.ok(logSourceProblem('jsonl', 'nas1', '/var/log/h', { timestamp: 'ts', model: 'm' }));
   assert.equal(logSourceProblem('omp', 'windows', 'C:\\x\\y', undefined), '');
   assert.equal(logSourceProblem('omp', 'windows', 'C:/x/y', undefined), '');
   assert.ok(logSourceProblem('cursor', 'mac', '/x', undefined));

@@ -119,10 +119,15 @@ const dayClock = lazyFormat({
   hour: 'numeric',
   minute: '2-digit',
 });
-const PLATFORM = { mac: 'Mac', windows: 'Windows', ubuntu: 'Ubuntu', linux: 'Linux' };
+const PLATFORM = { mac: 'Mac', windows: 'Windows', ubuntu: 'Ubuntu', nas1: 'Nas1', linux: 'Linux' };
 
 export const platformLabel = (id) =>
   PLATFORM[id] || (id ? id[0].toUpperCase() + id.slice(1) : 'Unknown');
+/**
+ * The computer an account's readings come from: its display-only `host` (Nas1, a second Ubuntu
+ * computer whose sources keep platform 'ubuntu'), else its platform.
+ */
+export const hostLabel = (account) => platformLabel(account?.host ?? account?.platform);
 export const planLabel = (plan) =>
   !plan ? '' : plan.length <= 5 ? plan[0].toUpperCase() + plan.slice(1) : plan;
 /** At most two decimals, locale grouping, never rounding a real reading up to a different integer label. */
@@ -370,7 +375,7 @@ export function meterView(
     sampled: sampledText(account, w, now),
     source: [
       text(account?.source) || 'Unknown source',
-      platformLabel(account?.platform),
+      hostLabel(account),
       w?.status === 'cached' ? 'Cached window' : statusWord(account),
     ].join(' · '),
     caption: '',
@@ -805,7 +810,7 @@ function codexSection(accounts, data, now, total = accounts.length) {
       plan: text(account.plan),
       meta: [
         planLabel(text(account.plan)),
-        platformLabel(account.platform),
+        hostLabel(account),
         account.status === 'ok' || account.status === 'cached'
           ? relative(account.sampledAt || account.fetchedAt, now)
           : statusWord(account),
@@ -814,9 +819,9 @@ function codexSection(accounts, data, now, total = accounts.length) {
         .join(' · '),
       status: statusWord(account),
       note: text(account.message),
-      platform: platformLabel(account.platform),
+      platform: hostLabel(account),
       active: account.isActive === true,
-      activeLabel: `on ${platformLabel(account.platform)}`,
+      activeLabel: `on ${hostLabel(account)}`,
       setup: false,
       canActivate: account.isActive !== true && !!profile,
       activateKind: 'activate',
@@ -934,7 +939,7 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
       plan: text(account.plan),
       meta: [
         text(account.plan),
-        platformLabel(account.platform),
+        hostLabel(account),
         account.status === 'ok' || account.status === 'cached'
           ? relative(account.sampledAt || account.fetchedAt, now)
           : statusWord(account),
@@ -943,7 +948,7 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
         .join(' · '),
       status: nativeRow?.status || statusWord(account),
       note: nativeRow?.note || text(account.message),
-      platform: platformLabel(account.platform),
+      platform: hostLabel(account),
       active,
       activeLabel: active
         ? nativeRow.runtimeVerified
@@ -1082,7 +1087,7 @@ function providerCards(accounts, hidden, now) {
           .join(' · '),
         flag: !normal ? statusWord(account) : stale ? 'Stale' : '',
         sampled: validDate(sampledAt) ? `sampled ${relative(sampledAt, now)}` : 'never sampled',
-        platform: platformLabel(account.platform),
+        platform: hostLabel(account),
         planNote: planExpiry ? exact(planExpiry.expiresAt, 'Plan subscription ends ') : '',
         packsNote: sameExpiry ? exact(packs[0].expiresAt, `All ${packs.length} packs expire `) : '',
         note: text(account.message) || (meters.length ? '' : 'Usage unavailable'),
@@ -1229,7 +1234,7 @@ export function detailsViewModel(data, id, ctx = {}) {
       mono: false,
     },
     { label: 'Source', value: text(account.source) || 'Unknown', mono: false },
-    { label: 'Platform', value: platformLabel(account.platform), mono: false },
+    { label: 'Platform', value: hostLabel(account), mono: false },
     ...(profile ? [{ label: 'Profile', value: profile, mono: true }] : []),
     ...(text(account.message)
       ? [{ label: 'Note', value: text(account.message), mono: false }]
@@ -1259,7 +1264,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     canSwitch: !!section?.canSwitch,
     activeLabel: row?.activeLabel || '',
     activateHint: row?.activateHint || '',
-    platform: platformLabel(account.platform),
+    platform: hostLabel(account),
     confirm: !!row?.confirm,
     confirmRuns: row?.confirmRuns || [],
     confirmWords: row?.confirmWords || wordsOf(row?.confirmRuns || []),
@@ -1282,9 +1287,22 @@ export function detailsViewModel(data, id, ctx = {}) {
   };
 }
 
-/** "Ubuntu", "Ubuntu and Mac", "Ubuntu, Mac and Windows". */
+/** "Ubuntu", "Ubuntu and Mac", "Ubuntu, Mac, Windows and Nas1". */
 const listWords = (words) =>
   words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
+
+/** The computers Update all runs on, in the order the header names them. */
+export const UPDATE_HOST_IDS = ['ubuntu', 'mac', 'windows', 'nas1'];
+/** The apps the update helper checks on every computer (one result row each). */
+const UPDATE_APPS_PER_HOST = 8;
+/**
+ * The result rows a run expects: the job's own `expectedResults`, else one row per app on every
+ * computer (32 for four computers), never a stale fixed count.
+ */
+export const updateTotal = (job) =>
+  finite(job?.expectedResults) && job.expectedResults > 0
+    ? job.expectedResults
+    : UPDATE_HOST_IDS.length * UPDATE_APPS_PER_HOST;
 
 /**
  * The computers an update job is working on now. Every computer runs at once
@@ -1294,7 +1312,7 @@ export function updateRunningHosts(job) {
   if (job?.state !== 'running') return [];
   const hosts = job.hosts && typeof job.hosts === 'object' ? job.hosts : null;
   if (hosts)
-    return ['ubuntu', 'mac', 'windows'].filter((id) => hosts[id]?.state === 'running');
+    return UPDATE_HOST_IDS.filter((id) => hosts[id]?.state === 'running');
   return job.activePlatform ? [job.activePlatform] : [];
 }
 
@@ -1312,12 +1330,12 @@ export function updateViewModel(job, { done = false } = {}) {
     ? `Updating apps on ${where || 'your computers'} · running apps may restart`
     : job
       ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}${held ? `, ${held} held` : ''}. Details under Accounts & Settings.`
-      : 'Update the Claude and Codex apps and CLIs on Mac, Windows and Ubuntu';
+      : 'Update the Claude and Codex apps and CLIs on Mac, Windows, Ubuntu and Nas1';
   return {
     running,
     done: !running && done,
     count: results.length,
-    total: 21,
+    total: updateTotal(job),
     tip,
     summary: job
       ? `${results.length} results${failed ? ` · ${failed} failed` : ''}${action ? ` · ${action} need action` : ''}${held ? ` · ${held} held` : ''}`
