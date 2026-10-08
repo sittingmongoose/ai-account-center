@@ -13,6 +13,7 @@ import {
 } from '../../../src/web-server/services/analytics-remote-transport';
 import { loadAnalyticsRemoteSources } from '../../../src/web-server/services/analytics-remote-sources';
 import { NAS1_SSH_ALIAS } from '../../../src/web-server/services/dashboard-hosts';
+import { forbiddenWordsIn } from './nas1-no-switching';
 
 // Nothing here reaches a real host: the aliases are resolved in a temporary CCS home and the only
 // process call the transport makes is replaced before it runs.
@@ -89,14 +90,6 @@ describe('analytics remote host aliases', () => {
   });
 });
 
-const FORBIDDEN = [
-  'activate',
-  'switch',
-  'key_store',
-  'claude_usage',
-  'auth.json',
-  '.credentials.json',
-];
 const EMPTY_ANSWER = JSON.stringify({
   version: 1,
   truncated: false,
@@ -171,8 +164,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
           /^(BatchMode|ConnectTimeout|ConnectionAttempts|ServerAliveInterval|ServerAliveCountMax)=\w+$/
         );
       }
-      const argv = call.args.join(' ').toLowerCase();
-      for (const word of FORBIDDEN) expect(argv).not.toContain(word);
+      expect(forbiddenWordsIn(call.args)).toEqual([]);
       // The helper arrives on stdin and is the pinned, read-only one: no other code ever runs.
       const payload = JSON.parse(call.input) as {
         helperSource: string;
