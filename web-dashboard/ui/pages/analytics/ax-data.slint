@@ -126,7 +126,10 @@ export struct AxModelRow {
     io-quiet: string,
     rate: string,
 }
-export struct AxCardText { sub: string, note: string, foot: string, empty: string }
+export struct AxCardText { sub: string, note: string, foot: string, empty: string,
+// task 9 analytics1: the CBM footnote's sentences separately (below-D renders one Text per sentence,
+// each created with its final text so the card measures it; see A2)
+foot-h: string, foot-u: string, foot-n: string }
 
 // ---- model donut ----
 export struct AxDonutSeg {

@@ -422,6 +422,16 @@ test('cache footnote (task 9 A3): the view carries the hit-rate note', () => {
   assert.equal(cache.note, 'Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.');
 });
 
+test('cbm footnote sentences (task 9 A2): the view carries each sentence separately', () => {
+  const p = payload();
+  p.activity.models[0] = { ...p.activity.models[0], estimatedCostUsd: p.activity.models[0].estimatedCostUsd * 1.5 };
+  p.activity.models.push(modelRow('custom-unlisted-model', 'codex', codexRows));
+  const cbm = usageView(p, state(), { now }).cbm;
+  assert.equal(cbm.foot, [cbm.footH, cbm.footU, cbm.footN].filter(Boolean).join(' '));
+  assert.match(cbm.footU, /claude-haiku-4-5: rates do not reconcile with the logged cost/);
+  assert.match(cbm.footN, /custom-unlisted-model has cost with no logged amount and no listed rate/);
+});
+
 test('donut centre (task 9 A5): a short label that fits a small hole, per mode', () => {
   const tokens = usageView(payload(), state({ donut: 'tokens' }), { now }).donut;
   assert.equal(tokens.mode, 'tokens');

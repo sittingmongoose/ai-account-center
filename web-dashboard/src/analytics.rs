@@ -205,6 +205,10 @@ fn card_text(v: &Value) -> AxCardText {
         note: s(v, "note"),
         foot: s(v, "foot"),
         empty: s(v, "empty"),
+        // task 9 A2 (analytics1): the CBM footnote's sentences separately
+        foot_h: s(v, "footH"),
+        foot_u: s(v, "footU"),
+        foot_n: s(v, "footN"),
     }
 }
 fn donut_seg(v: &Value) -> AxDonutSeg {
