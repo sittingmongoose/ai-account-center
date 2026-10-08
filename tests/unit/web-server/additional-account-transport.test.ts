@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { PROVIDER_CREDENTIAL_KINDS } from '../../../src/web-server/services/account-registry-v2';
+import {
+  PROVIDER_CREDENTIAL_KINDS,
+  parseAccountRegistry,
+  registrySource,
+} from '../../../src/web-server/services/account-registry-v2';
+import { parseSourceManifest } from '../../../src/web-server/services/account-usage-manifest';
 import {
   ADDITIONAL_PROVIDERS,
   AdditionalUsageTransportError,
@@ -254,6 +259,97 @@ describe('additional account usage transport', () => {
       expect(error.message).toBe('Account usage request failed.');
     }
   );
+});
+
+describe('usage sources on Nas1', () => {
+  // Nas1 is a second Ubuntu computer: an ubuntu source on its fixed ssh alias.
+  const SSH_OPTIONS = [
+    '-T',
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'ConnectTimeout=5',
+    '-o',
+    'ConnectionAttempts=1',
+    '-o',
+    'ServerAliveInterval=5',
+    '-o',
+    'ServerAliveCountMax=1',
+    '--',
+  ];
+  const helperFor = (provider: string) =>
+    ['antigravity', 'muse', 'cursor'].includes(provider) ? 'desktop_usage.py' : 'plan_usage.py';
+  const command = (provider: string) =>
+    `/usr/bin/python3 "$HOME/.ccs/account-usage/${helperFor(provider)}" --provider '${provider}' --platform 'ubuntu'`;
+
+  it.each(ADDITIONAL_PROVIDERS)(
+    'collects %s over bounded ssh to nas1-agent with --platform ubuntu',
+    async (provider) => {
+      const exec = mockProcess('{}');
+      await runAdditionalUsageSource({ provider, platform: 'ubuntu', sshHost: 'nas1-agent' });
+      expect(exec).toHaveBeenCalledTimes(1);
+      const [binary, args, options] = exec.mock.calls[0]!;
+      expect(binary).toBe('ssh');
+      expect(args).toEqual([...SSH_OPTIONS, 'nas1-agent', command(provider)]);
+      expect(options).toMatchObject({ timeout: 25_000, maxBuffer: 64 * 1024 });
+    }
+  );
+
+  it('collects the sources parsed from a version 1 manifest and from a registry v2 entry', async () => {
+    const manifest = parseSourceManifest(
+      JSON.stringify({
+        version: 1,
+        sources: [{ provider: 'muse', platform: 'ubuntu', sshHost: 'nas1-agent' }],
+      })
+    );
+    const parsed = parseAccountRegistry({
+      version: 2,
+      accounts: [
+        {
+          id: 'cursor:usage',
+          provider: 'cursor',
+          platform: 'ubuntu',
+          sshHost: 'nas1-agent',
+          label: null,
+          credential: { kind: 'discover' },
+        },
+      ],
+    });
+    expect(manifest.valid).toBe(true);
+    const sources = [
+      manifest.sources.find((source) => source.provider === 'muse')!,
+      registrySource(parsed!.accounts[0]!),
+    ];
+    const exec = mockProcess('{}');
+    for (const source of sources) await runAdditionalUsageSource(source);
+    expect(exec.mock.calls.map(([binary, args]) => [binary, (args as string[]).slice(-3)])).toEqual(
+      [
+        ['ssh', ['--', 'nas1-agent', command('muse')]],
+        ['ssh', ['--', 'nas1-agent', command('cursor')]],
+      ]
+    );
+  });
+
+  it('builds the same command as any Ubuntu over ssh, with no switch, sign-in or key flow', () => {
+    for (const provider of ADDITIONAL_PROVIDERS) {
+      const nas1 = remoteCommand({ provider, platform: 'ubuntu', sshHost: 'nas1-agent' });
+      expect(nas1).toBe(command(provider));
+      expect(nas1).toBe(remoteCommand({ provider, platform: 'ubuntu', sshHost: 'work-machine' }));
+      expect(nas1).not.toMatch(/activate|switch|key_store|claude_usage|auth\.json|credentials/i);
+    }
+  });
+
+  it('keeps nas1 out of the platform values the transport accepts', async () => {
+    const exec = mockProcess('{}');
+    await expect(
+      runAdditionalUsageSource({
+        provider: 'cursor',
+        platform: 'nas1',
+        sshHost: 'nas1-agent',
+      } as unknown as AdditionalUsageSource)
+    ).rejects.toBeInstanceOf(AdditionalUsageTransportError);
+    expect(exec).not.toHaveBeenCalled();
+  });
 });
 
 describe('registry v2 collector arguments', () => {

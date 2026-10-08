@@ -9,6 +9,7 @@ import {
 import {
   ACCOUNT_REGISTRY_FILE,
   parseAccountRegistry,
+  registrySource,
   type AccountRegistryRead,
 } from '../../../src/web-server/services/account-registry-v2';
 import {
@@ -281,6 +282,100 @@ describe('additional accounts from registry v2', () => {
   });
 });
 
+/** Cursor on Nas1 (an ubuntu entry behind the fixed alias) next to a plain local Z.ai account. */
+const NAS1_ENTRIES = [
+  entry('cursor:usage', { kind: 'discover' }, { sshHost: 'nas1-agent' }),
+  entry('zai:usage', { kind: 'discover' }),
+];
+
+describe('additional accounts on Nas1 from registry v2', () => {
+  it('parses an ubuntu entry on the Nas1 alias and keeps it an ubuntu source', () => {
+    const parsed = parseAccountRegistry({ version: 2, accounts: NAS1_ENTRIES });
+    expect(parsed?.accounts[0]).toMatchObject({ platform: 'ubuntu', sshHost: 'nas1-agent' });
+    expect(registrySource(parsed!.accounts[0]!)).toEqual({
+      provider: 'cursor',
+      platform: 'ubuntu',
+      sshHost: 'nas1-agent',
+      account: { id: 'cursor:usage', label: null, credential: { kind: 'discover' } },
+    });
+  });
+
+  it('does not accept nas1 as a persisted platform', () => {
+    const nas1 = entry(
+      'cursor:usage',
+      { kind: 'discover' },
+      { platform: 'nas1', sshHost: 'nas1-agent' }
+    );
+    expect(parseAccountRegistry({ version: 2, accounts: [nas1] })).toBeNull();
+  });
+
+  it('collects the entry over its alias and labels it Nas1, but not a local account', async () => {
+    const { service, calls } = fixture(() => registry(NAS1_ENTRIES));
+    const snapshot = await service.snapshot();
+    expect(calls[0]).toMatchObject({
+      provider: 'cursor',
+      platform: 'ubuntu',
+      sshHost: 'nas1-agent',
+    });
+    expect(snapshot.accounts.map((row) => [row.id, row.platform, row.host, row.source])).toEqual([
+      ['cursor:usage', 'ubuntu', 'nas1', 'Account on Nas1'],
+      ['zai:usage', 'ubuntu', undefined, 'Account on Ubuntu'],
+    ]);
+    expect(snapshot.accounts[1]).not.toHaveProperty('host');
+    // The dashboard projection keeps the host on the Nas1 row and adds none elsewhere.
+    const projected = additionalAccounts(snapshot.accounts, snapshot.registry);
+    expect(projected.find((account) => account.id === 'cursor:usage')).toMatchObject({
+      platform: 'ubuntu',
+      host: 'nas1',
+      source: 'Account on Nas1',
+    });
+    expect(projected.find((account) => account.id === 'zai:usage')).not.toHaveProperty('host');
+  });
+
+  it('names Nas1 when its usage helper is outdated', async () => {
+    const { service } = fixture(() => registry(NAS1_ENTRIES), {
+      // The transport flags an outdated helper only after account arguments were sent.
+      runSource: async (source) => {
+        if (source.sshHost === 'nas1-agent') throw new AdditionalUsageTransportError(false, true);
+        return payload();
+      },
+    });
+    const rows = await service.get();
+    expect(rows[0]).toMatchObject({
+      host: 'nas1',
+      status: 'unavailable',
+      message: 'Update the usage helper on Nas1.',
+      windows: [],
+    });
+    expect(rows[1]).toMatchObject({ status: 'ok' });
+  });
+
+  it('shows Nas1 on the placeholder rows offered before collection finishes', async () => {
+    const { service } = fixture(() => registry(NAS1_ENTRIES));
+    await service.get();
+    expect(service.configured()?.accounts.map((row) => [row.id, row.host, row.source])).toEqual([
+      ['cursor:usage', 'nas1', 'Account on Nas1'],
+      ['zai:usage', undefined, 'Account on Ubuntu'],
+    ]);
+  });
+
+  it('treats an account moved from local Ubuntu to Nas1 and back as new sources with their own caches', async () => {
+    let accounts: unknown[] = [entry('cursor:usage', { kind: 'discover' })];
+    const { service, calls } = fixture(() => registry(accounts));
+    expect((await service.get())[0]).not.toHaveProperty('host');
+    accounts = [entry('cursor:usage', { kind: 'discover' }, { sshHost: 'nas1-agent' })];
+    const moved = (await service.get())[0]!;
+    // The cached local sample was not reused for the Nas1 source.
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ platform: 'ubuntu', sshHost: 'nas1-agent' });
+    expect(moved).toMatchObject({ host: 'nas1', source: 'Account on Nas1' });
+    accounts = [entry('cursor:usage', { kind: 'discover' })];
+    const back = (await service.get())[0]!;
+    expect(back.source).toBe('Account on Ubuntu');
+    expect(back).not.toHaveProperty('host');
+  });
+});
+
 describe('additionalAccounts projection without the one-row limit', () => {
   function row(id: string, provider = id.split(':')[0]) {
     return {
@@ -322,6 +417,34 @@ describe('additionalAccounts projection without the one-row limit', () => {
     expect(
       projected.every((account) => !account.isActive && account.capabilities.codexProfile === null)
     ).toBe(true);
+  });
+
+  it('passes the Nas1 host through only on an ubuntu row, and nothing else as a host', () => {
+    const withHost = (id: string, extra: Record<string, unknown>) =>
+      ({ ...row(id), ...extra }) as unknown as Parameters<typeof additionalAccounts>[0][number];
+    const projected = additionalAccounts(
+      [
+        withHost('cursor:usage', { host: 'nas1' }),
+        withHost('zai:usage', { host: 'mars' }),
+        withHost('muse:usage', { platform: 'mac', host: 'nas1' }),
+        withHost('qwen:usage', { platform: 'windows', host: 'nas1' }),
+        withHost('kimi-code:usage', { host: ['nas1'] }),
+        row('opencode-go:usage'),
+      ],
+      'v2'
+    );
+    expect(projected.map((account) => [account.id, account.platform, account.host])).toEqual([
+      ['muse:usage', 'mac', undefined],
+      ['cursor:usage', 'ubuntu', 'nas1'],
+      ['kimi-code:usage', 'ubuntu', undefined],
+      ['qwen:usage', 'windows', undefined],
+      ['zai:usage', 'ubuntu', undefined],
+      ['opencode-go:usage', 'ubuntu', undefined],
+    ]);
+    // An absent or refused host leaves no key at all, so the JSON stays additive.
+    expect(projected.filter((account) => 'host' in account).map((account) => account.id)).toEqual([
+      'cursor:usage',
+    ]);
   });
 
   it('caps a provider at 16 rows and fills empty providers only for version 1', () => {
