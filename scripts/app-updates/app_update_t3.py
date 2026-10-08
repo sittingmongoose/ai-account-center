@@ -410,9 +410,10 @@ def job_finished(root, dashboard=False):
         if not isinstance(job, dict) or job.get("state") not in ("completed", "failed"):
             return False
         hosts = job.get("hosts")
-        return hosts is None or (isinstance(hosts, dict) and all(
-            isinstance(hosts.get(host), dict) and hosts[host].get("state") == "done"
-            for host in ("ubuntu", "mac", "windows")))
+        # Every computer the job saved must be done (Ubuntu, Mac, Windows and Nas1 today),
+        # so the restart also waits for one added later. An empty table proves nothing.
+        return hosts is None or (isinstance(hosts, dict) and len(hosts) > 0 and all(
+            isinstance(host, dict) and host.get("state") == "done" for host in hosts.values()))
     except FileNotFoundError:
         return not dashboard  # Only standalone --apply may have no job file.
     except (OSError, ValueError, AttributeError):

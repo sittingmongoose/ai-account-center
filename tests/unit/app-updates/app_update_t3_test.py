@@ -329,7 +329,7 @@ class T3Fixtures(unittest.TestCase):
         for state in ("running", "completed", "failed"):
             common.write_private_json(path, {"job": {"state": state}})
             self.assertEqual(t3.job_finished(root), state != "running")
-        hosts = {host: {"state": "done"} for host in ("ubuntu", "mac", "windows")}
+        hosts = {host: {"state": "done"} for host in ("ubuntu", "mac", "windows", "nas1")}
         common.write_private_json(path, {"job": {"state": "failed", "hosts": hosts}})
         self.assertTrue(t3.job_finished(root))
         hosts["windows"]["state"] = "running"
@@ -337,6 +337,55 @@ class T3Fixtures(unittest.TestCase):
         self.assertFalse(t3.job_finished(root))
         path.write_text("invalid")
         self.assertFalse(t3.job_finished(root))
+
+    def test_job_completion_waits_for_every_saved_host_including_nas1(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        path = root / "dashboard-job.json"
+
+        def finished(hosts, state="completed"):
+            common.write_private_json(path, {"job": {"state": state, "hosts": hosts}})
+            return t3.job_finished(root)
+
+        four = {host: {"state": "done"} for host in ("ubuntu", "mac", "windows", "nas1")}
+        self.assertTrue(finished(four))
+        for state in ("waiting", "running"):
+            four["nas1"]["state"] = state  # Nas1 alone holds the restart
+            self.assertFalse(finished(four), state)
+        # A job saved before Nas1 existed lists three computers; all done is finished.
+        three = {host: {"state": "done"} for host in ("ubuntu", "mac", "windows")}
+        self.assertTrue(finished(three, "failed"))
+        # Whatever the job saved must be done, even a computer added after this helper was written.
+        self.assertFalse(finished({**three, "nas1": {"state": "done"}, "later": {"state": "running"}}))
+        # Fail closed: nothing listed, or an entry that is not a host record in the done state.
+        for hosts in ({}, [], "done", {"ubuntu": "done"}, {**three, "nas1": None}, {**three, "nas1": {"state": "DONE"}}):
+            self.assertFalse(finished(hosts), hosts)
+
+    def test_detached_restart_waits_for_nas1_to_finish_in_the_saved_job(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
+        path = root / "dashboard-job.json"
+        hosts = {host: {"state": "done"} for host in ("ubuntu", "mac", "windows")}
+        hosts["nas1"] = {"state": "running"}
+        common.write_private_json(path, {"job": {"state": "completed", "hosts": hosts}})
+        now = [0]
+
+        def sleep(seconds):
+            now[0] += seconds
+            if now[0] == 45:  # Nas1 finishes long after the other three computers
+                hosts["nas1"]["state"] = "done"
+                common.write_private_json(path, {"job": {"state": "completed", "hosts": hosts}})
+
+        def run(argv, **kwargs):
+            # The 30-second quiet period starts only once Nas1 is done.
+            self.assertGreaterEqual(now[0], 75)
+            self.assertEqual(argv, ["/usr/bin/systemctl", "--user", "restart", "t3code.service"])
+
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=sleep), mock.patch.object(t3, "command", side_effect=run) as command, \
+                mock.patch.object(t3, "health_check"):
+            t3.deferred_restart(12345)
+        command.assert_called_once()
+        self.assertFalse((root / "t3-code-pending-restart.json").exists())
 
     def test_t3_is_last_and_each_host_installer_stays_sequential(self):
         installations = {key: common.Install(key, "ubuntu", self.root / key, "1.0.0") for key in common.APP_LABELS}
