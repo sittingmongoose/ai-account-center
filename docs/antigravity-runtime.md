@@ -401,7 +401,9 @@ backups are never overwritten.
 ### Update all holds unreviewed builds
 
 The dashboard's Update all never installs an Antigravity CLI build that is not
-in the reviewed set, on any of the three computers. The helper reads the
+in the reviewed set, on any of the four computers it updates (Ubuntu, Mac,
+Windows and Nas1). Account switching exists on Ubuntu only: the other
+computers, Nas1 included, are only ever updated. The helper reads the
 official release manifest first; when its newest version is not reviewed, the
 row reads "Update held: Antigravity X is waiting for a switching review" and
 the installed build stays. When the review list or the manifest cannot be read,

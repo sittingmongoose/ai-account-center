@@ -103,7 +103,7 @@ page as file:// or configure a cross-origin API URL.
   Per-type costs use the rates mirrored from `src/web-server/model-pricing.ts`
   (`public/model-rates.mjs`) and are kept only when they add up to each model's
   logged estimate; otherwise the split shows token shares and says so. Usage
-  from OMP, Muse Code and zcode (Ubuntu, Mac and Windows) is grouped under the
+  from OMP, Muse Code and zcode (Ubuntu, Mac, Windows and Nas1) is grouped under the
   dashboard provider that served it, from the route each log records (Qwen,
   Z.ai, Kimi Code, OpenCode Go, Cursor, Muse Code, Antigravity; a route no
   provider claims is Other); the tools are never providers. The top-right
