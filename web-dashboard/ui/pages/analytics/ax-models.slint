@@ -388,18 +388,22 @@ export component AxCbmCard inherits AxCard {
         padding-bottom: 14px;
         Text { text: AxData.cbm.foot; font-size: Breakpoints.tier-d ? 12px : Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
-    // below D one Text per footnote sentence (task 9 A2): each sentence is complete the moment it is
-    // non-empty, so its Text measures its final wrapped height. One Text for the joined foot instead gets
-    // stuck at its first-measured height and the card clips the rest (a wrapping Text directly in a
-    // HorizontalLayout is worse: measured single-line, it overflows the card).
-    if AxData.cbm.foot != "" && Breakpoints.below-d: VerticalLayout {
+    // below D the note sits directly in a column, so the card measures its wrapped height (task 9 A2):
+    // a wrapping Text in a HorizontalLayout is measured single-line and overflows the card. A wrapped Text
+    // stuck at an early-measured height never re-wraps when its bound string grows (verified: the card
+    // clips the note until any full relayout), so the bridge toggles foot-flip on every footnote change and
+    // the two copies below alternate: each new text gets a freshly created Text that measures it fully.
+    if AxData.cbm.foot != "" && !AxData.cbm.foot-flip && Breakpoints.below-d: VerticalLayout {
         padding-left: root.pad-x;
         padding-right: root.pad-x;
         padding-bottom: 14px;
-        spacing: 4px;
-        if AxData.cbm.foot-h != "": Text { text: AxData.cbm.foot-h; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
-        if AxData.cbm.foot-u != "": Text { text: AxData.cbm.foot-u; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
-        if AxData.cbm.foot-n != "": Text { text: AxData.cbm.foot-n; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+        Text { text: AxData.cbm.foot; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
+    }
+    if AxData.cbm.foot != "" && AxData.cbm.foot-flip && Breakpoints.below-d: VerticalLayout {
+        padding-left: root.pad-x;
+        padding-right: root.pad-x;
+        padding-bottom: 14px;
+        Text { text: AxData.cbm.foot; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
     // trailing conditional (task 9 A2, same Slint 1.18 quirk as A3): the data-bound note above only
     // measures its full wrapped height when a conditional layout with text follows it; without this

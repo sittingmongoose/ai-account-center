@@ -1248,6 +1248,9 @@ export function usageHead(payload, state, opts = {}) {
   const R = pageRange(state, A, now);
   return headOf(A, R, state, now, zoneName(now), hostProgress(payload));
 }
+// task 9 A2: last CBM footnote seen, with a revision bumped on every change (below-D recreates).
+let lastCbmFoot = null;
+let cbmFootRev = 0;
 export function usageView(payload, state, opts = {}) {
   const now = opts.now ?? Date.now();
   const A = activityData(payload, now);
@@ -1267,13 +1270,14 @@ export function usageView(payload, state, opts = {}) {
   const notLogged = shown.filter(m => m.unk);
   // models with some logged cost but no listed rate (a model with no logged cost has no split to show)
   const noRate = shown.filter(m => m.mode !== 'rates' && !m.unreconciled && !m.none).length;
-  // task 9 A2: per-sentence notes for below-D. Each sentence below is complete the moment it is
-  // non-empty, so a Text created for it measures its final height; the joined foot instead grows across
-  // updates and Slint 1.18 sticks it at its first-measured height (the card clips the rest).
-  const footH = hid.length ? `${hid.length === 1 ? hid[0].model : `${hid.length} entries`} ${hid.length === 1 ? 'is' : 'are'} left out: no tokens or cost logged.` : '';
-  const footU = unrec.length ? `${unrec.map(m => m.model).join(', ')}: rates do not reconcile with the logged cost, so the split shows token shares.` : '';
-  const footN = notLogged.length ? `${notLogged.length <= 3 ? andList(notLogged.map(m => m.model)) : `${notLogged.length} models`} ${notLogged.length === 1 ? 'has' : 'have'} cost with no logged amount and no listed rate: it shows as not logged and is left out of the totals.` : '';
-  const foot = [footH, footU, footN].filter(Boolean).join(' ');
+  const foot = [
+    hid.length ? `${hid.length === 1 ? hid[0].model : `${hid.length} entries`} ${hid.length === 1 ? 'is' : 'are'} left out: no tokens or cost logged.` : '',
+    unrec.length ? `${unrec.map(m => m.model).join(', ')}: rates do not reconcile with the logged cost, so the split shows token shares.` : '',
+    notLogged.length ? `${notLogged.length <= 3 ? andList(notLogged.map(m => m.model)) : `${notLogged.length} models`} ${notLogged.length === 1 ? 'has' : 'have'} cost with no logged amount and no listed rate: it shows as not logged and is left out of the totals.` : '',
+  ].filter(Boolean).join(' ');
+  // task 9 A2: a wrapped Text stuck at an early-measured height never re-wraps when its bound string
+  // grows, so below-D alternates two footnote copies on this revision: every distinct text recreates.
+  if (foot !== lastCbmFoot) { lastCbmFoot = foot; cbmFootRev += 1; }
   const statusNote = A.available ? '' : A.message || 'CLI usage logs are unavailable.';
   const sessions = sessionsView(A, state, now);
   const progress = hostProgress(payload);
@@ -1302,7 +1306,7 @@ export function usageView(payload, state, opts = {}) {
     picker: providerChoices(A, R, state),
     apportTip: APPORT_TIP,
     trend: trendView(A, R, state, opts.sizes?.trend),
-    cbm: { sub: `${windowText} · ${shown.length} model${shown.length === 1 ? '' : 's'} by ${cbmSortOf(state)} · select one for detail`, note: wholeNote('models'), sort: cbmSortOf(state), rows: modelRows(A, state, windowText), foot, footH, footU, footN, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
+    cbm: { sub: `${windowText} · ${shown.length} model${shown.length === 1 ? '' : 's'} by ${cbmSortOf(state)} · select one for detail`, note: wholeNote('models'), sort: cbmSortOf(state), rows: modelRows(A, state, windowText), foot, footRev: cbmFootRev, footFlip: cbmFootRev % 2 === 1, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
     donut: { sub: `Share of the logs read for ${windowText}`, note: wholeNote('models'), ...donutView(A, state, shades) },
     sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, moreSub: sessions.moreSub, stats: sessions.stats, rows: sessions.rows, recent: sessions.recent, recentMore: sessions.recentMore },
     tokens: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, rows: tokensView(K, C, costOk, A.available) },

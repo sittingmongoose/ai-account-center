@@ -127,9 +127,9 @@ export struct AxModelRow {
     rate: string,
 }
 export struct AxCardText { sub: string, note: string, foot: string, empty: string,
-// task 9 analytics1: the CBM footnote's sentences separately (below-D renders one Text per sentence,
-// each created with its final text so the card measures it; see A2)
-foot-h: string, foot-u: string, foot-n: string }
+// task 9 analytics1: the CBM footnote's flip bit, toggled on every change (below-D alternates two
+// footnote copies on it, so each new text gets a freshly created Text; see A2)
+foot-flip: bool }
 
 // ---- model donut ----
 export struct AxDonutSeg {
