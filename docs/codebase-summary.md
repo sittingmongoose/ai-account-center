@@ -24,7 +24,9 @@ authenticated dashboard. Retired runtime bins provide guidance rather than
 profile dispatch. Existing stored profile names, session aliases, provider IDs,
 native messaging identities and `CCS_*` environment names remain compatible.
 
-The root TypeScript build compiles `src/` into `dist/`. The
+The root TypeScript build compiles `src/` into `dist/` and
+[bundles](../scripts/build-codex-update-runtime.js) the Codex stop/start runtime
+that the update helpers carry to Linux hosts without AAC into `dist/app-updates/`. The
 [Slint builder](../scripts/build-ui.js) fingerprints the crate manifest/lock,
 Rust, Slint and public browser inputs, builds locked WASM and stages `dist/ui/`.
 The [validator](../scripts/validate-ui.js) and

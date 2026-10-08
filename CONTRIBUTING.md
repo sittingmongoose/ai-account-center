@@ -73,8 +73,9 @@ bun run ui:validate
 ```
 
 The UI gate verifies Slint pins, Rust formatting, offline browser helpers, bridge
-syntax, source fingerprint and packaged WASM. `build:server` only compiles
-TypeScript; it does not refresh dashboard assets.
+syntax, source fingerprint and packaged WASM. `build:server` compiles
+TypeScript and bundles the Codex update runtime into `dist/app-updates/`; it does
+not refresh dashboard assets.
 
 For documentation:
 
