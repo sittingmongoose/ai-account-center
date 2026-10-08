@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1222,
-    "filesAffected": 122,
+    "totalOccurrences": 1237,
+    "filesAffected": 127,
     "hotpathOccurrences": 589,
     "hotpathFilesAffected": 71,
     "topHotpathFiles": [
@@ -522,11 +522,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 671,
-      "typedThrows": 169,
+      "totalThrows": 674,
+      "typedThrows": 171,
       "plainThrows": 72,
-      "otherThrows": 430,
-      "adoptionRatio": 0.2519,
+      "otherThrows": 431,
+      "adoptionRatio": 0.2537,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -542,8 +542,8 @@
         },
         {
           "subdomain": "codex-auth",
-          "count": 97,
-          "typed": 6,
+          "count": 100,
+          "typed": 8,
           "plain": 25
         },
         {
@@ -603,9 +603,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 38,
-      "totalSourceFiles": 411,
-      "coverageRatio": 0.0925,
+      "filesWithCreateLogger": 40,
+      "totalSourceFiles": 423,
+      "coverageRatio": 0.0946,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,8 +632,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 153,
-          "withLogger": 22
+          "count": 156,
+          "withLogger": 23
         },
         {
           "subdomain": "utils",
@@ -646,14 +646,14 @@
           "withLogger": 0
         },
         {
+          "subdomain": "codex-auth",
+          "count": 37,
+          "withLogger": 10
+        },
+        {
           "subdomain": "commands",
           "count": 34,
           "withLogger": 1
-        },
-        {
-          "subdomain": "codex-auth",
-          "count": 28,
-          "withLogger": 9
         },
         {
           "subdomain": "config",
@@ -772,7 +772,7 @@
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1057
+          "loc": 1066
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
@@ -787,6 +787,10 @@
           "loc": 871
         },
         {
+          "file": "src/web-server/services/account-dashboard-service.ts",
+          "loc": 776
+        },
+        {
           "file": "src/web-server/usage/native-quota-collector.ts",
           "loc": 768
         },
@@ -799,10 +803,6 @@
           "loc": 767
         },
         {
-          "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 754
-        },
-        {
           "file": "src/web-server/services/account-analytics-projection.ts",
           "loc": 710
         },
@@ -811,8 +811,8 @@
           "loc": 689
         },
         {
-          "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 674
+          "file": "src/web-server/services/codex-auto-switch-service.ts",
+          "loc": 678
         }
       ]
     }
