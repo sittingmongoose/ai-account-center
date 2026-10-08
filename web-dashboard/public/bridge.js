@@ -1023,27 +1023,30 @@ function pushInputProfile() {
   renderAccounts();
 }
 function currentViewport() {
-  let appleMobile = false;
-  let standalone = false;
+  let canvasWidth = 0;
+  let canvasHeight = 0;
   try {
-    appleMobile = isAppleMobile(navigator?.userAgent, {
-      standalone: installStandalone,
-      touchPoints: navigator?.maxTouchPoints ?? 0,
-    });
-    if (typeof matchMedia === 'function') {
-      standalone = matchMedia('(display-mode: standalone)').matches === true;
+    const canvas = typeof document !== 'undefined' ? document.querySelector('#canvas') : null;
+    if (canvas) {
+      if (Number.isFinite(canvas.clientWidth) && canvas.clientWidth > 0) {
+        canvasWidth = canvas.clientWidth;
+      } else if (typeof canvas.getBoundingClientRect === 'function') {
+        const r = canvas.getBoundingClientRect();
+        if (Number.isFinite(r?.width) && r.width > 0) canvasWidth = Math.round(r.width);
+      }
+      if (Number.isFinite(canvas.clientHeight) && canvas.clientHeight > 0) {
+        canvasHeight = canvas.clientHeight;
+      } else if (typeof canvas.getBoundingClientRect === 'function') {
+        const r = canvas.getBoundingClientRect();
+        if (Number.isFinite(r?.height) && r.height > 0) canvasHeight = Math.round(r.height);
+      }
     }
-    if (typeof navigator !== 'undefined' && navigator.standalone === true) standalone = true;
   } catch {}
-  const screenWidth = typeof screen !== 'undefined' ? screen.width : innerWidth;
-  const screenHeight = typeof screen !== 'undefined' ? screen.height : innerHeight;
   return viewportSize({
-    innerWidth,
-    innerHeight,
-    screenWidth,
-    screenHeight,
-    standalone,
-    appleMobile,
+    canvasWidth,
+    canvasHeight,
+    innerWidth: typeof innerWidth !== 'undefined' ? innerWidth : 0,
+    innerHeight: typeof innerHeight !== 'undefined' ? innerHeight : 0,
   });
 }
 function resize() {

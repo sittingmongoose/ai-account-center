@@ -100,35 +100,27 @@ export function themeScreen(authenticated) {
 /**
  * Layout viewport dimensions ({ width, height }) for the Slint canvas.
  *
- * On iOS standalone PWA (Add to Home Screen), WebKit's window.innerHeight
- * stops short above the bottom safe area (e.g. 812 pt instead of 874 pt on iPhone 17/18 Pro),
- * leaving an unpainted 62 pt gap below the tab bar. When standalone and appleMobile,
- * this expands the layout height to the true screen dimension for the current orientation,
- * grounding the tab bar and allowing safe-bottom padding to cover the home indicator.
- * On desktop, Android, and normal Safari, innerWidth and innerHeight are preserved.
+ * Resolves the dimensions from the actual canvas element after CSS layout
+ * (e.g. canvas.clientWidth / clientHeight or getBoundingClientRect),
+ * falling back to the window inner dimensions.
+ *
+ * Never substitutes physical screen dimensions, preserving windowed environments
+ * (iPad Split View, Stage Manager / windowed PWA, external displays) and preventing
+ * false keyboard heights and offscreen controls.
  */
 export function viewportSize({
+  canvasWidth,
+  canvasHeight,
   innerWidth = 0,
   innerHeight = 0,
-  screenWidth = 0,
-  screenHeight = 0,
-  standalone = false,
-  appleMobile = false,
 } = {}) {
-  const w = Number.isFinite(innerWidth) && innerWidth > 0 ? innerWidth : 0;
-  const h = Number.isFinite(innerHeight) && innerHeight > 0 ? innerHeight : 0;
-  if (!standalone || !appleMobile) {
-    return { width: w, height: h };
-  }
-  const sw = Number.isFinite(screenWidth) && screenWidth > 0 ? screenWidth : w;
-  const sh = Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : h;
-  const minDim = Math.min(sw, sh);
-  const maxDim = Math.max(sw, sh);
-  const isLandscape = w > h;
-  const targetWidth = isLandscape ? maxDim : minDim;
-  const targetHeight = isLandscape ? minDim : maxDim;
+  const cw = Number.isFinite(canvasWidth) && canvasWidth > 0 ? Math.round(canvasWidth) : 0;
+  const ch = Number.isFinite(canvasHeight) && canvasHeight > 0 ? Math.round(canvasHeight) : 0;
+  const iw = Number.isFinite(innerWidth) && innerWidth > 0 ? Math.round(innerWidth) : 0;
+  const ih = Number.isFinite(innerHeight) && innerHeight > 0 ? Math.round(innerHeight) : 0;
+
   return {
-    width: targetWidth > 0 ? targetWidth : w,
-    height: targetHeight > 0 ? targetHeight : h,
+    width: cw > 0 ? cw : iw,
+    height: ch > 0 ? ch : ih,
   };
 }

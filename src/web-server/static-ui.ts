@@ -51,7 +51,6 @@ const CONTENT_TYPES = new Map<string, string>([
   // PWA: the install manifest and the install icons (sw.js is .js above).
   ['.webmanifest', 'application/manifest+json'],
   ['.png', 'image/png'],
-  ['.ico', 'image/x-icon'],
 ]);
 /** Build facts for the build scripts only; the UI never fetches it, so it is not served. */
 const UNSERVED = new Set(['ui-build-manifest.json']);
@@ -59,7 +58,7 @@ const UNSERVED = new Set(['ui-build-manifest.json']);
  * Root icon aliases probed by iOS Springboard and desktop browsers.
  * Served directly from icons/ without requiring session auth.
  */
-export const STATIC_ICON_ALIASES = new Map<string, string>([
+const STATIC_ICON_ALIASES: ReadonlyMap<string, string> = new Map<string, string>([
   ['/apple-touch-icon.png', 'icons/apple-touch-icon-180.png'],
   ['/apple-touch-icon-precomposed.png', 'icons/apple-touch-icon-180.png'],
   ['/favicon.ico', 'icons/apple-touch-icon-180.png'],
