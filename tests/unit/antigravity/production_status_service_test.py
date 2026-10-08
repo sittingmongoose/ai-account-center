@@ -74,7 +74,7 @@ class StatusServiceFixtures(unittest.TestCase):
 
     def frame(self,**changes):
         return json.dumps({'email':'fixture@example.com','conversation_id':CID,'cwd':'/fixture/project',
-            'version':'1.3.0','agent_state':'idle',**changes}).encode()
+            'version':'1.3.2','agent_state':'idle',**changes}).encode()
 
     def capture(self,raw=None):
         return self.service.accept(self.frame() if raw is None else raw,peer_pid=502,peer_uid=os.getuid())
@@ -578,7 +578,7 @@ class ReleaseBoundaryFixtures(unittest.TestCase):
     def test_released_factory_uses_injected_callbacks_without_running_them(self):
         profile=Mock(side_effect=AssertionError('constructor must not contact provider'))
         snapshot=Mock(side_effect=AssertionError('constructor must not read private store'))
-        factory=create_native_status_factory(release={'nativeActivationReleased':True,'nativeVersion':'1.3.0',
+        factory=create_native_status_factory(release={'nativeActivationReleased':True,'nativeVersion':'1.3.2',
             'nativeSha256':NATIVE_SHA256,'nativeProofReceiptSha256':'b'*64},binary='/fixture/agy',home='/fixture/home',
             status_path='/fixture/status',python_path='/fixture/python',helper_path='/fixture/helper',
             original_command_file='/fixture/original',read_profile=profile,read_snapshot=snapshot,

@@ -35,7 +35,7 @@
     },
     {
       "path": "native_status_composition.py",
-      "sha256": "443120a5f31a9c6d2502b9989d58a38becd22cb00c272acddf4e588d787eb586"
+      "sha256": "70b0d4c6561b5553e03866a8f2c5b25e9104bbb7b506ddad2ac7b525bee1e32a"
     },
     {
       "path": "native_status_config.py",
@@ -59,11 +59,11 @@
     },
     {
       "path": "native_status_omitted_counters.py",
-      "sha256": "00740af68631c450a002114c1435155400f7cc4991955ec8d485efaa53f356fe"
+      "sha256": "aacfc5aef6e33c0052e10da9dbe07764098cab8280145a67c837b6434337487d"
     },
     {
       "path": "native_status_present.py",
-      "sha256": "0a88a2a20527794091da017a54e90566bde119ccaac39eb33e43c9558a4d6e70"
+      "sha256": "88601c7fdeab73f637b6c2b63b793ef83839123c952371988c29b65b1aa58651"
     },
     {
       "path": "native_status_publisher.py",
@@ -71,7 +71,7 @@
     },
     {
       "path": "native_status_service.py",
-      "sha256": "1cc36d10673f3a0eab1b5304afc6e12ceb1475e765c8d2e543f28275d7129b12"
+      "sha256": "95bad018039cffa55d249305dd2f01f0447605f658b9e6bd617ef512a66222d4"
     },
     {
       "path": "native_status_spawn_retention.py",
@@ -83,7 +83,7 @@
     },
     {
       "path": "release.json",
-      "sha256": "0d2159e9e89a9bb2be09c003f00b0c18cc151f7191b87e1ab8f7ee19b096635b"
+      "sha256": "7b6c9d8f64d9f18c5f3fe89041c9d924667779e2c252675eab0da607b7fa61e4"
     },
     {
       "path": "requirements.txt",

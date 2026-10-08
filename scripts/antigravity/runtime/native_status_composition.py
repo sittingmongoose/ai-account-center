@@ -11,7 +11,7 @@ def create_native_status_factory(*,release,binary,home,status_path,python_path,
                                 helper_path,original_command_file,
                                 read_profile=None,read_snapshot=None,publisher_validator=None):
     if (type(release) is not dict or release.get('nativeActivationReleased') is not True or
-            release.get('nativeVersion')!='1.3.0' or release.get('nativeSha256')!=NATIVE_SHA256 or
+            release.get('nativeVersion')!='1.3.2' or release.get('nativeSha256')!=NATIVE_SHA256 or
             type(release.get('nativeProofReceiptSha256')) is not str or
             not re.fullmatch('[a-f0-9]{64}',release['nativeProofReceiptSha256'])):
         return None
