@@ -396,6 +396,13 @@ export component AxCbmCard inherits AxCard {
         padding-bottom: 14px;
         Text { text: AxData.cbm.foot; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
+    // trailing conditional (task 9 A2, same Slint 1.18 quirk as A3): the data-bound note above only
+    // measures its full wrapped height when a conditional layout with text follows it; without this
+    // the card clips the note to the first 2-3 lines (verified by capture). A single blank: zero-width
+    // cost, paints nothing.
+    if AxData.cbm.foot != "" && Breakpoints.below-d: VerticalLayout {
+        Text { text: " "; font-size: Type.small; wrap: word-wrap; }
+    }
     // A taller neighbour (the Model usage box beside it) stretches this card to the row's height.
     // Nothing else in the card body stretches, and when no child of a Slint layout has a stretch
     // factor they ALL grow evenly, so the spare height used to spread between the head, the column
