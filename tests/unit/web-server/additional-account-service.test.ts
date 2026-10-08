@@ -181,6 +181,7 @@ describe('additional account usage service', () => {
       expect(row.id).toBe(`${row.provider}:usage`);
       expect(row.platform).toBe('ubuntu');
       expect(row.source).toBe('Account on Ubuntu');
+      expect(row).not.toHaveProperty('host');
       expect(row.isActive).toBe(false);
       expect(row.capabilities).toEqual({
         codexProfile: null,
@@ -785,12 +786,99 @@ describe('additional account usage service', () => {
     expect(calls[2]).toEqual({ provider: 'cursor', platform: 'mac', sshHost: 'mac-usage' });
   });
 
+  it('labels a version 1 Ubuntu source on the Nas1 alias as Nas1 while it stays an ubuntu source', async () => {
+    const { service, calls, setManifest } = fixture();
+    setManifest(configuration([{ provider: 'cursor', platform: 'ubuntu', sshHost: 'nas1-agent' }]));
+    const rows = await service.get();
+    expect(calls[2]).toEqual({ provider: 'cursor', platform: 'ubuntu', sshHost: 'nas1-agent' });
+    expect(rows[2]).toMatchObject({
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+      host: 'nas1',
+      source: 'Account on Nas1',
+      status: 'ok',
+    });
+    // The other six providers still read this computer, with no host field.
+    for (const row of rows.filter((candidate) => candidate.provider !== 'cursor')) {
+      expect(row.source).toBe('Account on Ubuntu');
+      expect(row).not.toHaveProperty('host');
+    }
+  });
+
+  it.each(['work-ubuntu', 'nas1', 'Nas1-agent', 'nas1-agent2', 'nas1-agent.example'])(
+    'keeps an Ubuntu source on the other alias %s on Ubuntu, with no host field',
+    async (sshHost) => {
+      const { service, setManifest } = fixture();
+      setManifest(configuration([{ provider: 'cursor', platform: 'ubuntu', sshHost }]));
+      const row = (await service.get())[2]!;
+      expect(row).toMatchObject({ platform: 'ubuntu', source: 'Account on Ubuntu' });
+      expect(row).not.toHaveProperty('host');
+    }
+  );
+
+  it.each([
+    ['mac', 'Mac'],
+    ['windows', 'Windows'],
+  ] as const)(
+    'does not treat a %s source that names the Nas1 alias as Nas1',
+    async (platform, label) => {
+      const { service, setManifest } = fixture();
+      setManifest(configuration([{ provider: 'cursor', platform, sshHost: 'nas1-agent' }]));
+      const row = (await service.get())[2]!;
+      expect(row).toMatchObject({ platform, source: `Account on ${label}` });
+      expect(row).not.toHaveProperty('host');
+    }
+  );
+
+  it('never attributes a last sample from the local source to a newly configured offline Nas1', async () => {
+    const { service, setManifest } = fixture({
+      runSource: async (source) => {
+        if (source.sshHost === 'nas1-agent') throw new Error('PRIVATE_OFFLINE_ERROR');
+        return payload();
+      },
+    });
+    await service.get();
+    setManifest(configuration([{ provider: 'cursor', platform: 'ubuntu', sshHost: 'nas1-agent' }]));
+    const row = (await service.get())[2]!;
+    expect(row).toMatchObject({
+      platform: 'ubuntu',
+      host: 'nas1',
+      source: 'Account on Nas1',
+      status: 'error',
+    });
+    expect(row.windows).toEqual([]);
+    expect(row.sampledAt).toBeNull();
+    expect(JSON.stringify(row)).not.toContain('PRIVATE');
+  });
+
+  it('keeps the Nas1 host on its cached last sample when the computer goes offline', async () => {
+    let offline = false;
+    const { service, setManifest, setTime } = fixture({
+      runSource: async () => {
+        if (offline) throw new Error('PRIVATE_OFFLINE_ERROR');
+        return payload();
+      },
+    });
+    setManifest(configuration([{ provider: 'cursor', platform: 'ubuntu', sshHost: 'nas1-agent' }]));
+    expect((await service.get())[2]).toMatchObject({ status: 'ok', host: 'nas1' });
+    offline = true;
+    setTime(120_000);
+    expect((await service.get())[2]).toMatchObject({
+      status: 'cached',
+      platform: 'ubuntu',
+      host: 'nas1',
+      source: 'Account on Nas1',
+    });
+  });
+
   it.each([
     '{bad PRIVATE_CONFIG',
     JSON.stringify({ version: 2, sources: [] }),
     JSON.stringify({ version: 1, sources: [], command: 'PRIVATE_COMMAND' }),
     configuration([{ provider: 'claude', platform: 'ubuntu' }]),
     configuration([{ provider: 'cursor', platform: 'linux' }]),
+    // Nas1 is an ubuntu source on its alias, never a platform of its own.
+    configuration([{ provider: 'cursor', platform: 'nas1', sshHost: 'nas1-agent' }]),
     configuration([{ provider: 'cursor', platform: 'mac', sshHost: '-oProxyCommand=PRIVATE' }]),
     configuration([{ provider: 'cursor', platform: 'mac', sshHost: 'mac;PRIVATE' }]),
     configuration([{ provider: 'cursor', platform: 'mac', helper: '/tmp/PRIVATE' }]),

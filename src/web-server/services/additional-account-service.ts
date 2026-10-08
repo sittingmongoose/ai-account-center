@@ -19,6 +19,7 @@ import {
   type AdditionalProvider,
   type AdditionalUsageSource,
 } from './additional-usage-transport';
+import { HOST_LABELS, NAS1_SSH_ALIAS, type DashboardHost } from './dashboard-hosts';
 
 const CACHE_TTL_MS = 120_000;
 const REFRESH_DEBOUNCE_MS = 5_000;
@@ -35,7 +36,6 @@ const LABELS: Record<AdditionalProvider, string> = {
   zai: 'Z.ai coding plan',
   'opencode-go': 'OpenCode Go',
 };
-const PLATFORM_LABELS = { ubuntu: 'Ubuntu', mac: 'Mac', windows: 'Windows' };
 const MUSE_CACHED_MESSAGES = new Set([
   'Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically.',
 ]);
@@ -181,11 +181,23 @@ function usageWindow(value: unknown, index: number): DashboardAccountWindow | nu
   };
 }
 
+/**
+ * The computer a source runs on. Nas1, the second Ubuntu computer, is stored as
+ * platform 'ubuntu' plus its fixed ssh alias and never as a platform of its
+ * own, so registry files and older packages read it unchanged.
+ */
+function sourceHost(source: AdditionalUsageSource): DashboardHost {
+  return source.platform === 'ubuntu' && source.sshHost === NAS1_SSH_ALIAS
+    ? 'nas1'
+    : source.platform;
+}
+
 function unavailable(
   source: AdditionalUsageSource,
   status: DashboardAccount['status'] = 'unavailable',
   message = 'Saved account usage is unavailable on this computer.'
 ): DashboardAccount {
+  const host = sourceHost(source);
   return {
     id: source.account?.id ?? `${source.provider}:usage`,
     provider: source.provider,
@@ -194,7 +206,8 @@ function unavailable(
     email: null,
     plan: null,
     platform: source.platform,
-    source: `Account on ${PLATFORM_LABELS[source.platform]}`,
+    ...(host === 'nas1' ? { host } : {}),
+    source: `Account on ${HOST_LABELS[host]}`,
     status,
     message,
     fetchedAt: null,
@@ -431,7 +444,7 @@ export class AdditionalAccountService {
           ? unavailable(
               source,
               'unavailable',
-              `Update the usage helper on ${PLATFORM_LABELS[source.platform]}.`
+              `Update the usage helper on ${HOST_LABELS[sourceHost(source)]}.`
             )
           : unavailable(
               source,

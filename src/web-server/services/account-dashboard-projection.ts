@@ -322,6 +322,7 @@ export function additionalAccounts(
     providerLabel: string
   ): DashboardAccount => {
     const fallback = additionalFallback(provider, providerLabel);
+    const platform = row.platform === 'mac' || row.platform === 'windows' ? row.platform : 'ubuntu';
     return {
       id:
         typeof row.id === 'string' &&
@@ -339,7 +340,9 @@ export function additionalAccounts(
             timestamp(row.sampledAt) ?? timestamp(row.fetchedAt)
           )
         : { plan: text(row.plan, 80) }),
-      platform: row.platform === 'mac' || row.platform === 'windows' ? row.platform : 'ubuntu',
+      platform,
+      // Display only: Nas1 is an ubuntu source behind its fixed ssh alias.
+      ...(row.host === 'nas1' && platform === 'ubuntu' ? { host: 'nas1' as const } : {}),
       source: text(row.source, 80) ?? fallback.source,
       status: ['ok', 'cached', 'unavailable', 'error', 'needs_sign_in'].includes(row.status)
         ? row.status

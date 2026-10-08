@@ -77,6 +77,13 @@ export interface DashboardAccount {
   /** Antigravity coding entitlement at the sample time; absent for unknown plans. */
   antigravityPlan?: AntigravityPlan;
   platform: DashboardPlatform;
+  /**
+   * Display only: 'nas1' on a usage source that runs on Nas1, the second Ubuntu
+   * computer. That source is stored and reported as platform 'ubuntu' with its
+   * fixed ssh alias, so the registry, quota history and older packages are
+   * unchanged. Absent on every other row.
+   */
+  host?: 'nas1';
   source: string;
   status: DashboardAccountStatus;
   /** Present only with a precise reason; absent otherwise. */
