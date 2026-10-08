@@ -21,7 +21,11 @@ export const MAX_USAGE_LOG_SOURCES = 64;
 export const USAGE_LOG_TOOLS = ['omp', 'muse', 'zcode', 'claude-code', 'codex', 'jsonl'] as const;
 export type UsageLogTool = (typeof USAGE_LOG_TOOLS)[number];
 
-export const USAGE_LOG_HOSTS = ['ubuntu', 'mac', 'windows'] as const;
+/**
+ * The computers an extra usage-log folder can sit on. Nas1 is a second Ubuntu computer,
+ * so its paths are POSIX.
+ */
+export const USAGE_LOG_HOSTS = ['ubuntu', 'mac', 'windows', 'nas1'] as const;
 export type UsageLogHost = (typeof USAGE_LOG_HOSTS)[number];
 
 /** A dot path into a generic JSONL record (`usage.input_tokens`). */
@@ -60,7 +64,7 @@ function isUsageLogSource(value: unknown): value is UsageLogSource {
     source.path.length === 0 ||
     source.path.length > 1024 ||
     source.path.includes('\0') ||
-    // A Windows path follows Windows syntax; every other host is POSIX.
+    // A Windows path follows Windows syntax; every other host (Nas1 included) is POSIX.
     // `..` stays refused everywhere so an extra root cannot escape upward.
     !(
       path.posix.isAbsolute(source.path) ||
