@@ -26,6 +26,10 @@ DOWNLOAD_BLOCKED_RETRIES = 3
 # the old claude.ai redirect answers 403 to every non-browser client.
 CLAUDE_DARWIN_FEED = "https://downloads.claude.ai/releases/darwin/universal/RELEASES.json"
 CLAUDE_DARWIN_PREFIX = "https://downloads.claude.ai/releases/darwin/"
+# Windows Codex now ships through the Microsoft Store; the direct ChatGPT-x64.msix
+# stopped moving at 26.930.7945.0. The app itself reads this feed for updates.
+CODEX_STORE_FEED = "https://persistent.oaistatic.com/codex-app-prod/windows-store-update.json"
+CODEX_STORE_ID = "9PLM9XGG6VKS"
 
 
 def download_desktop(url, destination):
@@ -381,6 +385,45 @@ def add_appx_package(package):
     raise UpdateFailure()
 
 
+def codex_store_version(install):
+    """The Store build the Codex app itself offers, or None when the feed is unreadable or foreign."""
+    try:
+        with private_temporary() as temporary:
+            target = temporary / "windows-store-update.json"
+            download(CODEX_STORE_FEED, target, maximum=65536, timeout=30)
+            value = json.loads(target.read_text(encoding="utf-8"))
+    except (UpdateFailure, OSError, ValueError):
+        return None
+    if not isinstance(value, dict) or value.get("packageIdentity") != install.identity or value.get("storeProductId") != CODEX_STORE_ID:
+        return None
+    return version_text(value.get("buildVersion"))
+
+
+def update_windows_store(install, phase):
+    """Install the newer Codex Store build through winget's msstore source; never close the app."""
+    before = install.version
+    attempted = False
+    try:
+        if desktop_running(install):
+            return quit_first(install, before)
+        winget = shutil.which("winget.exe") or shutil.which("winget")
+        if not winget:
+            raise UpdateFailure("unsupported")
+        phase("updating")
+        attempted = True
+        # The Store verifies the package and upgrades the same OpenAI.Codex family in place.
+        command([winget, "install", "--id", CODEX_STORE_ID, "--source", "msstore", "--exact", "--silent",
+                 "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=900)
+        refreshed = windows_package(install.app_id)
+        if refreshed is None or refreshed.publisher != install.publisher or not refreshed.version or version_tuple(refreshed.version) <= version_tuple(before):
+            raise UpdateFailure("version_unknown")
+        value = result(install.app_id, "windows", "updated", before, refreshed.version, install.manager, attempted=True, restarted=0)
+        value["forcedStops"] = 0
+        return value
+    except UpdateFailure as error:
+        return result(install.app_id, "windows", "failed", before, before, install.manager, error.code, attempted)
+
+
 def update_windows(install, phase=None):
     """Update a Windows MSIX desktop app only while it is not running; never close it.
 
@@ -402,6 +445,10 @@ def update_windows(install, phase=None):
             return None
         return version_text(info.get("Version"))
 
+    if install.app_id == "codex-desktop":
+        store = codex_store_version(install)
+        if store and version_tuple(store) > version_tuple(before):
+            return update_windows_store(install, phase)
     try:
         running = desktop_running(install)
         remote = remote_msix_identity(url)

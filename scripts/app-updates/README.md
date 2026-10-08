@@ -202,7 +202,11 @@ Mac and Windows for Codex and Claude are **never quit, closed, restarted or kill
 does not even ask them to quit. A running app with a newer version reports the
 actionable `action_required`/`quit_first` row ("Quit Codex Desktop to finish
 its update") within seconds, before any package download: Windows reads only
-the published MSIX manifest over HTTP ranges (three requests, under 1 MB),
+the published MSIX manifest over HTTP ranges (three requests, under 1 MB);
+Windows Codex first reads the app's own Microsoft Store feed
+(`codex-app-prod/windows-store-update.json`, product `9PLM9XGG6VKS`), because the
+direct MSIX stopped at 26.930.7945.0, and installs a newer Store build with
+`winget install --source msstore` only while Codex is closed;
 Claude on Mac reads its release feed, and Codex on Mac remembers the version of
 the last verified DMG by its HEAD fingerprint. Only when that version is
 unknown does the full download decide, shown live on the page as

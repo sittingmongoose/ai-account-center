@@ -110,7 +110,7 @@ class UpdaterTests(unittest.TestCase):
             install = common.Install('codex-desktop', 'windows', root / 'ChatGPT.exe', '1.0.0.0', 'msix', 'OpenAI.Codex', 'Expected')
             with mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root)), mock.patch.object(desktop, 'download'), \
                     mock.patch.object(desktop, 'scan', return_value=[]), mock.patch.object(desktop, 'remote_msix_identity', return_value=None), \
-                    mock.patch.object(desktop, 'terminate_desktops') as stop:
+                    mock.patch.object(desktop, 'codex_store_version', return_value=None), mock.patch.object(desktop, 'terminate_desktops') as stop:
                 value = desktop.update_windows(install)
             self.assertEqual(value['messageCode'], 'signature_failed')
             stop.assert_not_called()
@@ -870,6 +870,7 @@ def _fake_msix(version, name='OpenAI.Codex', publisher='CN=fixture', filler=3 * 
 
 
 REAL_REMOTE_MSIX_IDENTITY = desktop.remote_msix_identity
+REAL_CODEX_STORE_VERSION = desktop.codex_store_version
 
 
 class DesktopWaitTests(unittest.TestCase):
@@ -888,6 +889,7 @@ class DesktopWaitTests(unittest.TestCase):
             mock.patch.object(desktop, 'scan', return_value=[]),
             mock.patch.object(desktop, 'remote_fingerprint', return_value=None),
             mock.patch.object(desktop, 'remote_msix_identity', return_value=None),
+            mock.patch.object(desktop, 'codex_store_version', return_value=None),
             # Any attempt to stop, close or relaunch a desktop app fails the test.
             mock.patch.object(desktop, 'terminate_desktops', side_effect=AssertionError('desktop app stopped')),
             mock.patch.object(desktop, 'restart_desktops', side_effect=AssertionError('desktop app relaunched')),
@@ -914,6 +916,52 @@ class DesktopWaitTests(unittest.TestCase):
         self.assertEqual(value['messageCode'], 'quit_first')
         self.assertFalse(value['updateAttempted'])
         self.assertEqual(value['version'], version)
+
+    # ---------------------------------------------------------------- Windows Codex via the Microsoft Store
+    def test_codex_store_feed_is_read_only_for_its_own_package(self):
+        install = self._windows_codex()
+        def feed(body):
+            def write(url, target, **_kwargs):
+                self.assertEqual(url, desktop.CODEX_STORE_FEED)
+                pathlib.Path(target).write_text(body, encoding='utf-8')
+            return write
+        good = '{"schemaVersion":1,"buildVersion":"26.1002.7124.0","storeProductId":"9PLM9XGG6VKS","packageIdentity":"OpenAI.Codex"}'
+        foreign = '{"buildVersion":"99.0.0.0","storeProductId":"9PLM9XGG6VKS","packageIdentity":"Impostor"}'
+        with mock.patch.object(desktop, 'download', side_effect=feed(good)):
+            self.assertEqual(REAL_CODEX_STORE_VERSION(install), '26.1002.7124.0')
+        with mock.patch.object(desktop, 'download', side_effect=feed(foreign)):
+            self.assertIsNone(REAL_CODEX_STORE_VERSION(install))
+        with mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure()):
+            self.assertIsNone(REAL_CODEX_STORE_VERSION(install))
+
+    def test_windows_running_codex_with_newer_store_build_reports_quit_first(self):
+        install = self._windows_codex()
+        with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
+                mock.patch.object(desktop, 'desktop_running', return_value=True), \
+                mock.patch.object(desktop, 'command', side_effect=AssertionError('winget ran')):
+            self._assert_quit_first(desktop.update_windows(install), '26.930.3748.0')
+
+    def test_windows_codex_store_build_installs_through_winget_without_closing(self):
+        install = self._windows_codex()
+        refreshed = common.Install('codex-desktop', 'windows', pathlib.Path('/fixture/ChatGPT.exe'), '26.1002.7124.0', 'msix', 'OpenAI.Codex', 'CN=fixture', pathlib.Path('/fixture'))
+        with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
+                mock.patch.object(desktop, 'desktop_running', return_value=False), \
+                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
+                mock.patch.object(desktop, 'command') as run, mock.patch.object(desktop, 'windows_package', return_value=refreshed), \
+                mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('stale MSIX downloaded')):
+            value = desktop.update_windows(install)
+        self.assertEqual((value['status'], value['version'], value['forcedStops']), ('updated', '26.1002.7124.0', 0))
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:6], ['C:/winget.exe', 'install', '--id', '9PLM9XGG6VKS', '--source', 'msstore'])
+
+    def test_windows_codex_store_install_that_changes_nothing_is_not_updated(self):
+        install = self._windows_codex()
+        with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
+                mock.patch.object(desktop, 'desktop_running', return_value=False), \
+                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
+                mock.patch.object(desktop, 'command'), mock.patch.object(desktop, 'windows_package', return_value=install):
+            value = desktop.update_windows(install)
+        self.assertEqual((value['status'], value['messageCode']), ('failed', 'version_unknown'))
 
     # ---------------------------------------------------------------- the quit request is gone
     def test_updater_has_no_way_to_ask_a_desktop_app_to_quit(self):
