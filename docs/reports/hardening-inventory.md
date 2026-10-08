@@ -6,9 +6,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1221 |
+| Sync fs occurrences (all) | 1222 |
 | Sync fs files affected (all) | 122 |
-| Sync fs occurrences (runtime hotpaths) | 588 |
+| Sync fs occurrences (runtime hotpaths) | 589 |
 | Sync fs files affected (runtime hotpaths) | 71 |
 | Legacy shim markers | 200 |
 | Legacy shim files affected | 76 |
@@ -53,13 +53,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 25.1% (168/670) |
+| typed-error adoption (typed/total throws) | 25.2% (169/671) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 38/409 |
+| files with createLogger | 38/411 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
-| files > 400 LOC | 49 |
+| files > 400 LOC | 51 |
 | files > 600 LOC | 20 |
 
 ### Top Hotpath console.error/warn Files
@@ -87,7 +87,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | File | LOC |
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 2472 |
-| `src/web-server/services/account-analytics-activity.ts` | 1452 |
+| `src/web-server/services/account-analytics-activity.ts` | 1453 |
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1104 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1057 |
@@ -99,6 +99,6 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/aggregator.ts` | 767 |
 | `src/web-server/services/account-dashboard-service.ts` | 754 |
 | `src/web-server/services/account-analytics-projection.ts` | 710 |
-| `src/web-server/services/analytics-remote-sources.ts` | 672 |
-| `src/web-server/services/additional-account-service.ts` | 668 |
+| `src/web-server/services/additional-account-service.ts` | 689 |
+| `src/web-server/services/analytics-remote-sources.ts` | 674 |
 

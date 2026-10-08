@@ -1,9 +1,9 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1221,
+    "totalOccurrences": 1222,
     "filesAffected": 122,
-    "hotpathOccurrences": 588,
+    "hotpathOccurrences": 589,
     "hotpathFilesAffected": 71,
     "topHotpathFiles": [
       {
@@ -522,16 +522,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 670,
-      "typedThrows": 168,
+      "totalThrows": 671,
+      "typedThrows": 169,
       "plainThrows": 72,
       "otherThrows": 430,
-      "adoptionRatio": 0.2507,
+      "adoptionRatio": 0.2519,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 313,
-          "typed": 105,
+          "count": 314,
+          "typed": 106,
           "plain": 10
         },
         {
@@ -604,8 +604,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 38,
-      "totalSourceFiles": 409,
-      "coverageRatio": 0.0929,
+      "totalSourceFiles": 411,
+      "coverageRatio": 0.0925,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,7 +632,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 152,
+          "count": 153,
           "withLogger": 22
         },
         {
@@ -652,7 +652,7 @@
         },
         {
           "subdomain": "codex-auth",
-          "count": 27,
+          "count": 28,
           "withLogger": 9
         },
         {
@@ -751,7 +751,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 49,
+      "countOver400": 51,
       "countOver600": 20,
       "topOver400": [
         {
@@ -760,7 +760,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1452
+          "loc": 1453
         },
         {
           "file": "src/web-server/model-pricing.ts",
@@ -807,12 +807,12 @@
           "loc": 710
         },
         {
-          "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 672
+          "file": "src/web-server/services/additional-account-service.ts",
+          "loc": 689
         },
         {
-          "file": "src/web-server/services/additional-account-service.ts",
-          "loc": 668
+          "file": "src/web-server/services/analytics-remote-sources.ts",
+          "loc": 674
         }
       ]
     }
