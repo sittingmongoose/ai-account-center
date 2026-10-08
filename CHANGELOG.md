@@ -1,3 +1,17 @@
+## [Unreleased]
+
+### Added
+
+* **nas1:** Nas1, a second Ubuntu computer reached over the fixed SSH alias `nas1-agent`, is the fourth computer AI Account Center reaches, beside the Ubuntu computer that runs the dashboard, the Mac and Windows. It takes part in Update all and Analytics only: it runs no dashboard and holds no account state, and no account switching, Codex or Antigravity activation, key storage, sign-in or Claude desktop flow targets it. The dashboard computer runs only these fixed commands there: the helper hash query, the helper extract, the update helper, the read-only analytics helper and, for a source saved for Nas1, the usage collectors.
+* **app-updates:** Nas1 runs the same fixed update helper with `--platform ubuntu`. The helpers are synced, checksum-gated, to `~/.ccs/app-updates/` on Nas1 with `sha256sum` and a POSIX `tar` extract. The sync also ships a self-contained Codex stop/start runtime (`app_update_codex_runtime.cjs`, generated into `dist/app-updates`), so Codex Desktop and a Codex CLI daemon update on a Linux host without AI Account Center installed. A T3 update on Nas1 schedules its own deferred `t3code.service` restart.
+* **analytics:** Nas1 is scanned with the same pinned, read-only helper streamed over SSH (Claude Code, Codex, T3 shadow homes, OMP, Muse, zcode and Antigravity) and shows as a fourth computer in the Included usage sources. Extra usage-log roots can be set for Nas1 in Settings (POSIX paths).
+* **accounts:** A quota source can run on Nas1 when it is saved as `platform: "ubuntu"` with `sshHost: "nas1-agent"`; its row reads "on Nas1". By default no source moves there, because Nas1 uses the same provider accounts as the dashboard computer.
+
+### Changed
+
+* **app-updates:** Update all covers four computers x eight apps, so a finished run has 32 result rows (was 24).
+* **compatibility:** Adding Nas1 touches no account data. Rolling back to a build without it loses display data, and Settings only if a Nas1 extra usage-log root was saved. An older build never opens the new analytics cache `cache/analytics-remote-v1/nas1.json`; it does not restore a saved Update-all job (`app-updates/dashboard-job.json`) with more than 24 result rows, so the last result is not shown and no update is replayed; and it treats a `dashboard-preferences.json` that holds a Nas1 extra usage-log root as invalid as a whole, so the defaults apply in memory, with a warning and without overwriting the file, until the next save of Settings. `account-usage-sources.json` and `account-usage-accounts.json` keep their format, because a Nas1 source is stored as `ubuntu` plus `sshHost`, which earlier builds already read and collect the same way.
+
 ## [8.10.0](https://github.com/kaitranntt/ccs/compare/v8.9.0...v8.10.0) (2026-09-11)
 
 ### Features

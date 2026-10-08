@@ -15,12 +15,17 @@ CCS fork, retaining original authorship, license, private state and history.
   automatic switching.
 - Observed quota Analytics with range presets, a Claude Code / Codex filter,
   Included usage sources and complete reset/expiration details.
-- Authentic CLI activity (Claude Code, Codex, OMP, Muse, zcode) with clearly
-  labeled logged, partial and not-logged costs; estimates are not charges.
+- Authentic CLI activity (Claude Code, Codex, OMP, Muse, zcode) from Ubuntu, Mac,
+  Windows and Nas1 with clearly labeled logged, partial and not-logged costs;
+  estimates are not charges.
 - Dashboard sign-in with password change, paired tray devices and the trusted
   local network setting.
 - Server-confirmed refresh settings and explicitly started allowlisted app-update
-  jobs with Cancel.
+  jobs with Cancel, covering four computers (Ubuntu, Mac, Windows and Nas1) and
+  32 result rows.
+- Nas1, a second Ubuntu computer reached over a fixed SSH alias, as the fourth
+  computer for app updates and Analytics. It runs no dashboard and holds no
+  account state; its quota sources stay where they are unless one is saved for it.
 - Native Mac and Windows clients of the same authenticated account APIs, paired
   with their own device keys.
 - Local source packaging and a dashboard-only Docker build.
@@ -39,6 +44,11 @@ Credentials stay with the host/session that owns them. Authentication,
 origin/session guards, identity-bound caches, target-bound switch approvals,
 migrations and rollback are part of the product behavior. A visible rename does
 not rename `~/.ccs/`, session aliases, provider/profile IDs or native host names.
+Nas1 never has account switching, activation, key storage, sign-in or Claude
+desktop flows: the dashboard computer runs only fixed update, hash, extract and
+read-only analytics commands there (and usage collectors for a source saved for
+it). What an older package ignores after a rollback is listed in the
+[README](../README.md#update-and-recovery).
 
 Implementation detail belongs in the [source map](codebase-summary.md) and
 [architecture](system-architecture/index.md). Historical upstream releases remain

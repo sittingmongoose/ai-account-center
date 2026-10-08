@@ -30,6 +30,23 @@ absence of a local valid login is reported as unavailable. Consult the
 [source parser](../../src/web-server/services/account-usage-manifest.ts)
 before changing an existing deployment.
 
+Nas1, the fourth computer, is a second Ubuntu computer and needs no new
+`platform` value. A source runs on Nas1 when it is saved as `platform: "ubuntu"` with
+`sshHost: "nas1-agent"`; the same command a remote Ubuntu already gets
+(`/usr/bin/python3 "$HOME/.ccs/account-usage/<helper>" ... --platform 'ubuntu'`)
+runs over ssh, and the dashboard derives the display host from that pair, so the
+account reads "on Nas1" and "Update the usage helper on Nas1". The persisted
+platform stays `ubuntu`, so the version-1 manifest, registry v2, quota history
+and every earlier package read and collect such a source unchanged. A quota
+reading belongs to a provider account, not to a computer, and Nas1 signs in to
+the same provider accounts as the dashboard computer, so by default no source
+moves there. Claude quota stays with the Mac and Windows Claude desktop apps (no
+Claude desktop exists on Nas1), Codex quota with the dashboard computer's saved
+logins and the OpenCode console wallet with the Mac. Lifecycle (add, sign in
+again, replace key, remove) is not offered for Nas1: it stores no keys and holds
+no sign-in state, and the key store refuses an Ubuntu source that has an
+`sshHost`.
+
 Registry v2, the private `account-usage-accounts.json` (0600, at most 64 KB),
 lists several accounts per additional provider (at most 16 each, 64 in all).
 When it exists and is valid it is the only source; when it exists but is unsafe

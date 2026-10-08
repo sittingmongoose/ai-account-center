@@ -32,10 +32,16 @@ and rollback. Polling and startup must not launch app updates or mutate accounts
 
 The repository is public. Docs, comments, fixtures and examples use neutral
 placeholders: profile names such as `work`, `personal`, `alt` or `plum`, hosts
-such as `mac-host` and `windows-host`, emails such as `user@example.com`,
+such as `mac-host`, `windows-host` and `ubuntu-host`, emails such as `user@example.com`,
 private addresses such as `192.168.10.x`, and `192.0.2.x` for documentation
 addresses. Never use a real account, computer, email, home path or home-network
 address.
+
+The only Nas1 names that belong in the repository are the product's fixed SSH
+alias `nas1-agent` and the label "Nas1" for the second Ubuntu computer; they are
+part of the product contract. That computer's real hostname, addresses and paths
+outside the usual `$HOME` conventions never appear, and no configurable host or
+alias is added for it.
 
 [personal-detail-guard](../scripts/personal-detail-guard.js) enforces this. It
 keeps only SHA-256 hashes of the blocked lowercased words and IPv4 /24 prefixes,

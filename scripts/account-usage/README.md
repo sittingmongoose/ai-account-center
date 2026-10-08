@@ -2,6 +2,20 @@ The desktop collectors read existing accounts on the computer that owns them.
 They emit normalized account usage only and never write account tokens, change
 the selected account, or send a model prompt.
 
+A collector runs on the computer its source names: the dashboard computer
+itself, or a Mac, Windows or Ubuntu computer reached over an approved ssh alias.
+Nas1, a second Ubuntu computer, is one of those: a source runs there when it is
+saved as `platform: "ubuntu"` with `sshHost: "nas1-agent"`. The helper then gets
+`--platform ubuntu` and reads Nas1's own files as it does on Ubuntu (a manual
+run there still says Ubuntu; the dashboard derives the "on Nas1" label from the
+alias). By default no source is saved for Nas1: it signs in to the same provider
+accounts as the dashboard computer, so a second reading would show the same
+numbers again. These helpers are copied by hand into `~/.ccs/account-usage/` on
+a remote computer; they are not synced like the update helpers. A Nas1 source
+needs only `desktop_usage.py` with `desktop_helpers.py` (plus `muse_console.py`
+for Muse) or `plan_usage.py` with `plan_common.py`; it never uses
+`claude_usage.py` (no Claude desktop on Nas1) or `key_store.py`.
+
 Antigravity refresh uses the native application's OAuth metadata from
 `~/.ccs/account-usage/antigravity-oauth-client.json`. Provision that file outside
 source control using the metadata shipped by the installed official application.
@@ -53,5 +67,6 @@ writes the record atomically at 0600 and prints only
 `{"ok":true,"fingerprint":"sha256:...","last4":"..."}` (`{"ok":true}` for delete). A
 refused key or a write failure prints nothing and exits 1; usage errors exit 2. The
 dashboard writes keys for its own host in-process in the same format and uses this
-helper over ssh only for a key kept on another host.
+helper over ssh only for a key kept on another host. Nas1 is never that host: it
+stores no keys, so a source saved for Nas1 relies on `discover`.
 
