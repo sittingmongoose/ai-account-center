@@ -11,6 +11,7 @@ import path from 'path';
 import {
   AppUpdateService,
   MAC_EXTRACT,
+  POSIX_EXTRACT,
   UPDATE_APP_LABELS,
   type HostRunControl,
   type UpdateAppId,
@@ -48,8 +49,13 @@ async function finish(service: AppUpdateService, limitMs = 3000) {
 }
 
 describe('Update apps runs every computer at once', () => {
-  it('finishes in about the slowest host, not the sum of all three', async () => {
-    const delays: Record<UpdatePlatform, number> = { ubuntu: 600, mac: 400, windows: 200 };
+  it('finishes in about the slowest host, not the sum of all four', async () => {
+    const delays: Record<UpdatePlatform, number> = {
+      ubuntu: 600,
+      mac: 400,
+      windows: 200,
+      nas1: 300,
+    };
     const started: Record<string, number> = {};
     const service = new AppUpdateService({
       persist: false,
@@ -64,7 +70,9 @@ describe('Update apps runs every computer at once', () => {
     await sleep(50);
     const mid = service.getStatus().job!;
     expect(mid.hosts).not.toBeNull();
+    expect(Object.keys(mid.hosts!)).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
     expect(Object.values(mid.hosts!).map((host) => host.state)).toEqual([
+      'running',
       'running',
       'running',
       'running',
@@ -73,8 +81,8 @@ describe('Update apps runs every computer at once', () => {
     const elapsed = Date.now() - t0;
     const job = service.getStatus().job!;
     expect(job.state).toBe('completed');
-    expect(job.results).toHaveLength(24);
-    // Serial would be >= 1200 ms; parallel is the slowest host plus scheduling.
+    expect(job.results).toHaveLength(32);
+    // Serial would be >= 1500 ms; parallel is the slowest host plus scheduling.
     expect(elapsed).toBeGreaterThanOrEqual(595);
     expect(elapsed).toBeLessThan(1000);
     expect(Math.max(...Object.values(started)) - Math.min(...Object.values(started))).toBeLessThan(
@@ -106,6 +114,7 @@ describe('Update apps runs every computer at once', () => {
     expect(running.state).toBe('running');
     expect(running.hosts!.mac.state).toBe('done');
     expect(running.hosts!.windows.state).toBe('done');
+    expect(running.hosts!.nas1.state).toBe('done');
     expect(running.hosts!.ubuntu).toEqual({
       state: 'running',
       currentApp: 'muse-code',
@@ -117,7 +126,7 @@ describe('Update apps runs every computer at once', () => {
     expect(Date.now() - t0).toBeLessThan(1000);
     const job = service.getStatus().job!;
     expect(aborted).toBe(1);
-    expect(job.results).toHaveLength(24);
+    expect(job.results).toHaveLength(32);
     const ubuntu = job.results.filter((value) => value.platform === 'ubuntu');
     expect(ubuntu.find((value) => value.appId === 'antigravity-cli')!.status).toBe('updated');
     const timedOut = ubuntu.filter((value) => value.appId !== 'antigravity-cli');
@@ -125,23 +134,31 @@ describe('Update apps runs every computer at once', () => {
     expect(timedOut.every((value) => value.status === 'unknown')).toBe(true);
     expect(timedOut.every((value) => value.message === MESSAGES.host_timeout)).toBe(true);
     expect(timedOut.every((value) => value.updateAttempted === false)).toBe(true);
-    expect(job.results.filter((value) => value.platform !== 'ubuntu')).toHaveLength(16);
+    expect(job.results.filter((value) => value.platform !== 'ubuntu')).toHaveLength(24);
     expect(job.state).toBe('failed');
   });
 
-  it('a slow helper sync is bounded by the same host deadline', async () => {
-    const service = new AppUpdateService({
-      persist: false,
-      hostDeadlineMs: 80,
-      sync: (platform) => (platform === 'mac' ? new Promise<void>(() => {}) : Promise.resolve()),
-      runHost: async () => payload(),
-    });
-    service.start();
-    await finish(service);
-    const mac = service.getStatus().job!.results.filter((value) => value.platform === 'mac');
-    expect(mac).toHaveLength(8);
-    expect(mac.every((value) => value.message === MESSAGES.host_timeout)).toBe(true);
-  });
+  it.each(['mac', 'nas1'] as const)(
+    'a slow helper sync on %s is bounded by the same host deadline',
+    async (slow) => {
+      const service = new AppUpdateService({
+        persist: false,
+        hostDeadlineMs: 80,
+        sync: (platform) => (platform === slow ? new Promise<void>(() => {}) : Promise.resolve()),
+        runHost: async () => payload(),
+      });
+      service.start();
+      await finish(service);
+      const job = service.getStatus().job!;
+      const stuck = job.results.filter((value) => value.platform === slow);
+      expect(stuck).toHaveLength(8);
+      expect(stuck.every((value) => value.message === MESSAGES.host_timeout)).toBe(true);
+      // The other computers finish normally while that one waits on its sync.
+      const rest = job.results.filter((value) => value.platform !== slow);
+      expect(rest).toHaveLength(24);
+      expect(rest.every((value) => value.status === 'current')).toBe(true);
+    }
+  );
 
   it('shows a desktop download live with the time its phase began', async () => {
     let clock = Date.parse('2026-10-06T15:09:16.000Z');
@@ -225,7 +242,7 @@ describe('Update apps runs every computer at once', () => {
     finishUbuntu();
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(24);
+    expect(job.results).toHaveLength(32);
     expect(job.results.filter((value) => value.platform === 'ubuntu')).toHaveLength(8);
     expect(job.state).toBe('completed');
   });
@@ -281,15 +298,15 @@ describe('Update apps runs every computer at once', () => {
     await sleep(10);
     expect(service.cancel().cancelling).toBe(true);
     expect(service.cancel().cancelling).toBe(true);
-    expect(handlers).toEqual({ ubuntu: 1, mac: 1, windows: 1 });
+    expect(handlers).toEqual({ ubuntu: 1, mac: 1, windows: 1, nas1: 1 });
     for (const release of releases) release();
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(24);
+    expect(job.results).toHaveLength(32);
     expect(job.results.filter((value) => value.status === 'skipped')).toHaveLength(
-      3 * (APPS.length - 1)
+      4 * (APPS.length - 1)
     );
-    expect(job.results.filter((value) => value.status === 'current')).toHaveLength(3);
+    expect(job.results.filter((value) => value.status === 'current')).toHaveLength(4);
     expect(job.cancelRequested).toBe(true);
     expect(job.state).toBe('completed');
   });
@@ -314,6 +331,8 @@ describe('Update apps runs every computer at once', () => {
     await finish(service);
     expect(runs).toEqual(['ubuntu']);
     const remote = service.getStatus().job!.results.filter((value) => value.platform !== 'ubuntu');
+    expect(remote).toHaveLength(24);
+    expect(remote.filter((value) => value.platform === 'nas1')).toHaveLength(8);
     expect(remote.every((value) => value.status === 'skipped')).toBe(true);
   });
 
@@ -336,18 +355,48 @@ describe('Update apps runs every computer at once', () => {
           },
         })
       );
+    const savedHosts = () => new AppUpdateService({ ccsDir: root }).getStatus().job!.hosts;
     const done = { state: 'done', currentApp: null, phase: null };
-    save({ ubuntu: done, mac: done, windows: { ...done, currentApp: 'omp', phase: 'updating' } });
-    const restored = new AppUpdateService({ ccsDir: root }).getStatus().job!;
-    expect(restored.hosts!.windows).toEqual({
-      state: 'done',
-      currentApp: 'omp',
-      phase: 'updating',
+    const windowsBusy = { ...done, currentApp: 'omp', phase: 'updating' };
+    save({
+      ubuntu: done,
+      mac: done,
+      windows: windowsBusy,
+      nas1: { ...done, currentApp: 't3-code', phase: 'updating' },
     });
+    const restored = savedHosts()!;
+    expect(restored.windows).toEqual({ state: 'done', currentApp: 'omp', phase: 'updating' });
+    expect(restored.nas1).toEqual({ state: 'done', currentApp: 't3-code', phase: 'updating' });
+    // The previous package saved no nas1 key: that computer was never part of the job.
+    save({ ubuntu: done, mac: done, windows: windowsBusy });
+    const previous = savedHosts()!;
+    expect(Object.keys(previous)).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
+    expect(previous.windows).toEqual({ state: 'done', currentApp: 'omp', phase: 'updating' });
+    expect(previous.nas1).toEqual({ state: 'done', currentApp: null, phase: null });
     save({ ubuntu: done, mac: done, windows: { ...done, currentApp: 'rm -rf' } });
-    expect(new AppUpdateService({ ccsDir: root }).getStatus().job!.hosts).toBeNull();
+    expect(savedHosts()).toBeNull();
+    // Only a missing nas1 entry is tolerated; a present one must be well-formed too.
+    for (const nas1 of [
+      null,
+      'done',
+      [],
+      {},
+      { ...done, state: 'idle' },
+      { ...done, currentApp: 'rm -rf' },
+      { ...done, phase: 'exploding' },
+    ]) {
+      save({ ubuntu: done, mac: done, windows: done, nas1 });
+      expect(savedHosts()).toBeNull();
+    }
+    // The earlier computers stay required.
+    for (const missing of ['ubuntu', 'mac', 'windows']) {
+      const hosts: Record<string, unknown> = { ubuntu: done, mac: done, windows: done, nas1: done };
+      delete hosts[missing];
+      save(hosts);
+      expect(savedHosts()).toBeNull();
+    }
     save(undefined);
-    expect(new AppUpdateService({ ccsDir: root }).getStatus().job!.hosts).toBeNull();
+    expect(savedHosts()).toBeNull();
   });
 });
 
@@ -471,11 +520,13 @@ describe('the real Python helper with fake apps', () => {
   });
 });
 
-describe('Mac helper sync', () => {
-  it('uses only tools that exist on macOS', () => {
-    expect(MAC_EXTRACT).not.toContain('/usr/bin/chmod');
-    const tools = MAC_EXTRACT.match(/\/(?:usr\/)?bin\/[a-z]+/g);
+describe('POSIX helper sync (Mac and Nas1)', () => {
+  it('uses only tools that exist on macOS and on Ubuntu', () => {
+    expect(POSIX_EXTRACT).not.toContain('/usr/bin/chmod');
+    const tools = POSIX_EXTRACT.match(/\/(?:usr\/)?bin\/[a-z]+/g);
     expect(tools).toEqual(['/bin/mkdir', '/bin/chmod', '/usr/bin/tar']);
+    // The extract's old name stays exported and is the same command.
+    expect(MAC_EXTRACT).toBe(POSIX_EXTRACT);
   });
 
   it('really extracts a helper archive into a private directory', () => {
@@ -485,7 +536,7 @@ describe('Mac helper sync', () => {
     fs.writeFileSync(path.join(source, 'app_updates.py'), 'print("fixture")\n');
     const archive = spawnSync('tar', ['-c', '-f', '-', '-C', source, 'app_updates.py']);
     expect(archive.status).toBe(0);
-    const extracted = spawnSync('/bin/sh', ['-c', MAC_EXTRACT], {
+    const extracted = spawnSync('/bin/sh', ['-c', POSIX_EXTRACT], {
       input: archive.stdout,
       env: { ...process.env, HOME: home },
     });

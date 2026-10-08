@@ -365,7 +365,7 @@ describe('app update expectedResults', () => {
         return payload();
       },
     });
-    const expected = 3 * Object.keys(UPDATE_APP_LABELS).length;
+    const expected = 4 * Object.keys(UPDATE_APP_LABELS).length;
     expect(service.start().job.expectedResults).toBe(expected);
     for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
     const running = service.getStatus().job;
@@ -388,7 +388,7 @@ describe('app update expectedResults', () => {
     for (let i = 0; i < 30 && first.getStatus().job?.state === 'running'; i++)
       await new Promise((resolve) => setTimeout(resolve, 0));
     const restored = new AppUpdateService({ ccsDir: directory, runHost: async () => payload() });
-    expect(restored.getStatus().job?.expectedResults).toBe(24);
+    expect(restored.getStatus().job?.expectedResults).toBe(32);
     const file = path.join(directory, 'app-updates', 'dashboard-job.json');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
     delete saved.job.expectedResults;

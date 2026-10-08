@@ -42,6 +42,7 @@ export {
   appUpdateInvocation,
   parseDeployedChecksums,
   syncRemoteHelpers,
+  POSIX_EXTRACT,
   MAC_EXTRACT,
 } from './app-update-hosts';
 export type { HostRunControl } from './app-update-hosts';
@@ -77,15 +78,30 @@ function waitingHosts(): Record<UpdatePlatform, AppUpdateHostProgress> {
     ubuntu: { state: 'waiting', currentApp: null, phase: null },
     mac: { state: 'waiting', currentApp: null, phase: null },
     windows: { state: 'waiting', currentApp: null, phase: null },
+    nas1: { state: 'waiting', currentApp: null, phase: null },
   };
 }
 
-/** Restores saved host progress only when every field is one of the fixed values. */
+/** Computers added after jobs were first saved: an older job has no entry for them. */
+const LATER_PLATFORMS: readonly UpdatePlatform[] = ['nas1'];
+
+/**
+ * Restores saved host progress only when every field is one of the fixed values.
+ * A job saved before a later computer existed never ran it, so its missing entry
+ * restores as done; a present entry must still be well-formed.
+ */
 function restoreHosts(value: unknown): Record<UpdatePlatform, AppUpdateHostProgress> | null {
   const raw = record(value);
   if (!raw) return null;
   const hosts = waitingHosts();
   for (const platform of PLATFORMS) {
+    if (
+      LATER_PLATFORMS.includes(platform) &&
+      !Object.prototype.hasOwnProperty.call(raw, platform)
+    ) {
+      hosts[platform] = { state: 'done', currentApp: null, phase: null };
+      continue;
+    }
     const host = record(raw[platform]);
     if (
       !host ||
@@ -262,8 +278,8 @@ export class AppUpdateService {
     };
     const work = async (): Promise<string | null> => {
       // Ubuntu runs the helpers inside this installed build; only the remote
-      // hosts carry deployed copies that can go stale. Skipping the await
-      // also keeps start() launching the Ubuntu helper synchronously.
+      // hosts (Mac, Windows and Nas1) carry deployed copies that can go stale.
+      // Skipping the await also keeps start() launching the Ubuntu helper synchronously.
       if (platform !== 'ubuntu') {
         try {
           await this.deps.sync(platform);

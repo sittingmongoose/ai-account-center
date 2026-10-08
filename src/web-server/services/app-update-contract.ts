@@ -1,4 +1,5 @@
 import { ConfigError } from '../../errors/error-types';
+import { DASHBOARD_HOSTS, HOST_OS, type DashboardHost } from './dashboard-hosts';
 
 export const UPDATE_APP_LABELS = {
   'antigravity-cli': 'Antigravity CLI',
@@ -11,7 +12,8 @@ export const UPDATE_APP_LABELS = {
   't3-code': 'T3 Code',
 } as const;
 export type UpdateAppId = keyof typeof UPDATE_APP_LABELS;
-export type UpdatePlatform = 'ubuntu' | 'mac' | 'windows';
+/** The fixed computers Update apps reaches; Nas1 is a second Ubuntu with its own id. */
+export type UpdatePlatform = DashboardHost;
 export type UpdateResultStatus =
   | 'updated'
   | 'current'
@@ -116,7 +118,7 @@ export const MESSAGES = {
     'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
-export const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows'];
+export const PLATFORMS: UpdatePlatform[] = [...DASHBOARD_HOSTS];
 /** Every platform yields one result per app, a failure row included when its host is down. */
 export const EXPECTED_RESULTS = PLATFORMS.length * Object.keys(UPDATE_APP_LABELS).length;
 const STATUSES: UpdateResultStatus[] = [
@@ -269,6 +271,9 @@ export function normalizeAppUpdateRow(
     row.forcedStops <= 10000
       ? row.forcedStops
       : 0;
+  // The Linux computers (Ubuntu and Nas1) restart T3 through its systemd service;
+  // the Mac and Windows restart its desktop app.
+  const linux = HOST_OS[platform] === 'linux';
   const targets: AppUpdateResult['restartTargets'] = [];
   for (const candidate of (Array.isArray(row.restartTargets) ? row.restartTargets : []).slice(
     0,
@@ -277,12 +282,12 @@ export function normalizeAppUpdateRow(
     const target = record(candidate);
     if (target?.kind === 'terminal' || target?.kind === 'windows-terminal')
       targets.push({ kind: target.kind });
-    else if (target?.kind === 'desktop' && appId === 't3-code' && platform !== 'ubuntu')
+    else if (target?.kind === 'desktop' && appId === 't3-code' && !linux)
       targets.push({ kind: 'desktop' });
     else if (
       target?.kind === 'systemd' &&
       appId === 't3-code' &&
-      platform === 'ubuntu' &&
+      linux &&
       target.service === 't3code.service' &&
       target.delaySeconds === 30
     )
@@ -311,7 +316,7 @@ export function normalizeAppUpdateRow(
     ((code === 't3_updated' || code === 't3_restart_scheduled') &&
       (appId !== 't3-code' || row.status !== 'updated')) ||
     (code === 't3_restart_scheduled' &&
-      (platform !== 'ubuntu' || !targets.some((target) => target.kind === 'systemd'))) ||
+      (!linux || !targets.some((target) => target.kind === 'systemd'))) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated'))

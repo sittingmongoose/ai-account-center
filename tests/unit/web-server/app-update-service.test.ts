@@ -76,25 +76,25 @@ describe('fixed app update service', () => {
     expect(started.job.state).toBe('running');
     expect(calls).toEqual(['ubuntu']);
     expect(() => service.start()).toThrow(AppUpdateBusyError);
-    // Mac and Windows never wait for the blocked Ubuntu run.
+    // Mac, Windows and Nas1 never wait for the blocked Ubuntu run.
     for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
-    expect([...calls].sort()).toEqual(['mac', 'ubuntu', 'windows']);
+    expect([...calls].sort()).toEqual(['mac', 'nas1', 'ubuntu', 'windows']);
     expect(
       service.getStatus().job!.results.filter((row) => row.platform !== 'ubuntu')
-    ).toHaveLength(16);
+    ).toHaveLength(24);
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
-    expect(calls).toHaveLength(3);
-    expect(job.results).toHaveLength(24);
+    expect(calls).toHaveLength(4);
+    expect(job.results).toHaveLength(32);
     expect(job.state).toBe('failed');
     expect(job.activePlatform).toBeNull();
     expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
     const clone = service.getStatus().job!;
     clone.results.length = 0;
-    expect(service.getStatus().job!.results).toHaveLength(24);
+    expect(service.getStatus().job!.results).toHaveLength(32);
   });
-  it('executes only the three fixed host-local helpers', () => {
+  it('executes only the four fixed host-local helpers', () => {
     const local = appUpdateInvocation('ubuntu');
     expect(local.binary).toBe('/usr/bin/python3');
     expect(local.args.slice(1, 4)).toEqual(['--apply', '--platform', 'ubuntu']);
@@ -102,12 +102,17 @@ describe('fixed app update service', () => {
     expect(mac.binary).toBe('ssh');
     expect(mac.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.mac]);
     expect(mac.args.at(-1)).toContain('$HOME/.ccs/app-updates/app_updates.py');
+    expect(mac.args.at(-1)).toContain('--apply --platform mac');
     const windows = appUpdateInvocation('windows');
     expect(windows.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.windows]);
     const encoded = windows.args.at(-1)!.split(' ').at(-1)!;
     const script = Buffer.from(encoded, 'base64').toString('utf16le');
     expect(script).toContain('--apply --platform windows');
     expect(script).not.toContain('Invoke-Expression');
+    const nas1 = appUpdateInvocation('nas1');
+    expect(nas1.binary).toBe('ssh');
+    expect(nas1.args.slice(-2, -1)).toEqual([APP_UPDATE_SSH_HOSTS.nas1]);
+    expect(nas1.args.at(-1)).toContain('$HOME/.ccs/app-updates/app_updates.py');
   });
   it('passes the resolved dashboard state directory for legacy home and custom config paths', async () => {
     const home = directory();
@@ -159,6 +164,10 @@ describe('fixed app update service', () => {
     expect(appUpdateInvocation('mac').args.at(-1)).toMatch(
       new RegExp(`--apply --platform mac --agy-reviewed '${reviewed.replace(/\./g, '\\.')}'$`)
     );
+    // Nas1 is a second Ubuntu: its helper runs with --platform ubuntu.
+    expect(appUpdateInvocation('nas1').args.at(-1)).toMatch(
+      new RegExp(`--apply --platform ubuntu --agy-reviewed '${reviewed.replace(/\./g, '\\.')}'$`)
+    );
     const decode = (args: string[]) =>
       Buffer.from(args.at(-1)!.split(' ').at(-1)!, 'base64').toString('utf16le');
     // PowerShell would split an unquoted comma list into separate arguments.
@@ -171,6 +180,8 @@ describe('fixed app update service', () => {
     expect(antigravityReviewedArgument(path.join(dir, 'release.json'))).toBe('');
     expect(appUpdateInvocation('ubuntu', '').args).not.toContain('--agy-reviewed');
     expect(appUpdateInvocation('mac', "1.3.0'; rm -rf ~; '").args.at(-1)).not.toContain('rm -rf');
+    expect(appUpdateInvocation('nas1', "1.3.0'; rm -rf ~; '").args.at(-1)).not.toContain('rm -rf');
+    expect(appUpdateInvocation('nas1', '').args.at(-1)).not.toContain('--agy-reviewed');
     expect(decode(appUpdateInvocation('windows', '').args)).not.toContain('--agy-reviewed');
   });
   it('accepts a held Antigravity row with the build it held and keeps it after a restore', () => {
@@ -250,7 +261,7 @@ describe('fixed app update service', () => {
     expect(service.getStatus().job!.state).toBe('completed');
     const restored = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
     const held = restored.getStatus().job!.results.filter((row) => row.status === 'held');
-    expect(held).toHaveLength(3);
+    expect(held).toHaveLength(4);
     expect(held.every((row) => row.heldVersion === '1.3.0')).toBe(true);
   });
   it('restores a quit-first desktop row from disk with its own words', async () => {
@@ -271,7 +282,7 @@ describe('fixed app update service', () => {
     await finish(service);
     const restored = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
     const quit = restored.getStatus().job!.results.filter((row) => row.appId === 'codex-desktop');
-    expect(quit).toHaveLength(3);
+    expect(quit).toHaveLength(4);
     for (const row of quit) {
       expect(row.status).toBe('action_required');
       expect(row.message).toBe(
@@ -382,7 +393,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(first);
     expect(second.getStatus().job!.state).toBe('completed');
-    expect(second.getStatus().job!.results).toHaveLength(24);
+    expect(second.getStatus().job!.results).toHaveLength(32);
     expect(fs.existsSync(path.join(root, 'app-updates/dashboard-update.lock'))).toBe(false);
   });
   it('refuses a cancel from a process that does not own the running job', async () => {
@@ -412,7 +423,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(owner);
     expect(owner.getStatus().job!.results.filter((row) => row.status === 'skipped')).toHaveLength(
-      16
+      24
     );
   });
   it('marks an interrupted persisted job failed without replaying it', () => {
@@ -457,30 +468,35 @@ describe('fixed app update service', () => {
     service.start();
     await finish(service);
     // Hosts run side by side; each remote host still syncs before it runs.
-    expect(events).toHaveLength(5);
+    expect(events).toHaveLength(7);
     expect(events.indexOf('sync:mac')).toBeLessThan(events.indexOf('run:mac'));
     expect(events.indexOf('sync:windows')).toBeLessThan(events.indexOf('run:windows'));
+    expect(events.indexOf('sync:nas1')).toBeLessThan(events.indexOf('run:nas1'));
     expect(events.filter((event) => event.startsWith('sync:')).sort()).toEqual([
       'sync:mac',
+      'sync:nas1',
       'sync:windows',
     ]);
     expect(events).not.toContain('sync:ubuntu');
     expect(service.getStatus().job!.state).toBe('completed');
     expect(JSON.stringify(service.getStatus().job)).not.toContain('PRIVATE_SENTINEL');
   });
-  it('parses deployed helper checksum lines from both host shells', () => {
+  it('parses deployed helper checksum lines from every host shell', () => {
     const hash = 'a'.repeat(64);
     const other = 'B'.repeat(64);
+    const linux = 'c'.repeat(64);
     const parsed = parseDeployedChecksums(
       [
         `${hash}  /Users/x/.ccs/app-updates/app_updates.py`,
         `${other}  app_update_common.py`,
+        `${linux}  /home/x/.ccs/app-updates/app_update_t3.py`,
         'shasum: /Users/x/.ccs/app-updates/app_update_pipe.py: No such file or directory',
         'not-a-hash  app_updates.py',
       ].join('\n')
     );
     expect(parsed['app_updates.py']).toBe(hash);
     expect(parsed['app_update_common.py']).toBe('b'.repeat(64));
-    expect(Object.keys(parsed)).toHaveLength(2);
+    expect(parsed['app_update_t3.py']).toBe(linux);
+    expect(Object.keys(parsed)).toHaveLength(3);
   });
 });
