@@ -390,16 +390,19 @@ export component AxCbmCard inherits AxCard {
     }
     // below D the note sits directly in a column, so the card measures its wrapped height (task 9 A2):
     // a wrapping Text in a HorizontalLayout is measured single-line and overflows the card. A wrapped Text
-    // stuck at an early-measured height never re-wraps when its bound string grows (verified: the card
-    // clips the note until any full relayout), so the bridge toggles foot-flip on every footnote change and
-    // the two copies below alternate: each new text gets a freshly created Text that measures it fully.
-    if AxData.cbm.foot != "" && !AxData.cbm.foot-flip && Breakpoints.below-d: VerticalLayout {
+    // created during first layout sticks at a short measured height and never re-wraps (verified: the card
+    // clips the note to 2-4 of 6 lines until any full relayout), so the copies below are created late, once
+    // data and fonts have settled; afterwards the bridge toggles foot-flip on every footnote change and the
+    // two copies alternate, so each new text gets a freshly created Text that measures it fully.
+    property <bool> foot-shown: !Motion.on;
+    foot-timer := Timer { interval: 1500ms; running: root.played && !root.foot-shown; triggered => { self.running = false; root.foot-shown = true; } }
+    if AxData.cbm.foot != "" && root.foot-shown && !AxData.cbm.foot-flip && Breakpoints.below-d: VerticalLayout {
         padding-left: root.pad-x;
         padding-right: root.pad-x;
         padding-bottom: 14px;
         Text { text: AxData.cbm.foot; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
-    if AxData.cbm.foot != "" && AxData.cbm.foot-flip && Breakpoints.below-d: VerticalLayout {
+    if AxData.cbm.foot != "" && root.foot-shown && AxData.cbm.foot-flip && Breakpoints.below-d: VerticalLayout {
         padding-left: root.pad-x;
         padding-right: root.pad-x;
         padding-bottom: 14px;
@@ -409,7 +412,7 @@ export component AxCbmCard inherits AxCard {
     // measures its full wrapped height when a conditional layout with text follows it; without this
     // the card clips the note to the first 2-3 lines (verified by capture). A single blank: zero-width
     // cost, paints nothing.
-    if AxData.cbm.foot != "" && Breakpoints.below-d: VerticalLayout {
+    if AxData.cbm.foot != "" && root.foot-shown && Breakpoints.below-d: VerticalLayout {
         Text { text: " "; font-size: Type.small; wrap: word-wrap; }
     }
     // A taller neighbour (the Model usage box beside it) stretches this card to the row's height.
