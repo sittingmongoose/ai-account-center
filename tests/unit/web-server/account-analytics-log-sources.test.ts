@@ -91,6 +91,8 @@ describe('extra usage-log sources', () => {
       source({ id: 'b', tool: 'omp', path: path.join(root, 'missing') }),
       source({ id: 'c', tool: 'zcode', path: path.join(root, 'logs') }),
       source({ id: 'd', tool: 'jsonl', path: path.join(root, 'logs') }),
+      // A Nas1 extra is read on Nas1 by the remote scan, never by the local one.
+      source({ id: 'e', tool: 'omp', host: 'nas1', path: path.join(root, 'logs') }),
     ]);
     expect(requests).toEqual([]);
   });
@@ -161,9 +163,12 @@ describe('remote extra usage-log sources', () => {
           { id: 'a', tool: 'omp', host: 'mac', path: '/Users/u/extra-omp' },
           { id: 'b', tool: 'muse', host: 'mac', path: '/Users/u/extra-muse' },
           { id: 'c', tool: 'omp', host: 'windows', path: 'C:\\extra\\omp' },
-          // Claude Code is never scanned remotely; Ubuntu extras stay local.
+          // Only the kinds the caller scans travel; Ubuntu extras stay local.
           { id: 'd', tool: 'claude-code', host: 'mac', path: '/Users/u/extra' },
           { id: 'e', tool: 'omp', host: 'ubuntu', path: '/home/u/extra' },
+          { id: 'f', tool: 'omp', host: 'nas1', path: '/data/nas1/extra-omp' },
+          { id: 'g', tool: 'zcode', host: 'nas1', path: '/data/nas1/zcode/db.sqlite' },
+          { id: 'h', tool: 'claude-code', host: 'nas1', path: '/data/nas1/extra-projects' },
         ],
       },
       path.join(root, '.ccs')
@@ -174,9 +179,20 @@ describe('remote extra usage-log sources', () => {
     });
     expect(remoteExtraRoots('windows', ['omp'])).toEqual({ omp: ['C:\\extra\\omp'] });
     expect(remoteExtraRoots('mac', ['omp'])).toEqual({ omp: ['/Users/u/extra-omp'] });
+    // Nas1 gets its own roots, as POSIX paths, and no other host's roots.
+    expect(remoteExtraRoots('nas1', ['omp', 'muse', 'zcode'])).toEqual({
+      omp: ['/data/nas1/extra-omp'],
+      zcode: ['/data/nas1/zcode/db.sqlite'],
+    });
+    expect(remoteExtraRoots('nas1', ['claude', 'omp'])).toEqual({
+      claude: ['/data/nas1/extra-projects'],
+      omp: ['/data/nas1/extra-omp'],
+    });
+    expect(remoteExtraRoots('nas1', ['muse'])).toEqual({});
   });
 
   it('scans built-in roots alone without saved preferences', () => {
     expect(remoteExtraRoots('mac', ['omp', 'muse', 'zcode'])).toEqual({});
+    expect(remoteExtraRoots('nas1', ['omp', 'muse', 'zcode'])).toEqual({});
   });
 });

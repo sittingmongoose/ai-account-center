@@ -5,12 +5,15 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   ANALYTICS_HELPER_SHA256,
+  REMOTE_ANALYTICS_HOSTS,
   analyticsHelperCommand,
   analyticsHelperPath,
   parseAnalyticsRemoteResponse,
   runAnalyticsRemoteHelper,
+  type AnalyticsRemoteHost,
 } from '../../../src/web-server/services/analytics-remote-transport';
 import {
+  analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
@@ -208,6 +211,29 @@ describe('analytics remote transport', () => {
     expect(analyticsHelperCommand('mac')).toStartWith("/usr/bin/python3 -c 'import sys,json,io;");
   });
 
+  it('runs the helper with python3 directly on Nas1, the same command as the Mac', () => {
+    const command = analyticsHelperCommand('nas1');
+    expect(command).toStartWith("/usr/bin/python3 -c 'import sys,json,io;");
+    // Nas1 is a second Ubuntu computer: any POSIX computer takes the python3 form, only Windows
+    // goes through PowerShell.
+    expect(command).toBe(analyticsHelperCommand('mac'));
+    expect(command).not.toContain('powershell');
+    expect(analyticsHelperCommand('windows')).toStartWith('powershell.exe ');
+  });
+
+  it('scans the Mac, Windows and Nas1 for the same six tools', () => {
+    expect([...REMOTE_ANALYTICS_HOSTS]).toEqual(['mac', 'windows', 'nas1']);
+    for (const host of REMOTE_ANALYTICS_HOSTS)
+      expect(analyticsRemoteTargets(host)).toEqual([
+        'claude',
+        'codex',
+        'omp',
+        'muse',
+        'zcode',
+        'antigravity',
+      ]);
+  });
+
   it('refuses malformed extra roots without running ssh', async () => {
     const bad = (extraRoots: unknown) =>
       runAnalyticsRemoteHelper('fine-alias', 'mac', {
@@ -233,10 +259,18 @@ describe('analytics remote helper integrity', () => {
     const bytes = fs.readFileSync(analyticsHelperPath());
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(ANALYTICS_HELPER_SHA256);
   });
+
+  it('keeps the helper bytes unchanged by the Nas1 host', () => {
+    // Nas1 streams the same packaged helper as the Mac and Windows; adding the host changed no byte
+    // of it. Change this value only together with the helper itself.
+    expect(ANALYTICS_HELPER_SHA256).toBe(
+      'da65d7d1a771d7cd63f82d090a797dce3bc6aa41c2acbdc5ab7317493125e9a6'
+    );
+  });
 });
 
 describe('analytics remote sources', () => {
-  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias' });
+  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias' });
 
   it('merges per-host aggregates and converts them to worker results', async () => {
     const { results, states } = await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -255,30 +289,101 @@ describe('analytics remote sources', () => {
           )
         ),
     });
-    expect(results.map((entry) => entry.tool)).toEqual(['omp', 'omp']);
+    expect(results.map((entry) => entry.tool)).toEqual(['omp', 'omp', 'omp']);
     expect(results[0].data.hourly[0].modelBreakdowns[0].modelName).toBe('deepseek-v4.1-flash');
     expect(results[0].data.eventCount).toBe(2);
     const ompMac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(ompMac).toMatchObject({ state: 'ok', rowCount: 2 });
     expect(ompMac?.lastScanAt).toBe('2026-10-02T00:00:00.000Z');
-    // Both hosts are asked about every kind; a tool that is not installed there
+    // Every host is asked about every kind; a tool that is not installed there
     // answers not_installed from the host itself, never from a fixed claim here.
-    expect(states.filter((entry) => entry.host === 'windows').map((entry) => entry.tool)).toEqual([
-      'antigravity',
-      'claude',
-      'codex',
-      'muse',
-      'omp',
-      'zcode',
-    ]);
-    expect(states.filter((entry) => entry.host === 'mac').map((entry) => entry.tool)).toEqual([
-      'antigravity',
-      'claude',
-      'codex',
-      'muse',
-      'omp',
-      'zcode',
-    ]);
+    for (const host of REMOTE_ANALYTICS_HOSTS)
+      expect(states.filter((entry) => entry.host === host).map((entry) => entry.tool)).toEqual([
+        'antigravity',
+        'claude',
+        'codex',
+        'muse',
+        'omp',
+        'zcode',
+      ]);
+  });
+
+  it('scans Nas1 over its own alias and keeps its aggregates in its own cache file', async () => {
+    const aliases = new Map<AnalyticsRemoteHost, string>();
+    const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      now: () => Date.parse('2026-10-02T00:00:00Z'),
+      runHelper: async (alias, platform) => {
+        aliases.set(platform, alias);
+        return parseAnalyticsRemoteResponse(JSON.stringify(response()));
+      },
+    });
+    expect(Object.fromEntries(aliases)).toEqual({
+      mac: 'mac-alias',
+      windows: 'win-alias',
+      nas1: 'nas1-alias',
+    });
+    for (const host of REMOTE_ANALYTICS_HOSTS)
+      expect(fs.existsSync(path.join(cache, 'analytics-remote-v1', `${host}.json`))).toBe(true);
+    expect(states.find((entry) => entry.tool === 'omp' && entry.host === 'nas1')).toMatchObject({
+      state: 'ok',
+      rowCount: 2,
+      lastScanAt: '2026-10-02T00:00:00.000Z',
+    });
+  });
+
+  it('keeps a failing Nas1 from touching the other hosts, and the other way round', async () => {
+    const onlyNas1Fails = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, platform) => {
+        if (platform === 'nas1') throw new Error('no route');
+        return parseAnalyticsRemoteResponse(JSON.stringify(response()));
+      },
+    });
+    const state = (host: AnalyticsRemoteHost) =>
+      onlyNas1Fails.states.find((entry) => entry.tool === 'omp' && entry.host === host)?.state;
+    expect(state('mac')).toBe('ok');
+    expect(state('windows')).toBe('ok');
+    expect(state('nas1')).toBe('unavailable');
+    expect(onlyNas1Fails.results.filter((entry) => entry.tool === 'omp')).toHaveLength(2);
+    // The other way round: only Nas1 answers, and the Mac and Windows fall back to what they read
+    // before, marked cached.
+    const failsEverywhereButNas1 = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, platform) => {
+        if (platform !== 'nas1') throw new Error('no route');
+        return parseAnalyticsRemoteResponse(JSON.stringify(response()));
+      },
+    });
+    const next = (host: AnalyticsRemoteHost) =>
+      failsEverywhereButNas1.states.find((entry) => entry.tool === 'omp' && entry.host === host)
+        ?.state;
+    expect(next('nas1')).toBe('ok');
+    expect(next('mac')).toBe('cached');
+    expect(next('windows')).toBe('cached');
+  });
+
+  it('scans only Nas1, over its fixed alias, when the launcher aliases cannot be resolved', async () => {
+    const calls: string[] = [];
+    const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts: async () => {
+        throw new Error('launcher list unreadable');
+      },
+      cacheDir: cache,
+      runHelper: async (alias, platform) => {
+        calls.push(`${platform}:${alias}`);
+        return parseAnalyticsRemoteResponse(JSON.stringify(response()));
+      },
+    });
+    expect([...new Set(calls)]).toEqual(['nas1:nas1-agent']);
+    const unconfigured = states.filter((entry) => entry.host !== 'nas1');
+    expect(unconfigured).toHaveLength(12);
+    expect(unconfigured.every((entry) => entry.detail === 'remote host is not configured')).toBe(
+      true
+    );
   });
 
   it('converts session aggregates to worker sessions without doubling hourly tokens', async () => {
@@ -311,9 +416,9 @@ describe('analytics remote sources', () => {
     const runHelper = async () =>
       parseAnalyticsRemoteResponse(JSON.stringify(response({ srows: [srow()] })));
     await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
-    // Both hosts answered, so both caches must read as stale: a cache saved before keys existed
+    // Every host answered, so every cache must read as stale: a cache saved before keys existed
     // holds raw session ids this build must never serve again.
-    for (const host of ['mac', 'windows']) {
+    for (const host of REMOTE_ANALYTICS_HOSTS) {
       const file = path.join(cache, 'analytics-remote-v1', `${host}.json`);
       const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as {
         version: number;
@@ -348,6 +453,14 @@ describe('analytics remote sources', () => {
             { id: 'c', tool: 'omp', host: 'ubuntu', path: '/home/u/extra' },
             { id: 'd', tool: 'claude-code', host: 'mac', path: '/Users/u/extra-projects' },
             { id: 'e', tool: 'codex', host: 'windows', path: 'C:\\extra\\.codex' },
+            { id: 'nas1-omp', tool: 'omp', host: 'nas1', path: '/data/nas1/extra-omp' },
+            {
+              id: 'nas1-claude',
+              tool: 'claude-code',
+              host: 'nas1',
+              path: '/data/nas1/extra-projects',
+            },
+            { id: 'nas1-zcode', tool: 'zcode', host: 'nas1', path: '/data/nas1/zcode/db.sqlite' },
             {
               id: 'f',
               tool: 'jsonl',
@@ -360,7 +473,7 @@ describe('analytics remote sources', () => {
         path.join(ccsHome, '.ccs')
       );
       const seen = new Map<string, unknown>();
-      const runHelper = async (_alias: string, platform: 'mac' | 'windows', request: unknown) => {
+      const runHelper = async (_alias: string, platform: AnalyticsRemoteHost, request: unknown) => {
         seen.set(platform, request);
         return parseAnalyticsRemoteResponse(JSON.stringify(response()));
       };
@@ -372,6 +485,12 @@ describe('analytics remote sources', () => {
       expect((seen.get('windows') as { extraRoots: unknown }).extraRoots).toEqual({
         omp: ['C:\\extra\\omp'],
         codex: ['C:\\extra\\.codex'],
+      });
+      // Nas1's own roots travel to Nas1 alone, as POSIX paths; no other host's roots reach it.
+      expect((seen.get('nas1') as { extraRoots: unknown }).extraRoots).toEqual({
+        omp: ['/data/nas1/extra-omp'],
+        claude: ['/data/nas1/extra-projects'],
+        zcode: ['/data/nas1/zcode/db.sqlite'],
       });
     } finally {
       if (previous === undefined) delete process.env.CCS_HOME;
@@ -451,7 +570,7 @@ describe('analytics remote sources', () => {
     expect(results).toEqual([]);
     expect(states.every((entry) => entry.state === 'unavailable')).toBe(true);
     const unconfigured = await loadAnalyticsRemoteSources(MIN_DATE, {
-      hosts: async () => ({ mac: null, windows: null }),
+      hosts: async () => ({ mac: null, windows: null, nas1: null }),
       cacheDir: cache,
       runHelper: failing,
     });
@@ -588,6 +707,11 @@ describe('analytics remote sources', () => {
     const mac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(mac?.state).toBe('cached');
     expect(mac?.detail).toContain('timed out');
+    // Nas1's saved aggregates come back like the other hosts', from its own cache file.
+    const nas1 = states.find((entry) => entry.tool === 'omp' && entry.host === 'nas1');
+    expect(nas1).toMatchObject({ state: 'cached', rowCount: 2 });
+    expect(nas1?.detail).toContain('timed out');
+    expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(6);
   });
 
   it('says when logs were read but hold no usage in the last 31 days', async () => {
@@ -616,7 +740,7 @@ describe('analytics remote sources', () => {
     };
     const runHelper = async () => parseAnalyticsRemoteResponse(JSON.stringify(response()));
     await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper, onHostScan });
-    for (const host of ['mac', 'windows']) {
+    for (const host of ['mac', 'windows', 'nas1']) {
       expect(calls.filter((call) => call.host === host).map((call) => call.phase)).toEqual([
         'start',
         'done',
@@ -632,7 +756,7 @@ describe('analytics remote sources', () => {
       runHelper: failing,
       onHostScan,
     });
-    for (const host of ['mac', 'windows']) {
+    for (const host of ['mac', 'windows', 'nas1']) {
       expect(calls.filter((call) => call.host === host).map((call) => call.phase)).toEqual([
         'start',
         'done',
@@ -642,7 +766,7 @@ describe('analytics remote sources', () => {
 });
 
 describe('analytics remote scans per kind', () => {
-  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias' });
+  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias' });
   const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
   const FILE_2 = 'a2'.repeat(32);
   /** A clean answer for exactly the kinds asked, with an OMP row when OMP is asked. */
@@ -685,8 +809,8 @@ describe('analytics remote scans per kind', () => {
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    // Every kind on both hosts is in flight together while Claude Code is still reading.
-    for (const host of ['mac', 'windows'])
+    // Every kind on every host is in flight together while Claude Code is still reading.
+    for (const host of ['mac', 'windows', 'nas1'])
       expect(
         calls
           .filter((call) => call.host === host)
@@ -695,8 +819,8 @@ describe('analytics remote scans per kind', () => {
       ).toEqual([...ALL].sort());
     releaseClaude();
     const { results, states } = await loading;
-    expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(2);
-    expect(states.filter((entry) => entry.state === 'ok')).toHaveLength(2);
+    expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(3);
+    expect(states.filter((entry) => entry.state === 'ok')).toHaveLength(3);
     // A settled host's next scan is one call for every kind.
     calls.length = 0;
     await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -711,7 +835,7 @@ describe('analytics remote scans per kind', () => {
         return answer(request.kinds);
       },
     });
-    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => call.host).sort()).toEqual(['mac', 'nas1', 'windows']);
     for (const call of calls) {
       expect(call.kinds).toEqual(ALL);
       expect([...call.prints].sort()).toEqual([...ALL].sort());
@@ -723,7 +847,7 @@ describe('analytics remote scans per kind', () => {
     const prints: string[][] = [];
     const runHelper = async (
       _alias: string,
-      platform: 'mac' | 'windows',
+      platform: AnalyticsRemoteHost,
       request: { kinds: string[]; fingerprints: Record<string, unknown> }
     ) => {
       if (platform === 'mac') {
@@ -769,7 +893,7 @@ describe('analytics remote scans per kind', () => {
     const omp = fresh.states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(omp).toMatchObject({ state: 'cached', rowCount: 2 });
     expect(omp?.detail).toBe('remote scan failed; showing previously read aggregates');
-    expect(fresh.results.filter((entry) => entry.tool === 'omp')).toHaveLength(2);
+    expect(fresh.results.filter((entry) => entry.tool === 'omp')).toHaveLength(3);
     expect(
       fresh.states.find((entry) => entry.tool === 'claude' && entry.host === 'mac')?.state
     ).toBe('no_usage');
@@ -824,12 +948,12 @@ describe('analytics remote scans per kind', () => {
       },
     });
     expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(0);
-    expect(results.filter((entry) => entry.tool === 'claude')).toHaveLength(2);
+    expect(results.filter((entry) => entry.tool === 'claude')).toHaveLength(3);
   });
 });
 
 describe('remote rows price like the local rows of their tool', () => {
-  const hosts = async () => ({ mac: 'mac-alias', windows: null });
+  const hosts = async () => ({ mac: 'mac-alias', windows: null, nas1: null });
   let tempRoot = '';
   let originalCcsHome: string | undefined;
   let originalCcsDir: string | undefined;

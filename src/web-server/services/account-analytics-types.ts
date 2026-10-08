@@ -7,6 +7,8 @@ import type {
   DashboardProvider,
 } from './account-dashboard-types';
 import type { AccountAnalyticsRangePreset } from './account-analytics-range';
+import type { AnalyticsRemoteHost } from './analytics-remote-transport';
+import type { DashboardHost } from './dashboard-hosts';
 import type { ModelPricingSource } from '../model-pricing';
 
 export type AccountAnalyticsRange = AccountAnalyticsRangePreset;
@@ -122,7 +124,7 @@ export type AccountAnalyticsSourceState =
 
 export interface AccountAnalyticsSource {
   tool: AccountAnalyticsActivityProvider | 'cursor';
-  host: 'ubuntu' | 'mac' | 'windows';
+  host: DashboardHost;
   state: AccountAnalyticsSourceState;
   /** Last successful scan, null when never scanned. */
   lastScanAt: string | null;
@@ -181,7 +183,7 @@ export interface AccountAnalyticsActivity {
    */
   refreshing?: boolean;
   /** Remote hosts the running collection is still waiting on; absent or empty when settled. */
-  refreshingRemote?: Array<'mac' | 'windows'>;
+  refreshingRemote?: AnalyticsRemoteHost[];
   scope: 'multi-host-cli';
   /** The zone used for `byDay`, `byDayModel` and anomaly dates. `byHour[].hour` stays a UTC instant. */
   timezone: string;

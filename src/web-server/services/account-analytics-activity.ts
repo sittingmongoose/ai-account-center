@@ -35,7 +35,8 @@ import {
   type AnalyticsRemoteSourceState,
   type AnalyticsSourceTool,
 } from './analytics-remote-sources';
-import type { AnalyticsRemoteHost } from './analytics-remote-transport';
+import { REMOTE_ANALYTICS_HOSTS, type AnalyticsRemoteHost } from './analytics-remote-transport';
+import { DASHBOARD_HOSTS } from './dashboard-hosts';
 import {
   defaultAccountAnalyticsPricing,
   memoiseAccountAnalyticsPricing,
@@ -107,7 +108,7 @@ type RemoteAnswer = {
  */
 export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
-  for (const host of ['ubuntu', 'mac', 'windows'] as const) {
+  for (const host of DASHBOARD_HOSTS) {
     entries.push({
       tool: 'cursor',
       host,
@@ -121,7 +122,7 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   return entries;
 }
 
-/** The grid's order: tools in reading order, hosts Ubuntu, Mac then Windows. */
+/** The grid's order: tools in reading order, hosts Ubuntu, Mac, Windows then Nas1. */
 const SOURCE_TOOL_ORDER = [
   'claude',
   'codex',
@@ -132,7 +133,7 @@ const SOURCE_TOOL_ORDER = [
   'antigravity',
   'cursor',
 ];
-const SOURCE_HOST_ORDER = ['ubuntu', 'mac', 'windows'];
+const SOURCE_HOST_ORDER: readonly string[] = DASHBOARD_HOSTS;
 function sortSourceEntries(entries: AccountAnalyticsSource[]): AccountAnalyticsSource[] {
   return entries.sort(
     (a, b) =>
@@ -148,7 +149,7 @@ function sortSourceEntries(entries: AccountAnalyticsSource[]): AccountAnalyticsS
  */
 export function coldScanningSourceStates(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
-  for (const host of ['ubuntu', 'mac', 'windows'] as const) {
+  for (const host of DASHBOARD_HOSTS) {
     const tools =
       host === 'ubuntu'
         ? (['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'] as const)
@@ -1178,7 +1179,7 @@ export class AccountAnalyticsActivityService {
     if (remote) {
       for (const entry of remote) entries.push({ ...entry });
     } else {
-      for (const host of ['mac', 'windows'] as const) {
+      for (const host of REMOTE_ANALYTICS_HOSTS) {
         // A scan that outlived the collection deadline is still running, but
         // its answer is gone: the tools honestly go back to "scanning" (the
         // next refresh continues), carrying their previous counts.
@@ -1417,7 +1418,7 @@ export class AccountAnalyticsActivityService {
             : state.partial
               ? 'Records read so far are shown while a bounded scan completes in the background; the Included usage grid says what each source contributed. Cost is an API-equivalent estimate, not a subscription charge.' +
                 scanProgress
-              : `CLI activity from Ubuntu, Mac and Windows (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
+              : `CLI activity from Ubuntu, Mac, Windows and Nas1 (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
       {
         tz,
         pricing: state.pricing,

@@ -5,11 +5,13 @@ import path from 'path';
 import express from 'express';
 import type { Server } from 'http';
 import {
+  USAGE_LOG_HOSTS,
   defaultDashboardPreferences,
   isDashboardPreferences,
   readDashboardPreferences,
   writeDashboardPreferences,
 } from '../../../src/web-server/services/dashboard-preferences';
+import { DASHBOARD_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 import { createAccountPreferencesRouter } from '../../../src/web-server/routes/account-preferences-routes';
 
 const temporaryDirs: string[] = [];
@@ -79,6 +81,7 @@ describe('dashboard preferences', () => {
     expect(isDashboardPreferences(withSource({ ...good, id: 'Bad id!' }))).toBe(false);
     expect(isDashboardPreferences(withSource({ ...good, tool: 'cursor' }))).toBe(false);
     expect(isDashboardPreferences(withSource({ ...good, host: 'mars' }))).toBe(false);
+    expect(isDashboardPreferences(withSource({ ...good, host: 'nas' }))).toBe(false);
     expect(isDashboardPreferences(withSource({ ...good, path: 'relative/path' }))).toBe(false);
     expect(isDashboardPreferences(withSource({ ...good, path: '/x/../y' }))).toBe(false);
     expect(isDashboardPreferences(withSource({ ...good, path: '/x\0y' }))).toBe(false);
@@ -93,12 +96,53 @@ describe('dashboard preferences', () => {
     expect(
       isDashboardPreferences(withSource({ ...good, host: 'windows', path: 'C:\\x\\..\\y' }))
     ).toBe(false);
+    // Nas1 is a second Ubuntu computer: POSIX paths only, never a drive letter.
+    const nas1 = { ...good, id: 'zcode-nas1', host: 'nas1' };
+    expect(isDashboardPreferences(withSource(nas1))).toBe(true);
+    expect(isDashboardPreferences(withSource({ ...nas1, path: '/data/logs/omp' }))).toBe(true);
+    expect(isDashboardPreferences(withSource({ ...nas1, path: 'C:\\logs\\omp' }))).toBe(false);
+    expect(isDashboardPreferences(withSource({ ...nas1, path: 'C:/logs/omp' }))).toBe(false);
+    expect(isDashboardPreferences(withSource({ ...nas1, path: 'relative/path' }))).toBe(false);
+    expect(isDashboardPreferences(withSource({ ...nas1, path: '/x/../y' }))).toBe(false);
+    expect(isDashboardPreferences(withSource({ ...nas1, path: '/x\0y' }))).toBe(false);
     expect(
       isDashboardPreferences({ ...base, usageLogSources: [good, { ...good, path: '/other' }] })
     ).toBe(false);
     expect(isDashboardPreferences({ ...base, usageLogSources: new Array(65).fill(good) })).toBe(
       false
     );
+  });
+
+  it('lets an extra usage-log folder sit on each of the fixed computers, and no other', () => {
+    expect([...USAGE_LOG_HOSTS]).toEqual([...DASHBOARD_HOSTS]);
+    expect([...USAGE_LOG_HOSTS]).toContain('nas1');
+  });
+
+  it('persists a Nas1 extra root and reads it back', () => {
+    const dir = directory();
+    const nas1 = {
+      id: 'omp-nas1',
+      tool: 'omp',
+      host: 'nas1',
+      path: '/data/nas1/.omp/sessions',
+    } as const;
+    const saved = writeDashboardPreferences(
+      { ...defaultDashboardPreferences(), usageLogSources: [nas1] },
+      dir
+    );
+    expect(saved.usageLogSources).toEqual([nas1]);
+    expect(readDashboardPreferences(dir)).toEqual(saved);
+    expect(() =>
+      writeDashboardPreferences(
+        {
+          ...defaultDashboardPreferences(),
+          usageLogSources: [{ ...nas1, path: 'C:\\logs\\omp' }],
+        },
+        dir
+      )
+    ).toThrow();
+    // The refused write left the saved file as it was.
+    expect(readDashboardPreferences(dir)).toEqual(saved);
   });
 
   it('requires a field mapping on generic JSONL sources, with timestamp and model', () => {
@@ -196,5 +240,19 @@ describe('dashboard preferences', () => {
     expect(saved.status).toBe(200);
     expect(((await saved.json()) as { timeZone: string }).timeZone).toBe('Europe/Paris');
     expect(readDashboardPreferences(dir).timeZone).toBe('Europe/Paris');
+    // The dashboard saves a Nas1 extra root (POSIX), and refuses a drive-letter path for it.
+    const nas1 = { id: 'omp-nas1', tool: 'omp', host: 'nas1', path: '/data/nas1/.omp/sessions' };
+    const withNas1 = await put(
+      { ...defaultDashboardPreferences(), usageLogSources: [nas1] },
+      { 'x-test-session': 'true' }
+    );
+    expect(withNas1.status).toBe(200);
+    expect(readDashboardPreferences(dir).usageLogSources).toEqual([nas1]);
+    const drive = await put(
+      { ...defaultDashboardPreferences(), usageLogSources: [{ ...nas1, path: 'C:\\logs' }] },
+      { 'x-test-session': 'true' }
+    );
+    expect(drive.status).toBe(400);
+    expect(readDashboardPreferences(dir).usageLogSources).toEqual([nas1]);
   });
 });
