@@ -29,6 +29,8 @@ const slowTests = [
   'tests/unit/web-server/dashboard-auth-runtime.test.ts',
   'tests/unit/web-server/analytics-remote-helper.test.ts',
   'tests/unit/web-server/antigravity-usage-helper.test.ts',
+  'tests/unit/web-server/app-update-helper-sync.test.ts',
+  'tests/unit/web-server/app-update-nas1.test.ts',
   'tests/unit/app-updates/codex-update-runtime-bundle.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
