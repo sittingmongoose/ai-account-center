@@ -42,10 +42,11 @@ reading belongs to a provider account, not to a computer, and Nas1 signs in to
 the same provider accounts as the dashboard computer, so by default no source
 moves there. Claude quota stays with the Mac and Windows Claude desktop apps (no
 Claude desktop exists on Nas1), Codex quota with the dashboard computer's saved
-logins and the OpenCode console wallet with the Mac. Lifecycle (add, sign in
-again, replace key, remove) is not offered for Nas1: it stores no keys and holds
-no sign-in state, and the key store refuses an Ubuntu source that has an
-`sshHost`.
+logins and the OpenCode console wallet with the Mac. Lifecycle that writes to a
+computer (add, sign in again, replace key) is not offered for Nas1: it stores no
+keys and holds no sign-in state, and the key store refuses an Ubuntu source that
+has an `sshHost`. Remove only stops the dashboard reading a source saved for
+Nas1 and says so ("Its sign-in on Nas1 is not changed."); it runs nothing there.
 
 Registry v2, the private `account-usage-accounts.json` (0600, at most 64 KB),
 lists several accounts per additional provider (at most 16 each, 64 in all).
