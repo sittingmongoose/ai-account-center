@@ -5,8 +5,16 @@ import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
+import { HOST_OS, NAS1_SSH_ALIAS } from './dashboard-hosts';
 
-export type AnalyticsRemoteHost = 'mac' | 'windows';
+/**
+ * The computers the packaged helper scans over ssh, in scan order: the Mac, Windows and Nas1. The
+ * local Ubuntu computer is read by the local collectors, never through this transport.
+ */
+export const REMOTE_ANALYTICS_HOSTS = ['mac', 'windows', 'nas1'] as const;
+export type AnalyticsRemoteHost = (typeof REMOTE_ANALYTICS_HOSTS)[number];
+/** The ssh alias to reach each remote host, or null when none is configured. */
+export type AnalyticsRemoteAliases = Record<AnalyticsRemoteHost, string | null>;
 export type AnalyticsRemoteKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'antigravity';
 
 /** Every kind the packaged helper reads. */
@@ -29,7 +37,7 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ROWS = 100_000;
 /**
  * The packaged helper's SHA-256, pinned like the Claude history writer: only these exact bytes are ever run on the
- * Mac and Windows. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
+ * Mac, Windows and Nas1. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
  */
 export const ANALYTICS_HELPER_SHA256 =
   'da65d7d1a771d7cd63f82d090a797dce3bc6aa41c2acbdc5ab7317493125e9a6';
@@ -325,7 +333,8 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
 /**
  * The fixed ssh command that runs the packaged helper on a host. Only this process's helper source,
  * streamed on stdin with the request, is executed; aggregates travel back on stdout without
- * temporary files. Python reads the request from stdin itself on every host. On Windows, PowerShell
+ * temporary files. Python reads the request from stdin itself on every host; every POSIX computer
+ * (the Mac and Nas1, by OS kind) runs `/usr/bin/python3` directly. On Windows, PowerShell
  * only finds Python and starts it: when PowerShell read a request of the helper's size from stdin
  * (`[Console]::In.ReadToEnd()`) over Windows OpenSSH, about half the reads never saw the end of
  * the input and hung until the ssh timeout (measured 2026-10-06: 4 of 8 80 KB reads hung, against
@@ -335,7 +344,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
 export function analyticsHelperCommand(platform: AnalyticsRemoteHost): string {
   const code =
     "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-analytics-helper','exec'))";
-  if (platform === 'mac') return `/usr/bin/python3 -c ${quoteShell(code)}`;
+  if (HOST_OS[platform] !== 'windows') return `/usr/bin/python3 -c ${quoteShell(code)}`;
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
@@ -450,19 +459,25 @@ export async function runAnalyticsRemoteHelper(
 }
 
 /**
+ * The aliases that need no Claude desktop launcher: only Nas1's, a fixed alias. Nas1 has no Claude
+ * desktop app, so no launcher names it, and a missing or unreadable launcher list never leaves it
+ * unscanned. The Mac and Windows have no alias until a launcher gives one.
+ */
+export function fixedAnalyticsRemoteAliases(): AnalyticsRemoteAliases {
+  return { mac: null, windows: null, nas1: NAS1_SSH_ALIAS };
+}
+
+/**
  * The same ssh host aliases the server already uses for the Mac and Windows:
  * the first Claude desktop launcher on each host that carries one. Null when
- * no launcher configures that host.
+ * no launcher configures that host. Nas1 is always its fixed alias.
  */
-export async function resolveAnalyticsRemoteHosts(): Promise<{
-  mac: string | null;
-  windows: string | null;
-}> {
+export async function resolveAnalyticsRemoteHosts(): Promise<AnalyticsRemoteAliases> {
   let profiles: Array<{ mac?: { sshHost?: string }; windows?: { sshHost?: string } }> = [];
   try {
     profiles = await listClaudeDesktopProfiles();
   } catch {
-    return { mac: null, windows: null };
+    return fixedAnalyticsRemoteAliases();
   }
   let mac: string | null = null;
   let windows: string | null = null;
@@ -473,5 +488,5 @@ export async function resolveAnalyticsRemoteHosts(): Promise<{
       windows = profile.windows.sshHost;
     if (mac && windows) break;
   }
-  return { mac, windows };
+  return { ...fixedAnalyticsRemoteAliases(), mac, windows };
 }

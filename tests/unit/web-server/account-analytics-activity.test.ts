@@ -4,6 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   AccountAnalyticsActivityService,
+  coldScanningSourceStates,
+  fixedAnalyticsSourceEntries,
   loadAccountAnalyticsWorker,
   projectAccountAnalyticsActivity,
 } from '../../../src/web-server/services/account-analytics-activity';
@@ -808,9 +810,10 @@ describe('native local analytics activity', () => {
       (entry) =>
         entry.host !== 'ubuntu' && ['claude', 'codex', 'omp', 'muse', 'zcode'].includes(entry.tool)
     );
-    expect(remote).toHaveLength(10);
+    // Five tools on each of the three remote computers.
+    expect(remote).toHaveLength(15);
     for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode'] as const) {
-      for (const host of ['mac', 'windows'] as const) {
+      for (const host of ['mac', 'windows', 'nas1'] as const) {
         expect(remote).toContainEqual(
           expect.objectContaining({ tool, host, state: 'unavailable' })
         );
@@ -1115,11 +1118,13 @@ describe('native local analytics activity', () => {
         remoteCalls++;
         opts?.onHostScan?.('mac', 'start');
         opts?.onHostScan?.('windows', 'start');
+        opts?.onHostScan?.('nas1', 'start');
         await new Promise<void>((resolve) => {
           release = resolve;
         });
         opts?.onHostScan?.('mac', 'done');
         opts?.onHostScan?.('windows', 'done');
+        opts?.onHostScan?.('nas1', 'done');
         return { results: [], states: [] };
       },
       requests: () => [],
@@ -1131,7 +1136,7 @@ describe('native local analytics activity', () => {
     // page can say which hosts the refresh waits on.
     const flying = await service.get(QUERY, FROM, NOW);
     expect(flying.refreshing).toBe(true);
-    expect(flying.refreshingRemote).toEqual(['mac', 'windows']);
+    expect(flying.refreshingRemote).toEqual(['mac', 'windows', 'nas1']);
     release();
     const first = await settled(service);
     expect(first.refreshing).toBe(false);
@@ -1140,7 +1145,7 @@ describe('native local analytics activity', () => {
     // A manual refresh runs the remote scan again instead of serving the cache.
     const refreshing = await service.get({ ...QUERY, refresh: true }, FROM, NOW);
     expect(refreshing.refreshing).toBe(true);
-    expect(refreshing.refreshingRemote).toEqual(['mac', 'windows']);
+    expect(refreshing.refreshingRemote).toEqual(['mac', 'windows', 'nas1']);
     release();
     const second = await settled(service);
     expect(second.refreshing).toBe(false);
@@ -1164,16 +1169,144 @@ describe('native local analytics activity', () => {
     // Every scanned tool on every host says scanning from the first byte, so the
     // loading page can show per-host progress; the fixed entries ride along.
     const scanning = cold.sources.filter((source) => source.state === 'scanning');
-    expect(scanning).toHaveLength(18);
+    // Six tools on each of Ubuntu, Mac, Windows and Nas1.
+    expect(scanning).toHaveLength(24);
     expect(scanning.every((source) => source.detail === 'the first scan is running')).toBe(true);
     // Antigravity is scanned on every host now; Cursor stays a fixed no-local-log entry.
     expect(
       cold.sources.filter((source) => source.tool === 'antigravity' && source.state === 'scanning')
-    ).toHaveLength(3);
-    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(3);
+    ).toHaveLength(4);
+    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(4);
     gate.resolve([]);
     remote.resolve({ results: [], states: [] });
     await settled(service);
+  });
+
+  it('lists the fixed Cursor row on every computer, Nas1 included', () => {
+    const fixed = fixedAnalyticsSourceEntries();
+    expect(fixed.map((entry) => `${entry.tool}:${entry.host}`)).toEqual([
+      'cursor:ubuntu',
+      'cursor:mac',
+      'cursor:windows',
+      'cursor:nas1',
+    ]);
+    expect(fixed.every((entry) => entry.state === 'unavailable' && entry.rowCount === 0)).toBe(
+      true
+    );
+    expect(fixed.every((entry) => entry.detail?.includes('usage is server-side'))).toBe(true);
+  });
+
+  it('orders the cold grid by tool, then Ubuntu, Mac, Windows and Nas1', () => {
+    const cold = coldScanningSourceStates();
+    // Six scanned tools on four computers, plus the four fixed Cursor rows.
+    expect(cold).toHaveLength(28);
+    const hostsOf = (tool: string) =>
+      cold.filter((entry) => entry.tool === tool).map((entry) => entry.host);
+    for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity', 'cursor'])
+      expect(hostsOf(tool)).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
+    // Generic JSONL sources are local to Ubuntu: never a cold cell, on Nas1 or anywhere else.
+    expect(hostsOf('jsonl')).toEqual([]);
+    const tools = cold.map((entry) => entry.tool);
+    expect(tools.indexOf('claude')).toBeLessThan(tools.indexOf('antigravity'));
+    expect(tools.indexOf('antigravity')).toBeLessThan(tools.indexOf('cursor'));
+  });
+
+  it('shows every remote computer scanning, Nas1 included, until the first remote answer', async () => {
+    const remote = Promise.withResolvers<{ results: []; states: [] }>();
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => remote.promise,
+      requests: () => [
+        {
+          provider: 'codex' as const,
+          request: { kind: 'codex' as const, codexHome: '/fixture', cacheDir: '/fixture/cache' },
+        },
+      ],
+      loadWorker: async () => data('gpt-5.4', 10, 0),
+      now: () => NOW,
+      responseBudgetMs: 200,
+      scope: () => '/fixture-first-remote-answer',
+    });
+    // The local rows publish while the remote scan is still running behind them.
+    const answer = await service.get(QUERY, FROM, NOW);
+    expect(answer.refreshing).toBe(true);
+    for (const host of ['mac', 'windows', 'nas1'] as const) {
+      const cells = answer.sources.filter(
+        (entry) => entry.host === host && entry.tool !== 'cursor'
+      );
+      expect(cells.map((entry) => entry.tool).sort()).toEqual([
+        'antigravity',
+        'claude',
+        'codex',
+        'muse',
+        'omp',
+        'zcode',
+      ]);
+      expect(cells.every((entry) => entry.state === 'scanning')).toBe(true);
+    }
+    remote.resolve({ results: [], states: [] });
+    await settled(service);
+  });
+
+  it('keeps the four-computer grid inside the snapshot state cap and serves it after a restart', async () => {
+    const scope = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-activity-snapshot-nas1-'));
+    try {
+      const remoteStates = (['mac', 'windows', 'nas1'] as const).flatMap((host) =>
+        (['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'] as const).map((tool) => ({
+          tool,
+          host,
+          state: 'no_usage' as const,
+          lastScanAt: new Date(NOW).toISOString(),
+          rowCount: 0,
+          detail: 'no usage recorded in the last 31 days',
+        }))
+      );
+      const requests = () => [
+        {
+          provider: 'codex' as const,
+          request: { kind: 'codex' as const, codexHome: '/fixture', cacheDir: '/fixture/cache' },
+        },
+      ];
+      const first = new AccountAnalyticsActivityService({
+        remote: async () => ({ results: [], states: remoteStates }),
+        requests,
+        loadWorker: async () => data('gpt-5.4', 10, 0),
+        now: () => NOW,
+        scope: () => scope,
+        persistSnapshot: true,
+      });
+      expect((await first.get(QUERY, FROM, NOW)).status).toBe('ok');
+      const file = path.join(
+        scope,
+        'cache',
+        'account-activity-v1',
+        'analytics-activity-snapshot-v1.json'
+      );
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+        sourceStates: Array<{ tool: string; host: string }>;
+      };
+      // Seven local tool cells (Generic JSONL included), six tools on each of the three remote
+      // computers and four Cursor rows: 29 states against the validator's cap of 64.
+      expect(saved.sourceStates).toHaveLength(29);
+      expect(saved.sourceStates.length).toBeLessThanOrEqual(64);
+      expect(new Set(saved.sourceStates.map((entry) => entry.host))).toEqual(
+        new Set(['ubuntu', 'mac', 'windows', 'nas1'])
+      );
+      // A restarted server accepts the snapshot and serves the Nas1 cells from it at once.
+      const second = new AccountAnalyticsActivityService({
+        remote: async () => ({ results: [], states: remoteStates }),
+        requests,
+        loadWorker: async () => data('gpt-5.4', 20, 0),
+        now: () => NOW + 61_000,
+        scope: () => scope,
+        persistSnapshot: true,
+      });
+      const instant = await second.get(QUERY, FROM, NOW);
+      expect(instant.status).toBe('cached');
+      expect(instant.sources.filter((entry) => entry.host === 'nas1')).toHaveLength(7);
+      await settled(second);
+    } finally {
+      fs.rmSync(scope, { recursive: true, force: true });
+    }
   });
 
   it('re-collects on the converge cadence while the grid holds scanning cells, then falls back', async () => {

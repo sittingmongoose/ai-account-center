@@ -9,8 +9,11 @@ import {
 } from '../usage/account-activity-collector';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import {
+  REMOTE_ANALYTICS_HOSTS,
+  fixedAnalyticsRemoteAliases,
   runAnalyticsRemoteHelper,
   resolveAnalyticsRemoteHosts,
+  type AnalyticsRemoteAliases,
   type AnalyticsRemoteFingerprint,
   type AnalyticsRemoteHost,
   type AnalyticsRemoteKind,
@@ -44,7 +47,7 @@ export interface AnalyticsRemoteSourceState {
 }
 
 export interface AnalyticsRemoteSourceDeps {
-  hosts?: () => Promise<{ mac: string | null; windows: string | null }>;
+  hosts?: () => Promise<AnalyticsRemoteAliases>;
   runHelper?: (
     sshHost: string,
     platform: AnalyticsRemoteHost,
@@ -61,13 +64,13 @@ export interface AnalyticsRemoteSourceDeps {
 
 /**
  * Remote coverage: Claude Code, Codex, OMP, Muse, zcode and Antigravity (T3 Code's
- * Antigravity instances included) on the Mac and Windows. Muse and zcode report
- * `not_installed` on Windows until they are; the states are measured by the
- * scan, never assumed.
+ * Antigravity instances included) on the Mac, Windows and Nas1. A tool a host does
+ * not have reports `not_installed`; the states are measured by the scan, never assumed.
  */
 const REMOTE_TARGETS: Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]> = {
   mac: ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
   windows: ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
+  nas1: ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
 };
 
 /** The kinds scanned on one remote host, for states when no scan answered. */
@@ -309,7 +312,7 @@ export function loadAnalyticsRemoteCachedSources(
   const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
   const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
-  for (const host of ['mac', 'windows'] as const) {
+  for (const host of REMOTE_ANALYTICS_HOSTS) {
     const part = cachedHostSources(
       host,
       loadCache(cacheFile(cacheDir, host)),
@@ -457,15 +460,14 @@ export async function loadAnalyticsRemoteSources(
 }> {
   const now = deps.now ?? Date.now;
   const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
-  const hosts = await (deps.hosts ?? resolveAnalyticsRemoteHosts)().catch(() => ({
-    mac: null as string | null,
-    windows: null as string | null,
-  }));
+  const hosts = await (deps.hosts ?? resolveAnalyticsRemoteHosts)().catch(() =>
+    fixedAnalyticsRemoteAliases()
+  );
   const runHelper = deps.runHelper ?? runAnalyticsRemoteHelper;
   const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
   const jobs: Array<Promise<void>> = [];
-  for (const host of ['mac', 'windows'] as const) {
+  for (const host of REMOTE_ANALYTICS_HOSTS) {
     jobs.push(
       (async (): Promise<void> => {
         const kinds = REMOTE_TARGETS[host];

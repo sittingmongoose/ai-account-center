@@ -112,7 +112,7 @@ export interface AccountAnalyticsProjectionOptions {
   /** A collection is running behind this answer; the numbers are the last snapshot. */
   refreshing?: boolean;
   /** Remote hosts the running collection is still waiting on; empty when settled. */
-  refreshingRemote?: Array<'mac' | 'windows'>;
+  refreshingRemote?: AccountAnalyticsActivity['refreshingRemote'];
 }
 
 function finite(value: unknown): number {

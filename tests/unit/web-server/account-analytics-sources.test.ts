@@ -97,7 +97,7 @@ async function remoteAnswer() {
         rowCount: 0,
         detail: 'remote scan failed',
       },
-      // Every kind is scanned on both hosts; absence is measured, never fixed.
+      // Every kind is scanned on every remote host; absence is measured, never fixed.
       {
         tool: 'muse',
         host: 'windows',
@@ -109,6 +109,23 @@ async function remoteAnswer() {
       {
         tool: 'zcode',
         host: 'windows',
+        state: 'not_installed',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 0,
+        detail: 'no usage logs found on this host',
+      },
+      // Nas1 is scanned like the others: a tool it has no logs for says so itself.
+      {
+        tool: 'omp',
+        host: 'nas1',
+        state: 'no_usage',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 0,
+        detail: 'no usage recorded in the last 31 days',
+      },
+      {
+        tool: 'zcode',
+        host: 'nas1',
         state: 'not_installed',
         lastScanAt: new Date(NOW).toISOString(),
         rowCount: 0,
@@ -222,6 +239,12 @@ describe('analytics activity across sources', () => {
       )
     ).toBe(false);
     expect(sources.get('cursor:windows')?.detail).toContain('no local usage log');
+    // Nas1 has its own cells: measured by its scan, with the same fixed Cursor row as the others.
+    expect(sources.get('omp:nas1')).toMatchObject({ state: 'no_usage', rowCount: 0 });
+    expect(sources.get('zcode:nas1')).toMatchObject({ state: 'not_installed', rowCount: 0 });
+    expect(sources.get('zcode:nas1')?.detail).toContain('no usage logs found on this host');
+    expect(sources.get('cursor:nas1')).toMatchObject({ state: 'unavailable', rowCount: 0 });
+    expect(sources.get('cursor:nas1')?.detail).toContain('no local usage log');
     // Windows Muse and zcode are measured by that host's own scan, not fixed here.
     expect(sources.get('muse:windows')?.state).toBe('not_installed');
     expect(sources.get('muse:windows')?.detail).toContain('no usage logs found on this host');
@@ -232,7 +255,8 @@ describe('analytics activity across sources', () => {
   it('describes the real multi-host coverage', async () => {
     const activity = await service().get(QUERY, FROM, TO, { tz: 'UTC' });
     expect(activity.message).not.toContain('Local Ubuntu CLI activity');
-    expect(activity.message).toContain('Ubuntu, Mac and Windows');
+    expect(activity.message).toContain('CLI activity from Ubuntu, Mac, Windows and Nas1 (');
+    expect(activity.message).not.toContain('Ubuntu, Mac and Windows');
   });
 
   it('keeps the remote part of the totals when a later remote scan does not answer', async () => {
@@ -301,7 +325,7 @@ describe('analytics activity across sources', () => {
     const cells = new Map(result.sources.map((row) => [`${row.tool}:${row.host}`, row]));
     // Claude and Codex cells stay in the grid too: their carried aggregates are in the totals,
     // so a timed-out scan must never read as "not read" for them.
-    for (const host of ['mac', 'windows'])
+    for (const host of ['mac', 'windows', 'nas1'])
       for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode'])
         expect(cells.get(`${tool}:${host}`), `${tool}:${host}`).toMatchObject({
           state: 'unavailable',
