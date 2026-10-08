@@ -435,6 +435,175 @@ int main(int argc,char **argv){
                 os.close(master)
 
 
+def _fixture_file(path, text='fixture'):
+    """A fixture file in a temporary folder (never a real install)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+@contextlib.contextmanager
+def windows_case_folding():
+    """os.path.normcase folds case only on Windows; stand in for that on POSIX."""
+    with mock.patch.object(os.path, 'normcase', side_effect=lambda value: str(value).lower()):
+        yield
+
+
+class WindowsCaseFoldingTests(unittest.TestCase):
+    """Windows names ignore case, but PATHEXT, resolve() and process paths can spell them in any case."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='ccs-update-case-')
+        self.addCleanup(directory.cleanup)
+        self.root = pathlib.Path(directory.name).resolve()
+        self.home, self.local = self.root / 'Home', self.root / 'Local'
+        for patcher in (mock.patch.object(pathlib.Path, 'home', return_value=self.home), mock.patch.dict(os.environ, {'LOCALAPPDATA': str(self.local)})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def detect_muse(self, shim, launcher=True):
+        """Meta's Windows install with shutil.which finding `shim`; returns (install, PowerShell probe)."""
+        _fixture_file(shim)
+        launcher_file = self.local / 'Programs/muse/.muse-launcher.ps1'
+        launcher_file.unlink(missing_ok=True)
+        if launcher:
+            _fixture_file(launcher_file)
+        with mock.patch.object(updater.shutil, 'which', return_value=str(shim)), mock.patch.object(updater, 'command', return_value='Muse Code (1.4.2)\n') as probe:
+            return updater.detect_cli('muse-code', 'windows'), probe
+
+    def test_windows_muse_cmd_from_path_ext_is_native_with_its_launcher(self):
+        install, probe = self.detect_muse(self.local / 'Programs/muse/muse.CMD')
+        self.assertEqual((install.manager, install.path, install.version, install.probe), ('native', self.local / 'Programs/muse/muse.cmd', '1.4.2', None))
+        self.assertIn(str(self.local / 'Programs/muse/.muse-launcher.ps1'), [str(arg) for arg in probe.call_args.args[0]])
+
+    def test_windows_muse_launcher_name_case_is_ignored(self):
+        for name in ('muse', 'muse.cmd', 'MUSE.CMD', 'Muse.Cmd'):
+            with self.subTest(name=name):
+                install, _ = self.detect_muse(self.local / 'Programs/muse' / name)
+                self.assertEqual((install.manager, install.path), ('native', self.local / 'Programs/muse/muse.cmd'))
+
+    def test_windows_muse_outside_its_folder_or_without_launcher_stays_unsupported(self):
+        for label, shim, launcher in (
+            ('other folder', self.root / 'Other/muse.CMD', True),
+            ('no launcher', self.local / 'Programs/muse/muse.CMD', False),
+            ('other name', self.local / 'Programs/muse/MUSE.EXE', True),
+        ):
+            with self.subTest(label):
+                install, probe = self.detect_muse(shim, launcher)
+                self.assertEqual(install.manager, 'unsupported')
+                probe.assert_not_called()
+
+    def test_muse_binary_prefix_matches_whatever_case_windows_reports(self):
+        install = common.Install('muse-code', 'windows', self.local / 'Programs/muse/muse.cmd')
+        rows = [processes.Process(7, 1, 1, str(self.local / 'Programs/muse/MUSE-BIN-1.4.2.exe'), '7'),
+                processes.Process(8, 1, 1, str(self.local / 'Other/MUSE-BIN-1.4.2.exe'), '8')]
+        with windows_case_folding():
+            self.assertEqual([item.pid for item in processes.family(install, rows)], [7])
+
+    def test_resolved_package_roots_fold_case_like_windows(self):
+        # resolve() reports the on-disk spelling, which need not match the folders CCS names.
+        for app_id, folder, on_disk in (
+            ('claude-code', '.local/share/claude/versions', '.local/share/Claude/Versions'),
+            ('codex-cli', '.codex/packages/standalone/releases', '.codex/Packages/Standalone/Releases'),
+        ):
+            with self.subTest(app_id=app_id):
+                name = updater.CLI_NAMES[app_id] + '.exe'
+                binary = _fixture_file(self.home / on_disk / '1.0.0' / name)
+                link = self.home / '.local/bin' / name
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(binary)
+                with windows_case_folding(), mock.patch.object(updater, '_candidates', return_value=[link]), mock.patch.object(updater, 'cli_probe', return_value=('1.0.0', None)):
+                    install = updater.detect_cli(app_id, 'windows')
+                self.assertEqual(install.package_root, self.home / folder)
+
+
+class WindowsMuseUpdateTests(unittest.TestCase):
+    """A live launcher lock reports busy, and AAC never stops or restarts Windows Muse."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='ccs-update-muse-')
+        self.addCleanup(directory.cleanup)
+        self.root = pathlib.Path(directory.name).resolve()
+        self.folder, self.lock = self.root / 'Programs/muse', self.root / 'Programs/muse/.muse-update-lock'
+        patcher = mock.patch.object(pathlib.Path, 'home', return_value=self.root / 'Home')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.install = common.Install('muse-code', 'windows', self.folder / 'muse.cmd', '1.4.2', 'native')
+        # T3's muse-acp adapter runs `muse serve` from this folder as muse-bin-<version>.exe.
+        self.host = processes.Process(77, 1, 1, str(self.folder / 'muse-bin-1.4.2.exe'), '77', ['muse-bin-1.4.2.exe', 'serve'], session=1)
+
+    @staticmethod
+    def refuse_running_instances(platform, contexts):
+        """Stands in for check_terminal, which refuses any running instance it could not restart."""
+        if contexts:
+            raise common.UpdateFailure('restart_context')
+
+    def test_muse_update_busy_is_false_without_a_lock(self):
+        with mock.patch.object(updater, '_pid_alive', return_value=True) as alive:
+            self.assertFalse(updater.muse_update_busy(self.folder))
+        alive.assert_not_called()
+
+    def test_muse_update_busy_is_false_for_a_dead_holder(self):
+        _fixture_file(self.lock / 'pid', '4242')
+        with mock.patch.object(updater, '_pid_alive', return_value=False) as alive:
+            self.assertFalse(updater.muse_update_busy(self.folder))
+        alive.assert_called_once_with(4242)
+
+    def test_muse_update_busy_rejects_garbage_and_oversized_pid_files(self):
+        pid = self.lock / 'pid'
+        pid.parent.mkdir(parents=True, exist_ok=True)
+        for raw in (b'', b'abc', b'0', b'-7', b'12.5', b'4242 4243', b'9' * 10, bytes([195, 169]), b'1' * 100000):
+            with self.subTest(raw=raw[:12]):
+                pid.write_bytes(raw)
+                with mock.patch.object(updater, '_pid_alive', return_value=True) as alive:
+                    self.assertFalse(updater.muse_update_busy(self.folder))
+                alive.assert_not_called()
+
+    def test_muse_update_busy_is_true_for_a_live_holder(self):
+        _fixture_file(self.lock / 'pid', '4242\r\n')
+        with mock.patch.object(updater, '_pid_alive', return_value=True) as alive:
+            self.assertTrue(updater.muse_update_busy(self.folder))
+        alive.assert_called_once_with(4242)
+
+    def test_windows_muse_same_version_while_its_launcher_updates_reports_busy(self):
+        # Meta's installer exits 0 without updating while the launcher's live updater holds the lock.
+        _fixture_file(self.lock / 'pid', '4242')
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'perform_cli_update') as installer, mock.patch.object(updater, 'detect_cli', return_value=self.install), \
+                mock.patch.object(updater, '_pid_alive', return_value=True) as alive:
+            value = updater.update_cli(self.install, time.monotonic() + 60)
+        installer.assert_called_once()
+        alive.assert_called_once_with(4242)
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('failed', 'busy', True))
+        self.assertTrue((self.lock / 'pid').is_file())  # the launcher owns the lock; AAC never removes it
+
+    def test_windows_muse_same_version_without_a_lock_stays_current(self):
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'perform_cli_update'), mock.patch.object(updater, 'detect_cli', return_value=self.install), \
+                mock.patch.object(updater, '_pid_alive', return_value=True) as alive:
+            value = updater.update_cli(self.install, time.monotonic() + 60)
+        alive.assert_not_called()
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('current', 'current', True))
+
+    def test_windows_muse_update_never_stops_or_restarts_its_running_binary(self):
+        # The installer writes the new muse-bin beside the running one; its host keeps the old version.
+        refreshed = common.Install('muse-code', 'windows', self.folder / 'muse.cmd', '1.5.0', 'native')
+        with mock.patch.object(updater, 'scan', return_value=[self.host]), mock.patch.object(updater, 'cli_contexts', return_value=([self.host], [self.host])), \
+                mock.patch.object(updater, 'check_terminal', side_effect=self.refuse_running_instances), mock.patch.object(updater, 'perform_cli_update') as installer, \
+                mock.patch.object(updater, 'detect_cli', return_value=refreshed), mock.patch.object(updater, 'terminate_cli') as stop, \
+                mock.patch.object(updater, 'restart_cli', return_value=[]) as restart:
+            value = updater.update_cli(self.install, time.monotonic() + 60)
+        installer.assert_called_once()
+        stop.assert_not_called()
+        restart.assert_called_once_with(refreshed, [])  # restart_cli is only ever handed no processes
+        self.assertEqual((value['status'], value['version'], value['restartedProcesses']), ('updated', '1.5.0', 0))
+
+    def test_windows_muse_readiness_never_judges_its_running_binary(self):
+        with mock.patch.object(updater, 'scan', return_value=[self.host]), mock.patch.object(updater, 'cli_contexts', return_value=([self.host], [self.host])), \
+                mock.patch.object(updater, 'check_terminal', side_effect=self.refuse_running_instances):
+            self.assertIsNone(updater.check_readiness(self.install))
+
+
 def _script(path, body):
     """A fixture executable (never a real app)."""
     path.parent.mkdir(parents=True, exist_ok=True)

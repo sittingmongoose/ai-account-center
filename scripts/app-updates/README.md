@@ -91,11 +91,18 @@ and cycles; Electron's internal `Versions/Current -> A` framework links remain
 supported. Windows requires a valid
 Authenticode signature from `T3 Tools Inc`, uses `/S`, and restores a private
 copy of the previous installation if installation or relaunch verification fails.
-Both desktops close only the captured T3 process family, reopen in the user's
-desktop session and check `http://127.0.0.1:3773/`. The Windows flow reuses the
-existing `CCS App Updates` InteractiveToken task and process/session guards.
-This explicit T3 close/swap/reopen flow is the exception to Codex and Claude's
-Mac/Windows quit-first behavior described below.
+A running Mac T3 is **never quit, closed or killed**, like Codex and Claude. Its
+update reports `action_required`/`quit_first` ("Quit T3 Code to finish its update,
+then run Update apps again.") before any download, and the family is checked again
+right before the bundle swap, so a T3 opened during the download is left alone.
+After the user quits it and runs Update apps again, the verified bundle replaces
+the old one, `open -a` reopens T3 and `http://127.0.0.1:3773/` is checked. A failed
+post-swap check stops only the T3 instance the updater opened and restores the
+retained bundle; nothing else is relaunched. Windows keeps its explicit
+close/install/reopen flow: it closes only the captured T3 process family, installs
+silently, reopens in the user's desktop session and checks `http://127.0.0.1:3773/`.
+The Windows flow reuses the existing `CCS App Updates` InteractiveToken task and
+process/session guards.
 
 On Ubuntu, `t3 update <version> --channel nightly` runs with empty, non-TTY stdin
 and **without `--yes`**. Its native updater verifies the runtime and rewrites the
@@ -128,19 +135,26 @@ No status read schedules or retries anything. Separate Muse ACP and ZCode ACP
 adapters remain under their existing auto-updaters and are outside this job.
 
 Hosts still run in parallel. Installers stay sequential within each host:
-T3's replacement closes its bundled server/process family, Windows installers
+T3's Windows replacement closes its bundled server/process family, installers
 can hold executable/package files, and Codex already shares a daemon with its
 desktop. Overlapping those operations would weaken stop/restart and rollback
 guarantees.
 
-Windows Muse is detected at `%LOCALAPPDATA%\Programs\muse\muse.cmd` (including
-the extensionless `muse` shim beside it). Its `.muse-launcher.ps1 --version` is
+Windows Muse is detected at `%LOCALAPPDATA%\Programs\muse\muse.cmd`. Meta's installer
+writes only that file; a hand-added extensionless `muse` shim beside it is not a
+detection target. The name matches in any letter case,
+as `shutil.which` returns `muse.CMD` from PATHEXT. Its `.muse-launcher.ps1 --version` is
 probed directly with auto-update disabled, retaining the full `1.4.3-R5018.1`
 build version. The old generic `.cmd` rejection reported this official install
 as unsupported before probing it. Its fixed
 [PowerShell installer](https://dev.meta.ai/install.ps1) now runs with
 `MUSE_UPGRADE_MODE=1`, `MUSE_NO_MODIFY_PATH=1` and `MUSE_INSTALL_DIR` bound to the
-detected official directory. Unrelated Muse shims remain unsupported.
+detected official directory. Unrelated Muse shims remain unsupported. AAC never stops or
+restarts Windows Muse: T3's muse-acp adapter hosts `muse serve` from the same folder, and a
+running session keeps its version until its host restarts it. The launcher's `.muse-update-lock`
+and `.muse-update.<pid>.exe` leftovers are left to the launcher, which reclaims a dead lock; while
+a live holder keeps the lock, Meta's installer skips the update, so the row fails with the `busy`
+code instead of reporting `current`.
 
 ### Live verification after deployment
 
@@ -191,8 +205,8 @@ validated against PID creation identity. Generic Node/Python/terminal processes
 are never selected. Desktop updates preserve existing absolute profile directory
 arguments. Mac uses verified atomic bundle replacement; Windows runs in an
 interactive task and Add-AppxPackage preserves MSIX LocalState. Desktop apps on
-Mac and Windows for Codex and Claude are **never quit, closed, restarted or killed**: the updater
-does not even ask them to quit. A running app with a newer version reports the
+Mac and Windows for Codex and Claude, and T3 Code on Mac, are **never quit, closed,
+restarted or killed**: the updater does not even ask them to quit. A running app with a newer version reports the
 actionable `action_required`/`quit_first` row ("Quit Codex Desktop to finish
 its update") within seconds, before any package download: Windows reads only
 the published MSIX manifest over HTTP ranges (three requests, under 1 MB),
@@ -269,8 +283,8 @@ does not prevent other apps/hosts from producing their own results. Status reads
 never retry an interrupted job.
 
 `action_required` is never a failure: the job completes and the row tells the
-user exactly what to do. Codex and Claude desktops on Mac and Windows that are running report
-`quit_first` (they are never asked to quit): nothing is swapped or
+user exactly what to do. Codex and Claude desktops on Mac and Windows, and T3 Code on Mac,
+that are running report `quit_first` (they are never asked to quit): nothing is swapped or
 deployed while anything runs, and the next click after the user quits updates
 cleanly. MSIX deployments rejected for apps that need closing also report
 `quit_first`. Codex/Claude desktop downloads refused by a bot challenge (HTTP 403 or a

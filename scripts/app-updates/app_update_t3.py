@@ -26,7 +26,7 @@ from app_update_common import (
     Install, UpdateFailure, cli_probe, command, download, execution_lock, powershell, private_temporary,
     ps_quote, result, write_private_json,
 )
-from app_update_processes import main_contexts, restart_desktops, scan, terminate_desktops
+from app_update_processes import family, main_contexts, restart_desktops, scan, terminate_desktops
 
 RELEASES = "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=20"
 RELEASE_BASE = "https://github.com/pingdotgg/t3code/releases/download/"
@@ -218,9 +218,11 @@ def update_runtime(install, version, deadline):
 
 
 def verify_mac(bundle, version):
+    # codesign reads a bare -R value as a requirement file path; "-R=" passes the text inline.
+    requirement = 'identifier "' + MAC_ID + '" and anchor apple generic and certificate leaf[subject.OU] = "' + MAC_TEAM + '"'
     try:
         command(["/usr/bin/codesign", "--verify", "--deep", "--strict", bundle], timeout=60)
-        command(["/usr/bin/codesign", "--verify", "-R", 'identifier "' + MAC_ID + '" and anchor apple generic and certificate leaf[subject.OU] = "' + MAC_TEAM + '"', bundle], timeout=30)
+        command(["/usr/bin/codesign", "--verify", "-R=" + requirement, bundle], timeout=30)
         command(["/usr/sbin/spctl", "--assess", "--type", "execute", bundle], timeout=60)
     except UpdateFailure:
         raise UpdateFailure("signature_failed") from None
@@ -311,35 +313,31 @@ def update_mac(install, version, temporary, deadline, phase):
     backup = install.path.with_name(".aac-t3-rollback-" + uuid.uuid4().hex + ".app")
     adjacent = install.path.with_name(".aac-t3-stage-" + uuid.uuid4().hex + ".app")
     moved = completed = False
-    contexts = []
     try:
         command(["/usr/bin/ditto", staged, adjacent], timeout=budget(deadline, 120))
         verify_mac(adjacent, version)
-        contexts = main_contexts(install, scan("mac"))
-        forced = terminate_desktops(install, contexts)
+        # T3 may have been opened while the package downloaded. Never quit it; report quit_first.
+        if family(install, scan("mac")):
+            raise UpdateFailure("quit_first")
         os.rename(install.path, backup)
         moved = True
         os.rename(adjacent, install.path)
         verify_mac(install.path, version)
-        if contexts:
-            restart_desktops(install, contexts)
-        else:
-            command(["/usr/bin/open", "-a", install.path], timeout=15)
+        command(["/usr/bin/open", "-a", install.path], timeout=15)
         health_check("mac")
         completed = True
     except Exception:
         if moved:
+            # Stop only the T3 instance this updater opened, then restore the retained bundle.
             terminate_desktops(install, main_contexts(install, scan("mac")))
             shutil.rmtree(install.path, ignore_errors=True)
             os.rename(backup, install.path)
-        with contextlib.suppress(UpdateFailure, OSError):
-            restart_desktops(install, contexts)
         raise
     finally:
         shutil.rmtree(adjacent, ignore_errors=True)
         if completed and backup.exists():
             shutil.rmtree(backup)
-    return len(contexts), forced
+    return 0, 0
 
 
 def update_windows(install, version, temporary, deadline, phase):
@@ -508,6 +506,9 @@ def update_t3(install, deadline, phase=None):
                 value["restartTargets"] = [schedule_restart(before)]
                 return value
             return result("t3-code", install.platform, "current", before, before, install.manager)
+        if install.platform == "mac" and desktop_needed and family(install, scan("mac")):
+            # A running Mac T3 is never quit: report it before any download or runtime change.
+            return result("t3-code", install.platform, "action_required", before, before, install.manager, "quit_first", False)
         restarted = forced = 0
         with private_temporary() as temporary:
             if runtime_needed:
@@ -530,6 +531,8 @@ def update_t3(install, deadline, phase=None):
         if attempted and install.desktop:
             after = mac_bundle_version(install.path) if install.platform == "mac" else windows_bundle_version(install.path)
         status = "restart_failed" if (after and after != before) or error.code == "restart_failed" else "failed"
+        if error.code == "quit_first":
+            status = "action_required"
         return result("t3-code", install.platform, status, before, after, install.manager, error.code, attempted)
     except Exception:
         if attempted and install.desktop:

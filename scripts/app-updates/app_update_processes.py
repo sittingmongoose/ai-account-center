@@ -171,7 +171,7 @@ def family(install, processes):
         exact = os.path.normcase(os.path.realpath(process.exe)) == active
         owned_package = root is not None and is_under(process.exe, root)
         node_module = install.manager == "npm" and root is not None and len(process.args) >= 2 and is_under(process.args[1], root)
-        muse_binary = install.app_id == "muse-code" and pathlib.Path(process.exe).name.startswith("muse-bin-") and pathlib.Path(process.exe).parent == install.path.parent
+        muse_binary = install.app_id == "muse-code" and os.path.normcase(pathlib.Path(process.exe).name).startswith("muse-bin-") and pathlib.Path(process.exe).parent == install.path.parent
         if exact or owned_package or node_module or muse_binary:
             values.append(process)
     # Some signed Codex desktop children live in its per-user staged runtime,

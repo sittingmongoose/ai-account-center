@@ -464,6 +464,21 @@ class T3Fixtures(unittest.TestCase):
         self.assertEqual(row["status"], "updated")
         self.assertEqual(row["version"], NEW)
 
+    def test_mac_codesign_requirement_is_one_inline_argument(self):
+        bundle_path = self.root / t3.MAC_NAME; bundle(bundle_path, NEW)
+        with mock.patch.object(t3, "command") as command:
+            t3.verify_mac(bundle_path, NEW)
+        argv = [call.args[0] for call in command.call_args_list]
+        requirement = 'identifier "com.t3tools.t3code" and anchor apple generic and certificate leaf[subject.OU] = "ARK85ZXQ4Z"'
+        self.assertEqual(argv, [
+            ["/usr/bin/codesign", "--verify", "--deep", "--strict", bundle_path],
+            ["/usr/bin/codesign", "--verify", "-R=" + requirement, bundle_path],
+            ["/usr/sbin/spctl", "--assess", "--type", "execute", bundle_path],
+        ])
+        # codesign reads a bare -R value as a file path, so the requirement must stay attached as -R=<text>.
+        self.assertTrue(argv[1][2].startswith("-R="))
+        self.assertNotIn("-R", [arg for call in argv for arg in call])
+
     def test_mac_bundle_swap_rolls_back_on_health_failure(self):
         installed = self.root / t3.MAC_NAME; bundle(installed, OLD)
         staged = self.root / "stage"; bundle(staged / t3.MAC_NAME, NEW)
@@ -471,19 +486,104 @@ class T3Fixtures(unittest.TestCase):
         with zipfile.ZipFile(package, "w") as archive:
             archive.writestr(t3.MAC_NAME + "/Contents/fixture", "fixture")
         install = t3.T3Install("t3-code", "mac", installed, OLD, "official-download", package_root=installed, desktop=True)
+        # Nothing ran before the swap, so the only T3 that rollback may stop is the one this updater opened.
+        opened = [processes.Process(7, 1, os.getuid(), str(installed / "Contents/MacOS/T3 Code (Nightly)"), "opened-start")]
+        running, commands = [], []
+        def run(argv, **kwargs):
+            commands.append(argv)
+            if "-x" in argv:
+                shutil.copytree(staged, argv[-1])
+            elif argv[0] == "/usr/bin/ditto":
+                shutil.copytree(argv[1], argv[2])
+            elif argv[0] == "/usr/bin/open":
+                running.extend(opened)
+        with mock.patch.object(t3, "verified_download", return_value=package), mock.patch.object(t3, "command", side_effect=run), \
+                mock.patch.object(t3, "verify_mac"), mock.patch.object(t3, "scan", side_effect=lambda platform: list(running)), \
+                mock.patch.object(processes, "mac_arguments", return_value=[opened[0].exe]), \
+                mock.patch.object(t3, "terminate_desktops", return_value=0) as stop, mock.patch.object(t3, "restart_desktops") as restart, \
+                mock.patch.object(t3, "health_check", side_effect=common.UpdateFailure("restart_failed")):
+            with self.assertRaises(common.UpdateFailure):
+                t3.update_mac(install, NEW, self.root / "work", time.monotonic() + 60, lambda name: None)
+        self.assertEqual([item.pid for item in stop.call_args.args[1]], [7])
+        restart.assert_not_called()
+        self.assertIn(["/usr/bin/open", "-a", installed], commands)
+        self.assertEqual(t3.mac_bundle_version(installed), OLD)
+        self.assertFalse(list(self.root.glob(".aac-t3-*")))
+
+    def test_mac_swap_reopens_with_open_and_never_stops_or_restarts_t3(self):
+        installed = self.root / t3.MAC_NAME; bundle(installed, OLD)
+        staged = self.root / "stage"; bundle(staged / t3.MAC_NAME, NEW)
+        package = self.root / "app.zip"
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr(t3.MAC_NAME + "/Contents/fixture", "fixture")
+        install = t3.T3Install("t3-code", "mac", installed, OLD, "official-download", t3.MAC_ID, t3.MAC_TEAM, installed, desktop=True)
+        commands = []
+        def run(argv, **kwargs):
+            commands.append(argv)
+            if "-x" in argv:
+                shutil.copytree(staged, argv[-1])
+            elif argv[0] == "/usr/bin/ditto":
+                shutil.copytree(argv[1], argv[2])
+        with mock.patch.object(t3, "latest_release", return_value=NEW), mock.patch.object(t3, "verified_download", return_value=package), \
+                mock.patch.object(t3, "command", side_effect=run), mock.patch.object(t3, "verify_mac"), mock.patch.object(t3, "scan", return_value=[]), \
+                mock.patch.object(t3, "terminate_desktops") as stop, mock.patch.object(t3, "restart_desktops") as restart, \
+                mock.patch.object(t3, "health_check") as health:
+            row = t3.update_t3(install, time.monotonic() + 60)
+        self.assertEqual((row["status"], row["messageCode"], row["version"], row["restartedProcesses"], row["forcedStops"]), ("updated", "t3_updated", NEW, 0, 0))
+        self.assertEqual(row["restartTargets"], [{"kind": "desktop"}])
+        self.assertEqual(commands[-1], ["/usr/bin/open", "-a", installed])
+        health.assert_called_once_with("mac")
+        stop.assert_not_called(); restart.assert_not_called()
+        self.assertEqual(t3.mac_bundle_version(installed), NEW)
+        self.assertFalse(list(self.root.glob(".aac-t3-*")))
+
+    def test_running_mac_t3_reports_quit_first_before_download_runtime_or_quit(self):
+        installed = self.root / t3.MAC_NAME; bundle(installed, OLD)
+        runtime = self.root / ".t3/runtime/versions" / OLD / "t3"
+        install = t3.T3Install("t3-code", "mac", installed, OLD, "official-download", t3.MAC_ID, t3.MAC_TEAM, installed, runtime=runtime, runtime_version=OLD, desktop=True)
+        opened = [processes.Process(1, 0, os.getuid(), str(installed / "Contents/MacOS/T3 Code (Nightly)"), "opened-start")]
+        with mock.patch.object(t3, "latest_release", return_value=NEW), mock.patch.object(t3, "scan", return_value=opened), \
+                mock.patch.object(t3, "download") as get, mock.patch.object(t3, "verified_download") as verified, \
+                mock.patch.object(t3, "update_runtime") as runtime_update, mock.patch.object(t3, "update_mac") as desktop, \
+                mock.patch.object(t3, "terminate_desktops") as stop:
+            row = t3.update_t3(install, time.monotonic() + 60)
+        self.assertEqual(row, {"appId": "t3-code", "platform": "mac", "status": "action_required", "previousVersion": OLD, "version": OLD,
+                               "manager": "official-download", "messageCode": "quit_first", "updateAttempted": False, "restartedProcesses": 0})
+        get.assert_not_called(); verified.assert_not_called(); runtime_update.assert_not_called(); desktop.assert_not_called(); stop.assert_not_called()
+
+    def test_mac_t3_opened_during_download_is_left_alone_and_stage_removed(self):
+        installed = self.root / t3.MAC_NAME; bundle(installed, OLD)
+        staged = self.root / "stage"; bundle(staged / t3.MAC_NAME, NEW)
+        package = self.root / "app.zip"
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr(t3.MAC_NAME + "/Contents/fixture", "fixture")
+        install = t3.T3Install("t3-code", "mac", installed, OLD, "official-download", t3.MAC_ID, t3.MAC_TEAM, installed, desktop=True)
+        opened = [processes.Process(1, 0, os.getuid(), str(installed / "Contents/MacOS/T3 Code (Nightly)"), "opened-start")]
         def run(argv, **kwargs):
             if "-x" in argv:
                 shutil.copytree(staged, argv[-1])
             elif argv[0] == "/usr/bin/ditto":
                 shutil.copytree(argv[1], argv[2])
-        with mock.patch.object(t3, "verified_download", return_value=package), mock.patch.object(t3, "command", side_effect=run), \
-                mock.patch.object(t3, "verify_mac"), mock.patch.object(t3, "scan", return_value=[]), \
-                mock.patch.object(t3, "terminate_desktops", return_value=0), mock.patch.object(t3, "restart_desktops"), \
-                mock.patch.object(t3, "health_check", side_effect=common.UpdateFailure("restart_failed")):
-            with self.assertRaises(common.UpdateFailure):
-                t3.update_mac(install, NEW, self.root / "work", time.monotonic() + 60, lambda name: None)
+        # Not running at the first check; opened while the package downloaded, so the re-check before the swap sees it.
+        with mock.patch.object(t3, "latest_release", return_value=NEW), mock.patch.object(t3, "verified_download", return_value=package) as download, \
+                mock.patch.object(t3, "command", side_effect=run), mock.patch.object(t3, "verify_mac"), \
+                mock.patch.object(t3, "scan", side_effect=[[], opened]), mock.patch.object(t3, "terminate_desktops") as stop, \
+                mock.patch.object(t3, "restart_desktops") as restart, mock.patch.object(t3.os, "rename", wraps=os.rename) as rename:
+            row = t3.update_t3(install, time.monotonic() + 60)
+        self.assertEqual((row["status"], row["messageCode"], row["version"], row["updateAttempted"]), ("action_required", "quit_first", OLD, True))
+        download.assert_called_once()
+        rename.assert_not_called(); stop.assert_not_called(); restart.assert_not_called()
         self.assertEqual(t3.mac_bundle_version(installed), OLD)
         self.assertFalse(list(self.root.glob(".aac-t3-*")))
+
+    def test_running_windows_t3_still_closes_installs_and_reopens(self):
+        executable = self.root / "install" / t3.WINDOWS_NAME; asar(executable, OLD)
+        install = t3.T3Install("t3-code", "windows", executable, OLD, "official-download", publisher=t3.WINDOWS_PUBLISHER, package_root=executable.parent, desktop=True)
+        with mock.patch.object(t3, "latest_release", return_value=NEW), mock.patch.object(t3, "update_windows", return_value=(1, 0)) as desktop:
+            row = t3.update_t3(install, time.monotonic() + 60)
+        desktop.assert_called_once()
+        self.assertEqual((row["status"], row["messageCode"], row["restartedProcesses"]), ("updated", "t3_updated", 1))
+        self.assertEqual(row["restartTargets"], [{"kind": "desktop"}])
 
     def test_windows_signature_failure_never_stops_app_and_valid_update_reuses_session_helpers(self):
         executable = self.root / "install" / t3.WINDOWS_NAME; asar(executable, OLD)

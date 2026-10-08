@@ -6,6 +6,7 @@ restarts anything. There are no configurable app IDs, commands, hosts or URLs.
 """
 
 import argparse
+import ctypes
 import json
 import os
 import pathlib
@@ -178,12 +179,13 @@ def detect_cli(app_id, platform):
         return None
     manager, root = "native", None
     if platform == "windows" and app_id == "muse-code":
-        # Meta installs both an extensionless shell shim and muse.cmd. Probe
-        # its PowerShell launcher directly: CreateProcess cannot execute .cmd.
+        # Meta's install.ps1 writes only muse.cmd (a hand-added `muse` shim is also
+        # accepted). Probe its PowerShell launcher directly: CreateProcess cannot run .cmd.
         local = pathlib.Path(os.environ.get("LOCALAPPDATA", str(pathlib.Path.home() / "AppData/Local")))
         expected = local / "Programs/muse"
         launcher = expected / ".muse-launcher.ps1"
-        if path.parent.resolve() != expected.resolve() or path.name not in ("muse", "muse.cmd") or not launcher.is_file():
+        # shutil.which spells the shim from PATHEXT (muse.CMD), so fold its case.
+        if path.parent.resolve() != expected.resolve() or path.name.lower() not in ("muse", "muse.cmd") or not launcher.is_file():
             return Install(app_id, platform, path, manager="unsupported")
         try:
             output = command(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcher, "--version"], timeout=20, capture=True)
@@ -209,9 +211,11 @@ def detect_cli(app_id, platform):
         return Install(app_id, platform, path, None, "native", probe="timeout")
     resolved = path.resolve()
     home = pathlib.Path.home()
-    if app_id == "codex-cli" and str(home / ".codex/packages/standalone/releases") in str(resolved):
+    # normcase folds case on Windows only, where resolve() reports the on-disk spelling.
+    resolved_text = os.path.normcase(str(resolved))
+    if app_id == "codex-cli" and os.path.normcase(str(home / ".codex/packages/standalone/releases")) in resolved_text:
         root = home / ".codex/packages/standalone/releases"
-    elif app_id == "claude-code" and str(home / ".local/share/claude/versions") in str(resolved):
+    elif app_id == "claude-code" and os.path.normcase(str(home / ".local/share/claude/versions")) in resolved_text:
         root = home / ".local/share/claude/versions"
     return Install(app_id, platform, path, version, manager, package_root=root)
 
@@ -252,6 +256,41 @@ def resolve_muse_shell(platform):
     if shell is None:
         raise UpdateFailure("unsupported")
     return shell
+
+
+def _pid_alive(pid):
+    """Windows only: True while `pid` is a running process."""
+    from ctypes import wintypes
+    kernel = ctypes.windll.kernel32
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        status = wintypes.DWORD()
+        # 259 is STILL_ACTIVE: the process has not exited yet.
+        return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(status)) and status.value == 259)
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def muse_update_busy(directory):
+    """True while the Muse launcher's own updater holds its lock with a live PID.
+
+    Read-only: the launcher reclaims a dead holder's lock itself, so AAC never
+    deletes the lock or a `.muse-update.<pid>.exe` partial beside it.
+    """
+    try:
+        with (pathlib.Path(directory) / ".muse-update-lock" / "pid").open("rb") as handle:
+            text = handle.read(64).decode("ascii").strip()
+    except (OSError, ValueError):
+        return False
+    if not re.fullmatch(r"[1-9][0-9]{0,8}", text):
+        return False
+    return _pid_alive(int(text))
 
 
 def resolve_npm(prefix):
@@ -377,7 +416,11 @@ def update_cli(install, deadline):
                 except (UpdateFailure, OSError):
                     payload.update(status="restart_failed", messageCode="restart_failed")
             return payload
-        contexts, targets = cli_contexts(install, processes)
+        if install.app_id == "muse-code" and install.platform == "windows":
+            # T3's muse-acp adapter hosts `muse serve` from this folder: never stop or restart it.
+            contexts, targets = [], []
+        else:
+            contexts, targets = cli_contexts(install, processes)
         check_terminal(install.platform, contexts)
         if install.manager == "npm" and install.platform == "windows":
             if contexts and npm_view_latest(install) == before:
@@ -413,6 +456,10 @@ def update_cli(install, deadline):
             pass
         needs_restart = marker_version == refreshed.version and marker_version != before
         if refreshed.version == before and not needs_restart:
+            if install.app_id == "muse-code" and install.platform == "windows" and muse_update_busy(install.path.parent):
+                # The launcher's own updater holds the lock, so Meta's installer
+                # skipped this run. Report busy, never a false "current"; the lock stays.
+                raise UpdateFailure("busy")
             if pre_stopped:
                 # Stopped for the install; relaunch the same version. The
                 # marker must go: there is nothing newer to retry towards.
@@ -482,6 +529,9 @@ def check_readiness(install):
         if install.app_id.endswith("-desktop") or install.app_id == "t3-code":
             # Desktop updaters verify before stopping anything; the manager
             # check above is the whole pre-flight.
+            return None
+        if install.app_id == "muse-code" and install.platform == "windows":
+            # Never stopped or restarted on Windows (see update_cli), so nothing to check.
             return None
         contexts, _targets = cli_contexts(install, scan(install.platform))
         check_terminal(install.platform, contexts)
