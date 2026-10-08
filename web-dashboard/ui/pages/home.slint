@@ -1604,9 +1604,11 @@ export component AccountSection inherits Plate {
                     for col in root.section.columns: Caps {
                         // crowded below-D table heads grow to two lines at most (shorts break
                         // cleanly) and stacked below-D heads keep one line, so a narrow wrap can't
-                        // stretch the band; D sizes naturally, exactly as on main
+                        // stretch the band. D keeps main's one 15 px line: inside the H3 wrapper a
+                        // long label ("CLAUDE AND GPT WEEKLY") is measured at its 108 px minimum and
+                        // would grow the desktop band by a line.
                         min-height: 15px;
-                        max-height: root.touch ? (root.table ? 30px : 15px) : 1000000px;
+                        max-height: root.touch && root.table ? 30px : 15px;
                         min-width: root.table ? (root.touch ? 0px : 108px) : 0px;
                         preferred-width: !root.table && root.section.switchable ? root.cell-w : (root.table ? (root.touch ? 120px : 108px) : 0px);
                         horizontal-stretch: root.table || !root.section.switchable ? 1 : 0;
