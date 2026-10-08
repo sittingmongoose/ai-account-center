@@ -72,22 +72,67 @@ test('themeScreen is the dashboard only once signed in', () => {
   assert.equal(themeScreen(false), 'cover');
 });
 
-test('viewportSize sizes from canvas layout dimensions when resolved', () => {
-  // Desktop canvas
+test('viewportSize sizes from layout probe dimensions when resolved', () => {
+  // Desktop layout probe
   assert.deepEqual(
-    viewportSize({ canvasWidth: 1440, canvasHeight: 900, innerWidth: 1440, innerHeight: 900 }),
+    viewportSize({ layoutWidth: 1440, layoutHeight: 900, innerWidth: 1440, innerHeight: 900 }),
     { width: 1440, height: 900 }
   );
-  // Mobile Safari canvas
+  // Mobile Safari layout probe
   assert.deepEqual(
-    viewportSize({ canvasWidth: 402, canvasHeight: 714, innerWidth: 402, innerHeight: 714 }),
+    viewportSize({ layoutWidth: 402, layoutHeight: 714, innerWidth: 402, innerHeight: 714 }),
     { width: 402, height: 714 }
   );
-  // Standalone iOS PWA canvas with default status bar (62pt status bar -> 812pt content)
+  // Standalone iOS PWA layout probe with default status bar (62pt status bar -> 812pt content)
+  assert.deepEqual(
+    viewportSize({ layoutWidth: 402, layoutHeight: 812, innerWidth: 402, innerHeight: 812 }),
+    { width: 402, height: 812 }
+  );
+  // Backward compatibility: canvasWidth / canvasHeight still honored if supplied
   assert.deepEqual(
     viewportSize({ canvasWidth: 402, canvasHeight: 812, innerWidth: 402, innerHeight: 812 }),
     { width: 402, height: 812 }
   );
+});
+
+test('viewportSize tracks runtime window size and orientation transitions', () => {
+  // Sequence 1: 1280x800 -> 600x800 -> 800x600 -> 1280x800
+  const step1 = viewportSize({ layoutWidth: 1280, layoutHeight: 800, innerWidth: 1280, innerHeight: 800 });
+  assert.deepEqual(step1, { width: 1280, height: 800 });
+
+  const step2 = viewportSize({ layoutWidth: 600, layoutHeight: 800, innerWidth: 600, innerHeight: 800 });
+  assert.deepEqual(step2, { width: 600, height: 800 });
+
+  const step3 = viewportSize({ layoutWidth: 800, layoutHeight: 600, innerWidth: 800, innerHeight: 600 });
+  assert.deepEqual(step3, { width: 800, height: 600 });
+
+  const step4 = viewportSize({ layoutWidth: 1280, layoutHeight: 800, innerWidth: 1280, innerHeight: 800 });
+  assert.deepEqual(step4, { width: 1280, height: 800 });
+
+  // Sequence 2: Phone portrait -> landscape -> portrait
+  const portrait = viewportSize({ layoutWidth: 402, layoutHeight: 812, innerWidth: 402, innerHeight: 812 });
+  assert.deepEqual(portrait, { width: 402, height: 812 });
+
+  const landscape = viewportSize({ layoutWidth: 812, layoutHeight: 402, innerWidth: 812, innerHeight: 402 });
+  assert.deepEqual(landscape, { width: 812, height: 402 });
+
+  const backToPortrait = viewportSize({ layoutWidth: 402, layoutHeight: 812, innerWidth: 402, innerHeight: 812 });
+  assert.deepEqual(backToPortrait, { width: 402, height: 812 });
+});
+
+test('viewportSize layout probe breaks renderer canvas feedback loop', () => {
+  // If renderer canvas has stale inline style (e.g. 1280x800 from prior render),
+  // layoutWidth/layoutHeight probe takes precedence over stale canvas dimensions.
+  const resized = viewportSize({
+    layoutWidth: 600,
+    layoutHeight: 800,
+    canvasWidth: 1280, // stale inline renderer canvas
+    canvasHeight: 800,
+    innerWidth: 600,
+    innerHeight: 800,
+  });
+  assert.deepEqual(resized, { width: 600, height: 800 });
+  assert.notEqual(resized.width, 1280);
 });
 
 test('viewportSize falls back to inner dimensions when canvas is not yet sized', () => {

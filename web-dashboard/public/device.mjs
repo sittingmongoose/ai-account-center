@@ -109,18 +109,22 @@ export function themeScreen(authenticated) {
  * false keyboard heights and offscreen controls.
  */
 export function viewportSize({
+  layoutWidth,
+  layoutHeight,
   canvasWidth,
   canvasHeight,
   innerWidth = 0,
   innerHeight = 0,
 } = {}) {
-  const cw = Number.isFinite(canvasWidth) && canvasWidth > 0 ? Math.round(canvasWidth) : 0;
-  const ch = Number.isFinite(canvasHeight) && canvasHeight > 0 ? Math.round(canvasHeight) : 0;
+  const effectiveWidth = layoutWidth ?? canvasWidth;
+  const effectiveHeight = layoutHeight ?? canvasHeight;
+  const lw = Number.isFinite(effectiveWidth) && effectiveWidth > 0 ? Math.round(effectiveWidth) : 0;
+  const lh = Number.isFinite(effectiveHeight) && effectiveHeight > 0 ? Math.round(effectiveHeight) : 0;
   const iw = Number.isFinite(innerWidth) && innerWidth > 0 ? Math.round(innerWidth) : 0;
   const ih = Number.isFinite(innerHeight) && innerHeight > 0 ? Math.round(innerHeight) : 0;
 
   return {
-    width: cw > 0 ? cw : iw,
-    height: ch > 0 ? ch : ih,
+    width: lw > 0 ? lw : iw,
+    height: lh > 0 ? lh : ih,
   };
 }
