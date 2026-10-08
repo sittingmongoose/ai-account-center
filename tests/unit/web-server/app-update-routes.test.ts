@@ -101,12 +101,12 @@ describe('authenticated app updater action', () => {
     expect(first.status).toBe(202);
     const job = (await first.json()).job;
     expect(job.state).toBe('running');
-    // One helper run per computer, all three at once.
-    expect(calls).toBe(3);
+    // One helper run per computer, all four at once.
+    expect(calls).toBe(4);
     const second = await start();
     expect(second.status).toBe(409);
     expect((await second.json()).job.id).toBe(job.id);
-    expect(calls).toBe(3);
+    expect(calls).toBe(4);
   });
   it('cancel rejects unauthenticated and cross-origin actions', async () => {
     expect((await cancel('{}', base, false)).status).toBe(401);
@@ -149,7 +149,7 @@ describe('authenticated app updater action', () => {
     const second = await cancel();
     expect(second.status).toBe(202);
     expect(await second.json()).toEqual(outcome);
-    expect(calls).toBe(3);
+    expect(calls).toBe(4);
   });
   it('cancel answers 409 not_owner when another dashboard process runs the job', async () => {
     const app = express();

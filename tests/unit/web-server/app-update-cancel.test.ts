@@ -29,8 +29,8 @@ async function finish(service: AppUpdateService) {
 
 describe('cancellable app updates', () => {
   it('a cancel right after start lets Ubuntu finish and skips hosts still syncing', async () => {
-    // Hosts run side by side; Mac and Windows sync their helpers first, so a
-    // cancel that lands before they start keeps their helpers from running.
+    // Hosts run side by side; Mac, Windows and Nas1 sync their helpers first, so
+    // a cancel that lands before they start keeps their helpers from running.
     const calls: UpdatePlatform[] = [];
     let release!: (value: string) => void;
     const blocked = new Promise<string>((resolve) => {
@@ -57,12 +57,13 @@ describe('cancellable app updates', () => {
     const queued = job.results.filter((row) => row.platform !== 'ubuntu');
     expect(running).toHaveLength(8);
     expect(running.every((row) => row.status === 'current')).toBe(true);
-    expect(queued).toHaveLength(16);
+    expect(queued).toHaveLength(24);
+    expect(queued.filter((row) => row.platform === 'nas1')).toHaveLength(8);
     expect(queued.every((row) => row.status === 'skipped')).toBe(true);
     expect(queued.every((row) => row.message === MESSAGES.skipped_cancelled)).toBe(true);
     expect(queued.every((row) => row.updateAttempted === false)).toBe(true);
-    expect(job.results).toHaveLength(24);
-    expect(job.expectedResults).toBe(24);
+    expect(job.results).toHaveLength(32);
+    expect(job.expectedResults).toBe(32);
     expect(job.state).toBe('completed');
     expect(job.cancelRequested).toBe(true);
     expect(job.activePlatform).toBeNull();
@@ -100,8 +101,8 @@ describe('cancellable app updates', () => {
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(24);
-    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength(16);
+    expect(job.results).toHaveLength(32);
+    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength(24);
   });
 
   it('cancel with no job is a no-op', () => {
@@ -122,25 +123,32 @@ describe('cancellable app updates', () => {
     expect(normalized[0].message).not.toBe(normalized[1].message);
   });
 
-  it('an unreachable host reports unknown and the job cannot complete', async () => {
-    const service = new AppUpdateService({
-      persist: false,
-      runHost: async (host) => {
-        if (host === 'windows') throw new Error('PRIVATE_SENTINEL');
-        return payload();
-      },
-    });
-    service.start();
-    await finish(service);
-    const job = service.getStatus().job!;
-    const windows = job.results.filter((row) => row.platform === 'windows');
-    expect(windows).toHaveLength(8);
-    expect(windows.every((row) => row.status === 'unknown')).toBe(true);
-    expect(windows.every((row) => row.message === MESSAGES.host_unknown)).toBe(true);
-    expect(windows.every((row) => row.updateAttempted === false)).toBe(true);
-    expect(job.state).toBe('failed');
-    expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
-  });
+  it.each(['windows', 'nas1'] as const)(
+    'an unreachable %s reports unknown and the job cannot complete',
+    async (down) => {
+      const service = new AppUpdateService({
+        persist: false,
+        runHost: async (host) => {
+          if (host === down) throw new Error('PRIVATE_SENTINEL');
+          return payload();
+        },
+      });
+      service.start();
+      await finish(service);
+      const job = service.getStatus().job!;
+      const unreachable = job.results.filter((row) => row.platform === down);
+      expect(unreachable).toHaveLength(8);
+      expect(unreachable.every((row) => row.status === 'unknown')).toBe(true);
+      expect(unreachable.every((row) => row.message === MESSAGES.host_unknown)).toBe(true);
+      expect(unreachable.every((row) => row.updateAttempted === false)).toBe(true);
+      // The other computers still report their own rows.
+      const rest = job.results.filter((row) => row.platform !== down);
+      expect(rest).toHaveLength(24);
+      expect(rest.every((row) => row.status === 'current')).toBe(true);
+      expect(job.state).toBe('failed');
+      expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
+    }
+  );
 
   it('cancel and readiness DTO shape', async () => {
     expect(MESSAGES.skipped_cancelled).toBe('Skipped: cancelled');

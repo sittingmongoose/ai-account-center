@@ -5,18 +5,23 @@ import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
 import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
+import { HOST_OS, NAS1_SSH_ALIAS, helperPlatform } from './dashboard-hosts';
 
 /**
  * How the dashboard reaches each computer's fixed update helper: the local
- * Ubuntu run, ssh to the fixed Mac and Windows aliases below, live progress
- * streaming and the checksum-gated helper sync. No configurable hosts,
- * commands or paths.
+ * Ubuntu run, ssh to the fixed Mac, Windows and Nas1 aliases below, live
+ * progress streaming and the checksum-gated helper sync. No configurable
+ * hosts, commands or paths.
  */
 
-/** The fixed ssh aliases of the Mac and Windows computers. */
-export const APP_UPDATE_SSH_HOSTS: Readonly<Record<'mac' | 'windows', string>> = Object.freeze({
+/** The remote computers: every update computer except the local Ubuntu one. */
+type RemotePlatform = Exclude<UpdatePlatform, 'ubuntu'>;
+
+/** The fixed ssh aliases of the Mac, Windows and Nas1 computers. */
+export const APP_UPDATE_SSH_HOSTS: Readonly<Record<RemotePlatform, string>> = Object.freeze({
   mac: 'jared-mac',
   windows: 'jared-windows',
+  nas1: NAS1_SSH_ALIAS,
 });
 
 /** Total progress output accepted from one host; a runaway helper is stopped. */
@@ -56,19 +61,24 @@ export function appUpdateInvocation(
         ...(review ? ['--agy-reviewed', review] : []),
       ],
     };
-  const host = platform === 'mac' ? APP_UPDATE_SSH_HOSTS.mac : APP_UPDATE_SSH_HOSTS.windows;
+  // Each remote host has its own alias and its own --platform; the helper checks
+  // that value against its native OS, so Nas1 (a second Ubuntu) passes 'ubuntu'.
+  // The remote helper keeps its state in its own ~/.ccs/app-updates: no
+  // --state-dir or --dashboard-job, which belong to the local dashboard job.
+  const host = APP_UPDATE_SSH_HOSTS[platform];
+  const helperOs = helperPlatform(platform);
   const reviewArgument = review ? ` --agy-reviewed '${review}'` : '';
   // AAC_UPDATE_PROGRESS asks the helper for line-by-line progress; a helper
   // that predates it ignores the variable and prints one final document.
-  let command = `AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform mac${reviewArgument}`;
-  if (platform === 'windows') {
+  let command = `AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform ${helperOs}${reviewArgument}`;
+  if (HOST_OS[platform] === 'windows') {
     const script = [
       "$ErrorActionPreference='Stop'",
       "$env:PYTHONUTF8='1'",
       "$env:PYTHONIOENCODING='utf-8'",
       "$env:AAC_UPDATE_PROGRESS='1'",
       "$helper=[IO.Path]::Combine($HOME,'.ccs','app-updates','app_updates.py')",
-      `& python.exe $helper --apply --platform windows${reviewArgument}`,
+      `& python.exe $helper --apply --platform ${helperOs}${reviewArgument}`,
       'exit $LASTEXITCODE',
     ].join('; ');
     command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
@@ -240,9 +250,12 @@ const SSH_SYNC_OPTIONS = [
 ];
 // macOS ships mkdir and chmod in /bin and tar in /usr/bin. (/usr/bin/chmod
 // does not exist there: the chain stopped before tar and every Mac run used
-// the stale Oct-2 helpers.) Each path is asserted in the tests.
-export const MAC_EXTRACT =
+// the stale Oct-2 helpers.) Ubuntu's merged /usr has the same three paths, so
+// the Mac and Nas1 share this extract. Each path is asserted in the tests.
+export const POSIX_EXTRACT =
   '/bin/mkdir -p "$HOME/.ccs/app-updates" && /bin/chmod 700 "$HOME/.ccs/app-updates" && /usr/bin/tar -x -f - -C "$HOME/.ccs/app-updates"';
+/** The extract's name before Nas1 shared it; kept for the Mac sync tests. */
+export const MAC_EXTRACT = POSIX_EXTRACT;
 // The Windows sshd runs cmd.exe, so the extract script must travel as an
 // encoded powershell command; tar.exe reads the archive from the ssh stdin.
 const WINDOWS_EXTRACT = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(
@@ -337,29 +350,39 @@ function pushHelpers(host: string, extract: string): Promise<void> {
 }
 
 /**
+ * The fixed command that prints "<sha256>  <path>" for each deployed helper (a
+ * missing file prints nothing). macOS ships shasum, Ubuntu (Nas1) ships
+ * coreutils' sha256sum, and Windows hashes through PowerShell.
+ */
+export function helperHashQuery(platform: RemotePlatform): string {
+  if (HOST_OS[platform] === 'windows') return WINDOWS_HASH_QUERY;
+  const tool = HOST_OS[platform] === 'mac' ? '/usr/bin/shasum -a 256' : '/usr/bin/sha256sum';
+  return `${tool} ${HELPER_FILES.map((name) => `"$HOME/.ccs/app-updates/${name}"`).join(' ')} 2>/dev/null; exit 0`;
+}
+
+/** The fixed command that unpacks the pushed helper archive on a remote host. */
+export function helperExtract(platform: RemotePlatform): string {
+  return HOST_OS[platform] === 'windows' ? WINDOWS_EXTRACT : POSIX_EXTRACT;
+}
+
+/**
  * Aligns a remote host's deployed helpers with this build before invoking it.
- * Hosts keep their own copies under ~/.ccs/app-updates; a stale copy would
- * silently run old updater logic no matter what the server ships. Checksum-
- * gated, so an up-to-date host pays one hash query. Best effort: a sync
- * failure leaves the deployed helpers untouched and the run proceeds.
+ * Hosts (Mac, Windows and Nas1) keep their own copies under ~/.ccs/app-updates;
+ * a stale copy would silently run old updater logic no matter what the server
+ * ships. Checksum-gated, so an up-to-date host pays one hash query. Best
+ * effort: a sync failure leaves the deployed helpers untouched and the run proceeds.
  */
 export async function syncRemoteHelpers(platform: UpdatePlatform): Promise<void> {
   if (platform === 'ubuntu') return;
   const local = localHelperChecksums();
-  const host = platform === 'mac' ? APP_UPDATE_SSH_HOSTS.mac : APP_UPDATE_SSH_HOSTS.windows;
+  const host = APP_UPDATE_SSH_HOSTS[platform];
   let deployed = '';
   try {
-    deployed =
-      platform === 'mac'
-        ? await sshText(
-            host,
-            `/usr/bin/shasum -a 256 ${HELPER_FILES.map((name) => `"$HOME/.ccs/app-updates/${name}"`).join(' ')} 2>/dev/null; exit 0`
-          )
-        : await sshText(host, WINDOWS_HASH_QUERY);
+    deployed = await sshText(host, helperHashQuery(platform));
   } catch {
     /* An unreachable host is reported by the run itself; treat it as stale. */
   }
   const remote = parseDeployedChecksums(deployed);
   if (HELPER_FILES.every((name) => remote[name] === local[name])) return;
-  await pushHelpers(host, platform === 'mac' ? MAC_EXTRACT : WINDOWS_EXTRACT);
+  await pushHelpers(host, helperExtract(platform));
 }

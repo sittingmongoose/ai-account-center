@@ -34,7 +34,7 @@ function row() {
 describe('T3 Code update contract', () => {
   it('includes desktop and server in one fixed app per host and keeps exact nightly versions', () => {
     expect(UPDATE_APP_LABELS['t3-code']).toBe('T3 Code');
-    expect(EXPECTED_RESULTS).toBe(24);
+    expect(EXPECTED_RESULTS).toBe(32);
     expect(normalizeAppUpdateRow(row(), 't3-code', 'ubuntu')).toMatchObject({
       appLabel: 'T3 Code',
       status: 'updated',
@@ -45,19 +45,40 @@ describe('T3 Code update contract', () => {
     });
   });
 
-  it('accepts only the fixed delayed Ubuntu T3 service target', () => {
-    for (const restartTargets of [
-      [],
-      [{ ...target, service: 'ccs-dashboard.service' }],
-      [{ ...target, delaySeconds: 0 }],
-      [{ ...target, service: '../t3code.service' }],
-    ]) {
-      expect(normalizeAppUpdateRow({ ...row(), restartTargets }, 't3-code', 'ubuntu').message).toBe(
-        MESSAGES.helper_invalid
-      );
+  it('accepts only the fixed delayed Linux T3 service target', () => {
+    // Ubuntu and Nas1 are both Linux computers: the same systemd target, nothing else.
+    for (const platform of ['ubuntu', 'nas1'] as const) {
+      for (const restartTargets of [
+        [],
+        [{ ...target, service: 'ccs-dashboard.service' }],
+        [{ ...target, delaySeconds: 0 }],
+        [{ ...target, service: '../t3code.service' }],
+      ]) {
+        expect(
+          normalizeAppUpdateRow({ ...row(), restartTargets }, 't3-code', platform).message
+        ).toBe(MESSAGES.helper_invalid);
+      }
+      expect(normalizeAppUpdateRow(row(), 'omp', platform).message).toBe(MESSAGES.helper_invalid);
     }
     expect(normalizeAppUpdateRow(row(), 't3-code', 'mac').message).toBe(MESSAGES.helper_invalid);
-    expect(normalizeAppUpdateRow(row(), 'omp', 'ubuntu').message).toBe(MESSAGES.helper_invalid);
+    expect(normalizeAppUpdateRow(row(), 't3-code', 'windows').message).toBe(
+      MESSAGES.helper_invalid
+    );
+  });
+
+  it('accepts the Nas1 systemd restart exactly like the Ubuntu one', () => {
+    const nas1 = normalizeAppUpdateRow(row(), 't3-code', 'nas1');
+    expect(nas1).toMatchObject({
+      platform: 'nas1',
+      appLabel: 'T3 Code',
+      status: 'updated',
+      version,
+      message: MESSAGES.t3_restart_scheduled,
+      restartTargets: [target],
+    });
+    expect({ ...nas1, platform: 'ubuntu' }).toEqual(
+      normalizeAppUpdateRow(row(), 't3-code', 'ubuntu')
+    );
   });
 
   it('accepts a T3 desktop restart only for Mac or Windows', () => {
@@ -74,6 +95,12 @@ describe('T3 Code update contract', () => {
       { kind: 'desktop' },
     ]);
     expect(normalizeAppUpdateRow(desktop, 't3-code', 'ubuntu').restartTargets).toEqual([]);
+    // Nas1 has no T3 desktop app: the desktop target is dropped, never accepted.
+    expect(normalizeAppUpdateRow(desktop, 't3-code', 'nas1').restartTargets).toEqual([]);
+    expect(
+      normalizeAppUpdateRow({ ...desktop, messageCode: 't3_restart_scheduled' }, 't3-code', 'nas1')
+        .message
+    ).toBe(MESSAGES.helper_invalid);
     expect(
       normalizeAppUpdateRow({ ...desktop, messageCode: 'updated' }, 'claude-desktop', 'mac')
         .restartTargets
@@ -84,11 +111,11 @@ describe('T3 Code update contract', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-t3-contract-'));
     temporary.push(directory);
     const service = new AppUpdateService({
-      directory,
+      ccsDir: directory,
       runHost: async (platform) =>
         JSON.stringify({
           results: Object.keys(UPDATE_APP_LABELS).map((appId) =>
-            appId === 't3-code' && platform === 'ubuntu'
+            appId === 't3-code' && (platform === 'ubuntu' || platform === 'nas1')
               ? row()
               : {
                   appId,
@@ -104,19 +131,21 @@ describe('T3 Code update contract', () => {
     for (let i = 0; i < 30 && service.getStatus().job?.state === 'running'; i++)
       await new Promise((resolve) => setTimeout(resolve, 0));
     const restored = new AppUpdateService({
-      directory,
+      ccsDir: directory,
       runHost: async () => {
         throw new Error('No replay');
       },
     });
-    expect(
-      restored
-        .getStatus()
-        .job?.results.find((result) => result.appId === 't3-code' && result.platform === 'ubuntu')
-    ).toMatchObject({
-      message: MESSAGES.t3_restart_scheduled,
-      restartTargets: [target],
-      version,
-    });
+    for (const platform of ['ubuntu', 'nas1']) {
+      expect(
+        restored
+          .getStatus()
+          .job?.results.find((result) => result.appId === 't3-code' && result.platform === platform)
+      ).toMatchObject({
+        message: MESSAGES.t3_restart_scheduled,
+        restartTargets: [target],
+        version,
+      });
+    }
   });
 });
