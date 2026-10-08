@@ -1,5 +1,12 @@
-import { beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 const bridge = require('../../../scripts/app-updates/app_update_codex.cjs');
+const directories: string[] = [];
+afterEach(() => {
+  for (const value of directories.splice(0)) fs.rmSync(value, { recursive: true, force: true });
+});
 beforeEach(() =>
   Object.assign(bridge.output, {
     appId: 'codex-cli',
@@ -151,5 +158,79 @@ describe('Codex update idle and restart coordinator', () => {
     const result = await bridge.execute(value.deps);
     expect(result.status).toBe('restart_failed');
     expect(value.pending()).toBe(true);
+  });
+});
+describe('Codex update runtime resolution', () => {
+  function write(file: string, text: string): string {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+    return file;
+  }
+  /** A flat remote helper folder holding the bundle, and an installed AAC package. */
+  function layout() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-codex-runtime-'));
+    directories.push(root);
+    const bundle = path.join(root, 'app-updates', 'app_update_codex_runtime.cjs');
+    const installed = path.join(root, 'pkg', 'dist', 'codex-auth', 'codex-activation-runtime.js');
+    write(installed, "exports.createCodexActivationRuntime = () => 'installed';\n");
+    write(
+      path.join(root, 'pkg', 'node_modules', 'proper-lockfile', 'index.js'),
+      "exports.lock = 'installed-lock';\n"
+    );
+    return { bundle, installed };
+  }
+
+  it('tries the bundle beside the helper first, then the installed packages', () => {
+    const helpers = path.dirname(
+      require.resolve('../../../scripts/app-updates/app_update_codex.cjs')
+    );
+    const packages = path.join(os.homedir(), '.local', 'lib', 'node_modules');
+    expect(bridge.modules[0]).toBe(path.join(helpers, 'app_update_codex_runtime.cjs'));
+    expect(bridge.modules[1]).toBe(
+      path.resolve(helpers, '..', '..', 'dist', 'codex-auth', 'codex-activation-runtime.js')
+    );
+    expect(bridge.modules.slice(2)).toEqual([
+      path.join(
+        packages,
+        '@sittingmongoose',
+        'ai-account-center',
+        'dist',
+        'codex-auth',
+        'codex-activation-runtime.js'
+      ),
+      path.join(
+        packages,
+        '@kaitranntt',
+        'ccs',
+        'dist',
+        'codex-auth',
+        'codex-activation-runtime.js'
+      ),
+    ]);
+  });
+
+  it('loads the bundle and its own lock library when the bundle is present', () => {
+    const { bundle, installed } = layout();
+    write(
+      bundle,
+      "exports.createCodexActivationRuntime = () => 'bundle';\nexports.lockfile = { lock: 'bundle-lock' };\n"
+    );
+    const loaded = bridge.loadRuntime([bundle, installed]);
+    expect(loaded.selected).toBe(bundle);
+    expect(loaded.createCodexActivationRuntime()).toBe('bundle');
+    expect(loaded.lockfile.lock).toBe('bundle-lock');
+  });
+
+  it('falls back to the installed package and its node_modules lock library', () => {
+    const { bundle, installed } = layout();
+    const loaded = bridge.loadRuntime([bundle, installed]);
+    expect(loaded.selected).toBe(installed);
+    expect(loaded.createCodexActivationRuntime()).toBe('installed');
+    expect(loaded.lockfile.lock).toBe('installed-lock');
+  });
+
+  it('finds nothing when no runtime exists', () => {
+    const { bundle } = layout();
+    expect(bridge.loadRuntime([bundle])).toBeNull();
   });
 });

@@ -80,9 +80,9 @@
   "preferGlobal": true,
   "scripts": {
     "postuninstall": "node scripts/postuninstall.js",
-    "build": "node scripts/build-ui.js && tsc && node scripts/add-shebang.js",
+    "build": "node scripts/build-ui.js && tsc && node scripts/add-shebang.js && node scripts/build-codex-update-runtime.js",
     "build:watch": "tsc --watch",
-    "build:server": "tsc && node scripts/add-shebang.js",
+    "build:server": "tsc && node scripts/add-shebang.js && node scripts/build-codex-update-runtime.js",
     "build:all": "bun run ui:build && bun run build:server",
     "prebuild": "node scripts/clean-dist.js",
     "prebuild:server": "node scripts/clean-dist.js",

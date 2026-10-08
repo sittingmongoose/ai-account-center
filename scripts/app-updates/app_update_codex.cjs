@@ -8,7 +8,10 @@ const path = require('path');
 const { execFile, spawn } = require('child_process');
 const home = os.homedir();
 const executable = path.join(home, '.local/bin/codex');
-const modules = [path.resolve(__dirname, '../../dist/codex-auth/codex-activation-runtime.js'),
+// A remote host without AAC runs the self-contained bundle synced beside this
+// helper; the VM loads the runtime of its installed AAC package.
+const modules = [path.join(__dirname, 'app_update_codex_runtime.cjs'),
+  path.resolve(__dirname, '../../dist/codex-auth/codex-activation-runtime.js'),
   path.join(home, '.local/lib/node_modules/@sittingmongoose/ai-account-center/dist/codex-auth/codex-activation-runtime.js'),
   path.join(home, '.local/lib/node_modules/@kaitranntt/ccs/dist/codex-auth/codex-activation-runtime.js')];
 const flags = Object.fromEntries(process.argv.slice(2).reduce((pairs, arg, index, args) => {
@@ -118,11 +121,18 @@ async function execute(deps) {
   } finally { await runtime?.dispose?.(); }
   return output;
 }
+// The bundle exports its own lock library; an installed package resolves it
+// from its node_modules.
+function loadRuntime(candidates = modules) {
+  const selected = candidates.find((file) => fs.existsSync(file));
+  if (!selected) return null;
+  const { createCodexActivationRuntime, lockfile } = require(selected);
+  return { selected, createCodexActivationRuntime, lockfile: lockfile ?? require('module').createRequire(selected)('proper-lockfile') };
+}
 async function main() {
-  const selected = modules.find((file) => fs.existsSync(file));
-  if (!selected || !fs.existsSync(executable)) return output;
-  const scopedRequire = require('module').createRequire(selected);
-  const lockfile = scopedRequire('proper-lockfile');
+  const loaded = fs.existsSync(executable) ? loadRuntime() : null;
+  if (!loaded) return output;
+  const { createCodexActivationRuntime, lockfile } = loaded;
   let release;
   try {
     release = await lockfile.lock(path.join(home, '.codex'), { realpath: false,
@@ -133,7 +143,6 @@ async function main() {
     output.status = 'action_required'; output.messageCode = 'codex_busy'; return output;
   }
   try {
-  const { createCodexActivationRuntime } = require(selected);
   const initial = privateScan();
   const oldProxies = initial.filter((item) => item.args.includes('app-server') && item.args.includes('proxy') &&
     (item.exe === executable || item.exe.startsWith(path.join(home, '.codex/packages/standalone/releases') + path.sep)));
@@ -192,5 +201,5 @@ async function main() {
   });
   } finally { await release(); }
 }
-module.exports = { execute, output, version };
+module.exports = { execute, loadRuntime, modules, output, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

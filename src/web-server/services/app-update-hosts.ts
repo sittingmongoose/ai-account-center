@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { BinaryError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
 import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
@@ -223,8 +224,13 @@ export function runHelperProcess(
   });
 }
 
+/**
+ * The Codex stop/start runtime app_update_codex.cjs loads on a Linux host
+ * without AAC. Generated into dist/app-updates by bun run build:server.
+ */
+const CODEX_RUNTIME_HELPER = 'app_update_codex_runtime.cjs';
 /** The helper files every remote host must run from ~/.ccs/app-updates. */
-const HELPER_FILES = [
+export const HELPER_FILES = [
   'app_updates.py',
   'app_update_common.py',
   'app_update_desktop.py',
@@ -236,7 +242,45 @@ const HELPER_FILES = [
   'app_update_probe.py',
   'app_update_confirmed_codex.py',
   'app_update_codex.cjs',
+  CODEX_RUNTIME_HELPER,
 ] as const;
+/** The package this build runs from (the checkout under tests). */
+const PACKAGE_ROOT = path.resolve(__dirname, '../../..');
+
+/**
+ * Where each helper lives in this build: the source helpers in
+ * scripts/app-updates, the generated runtime in dist/app-updates. A missing
+ * file fails the sync instead of deploying a partial set.
+ */
+function localHelperFolders(root: string): Array<{ directory: string; names: string[] }> {
+  const folders = [
+    {
+      directory: path.join(root, 'scripts', 'app-updates'),
+      names: HELPER_FILES.filter((name) => name !== CODEX_RUNTIME_HELPER),
+    },
+    { directory: path.join(root, 'dist', 'app-updates'), names: [CODEX_RUNTIME_HELPER] },
+  ];
+  for (const { directory, names } of folders)
+    for (const name of names)
+      if (!fs.existsSync(path.join(directory, name)))
+        throw new BinaryError(
+          name === CODEX_RUNTIME_HELPER
+            ? 'The Codex update runtime is not built; run bun run build:server.'
+            : `The app update helper ${name} is missing.`,
+          path.join(directory, name)
+        );
+  return folders;
+}
+
+/** tar arguments for one flat archive of every helper (one -C per folder). */
+export function helperArchiveArgs(root = PACKAGE_ROOT): string[] {
+  return [
+    '-c',
+    '-f',
+    '-',
+    ...localHelperFolders(root).flatMap(({ directory, names }) => ['-C', directory, ...names]),
+  ];
+}
 const HELPER_QUERY_TIMEOUT_MS = 30_000;
 const HELPER_PUSH_TIMEOUT_MS = 90_000;
 const SSH_SYNC_OPTIONS = [
@@ -276,13 +320,13 @@ export function parseDeployedChecksums(output: string): Record<string, string> {
   return values;
 }
 
-function localHelperChecksums(): Record<string, string> {
-  const source = path.resolve(__dirname, '../../../scripts/app-updates');
+export function localHelperChecksums(root = PACKAGE_ROOT): Record<string, string> {
   const values: Record<string, string> = {};
-  for (const name of HELPER_FILES)
-    values[name] = createHash('sha256')
-      .update(fs.readFileSync(path.join(source, name)))
-      .digest('hex');
+  for (const { directory, names } of localHelperFolders(root))
+    for (const name of names)
+      values[name] = createHash('sha256')
+        .update(fs.readFileSync(path.join(directory, name)))
+        .digest('hex');
   return values;
 }
 
@@ -310,21 +354,20 @@ const WINDOWS_HASH_QUERY = `powershell.exe -NoProfile -NonInteractive -EncodedCo
   'utf16le'
 ).toString('base64')}`;
 
-function pushHelpers(host: string, extract: string): Promise<void> {
+function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promise<void> {
   // lib is ES2020, so the executor form is the available API here (as in runHost).
   return new Promise((resolve, reject) => {
-    const archive = spawn(
-      'tar',
-      [
-        '-c',
-        '-f',
-        '-',
-        '-C',
-        path.resolve(__dirname, '../../../scripts/app-updates'),
-        ...HELPER_FILES,
-      ],
-      { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }
-    );
+    let args: string[];
+    try {
+      args = helperArchiveArgs(root);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const archive = spawn('tar', args, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
     const remote = spawn('ssh', [...SSH_SYNC_OPTIONS, '--', host, extract], {
       stdio: ['pipe', 'ignore', 'ignore'],
       windowsHide: true,
@@ -340,11 +383,18 @@ function pushHelpers(host: string, extract: string): Promise<void> {
     };
     archive.on('error', fail);
     remote.on('error', fail);
-    remote.on('close', (code) => {
+    // Both ends must succeed: a tar that stopped early sent a partial set.
+    let open = 2;
+    let failed = false;
+    const closed = (code: number | null): void => {
+      if (code !== 0) failed = true;
+      if (--open > 0) return;
       clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error('Helper sync failed.'));
-    });
+      if (failed) reject(new Error('Helper sync failed.'));
+      else resolve();
+    };
+    archive.on('close', closed);
+    remote.on('close', closed);
     archive.stdout.pipe(remote.stdin);
   });
 }

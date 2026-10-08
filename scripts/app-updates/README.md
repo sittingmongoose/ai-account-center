@@ -213,6 +213,14 @@ unsupervised proxies yield an explicit restart failure. A private **version-only
 pending-restart marker permits a subsequent explicit click to retry after timeout.
 No account authentication is changed.
 
+On a Linux host without AAC installed, the bridge loads
+`app_update_codex_runtime.cjs` from beside itself: the same stop/start runtime
+bundled with `ws` and `proper-lockfile`, generated into `dist/app-updates` by
+`bun run build:server` and synced with the helpers (a tree without it fails the
+sync instead of sending a partial set). It carries no account activation code;
+`scripts/verify-bundle.js` checks that. The VM keeps loading the runtime of its
+installed package.
+
 The native client reconnect behavior was checked read-only in installed app.asar
 bundles on all three hosts and the [version-pinned proxy](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/stdio-to-uds/src/lib.rs)
 and [startup lock](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/app-server-transport/src/transport/unix_socket.rs)
