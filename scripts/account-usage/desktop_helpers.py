@@ -229,6 +229,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise UsageError("error", "The usage service returned an unexpected redirect.")
 
 
+def is_invalid_grant(error):
+    """Recognize an OAuth invalid_grant body; a read or parse failure is not one."""
+    try:
+        value = json.loads(error.read(4096))
+    except Exception:
+        return False
+    return isinstance(value, dict) and value.get("error") == "invalid_grant"
+
+
 def request_json(url, headers=None, body=None, form=False):
     headers = dict(headers or {})
     headers["Accept"] = "application/json"
@@ -254,6 +263,8 @@ def request_json(url, headers=None, body=None, form=False):
     except urllib.error.HTTPError as error:
         if error.code in (401, 403):
             raise UsageError("needs_sign_in", "The saved account could not authenticate with the usage service.") from None
+        if error.code == 400 and is_invalid_grant(error):
+            raise UsageError("needs_sign_in", "The saved account's sign-in has expired or was revoked.") from None
         raise UsageError("error", "The usage service is temporarily unavailable.") from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise UsageError("error", "The usage service could not be reached within its time limit.") from None

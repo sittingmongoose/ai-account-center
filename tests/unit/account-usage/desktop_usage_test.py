@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts/account-usage"))
@@ -301,6 +302,23 @@ class AntigravityAppMetadataTests(unittest.TestCase):
         self.assertEqual(renewed.email, original.email)
 
     @patch("desktop_usage.antigravity_credentials", return_value=helpers.Credential("old-access", refresh="synthetic-refresh", expires=1))
+    def test_revoked_refresh_grant_is_sign_in_on_the_live_collector_path(self, _credentials):
+        self.write()
+        error = urllib.error.HTTPError("https://oauth2.googleapis.com/token", 400, "Bad Request", {},
+                                      io.BytesIO(b'{"error":"invalid_grant","error_description":"Token has been expired or revoked."}'))
+        self.addCleanup(error.close)
+        with patch("desktop_helpers.urllib.request.build_opener") as opener:
+            opener.return_value.open.side_effect = error
+            result = usage.collect("antigravity", "ubuntu", self.home)
+        self.assertEqual(opener.return_value.open.call_count, 1)
+        self.assertEqual(result["status"], "needs_sign_in")
+        self.assertEqual(result["message"], "The saved account's sign-in has expired or was revoked.")
+        self.assertEqual(result["windows"], [])
+        encoded = json.dumps(result)
+        self.assertNotIn("Token has been", encoded)
+        self.assertNotIn("synthetic-refresh", encoded)
+
+    @patch("desktop_usage.antigravity_credentials", return_value=helpers.Credential("old-access", refresh="synthetic-refresh", expires=1))
     @patch("desktop_usage.request_json")
     def test_collect_isolates_home_and_missing_metadata_leaves_limits_unknown(self, request, credentials):
         result = usage.collect("antigravity", "ubuntu", self.home)
@@ -415,6 +433,67 @@ class HttpSafetyTests(unittest.TestCase):
             helpers.request_json("https://cursor.com/api/usage-summary")
         self.assertEqual(context.exception.status, "needs_sign_in")
         self.assertNotIn("private fixture", str(context.exception))
+
+    @patch("desktop_helpers.urllib.request.build_opener")
+    def test_oauth_invalid_grant_is_sign_in_and_never_echoes_the_body(self, opener):
+        error = urllib.error.HTTPError("https://oauth2.googleapis.com/token", 400, "Bad Request", {},
+                                      io.BytesIO(b'{"error":"invalid_grant","error_description":"contains ya29.FAKE-secret"}'))
+        self.addCleanup(error.close)
+        opener.return_value.open.side_effect = error
+        with self.assertRaises(helpers.UsageError) as context:
+            helpers.request_json("https://oauth2.googleapis.com/token", body={"refresh_token": "fixture"}, form=True)
+        self.assertEqual(context.exception.status, "needs_sign_in")
+        self.assertEqual(context.exception.message, "The saved account's sign-in has expired or was revoked.")
+        self.assertIsNone(context.exception.__cause__)
+        for leaked in ("ya29", "FAKE-secret", "invalid_grant", "contains"):
+            self.assertNotIn(leaked, str(context.exception))
+
+    @patch("desktop_helpers.urllib.request.build_opener")
+    def test_oauth_invalid_grant_body_read_is_capped_at_four_kib(self, opener):
+        body = Mock()
+        body.read.return_value = b'{"error":"invalid_grant"}'
+        error = urllib.error.HTTPError("https://oauth2.googleapis.com/token", 400, "Bad Request", {}, body)
+        self.addCleanup(error.close)
+        opener.return_value.open.side_effect = error
+        with self.assertRaises(helpers.UsageError) as context:
+            helpers.request_json("https://oauth2.googleapis.com/token")
+        self.assertEqual(context.exception.status, "needs_sign_in")
+        body.read.assert_called_once_with(4096)
+
+    @patch("desktop_helpers.urllib.request.build_opener")
+    def test_other_oauth_400_bodies_keep_the_generic_unavailable_error(self, opener):
+        for body in (b'{"error":"invalid_request"}', b'not json', b'', b'["invalid_grant"]',
+                     b'{"error":["invalid_grant"]}', b'{"error":"invalid_grant \xff"}'):
+            with self.subTest(body=body):
+                error = urllib.error.HTTPError("https://oauth2.googleapis.com/token", 400, "Bad Request", {}, io.BytesIO(body))
+                self.addCleanup(error.close)
+                opener.return_value.open.side_effect = error
+                with self.assertRaises(helpers.UsageError) as context:
+                    helpers.request_json("https://oauth2.googleapis.com/token")
+                self.assertEqual(context.exception.status, "error")
+                self.assertEqual(context.exception.message, "The usage service is temporarily unavailable.")
+
+    @patch("desktop_helpers.urllib.request.build_opener")
+    def test_failed_oauth_400_body_read_keeps_the_generic_error(self, opener):
+        body = Mock()
+        body.read.side_effect = OSError("fixture socket reset")
+        error = urllib.error.HTTPError("https://oauth2.googleapis.com/token", 400, "Bad Request", {}, body)
+        self.addCleanup(error.close)
+        opener.return_value.open.side_effect = error
+        with self.assertRaises(helpers.UsageError) as context:
+            helpers.request_json("https://oauth2.googleapis.com/token")
+        self.assertEqual(context.exception.status, "error")
+        self.assertNotIn("socket reset", str(context.exception))
+
+    @patch("desktop_helpers.urllib.request.build_opener")
+    def test_invalid_grant_body_maps_only_from_http_400(self, opener):
+        error = urllib.error.HTTPError("https://oauth2.googleapis.com/token", 500, "Server Error", {},
+                                      io.BytesIO(b'{"error":"invalid_grant"}'))
+        self.addCleanup(error.close)
+        opener.return_value.open.side_effect = error
+        with self.assertRaises(helpers.UsageError) as context:
+            helpers.request_json("https://oauth2.googleapis.com/token")
+        self.assertEqual(context.exception.status, "error")
 
     def test_redirect_cannot_forward_authorization_to_another_host(self):
         with self.assertRaises(helpers.UsageError):
