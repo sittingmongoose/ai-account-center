@@ -205,8 +205,6 @@ fn card_text(v: &Value) -> AxCardText {
         note: s(v, "note"),
         foot: s(v, "foot"),
         empty: s(v, "empty"),
-        // task 9 A2 (analytics1): the CBM footnote's flip bit
-        foot_flip: b(v, "footFlip"),
     }
 }
 fn donut_seg(v: &Value) -> AxDonutSeg {

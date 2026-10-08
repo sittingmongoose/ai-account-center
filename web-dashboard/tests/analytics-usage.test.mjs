@@ -422,14 +422,6 @@ test('cache footnote (task 9 A3): the view carries the hit-rate note', () => {
   assert.equal(cache.note, 'Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.');
 });
 
-test('cbm footnote revision (task 9 A2): the view bumps footRev on every footnote change', () => {
-  const r1 = usageView(payload(), state(), { now }).cbm.footRev;
-  const p = payload();
-  p.activity.models[0] = { ...p.activity.models[0], estimatedCostUsd: p.activity.models[0].estimatedCostUsd * 1.5 };
-  assert.equal(usageView(p, state(), { now }).cbm.footRev, r1 + 1);
-  assert.equal(usageView(p, state(), { now }).cbm.footRev, r1 + 1);
-});
-
 test('donut centre (task 9 A5): a short label that fits a small hole, per mode', () => {
   const tokens = usageView(payload(), state({ donut: 'tokens' }), { now }).donut;
   assert.equal(tokens.mode, 'tokens');

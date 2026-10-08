@@ -1248,9 +1248,6 @@ export function usageHead(payload, state, opts = {}) {
   const R = pageRange(state, A, now);
   return headOf(A, R, state, now, zoneName(now), hostProgress(payload));
 }
-// task 9 A2: last CBM footnote seen, with a revision bumped on every change (below-D recreates).
-let lastCbmFoot = null;
-let cbmFootRev = 0;
 export function usageView(payload, state, opts = {}) {
   const now = opts.now ?? Date.now();
   const A = activityData(payload, now);
@@ -1275,9 +1272,6 @@ export function usageView(payload, state, opts = {}) {
     unrec.length ? `${unrec.map(m => m.model).join(', ')}: rates do not reconcile with the logged cost, so the split shows token shares.` : '',
     notLogged.length ? `${notLogged.length <= 3 ? andList(notLogged.map(m => m.model)) : `${notLogged.length} models`} ${notLogged.length === 1 ? 'has' : 'have'} cost with no logged amount and no listed rate: it shows as not logged and is left out of the totals.` : '',
   ].filter(Boolean).join(' ');
-  // task 9 A2: a wrapped Text stuck at an early-measured height never re-wraps when its bound string
-  // grows, so below-D alternates two footnote copies on this revision: every distinct text recreates.
-  if (foot !== lastCbmFoot) { lastCbmFoot = foot; cbmFootRev += 1; }
   const statusNote = A.available ? '' : A.message || 'CLI usage logs are unavailable.';
   const sessions = sessionsView(A, state, now);
   const progress = hostProgress(payload);
@@ -1306,7 +1300,7 @@ export function usageView(payload, state, opts = {}) {
     picker: providerChoices(A, R, state),
     apportTip: APPORT_TIP,
     trend: trendView(A, R, state, opts.sizes?.trend),
-    cbm: { sub: `${windowText} · ${shown.length} model${shown.length === 1 ? '' : 's'} by ${cbmSortOf(state)} · select one for detail`, note: wholeNote('models'), sort: cbmSortOf(state), rows: modelRows(A, state, windowText), foot, footRev: cbmFootRev, footFlip: cbmFootRev % 2 === 1, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
+    cbm: { sub: `${windowText} · ${shown.length} model${shown.length === 1 ? '' : 's'} by ${cbmSortOf(state)} · select one for detail`, note: wholeNote('models'), sort: cbmSortOf(state), rows: modelRows(A, state, windowText), foot, empty: A.available ? `No model activity ${provWords(state, A) ? `for ${provName(state, A)} ` : ''}in the logs.` : statusNote },
     donut: { sub: `Share of the logs read for ${windowText}`, note: wholeNote('models'), ...donutView(A, state, shades) },
     sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, moreSub: sessions.moreSub, stats: sessions.stats, rows: sessions.rows, recent: sessions.recent, recentMore: sessions.recentMore },
     tokens: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, rows: tokensView(K, C, costOk, A.available) },
