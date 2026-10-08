@@ -26,7 +26,7 @@ from app_update_common import (
     Install, UpdateFailure, cli_probe, command, download, execution_lock, powershell, private_temporary,
     ps_quote, result, write_private_json,
 )
-from app_update_processes import family, main_contexts, restart_desktops, scan, terminate_desktops
+from app_update_processes import live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
 
 RELEASES = "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=20"
 RELEASE_BASE = "https://github.com/pingdotgg/t3code/releases/download/"
@@ -313,31 +313,37 @@ def update_mac(install, version, temporary, deadline, phase):
     backup = install.path.with_name(".aac-t3-rollback-" + uuid.uuid4().hex + ".app")
     adjacent = install.path.with_name(".aac-t3-stage-" + uuid.uuid4().hex + ".app")
     moved = completed = False
+    contexts = []
     try:
         command(["/usr/bin/ditto", staged, adjacent], timeout=budget(deadline, 120))
         verify_mac(adjacent, version)
-        # T3 may have been opened while the package downloaded. Never quit it; report quit_first.
-        if family(install, scan("mac")):
-            raise UpdateFailure("quit_first")
+        contexts = main_contexts(install, scan("mac"))
+        forced = terminate_desktops(install, contexts)
         os.rename(install.path, backup)
         moved = True
         os.rename(adjacent, install.path)
         verify_mac(install.path, version)
-        command(["/usr/bin/open", "-a", install.path], timeout=15)
+        if contexts:
+            restart_desktops(install, contexts)
+        else:
+            command(["/usr/bin/open", "-a", install.path], timeout=15)
         health_check("mac")
         completed = True
     except Exception:
         if moved:
-            # Stop only the T3 instance this updater opened, then restore the retained bundle.
             terminate_desktops(install, main_contexts(install, scan("mac")))
             shutil.rmtree(install.path, ignore_errors=True)
             os.rename(backup, install.path)
+        # Relaunch only when the captured app is gone; a failed quit must not open a second T3.
+        with contextlib.suppress(UpdateFailure, OSError):
+            if not live_contexts("mac", contexts):
+                restart_desktops(install, contexts)
         raise
     finally:
         shutil.rmtree(adjacent, ignore_errors=True)
         if completed and backup.exists():
             shutil.rmtree(backup)
-    return 0, 0
+    return len(contexts), forced
 
 
 def update_windows(install, version, temporary, deadline, phase):
@@ -506,9 +512,6 @@ def update_t3(install, deadline, phase=None):
                 value["restartTargets"] = [schedule_restart(before)]
                 return value
             return result("t3-code", install.platform, "current", before, before, install.manager)
-        if install.platform == "mac" and desktop_needed and family(install, scan("mac")):
-            # A running Mac T3 is never quit: report it before any download or runtime change.
-            return result("t3-code", install.platform, "action_required", before, before, install.manager, "quit_first", False)
         restarted = forced = 0
         with private_temporary() as temporary:
             if runtime_needed:
@@ -531,8 +534,6 @@ def update_t3(install, deadline, phase=None):
         if attempted and install.desktop:
             after = mac_bundle_version(install.path) if install.platform == "mac" else windows_bundle_version(install.path)
         status = "restart_failed" if (after and after != before) or error.code == "restart_failed" else "failed"
-        if error.code == "quit_first":
-            status = "action_required"
         return result("t3-code", install.platform, status, before, after, install.manager, error.code, attempted)
     except Exception:
         if attempted and install.desktop:
