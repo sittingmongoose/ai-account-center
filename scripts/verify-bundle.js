@@ -202,6 +202,79 @@ function verifyBundle(uiDir = UI_DIR) {
   return { totalSize, manifest };
 }
 
+const CODEX_RUNTIME_FILE = path.join(__dirname, '../dist/app-updates/app_update_codex_runtime.cjs');
+const CODEX_RUNTIME_EXPORTS = ['createCodexActivationRuntime', 'lockfile'];
+// The only first-party modules the runtime may carry. Account activation
+// (activate-codex-profile, auth.json replacement) is not among them.
+const CODEX_RUNTIME_SOURCES = new Set([
+  'src/codex-auth/codex-update-runtime-entry.ts',
+  'src/codex-auth/codex-activation-runtime.ts',
+  'src/codex-auth/codex-activation-confirmation.ts',
+  'src/utils/app-launcher.ts',
+]);
+const CODEX_RUNTIME_PACKAGES = new Set([
+  'ws',
+  'proper-lockfile',
+  'graceful-fs',
+  'retry',
+  'signal-exit',
+]);
+const CODEX_RUNTIME_FORBIDDEN = ['activate-codex-profile', 'activateCodexProfile', 'auth.json'];
+
+/**
+ * The Codex stop/start runtime shipped with the update helpers: self-contained,
+ * exporting exactly { createCodexActivationRuntime, lockfile }, with no
+ * account activation code and no path of the checkout that built it.
+ */
+function verifyCodexUpdateRuntime(file = CODEX_RUNTIME_FILE) {
+  if (!fs.existsSync(file)) {
+    throw new Error('Missing the Codex update runtime; run bun run build:server.');
+  }
+  const text = fs.readFileSync(file, 'utf8');
+  const fail = (reason) => {
+    throw new Error(`The Codex update runtime ${reason}.`);
+  };
+  // Bun marks each bundled module with a "// <path>" line.
+  const modules = [...text.matchAll(/^\/\/ ((?:src|node_modules)\/\S+)$/gm)].map(
+    (match) => match[1]
+  );
+  const sources = new Set(modules.filter((module) => module.startsWith('src/')));
+  if (
+    !sources.has('src/codex-auth/codex-update-runtime-entry.ts') ||
+    !sources.has('src/codex-auth/codex-activation-runtime.ts')
+  )
+    fail('does not list its bundled modules');
+  for (const source of sources) {
+    if (!CODEX_RUNTIME_SOURCES.has(source)) fail(`bundles an unexpected module (${source})`);
+  }
+  for (const module of modules.filter((value) => value.startsWith('node_modules/'))) {
+    const parts = module.split('/');
+    const name = parts[1].startsWith('@') ? `${parts[1]}/${parts[2]}` : parts[1];
+    if (!CODEX_RUNTIME_PACKAGES.has(name)) fail(`bundles an unexpected package (${name})`);
+  }
+  for (const marker of CODEX_RUNTIME_FORBIDDEN) {
+    if (text.includes(marker)) fail('contains account activation code');
+  }
+  if (text.includes(path.resolve(__dirname, '..'))) fail('embeds the path of its build checkout');
+  // Node core modules only: Bun's list adds its own and the npm names it serves.
+  const builtins = new Set(
+    require('module').builtinModules.filter((name) => !/^(?:bun(?::.*)?|ws|undici)$/.test(name))
+  );
+  for (const [, , name] of text.matchAll(/\brequire\((["'])([^"']+)\1\)/g)) {
+    if (!builtins.has(name.replace(/^node:/, ''))) fail(`requires an external module (${name})`);
+  }
+  delete require.cache[require.resolve(file)];
+  const loaded = require(file);
+  if (
+    JSON.stringify(Object.keys(loaded).sort()) !== JSON.stringify(CODEX_RUNTIME_EXPORTS) ||
+    typeof loaded.createCodexActivationRuntime !== 'function' ||
+    typeof loaded.lockfile?.lock !== 'function' ||
+    typeof loaded.lockfile?.unlock !== 'function'
+  )
+    fail('must export exactly createCodexActivationRuntime and lockfile');
+  return { bytes: Buffer.byteLength(text), modules: new Set(modules).size };
+}
+
 if (require.main === module) {
   try {
     const result = verifyBundle();
@@ -214,6 +287,17 @@ if (require.main === module) {
     );
     process.exitCode = 1;
   }
+  try {
+    const result = verifyCodexUpdateRuntime();
+    console.log(
+      `[OK] Codex update runtime: ${(result.bytes / 1024).toFixed(1)}KB, ${result.modules} modules, no account activation code.`
+    );
+  } catch (error) {
+    console.error(
+      `[X] ${error instanceof Error ? error.message : 'Codex update runtime verification failed.'}`
+    );
+    process.exitCode = 1;
+  }
 }
 
-module.exports = { verifyBundle };
+module.exports = { CODEX_RUNTIME_FILE, verifyBundle, verifyCodexUpdateRuntime };
