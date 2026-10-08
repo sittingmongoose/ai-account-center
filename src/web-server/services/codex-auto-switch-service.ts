@@ -18,6 +18,8 @@ import { getCcsDir, runWithScopedConfigDir } from '../../utils/config-manager';
 import { createLogger } from '../../services/logging';
 import { getCodexProfileQuotaRows } from '../usage/native-quota-collector';
 import type { BarSummaryRow } from '../routes/bar-routes';
+import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
+import { readCodexRenewalEntries } from './codex-renewal-entries';
 
 const logger = createLogger('codex-auto-switch');
 
@@ -93,6 +95,11 @@ export interface CodexAutoSwitchDeps {
   writeConfig?: (config: AutoSwitchConfig) => void;
   getSummary?: () => Promise<CodexAuthProfilesSummary>;
   getRows?: (names: string[]) => Promise<BarSummaryRow[]>;
+  /**
+   * Renewal state per saved login. A profile whose login OpenAI rejected is never a
+   * switch target; a read that fails excludes nothing.
+   */
+  getRenewalStatus?: () => Promise<{ profiles: CodexProfileRenewalProfileStatus[] }>;
   activate?: (name: string) => Promise<unknown>;
   /** Private fingerprints are only compared in memory, never returned to the browser. */
   getAuthSnapshot?: (names: string[]) => CodexAutoSwitchAuthSnapshot;
@@ -539,9 +546,13 @@ export class CodexAutoSwitchService {
         this.logConclusion({ active, remaining: assessed.remaining });
         return;
       }
+      // A login OpenAI rejected would sign Codex out within days of a switch to it.
+      const renewals = await readCodexRenewalEntries(this.deps.getRenewalStatus);
       let freshnessBlocked = false;
       const candidates = valid
-        .filter((profile) => profile.name !== active)
+        .filter(
+          (profile) => profile.name !== active && renewals.get(profile.name)?.state !== 'failed'
+        )
         .map((profile) => {
           const assessment = assessRemaining(byProfile.get(profile.name), profile.name, now());
           if (!('remaining' in assessment)) freshnessBlocked = true;

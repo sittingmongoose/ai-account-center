@@ -27,6 +27,8 @@ import {
   type ClaudeDesktopUsage,
 } from './claude-desktop-usage-service';
 import { getCodexAutoSwitchService } from './codex-auto-switch-service';
+import { readCodexRenewalEntries, type CodexRenewalEntries } from './codex-renewal-entries';
+import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import {
   getAdditionalDashboardSnapshot,
   getConfiguredAdditionalAccounts,
@@ -83,6 +85,8 @@ export interface AccountDashboardDeps {
   getCodexSummary?: () => Promise<CodexAuthProfilesSummary>;
   getCodexRows?: (names: string[], refresh: boolean) => Promise<BarSummaryRow[]>;
   getCachedCodexRows?: (names: string[]) => BarSummaryRow[];
+  /** Renewal state per saved Codex login (local files only); unreadable means no renewal notes. */
+  getRenewalStatus?: () => Promise<{ profiles: CodexProfileRenewalProfileStatus[] }>;
   listClaudeProfiles?: () => Promise<ClaudeDesktopProfile[]>;
   getClaudeUsage?: (platform: ClaudeDashboardPlatform) => Promise<ClaudeDesktopUsage>;
   getLiveClaudeUsage?: (
@@ -146,6 +150,8 @@ interface DashboardState {
 export class AccountDashboardService {
   private readonly states = new Map<string, DashboardState>();
   private readonly codexInventories = new Map<string, CodexAuthProfilesSummary>();
+  /** Last renewal entries per scope, for the cached Codex rows that cannot await a read. */
+  private readonly codexRenewals = new Map<string, CodexRenewalEntries>();
   private readonly claudeInventories = new Map<string, ClaudeDesktopProfile[]>();
   private readonly claudeLiveSamples = new Map<string, ClaudeDesktopLiveUsage>();
   /** Last known "Sign-in needed" computers per Claude manifest entry, kept across collections. */
@@ -174,18 +180,27 @@ export class AccountDashboardService {
     const summary = await (this.deps.getCodexSummary ?? getCodexAuthProfilesSummary)();
     this.codexInventories.set(scope, summary);
     const names = summary.profiles.map((profile) => profile.name);
-    const rows = await this.bounded(
-      (
-        this.deps.getCodexRows ??
-        ((profiles, force) => getCodexProfileQuotaRows(profiles, {}, { force }))
-      )(names, refresh),
-      () => (this.deps.getCachedCodexRows ?? getCachedCodexProfileQuotaRows)(names)
-    );
+    // Kept as soon as read, so a slow quota fetch still lets the cached rows show notes.
+    const renewals = readCodexRenewalEntries(this.deps.getRenewalStatus).then((entries) => {
+      this.codexRenewals.set(scope, entries);
+      return entries;
+    });
+    const [rows, entries] = await Promise.all([
+      this.bounded(
+        (
+          this.deps.getCodexRows ??
+          ((profiles, force) => getCodexProfileQuotaRows(profiles, {}, { force }))
+        )(names, refresh),
+        () => (this.deps.getCachedCodexRows ?? getCachedCodexProfileQuotaRows)(names)
+      ),
+      renewals,
+    ]);
     return summary.profiles.map((profile) =>
       codexAccount(
         profile,
         summary.activated,
-        rows.find((row) => row.profile === profile.name)
+        rows.find((row) => row.profile === profile.name),
+        entries.get(profile.name)
       )
     );
   }
@@ -196,11 +211,13 @@ export class AccountDashboardService {
     const rows = (this.deps.getCachedCodexRows ?? getCachedCodexProfileQuotaRows)(
       summary.profiles.map((profile) => profile.name)
     );
+    const renewals = this.codexRenewals.get(scope);
     return summary.profiles.map((profile) =>
       codexAccount(
         profile,
         summary.activated,
-        rows.find((row) => row.profile === profile.name)
+        rows.find((row) => row.profile === profile.name),
+        renewals?.get(profile.name)
       )
     );
   }
@@ -667,7 +684,12 @@ export class AccountDashboardService {
           previous?.accountId !== profile.accountId ||
           account.email !== emailForComparison(profile.email)
         ) {
-          current = codexAccount(profile, summary.activated, undefined);
+          current = codexAccount(
+            profile,
+            summary.activated,
+            undefined,
+            this.codexRenewals.get(scope)?.get(profile.name)
+          );
         }
       }
       return [

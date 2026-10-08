@@ -85,6 +85,14 @@ export function isDesktop(process: CodexProcessSnapshot): boolean {
   );
 }
 
+/** The Codex home a Codex CLI or desktop process reads and refreshes; null for other processes. */
+export function codexProcessHome(process: CodexProcessSnapshot): string | null {
+  if (!isCodex(process) && !isDesktop(process)) return null;
+  const configured = process.env.CODEX_HOME;
+  if (configured) return path.resolve(process.cwd || '/', configured);
+  return path.resolve(path.join(process.env.HOME || os.homedir(), '.codex'));
+}
+
 function usesHome(process: CodexProcessSnapshot, home: string): boolean {
   const configured = process.env.CODEX_HOME;
   const defaultHome = path.join(process.env.HOME || os.homedir(), '.codex');
@@ -556,7 +564,8 @@ function desktopLauncher(
   return { ...desktop, args, env };
 }
 
-function readProcesses(): CodexProcessSnapshot[] {
+/** Same-user processes (Linux /proc). Env stays in memory; never serialize a snapshot. */
+export function readProcesses(): CodexProcessSnapshot[] {
   const processes: CodexProcessSnapshot[] = [];
   for (const name of fs.readdirSync('/proc')) {
     if (!/^\d+$/.test(name)) continue;

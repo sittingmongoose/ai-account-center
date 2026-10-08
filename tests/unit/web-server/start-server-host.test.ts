@@ -6,6 +6,7 @@ import * as path from 'path';
 
 import { startServer } from '../../../src/web-server';
 import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
+import { CodexProfileRenewalService } from '../../../src/web-server/services/codex-profile-renewal-service';
 import * as analyticsSampling from '../../../src/web-server/services/account-analytics-service';
 
 const instances: Array<Awaited<ReturnType<typeof startServer>>> = [];
@@ -14,6 +15,8 @@ const fixtureEnvKeys = ['CCS_HOME', 'CCS_DIR', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'
 let fixtureHome = '';
 let originalEnv: Partial<Record<(typeof fixtureEnvKeys)[number], string | undefined>> = {};
 let autoSwitchStart: ReturnType<typeof spyOn<CodexAutoSwitchService, 'start'>>;
+let renewalStart: ReturnType<typeof spyOn<CodexProfileRenewalService, 'start'>>;
+let renewalStop: ReturnType<typeof spyOn<CodexProfileRenewalService, 'stop'>>;
 let analyticsStart: ReturnType<
   typeof spyOn<typeof analyticsSampling, 'startAccountAnalyticsSampling'>
 >;
@@ -29,6 +32,8 @@ beforeEach(() => {
   // Exercise the real HTTP/session/upgrade stack while avoiding background
   // account activation and usage helpers unrelated to these server fixtures.
   autoSwitchStart = spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {});
+  renewalStart = spyOn(CodexProfileRenewalService.prototype, 'start').mockImplementation(() => {});
+  renewalStop = spyOn(CodexProfileRenewalService.prototype, 'stop');
   analyticsStart = spyOn(analyticsSampling, 'startAccountAnalyticsSampling').mockImplementation(
     () => {}
   );
@@ -80,6 +85,7 @@ function dispatchUpgrade(instance: Awaited<ReturnType<typeof startServer>>, url:
 
 afterEach(async () => {
   expect(autoSwitchStart).toHaveBeenCalledTimes(1);
+  expect(renewalStart).toHaveBeenCalledTimes(1);
   expect(analyticsStart).toHaveBeenCalledTimes(1);
   while (instances.length > 0) {
     const instance = instances.pop();
@@ -165,5 +171,28 @@ describe('startServer host binding', () => {
 
     expect(socket.data.startsWith('HTTP/1.1 400')).toBe(true);
     expect(socket.destroyed).toBe(true);
+  });
+});
+
+describe('startServer saved Codex login renewal', () => {
+  it('starts renewal once the server listens and stops it with the server', async () => {
+    const instance = await startServer({ port: 0 });
+    instances.push(instance);
+
+    expect(renewalStart).toHaveBeenCalledTimes(1);
+    expect(renewalStop).not.toHaveBeenCalled();
+    instance.cleanup();
+    expect(renewalStop).toHaveBeenCalled();
+  });
+
+  it('keeps the server running when renewal cannot start', async () => {
+    renewalStart.mockImplementationOnce(() => {
+      throw new Error('renewal unavailable');
+    });
+
+    const instance = await startServer({ port: 0 });
+    instances.push(instance);
+
+    expect(instance.server.listening).toBe(true);
   });
 });

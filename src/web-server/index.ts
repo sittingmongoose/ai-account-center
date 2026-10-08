@@ -25,6 +25,7 @@ import { shutdownUsageAggregator } from './usage/aggregator';
 import { createLogger } from '../services/logging';
 import { DEFAULT_DASHBOARD_HOST, isLoopbackHost } from '../commands/config-dashboard-host';
 import { getCodexAutoSwitchService } from './services/codex-auto-switch-service';
+import { getCodexProfileRenewalService } from './services/codex-profile-renewal-service';
 import {
   startAccountAnalyticsSampling,
   stopAccountAnalyticsSampling,
@@ -286,6 +287,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let stopCgroupForeignCheck: (() => void) | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
+  const codexRenewal = getCodexProfileRenewalService();
   // Account changes and sign-in jobs reach /ws clients as hints. A job goes only
   // to browser sessions, and its code only to those that connected over a
   // secure transport. The upgrade request carries the session (see above).
@@ -301,6 +303,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     detachDashboardEvents();
     stopAccountLifecycleMaintenance();
     codexAutoSwitch.stop();
+    codexRenewal.stop();
     stopAntigravityRuntime();
     stopAccountAnalyticsSampling();
     stopCgroupForeignCheck?.();
@@ -357,6 +360,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         }
       }
       codexAutoSwitch.start();
+      try {
+        codexRenewal.start();
+      } catch {
+        logger.error(
+          'codex.renewal_unavailable',
+          'Saved Codex login renewal could not start safely'
+        );
+      }
       startAccountAnalyticsSampling();
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { getCodexProfileQuotas } from '../../../src/web-server/services/codex-profile-quota-service';
 import type { BarSummaryRow } from '../../../src/web-server/routes/bar-routes';
+import { CODEX_RENEWAL_MESSAGES } from '../../../src/codex-auth/codex-renewal-types';
+import { renewalEntry } from './codex-renewal-entry-fixture';
 
 function row(profile: string, overrides: Partial<BarSummaryRow> = {}): BarSummaryRow {
   return {
@@ -185,5 +187,38 @@ describe('Codex native profile quota DTO', () => {
     });
     expect(result.profiles[0].status).toBe('not_connected');
     expect(result.profiles[0].windows).toEqual([]);
+  });
+});
+
+describe('Codex profile quota DTO and saved-login renewal', () => {
+  const now = () => Date.parse('2026-10-01T12:30:00Z');
+
+  it('reports a rejected saved login as needing renewal, even while its last reading still shows', async () => {
+    const response = await getCodexProfileQuotas({
+      listProfiles: async () => [{ name: 'gmail', authValid: true }],
+      getRows: async () => [row('gmail')],
+      getRenewalStatus: async () => ({ profiles: [renewalEntry('gmail', 'failed', 'dead')] }),
+      now,
+    });
+    expect(response.profiles[0]).toMatchObject({
+      profileName: 'gmail',
+      status: 'reauth_required',
+      message: CODEX_RENEWAL_MESSAGES.dead,
+      fetchedAt: '2026-10-01T12:00:00Z',
+    });
+    expect(response.profiles[0].windows).toHaveLength(2);
+  });
+
+  it('keeps the reading when the renewal status cannot be read', async () => {
+    const response = await getCodexProfileQuotas({
+      listProfiles: async () => [{ name: 'gmail', authValid: true }],
+      getRows: async () => [row('gmail')],
+      getRenewalStatus: async () => {
+        throw new Error('unreadable');
+      },
+      now,
+    });
+    expect(response.profiles[0]).toMatchObject({ profileName: 'gmail', status: 'available' });
+    expect(response.profiles[0].message).toBeUndefined();
   });
 });

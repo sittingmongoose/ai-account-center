@@ -4,7 +4,9 @@ import {
   getCodexProfileQuotaRows,
 } from '../usage/native-quota-collector';
 import type { BarSummaryRow } from '../routes/bar-routes';
+import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import { readingPredatesReset } from './account-window-reset';
+import { readCodexRenewalEntries } from './codex-renewal-entries';
 
 export interface CodexProfileQuotaWindow {
   key: string;
@@ -32,11 +34,18 @@ export interface CodexProfileQuotaDeps {
   listProfiles?: () => Promise<QuotaProfile[]>;
   getRows?: (names: string[]) => Promise<BarSummaryRow[]>;
   getCachedRows?: (names: string[]) => BarSummaryRow[];
+  /** Renewal state per saved Codex login (local files only); unreadable means no renewal notes. */
+  getRenewalStatus?: () => Promise<{ profiles: CodexProfileRenewalProfileStatus[] }>;
   responseBudgetMs?: number;
   now?: () => number;
 }
 
-function buildQuota(profile: QuotaProfile, now: number, row?: BarSummaryRow): CodexProfileQuota {
+function buildQuota(
+  profile: QuotaProfile,
+  now: number,
+  row?: BarSummaryRow,
+  renewal?: CodexProfileRenewalProfileStatus
+): CodexProfileQuota {
   if (!profile.authValid) {
     return {
       profileName: profile.name,
@@ -60,6 +69,16 @@ function buildQuota(profile: QuotaProfile, now: number, row?: BarSummaryRow): Co
       ? { resetPassed: true as const }
       : {}),
   }));
+  // OpenAI rejected the saved login: say so even while its last reading still shows.
+  if (renewal?.state === 'failed') {
+    return {
+      profileName: profile.name,
+      status: 'reauth_required',
+      windows: row?.quotaStatus === 'ok' ? windows : [],
+      ...(row ? { fetchedAt: row.fetchedAt } : {}),
+      message: renewal.message,
+    };
+  }
   if (row?.quotaStatus === 'ok' && windows.length > 0) {
     return { profileName: profile.name, status: 'available', windows, fetchedAt: row.fetchedAt };
   }
@@ -91,6 +110,7 @@ export async function getCodexProfileQuotas(
   const names = profiles.map((profile) => profile.name);
   if (names.length === 0) return { profiles: [] };
 
+  const renewals = readCodexRenewalEntries(deps.getRenewalStatus);
   // Keep the dashboard responsive. The bounded collector continues filling all
   // saved profiles after this deadline, with its per-profile cache/coalescing.
   const pending = (deps.getRows ?? getCodexProfileQuotaRows)(names).catch(() => null);
@@ -103,7 +123,10 @@ export async function getCodexProfileQuotas(
   const rows = freshRows ?? (deps.getCachedRows ?? getCachedCodexProfileQuotaRows)(names);
   const byProfile = new Map(rows.map((row) => [row.profile, row]));
   const now = (deps.now ?? Date.now)();
+  const entries = await renewals;
   return {
-    profiles: profiles.map((profile) => buildQuota(profile, now, byProfile.get(profile.name))),
+    profiles: profiles.map((profile) =>
+      buildQuota(profile, now, byProfile.get(profile.name), entries.get(profile.name))
+    ),
   };
 }

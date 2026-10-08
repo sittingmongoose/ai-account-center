@@ -28,6 +28,26 @@ identity also keeps the profile while a native login exists. `--force` only
 overrides the saved-default selection. Confirmation, backup and rollback remain
 part of removal.
 
+## Idle saved-login renewal
+
+The server renews idle saved logins itself. About four days before a saved
+login's access token expires (the token lasts 10 days), AAC refreshes it with
+OpenAI. The check runs three to five minutes after the server starts, then every
+six hours, plus or minus 30 minutes. A busy account switch, sign-in or removal
+makes the check retry shortly.
+
+AAC leaves these logins alone: the login Codex is using (Codex renews it itself),
+a login that a running Codex app uses directly, and a login that another Codex
+home on this machine shares (the same refresh token, session id or sign-in time).
+Renewing one copy would sign the other out, so Sign in again on one of the copies
+to separate them. Renewal shares the activation lock and never waits for it.
+Renewed tokens are written atomically, only back into the same profile folder.
+
+The dashboard and `GET /api/codex/profiles/quotas` report a login that OpenAI
+rejected as needing Sign in again, and Sign in again restores it. Automatic
+switching never chooses such a login. Set `CCS_CODEX_RENEWAL=0` to turn renewal
+off; a rejected login still shows Sign in again.
+
 ## Activation and automatic switching
 
 [Activation](activate-in-place.md) changes the selected native login in the

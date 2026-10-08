@@ -78,7 +78,8 @@ export function hasStructurallyValidIdToken(idToken: string): boolean {
   return decodeJwtPayload(idToken) !== null;
 }
 
-function decodeJwtPayload(idToken: string): JwtPayload | null {
+/** Unverified JWT payload claims, or null when the token is not a well-formed JWT. */
+export function decodeJwtPayload(idToken: string): JwtPayload | null {
   try {
     const parts = idToken.split('.');
     if (parts.length !== 3) {

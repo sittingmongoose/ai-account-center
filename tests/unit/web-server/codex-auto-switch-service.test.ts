@@ -13,6 +13,7 @@ import {
 import type { CodexAutoSwitchDeps } from '../../../src/web-server/services/codex-auto-switch-service';
 import type { CodexAutoSwitchAuthSnapshot } from '../../../src/web-server/services/codex-auto-switch-service';
 import { runWithScopedConfigDir } from '../../../src/utils/config-manager';
+import { renewalEntry } from './codex-renewal-entry-fixture';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
 const directories: string[] = [];
@@ -983,5 +984,35 @@ describe('native Codex automatic switching', () => {
     exhausted = true;
     await h.service.runCycle();
     expect(entries).toEqual(['healthy', 'switched']);
+  });
+});
+
+describe('native Codex switching skips saved logins OpenAI rejected', () => {
+  const rejected = (name: string) => renewalEntry(name, 'failed', 'dead');
+
+  it('skips a rejected candidate and switches to the next healthy one', async () => {
+    const h = harness({ getRenewalStatus: async () => ({ profiles: [rejected('beta')] }) });
+    await h.service.runCycle();
+    expect(h.activate).toHaveBeenCalledWith('gamma');
+    expect(h.activate).not.toHaveBeenCalledWith('beta');
+  });
+
+  it('switches nowhere when the only healthy candidate was rejected', async () => {
+    const h = harness({
+      getRenewalStatus: async () => ({ profiles: [rejected('beta'), rejected('gamma')] }),
+    });
+    await h.service.runCycle();
+    expect(h.activate).not.toHaveBeenCalled();
+    expect(h.service.getStatus().outcome).toBe('no_candidate');
+  });
+
+  it('excludes nothing when the renewal status cannot be read', async () => {
+    const h = harness({
+      getRenewalStatus: async () => {
+        throw new Error('unreadable');
+      },
+    });
+    await h.service.runCycle();
+    expect(h.activate).toHaveBeenCalledWith('beta');
   });
 });

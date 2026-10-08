@@ -1,6 +1,8 @@
 import type { CodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
+import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import { antigravityPlanDisplay } from '../../antigravity/plan';
 import type { BarSummaryRow } from '../routes/bar-routes';
+import { codexRenewalNote } from './codex-renewal-notes';
 import {
   canOpenClaudeMacProfile,
   type ClaudeDesktopProfile,
@@ -87,7 +89,8 @@ function quotaWindow(window: Partial<DashboardAccountWindow>): DashboardAccountW
 export function codexAccount(
   profile: CodexAuthProfilesSummary['profiles'][number],
   activated: CodexAuthProfilesSummary['activated'],
-  row: BarSummaryRow | undefined
+  row: BarSummaryRow | undefined,
+  renewal?: CodexProfileRenewalProfileStatus
 ): DashboardAccount {
   const connected = profile.authValid;
   const status =
@@ -100,6 +103,11 @@ export function codexAccount(
         : row?.quotaStatus === 'error'
           ? 'error'
           : 'unavailable';
+  // Codex renews the login it is using itself, so that login never gets a renewal note.
+  const note =
+    renewal && activated?.name !== profile.name && renewal.reason !== 'live'
+      ? codexRenewalNote(row, renewal)
+      : null;
   return {
     id: `codex:${profile.name}`,
     provider: 'codex',
@@ -109,13 +117,14 @@ export function codexAccount(
     plan: text(profile.plan, 80),
     platform: 'ubuntu',
     source: row?.quotaSource === 'local' ? 'Codex local quota' : 'Codex saved login on Ubuntu',
-    status,
+    status: note?.status ?? status,
     message:
-      status === 'needs_sign_in'
+      note?.message ??
+      (status === 'needs_sign_in'
         ? 'This saved Codex login needs to be renewed.'
         : status === 'error' || status === 'unavailable'
           ? 'Codex usage is temporarily unavailable.'
-          : null,
+          : null),
     fetchedAt: timestamp(row?.fetchedAt),
     // A local fallback reading is fetched now but was written when its session file
     // last changed (staleAsOf, set once that is over five minutes ago).

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomBytes } from 'crypto';
 import { CodexProfileRegistry } from './codex-profile-registry';
+import { replaceFileAtomically } from './codex-atomic-file';
 import { resolveCodexProfileDir } from './codex-profile-paths';
 import { decodeIdToken, hasStructurallyValidIdToken } from './decode-id-token';
 import {
@@ -135,30 +135,10 @@ function readAuth(authPath: string, label: string, requireCredentials = false): 
 }
 
 function atomicReplace(authPath: string, content: Buffer): void {
-  const temporary = `${authPath}.tmp.${process.pid}.${randomBytes(8).toString('hex')}`;
-  let fd: number | undefined;
   try {
-    fd = fs.openSync(temporary, 'wx', 0o600);
-    fs.writeFileSync(fd, content);
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.renameSync(temporary, authPath);
-    const directoryFd = fs.openSync(path.dirname(authPath), 'r');
-    try {
-      fs.fsyncSync(directoryFd);
-    } finally {
-      fs.closeSync(directoryFd);
-    }
+    replaceFileAtomically(authPath, content);
   } catch {
     throw new CodexActivationError('auth_write_failed', 'Could not atomically save auth.json.');
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd);
-    try {
-      fs.unlinkSync(temporary);
-    } catch {
-      // Successful rename leaves no temporary file.
-    }
   }
 }
 

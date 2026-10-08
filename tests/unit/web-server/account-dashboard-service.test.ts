@@ -4,6 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import type { CodexAuthProfilesSummary } from '../../../src/codex-auth/codex-auth-dashboard-service';
+import { CODEX_RENEWAL_MESSAGES } from '../../../src/codex-auth/codex-renewal-types';
+import { renewalEntry } from './codex-renewal-entry-fixture';
 import type { BarSummaryRow } from '../../../src/web-server/routes/bar-routes';
 import {
   AccountDashboardService,
@@ -1403,5 +1405,67 @@ describe('consolidated account dashboard', () => {
     });
     expect(codex('party').sampledAt).toBe('2026-10-01T15:10:00.000Z');
     expect(codex('party').windows[0].resetPassed).toBeUndefined();
+  });
+});
+
+describe('Codex saved-login renewal in the dashboard', () => {
+  it('shows a rejected saved login as needing sign in and leaves the other logins alone', async () => {
+    const result = await new AccountDashboardService(
+      deps({
+        getCodexSummary: async () => summary('lime'),
+        getRenewalStatus: async () => ({ profiles: [renewalEntry('gmail', 'failed', 'dead')] }),
+      })
+    ).get();
+    expect(result.accounts.find((account) => account.id === 'codex:gmail')).toMatchObject({
+      status: 'needs_sign_in',
+      message: CODEX_RENEWAL_MESSAGES.dead,
+    });
+    const party = result.accounts.find((account) => account.id === 'codex:party');
+    expect(party?.status).not.toBe('needs_sign_in');
+    expect(party?.message).toBeNull();
+  });
+
+  it('keeps the rows as they were when the renewal status cannot be read', async () => {
+    const result = await new AccountDashboardService(
+      deps({
+        getCodexSummary: async () => summary('lime'),
+        getRenewalStatus: async () => {
+          throw new Error('unreadable');
+        },
+      })
+    ).get();
+    const gmail = result.accounts.find((account) => account.id === 'codex:gmail');
+    expect(gmail?.status).not.toBe('needs_sign_in');
+    expect(gmail?.message).toBeNull();
+  });
+
+  it('never adds a renewal note to the login Codex is using', async () => {
+    const result = await new AccountDashboardService(
+      deps({
+        getCodexSummary: async () => summary('gmail'),
+        getRenewalStatus: async () => ({ profiles: [renewalEntry('gmail', 'failed', 'dead')] }),
+      })
+    ).get();
+    expect(result.accounts.find((account) => account.id === 'codex:gmail')).toMatchObject({
+      isActive: true,
+      message: null,
+    });
+  });
+
+  it('keeps the renewal note on the cached Codex rows used while a collection is slow', async () => {
+    const service = new AccountDashboardService(
+      deps({
+        getCodexSummary: async () => summary('lime'),
+        getRenewalStatus: async () => ({ profiles: [renewalEntry('gmail', 'failed', 'dead')] }),
+      })
+    );
+    await service.get();
+    const cached = (
+      service as unknown as { cachedCodex(scope: string): DashboardAccount[] }
+    ).cachedCodex('fixture-scope');
+    expect(cached.find((account) => account.id === 'codex:gmail')).toMatchObject({
+      status: 'needs_sign_in',
+      message: CODEX_RENEWAL_MESSAGES.dead,
+    });
   });
 });

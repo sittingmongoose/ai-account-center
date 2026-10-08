@@ -6,11 +6,16 @@
 * **app-updates:** Nas1 runs the same fixed update helper with `--platform ubuntu`. The helpers are synced, checksum-gated, to `~/.ccs/app-updates/` on Nas1 with `sha256sum` and a POSIX `tar` extract. The sync also ships a self-contained Codex stop/start runtime (`app_update_codex_runtime.cjs`, generated into `dist/app-updates`), so Codex Desktop and a Codex CLI daemon update on a Linux host without AI Account Center installed. A T3 update on Nas1 schedules its own deferred `t3code.service` restart.
 * **analytics:** Nas1 is scanned with the same pinned, read-only helper streamed over SSH (Claude Code, Codex, T3 shadow homes, OMP, Muse, zcode and Antigravity) and shows as a fourth computer in the Included usage sources. Extra usage-log roots can be set for Nas1 in Settings (POSIX paths).
 * **accounts:** A quota source can run on Nas1 when it is saved as `platform: "ubuntu"` with `sshHost: "nas1-agent"`; its row reads "on Nas1". By default no source moves there, because Nas1 uses the same provider accounts as the dashboard computer.
+* **accounts:** Idle saved Codex logins renew themselves. About four days before a saved login's 10-day access token expires, AAC renews it with OpenAI. The check runs every 6 hours, plus or minus 30 minutes, and the first one 3 to 5 minutes after the dashboard starts. AAC never renews the login Codex is using, never renews during an account switch, sign-in or removal (renewal shares the activation lock, retries shortly when it is busy, and never waits for it), and never renews a login another Codex home on this machine shares (the same refresh token, session id or sign-in time), because renewing one copy would sign the other out. Renewed tokens are written back only to the same profile, atomically. The dashboard shows a login OpenAI rejected as needing Sign in again, names a retry or a stuck renewal once its access token nears expiry, and automatic switching never picks a rejected login. `CCS_CODEX_RENEWAL=0` turns renewal off.
 
 ### Changed
 
 * **app-updates:** Update all covers four computers x eight apps, so a finished run has 32 result rows (was 24).
 * **compatibility:** Adding Nas1 touches no account data. Rolling back to a build without it loses display data, and Settings only if a Nas1 extra usage-log root was saved. An older build never opens the new analytics cache `cache/analytics-remote-v1/nas1.json`; it does not restore a saved Update-all job (`app-updates/dashboard-job.json`) with more than 24 result rows, so the last result is not shown and no update is replayed; and it treats a `dashboard-preferences.json` that holds a Nas1 extra usage-log root as invalid as a whole, so the defaults apply in memory, with a warning and without overwriting the file, until the next save of Settings. `account-usage-sources.json` and `account-usage-accounts.json` keep their format, because a Nas1 source is stored as `ubuntu` plus `sshHost`, which earlier builds already read and collect the same way.
+
+### Fixed
+
+* **antigravity:** A revoked or expired Antigravity refresh grant (HTTP 400 `invalid_grant` from Google's token endpoint) now shows Sign in again instead of temporarily unavailable.
 
 ## [8.10.0](https://github.com/kaitranntt/ccs/compare/v8.9.0...v8.10.0) (2026-09-11)
 
