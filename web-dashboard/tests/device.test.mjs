@@ -8,6 +8,7 @@ import {
   installRow,
   themeColor,
   themeScreen,
+  viewportSize,
 } from '../public/device.mjs';
 
 test('px parses CSS lengths', () => {
@@ -69,4 +70,136 @@ test('themeColor follows the resolved theme and the screen', () => {
 test('themeScreen is the dashboard only once signed in', () => {
   assert.equal(themeScreen(true), 'dashboard');
   assert.equal(themeScreen(false), 'cover');
+});
+
+test('viewportSize sizes from layout probe dimensions when resolved', () => {
+  // Desktop layout probe
+  assert.deepEqual(
+    viewportSize({ layoutWidth: 1440, layoutHeight: 900, innerWidth: 1440, innerHeight: 900 }),
+    { width: 1440, height: 900 }
+  );
+  // Mobile Safari layout probe
+  assert.deepEqual(
+    viewportSize({ layoutWidth: 402, layoutHeight: 714, innerWidth: 402, innerHeight: 714 }),
+    { width: 402, height: 714 }
+  );
+  // Standalone iOS PWA layout probe with default status bar (62pt status bar -> 812pt content)
+  assert.deepEqual(
+    viewportSize({ layoutWidth: 402, layoutHeight: 812, innerWidth: 402, innerHeight: 812 }),
+    { width: 402, height: 812 }
+  );
+  // Backward compatibility: canvasWidth / canvasHeight still honored if supplied
+  assert.deepEqual(
+    viewportSize({ canvasWidth: 402, canvasHeight: 812, innerWidth: 402, innerHeight: 812 }),
+    { width: 402, height: 812 }
+  );
+});
+
+test('viewportSize tracks runtime window size and orientation transitions', () => {
+  // Sequence 1: 1280x800 -> 600x800 -> 800x600 -> 1280x800
+  const step1 = viewportSize({ layoutWidth: 1280, layoutHeight: 800, innerWidth: 1280, innerHeight: 800 });
+  assert.deepEqual(step1, { width: 1280, height: 800 });
+
+  const step2 = viewportSize({ layoutWidth: 600, layoutHeight: 800, innerWidth: 600, innerHeight: 800 });
+  assert.deepEqual(step2, { width: 600, height: 800 });
+
+  const step3 = viewportSize({ layoutWidth: 800, layoutHeight: 600, innerWidth: 800, innerHeight: 600 });
+  assert.deepEqual(step3, { width: 800, height: 600 });
+
+  const step4 = viewportSize({ layoutWidth: 1280, layoutHeight: 800, innerWidth: 1280, innerHeight: 800 });
+  assert.deepEqual(step4, { width: 1280, height: 800 });
+
+  // Sequence 2: Phone portrait -> landscape -> portrait
+  const portrait = viewportSize({ layoutWidth: 402, layoutHeight: 812, innerWidth: 402, innerHeight: 812 });
+  assert.deepEqual(portrait, { width: 402, height: 812 });
+
+  const landscape = viewportSize({ layoutWidth: 812, layoutHeight: 402, innerWidth: 812, innerHeight: 402 });
+  assert.deepEqual(landscape, { width: 812, height: 402 });
+
+  const backToPortrait = viewportSize({ layoutWidth: 402, layoutHeight: 812, innerWidth: 402, innerHeight: 812 });
+  assert.deepEqual(backToPortrait, { width: 402, height: 812 });
+});
+
+test('viewportSize layout probe breaks renderer canvas feedback loop', () => {
+  // If renderer canvas has stale inline style (e.g. 1280x800 from prior render),
+  // layoutWidth/layoutHeight probe takes precedence over stale canvas dimensions.
+  const resized = viewportSize({
+    layoutWidth: 600,
+    layoutHeight: 800,
+    canvasWidth: 1280, // stale inline renderer canvas
+    canvasHeight: 800,
+    innerWidth: 600,
+    innerHeight: 800,
+  });
+  assert.deepEqual(resized, { width: 600, height: 800 });
+  assert.notEqual(resized.width, 1280);
+});
+
+test('viewportSize falls back to inner dimensions when canvas is not yet sized', () => {
+  assert.deepEqual(
+    viewportSize({ innerWidth: 1440, innerHeight: 900 }),
+    { width: 1440, height: 900 }
+  );
+  assert.deepEqual(
+    viewportSize({ innerWidth: 402, innerHeight: 714 }),
+    { width: 402, height: 714 }
+  );
+  assert.deepEqual(
+    viewportSize({ innerWidth: 412, innerHeight: 915 }),
+    { width: 412, height: 915 }
+  );
+});
+
+test('viewportSize preserves iPad Split View, Stage Manager and rotation without screen substitution', () => {
+  // iPad Split View (e.g. 600x800 on 820x1180 screen): must preserve 600x800, NOT physical screen 820x1180
+  const splitView = viewportSize({ canvasWidth: 600, canvasHeight: 800, innerWidth: 600, innerHeight: 800 });
+  assert.deepEqual(splitView, { width: 600, height: 800 });
+  assert.notEqual(splitView.width, 820);
+  assert.notEqual(splitView.height, 1180);
+
+  // Stage Manager windowed PWA (e.g. 700x600)
+  assert.deepEqual(
+    viewportSize({ canvasWidth: 700, canvasHeight: 600, innerWidth: 700, innerHeight: 600 }),
+    { width: 700, height: 600 }
+  );
+
+  // External display window (e.g. 1920x1080)
+  assert.deepEqual(
+    viewportSize({ canvasWidth: 1920, canvasHeight: 1080, innerWidth: 1920, innerHeight: 1080 }),
+    { width: 1920, height: 1080 }
+  );
+
+  // Rotation: portrait (600x800) vs landscape (800x600)
+  assert.deepEqual(
+    viewportSize({ canvasWidth: 600, canvasHeight: 800 }),
+    { width: 600, height: 800 }
+  );
+  assert.deepEqual(
+    viewportSize({ canvasWidth: 800, canvasHeight: 600 }),
+    { width: 800, height: 600 }
+  );
+});
+
+test('keyboardHeight computes covered band without false keyboard at idle', () => {
+  // Idle (not focused): always 0 regardless of dimensions
+  assert.equal(keyboardHeight(800, { height: 800, offsetTop: 0 }, false), 0);
+  assert.equal(keyboardHeight(800, { height: 500, offsetTop: 0 }, false), 0);
+  assert.equal(keyboardHeight(800, null, false), 0);
+
+  // Idle when focused is true but visual viewport matches layout height: 0 (no false keyboard)
+  assert.equal(keyboardHeight(800, { height: 800, offsetTop: 0 }, true), 0);
+  assert.equal(keyboardHeight(600, { height: 600, offsetTop: 0 }, true), 0);
+
+  // Active keyboard: layout height 800, visualViewport height 520 -> 280
+  assert.equal(keyboardHeight(800, { height: 520, offsetTop: 0 }, true), 280);
+
+  // Active keyboard on windowed iPad: layout height 600, visualViewport height 350 -> 250
+  assert.equal(keyboardHeight(600, { height: 350, offsetTop: 0 }, true), 250);
+});
+
+test('viewportSize handles fallback values gracefully', () => {
+  assert.deepEqual(viewportSize({}), { width: 0, height: 0 });
+  assert.deepEqual(viewportSize({ innerWidth: null, innerHeight: undefined }), { width: 0, height: 0 });
+  assert.deepEqual(viewportSize({ innerWidth: 300, innerHeight: 600 }), { width: 300, height: 600 });
+  assert.deepEqual(viewportSize({ canvasWidth: 300.4, canvasHeight: 600.6 }), { width: 300, height: 601 });
 });

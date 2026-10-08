@@ -214,6 +214,28 @@ describe('PWA shell serving while signed out', () => {
     }
   });
 
+  it('serves root icon aliases without a session and preserves redirects for other routes', async () => {
+    for (const route of [
+      '/apple-touch-icon.png',
+      '/apple-touch-icon-precomposed.png',
+      '/favicon.ico',
+    ]) {
+      const response = await raw('GET', route);
+      expect([route, response.status]).toEqual([route, 200]);
+      expect(response.headers['content-type']).toBe('image/png');
+      expect(response.headers['cache-control']).toBe('no-cache');
+      expect(response.body.length).toBeGreaterThan(0);
+
+      const head = await raw('HEAD', route);
+      expect([route, head.status]).toEqual([route, 200]);
+      expect(head.body.length).toBe(0);
+    }
+
+    const other = await raw('GET', '/unknown-icon.png');
+    expect(other.status).toBe(302);
+    expect(other.headers.location).toBe('/');
+  });
+
   it('keeps /api behind the auth wall while the shell stays public', async () => {
     const api = await raw('GET', '/api/accounts/registry');
     expect(api.status).toBe(401);

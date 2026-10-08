@@ -54,6 +54,16 @@ const CONTENT_TYPES = new Map<string, string>([
 ]);
 /** Build facts for the build scripts only; the UI never fetches it, so it is not served. */
 const UNSERVED = new Set(['ui-build-manifest.json']);
+/**
+ * Root icon aliases probed by iOS Springboard and desktop browsers.
+ * Served directly from icons/ without requiring session auth.
+ */
+const STATIC_ICON_ALIASES: ReadonlyMap<string, string> = new Map<string, string>([
+  ['/apple-touch-icon.png', 'icons/apple-touch-icon-180.png'],
+  ['/apple-touch-icon-precomposed.png', 'icons/apple-touch-icon-180.png'],
+  ['/favicon.ico', 'icons/apple-touch-icon-180.png'],
+]);
+
 const PAGES = new Set(['/', '/login', '/analytics', '/accounts']);
 const PAGE_ALIASES = new Map([
   ['/settings', '/accounts'],
@@ -207,6 +217,8 @@ export function negotiateEncoding(
 
 /** The decoded path below the static root, or null when it cannot be one. */
 function relativeUiPath(root: string, requestPath: string): string | null {
+  const alias = STATIC_ICON_ALIASES.get(requestPath);
+  if (alias) return alias;
   let decoded: string;
   try {
     decoded = decodeURIComponent(requestPath);
@@ -344,6 +356,13 @@ export function precompressedStatic(ui: StaticUi): RequestHandler {
     }
     serveUiFile(ui, req, res, relative, () => {
       withoutVariantHeaders(res);
+      if (STATIC_ICON_ALIASES.has(req.path)) {
+        setSharedHeaders(ui, res, relative);
+        res.sendFile(path.join(ui.root, relative), (error?: Error) => {
+          if (error && !res.headersSent) next(error);
+        });
+        return;
+      }
       next();
     });
   };

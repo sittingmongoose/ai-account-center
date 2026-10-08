@@ -96,3 +96,35 @@ export function themeColor({ mode = 'auto', systemDark = false, screen = 'dashbo
 export function themeScreen(authenticated) {
   return authenticated === true ? 'dashboard' : 'cover';
 }
+
+/**
+ * Layout viewport dimensions ({ width, height }) for the Slint canvas.
+ *
+ * Resolves the dimensions from the actual canvas element after CSS layout
+ * (e.g. canvas.clientWidth / clientHeight or getBoundingClientRect),
+ * falling back to the window inner dimensions.
+ *
+ * Never substitutes physical screen dimensions, preserving windowed environments
+ * (iPad Split View, Stage Manager / windowed PWA, external displays) and preventing
+ * false keyboard heights and offscreen controls.
+ */
+export function viewportSize({
+  layoutWidth,
+  layoutHeight,
+  canvasWidth,
+  canvasHeight,
+  innerWidth = 0,
+  innerHeight = 0,
+} = {}) {
+  const effectiveWidth = layoutWidth ?? canvasWidth;
+  const effectiveHeight = layoutHeight ?? canvasHeight;
+  const lw = Number.isFinite(effectiveWidth) && effectiveWidth > 0 ? Math.round(effectiveWidth) : 0;
+  const lh = Number.isFinite(effectiveHeight) && effectiveHeight > 0 ? Math.round(effectiveHeight) : 0;
+  const iw = Number.isFinite(innerWidth) && innerWidth > 0 ? Math.round(innerWidth) : 0;
+  const ih = Number.isFinite(innerHeight) && innerHeight > 0 ? Math.round(innerHeight) : 0;
+
+  return {
+    width: lw > 0 ? lw : iw,
+    height: lh > 0 ? lh : ih,
+  };
+}

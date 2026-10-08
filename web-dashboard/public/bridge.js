@@ -16,7 +16,7 @@ import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
-import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen } from './device.mjs';
+import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen, viewportSize } from './device.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -1019,14 +1019,79 @@ function pushInputProfile() {
   // Standalone hides the Settings "Home screen app" row (installRow); a display-mode
   // change (installed while open) re-renders it.
   installStandalone = standalone;
+  resize();
   renderAccounts();
+}
+let viewportProbe = null;
+function readLayoutViewport() {
+  if (typeof document !== 'undefined') {
+    if (!viewportProbe) {
+      try {
+        if (typeof document.getElementById === 'function') {
+          viewportProbe = document.getElementById('viewport-probe');
+        } else if (typeof document.querySelector === 'function') {
+          viewportProbe = document.querySelector('#viewport-probe');
+        }
+      } catch {}
+    }
+    if (!viewportProbe && document.body && typeof document.createElement === 'function') {
+      try {
+        viewportProbe = document.createElement('div');
+        viewportProbe.id = 'viewport-probe';
+        viewportProbe.setAttribute('aria-hidden', 'true');
+        viewportProbe.style.cssText =
+          'position:fixed;inset:0;left:0;top:0;width:100%;height:100%;pointer-events:none;visibility:hidden;z-index:-1;';
+        document.body.appendChild(viewportProbe);
+      } catch {
+        viewportProbe = null;
+      }
+    }
+    if (viewportProbe) {
+      let pw = 0;
+      let ph = 0;
+      if (Number.isFinite(viewportProbe.clientWidth) && viewportProbe.clientWidth > 0) {
+        pw = viewportProbe.clientWidth;
+      } else if (typeof viewportProbe.getBoundingClientRect === 'function') {
+        const r = viewportProbe.getBoundingClientRect();
+        if (Number.isFinite(r?.width) && r.width > 0) pw = Math.round(r.width);
+      }
+      if (Number.isFinite(viewportProbe.clientHeight) && viewportProbe.clientHeight > 0) {
+        ph = viewportProbe.clientHeight;
+      } else if (typeof viewportProbe.getBoundingClientRect === 'function') {
+        const r = viewportProbe.getBoundingClientRect();
+        if (Number.isFinite(r?.height) && r.height > 0) ph = Math.round(r.height);
+      }
+      if (pw > 0 && ph > 0) {
+        return { width: pw, height: ph };
+      }
+    }
+  }
+  const iw = typeof innerWidth !== 'undefined' && Number.isFinite(innerWidth) ? innerWidth : 0;
+  const ih = typeof innerHeight !== 'undefined' && Number.isFinite(innerHeight) ? innerHeight : 0;
+  return { width: iw, height: ih };
+}
+function currentViewport() {
+  const vp = readLayoutViewport();
+  return viewportSize({
+    layoutWidth: vp.width,
+    layoutHeight: vp.height,
+    innerWidth: typeof innerWidth !== 'undefined' ? innerWidth : 0,
+    innerHeight: typeof innerHeight !== 'undefined' ? innerHeight : 0,
+  });
+}
+function resize() {
+  try {
+    const vp = currentViewport();
+    resize_dashboard(vp.width, vp.height);
+  } catch {}
 }
 function pushKeyboard() {
   let height = 0;
   try {
     const viewport = typeof visualViewport !== 'undefined' ? visualViewport : null;
+    const vp = currentViewport();
     height = keyboardHeight(
-      innerHeight,
+      vp.height,
       viewport ? { height: viewport.height, offsetTop: viewport.offsetTop ?? 0 } : null,
       keyboardFocus
     );
@@ -1042,12 +1107,29 @@ function setupDevice() {
     safeProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;visibility:hidden;padding-top:env(safe-area-inset-top);padding-right:env(safe-area-inset-right);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);';
     document.body.appendChild(safeProbe);
   } catch { safeProbe = null; }
+  try {
+    if (!viewportProbe && typeof document !== 'undefined') {
+      if (typeof document.getElementById === 'function') {
+        viewportProbe = document.getElementById('viewport-probe');
+      } else if (typeof document.querySelector === 'function') {
+        viewportProbe = document.querySelector('#viewport-probe');
+      }
+      if (!viewportProbe && document.body && typeof document.createElement === 'function') {
+        viewportProbe = document.createElement('div');
+        viewportProbe.id = 'viewport-probe';
+        viewportProbe.setAttribute('aria-hidden', 'true');
+        viewportProbe.style.cssText =
+          'position:fixed;inset:0;left:0;top:0;width:100%;height:100%;pointer-events:none;visibility:hidden;z-index:-1;';
+        document.body.appendChild(viewportProbe);
+      }
+    }
+  } catch { viewportProbe = null; }
   pushSafeArea();
   pushInputProfile();
   pushKeyboard();
   try { set_online(onlineState); } catch {}
   addEventListener('resize', () => { pushSafeArea(); pushKeyboard(); });
-  addEventListener('orientationchange', () => setTimeout(() => { pushSafeArea(); pushKeyboard(); }, 60));
+  addEventListener('orientationchange', () => setTimeout(() => { resize(); pushSafeArea(); pushKeyboard(); }, 60));
   try {
     visualViewport?.addEventListener?.('resize', () => { pushSafeArea(); pushKeyboard(); });
     visualViewport?.addEventListener?.('scroll', pushKeyboard);
@@ -1161,7 +1243,8 @@ try {
   const earlyCheck = request('/api/auth/check');
   earlyCheck.catch(() => {});
   await init();
-  startSlintDashboard(() => start_dashboard(innerWidth, innerHeight, devicePixelRatio));
+  const initialVp = currentViewport();
+  startSlintDashboard(() => start_dashboard(initialVp.width, initialVp.height, devicePixelRatio));
   // The login form's real HTML inputs lie over the Slint fields (login-bridge.mjs): what is typed or filled lands
   // in the Slint fields too, their focus and hover reach the Slint boxes, and a submit runs the same login as Sign in.
   try {
@@ -1186,7 +1269,6 @@ try {
     });
   } catch {}
   set_current_page(currentPage);
-  const resize = () => resize_dashboard(innerWidth, innerHeight);
   addEventListener('resize', resize); resize();
   closeDetailsOnOutsideClicks(document.querySelector('#canvas'));
   addEventListener('popstate', () => {
