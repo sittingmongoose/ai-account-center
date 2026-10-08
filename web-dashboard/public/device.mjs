@@ -96,3 +96,39 @@ export function themeColor({ mode = 'auto', systemDark = false, screen = 'dashbo
 export function themeScreen(authenticated) {
   return authenticated === true ? 'dashboard' : 'cover';
 }
+
+/**
+ * Layout viewport dimensions ({ width, height }) for the Slint canvas.
+ *
+ * On iOS standalone PWA (Add to Home Screen), WebKit's window.innerHeight
+ * stops short above the bottom safe area (e.g. 812 pt instead of 874 pt on iPhone 17/18 Pro),
+ * leaving an unpainted 62 pt gap below the tab bar. When standalone and appleMobile,
+ * this expands the layout height to the true screen dimension for the current orientation,
+ * grounding the tab bar and allowing safe-bottom padding to cover the home indicator.
+ * On desktop, Android, and normal Safari, innerWidth and innerHeight are preserved.
+ */
+export function viewportSize({
+  innerWidth = 0,
+  innerHeight = 0,
+  screenWidth = 0,
+  screenHeight = 0,
+  standalone = false,
+  appleMobile = false,
+} = {}) {
+  const w = Number.isFinite(innerWidth) && innerWidth > 0 ? innerWidth : 0;
+  const h = Number.isFinite(innerHeight) && innerHeight > 0 ? innerHeight : 0;
+  if (!standalone || !appleMobile) {
+    return { width: w, height: h };
+  }
+  const sw = Number.isFinite(screenWidth) && screenWidth > 0 ? screenWidth : w;
+  const sh = Number.isFinite(screenHeight) && screenHeight > 0 ? screenHeight : h;
+  const minDim = Math.min(sw, sh);
+  const maxDim = Math.max(sw, sh);
+  const isLandscape = w > h;
+  const targetWidth = isLandscape ? maxDim : minDim;
+  const targetHeight = isLandscape ? minDim : maxDim;
+  return {
+    width: targetWidth > 0 ? targetWidth : w,
+    height: targetHeight > 0 ? targetHeight : h,
+  };
+}

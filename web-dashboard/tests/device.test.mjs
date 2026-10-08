@@ -8,6 +8,7 @@ import {
   installRow,
   themeColor,
   themeScreen,
+  viewportSize,
 } from '../public/device.mjs';
 
 test('px parses CSS lengths', () => {
@@ -69,4 +70,41 @@ test('themeColor follows the resolved theme and the screen', () => {
 test('themeScreen is the dashboard only once signed in', () => {
   assert.equal(themeScreen(true), 'dashboard');
   assert.equal(themeScreen(false), 'cover');
+});
+
+test('viewportSize returns inner dimensions on desktop or non-standalone', () => {
+  // Desktop
+  assert.deepEqual(
+    viewportSize({ innerWidth: 1440, innerHeight: 900, standalone: false, appleMobile: false }),
+    { width: 1440, height: 900 }
+  );
+  // Android standalone
+  assert.deepEqual(
+    viewportSize({ innerWidth: 412, innerHeight: 915, screenWidth: 412, screenHeight: 915, standalone: true, appleMobile: false }),
+    { width: 412, height: 915 }
+  );
+  // iOS Safari (not standalone)
+  assert.deepEqual(
+    viewportSize({ innerWidth: 402, innerHeight: 714, screenWidth: 402, screenHeight: 874, standalone: false, appleMobile: true }),
+    { width: 402, height: 714 }
+  );
+});
+
+test('viewportSize expands layout height to full screen in standalone iOS (portrait & landscape)', () => {
+  // iPhone 17/18 Pro portrait standalone: innerHeight is 812 pt, but full screen is 874 pt
+  assert.deepEqual(
+    viewportSize({ innerWidth: 402, innerHeight: 812, screenWidth: 402, screenHeight: 874, standalone: true, appleMobile: true }),
+    { width: 402, height: 874 }
+  );
+  // iPhone landscape standalone: innerWidth is 874, innerHeight is 360 pt
+  assert.deepEqual(
+    viewportSize({ innerWidth: 874, innerHeight: 360, screenWidth: 402, screenHeight: 874, standalone: true, appleMobile: true }),
+    { width: 874, height: 402 }
+  );
+});
+
+test('viewportSize handles fallback values gracefully', () => {
+  assert.deepEqual(viewportSize({}), { width: 0, height: 0 });
+  assert.deepEqual(viewportSize({ innerWidth: null, innerHeight: undefined }), { width: 0, height: 0 });
+  assert.deepEqual(viewportSize({ innerWidth: 300, innerHeight: 600 }), { width: 300, height: 600 });
 });

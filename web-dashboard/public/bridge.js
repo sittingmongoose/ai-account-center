@@ -16,7 +16,7 @@ import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
-import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen } from './device.mjs';
+import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen, viewportSize } from './device.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
 // (public/*.mjs); the Slint UI receives version 2 view-model JSON and reports intent through
@@ -1019,14 +1019,46 @@ function pushInputProfile() {
   // Standalone hides the Settings "Home screen app" row (installRow); a display-mode
   // change (installed while open) re-renders it.
   installStandalone = standalone;
+  resize();
   renderAccounts();
+}
+function currentViewport() {
+  let appleMobile = false;
+  let standalone = false;
+  try {
+    appleMobile = isAppleMobile(navigator?.userAgent, {
+      standalone: installStandalone,
+      touchPoints: navigator?.maxTouchPoints ?? 0,
+    });
+    if (typeof matchMedia === 'function') {
+      standalone = matchMedia('(display-mode: standalone)').matches === true;
+    }
+    if (typeof navigator !== 'undefined' && navigator.standalone === true) standalone = true;
+  } catch {}
+  const screenWidth = typeof screen !== 'undefined' ? screen.width : innerWidth;
+  const screenHeight = typeof screen !== 'undefined' ? screen.height : innerHeight;
+  return viewportSize({
+    innerWidth,
+    innerHeight,
+    screenWidth,
+    screenHeight,
+    standalone,
+    appleMobile,
+  });
+}
+function resize() {
+  try {
+    const vp = currentViewport();
+    resize_dashboard(vp.width, vp.height);
+  } catch {}
 }
 function pushKeyboard() {
   let height = 0;
   try {
     const viewport = typeof visualViewport !== 'undefined' ? visualViewport : null;
+    const vp = currentViewport();
     height = keyboardHeight(
-      innerHeight,
+      vp.height,
       viewport ? { height: viewport.height, offsetTop: viewport.offsetTop ?? 0 } : null,
       keyboardFocus
     );
@@ -1047,7 +1079,7 @@ function setupDevice() {
   pushKeyboard();
   try { set_online(onlineState); } catch {}
   addEventListener('resize', () => { pushSafeArea(); pushKeyboard(); });
-  addEventListener('orientationchange', () => setTimeout(() => { pushSafeArea(); pushKeyboard(); }, 60));
+  addEventListener('orientationchange', () => setTimeout(() => { resize(); pushSafeArea(); pushKeyboard(); }, 60));
   try {
     visualViewport?.addEventListener?.('resize', () => { pushSafeArea(); pushKeyboard(); });
     visualViewport?.addEventListener?.('scroll', pushKeyboard);
@@ -1161,7 +1193,8 @@ try {
   const earlyCheck = request('/api/auth/check');
   earlyCheck.catch(() => {});
   await init();
-  startSlintDashboard(() => start_dashboard(innerWidth, innerHeight, devicePixelRatio));
+  const initialVp = currentViewport();
+  startSlintDashboard(() => start_dashboard(initialVp.width, initialVp.height, devicePixelRatio));
   // The login form's real HTML inputs lie over the Slint fields (login-bridge.mjs): what is typed or filled lands
   // in the Slint fields too, their focus and hover reach the Slint boxes, and a submit runs the same login as Sign in.
   try {
@@ -1186,7 +1219,6 @@ try {
     });
   } catch {}
   set_current_page(currentPage);
-  const resize = () => resize_dashboard(innerWidth, innerHeight);
   addEventListener('resize', resize); resize();
   closeDetailsOnOutsideClicks(document.querySelector('#canvas'));
   addEventListener('popstate', () => {
