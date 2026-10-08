@@ -48,3 +48,9 @@ test('the service-worker offline page follows the OS theme', () => {
   );
   assert.doesNotMatch(sw, /<meta name="theme-color" content="/);
 });
+
+test('index.html uses default status bar style to avoid standalone blur overlay', () => {
+  const html = read('index.html');
+  assert.match(html, /<meta name="apple-mobile-web-app-status-bar-style" content="default">/);
+  assert.doesNotMatch(html, /content="black-translucent"/);
+});
