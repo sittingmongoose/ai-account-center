@@ -7,7 +7,7 @@
 // and per account `actions` and `removeRefusal` in GET /api/accounts/registry. A control is "coming" only where
 // the server has no flow for it yet (`not_implemented`, or a route that does not exist on this server); any other
 // reason it is off is said in plain words. Nothing here ever shows an example value as real data.
-import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, planLabel, relative, intervalLabel, run, statusWord, duration, claudeSignInNeeded } from './view-model.mjs';
+import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, hostLabel, planLabel, relative, intervalLabel, run, statusWord, duration, claudeSignInNeeded, updateTotal } from './view-model.mjs';
 import { antigravityView } from './antigravity-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
@@ -143,18 +143,18 @@ function sourceLines(provider, account, reg) {
   const def = ACCOUNT_KINDS[provider];
   if (provider === 'claude') {
     const platforms = Array.isArray(account.capabilities?.claudePlatforms) ? account.capabilities.claudePlatforms : [];
-    return [def.src, platforms.length ? platforms.map(platformLabel).join(' and ') : platformLabel(account.platform)];
+    return [def.src, platforms.length ? platforms.map(platformLabel).join(' and ') : hostLabel(account)];
   }
   if (provider === 'opencode-go' && isConsole(account)) return ['Console session in a browser', 'Wallet and usage'];
   if (provider === 'qwen') return [def.src, 'by browser extension'];
   const credential = reg?.credential;
   if (credential?.kind === 'aac-key') {
-    return [credential.last4 ? `API key ending ${credential.last4}` : 'API key', `stored on ${platformLabel(credential.storedOn || account.platform)}`];
+    return [credential.last4 ? `API key ending ${credential.last4}` : 'API key', `stored on ${platformLabel(credential.storedOn || (account.host ?? account.platform))}`];
   }
   if (def.kind === 'apikey' && credential?.kind && credential.kind !== 'aac-key') {
-    return ['Signed in through the app', platformLabel(account.platform)];
+    return ['Signed in through the app', hostLabel(account)];
   }
-  return [def.src, platformLabel(account.platform)];
+  return [def.src, hostLabel(account)];
 }
 
 /**
@@ -734,7 +734,8 @@ function policies(data, home, ag) {
 }
 
 // ---------------------------------------------------------------- Update apps results
-const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows'], ['ubuntu', 'Ubuntu', 'ubuntu']];
+// Nas1 is a second Ubuntu computer: it reuses the Ubuntu glyph.
+const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows'], ['ubuntu', 'Ubuntu', 'ubuntu'], ['nas1', 'Nas1', 'ubuntu']];
 const UPDATE_APP_NAMES = {
   'antigravity-cli': 'Antigravity CLI', 'muse-code': 'Muse Code', omp: 'OMP', 'codex-cli': 'Codex CLI',
   'codex-desktop': 'Codex Desktop', 'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop', 't3-code': 'T3 Code',
@@ -787,7 +788,7 @@ export function updateResultsView(job, now = Date.now()) {
   const cancelling = running && job.cancelRequested === true;
   const count = status => results.filter(row => row.status === status).length;
   const failed = count('failed') + count('restart_failed');
-  const total = finite(job?.expectedResults) && job.expectedResults > 0 ? job.expectedResults : 21;
+  const total = updateTotal(job);
   let headRuns;
   if (!job) headRuns = [run('No run yet. '), run('Update apps'), run(' in the header runs one.')];
   else if (running) headRuns = cancelling
@@ -1188,14 +1189,21 @@ export const LOG_SOURCE_TOOLS = [
   ['jsonl', 'Generic JSONL'],
 ];
 export const LOG_SOURCE_TOOL_LABEL = Object.fromEntries(LOG_SOURCE_TOOLS);
+// Nas1 is a second Ubuntu computer (POSIX paths); a generic JSONL log is read on this computer only.
+// The Settings host select shows these hosts' labels; the controller maps a label back to its id.
 export const LOG_SOURCE_HOSTS = {
-  omp: ['ubuntu', 'mac', 'windows'],
-  muse: ['ubuntu', 'mac'],
-  zcode: ['ubuntu', 'mac'],
-  'claude-code': ['ubuntu', 'mac', 'windows'],
-  codex: ['ubuntu', 'mac', 'windows'],
+  omp: ['ubuntu', 'mac', 'windows', 'nas1'],
+  muse: ['ubuntu', 'mac', 'nas1'],
+  zcode: ['ubuntu', 'mac', 'nas1'],
+  'claude-code': ['ubuntu', 'mac', 'windows', 'nas1'],
+  codex: ['ubuntu', 'mac', 'windows', 'nas1'],
   jsonl: ['ubuntu'],
 };
+/** A host the Settings select names by label ("Nas1") or id ("nas1") as its id; '' when it is neither. */
+export function logSourceHostId(tool, host) {
+  const hosts = LOG_SOURCE_HOSTS[tool] || [];
+  return hosts.includes(host) ? host : hosts.find(id => platformLabel(id) === host) || '';
+}
 export const LOG_SOURCE_PATH_HINT = {
   omp: 'an OMP session-root folder',
   muse: 'a Muse sessions folder',
@@ -1224,11 +1232,13 @@ export function logSourcesView(prefs) {
       tool: typeof entry?.tool === 'string' ? entry.tool : '',
       toolLabel: LOG_SOURCE_TOOL_LABEL[entry?.tool] || String(entry?.tool ?? ''),
       host: typeof entry?.host === 'string' ? entry.host : '',
+      hostLabel: typeof entry?.host === 'string' && entry.host ? platformLabel(entry.host) : '',
       path: typeof entry?.path === 'string' ? entry.path : '',
       mapping: logSourceMappingSummary(entry?.fieldMapping),
     })),
     tools: LOG_SOURCE_TOOLS.map(([tool, label]) => ({ tool, label })),
     hosts: { ...LOG_SOURCE_HOSTS },
+    hostLabels: Object.fromEntries(Object.entries(LOG_SOURCE_HOSTS).map(([tool, ids]) => [tool, ids.map(platformLabel)])),
     hints: { ...LOG_SOURCE_PATH_HINT },
     enabled: !!data && prefs?.busy !== 'logsources',
     busy: prefs?.busy === 'logsources',

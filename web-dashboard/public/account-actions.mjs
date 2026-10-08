@@ -147,7 +147,7 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const waitText = seconds => finite(seconds) && seconds > 0
   ? (seconds < 60 ? plural(Math.ceil(seconds), 'second', 'seconds') : plural(Math.ceil(seconds / 60), 'minute', 'minutes'))
   : 'a moment';
-const HOSTS = { mac: 'the Mac', windows: 'Windows', ubuntu: 'Ubuntu' };
+const HOSTS = { mac: 'the Mac', windows: 'Windows', ubuntu: 'Ubuntu', nas1: 'Nas1' };
 
 /**
  * Calm, specific words for an error answer. `error` is what `send()` throws ({ status, payload }) or a payload.

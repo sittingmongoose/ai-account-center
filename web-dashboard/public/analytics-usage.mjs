@@ -65,6 +65,13 @@ export const untilTxt = (t, now) => !finite(t) ? '' : t - now <= 0 ? 'reset due'
 /** A line that mixes weights travels as runs ({ text, strong, tone }), like the Home view model. */
 const run = (value, strong = false, tone = '') => ({ text: String(value), strong: !!strong, tone });
 
+// ---------------------------------------------------------------- the computers whose logs are read
+/** This computer first, then the remote ones in the order the page names them (Nas1 is a second Ubuntu computer). */
+const SOURCE_HOSTS = [['ubuntu', 'Ubuntu'], ['mac', 'Mac'], ['windows', 'Windows'], ['nas1', 'Nas1']];
+/** The remote computers a background refresh can still be waiting on (activity.refreshingRemote), in page order. */
+const REMOTE_HOSTS = SOURCE_HOSTS.filter(([h]) => h !== 'ubuntu');
+const remoteHosts = list => REMOTE_HOSTS.filter(([h]) => Array.isArray(list) && list.includes(h)).map(([h]) => h);
+
 // ---------------------------------------------------------------- display-zone calendar
 export const dayStart = t => zonedDayStart(t);
 export const addDays = (t, n) => zonedAddDays(t, n);
@@ -335,7 +342,7 @@ function buildActivityRows(payload) {
   const sessionsTruncated = act.sessions?.truncated === true;
   // usage from a provider other than Claude and Codex (it shares the charts' neutral third series)
   const others = hours.some(r => !ownSeries(r.p)) || models.some(m => !ownSeries(m.provider));
-  const refreshingRemote = Array.isArray(act.refreshingRemote) ? act.refreshingRemote.filter(h => h === 'mac' || h === 'windows') : [];
+  const refreshingRemote = remoteHosts(act.refreshingRemote);
   return { available, status: text(act.status), refreshing: act.refreshing === true, refreshingRemote, message: text(act.message), hours, models, unreconciled, blend, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom, fetched };
 }
 
@@ -803,7 +810,7 @@ const SESS_TOP = 5, SESS_SHOWN = 25;
  * continues the table with the next sessions up to SESS_SHOWN in total, same columns and styling, so the
  * two boxes read as one list. The average cost comes from the rows that have costs, and says partial when
  * some rows do not; only with no priced row at all is it not logged. Every native tool names a session on
- * every host it runs on, so sessions cover Ubuntu, Mac and Windows alike; a generic JSONL log names none,
+ * every host it runs on, so sessions cover Ubuntu, Mac, Windows and Nas1 alike; a generic JSONL log names none,
  * and the note says so. The table lists the sample most recent first, without paths. The sample rows are
  * the server's AccountAnalyticsSessionRow shape (provider, lastActivity, string models, token totals);
  * anything else is dropped, never guessed.
@@ -1050,7 +1057,6 @@ export function calendarView(A, R, now, apiAll) {
 
 // ---------------------------------------------------------------- included usage (activity.sources)
 const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
-const SOURCE_HOSTS = [['ubuntu', 'Ubuntu'], ['mac', 'Mac'], ['windows', 'Windows']];
 const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
 const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
@@ -1125,7 +1131,7 @@ const PROGRESS_TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'
 export function hostProgress(payload) {
   const act = payload?.activity || {};
   const list = Array.isArray(act.sources) ? act.sources : [];
-  const pending = new Set(Array.isArray(act.refreshingRemote) ? act.refreshingRemote.filter(h => h === 'mac' || h === 'windows') : []);
+  const pending = new Set(remoteHosts(act.refreshingRemote));
   const running = act.status === 'loading' || act.refreshing === true;
   return SOURCE_HOSTS.map(([h, name]) => {
     const cells = list.filter(r => r?.host === h && PROGRESS_TOOLS.includes(r?.tool));
@@ -1218,16 +1224,13 @@ export function providerChoices(A, R, state) {
  * (_other, _undrawn) }. opts: { now, sizes }.
  */
 function headOf(A, R, state, now, zone, progress) {
-  const remote = [...new Set(Array.isArray(A.refreshingRemote) ? A.refreshingRemote : [])]
-    .filter(h => h === 'mac' || h === 'windows')
-    .sort((a, b) => (a === 'mac' ? 0 : 1) - (b === 'mac' ? 0 : 1))
-    .map(h => (h === 'mac' ? 'Mac' : 'Windows'));
+  const remote = REMOTE_HOSTS.filter(([h]) => A.refreshingRemote.includes(h)).map(([, name]) => name);
   const counts = progress.filter(p => p.scanning > 0).map(p => `${p.name} ${p.done} of ${p.total} tools`).join(', ');
   // One calm indicator for every background update: a scan running now, or cells
   // still converging between scans. Nothing else on the page moves for it.
   const updating = A.refreshing || counts !== '';
   const updateNote = !updating ? ''
-    : A.refreshing ? remote.length ? `Updating · refreshing ${remote.join(' and ')}…` : 'Updating…'
+    : A.refreshing ? remote.length ? `Updating · refreshing ${andList(remote)}…` : 'Updating…'
       : `Updating · ${counts} · continues shortly`;
   return {
     scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,

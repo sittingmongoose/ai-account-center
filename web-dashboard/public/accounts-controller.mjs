@@ -20,9 +20,9 @@
 import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS } from './account-actions.mjs';
 import { setDisplayTimeZone, DEFAULT_DISPLAY_TIME_ZONE } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
-import { statusWord } from './view-model.mjs';
+import { statusWord, platformLabel } from './view-model.mjs';
 import { lazyFormat } from './time-format.mjs';
-import { LOG_SOURCE_HOSTS, LOG_SOURCE_TOOL_LABEL, LOG_SOURCE_PATH_HINT } from './accounts-view.mjs';
+import { LOG_SOURCE_HOSTS, LOG_SOURCE_TOOL_LABEL, LOG_SOURCE_PATH_HINT, logSourceHostId } from './accounts-view.mjs';
 
 export const JOB_POLL_MS = 2_000;
 /** Terminal sign-in watch: poll the inventory this often, give up after this long (the CLI itself times out at 15 min). */
@@ -58,7 +58,8 @@ export function logSourceProblem(tool, host, location, mapping) {
   const hosts = LOG_SOURCE_HOSTS[tool];
   if (!hosts) return 'Pick a tool for the extra location.';
   if (!hosts.includes(host)) {
-    const names = hosts.join(', ');
+    const labels = hosts.map(platformLabel);
+    const names = labels.length < 2 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
     return `${LOG_SOURCE_TOOL_LABEL[tool]} usage is only scanned on ${names}.`;
   }
   const hint = LOG_SOURCE_PATH_HINT[tool];
@@ -869,7 +870,9 @@ export function createAccountsController(deps) {
     if (!current || state.prefs.busy) return;
     // "tool\nhost\npath\nmapping-json?": the mapping JSON holds no raw newlines, and a path holding
     // one fails the absolute-path check below, so the split cannot smuggle a bad path through.
-    const [tool = '', host = '', location = '', ...rest] = String(v ?? '').split('\n');
+    // The Settings select sends the host's label ("Nas1"); an id ("nas1") works the same.
+    const [tool = '', hostChoice = '', location = '', ...rest] = String(v ?? '').split('\n');
+    const host = logSourceHostId(tool, hostChoice) || hostChoice;
     const json = rest.join('\n');
     let mapping;
     if (json) {

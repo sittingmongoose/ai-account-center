@@ -518,11 +518,16 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
       running: true,
       done: false,
       count: 2,
-      total: 21,
+      // no expectedResults: 8 apps on each of the 4 computers
+      total: 32,
       tip: 'Updating apps on Mac · running apps may restart',
       summary: '2 results',
     }
   );
+  // the job's own expectedResults wins
+  assert.equal(updateViewModel({ state: 'running', expectedResults: 32, results: [] }).total, 32);
+  assert.equal(updateViewModel({ state: 'completed', expectedResults: 24, results: [] }).total, 24);
+  assert.equal(updateViewModel(null).total, 32);
   assert.equal(
     updateViewModel({
       state: 'running',
@@ -531,10 +536,28 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
         ubuntu: { state: 'running', currentApp: 'codex-cli', phase: 'updating' },
         mac: { state: 'running', currentApp: null, phase: 'checking' },
         windows: { state: 'running', currentApp: 'omp', phase: 'checking' },
+        nas1: { state: 'running', currentApp: 'claude-code', phase: 'checking' },
       },
       results: [],
     }).tip,
-    'Updating apps on Ubuntu, Mac and Windows · running apps may restart'
+    'Updating apps on Ubuntu, Mac, Windows and Nas1 · running apps may restart'
+  );
+  assert.equal(
+    updateViewModel({
+      state: 'running',
+      hosts: {
+        ubuntu: { state: 'done' },
+        mac: { state: 'done' },
+        windows: { state: 'done' },
+        nas1: { state: 'running', currentApp: 'omp', phase: 'checking' },
+      },
+      results: [],
+    }).tip,
+    'Updating apps on Nas1 · running apps may restart'
+  );
+  assert.equal(
+    updateViewModel(null).tip,
+    'Update the Claude and Codex apps and CLIs on Mac, Windows, Ubuntu and Nas1'
   );
   assert.equal(
     updateViewModel({

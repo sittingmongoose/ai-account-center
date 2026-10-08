@@ -9,12 +9,12 @@
 //! the selected-row highlight and cross-fades the Activate slot instead of re-mounting the list.
 use crate::sync::{Nested, sync_rows};
 use crate::{
-    AcAction, AcAgPolicy, AcData, AcDevice, AcFlow, AcLine, AcLogSource, AcNetwork, AcPolicy,
-    AcProvider, AcRow, AcSignin, AcTrashRow, AcUpdHost, AcUpdItem, Dashboard, FactView, RunView,
-    SegItem, StrengthView,
+    AcAction, AcAgPolicy, AcData, AcDevice, AcFlow, AcLine, AcLogHosts, AcLogSource, AcNetwork,
+    AcPolicy, AcProvider, AcRow, AcSignin, AcTrashRow, AcUpdHost, AcUpdItem, Dashboard, FactView,
+    RunView, SegItem, StrengthView,
 };
 use serde_json::Value;
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
@@ -40,6 +40,19 @@ fn i(v: &Value, k: &str, fallback: i32) -> i32 {
 }
 fn arr<'a>(v: &'a Value, k: &str) -> &'a [Value] {
     g(v, k).as_array().map(|a| a.as_slice()).unwrap_or(&[])
+}
+/// A JSON array of strings as a model; `current` is kept when it already holds the same strings, so an open
+/// select is not rebuilt by an unchanged refresh.
+fn strings(v: &Value, k: &str, current: ModelRc<SharedString>) -> ModelRc<SharedString> {
+    let next: Vec<SharedString> = arr(v, k)
+        .iter()
+        .filter_map(|x| x.as_str().map(SharedString::from))
+        .collect();
+    if current.row_count() == next.len() && current.iter().zip(next.iter()).all(|(a, b)| &a == b) {
+        current
+    } else {
+        ModelRc::new(VecModel::from(next))
+    }
 }
 fn run(v: &Value) -> RunView {
     RunView {
@@ -423,6 +436,7 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
                 tool: s(entry, "tool"),
                 tool_label: s(entry, "toolLabel"),
                 host: s(entry, "host"),
+                host_label: s(entry, "hostLabel"),
                 path: s(entry, "path"),
                 mapping: s(entry, "mapping"),
             })
@@ -433,6 +447,17 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     ac.set_log_sources_busy(b(log_sources, "busy"));
     ac.set_log_sources_error(s(log_sources, "error"));
     ac.set_log_sources_tip(s(log_sources, "tip"));
+    // The host select's options per tool, as labels (accounts-view.mjs LOG_SOURCE_HOSTS).
+    let host_labels = g(log_sources, "hostLabels");
+    let was = ac.get_log_source_hosts();
+    ac.set_log_source_hosts(AcLogHosts {
+        omp: strings(host_labels, "omp", was.omp),
+        muse: strings(host_labels, "muse", was.muse),
+        zcode: strings(host_labels, "zcode", was.zcode),
+        claude_code: strings(host_labels, "claude-code", was.claude_code),
+        codex: strings(host_labels, "codex", was.codex),
+        jsonl: strings(host_labels, "jsonl", was.jsonl),
+    });
 
     let update = g(&v, "update");
     ac.set_update_shown(b(update, "shown"));

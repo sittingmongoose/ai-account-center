@@ -74,36 +74,43 @@ component IncludedLines inherits VerticalLayout {
     in property <length> body-w;
     // On P the grid becomes a list grouped by tool (DESIGN-MOBILE 4.2.1).
     in property <bool> narrow: false;
+    // So does any body too narrow for every computer's column at 120 px ("Cached, 2h 59m ago"
+    // never elides): with four computers that is a body under 616 px.
+    property <bool> list: root.narrow || root.body-w < 96px + AxData.included-hosts.length * 130px;
     spacing: 0px;
     Text { text: "Included usage"; font-size: 14px; font-weight: 640; color: Theme.ink; min-height: 20px; }
     Rectangle { height: 6px; }
     Text { text: AxData.included.line; width: root.body-w; font-size: 13px; color: Theme.ink-2; wrap: word-wrap; }
     Rectangle { height: 12px; }
-    if !root.narrow: HorizontalLayout {
+    if !root.list: HorizontalLayout {
         spacing: 10px;
         min-height: 22px;
         Rectangle { width: 96px; }
         for h in AxData.included-hosts: Caps { text: h; horizontal-stretch: 1; min-width: 0px; }
     }
-    for r in AxData.included-rows: VerticalLayout {
-        visible: !root.narrow;
-        Rectangle { height: 1px; background: Theme.rule-2; }
-        HorizontalLayout {
-            spacing: 10px;
-            min-height: 28px;
-            Text { text: r.tool; width: 96px; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; }
-            for c in r.cells: SrcCell { c: c; }
+    // Only one of the grid and the list exists: a hidden (visible: false) one would still take its
+    // height in the layout and leave a blank band in the popover.
+    if !root.list: VerticalLayout {
+        for r in AxData.included-rows: VerticalLayout {
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            HorizontalLayout {
+                spacing: 10px;
+                min-height: 28px;
+                Text { text: r.tool; width: 96px; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; }
+                for c in r.cells: SrcCell { c: c; }
+            }
         }
     }
-    for r in AxData.included-rows: VerticalLayout {
-        visible: root.narrow;
-        Rectangle { height: 1px; background: Theme.rule-2; }
-        Text { text: r.tool; font-size: Type.body; font-weight: 600; color: Theme.ink; min-height: 32px; vertical-alignment: bottom; }
-        for c[i] in r.cells: HorizontalLayout {
-            spacing: 10px;
-            min-height: 44px;
-            Text { text: AxData.included-hosts.length > i ? AxData.included-hosts[i] : c.id; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-            Text { text: c.text; font-family: Type.tab; font-size: Type.small; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; AxPress { tip: c.tip; long-tip: c.tip; } }
+    if root.list: VerticalLayout {
+        for r in AxData.included-rows: VerticalLayout {
+            Rectangle { height: 1px; background: Theme.rule-2; }
+            Text { text: r.tool; font-size: Type.body; font-weight: 600; color: Theme.ink; min-height: 32px; vertical-alignment: bottom; }
+            for c[i] in r.cells: HorizontalLayout {
+                spacing: 10px;
+                min-height: 44px;
+                Text { text: AxData.included-hosts.length > i ? AxData.included-hosts[i] : c.id; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                Text { text: c.text; font-family: Type.tab; font-size: Type.small; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; AxPress { tip: c.tip; long-tip: c.tip; } }
+            }
         }
     }
     Rectangle { height: 1px; background: Theme.rule-2; }
@@ -468,10 +475,11 @@ export component AxHeader inherits Rectangle {
                             inc-pop := PopupWindow {
                                 x: 0px;
                                 y: inc.height + 8px;
-                                width: 500px;
+                                // wide enough for four computer columns that never elide
+                                width: 660px;
                                 height: inc-body.preferred-height;
                                 close-policy: close-on-click-outside;
-                                inc-body := AxPopBody { width: 500px; height: self.preferred-height; IncludedLines { body-w: 500px - 32px; } }
+                                inc-body := AxPopBody { width: 660px; height: self.preferred-height; IncludedLines { body-w: 660px - 32px; } }
                             }
                         }
                     }
@@ -532,7 +540,10 @@ export component AxHeader inherits Rectangle {
         property <bool> two-row: Breakpoints.tier-p || (Breakpoints.tier-f && Breakpoints.tier-width < 760px);
         property <bool> seg-wrap: self.cw / 5 < 64px;
         property <bool> read-tip: false;
-        property <length> inc-w: min(500px, self.cw);
+        property <length> inc-w: min(660px, self.cw);
+        // the Updating note takes at most half the subline and wraps beyond it, so a long note
+        // ("refreshing Mac, Windows and Nas1…") never pushes the page wider than the screen
+        property <length> upd-w: min(m-upd.preferred-width, self.cw / 2);
         property <length> date-w: min(336px, self.cw);
         property <length> pick-w: min(320px, self.cw);
         Text { text: "Analytics"; font-size: Type.page-title; font-weight: 620; color: Theme.ink; }
@@ -542,7 +553,7 @@ export component AxHeader inherits Rectangle {
             // spacer below), so the info icon sits right after the read time and only wraps with
             // the text when the line truly runs out (DESIGN-MOBILE 4.2.1).
             sub := StyledText {
-                width: min(m-sub.preferred-width + 6px, max(48px, mlay.cw - 50px - (AxData.head.updating ? m-upd.preferred-width + 6px : 0px)));
+                width: min(m-sub.preferred-width + 6px, max(48px, mlay.cw - 50px - (AxData.head.updating ? mlay.upd-w + 6px : 0px)));
                 text: @markdown("<font color='\{Theme.ink-3}'>\{AxData.head.scope}</font><font color='\{Theme.ink-2}'>**\{AxData.head.read}**</font>");
                 default-color: Theme.ink-3;
                 default-font-size: Type.small;
@@ -552,7 +563,7 @@ export component AxHeader inherits Rectangle {
                 alignment: center;
                 AxInfo { open: mlay.read-tip; tip: AxData.head.read-tip; clicked => { mlay.read-tip = !mlay.read-tip; } }
             }
-            if AxData.head.updating: Text { text: AxData.head.update-note == "" ? "Updating…" : AxData.head.update-note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+            if AxData.head.updating: Text { width: mlay.upd-w; text: AxData.head.update-note == "" ? "Updating…" : AxData.head.update-note; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; wrap: word-wrap; }
             // The slack goes here, never between the text and the icon. The zero-size measurers
             // hide in the spacer so the rows above and below keep their 6 px rhythm.
             Rectangle {

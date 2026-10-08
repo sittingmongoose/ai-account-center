@@ -25,7 +25,7 @@ export component AnalyticsPage inherits Rectangle {
     // sections rise in once the first response arrives (or fails: the header then says why)
     property <bool> armed: AxData.ready || AxData.head.error != "";
     // the loading screen's per-host rows; a quiet default until the first answer pushes real progress
-    property <[AxLoadHost]> load-hosts: AxData.load-hosts.length > 0 ? AxData.load-hosts : [{ name: "Ubuntu", detail: "queued" }, { name: "Mac", detail: "queued" }, { name: "Windows", detail: "queued" }];
+    property <[AxLoadHost]> load-hosts: AxData.load-hosts.length > 0 ? AxData.load-hosts : [{ name: "Ubuntu", detail: "queued" }, { name: "Mac", detail: "queued" }, { name: "Windows", detail: "queued" }, { name: "Nas1", detail: "queued" }];
     property <bool> wide3: Breakpoints.width >= 1600px;
     // section gap: 18 on D, 20/16/12 on T/F/P (DESIGN-MOBILE 2.2)
     property <length> gap: Breakpoints.tier-d ? 18px : Breakpoints.tier-t ? 20px : Breakpoints.tier-f ? 16px : 12px;
@@ -56,7 +56,7 @@ export component AnalyticsPage inherits Rectangle {
             spacing: 18px;
             AxCard {
                 hover-lift: false;
-                AxCardHead { title: "Reading usage logs"; sub: "Reading usage logs on Ubuntu, Mac and Windows. The page appears as soon as the first numbers land."; }
+                AxCardHead { title: "Reading usage logs"; sub: "Reading usage logs on Ubuntu, Mac, Windows and Nas1. The page appears as soon as the first numbers land."; }
                 VerticalLayout {
                     padding-left: 20px; padding-right: 20px; padding-top: 6px; padding-bottom: 18px; spacing: 12px;
                     for host in root.load-hosts: VerticalLayout {

@@ -1199,6 +1199,7 @@ component LogSourceRow inherits HorizontalLayout {
     in property <string> id;
     in property <string> tool-label;
     in property <string> host;
+    in property <string> host-label;
     in property <string> location;
     in property <string> mapping;
     in property <bool> enabled;
@@ -1208,7 +1209,7 @@ component LogSourceRow inherits HorizontalLayout {
         horizontal-stretch: 1;
         min-width: 0px;
         spacing: 1px;
-        Text { text: tool-label + " · " + host; font-size: 12.5px; font-weight: 600; color: Theme.ink-2; }
+        Text { text: tool-label + " · " + (host-label != "" ? host-label : host); font-size: 12.5px; font-weight: 600; color: Theme.ink-2; }
         Text { text: location; font-size: Breakpoints.below-d ? 13px : Type.small; font-family: Breakpoints.below-d ? Type.mono : Type.sans; color: Theme.ink-3; wrap: Breakpoints.below-d ? char-wrap : word-wrap; }
         if mapping != "": Text { text: mapping; font-size: Type.small; color: Theme.ink-3; wrap: word-wrap; }
     }
@@ -1249,9 +1250,10 @@ component LogSourcesGroup inherits SetGroup {
     // the tool and host behind the selects (Select shows strings only); hoisted so both the side-by-side
     // and the stacked layouts (and the submit) read one source
     property <string> tool-choice: "OMP";
-    property <string> host-choice: "ubuntu";
+    property <string> host-choice: "Ubuntu";
     property <string> tool-id: root.tool-choice == "Muse Code" ? "muse" : root.tool-choice == "zcode" ? "zcode" : root.tool-choice == "Claude Code" ? "claude-code" : root.tool-choice == "Codex" ? "codex" : root.tool-choice == "Generic JSONL" ? "jsonl" : "omp";
-    property <[string]> host-options: root.tool-id == "omp" || root.tool-id == "claude-code" || root.tool-id == "codex" ? ["ubuntu", "mac", "windows"] : root.tool-id == "muse" || root.tool-id == "zcode" ? ["ubuntu", "mac"] : ["ubuntu"];
+    // the hosts each tool is scanned on, as labels, from the view model (accounts-view.mjs LOG_SOURCE_HOSTS)
+    property <[string]> host-options: root.tool-id == "muse" ? AcData.log-source-hosts.muse : root.tool-id == "zcode" ? AcData.log-source-hosts.zcode : root.tool-id == "claude-code" ? AcData.log-source-hosts.claude-code : root.tool-id == "codex" ? AcData.log-source-hosts.codex : root.tool-id == "jsonl" ? AcData.log-source-hosts.jsonl : AcData.log-source-hosts.omp;
     // the mapping fields live under an `if`: their text is hoisted here so the
     // submitted JSON never reads an uninstantiated element
     property <string> map-ts-text;
@@ -1280,6 +1282,7 @@ component LogSourcesGroup inherits SetGroup {
                     id: src.id;
                     tool-label: src.tool-label;
                     host: src.host;
+                    host-label: src.host-label;
                     location: src.path;
                     mapping: src.mapping;
                     enabled: form-enabled;
@@ -1303,7 +1306,7 @@ component LogSourcesGroup inherits SetGroup {
                         options: ["OMP", "Muse Code", "zcode", "Claude Code", "Codex", "Generic JSONL"];
                         value <=> root.tool-choice;
                         enabled: form-enabled;
-                        selected(v) => { root.host-choice = "ubuntu"; }
+                        selected(v) => { root.host-choice = "Ubuntu"; }
                     }
                 }
                 VerticalLayout {
