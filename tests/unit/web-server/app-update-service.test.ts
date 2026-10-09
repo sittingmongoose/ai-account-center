@@ -13,6 +13,10 @@ import {
   type UpdatePlatform,
 } from '../../../src/web-server/services/app-update-service';
 import { APP_UPDATE_SSH_HOSTS } from '../../../src/web-server/services/app-update-hosts';
+import {
+  MESSAGES,
+  normalizeAppUpdateRow,
+} from '../../../src/web-server/services/app-update-contract';
 import { runWithScopedCcsHome, runWithScopedConfigDir } from '../../../src/utils/config-manager';
 
 const directories: string[] = [];
@@ -289,6 +293,60 @@ describe('fixed app update service', () => {
         'Quit Codex Desktop to finish its update, then run Update apps again.'
       );
     }
+  });
+  it('accepts a closed-and-reopened desktop only for Windows Codex and Claude updates', () => {
+    const reopened = {
+      status: 'updated',
+      messageCode: 'desktop_reopened',
+      previousVersion: '26.930.3748.0',
+      version: '26.1002.7124.0',
+      manager: 'msix',
+      updateAttempted: true,
+      restartedProcesses: 3,
+      forcedStops: 1,
+      restartTargets: [{ kind: 'desktop', path: 'PRIVATE_SENTINEL' }],
+    };
+    for (const appId of ['codex-desktop', 'claude-desktop'] as const) {
+      const value = normalizeAppUpdateRow({ ...reopened, appId }, appId, 'windows');
+      expect(value).toMatchObject({
+        status: 'updated',
+        message: MESSAGES.desktop_reopened,
+        version: '26.1002.7124.0',
+        restartedProcesses: 3,
+        forcedStops: 1,
+        restartTargets: [{ kind: 'desktop' }],
+      });
+      expect(JSON.stringify(value)).not.toContain('PRIVATE_SENTINEL');
+      // The Mac still asks the user to quit first; Linux desktops never send this code.
+      for (const platform of ['mac', 'ubuntu', 'nas1'] as const)
+        expect(normalizeAppUpdateRow({ ...reopened, appId }, appId, platform).message).toBe(
+          MESSAGES.helper_invalid
+        );
+      for (const status of ['failed', 'restart_failed', 'action_required'])
+        expect(
+          normalizeAppUpdateRow({ ...reopened, appId, status }, appId, 'windows').message
+        ).toBe(MESSAGES.helper_invalid);
+      // A plain update of a closed app needs no reopen target and keeps it if sent.
+      expect(
+        normalizeAppUpdateRow({ ...reopened, appId, messageCode: 'updated' }, appId, 'windows')
+          .restartTargets
+      ).toEqual([{ kind: 'desktop' }]);
+      expect(
+        normalizeAppUpdateRow({ ...reopened, appId, messageCode: 'updated' }, appId, 'mac')
+          .restartTargets
+      ).toEqual([]);
+    }
+    for (const appId of ['codex-cli', 'claude-code', 't3-code', 'omp'] as const)
+      expect(normalizeAppUpdateRow({ ...reopened, appId }, appId, 'windows').message).toBe(
+        MESSAGES.helper_invalid
+      );
+    expect(
+      normalizeAppUpdateRow(
+        { ...reopened, appId: 'codex-cli', messageCode: 'updated' },
+        'codex-cli',
+        'windows'
+      ).restartTargets
+    ).toEqual([]);
   });
   it('normalizes only safe whitelist metadata and never full helper responses', () => {
     const rows = JSON.parse(payload()).results;

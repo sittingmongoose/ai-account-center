@@ -1,10 +1,15 @@
 """Publisher-verified desktop package updates for the detected installation."""
 
+import contextlib
+import ctypes
+import dataclasses
 import json
 import os
 import pathlib
 import plistlib
+import re
 import shutil
+import subprocess
 import time
 import uuid
 import zipfile
@@ -14,7 +19,9 @@ from app_update_common import (
     Install, RangeReader, UpdateFailure, command, download, powershell, private_temporary,
     ps_quote, remote_fingerprint, result, version_text, version_tuple, write_private_json,
 )
-from app_update_processes import family, main_contexts, restart_desktops, scan, terminate_desktops
+from app_update_processes import (
+    desktop_arguments, family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops,
+)
 
 
 # Desktop packages are hundreds of megabytes (the Codex MSIX is over 900 MB)
@@ -53,10 +60,23 @@ MAC = {
     # Claude's package URL comes from CLAUDE_DARWIN_FEED at run time.
     "claude-desktop": ("Claude.app", "com.anthropic.claudefordesktop", "Q6L2SF6YDW", None),
 }
+# Identity, executable and the fixed AppId of its Application element: a packaged
+# instance without arguments reopens by AUMID <PackageFamilyName>!<AppId>, as the Start menu does.
 WINDOWS = {
-    "codex-desktop": ("OpenAI.Codex", "app/ChatGPT.exe"),
-    "claude-desktop": ("Claude", "app/Claude.exe"),
+    "codex-desktop": ("OpenAI.Codex", "app/ChatGPT.exe", "App"),
+    "claude-desktop": ("Claude", "app/Claude.exe", "Claude"),
 }
+# A relaunched MSIX instance cold-starts slower than T3; still bounded.
+WINDOWS_REOPEN_SECONDS = 45
+# DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, spelled out so fixtures run on any OS.
+DETACHED = 0x00000008 | 0x00000200
+APPMODEL_ERROR_NO_PACKAGE = 15700
+
+
+@dataclasses.dataclass
+class MsixInstall(Install):
+    # <Name>_<PublisherId> of the registered package; None when it was not exactly that shape.
+    package_family: str = None
 
 
 # Reading only an MSIX's manifest over HTTP ranges takes well under a second
@@ -68,9 +88,10 @@ REMOTE_MANIFEST_SECONDS = 20
 def desktop_running(install):
     """True while any process of this desktop app runs. Read-only: never asks it to quit.
 
-    A running Mac or Windows desktop app is never quit, closed, restarted or
-    killed by the updater (N3). Its update waits until the user quits it, and
-    that is reported at once instead of after a download or a close request.
+    A running Mac desktop app is never quit, closed, restarted or killed by the
+    updater (N3). Its update waits until the user quits it, and that is
+    reported at once instead of after a download. Windows closes and reopens
+    it instead (windows_replace).
     """
     return bool(family(install, scan(install.platform)))
 
@@ -105,9 +126,9 @@ def bundle_info(path):
 
 
 def windows_package(app_id):
-    identity, executable = WINDOWS[app_id]
+    identity, executable, _ = WINDOWS[app_id]
     # Sort-Object keeps the query a single object when two versions coexist mid-staging.
-    script = "$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name " + ps_quote(identity) + " | Sort-Object {[Version]$_.Version} -Descending | Select-Object -First 1; if($p){@{name=$p.Name;version=$p.Version.ToString();publisher=$p.Publisher;root=$p.InstallLocation}|ConvertTo-Json -Compress}"
+    script = "$ErrorActionPreference='Stop'; $p=Get-AppxPackage -Name " + ps_quote(identity) + " | Sort-Object {[Version]$_.Version} -Descending | Select-Object -First 1; if($p){@{name=$p.Name;version=$p.Version.ToString();publisher=$p.Publisher;root=$p.InstallLocation;family=$p.PackageFamilyName}|ConvertTo-Json -Compress}"
     try:
         raw = powershell(script, timeout=30)
         value = json.loads(raw) if raw.strip() else None
@@ -117,7 +138,12 @@ def windows_package(app_id):
         target = root / executable
         if not target.is_file():
             return None
-        return Install(app_id, "windows", target, version_text(value.get("version")), "msix", identity, value.get("publisher"), root)
+        # Only the exact <Name>_<13-character publisher id> may become an AUMID.
+        package_family = value.get("family")
+        if not isinstance(package_family, str) or not re.fullmatch(re.escape(identity) + "_[a-z0-9]{13}", package_family):
+            package_family = None
+        return MsixInstall(app_id, "windows", target, version_text(value.get("version")), "msix", identity, value.get("publisher"), root,
+                           package_family=package_family)
     except UpdateFailure as error:
         # A query that ran out of time says nothing about the package: report
         # "Check timed out" rather than "not installed".
@@ -399,43 +425,181 @@ def codex_store_version(install):
     return version_text(value.get("buildVersion"))
 
 
-def update_windows_store(install, phase):
-    """Install the newer Codex Store build through winget's msstore source; never close the app."""
-    before = install.version
-    attempted = False
+def process_package(item):
+    """The package full name of a running process, or None when it has no package identity.
+
+    Read per instance: a WindowsApps executable started by path can be packaged
+    too (AAC's Claude profiles are), so the start method is never assumed.
+    """
+    from ctypes import wintypes
+    kernel = ctypes.windll.kernel32
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetPackageFullName.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.UINT), wintypes.LPWSTR]
+    kernel.GetPackageFullName.restype = wintypes.LONG
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, item.pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        raise UpdateFailure("restart_context")
     try:
-        if desktop_running(install):
+        length = wintypes.UINT(128)  # PACKAGE_FULL_NAME_MAX_LENGTH and its terminator.
+        name = ctypes.create_unicode_buffer(length.value)
+        status = kernel.GetPackageFullName(handle, ctypes.byref(length), name)
+        if status == APPMODEL_ERROR_NO_PACKAGE:
+            return None
+        if status != 0:
+            raise UpdateFailure("restart_context")
+        return name.value
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def windows_explorer():
+    return pathlib.Path(os.environ.get("WINDIR") or "C:\\Windows") / "explorer.exe"
+
+
+def windows_capture(install):
+    """The running main instances and how to reopen each exactly as it was started.
+
+    Read-only. An instance with a data-directory argument reopens from the
+    refreshed package the way AAC's launcher starts a Claude profile (that exe,
+    its folder, the same argument), packaged or not. One without arguments
+    reopens through its AUMID when packaged (the Start menu, or Claude's
+    default) and by path when not. One in another session, one of another
+    package, one whose AUMID cannot be built and any it cannot inspect raise
+    UpdateFailure("quit_first"): nothing may close for it.
+    """
+    try:
+        contexts = main_contexts(install, scan("windows"))
+        if not contexts:
+            return [], []
+        identity, _, application = WINDOWS[install.app_id]
+        session = ctypes.c_ulong()
+        if not ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session)):
+            raise UpdateFailure("restart_context")
+        plans = []
+        for item in contexts:
+            if item.session != session.value:
+                raise UpdateFailure("quit_first")
+            name, arguments = process_package(item), desktop_arguments(item, "windows")
+            # Another package's instance: this start cannot be reproduced, so nothing closes for it.
+            if name is not None and not name.startswith(identity + "_"):
+                raise UpdateFailure("quit_first")
+            if arguments or name is None:
+                # By path: the launcher's start for a profile, or a plain start of an unpackaged app.
+                plans.append((item, None, arguments))
+            elif install.package_family and windows_explorer().is_file():
+                plans.append((item, install.package_family + "!" + application, []))
+            else:
+                raise UpdateFailure("quit_first")
+        return contexts, plans
+    except UpdateFailure as error:
+        raise UpdateFailure("quit_first" if error.code == "restart_context" else error.code) from None
+
+
+def reopen_windows(install, plans):
+    """Start each planned instance from this install, then wait for its main processes to show."""
+    for _, aumid, arguments in plans:
+        if aumid:
+            # explorer.exe exits 1 even after it opened the app: only the scan below decides.
+            argv, cwd = [str(windows_explorer()), "shell:AppsFolder\\" + aumid], None
+        else:
+            # The same direct start as AAC's Claude launcher: current exe, its folder, one data directory.
+            argv, cwd = [str(install.path), *arguments], str(install.path.parent)
+        subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=DETACHED)
+    if not plans:
+        return 0
+    deadline = time.monotonic() + WINDOWS_REOPEN_SECONDS
+    while True:
+        existing = family(install, scan("windows"))
+        pids = {item.pid for item in existing}
+        if len([item for item in existing if item.ppid not in pids]) >= len(plans):
+            return len(plans)
+        if time.monotonic() >= deadline:
+            raise UpdateFailure("restart_failed")
+        time.sleep(.5)
+
+
+def windows_replace(install, before, deploy, accepted):
+    """Install a newer package; a running app is closed first and reopened as each instance was started.
+
+    The instances are captured right before closing (the app may have been
+    opened or closed meanwhile) and every reopen is planned before anything
+    closes. Closing is terminate_desktops: WM_CLOSE, a bounded 15 s wait, then
+    a stop of only identity-checked family survivors (forcedStops). A failed
+    close or install reopens what was closed from the old package, which is
+    still registered; a failed reopen after a good install is restart_failed.
+    """
+    app_id, manager = install.app_id, install.manager
+    try:
+        contexts, plans = windows_capture(install)
+    except UpdateFailure as error:
+        if error.code == "quit_first":
             return quit_first(install, before)
-        winget = shutil.which("winget.exe") or shutil.which("winget")
-        if not winget:
-            raise UpdateFailure("unsupported")
-        phase("updating")
-        attempted = True
+        return result(app_id, "windows", "failed", before, before, manager, error.code)
+    forced = 0
+    if contexts:
+        try:
+            forced = terminate_desktops(install, contexts)
+        except Exception as error:
+            # Never leave a closed instance closed: reopen what already ended from the untouched package.
+            with contextlib.suppress(Exception):
+                live = live_contexts("windows", contexts)
+                reopen_windows(install, [plan for plan in plans if not any(plan[0] is item for item in live)])
+            return result(app_id, "windows", "failed", before, before, manager, error.code if isinstance(error, UpdateFailure) else "restart_failed")
+    refreshed = None
+    try:
+        deploy()
+        refreshed = windows_package(app_id)
+        if refreshed is None or refreshed.path is None or not accepted(refreshed):
+            raise UpdateFailure("version_unknown")
+    except Exception as error:
+        # Reopen from whatever package is registered now: the old one when the install failed.
+        with contextlib.suppress(Exception):
+            reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
+        code = error.code if isinstance(error, UpdateFailure) else "update_failed"
+        # A needs-closing rejection even after the close still asks the user to quit.
+        return quit_first(install, before) if code == "quit_first" else result(app_id, "windows", "failed", before, before, manager, code, True)
+    try:
+        restarted = reopen_windows(refreshed, plans)
+    except Exception:
+        return result(app_id, "windows", "restart_failed", before, refreshed.version, manager, "restart_failed", True)
+    value = result(app_id, "windows", "updated", before, refreshed.version, manager, "desktop_reopened" if plans else None, True, restarted)
+    value["forcedStops"] = forced
+    if plans:
+        value["restartTargets"] = [{"kind": "desktop"}]
+    return value
+
+
+def update_windows_store(install, phase):
+    """Install the newer Codex Store build through winget's msstore source, reopening a running Codex."""
+    winget = shutil.which("winget.exe") or shutil.which("winget")
+    if not winget:
+        return result(install.app_id, "windows", "failed", install.version, install.version, install.manager, "unsupported")
+    phase("updating")
+
+    def deploy():
         # The Store verifies the package and upgrades the same OpenAI.Codex family in place.
         command([winget, "install", "--id", CODEX_STORE_ID, "--source", "msstore", "--exact", "--silent",
                  "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=900)
-        refreshed = windows_package(install.app_id)
-        if refreshed is None or refreshed.publisher != install.publisher or not refreshed.version or version_tuple(refreshed.version) <= version_tuple(before):
-            raise UpdateFailure("version_unknown")
-        value = result(install.app_id, "windows", "updated", before, refreshed.version, install.manager, attempted=True, restarted=0)
-        value["forcedStops"] = 0
-        return value
-    except UpdateFailure as error:
-        return result(install.app_id, "windows", "failed", before, before, install.manager, error.code, attempted)
+
+    def accepted(refreshed):
+        return refreshed.publisher == install.publisher and bool(refreshed.version) and version_tuple(refreshed.version) > version_tuple(install.version)
+    return windows_replace(install, install.version, deploy, accepted)
 
 
 def update_windows(install, phase=None):
-    """Update a Windows MSIX desktop app only while it is not running; never close it.
+    """Update a Windows MSIX desktop app, closing and reopening it when it runs.
 
     The published manifest alone (HTTP ranges, under a second) says whether a
-    newer version exists, so a current app reports current and a running app
-    with an update reports quit_first within seconds, before any download.
-    Only when the manifest cannot be read does the full package decide, and
-    that download shows live as Downloading.
+    newer version exists, so a current app reports current, and a running app
+    that could not be reopened reports quit_first, before any download. Only
+    when the manifest cannot be read does the full package decide. The
+    download (shown live as Downloading) and its verification finish while
+    the app keeps running; windows_replace then closes, installs and reopens.
     """
     phase = phase or (lambda name: None)
     before = install.version
-    installed = False
     architecture = "arm64" if os.environ.get("PROCESSOR_ARCHITECTURE", "").upper() == "ARM64" else "x64"
     url = ("https://persistent.oaistatic.com/codex-app-prod/ChatGPT-" + architecture + ".msix" if install.app_id == "codex-desktop"
            else "https://claude.ai/api/desktop/win32/" + architecture + "/msix/latest/redirect")
@@ -450,14 +614,16 @@ def update_windows(install, phase=None):
         if store and version_tuple(store) > version_tuple(before):
             return update_windows_store(install, phase)
     try:
-        running = desktop_running(install)
         remote = remote_msix_identity(url)
         available = published(remote) if remote is not None else None
         if available and version_tuple(available) <= version_tuple(before):
             return result(install.app_id, "windows", "current", before, before, install.manager)
-        if available and running:
-            return quit_first(install, before)
+        if available:
+            # Read-only: an instance that could not be reopened answers before any download.
+            windows_capture(install)
     except UpdateFailure as error:
+        if error.code == "quit_first":
+            return quit_first(install, before)
         return result(install.app_id, "windows", "failed", before, before, install.manager, error.code)
     with private_temporary() as temporary:
         package = temporary / "update.msix"
@@ -470,26 +636,14 @@ def update_windows(install, phase=None):
                 raise UpdateFailure("signature_failed")
             if version_tuple(after) <= version_tuple(before):
                 return result(install.app_id, "windows", "current", before, before, install.manager)
-            # Look again: the app may have been opened during the download.
-            if running or desktop_running(install):
-                return quit_first(install, before)
-            # Add-AppxPackage verifies the Microsoft Store/publisher signature
-            # and upgrades the same per-user package, preserving LocalState. A
-            # rejection for a running app (0x80073D02) reports quit_first.
-            add_appx_package(package)
-            installed = True
-            refreshed = windows_package(install.app_id)
-            if refreshed is None or refreshed.version != after:
-                raise UpdateFailure("version_unknown")
-            value = result(install.app_id, "windows", "updated", before, refreshed.version, install.manager, attempted=True, restarted=0)
-            value["forcedStops"] = 0
-            return value
         except UpdateFailure as error:
             if error.code == "download_blocked":
                 return result(install.app_id, "windows", "action_required", before, before, install.manager, "check_in_app", False)
-            if error.code == "quit_first":
-                return quit_first(install, before)
-            return result(install.app_id, "windows", "failed", before, before, install.manager, error.code, installed)
+            return result(install.app_id, "windows", "failed", before, before, install.manager, error.code)
+        # Add-AppxPackage verifies the Microsoft Store/publisher signature and
+        # upgrades the same per-user package, preserving LocalState. A
+        # rejection for a running app (0x80073D02) reports quit_first.
+        return windows_replace(install, before, lambda: add_appx_package(package), lambda refreshed: refreshed.version == after)
 
 
 def update_linux(install, deadline=None):
@@ -549,8 +703,8 @@ def update_desktop(install, deadline=None, phase=None):
         return update_linux(install, deadline)
     # Older builds quit the app, installed, then relaunched it, and left this
     # marker when the relaunch failed. The installed bits are already the new
-    # version and nothing is ever relaunched or quit now, so the marker is
-    # obsolete: drop it and run the normal check.
+    # version and no flow reads the marker now (Windows reopens in the same
+    # run), so it is obsolete: drop it and run the normal check.
     try:
         clear_restart(install)
     except OSError:
