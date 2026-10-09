@@ -13,6 +13,7 @@ import {
   type UpdatePlatform,
 } from '../../../src/web-server/services/app-update-service';
 import { APP_UPDATE_SSH_HOSTS } from '../../../src/web-server/services/app-update-hosts';
+import { MESSAGES } from '../../../src/web-server/services/app-update-contract';
 import { runWithScopedCcsHome, runWithScopedConfigDir } from '../../../src/utils/config-manager';
 
 const directories: string[] = [];
@@ -375,6 +376,21 @@ describe('fixed app update service', () => {
     const value = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'ubuntu');
     expect(value[0].status).toBe('failed');
     expect(JSON.stringify(value)).not.toContain('bogus');
+  });
+  it('accepts a disabled package source only as action-required', () => {
+    const rows = JSON.parse(payload()).results;
+    rows[0] = {
+      ...rows[0],
+      status: 'action_required',
+      messageCode: 'source_disabled',
+      updateAttempted: false,
+    };
+    rows[1] = { ...rows[1], status: 'failed', messageCode: 'source_disabled' };
+    const value = normalizeAppUpdateResults(JSON.stringify({ results: rows }), 'ubuntu');
+    expect(value[0].status).toBe('action_required');
+    expect(value[0].message).toBe(MESSAGES.source_disabled);
+    expect(value[1].status).toBe('failed');
+    expect(value[1].message).toBe(MESSAGES.helper_invalid);
   });
   it('uses an owner-only cross-process lock and restores safe completed status', async () => {
     const root = directory();

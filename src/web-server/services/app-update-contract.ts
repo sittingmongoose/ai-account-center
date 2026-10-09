@@ -103,6 +103,8 @@ export const MESSAGES = {
   host_unknown: 'Unknown: this computer is not reachable.',
   readiness_unknown: 'Unknown: the readiness check could not run.',
   quit_first: 'Quit the app, then run Update apps again.',
+  source_disabled:
+    'Its package source is turned off on this computer, so it cannot update here. An Ubuntu upgrade turns these sources off; turn it back on to update.',
   check_in_app: 'The download was blocked; open the app to check for updates.',
   codex_busy: 'Codex is busy with a task; run Update apps again when it is idle.',
   check_timeout: 'Check timed out: the app did not answer in time.',
@@ -315,6 +317,7 @@ export function normalizeAppUpdateRow(
   if (
     ((code === 't3_updated' || code === 't3_restart_scheduled') &&
       (appId !== 't3-code' || row.status !== 'updated')) ||
+    (code === 'source_disabled' && row.status !== 'action_required') ||
     (code === 't3_restart_scheduled' &&
       (!linux || !targets.some((target) => target.kind === 'systemd'))) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||

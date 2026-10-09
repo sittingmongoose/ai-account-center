@@ -29,6 +29,11 @@ OLD = "0.0.46-nightly.20261006.2735"
 NEW = "0.0.46-nightly.20261007.2774"
 
 
+def named(number):
+    # Runtime directory names for the prune layouts; only the last number differs.
+    return "0.0.46-nightly.20261007." + str(number)
+
+
 def bundle(path, version):
     (path / "Contents").mkdir(parents=True)
     with (path / "Contents/Info.plist").open("wb") as stream:
@@ -46,6 +51,11 @@ def asar(executable, version, name="t3code"):
     (resources / "app.asar").write_bytes(struct.pack("<4I", 4, 8 + len(padded), 4 + len(padded), len(header)) + padded + package)
 
 
+def systemctl(argv, reload="no"):
+    # Fixed answers for the unit queries; any other call changes nothing in this fixture.
+    return reload if "--property=NeedDaemonReload" in argv else ""
+
+
 class T3Fixtures(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -54,6 +64,9 @@ class T3Fixtures(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
         mock.patch.object(pathlib.Path, "home", return_value=self.root).start()
         mock.patch.dict(os.environ, {"CCS_HOME": str(self.root / "state"), "LOCALAPPDATA": str(self.root / "local")}).start()
+        # The detached worker prints one journal line; keep the test output clean.
+        self.stdout = io.StringIO()
+        mock.patch.object(sys, "stdout", self.stdout).start()
 
     def test_state_directory_is_explicit_and_defaults_to_home_ccs(self):
         with mock.patch.dict(os.environ, {"CCS_HOME": str(self.root / "legacy"), "CCS_DIR": str(self.root / "config")}, clear=True):
@@ -178,9 +191,10 @@ class T3Fixtures(unittest.TestCase):
         self.assertEqual(row["messageCode"], "t3_restart_scheduled")
         self.assertEqual(row["version"], NEW)
         self.assertEqual(row["restartedProcesses"], 0)
-        update, schedule = [call.args[0] for call in run.call_args_list]
+        update, query, schedule = [call.args[0] for call in run.call_args_list]
         self.assertEqual(update[1:], ["update", NEW, "--channel", "nightly"])
         self.assertNotIn("--yes", update)
+        self.assertIn("--property=NeedDaemonReload", query)  # Re-read the rewritten unit; this never restarts it.
         self.assertEqual(schedule[0], "/usr/bin/systemd-run")
         self.assertIn("--restart-service", schedule)
         self.assertNotIn("restart", schedule)
@@ -230,7 +244,8 @@ class T3Fixtures(unittest.TestCase):
         self.assertEqual(row["status"], "current")
         self.assertFalse(marker.exists())
         restart.assert_not_called()
-        self.assertEqual(command.call_args.args[0], ["/usr/bin/systemctl", "--user", "show", "--property=MainPID", "--value", "t3code.service"])
+        self.assertIn(["/usr/bin/systemctl", "--user", "show", "--property=MainPID", "--value", "t3code.service"],
+                      [call.args[0] for call in command.call_args_list])
         for executable in (self.root / "other" / NEW / "t3", runtime.with_name("impostor")):
             with mock.patch.object(t3, "command", return_value="12345"), mock.patch.object(t3.os, "readlink", return_value=str(executable)):
                 self.assertIsNone(t3.running_runtime_version())
@@ -249,12 +264,15 @@ class T3Fixtures(unittest.TestCase):
             with self.assertRaisesRegex(common.UpdateFailure, "busy"):
                 with common.execution_lock():
                     self.fail("A standalone update acquired the restart worker's lock")
+            if "--property=NeedDaemonReload" in argv:
+                return systemctl(argv)
             self.assertEqual(argv, ["/usr/bin/systemctl", "--user", "restart", "t3code.service"])
         with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
                 mock.patch.object(t3.time, "sleep", side_effect=sleep), mock.patch.object(t3, "job_finished", side_effect=job_finished), \
-                mock.patch.object(t3, "command", side_effect=run) as command, mock.patch.object(t3, "health_check"):
+                mock.patch.object(t3, "command", side_effect=run) as command, mock.patch.object(t3, "health_check"), \
+                mock.patch.object(t3, "running_runtime_version", return_value=NEW):
             t3.deferred_restart(12345)
-        command.assert_called_once()
+        self.assertEqual(command.call_count, 2)  # The unit query, then the one restart.
         self.assertFalse((root / "dashboard-update.lock").exists())
         self.assertFalse((root / "t3-code-pending-restart.json").exists())
 
@@ -282,11 +300,15 @@ class T3Fixtures(unittest.TestCase):
             now[0] += seconds
         def finished(_root, _dashboard):
             return not 10 <= now[0] < 40
+        def run(argv, **kwargs):
+            self.assertGreaterEqual(now[0], 70)
+            return systemctl(argv)
         with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), \
                 mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
                 mock.patch.object(t3.time, "sleep", side_effect=sleep), \
                 mock.patch.object(t3, "job_finished", side_effect=finished), \
-                mock.patch.object(t3, "command", side_effect=lambda *args, **kwargs: self.assertGreaterEqual(now[0], 70)), \
+                mock.patch.object(t3, "command", side_effect=run), \
+                mock.patch.object(t3, "running_runtime_version", return_value=NEW), \
                 mock.patch.object(t3, "health_check"):
             t3.deferred_restart(12345)
 
@@ -300,18 +322,24 @@ class T3Fixtures(unittest.TestCase):
                 holder[0] = common.execution_lock(); holder[0].__enter__()
             elif now[0] == 45:
                 holder[0].__exit__(None, None, None); holder[0] = None
-        def locked(*args, **kwargs):
+        def check_locks():
             self.assertGreaterEqual(now[0], 75)
             self.assertTrue((root / "dashboard-update.lock").exists())
             with self.assertRaisesRegex(common.UpdateFailure, "busy"):
                 with common.execution_lock():
                     self.fail("helper lock was not held")
+        def command_locked(argv, **kwargs):
+            check_locks()
+            return systemctl(argv)
+        def health_locked(host):
+            check_locks()
         with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), \
                 mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
                 mock.patch.object(t3.time, "sleep", side_effect=sleep), \
-                mock.patch.object(t3, "command", side_effect=locked) as command, mock.patch.object(t3, "health_check", side_effect=locked):
+                mock.patch.object(t3, "command", side_effect=command_locked) as command, mock.patch.object(t3, "health_check", side_effect=health_locked), \
+                mock.patch.object(t3, "running_runtime_version", return_value=NEW):
             t3.deferred_restart(12345, root)
-        command.assert_called_once()
+        self.assertEqual(command.call_count, 2)  # The unit query, then the one restart.
         self.assertIsNone(holder[0])
         self.assertFalse((root / "dashboard-update.lock").exists())
         with common.execution_lock():
@@ -378,13 +406,15 @@ class T3Fixtures(unittest.TestCase):
         def run(argv, **kwargs):
             # The 30-second quiet period starts only once Nas1 is done.
             self.assertGreaterEqual(now[0], 75)
+            if "--property=NeedDaemonReload" in argv:
+                return systemctl(argv)
             self.assertEqual(argv, ["/usr/bin/systemctl", "--user", "restart", "t3code.service"])
 
         with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
                 mock.patch.object(t3.time, "sleep", side_effect=sleep), mock.patch.object(t3, "command", side_effect=run) as command, \
-                mock.patch.object(t3, "health_check"):
+                mock.patch.object(t3, "health_check"), mock.patch.object(t3, "running_runtime_version", return_value=NEW):
             t3.deferred_restart(12345)
-        command.assert_called_once()
+        self.assertEqual(command.call_count, 2)  # The unit query, then the one restart.
         self.assertFalse((root / "t3-code-pending-restart.json").exists())
 
     def test_t3_is_last_and_each_host_installer_stays_sequential(self):
@@ -618,6 +648,304 @@ class T3Fixtures(unittest.TestCase):
                 t3.update_windows(install, NEW, self.root, time.monotonic() + 60, lambda name: None)
         self.assertEqual(t3.windows_bundle_version(executable), OLD)
         self.assertIn("taskkill.exe /PID $p.Id /T /F", ps.call_args.args[0])
+
+    def runtime(self, version):
+        binary = self.root / ".t3/runtime/versions" / version / "t3"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.touch()
+        return binary
+
+    def fake_proc(self, processes):
+        # {pid: (exe, argv, child pids)}; exe links point at real files, so readlink works unmocked. None leaves no exe link.
+        proc = pathlib.Path(tempfile.mkdtemp(dir=self.root))
+        for pid, (exe, argv, children) in processes.items():
+            (proc / pid / "task" / pid).mkdir(parents=True)
+            if exe:
+                (proc / pid / "exe").symlink_to(exe)
+            (proc / pid / "cmdline").write_bytes(b"".join(item.encode() + b"\0" for item in argv))
+            (proc / pid / "task" / pid / "children").write_text("".join(child + " " for child in children))
+        return proc
+
+    def runtime_layout(self, numbers, active):
+        versions = self.root / ".t3/runtime/versions"
+        for number in numbers:
+            self.runtime(named(number))
+        common.write_private_json(self.root / ".t3/runtime/service-state.json", {"protocol": 3, "activeVersion": named(active)})
+        (self.root / ".local/bin").mkdir(parents=True, exist_ok=True)
+        (self.root / ".local/bin/t3").symlink_to(versions / named(active) / "t3")
+        return versions
+
+    def acp_unit(self):
+        unit = self.root / ".config/systemd/user" / t3.ACP_UNIT
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        unit.write_text("[Unit]\n")
+        return unit
+
+    def managed_cursor(self):
+        binary = self.root / ".local/share/cursor-agent/versions/2026.10.01-fixture/cursor-agent"
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        (self.root / ".local/bin").mkdir(parents=True, exist_ok=True)
+        (self.root / ".local/bin/cursor-agent").symlink_to(binary)
+        return self.root / ".local/bin/cursor-agent"
+
+    def components(self):
+        return json.loads((t3.state_root() / "t3-components.json").read_text())
+
+    def test_running_version_is_the_server_child_of_the_service_launcher(self):
+        old, new = self.runtime(OLD), self.runtime(NEW)
+        outside = self.root / "other" / NEW / "t3"
+        outside.parent.mkdir(parents=True)
+        outside.touch()
+        launcher = (old, [str(old), "__service-launcher"], ["4343"])
+        cases = {
+            "server child": ({"4242": launcher, "4343": (new, [str(new), "serve"], [])}, NEW),
+            "child is not a server": ({"4242": launcher, "4343": (new, [str(new), "doctor"], [])}, None),
+            "server outside the runtime tree": ({"4242": launcher, "4343": (outside, [str(outside), "serve"], [])}, None),
+            "launcher without a child": ({"4242": (old, [str(old), "__service-launcher"], [])}, None),
+            "plain server as main process": ({"4242": (new, [str(new), "serve"], [])}, NEW),
+        }
+        for name, (processes, expected) in cases.items():
+            with self.subTest(name), mock.patch.object(t3, "command", return_value="4242\n"), \
+                    mock.patch.object(t3, "PROC_ROOT", str(self.fake_proc(processes))):
+                self.assertEqual(t3.running_runtime_version(), expected)
+
+    def test_stale_unit_is_reloaded_after_a_runtime_install_and_never_restarted(self):
+        runtime = self.root / ".t3/runtime/versions" / OLD / "t3"
+        install = t3.T3Install("t3-code", "ubuntu", runtime, OLD, runtime=runtime, runtime_version=OLD)
+        with mock.patch.object(t3, "latest_release", return_value=NEW), \
+                mock.patch.object(t3, "command", side_effect=lambda argv, **kwargs: systemctl(argv, reload="yes")) as command, \
+                mock.patch.object(t3, "cli_probe", return_value=(NEW, None)):
+            row = t3.update_t3(install, time.monotonic() + 60)
+        self.assertEqual(row["messageCode"], "t3_restart_scheduled")
+        argv = [call.args[0] for call in command.call_args_list]
+        self.assertEqual(argv[2], ["/usr/bin/systemctl", "--user", "daemon-reload"])
+        self.assertNotIn("restart", [item for call in argv for item in call])
+        self.assertTrue(self.components()["daemonReload"])
+
+    def test_stale_unit_is_reloaded_on_the_current_path_without_any_restart(self):
+        runtime = self.root / ".t3/runtime/versions" / NEW / "t3"
+        install = t3.T3Install("t3-code", "ubuntu", runtime, NEW, runtime=runtime, runtime_version=NEW)
+        with mock.patch.object(t3, "latest_release", return_value=NEW), \
+                mock.patch.object(t3, "command", side_effect=lambda argv, **kwargs: systemctl(argv, reload="yes")) as command, \
+                mock.patch.object(t3, "schedule_restart") as schedule:
+            row = t3.update_t3(install, time.monotonic() + 60)
+        self.assertEqual(row["status"], "current")
+        schedule.assert_not_called()
+        self.assertEqual([call.args[0] for call in command.call_args_list], [
+            ["/usr/bin/systemctl", "--user", "show", "--property=NeedDaemonReload", "--value", "t3code.service"],
+            ["/usr/bin/systemctl", "--user", "daemon-reload"],
+        ])
+        components = self.components()
+        self.assertEqual(set(components), set(t3.COMPONENT_KEYS))
+        self.assertEqual((components["cursorAgent"]["status"], components["acpUpdater"]), ("absent", "absent"))
+
+    def test_detached_restart_reloads_the_stale_unit_right_before_restarting(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
+        now = [0]
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)), \
+                mock.patch.object(t3, "job_finished", return_value=True), \
+                mock.patch.object(t3, "command", side_effect=lambda argv, **kwargs: systemctl(argv, reload="yes")) as command, \
+                mock.patch.object(t3, "health_check"), mock.patch.object(t3, "running_runtime_version", return_value=NEW), \
+                mock.patch.object(t3, "prune_runtimes", return_value=[]):
+            t3.deferred_restart(12345)
+        self.assertEqual([call.args[0][2] for call in command.call_args_list], ["show", "daemon-reload", "restart"])
+        self.assertTrue(self.components()["daemonReload"])
+
+    def test_post_restart_version_mismatch_keeps_the_marker_and_finishes_nothing(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        marker = root / "t3-code-pending-restart.json"
+        common.write_private_json(marker, {"version": NEW})
+        now = [0]
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)), \
+                mock.patch.object(t3, "job_finished", return_value=True), \
+                mock.patch.object(t3, "command", side_effect=lambda argv, **kwargs: systemctl(argv)) as command, mock.patch.object(t3, "health_check"), \
+                mock.patch.object(t3, "running_runtime_version", return_value=OLD), mock.patch.object(t3, "finish_ubuntu_restart") as finish:
+            with self.assertRaisesRegex(common.UpdateFailure, "restart_failed"):
+                t3.deferred_restart(12345)
+        self.assertIn(["/usr/bin/systemctl", "--user", "restart", "t3code.service"], [call.args[0] for call in command.call_args_list])
+        self.assertTrue(marker.exists())
+        finish.assert_not_called()
+
+    def test_unreadable_pending_marker_never_restarts_the_service(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        (root / "t3-code-pending-restart.json").write_text("not json")
+        now = [0]
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)), \
+                mock.patch.object(t3, "job_finished", return_value=True), mock.patch.object(t3, "command") as command:
+            with self.assertRaisesRegex(common.UpdateFailure, "restart_failed"):
+                t3.deferred_restart(12345)
+        command.assert_not_called()
+
+    def test_prune_keeps_the_vm_active_rollback_and_running_runtimes(self):
+        versions = self.runtime_layout([2735, 2752, 2774, 2833, 2849], active=2849)
+        proc = self.fake_proc({"4242": (versions / named(2833) / "t3", [str(versions / named(2833) / "t3"), "__service-launcher"], [])})
+        with mock.patch.object(t3, "PROC_ROOT", str(proc)):
+            deleted = t3.prune_runtimes()
+        self.assertEqual(deleted, [named(number) for number in (2735, 2752, 2774)])
+        self.assertEqual(sorted(path.name for path in versions.iterdir()), sorted([named(2833), named(2849)]))
+
+    def test_prune_keeps_an_old_runtime_that_a_process_still_executes(self):
+        versions = self.runtime_layout([2735, 2752, 2833, 2849], active=2849)
+        proc = self.fake_proc({"4242": (versions / named(2735) / "t3", [str(versions / named(2735) / "t3"), "__service-launcher"], [])})
+        with mock.patch.object(t3, "PROC_ROOT", str(proc)):
+            deleted = t3.prune_runtimes()
+        self.assertEqual(deleted, [named(2752)])  # 2833 is the rollback copy; 2735 is still running.
+        self.assertEqual(sorted(path.name for path in versions.iterdir()), sorted([named(2735), named(2833), named(2849)]))
+
+    def test_prune_keeps_runtimes_named_on_a_command_line_when_the_exe_is_elsewhere_or_hidden(self):
+        versions = self.runtime_layout([2600, 2735, 2752, 2774, 2833, 2849], active=2849)
+        node = "/usr/bin/node"
+        proc = self.fake_proc({
+            "4242": (node, [node, str(versions / named(2735) / "node_modules/x.js")], []),
+            "4243": (None, [node, str(versions / named(2752) / "resource-monitor")], []),  # hidden exe, like a non-dumpable helper
+            "4244": (node, [node, "--runtime-dir", str(versions / named(2774))], []),  # a bare directory argument
+        })
+        with mock.patch.object(t3, "PROC_ROOT", str(proc)):
+            self.assertEqual(t3.running_runtime_versions(versions), {named(2735), named(2752), named(2774)})
+            self.assertEqual(t3.prune_runtimes(), [named(2600)])
+        self.assertEqual(sorted(path.name for path in versions.iterdir()), sorted([named(number) for number in (2735, 2752, 2774, 2833, 2849)]))
+
+    def test_command_line_names_count_only_as_exact_version_directories(self):
+        versions = self.runtime_layout([2735, 2849], active=2849)
+        node = "/usr/bin/node"
+        names = ["0.0.46-nightly.2735", "latest", named(2735) + ".bak", "../" + named(2735)]
+        proc = self.fake_proc({"4242": (node, [node] + [str(versions / name / "x.js") for name in names], [])})
+        with mock.patch.object(t3, "PROC_ROOT", str(proc)):
+            self.assertEqual(t3.running_runtime_versions(versions), set())
+
+    def test_unreadable_command_line_is_skipped_and_missing_proc_gives_none(self):
+        versions = self.runtime_layout([2735, 2849], active=2849)
+        proc = self.fake_proc({"4242": (str(versions / named(2735) / "t3"), [], [])})
+        (proc / "4242" / "cmdline").unlink()
+        with mock.patch.object(t3, "PROC_ROOT", str(proc)):
+            self.assertEqual(t3.running_runtime_versions(versions), {named(2735)})
+        with mock.patch.object(t3, "PROC_ROOT", str(self.root / "no-proc")):
+            self.assertIsNone(t3.running_runtime_versions(versions))
+
+    def test_prune_keeps_only_the_nas1_rollback_copy(self):
+        versions = self.runtime_layout([2787, 2833, 2849], active=2849)
+        with mock.patch.object(t3, "PROC_ROOT", str(self.fake_proc({}))):
+            deleted = t3.prune_runtimes()
+        self.assertEqual(deleted, [named(2787)])
+        self.assertEqual(sorted(path.name for path in versions.iterdir()), sorted([named(2833), named(2849)]))
+
+    def test_prune_deletes_nothing_without_a_readable_active_version(self):
+        versions = self.runtime_layout([2735, 2849], active=2849)
+        state = self.root / ".t3/runtime/service-state.json"
+        for content in ("{not json", json.dumps({"activeVersion": "../escape"}), json.dumps(["no"]), None):
+            with self.subTest(content=content):
+                if content is None:
+                    state.unlink()
+                else:
+                    state.write_text(content)
+                with mock.patch.object(t3, "PROC_ROOT", str(self.fake_proc({}))):
+                    self.assertEqual(t3.prune_runtimes(), [])
+                self.assertTrue((versions / named(2735) / "t3").exists())
+
+    def test_prune_never_follows_or_removes_symlinks(self):
+        versions = self.runtime_layout([2849], active=2849)
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("keep")
+        (versions / named(2600)).symlink_to(outside)
+        with mock.patch.object(t3, "PROC_ROOT", str(self.fake_proc({}))):
+            self.assertEqual(t3.prune_runtimes(), [])
+        self.assertTrue((versions / named(2600)).is_symlink())
+        self.assertEqual((outside / "keep.txt").read_text(), "keep")
+
+    def test_prune_deletes_at_most_twenty_directories_per_run_oldest_first(self):
+        versions = self.runtime_layout(list(range(1000, 1025)) + [2849], active=2849)
+        with mock.patch.object(t3, "PROC_ROOT", str(self.fake_proc({}))):
+            deleted = t3.prune_runtimes()
+        self.assertEqual(deleted, [named(number) for number in range(1000, 1020)])
+        self.assertEqual(len(list(versions.iterdir())), 6)  # 1020 to 1024, the rollback 1024 among them, plus 2849.
+
+    def test_cursor_agent_update_runs_only_for_the_managed_install(self):
+        deadline = time.monotonic() + 60
+        with mock.patch.object(t3, "command") as command, mock.patch.object(t3, "cli_probe") as probe:
+            self.assertEqual(t3.cursor_agent_update(deadline), {"before": None, "after": None, "status": "absent"})
+            outside = self.root / "outside/cursor-agent"
+            outside.parent.mkdir()
+            outside.touch()
+            (self.root / ".local/bin").mkdir(parents=True, exist_ok=True)
+            (self.root / ".local/bin/cursor-agent").symlink_to(outside)
+            self.assertEqual(t3.cursor_agent_update(deadline)["status"], "unmanaged")
+            command.assert_not_called(); probe.assert_not_called()
+        (self.root / ".local/bin/cursor-agent").unlink()
+        link = self.managed_cursor()
+        with mock.patch.object(t3, "command") as command, \
+                mock.patch.object(t3, "cli_probe", side_effect=[("2026.10.01-old", None), ("2026.10.02-new", None)]):
+            self.assertEqual(t3.cursor_agent_update(deadline), {"before": "2026.10.01-old", "after": "2026.10.02-new", "status": "updated"})
+        command.assert_called_once_with([link, "update"], timeout=mock.ANY)
+        with mock.patch.object(t3, "command", side_effect=common.UpdateFailure()), \
+                mock.patch.object(t3, "cli_probe", side_effect=[("2026.10.01-old", None), ("2026.10.01-old", None)]):
+            self.assertEqual(t3.cursor_agent_update(deadline)["status"], "failed")
+        with mock.patch.object(t3, "command") as command, mock.patch.object(t3, "cli_probe", return_value=("2026.10.01-old", None)):
+            self.assertEqual(t3.cursor_agent_update(time.monotonic() - 1)["status"], "failed")
+        command.assert_not_called()
+
+    def test_acp_updater_starts_from_the_row_only_when_no_restart_is_scheduled(self):
+        self.acp_unit()
+        runtime = self.root / ".t3/runtime/versions" / NEW / "t3"
+        install = t3.T3Install("t3-code", "ubuntu", runtime, NEW, runtime=runtime, runtime_version=NEW)
+        with mock.patch.object(t3, "latest_release", return_value=NEW), \
+                mock.patch.object(t3, "command", side_effect=lambda argv, **kwargs: systemctl(argv)) as command:
+            row = t3.update_t3(install, time.monotonic() + 60)
+        self.assertEqual(row["status"], "current")
+        argv = [call.args[0] for call in command.call_args_list]
+        self.assertIn(["/usr/bin/systemctl", "--user", "start", "--no-block", "t3-acp-update.service"], argv)
+        self.assertNotIn(["/usr/bin/systemctl", "--user", "daemon-reload"], argv)  # The unit query said "no".
+        self.assertEqual(self.components()["acpUpdater"], "started")
+
+    def test_acp_updater_waits_for_the_verified_restart_when_one_is_scheduled(self):
+        self.acp_unit()
+        runtime = self.root / ".t3/runtime/versions" / OLD / "t3"
+        install = t3.T3Install("t3-code", "ubuntu", runtime, OLD, runtime=runtime, runtime_version=OLD)
+        calls = []
+        def run(argv, **kwargs):
+            calls.append([str(item) for item in argv])
+            return systemctl(argv)
+        with mock.patch.object(t3, "latest_release", return_value=NEW), mock.patch.object(t3, "command", side_effect=run), \
+                mock.patch.object(t3, "cli_probe", return_value=(NEW, None)):
+            row = t3.update_t3(install, time.monotonic() + 60)
+        start = ["/usr/bin/systemctl", "--user", "start", "--no-block", "t3-acp-update.service"]
+        restart = ["/usr/bin/systemctl", "--user", "restart", "t3code.service"]
+        self.assertEqual(row["messageCode"], "t3_restart_scheduled")
+        self.assertNotIn(start, calls)
+        self.assertEqual(self.components()["acpUpdater"], "pending")
+        now = [0]
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)), \
+                mock.patch.object(t3, "job_finished", return_value=True), mock.patch.object(t3, "command", side_effect=run), \
+                mock.patch.object(t3, "health_check"), mock.patch.object(t3, "running_runtime_version", return_value=NEW), \
+                mock.patch.object(t3, "prune_runtimes", return_value=[OLD]):
+            t3.deferred_restart(12345)
+        self.assertLess(calls.index(restart), calls.index(start))
+        components = self.components()
+        self.assertEqual((components["acpUpdater"], components["prunedRuntimes"], components["daemonReload"]), ("started", [OLD], False))
+        self.assertIn("T3 companions: ACP updater started; pruned " + OLD, self.stdout.getvalue())
+
+    def test_companion_failures_never_change_the_t3_row(self):
+        self.managed_cursor()
+        self.acp_unit()
+        runtime = self.root / ".t3/runtime/versions" / NEW / "t3"
+        install = t3.T3Install("t3-code", "ubuntu", runtime, NEW, runtime=runtime, runtime_version=NEW)
+        def run(argv, **kwargs):
+            if "update" in argv:
+                raise common.UpdateFailure("timeout")
+            if "start" in argv:
+                raise common.UpdateFailure("update_failed")
+            return systemctl(argv)
+        with mock.patch.object(t3, "latest_release", return_value=NEW), mock.patch.object(t3, "command", side_effect=run), \
+                mock.patch.object(t3, "cli_probe", return_value=("2026.10.01-fixture", None)):
+            row = t3.update_t3(install, time.monotonic() + 60)
+        self.assertEqual((row["status"], row["messageCode"], row["version"], row["updateAttempted"]), ("current", "current", NEW, False))
+        self.assertEqual((self.components()["cursorAgent"]["status"], self.components()["acpUpdater"]), ("failed", "failed"))
 
     def test_muse_cmd_detection_versions_official_launcher_and_disables_auto_update(self):
         root = self.root / "local/Programs/muse"; root.mkdir(parents=True)

@@ -52,7 +52,7 @@ modify or export account credentials/configuration.
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix |
 | Claude Code | Active native `claude update` |
-| Codex Desktop | Ubuntu signed-repository `chatgpt` package only; Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
+| Codex Desktop | Ubuntu signed-repository `chatgpt` package only (a turned-off repository reports `source_disabled`); Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
 | T3 Code | One `t3-code` row per host covers its nightly desktop/bundled server and any installed standalone runtime; Ubuntu uses the native updater and a detached delayed server restart; Mac verifies SHA512, codesign and notarization before a bundle swap; Windows verifies SHA512 and the T3 Tools Inc Authenticode publisher before the silent NSIS installer |
 
@@ -99,7 +99,11 @@ Mac/Windows quit-first behavior described below.
 
 On Ubuntu, `t3 update <version> --channel nightly` runs with empty, non-TTY stdin
 and **without `--yes`**. Its native updater verifies the runtime and rewrites the
-service definition while leaving the running server on its old version. T3 is
+service definition while leaving the running server on its old version. The
+updater never reloads systemd, so the helper runs `systemctl --user daemon-reload`
+only when `NeedDaemonReload` reports `yes`: after a runtime install, on a later run
+that finds T3 current (a unit an earlier run left stale), and right before the
+detached restart. A reload never restarts a service. T3 is
 the last app on each host, and Ubuntu schedules a separate transient user service
 that waits for the update helper to exit, every computer in the dashboard job
 (Nas1 included) to finish and the
@@ -112,20 +116,49 @@ the final check, restart and health verification before releasing them. It
 restarts **only `t3code.service`**;
 `ccs-dashboard.service` is never stopped or restarted. A new update job delays
 the restart again. The detached worker has an 18-minute wait limit and verifies
-HTTP health after restarting.
+HTTP health after restarting, then checks that the running server reports the
+installed version. The unit's main process is a launcher that starts the server
+from the runtime named in `service-state.json`, so the version is read from the
+launcher's direct `serve` child (a process from `~/.t3/runtime/versions/<version>/t3`);
+a plain server is read directly. Nothing is restarted to read it.
 
 The immediate result says the server restart is **scheduled**, with zero
 synchronously restarted processes and a fixed `systemd` restart target; it
 does not claim the new server is already running. Restarting T3 disconnects its
 active agent threads and clients. A version-only pending marker remains if
-scheduling, restart or health verification fails; a later explicit click retries.
-Restart intent is written before runtime installation, so a post-install version
-probe timeout cannot lose it. On a later explicit run, a read-only service PID
-and executable-path check clears intent if the running service already uses the
-installed version; otherwise the delayed restart is scheduled again.
+scheduling, restart, health verification or the server's version check fails; a
+later explicit click retries. Restart intent is written before runtime
+installation, so a post-install version probe timeout cannot lose it. On a later
+explicit run, a read-only check of the service's main process and server child
+clears intent if the running server already uses the installed version; otherwise
+the delayed restart is scheduled again.
 Inspect `journalctl --user -u 'aac-t3-restart-*'` for the detached outcome.
-No status read schedules or retries anything. Separate Muse ACP and ZCode ACP
-adapters remain under their existing auto-updaters and are outside this job.
+No status read schedules or retries anything.
+
+After a verified restart the helper prunes old runtimes under
+`~/.t3/runtime/versions`, and an Ubuntu run that finds T3 current prunes them too.
+It deletes at most 20 real directories per run, oldest first. It keeps the active
+version from `service-state.json`, the version `~/.local/bin/t3` resolves to, the
+newest older version as one rollback copy, and any version a process of this user
+is executing from or names in its command line. Symlinks are never followed or
+removed, and nothing is deleted when `service-state.json` is unreadable or names no
+exact version. T3's own tool cache (`~/.t3/tools`, for example cloudflared) is not
+part of this: T3 downloads the tool version it pins on demand.
+
+Two companions run beside T3 on Ubuntu, best effort, and neither changes the
+`t3-code` row. The Cursor agent CLI behind T3's Cursor provider
+(`~/.local/bin/cursor-agent`, only when it resolves inside
+`~/.local/share/cursor-agent/versions`) runs its own `cursor-agent update` before
+any restart is scheduled. The Muse and ZCode ACP adapters and the extracted ZCode
+app are updated by Jared's own `t3-acp-update.service` user unit; this job only
+starts that unit, without waiting, and the unit keeps its own lock, deferrals and
+log (`~/.local/state/t3-acp-update/update.log`). When a restart is scheduled, the
+detached worker starts it right after the verified restart, because the restart has
+just stopped the running adapters; otherwise the helper starts it at once. The
+outcome goes to `t3-components.json` in the helper state directory: UTC time, the
+Cursor CLI before, after and status, the ACP updater status (`pending` until the
+worker starts it), the pruned versions and whether a reload ran. The detached
+worker also writes one line to its journal.
 
 Hosts still run in parallel. Installers stay sequential within each host:
 T3's replacement closes its bundled server/process family, Windows installers
@@ -215,7 +248,10 @@ the install, so one opened during the download is left alone (Ubuntu desktops
 keep the previous bounded terminate-and-relaunch flow). CLI forced stops stay
 bounded, app-family-only and counted.
 A successful result verifies
-that replacement processes exist.
+that replacement processes exist. An Ubuntu upgrade turns third-party sources off:
+when `apt-cache policy` lists no package source for the Codex or Claude desktop
+package except the installed status file, the row is `action_required` /
+`source_disabled` and nothing is stopped or installed, never a false `current`.
 
 Updated interactive CLIs open new idle terminal instances. Ubuntu uses a private
 `tmux -L ccs-updates-...` server; Mac uses Terminal; Windows uses Windows Terminal.
@@ -322,9 +358,12 @@ three. It follows the Ubuntu rows of this guide except where noted here.
   `~/.codex/app-server-control/` socket; it never writes `auth.json` or any
   other login.
 - **T3.** A T3 update on Nas1 schedules its own deferred restart: a detached
-  user service waits for the helper to exit and 30 seconds, then restarts only
-  Nas1's `t3code.service` and checks its health. Run without `--dashboard-job`,
-  it needs no dashboard job or lock.
+  user service waits for the helper to exit and 30 seconds, reloads Nas1's unit
+  only when it is stale, restarts only Nas1's `t3code.service`, checks its health
+  and that the server reports the installed version. Nas1 then prunes its old
+  runtimes, updates its Cursor CLI and starts its `t3-acp-update` unit, as the
+  Ubuntu rows above describe, where those are installed. Run without
+  `--dashboard-job`, it needs no dashboard job or lock.
 - **Antigravity.** Nas1 has no AI Account Center managed Antigravity runtime
   (that update branch needs `~/.ccs/antigravity-switching/runtime-installation.json`,
   which is never created there), so the CLI updates through the generic

@@ -492,6 +492,17 @@ def update_windows(install, phase=None):
             return result(install.app_id, "windows", "failed", before, before, install.manager, error.code, installed)
 
 
+def apt_package_sources(policy):
+    """Package sources in apt-cache policy's version table, minus the installed status file."""
+    sources = []
+    for line in policy.splitlines():
+        # A source row reads "<priority> <url or path>"; a version row starts with the version itself.
+        fields = line.split()
+        if len(fields) > 1 and fields[0].isdigit() and ("/" in fields[1] or ":" in fields[1]) and fields[1] != "/var/lib/dpkg/status":
+            sources.append(fields[1])
+    return sources
+
+
 def update_linux(install, deadline=None):
     before = install.version
     contexts = []
@@ -503,6 +514,10 @@ def update_linux(install, deadline=None):
         candidate = next((version_text(line.split(":", 1)[1]) for line in policy.splitlines() if line.strip().startswith("Candidate:")), None)
         if not candidate:
             raise UpdateFailure("version_unknown")
+        # An Ubuntu upgrade turns third-party sources off. Without one, apt only
+        # knows the installed copy, so "current" would be a false answer.
+        if not apt_package_sources(policy):
+            return result(install.app_id, "ubuntu", "action_required", before, before, "apt", "source_disabled", False)
         pending = pathlib.Path.home() / ".ccs/app-updates/codex-desktop-pending-restart.json"
         retry_restart = False
         try:
