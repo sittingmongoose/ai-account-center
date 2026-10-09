@@ -425,6 +425,7 @@ class T3Fixtures(unittest.TestCase):
             return common.result(install.app_id, "ubuntu", "current", "1.0.0", "1.0.0", "native")
         with mock.patch.object(updater, "detect", return_value=installations), mock.patch.object(updater, "check_readiness", return_value=None), \
                 mock.patch.object(updater, "antigravity_hold", return_value=None), mock.patch.object(updater, "update_cli", side_effect=update), \
+                mock.patch.object(updater, "latest_claude_version", return_value=None), \
                 mock.patch.object(updater, "update_desktop", side_effect=update), mock.patch.object(updater, "update_t3", side_effect=update), \
                 mock.patch.object(updater, "update_zcode", side_effect=update), mock.patch.object(updater, "update_adapters", side_effect=update):
             updater.run_apply("ubuntu")

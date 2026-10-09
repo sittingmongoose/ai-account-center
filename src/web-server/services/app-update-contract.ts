@@ -1,5 +1,15 @@
 import { ConfigError } from '../../errors/error-types';
 import { DASHBOARD_HOSTS, HOST_OS, type DashboardHost } from './dashboard-hosts';
+import {
+  MAX_STRAYS,
+  olderShadow,
+  STRAY_LOCATIONS,
+  strayNote,
+  type AppUpdateStray,
+  type AppUpdateStrayLocation,
+} from './app-update-strays';
+
+export type { AppUpdateStray, AppUpdateStrayLocation } from './app-update-strays';
 
 export const UPDATE_APP_LABELS = {
   'antigravity-cli': 'Antigravity CLI',
@@ -47,6 +57,8 @@ export interface AppUpdateResult {
     previousVersion: string | null;
     version: string | null;
   }>;
+  /** Other Codex or Claude copies beside a managed install; present only when there are some. */
+  strays?: AppUpdateStray[];
   restartTargets: Array<{
     kind: 'tmux' | 'terminal' | 'windows-terminal' | 'desktop' | 'systemd';
     server?: string;
@@ -156,6 +168,8 @@ const CLI_APPS: readonly UpdateAppId[] = [
   'codex-cli',
   'claude-code',
 ];
+/** Only the Codex and Claude CLIs have a managed install that another copy can shadow. */
+const STRAY_APPS: readonly UpdateAppId[] = ['codex-cli', 'claude-code'];
 
 export function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -259,12 +273,63 @@ export function normalizeAppUpdateResults(
 }
 
 /** A row's words; "quit first" and "in use" name the app, so the page says what to close. */
-export function messageFor(code: MessageCode, appId: UpdateAppId): string {
+function codeWords(code: MessageCode, appId: UpdateAppId): string {
   if (code === 'quit_first')
     return `Quit ${UPDATE_APP_LABELS[appId]} to finish its update, then run Update apps again.`;
   if (code === 'in_use')
     return `${UPDATE_APP_LABELS[appId]} is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.`;
   return MESSAGES[code];
+}
+
+/**
+ * The code's words, plus one fixed sentence when an older copy shadows the managed
+ * install on PATH. The version is the row's own, so "older" is judged against it.
+ */
+export function messageFor(
+  code: MessageCode,
+  appId: UpdateAppId,
+  strays: AppUpdateStray[] = [],
+  version: string | null = null
+): string {
+  const words = codeWords(code, appId);
+  const older = olderShadow(strays, version);
+  if (!older) return words;
+  // Some words end without a full stop ("Skipped: cancelled"); the sentence needs one before it.
+  const lead = /[.!?]$/.test(words) ? words : `${words}.`;
+  return `${lead} ${strayNote(UPDATE_APP_LABELS[appId], older)}`;
+}
+
+/** The words a helper row, or a row saved to disk, carries for `code`; a restore matches saved words against this. */
+export function rowMessage(
+  row: Record<string, unknown>,
+  appId: UpdateAppId,
+  code: MessageCode
+): string {
+  return messageFor(
+    code,
+    appId,
+    rowStrays(row, appId),
+    safeVersion(row.version) ?? safeVersion(row.previousVersion)
+  );
+}
+
+/** A row's strays: only Codex and Claude rows carry them, at most four, each with a known location and a boolean. */
+function rowStrays(row: Record<string, unknown>, appId: UpdateAppId): AppUpdateStray[] {
+  if (!STRAY_APPS.includes(appId)) return [];
+  const strays: AppUpdateStray[] = [];
+  for (const candidate of Array.isArray(row.strays) ? row.strays.slice(0, MAX_STRAYS) : []) {
+    const stray = record(candidate);
+    const location = stray?.location as AppUpdateStrayLocation | undefined;
+    if (
+      !stray ||
+      !location ||
+      !STRAY_LOCATIONS.includes(location) ||
+      typeof stray.shadows !== 'boolean'
+    )
+      continue;
+    strays.push({ location, version: safeVersion(stray.version), shadows: stray.shadows });
+  }
+  return strays;
 }
 
 const ACP_PARTS = ['muse-acp', 'zcode-acp-server'] as const;
@@ -376,6 +441,7 @@ export function normalizeAppUpdateRow(
   )
     return failure(platform, appId, 'helper_invalid');
   const heldVersion = held && code === 'held_for_review' ? safeVersion(row.heldVersion) : null;
+  const strays = rowStrays(row, appId);
   return {
     appId,
     appLabel: UPDATE_APP_LABELS[appId],
@@ -384,12 +450,13 @@ export function normalizeAppUpdateRow(
     previousVersion: safeVersion(row.previousVersion),
     version: safeVersion(row.version),
     manager: typeof row.manager === 'string' && MANAGERS.includes(row.manager) ? row.manager : null,
-    message: messageFor(code, appId),
+    message: rowMessage(row, appId, code),
     updateAttempted: row.updateAttempted === true,
     restartedProcesses: count,
     forcedStops: forced,
     ...(heldVersion ? { heldVersion } : {}),
     ...(parts ? { parts } : {}),
+    ...(strays.length ? { strays } : {}),
     restartTargets: targets,
   };
 }

@@ -50,8 +50,8 @@ modify or export account credentials/configuration.
 | Antigravity CLI | Active native `agy update`, only to a build in the switching review set (held otherwise, see below) |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
-| Codex CLI | Active native `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix |
-| Claude Code | Active native `claude update`; an install already at the newer of the official `latest` and `stable` pointers reports `current` before any process check (see [CLI instances and T3 sessions](#cli-instances-and-t3-sessions)) |
+| Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
+| Claude Code | Active native `claude update` on its managed install (linked from `~/.local/bin/claude`); an install already at the newer of the official `latest` and `stable` pointers reports `current` before any process check (see [CLI instances and T3 sessions](#cli-instances-and-t3-sessions)); other copies are reported as strays |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only (a turned-off repository reports `source_disabled`); Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
 | ZCode | Official release page and that release's CDN `latest.yml` (sha512 and size); Ubuntu/Nas1 through Jared's `t3-acp-update.service`; Mac verified ZIP swap (never quit); Windows same-signer NSIS installer with close, install and reopen (see [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)) |
@@ -70,6 +70,37 @@ Official methods: [Antigravity installer](https://antigravity.google/cli/install
 [Claude Code setup](https://code.claude.com/docs/en/setup),
 [OpenAI Linux package](https://learn.chatgpt.com/docs/linux/linux-app),
 [OpenAI app update management](https://learn.chatgpt.com/docs/manage-app-updates).
+
+### Stray copies beside a managed install
+
+On Ubuntu and Mac, a managed Codex CLI or Claude Code install is the release folder
+that its `~/.local/bin` link resolves into (`~/.codex/packages/standalone/releases/<version>`
+and `~/.local/share/claude/versions/<version>`). Detection always picks that copy, whatever
+the PATH order, so an older copy earlier on PATH (such as a stale npm install in
+`/usr/local/bin`) cannot mis-report the version. Where no managed install exists, detection
+is unchanged: the first copy on PATH is used and no strays are reported. Nas1's npm-installed
+Codex under `~/.local` is such a case.
+
+Every other copy that resolves to a different file is a **stray**. Each one gets a single
+bounded, read-only `--version` probe, run side by side (at most 20 seconds each), and at most
+four are kept, in PATH order. Strays appear in `--inventory` output and on the job's Codex or
+Claude row as, for example:
+
+```json
+"strays":[{"location":"usr-local","version":"0.145.0","shadows":true}]
+```
+
+- `location` is one fixed word: `usr-local`, `homebrew`, `bun`, `user-npm` (an npm package under the
+  home folder) or `other`. The folder itself is never reported.
+- `version` is the copy's own version, or `null` when its probe could not read one.
+- `shadows` is `true` when the copy comes before the managed install on the helper's PATH, or
+  when the managed install is not on that PATH at all.
+
+When a shadowing copy is older than the row's version, the row's message gains one fixed sentence:
+"An older Codex CLI copy (0.145.0) in /usr/local/bin comes first on some PATHs; remove it so it
+never runs instead." A copy that is newer, or the same version, is listed but never named as
+older. Strays are never updated, stopped or removed: the update runs only the managed install.
+Windows and the other CLIs have no managed layout, so they report no strays.
 
 ## T3 Code nightly updates
 
@@ -191,7 +222,8 @@ code instead of reporting `current`.
 Only the owner's explicitly authorized Update apps click should exercise real
 installers. Before that, read-only `--inventory --platform <host>` should show
 ten rows, full T3 nightly versions, Windows Muse's native manager/version, ZCode's
-version and the adapters' `parts`.
+version and the adapters' `parts`; Codex CLI or Claude Code also lists `strays` when
+another copy sits beside its managed install.
 After an authorized click, confirm 40 result rows and simultaneous host progress.
 When T3 updates, verify Mac/Windows bundle versions and port 3773 health, then
 wait until the completed job's scheduled Ubuntu restart has finished; inspect
