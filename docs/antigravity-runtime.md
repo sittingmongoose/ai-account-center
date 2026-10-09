@@ -118,6 +118,15 @@ current. After a failed cutover, `--recover-rebuild` removes the incomplete bund
 and `--plan`/`--apply` can be retried: the rollback restores each owned file's bytes,
 mode and timestamps through a new inode, and both accept that restored state.
 
+After a crash, a leftover socket file with nothing listening in
+`~/.ccs/antigravity-runtime/` is removed at startup, while a live socket still
+makes the service refuse to start. Bundles built before this fix need the manual
+cleanup: check that nothing listens on `control.sock` or `status.sock`, remove those
+two files, and start `ai-account-center-antigravity.service` once. The fix reaches
+the VM only when the package is deployed and the bundle is rebuilt from the packaged
+sources (`rebuild_bundle.py --apply`, which the planned rebuild after Update all
+installs agy 1.3.2 does).
+
 ## Manual and automatic control
 
 Coding plans are normalized only from reported plan/tier values; unknown values

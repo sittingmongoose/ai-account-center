@@ -318,6 +318,31 @@ def validate_private_socket(path: Path):
     return leaf.st_dev, leaf.st_ino
 
 
+def clear_stale_socket(path: Path) -> bool:
+    """Unlink only a dead socket leftover owned by this uid; False leaves the path untouched.
+
+    An absent path is clear. A symlink, regular file, foreign-owned path, live
+    listener or probe error refuses. The unlink needs the inode seen before probing.
+    """
+    try: before = path.lstat()
+    except FileNotFoundError: return True
+    except OSError: return False
+    if not stat.S_ISSOCK(before.st_mode) or before.st_uid != os.getuid(): return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(1.0)
+            probe.connect(str(path))
+    except ConnectionRefusedError: pass
+    except OSError: return False
+    else: return False
+    try:
+        after = path.lstat()
+        if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino): return False
+        path.unlink()
+    except OSError: return False
+    return True
+
+
 def send_projection(path: Path, projection: dict, timeout=1.0):
     if not 0 < timeout <= 2.0: fail('status-socket-timeout-invalid')
     raw = json.dumps(projection, separators=(',', ':')).encode()
@@ -351,7 +376,7 @@ class NativeStatusSocket:
             info = self.path.parent.lstat()
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or
                     stat.S_IMODE(info.st_mode) != 0o700): fail('status-socket-directory-unsafe')
-            if self.path.exists() or self.path.is_symlink(): fail('status-socket-already-exists')
+            if not clear_stale_socket(self.path): fail('status-socket-already-exists')
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             old = os.umask(0o177)
             try: listener.bind(str(self.path))

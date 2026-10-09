@@ -70,5 +70,7 @@ if __name__ == '__main__':
     try:main()
     except ParserUnavailable as error:
         raise SystemExit('Managed Antigravity runtime failed: %s (runtime-parser-missing).'%error) from None
-    except (OSError, ContinuityError, ValueError):
+    except ContinuityError as error:
+        raise SystemExit('Managed Antigravity runtime is unavailable (%s).'%error) from None
+    except (OSError, ValueError):
         raise SystemExit('Managed Antigravity runtime is unavailable.') from None
