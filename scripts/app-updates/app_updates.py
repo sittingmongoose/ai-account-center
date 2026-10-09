@@ -301,13 +301,62 @@ def _strays(found, managed):
         return []
     managed_at = _path_position(managed)
     with ThreadPoolExecutor(max_workers=len(copies)) as pool:
-        versions = list(pool.map(lambda item: cli_probe(item[0])[0], copies))
+        versions = list(pool.map(lambda item: _stray_version(item[0], item[1]), copies))
     strays = []
     for (path, real), version in zip(copies, versions):
         at = _path_position(path)
         strays.append({"location": _stray_location(path, real), "version": version,
                        "shadows": at is not None and (managed_at is None or at < managed_at)})
     return strays
+
+
+# An npm global Codex CLI on Ubuntu or Mac is `<prefix>/bin/codex` linking into
+# `<prefix>/lib/node_modules/@openai/codex`. Its update runs npm itself under that
+# prefix, because `codex update` would run whichever npm PATH finds (see perform_cli_update).
+CODEX_NPM_PACKAGE = "@openai/codex"
+PACKAGE_JSON_LIMIT = 64 * 1024
+
+
+def _package_json(folder):
+    """The parsed package.json of a package folder, or None. The read is bounded and nothing in it runs."""
+    try:
+        with (pathlib.Path(folder) / "package.json").open("rb") as handle:
+            raw = handle.read(PACKAGE_JSON_LIMIT + 1)
+        info = json.loads(raw) if len(raw) <= PACKAGE_JSON_LIMIT else None
+    except (OSError, ValueError):
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def _stray_version(path, real):
+    """A stray's version. An npm-script copy (`.../@openai/codex/bin/codex.js`, package named @openai/codex)
+    reports its package.json version and is never run; any other copy gets the bounded --version probe."""
+    root = real.parent.parent
+    if real.name == "codex.js" and real.parent.name == "bin" and root.parts[-3:] == ("node_modules", "@openai", "codex"):
+        info = _package_json(root)
+        if info is not None and info.get("name") == CODEX_NPM_PACKAGE:
+            return version_text(info.get("version"))
+    return cli_probe(path)[0]
+
+
+def _npm_codex_root(path, resolved):
+    """The package folder when this POSIX Codex CLI is an npm global install, else None.
+
+    `path` must be `<prefix>/bin/codex`, `resolved` must lie inside `<prefix>/lib/node_modules/@openai/codex`,
+    and that package.json must name @openai/codex. Windows shims never reach here (see detect_cli).
+    """
+    if path.parent.name != "bin":
+        return None
+    root = path.parent.parent / "lib/node_modules/@openai/codex"
+    if not _within(resolved, root.resolve()):
+        return None
+    info = _package_json(root)
+    return root if info is not None and info.get("name") == CODEX_NPM_PACKAGE else None
+
+
+def npm_prefix(install):
+    """The npm global prefix that owns an npm-managed install: the folder of codex.cmd on Windows, the folder above bin on POSIX."""
+    return install.path.parent if install.platform == "windows" else install.path.parent.parent
 
 
 def detect_cli(app_id, platform):
@@ -353,10 +402,13 @@ def detect_cli(app_id, platform):
     home = pathlib.Path.home()
     # normcase folds case on Windows only, where resolve() reports the on-disk spelling.
     resolved_text = os.path.normcase(str(resolved))
+    npm_root = _npm_codex_root(path, resolved) if app_id == "codex-cli" and platform != "windows" else None
     if app_id == "codex-cli" and os.path.normcase(str(home / ".codex/packages/standalone/releases")) in resolved_text:
         root = home / ".codex/packages/standalone/releases"
     elif app_id == "claude-code" and os.path.normcase(str(home / ".local/share/claude/versions")) in resolved_text:
         root = home / ".local/share/claude/versions"
+    elif npm_root is not None:
+        manager, root = "npm", npm_root
     strays = _strays(found, managed) if managed is not None else []
     return Install(app_id, platform, path, version, manager, package_root=root, strays=strays)
 
@@ -478,15 +530,32 @@ def perform_cli_update(install, deadline=None):
                 command([shell, target], timeout=_clamp(600, deadline), env=env)
         return
     if install.manager == "npm":
-        resolved = resolve_npm(install.path.parent)
+        # npm itself, under the install's own prefix: never `codex update`, which runs whichever npm PATH finds.
+        prefix = npm_prefix(install)
+        resolved = resolve_npm(prefix)
         if resolved is None:
             raise UpdateFailure("unsupported")
         node, cli = resolved
-        command([str(node), str(cli), "install", "--global", "--prefix", str(install.path.parent), "@openai/codex@latest"], timeout=_clamp(300, deadline))
+        command([str(node), str(cli), "install", "--global", "--prefix", str(prefix), "@openai/codex@latest"], timeout=_clamp(300, deadline))
         return
     if install.manager != "native":
         raise UpdateFailure("unsupported")
     command([path, "update"], timeout=180, env={"PATH": str(path.parent) + os.pathsep + os.environ.get("PATH", "")})
+
+
+def npm_bridge_arguments(install):
+    """The Codex bridge's npm flags for an npm-managed install: node, npm-cli.js and its prefix. None otherwise.
+
+    The bridge then runs the same npm command as perform_cli_update, under the same prefix.
+    """
+    if install.manager != "npm":
+        return []
+    prefix = npm_prefix(install)
+    resolved = resolve_npm(prefix)
+    if resolved is None:
+        raise UpdateFailure("unsupported")
+    node, cli = resolved
+    return ["--npm-node", str(node), "--npm-cli", str(cli), "--npm-prefix", str(prefix)]
 
 
 def update_cli(install, deadline):
@@ -520,7 +589,7 @@ def update_cli(install, deadline):
             check_terminal(install.platform, contexts)
             bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
             seconds = max(30, min(CODEX_BRIDGE_SECONDS, int(deadline - time.monotonic())))
-            payload = json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "cli", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
+            payload = json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "cli", "--timeout-seconds", str(seconds), *npm_bridge_arguments(install)], timeout=seconds + 15, capture=True))
             if payload.get("status") == "updated" and contexts:
                 refreshed = detect_cli(install.app_id, install.platform)
                 if refreshed is None or not refreshed.version:

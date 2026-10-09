@@ -50,7 +50,7 @@ modify or export account credentials/configuration.
 | Antigravity CLI | Active native `agy update`, only to a build in the switching review set (held otherwise, see below) |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
-| Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
+| Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
 | Claude Code | Active native `claude update` on its managed install (linked from `~/.local/bin/claude`); an install already at the newer of the official `latest` and `stable` pointers reports `current` before any process check (see [CLI instances and T3 sessions](#cli-instances-and-t3-sessions)); other copies are reported as strays |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only (a turned-off repository reports `source_disabled`); Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
@@ -77,13 +77,16 @@ On Ubuntu and Mac, a managed Codex CLI or Claude Code install is the release fol
 that its `~/.local/bin` link resolves into (`~/.codex/packages/standalone/releases/<version>`
 and `~/.local/share/claude/versions/<version>`). Detection always picks that copy, whatever
 the PATH order, so an older copy earlier on PATH (such as a stale npm install in
-`/usr/local/bin`) cannot mis-report the version. Where no managed install exists, detection
-is unchanged: the first copy on PATH is used and no strays are reported. Nas1's npm-installed
-Codex under `~/.local` is such a case.
+`/usr/local/bin`) cannot mis-report the version. Where no managed install exists, the first copy
+on PATH is used and no strays are reported. Nas1's npm-installed Codex under `~/.local` is such a
+case: it is an npm install (see the Codex CLI row), not a managed one.
 
 Every other copy that resolves to a different file is a **stray**. Each one gets a single
 bounded, read-only `--version` probe, run side by side (at most 20 seconds each), and at most
-four are kept, in PATH order. Strays appear in `--inventory` output and on the job's Codex or
+four are kept, in PATH order. An npm-script copy (its file is `.../@openai/codex/bin/codex.js`
+in a package whose `package.json` names `@openai/codex`) reports the version in that
+`package.json` instead, and its script is never run, so a copy whose `node` is not on the
+helper's PATH still reports its version. Strays appear in `--inventory` output and on the job's Codex or
 Claude row as, for example:
 
 ```json
@@ -411,6 +414,15 @@ are gone and replacement proxies execute the updated active binary. Unknown
 unsupervised proxies yield an explicit restart failure. A private **version-only**
 pending-restart marker permits a subsequent explicit click to retry after timeout.
 No account authentication is changed.
+
+An npm global Codex CLI (Codex CLI row above) uses the same bridge with one change: the updater
+passes the npm command's node, `npm-cli.js` and prefix, and the bridge runs
+`npm install --global --prefix <prefix> @openai/codex@latest` where it would run `codex update`.
+The bridge refuses that command unless its executable really lives under that prefix. The
+stop, start and idle steps are the same, and the row's manager is reported as `npm`. Its running
+Codex processes count as Codex processes, as a managed install's do: a running app-server goes
+through this bridge, and the user's own CLI sessions are relaunched after the update. T3-started
+sessions are never stopped.
 
 On a Linux host without AAC installed, the bridge loads
 `app_update_codex_runtime.cjs` from beside itself: the same stop/start runtime

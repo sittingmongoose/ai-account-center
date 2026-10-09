@@ -19,13 +19,15 @@ const flags = Object.fromEntries(process.argv.slice(2).reduce((pairs, arg, index
 }, []));
 const operation = flags['--operation'] === 'desktop' ? 'desktop' : 'cli';
 const seconds = /^\d+$/.test(flags['--timeout-seconds'] || '') ? Math.max(30, Math.min(900, Number(flags['--timeout-seconds']))) : 900;
+// Set only for an npm-global Codex (app_updates.npm_bridge_arguments passes them): npm itself then updates it under its own prefix.
+const npmFlags = flags['--npm-prefix'] ? { node: flags['--npm-node'], cli: flags['--npm-cli'], prefix: flags['--npm-prefix'] } : null;
 // Shared Codex work is often busy for hours (long goals, other projects'
 // stdio servers). Waiting longer than this for idle only stalls Update apps;
 // a busy Codex becomes an honest "Codex is busy" row instead.
 const IDLE_WAIT_SECONDS = 60;
 const LOCK_WAIT_SECONDS = 30;
 const output = { appId: operation === 'desktop' ? 'codex-desktop' : 'codex-cli', platform: 'ubuntu',
-  status: 'failed', previousVersion: null, version: null, manager: operation === 'desktop' ? 'apt' : 'native',
+  status: 'failed', previousVersion: null, version: null, manager: operation === 'desktop' ? 'apt' : npmFlags ? 'npm' : 'native',
   messageCode: 'update_failed', updateAttempted: false, restartedProcesses: 0, forcedStops: 0 };
 const version = (text) => typeof text === 'string' ? text.match(/\d+\.\d+(?:\.\d+){0,3}/)?.[0] ?? null : null;
 function run(binary, args, timeout = 10000) {
@@ -62,6 +64,19 @@ function privateScan() {
     } catch (error) { if (!['ENOENT', 'ESRCH'].includes(error.code)) throw new Error('Codex inventory failed.'); }
   }
   return values;
+}
+// The command that updates the CLI at `target`. An npm-global install is updated by npm itself, under the prefix
+// that must own `target`: `codex update` would run whichever npm PATH finds. Anything else runs `codex update`.
+function updateCommand(target = executable, npm = npmFlags) {
+  if (!npm) return { file: target, args: ['update'] };
+  if (![npm.node, npm.cli, npm.prefix].every((value) => typeof value === 'string' && path.isAbsolute(value))) throw new Error('npm install is unknown.');
+  const packageRoot = fs.realpathSync(path.join(npm.prefix, 'lib/node_modules/@openai/codex'));
+  if (!fs.realpathSync(target).startsWith(packageRoot + path.sep)) throw new Error('npm install does not own this Codex.');
+  return { file: npm.node, args: [npm.cli, 'install', '--global', '--prefix', npm.prefix, '@openai/codex@latest'] };
+}
+function cliUpdate() {
+  const { file, args } = updateCommand();
+  return run(file, args, 180000);
 }
 function markerFile() { return path.join(home, '.ccs/app-updates', output.appId + '-pending-restart.json'); }
 function markPending() {
@@ -161,7 +176,7 @@ async function main() {
   });
   return await execute({ now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     readVersion: () => operation === 'desktop' ? run('/usr/bin/dpkg-query', ['-W', '-f=${Version}', 'chatgpt']) : run(executable, ['--version']),
-    update: () => operation === 'desktop' ? run('/usr/bin/sudo', ['-n', '/usr/bin/apt-get', 'install', '--only-upgrade', '-y', 'chatgpt'], 180000) : run(executable, ['update'], 180000),
+    update: () => operation === 'desktop' ? run('/usr/bin/sudo', ['-n', '/usr/bin/apt-get', 'install', '--only-upgrade', '-y', 'chatgpt'], 180000) : cliUpdate(),
     pending: (expected) => { try { return JSON.parse(fs.readFileSync(markerFile(), 'utf8')).version === expected; } catch { return false; } },
     mark: markPending, clear: () => { try { fs.unlinkSync(markerFile()); } catch {} },
     restartProxies: async () => {
@@ -201,5 +216,5 @@ async function main() {
   });
   } finally { await release(); }
 }
-module.exports = { execute, loadRuntime, modules, output, version };
+module.exports = { execute, loadRuntime, modules, output, version, updateCommand };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

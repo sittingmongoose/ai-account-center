@@ -2406,4 +2406,175 @@ class ManagedCliStrayTests(unittest.TestCase):
         self.assertEqual((rows['codex-cli']['version'], rows['codex-cli']['strays']), ('0.162.0', stray))
         self.assertNotIn('strays', rows['claude-code'])
 
+    def npm_script_copy(self, folder, version, marker=None):
+        """An npm-script copy: <folder>/codex links to a package's bin/codex.js. Its own package.json says `version`;
+        the script prints another version and creates `marker` when it runs, so either shows a wrong read.
+        The marker is a shell redirection: the fixture PATH has no `touch`."""
+        package = self.root / folder / 'lib/node_modules/@openai/codex'
+        script = package / 'bin/codex.js'
+        _script(script, (f': > {shlex.quote(str(marker))}; ' if marker else '') + 'echo "codex-cli 9.9.9"')
+        (package / 'package.json').write_text(json.dumps({'name': '@openai/codex', 'version': version}))
+        link = self.root / folder / 'codex'
+        link.symlink_to(script)
+        return link
+
+    def test_an_npm_script_stray_reports_its_package_version_and_is_never_run(self):
+        link = self.managed_codex()
+        marker = self.root / 'ran-stray'
+        stale = self.npm_script_copy('stale', '0.145.0', marker)
+        install = self.detect([stale.parent, link.parent])
+        self.assertEqual((install.path, install.version), (link, '0.162.0'))
+        self.assertEqual(install.strays, [{'location': 'other', 'version': '0.145.0', 'shadows': True}])
+        self.assertFalse(marker.exists(), 'an npm-script stray is read from package.json, never executed')
+
+    def test_a_script_copy_whose_package_is_not_named_openai_codex_is_still_probed(self):
+        link = self.managed_codex()
+        marker = self.root / 'ran-imposter'
+        imposter = self.npm_script_copy('imposter', '0.1.0', marker)
+        (imposter.resolve().parents[1] / 'package.json').write_text(json.dumps({'name': 'imposter', 'version': '0.1.0'}))
+        install = self.detect([imposter.parent, link.parent])
+        self.assertEqual(install.strays, [{'location': 'other', 'version': '9.9.9', 'shadows': True}])
+        self.assertTrue(marker.exists(), 'a copy that fails the name check keeps the bounded probe')
+
+    def test_package_json_reads_are_bounded(self):
+        folder = self.root / 'package'
+        folder.mkdir()
+        (folder / 'package.json').write_text(json.dumps({'name': '@openai/codex', 'version': '1.0.0', 'pad': 'x' * updater.PACKAGE_JSON_LIMIT}))
+        self.assertIsNone(updater._package_json(folder))
+        (folder / 'package.json').write_text(json.dumps({'name': '@openai/codex', 'version': '1.0.0'}))
+        self.assertEqual(updater._package_json(folder)['version'], '1.0.0')
+
+
+class NpmCodexTests(unittest.TestCase):
+    """An npm global Codex CLI on Ubuntu or Mac: npm itself updates it under its own prefix, never `codex update`."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix='ccs-update-npm-codex-')
+        self.addCleanup(self.directory.cleanup)
+        self.root = pathlib.Path(self.directory.name)
+        self.home = self.root / 'home'
+        self.home.mkdir()
+        home = mock.patch.object(pathlib.Path, 'home', return_value=self.home)
+        home.start()
+        self.addCleanup(home.stop)
+        self.prefix = self.home / '.local'
+
+    def npm_codex(self, version='0.162.0', name='@openai/codex'):
+        """npm's layout under ~/.local: bin/codex links into lib/node_modules/@openai/codex/bin/codex.js."""
+        package = self.prefix / 'lib/node_modules/@openai/codex'
+        _script(package / 'bin/codex.js', f'echo "codex-cli {version}"')
+        (package / 'package.json').write_text(json.dumps({'name': name, 'version': version}))
+        link = self.prefix / 'bin/codex'
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to('../lib/node_modules/@openai/codex/bin/codex.js')
+        return link
+
+    def npm_tools(self):
+        """A node in the prefix's bin with npm-cli.js beside it (fixture files, never run)."""
+        node = self.prefix / 'bin/node'
+        node.parent.mkdir(parents=True, exist_ok=True)
+        node.write_text('fixture')
+        cli = self.prefix / 'lib/node_modules/npm/bin/npm-cli.js'
+        cli.parent.mkdir(parents=True, exist_ok=True)
+        cli.write_text('fixture')
+        return node, cli
+
+    def detect(self, folder):
+        with _isolated_candidates(), mock.patch.dict(os.environ, {'PATH': str(folder)}):
+            return updater.detect_cli('codex-cli', 'ubuntu')
+
+    def test_a_global_npm_codex_under_a_posix_prefix_is_npm_managed(self):
+        link = self.npm_codex()
+        install = self.detect(link.parent)
+        self.assertEqual((install.manager, install.path, install.version), ('npm', link, '0.162.0'))
+        self.assertEqual(install.package_root, self.prefix / 'lib/node_modules/@openai/codex')
+        self.assertEqual(install.strays, [])
+
+    def test_a_package_not_named_openai_codex_stays_native(self):
+        install = self.detect(self.npm_codex(name='not-codex').parent)
+        self.assertEqual((install.manager, install.package_root), ('native', None))
+
+    def test_a_link_whose_target_lies_outside_the_prefix_stays_native(self):
+        package = self.root / 'elsewhere/lib/node_modules/@openai/codex'
+        _script(package / 'bin/codex.js', 'echo "codex-cli 0.162.0"')
+        (package / 'package.json').write_text(json.dumps({'name': '@openai/codex', 'version': '0.162.0'}))
+        link = self.prefix / 'bin/codex'
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(package / 'bin/codex.js')
+        install = self.detect(link.parent)
+        self.assertEqual((install.manager, install.package_root), ('native', None))
+
+    def test_update_runs_npm_itself_under_the_install_prefix_and_never_codex_update(self):
+        link = self.npm_codex()
+        node, cli = self.npm_tools()
+        install = self.detect(link.parent)
+        with mock.patch.object(updater, 'command') as run:
+            updater.perform_cli_update(install)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], [str(node.resolve()), str(cli.resolve()), 'install', '--global', '--prefix', str(self.prefix), '@openai/codex@latest'])
+        self.assertNotIn([link, 'update'], [call.args[0] for call in run.call_args_list])
+
+    def test_a_node_symlinked_into_its_own_install_uses_that_installs_npm(self):
+        # The Nas1 layout: ~/.local/bin/node links into an extracted node folder that holds its own npm.
+        node = self.root / 'opt/node-test/bin/node'
+        node.parent.mkdir(parents=True)
+        node.write_text('fixture')
+        cli = self.root / 'opt/node-test/lib/node_modules/npm/bin/npm-cli.js'
+        cli.parent.mkdir(parents=True)
+        cli.write_text('fixture')
+        (self.prefix / 'bin').mkdir(parents=True)
+        (self.prefix / 'bin/node').symlink_to(node)
+        with mock.patch.object(common.shutil, 'which', return_value=None):
+            self.assertEqual(common.resolve_npm(self.prefix), (node.resolve(), cli.resolve()))
+
+    def test_a_homebrew_style_npm_in_libexec_beside_its_real_node_is_found(self):
+        cellar = self.root / 'Cellar/node/22.0'
+        node = cellar / 'bin/node'
+        node.parent.mkdir(parents=True)
+        node.write_text('fixture')
+        cli = cellar / 'libexec/lib/node_modules/npm/bin/npm-cli.js'
+        cli.parent.mkdir(parents=True)
+        cli.write_text('fixture')
+        (self.prefix / 'bin').mkdir(parents=True)
+        (self.prefix / 'bin/node').symlink_to(node)
+        with mock.patch.object(common.shutil, 'which', return_value=None):
+            self.assertEqual(common.resolve_npm(self.prefix), (node.resolve(), cli.resolve()))
+
+    def test_an_install_without_any_npm_is_unsupported_and_runs_nothing(self):
+        link = self.npm_codex()
+        node = self.prefix / 'bin/node'
+        node.parent.mkdir(parents=True, exist_ok=True)
+        node.write_text('fixture')
+        install = self.detect(link.parent)
+        with mock.patch.object(common.shutil, 'which', return_value=None), mock.patch.object(updater, 'command') as run:
+            with self.assertRaises(common.UpdateFailure) as raised:
+                updater.perform_cli_update(install)
+        self.assertEqual(raised.exception.code, 'unsupported')
+        run.assert_not_called()
+
+    def test_the_codex_bridge_gets_the_npm_flags_only_for_an_npm_install(self):
+        link = self.npm_codex()
+        node, cli = self.npm_tools()
+        install = self.detect(link.parent)
+        self.assertEqual(updater.npm_bridge_arguments(install), ['--npm-node', str(node.resolve()), '--npm-cli', str(cli.resolve()), '--npm-prefix', str(self.prefix)])
+        native = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), '1.0.0')
+        self.assertEqual(updater.npm_bridge_arguments(native), [])
+
+    def test_an_app_server_update_hands_the_npm_command_to_the_bridge(self):
+        link = self.npm_codex()
+        _, cli = self.npm_tools()
+        install = self.detect(link.parent)
+        daemon = processes.Process(10, 1, 1, str(install.package_root / 'node_modules/@openai/codex-linux-x64/vendor/codex'), '10', ['codex', 'app-server'])
+        busy = {'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'action_required', 'previousVersion': '0.162.0',
+                'version': '0.162.0', 'manager': 'npm', 'messageCode': 'codex_busy', 'updateAttempted': True,
+                'restartedProcesses': 0, 'forcedStops': 0}
+        with mock.patch.object(updater, 'scan', return_value=[daemon]), mock.patch.object(updater, 'family', return_value=[daemon]), \
+                mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'command', return_value=json.dumps(busy)) as run:
+            updater.update_cli(install, time.monotonic() + 15 * 60)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[argv.index('--npm-cli') + 1], str(cli.resolve()))
+        self.assertEqual(argv[argv.index('--npm-prefix') + 1], str(self.prefix))
+
+
 if __name__ == '__main__': unittest.main()
