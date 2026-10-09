@@ -4,6 +4,7 @@ Only disposable sockets under temporary directories are bound. The startup
 subprocesses run a copied runtime bundle with a fake parser and a temporary
 HOME; they never read the real ~/.ccs, ~/.gemini or an installed agy.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ from unittest.mock import Mock, patch
 PUBLIC_RUNTIME = Path(__file__).resolve().parents[3] / 'scripts/antigravity/runtime'
 sys.path.insert(0, str(PUBLIC_RUNTIME))
 from native_status_attestor import NativeStatusSocket, StatusError, clear_stale_socket
+from native_status_omitted_counters import NATIVE_SHA256
 from resident_broker import ResidentBroker
 from runtime_continuity import ContinuityError
 
@@ -169,7 +171,7 @@ class ClearStaleSocketFixtures(unittest.TestCase):
 class StartupMessageFixtures(unittest.TestCase):
     """Runs the real resident_main entrypoint from a copied bundle, as a subprocess."""
 
-    def run_entrypoint(self, socket_path_for):
+    def run_entrypoint(self, socket_path_for, native_released=False):
         temp = tempfile.TemporaryDirectory(prefix='aac-startup-message-')
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
@@ -177,7 +179,19 @@ class StartupMessageFixtures(unittest.TestCase):
         library = root / 'bundle' / 'library'
         shutil.copytree(PUBLIC_RUNTIME, library, ignore=shutil.ignore_patterns('__pycache__'))
         release = json.loads((library / 'release.json').read_text(encoding='utf-8'))
-        release['nativeActivationReleased'] = False
+        release['nativeActivationReleased'] = native_released
+        if native_released:
+            # Only this temporary copy changes: its pinned digest names a fixture binary, so the
+            # status service is built and reaches its socket. The public pin and agy are untouched.
+            binary = root / 'agy'
+            binary.write_bytes(b'fixture native binary, never executed')
+            binary.chmod(0o700)
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            module = library / 'native_status_omitted_counters.py'
+            text = module.read_text(encoding='utf-8')
+            assert text.count(NATIVE_SHA256) == 1
+            module.write_text(text.replace(NATIVE_SHA256, digest), encoding='utf-8')
+            release['nativeSha256'] = digest
         (library / 'release.json').write_text(json.dumps(release), encoding='utf-8')
         parser = root / 'bundle' / 'parser'
         for name, version in (('pyte', '0.8.2'), ('wcwidth', '0.9.1')):
@@ -208,6 +222,24 @@ class StartupMessageFixtures(unittest.TestCase):
         last, stderr = self.run_entrypoint(live_socket)
         self.assertEqual(last, 'Managed Antigravity runtime is unavailable (ipc-already-exists).', stderr)
         self.assertTrue(accepts(run['dir'] / 'control.sock'))
+
+    def test_live_status_socket_names_the_status_code(self):
+        run = {}
+        def live_status_socket(root):
+            run['root'] = root
+            run['dir'] = root / 'home' / '.ccs' / 'antigravity-runtime'
+            run['dir'].mkdir(parents=True, mode=0o700)
+            run['live'] = bind_socket(run['dir'] / 'status.sock')
+            self.addCleanup(run['live'].close)
+            info = (run['dir'] / 'status.sock').lstat()
+            run['before'] = (info.st_dev, info.st_ino)
+            return root / 'control.sock'
+        last, stderr = self.run_entrypoint(live_status_socket, native_released=True)
+        self.assertEqual(last, 'Managed Antigravity runtime is unavailable (status-socket-already-exists).', stderr)
+        self.assertNotIn(str(run['root']), stderr)
+        after = (run['dir'] / 'status.sock').lstat()
+        self.assertEqual((after.st_dev, after.st_ino), run['before'])
+        self.assertTrue(accepts(run['dir'] / 'status.sock'))
 
     def test_os_error_keeps_the_generic_message_without_paths(self):
         def blocked_parent(root):

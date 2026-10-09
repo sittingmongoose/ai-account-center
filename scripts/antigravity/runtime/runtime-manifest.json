@@ -95,7 +95,7 @@
     },
     {
       "path": "resident_main.py",
-      "sha256": "9a8ef221753a6e0d797f26cdc515bcd2e5426e4fe62f97f98302f065bebe272a"
+      "sha256": "a93842ec280f8263cbb4bb847802b0621c95d2fc100f220355ca1c46f5b7981d"
     },
     {
       "path": "runtime_continuity.py",
