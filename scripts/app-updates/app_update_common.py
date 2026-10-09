@@ -27,11 +27,13 @@ NO_AUTO_UPDATE = {
 
 
 class UpdateFailure(Exception):
-    def __init__(self, code="update_failed", output=""):
+    def __init__(self, code="update_failed", output="", exit_code=None):
         super().__init__(code)
         self.code = code
         # Diagnostic text for in-memory classification only; it is never emitted.
         self.output = output
+        # The exit code of a command that ran to completion and failed (a winget HRESULT, for example).
+        self.exit_code = exit_code
 
 
 @dataclasses.dataclass
@@ -127,7 +129,7 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
     except OSError:
         raise UpdateFailure("update_failed") from None
     if returncode != 0:
-        raise UpdateFailure(output=data.decode("utf-8", "replace")[-262144:] if errors else "")
+        raise UpdateFailure(output=data.decode("utf-8", "replace")[-262144:] if errors else "", exit_code=returncode)
     if capture and len(data) > min(2 * 1024 * 1024, capture_limit):
         raise UpdateFailure()
     return data.decode("utf-8", "replace") if capture else ""

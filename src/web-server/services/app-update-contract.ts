@@ -136,6 +136,8 @@ export const MESSAGES = {
   desktop_reopened: 'Updated: it closed, installed the update and reopened.',
   t3_sessions_kept:
     'Updated and restarted running terminal instances. Running T3 sessions were left alone and keep the previous version until T3 starts them again.',
+  store_no_newer:
+    'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = [...DASHBOARD_HOSTS];
@@ -390,6 +392,8 @@ export function normalizeAppUpdateRow(
     (code === 't3_restart_scheduled' &&
       (!linux || !targets.some((target) => target.kind === 'systemd'))) ||
     (code === 'desktop_reopened' && (!reopensDesktop || row.status !== 'updated')) ||
+    (code === 'store_no_newer' &&
+      (appId !== 'codex-desktop' || row.status !== 'current' || HOST_OS[platform] !== 'windows')) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated')) ||

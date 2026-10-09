@@ -37,6 +37,12 @@ CLAUDE_DARWIN_PREFIX = "https://downloads.claude.ai/releases/darwin/"
 # stopped moving at 26.930.7945.0. The app itself reads this feed for updates.
 CODEX_STORE_FEED = "https://persistent.oaistatic.com/codex-app-prod/windows-store-update.json"
 CODEX_STORE_ID = "9PLM9XGG6VKS"
+# winget exit codes (read unsigned) for a Store package with nothing newer to install here:
+# 0x8A15002B UPDATE_NOT_APPLICABLE ("No applicable update found") and 0x8A150061 PACKAGE_ALREADY_INSTALLED.
+WINGET_NO_NEWER = {0x8A15002B, 0x8A150061}
+# winget's "nothing newer" answer is trusted this long for the same feed build and installed version.
+STORE_NO_NEWER_SECONDS = 6 * 60 * 60
+STORE_MEMORY_BYTES = 4096
 
 
 def download_desktop(url, destination):
@@ -520,7 +526,7 @@ def reopen_windows(install, plans):
         time.sleep(.5)
 
 
-def windows_replace(install, before, deploy, accepted):
+def windows_replace(install, before, deploy, accepted, current_codes=()):
     """Install a newer package; a running app is closed first and reopened as each instance was started.
 
     The instances are captured right before closing (the app may have been
@@ -529,6 +535,8 @@ def windows_replace(install, before, deploy, accepted):
     a stop of only identity-checked family survivors (forcedStops). A failed
     close or install reopens what was closed from the old package, which is
     still registered; a failed reopen after a good install is restart_failed.
+    A failure code in current_codes means nothing newer was installed: once
+    reopened the row is current, not failed.
     """
     app_id, manager = install.app_id, install.manager
     try:
@@ -555,11 +563,19 @@ def windows_replace(install, before, deploy, accepted):
             raise UpdateFailure("version_unknown")
     except Exception as error:
         # Reopen from whatever package is registered now: the old one when the install failed.
+        reopened = 0
         with contextlib.suppress(Exception):
-            reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
+            reopened = reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
         code = error.code if isinstance(error, UpdateFailure) else "update_failed"
         # A needs-closing rejection even after the close still asks the user to quit.
-        return quit_first(install, before) if code == "quit_first" else result(app_id, "windows", "failed", before, before, manager, code, True)
+        if code == "quit_first":
+            return quit_first(install, before)
+        if code in current_codes:
+            # Nothing newer was installed, so the app is current; a reopen that failed is still reported.
+            if reopened != len(plans):
+                return result(app_id, "windows", "restart_failed", before, before, manager, "restart_failed", True)
+            return result(app_id, "windows", "current", before, before, manager, code, True, reopened)
+        return result(app_id, "windows", "failed", before, before, manager, code, True)
     try:
         restarted = reopen_windows(refreshed, plans)
     except Exception:
@@ -571,8 +587,62 @@ def windows_replace(install, before, deploy, accepted):
     return value
 
 
-def update_windows_store(install, phase):
-    """Install the newer Codex Store build through winget's msstore source, reopening a running Codex."""
+def store_memory(install):
+    """Where winget's last "nothing newer" answer for Codex is remembered, beside the Mac package memory."""
+    return pathlib.Path.home() / ".ccs/app-updates" / (install.app_id + "-windows-store.json")
+
+
+def remembered_store_answer(install, feed):
+    """True while winget's "nothing newer" answer holds for this feed build and installed version.
+
+    The answer holds for STORE_NO_NEWER_SECONDS from when it was given. A memory
+    for another installed version is dropped. A missing, unreadable, oversized,
+    malformed, expired or future-dated (the clock went backwards) memory is not
+    trusted, so the install decides.
+    """
+    try:
+        with store_memory(install).open("rb") as handle:
+            raw = handle.read(STORE_MEMORY_BYTES + 1)
+        if len(raw) > STORE_MEMORY_BYTES:
+            return False
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):  # Some JSON parsers recurse: a deeply nested file exhausts them.
+        return False
+    if not isinstance(value, dict):
+        return False
+    remembered_feed, remembered_installed, checked = value.get("feedBuild"), value.get("installedVersion"), value.get("checkedAt")
+    if not isinstance(remembered_feed, str) or not isinstance(remembered_installed, str) or type(checked) is not int:
+        return False
+    if remembered_installed != install.version:
+        forget_store_answer(install)
+        return False
+    return remembered_feed == feed and 0 <= time.time() - checked < STORE_NO_NEWER_SECONDS
+
+
+def remember_store_answer(install, feed):
+    """Remember that winget found nothing newer than the installed version for this feed build."""
+    try:
+        write_private_json(store_memory(install), {"feedBuild": feed, "installedVersion": install.version, "checkedAt": int(time.time())})
+    except (OSError, ValueError):
+        pass
+
+
+def forget_store_answer(install):
+    with contextlib.suppress(OSError):
+        store_memory(install).unlink(missing_ok=True)
+
+
+def update_windows_store(install, phase, feed):
+    """Install the newer Codex Store build through winget's msstore source, reopening a running Codex.
+
+    Only winget's install can say whether the Store offers a newer build here: its
+    listings never name this product. So its "nothing newer" answer is remembered
+    for STORE_NO_NEWER_SECONDS, and while that holds a running Codex is not closed
+    again. Otherwise the install decides: when it reports nothing newer, the closed
+    Codex is reopened and the row is current; any other failure stays failed.
+    """
+    if remembered_store_answer(install, feed):
+        return result(install.app_id, "windows", "current", install.version, install.version, install.manager, "store_no_newer")
     winget = shutil.which("winget.exe") or shutil.which("winget")
     if not winget:
         return result(install.app_id, "windows", "failed", install.version, install.version, install.manager, "unsupported")
@@ -580,12 +650,19 @@ def update_windows_store(install, phase):
 
     def deploy():
         # The Store verifies the package and upgrades the same OpenAI.Codex family in place.
-        command([winget, "install", "--id", CODEX_STORE_ID, "--source", "msstore", "--exact", "--silent",
-                 "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=900)
+        try:
+            command([winget, "install", "--id", CODEX_STORE_ID, "--source", "msstore", "--exact", "--silent",
+                     "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=900)
+        except UpdateFailure as error:
+            if error.exit_code is not None and (error.exit_code & 0xFFFFFFFF) in WINGET_NO_NEWER:
+                remember_store_answer(install, feed)
+                raise UpdateFailure("store_no_newer") from None
+            raise
+        forget_store_answer(install)
 
     def accepted(refreshed):
         return refreshed.publisher == install.publisher and bool(refreshed.version) and version_tuple(refreshed.version) > version_tuple(install.version)
-    return windows_replace(install, install.version, deploy, accepted)
+    return windows_replace(install, install.version, deploy, accepted, current_codes=("store_no_newer",))
 
 
 def update_windows(install, phase=None):
@@ -612,7 +689,7 @@ def update_windows(install, phase=None):
     if install.app_id == "codex-desktop":
         store = codex_store_version(install)
         if store and version_tuple(store) > version_tuple(before):
-            return update_windows_store(install, phase)
+            return update_windows_store(install, phase, store)
     try:
         remote = remote_msix_identity(url)
         available = published(remote) if remote is not None else None

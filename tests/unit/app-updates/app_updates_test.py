@@ -1442,18 +1442,176 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.assertEqual(self.launches(), [self.aumid_launch()])
         self.assert_reopened(value, 1, forced=1)
 
-    def test_running_codex_store_build_closes_installs_through_winget_and_reopens(self):
-        self.run_main()
-        def winget(argv, **kwargs):
-            self.assertEqual(argv[:6], ['C:/winget.exe', 'install', '--id', '9PLM9XGG6VKS', '--source', 'msstore'])
-            self.install(None)
+    # Winget's own install is the only answer about the Store: its listings never name this product.
+    # The "nothing newer" answer is remembered in a private file, beside the Mac package memory.
+    def store_memory(self):
+        return self.root / '.ccs/app-updates/codex-desktop-windows-store.json'
+
+    def remember_store(self, feed=None, installed=None, checked=None, raw=None):
+        """Write winget's remembered "nothing newer" answer, or raw bytes in its place."""
+        path = self.store_memory()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if raw is not None:
+            path.write_bytes(raw)
+            return
+        now = int(time.time())
+        value = {'feedBuild': feed or self.NEW, 'installedVersion': installed or self.OLD, 'checkedAt': now if checked is None else checked}
+        path.write_text(json.dumps(value), encoding='utf-8')
+
+    def remembered(self):
+        return json.loads(self.store_memory().read_text(encoding='utf-8'))
+
+    def assert_remembered_now(self):
+        """The memory holds this run's answer: the feed build, the installed version and the time in whole seconds."""
+        value = self.remembered()
+        self.assertEqual(sorted(value), ['checkedAt', 'feedBuild', 'installedVersion'])
+        self.assertEqual((value['feedBuild'], value['installedVersion']), (self.NEW, self.OLD))
+        self.assertIs(type(value['checkedAt']), int)
+        self.assertLessEqual(abs(value['checkedAt'] - time.time()), 60)
+
+    def fresh_run(self):
+        """Forget the last run's events and processes, so the next run_main() starts from the old package."""
+        self.events, self.launched, self.processes, self.packages = [], [], [], {}
+        self.registered, self.registered_version = self.old_root, self.OLD
+
+    def store_run(self, command):
+        """Update the running Codex while its feed is ahead; `command` answers each winget call (a function, or an exception to raise)."""
         with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
                 mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
-                mock.patch.object(desktop, 'command', side_effect=winget):
+                mock.patch.object(desktop, 'command', side_effect=command) as run:
             value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        return value, run
+
+    def installs_nothing_newer(self, argv, **kwargs):
+        """winget install finds no applicable update for this Store product."""
+        raise common.UpdateFailure(exit_code=0x8A15002B)
+
+    def installs(self, argv, **kwargs):
+        self.assertEqual(argv[:6], ['C:/winget.exe', 'install', '--id', '9PLM9XGG6VKS', '--source', 'msstore'])
+        self.install(None)
+
+    def test_running_codex_store_build_closes_installs_through_winget_and_reopens(self):
+        self.run_main()
+        value, run = self.store_run(self.installs)
         self.assertEqual(self.events, ['close', 'install', 'launch'])
         self.assertEqual(self.launches(), [self.aumid_launch()])
         self.assert_reopened(value, 1)
+        self.assertEqual([call.args[0][1] for call in run.call_args_list], ['install'])
+        self.assertFalse(self.store_memory().exists())
+
+    def test_nothing_newer_from_winget_closes_codex_once_reopens_it_as_current_and_remembers_it(self):
+        self.run_main()
+        value, run = self.store_run(self.installs_nothing_newer)
+        self.assertEqual(self.events, ['close', 'launch'])
+        self.assertEqual(self.launches(), [self.aumid_launch()])
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['previousVersion']), ('current', 'store_no_newer', self.OLD, self.OLD))
+        self.assertEqual((value['updateAttempted'], value['restartedProcesses']), (True, 1))
+        self.assertEqual(len(run.call_args_list), 1)
+        self.assert_remembered_now()
+
+    def test_a_fresh_remembered_answer_keeps_running_codex_open_and_does_not_ask_winget(self):
+        self.run_main()
+        self.remember_store()
+        value, run = self.store_run(AssertionError('winget was asked'))
+        self.assertEqual((self.events, self.launched, run.call_args_list), ([], [], []))
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['previousVersion']), ('current', 'store_no_newer', self.OLD, self.OLD))
+        self.assertEqual((value['updateAttempted'], value['restartedProcesses']), (False, 0))
+        self.assertTrue(self.store_memory().exists())
+
+    def test_an_expired_answer_another_feed_build_or_a_clock_set_back_takes_the_normal_path(self):
+        now = int(time.time())
+        cases = {
+            'expired': {'checked': now - desktop.STORE_NO_NEWER_SECONDS - 60},
+            'feed build moved': {'feed': '26.1007.2314.0'},
+            'clock went backwards': {'checked': now + 3600},
+        }
+        for name, change in cases.items():
+            with self.subTest(name):
+                self.fresh_run()
+                self.run_main()
+                self.remember_store(**change)
+                value, run = self.store_run(self.installs_nothing_newer)
+                self.assertEqual(self.events, ['close', 'launch'])
+                self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('current', 'store_no_newer', True))
+                self.assertEqual(len(run.call_args_list), 1)
+                self.assert_remembered_now()
+
+    def test_a_malformed_unreadable_or_oversized_answer_is_ignored_and_the_normal_path_runs(self):
+        now = int(time.time())
+        valid = {'feedBuild': self.NEW, 'installedVersion': self.OLD, 'checkedAt': now}
+        cases = {
+            'not JSON': b'{"feedBuild": ',
+            'not UTF-8': b'\xff\xfe\x00',
+            'a list instead of an object': json.dumps([valid]).encode(),
+            'nested 2000 levels deep': b'[' * 2000 + b']' * 2000,
+            'no checkedAt': json.dumps({key: value for key, value in valid.items() if key != 'checkedAt'}).encode(),
+            'checkedAt as text': json.dumps({**valid, 'checkedAt': str(now)}).encode(),
+            'checkedAt as a boolean': json.dumps({**valid, 'checkedAt': True}).encode(),
+            'checkedAt as a float': json.dumps({**valid, 'checkedAt': float(now)}).encode(),
+            'feedBuild as a number': json.dumps({**valid, 'feedBuild': 2610}).encode(),
+            'installedVersion as null': json.dumps({**valid, 'installedVersion': None}).encode(),
+            'larger than 4 KiB': json.dumps({**valid, 'padding': 'x' * desktop.STORE_MEMORY_BYTES}).encode(),
+        }
+        for name, raw in cases.items():
+            with self.subTest(name):
+                self.fresh_run()
+                self.run_main()
+                self.remember_store(raw=raw)
+                value, run = self.store_run(self.installs_nothing_newer)
+                self.assertEqual(self.events, ['close', 'launch'])
+                self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('current', 'store_no_newer', True))
+                self.assertEqual(len(run.call_args_list), 1)
+                self.assert_remembered_now()
+
+    def test_a_remembered_answer_for_another_installed_version_is_dropped(self):
+        self.run_main()
+        self.remember_store(installed='26.1001.1.0')
+        value, run = self.store_run(common.UpdateFailure(exit_code=1))
+        self.assertEqual(self.events, ['close', 'launch'])
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('failed', 'update_failed', self.OLD, True))
+        self.assertEqual(len(run.call_args_list), 1)
+        self.assertFalse(self.store_memory().exists())
+
+    def test_a_successful_store_install_clears_the_remembered_answer(self):
+        self.run_main()
+        self.remember_store(checked=int(time.time()) - desktop.STORE_NO_NEWER_SECONDS - 60)
+        self.assertTrue(self.store_memory().exists())
+        value, run = self.store_run(self.installs)
+        self.assertEqual(self.events, ['close', 'install', 'launch'])
+        self.assert_reopened(value, 1)
+        self.assertFalse(self.store_memory().exists())
+
+    def test_any_other_winget_failure_stays_failed_reopens_codex_and_remembers_nothing(self):
+        for code in (1, 0x8A150014, 0x80070005):
+            with self.subTest(exit_code=hex(code)):
+                self.fresh_run()
+                self.run_main()
+                value, run = self.store_run(common.UpdateFailure(exit_code=code))
+                self.assertEqual(self.events, ['close', 'launch'])
+                self.assertEqual(self.launches(), [self.aumid_launch()])
+                self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('failed', 'update_failed', self.OLD, True))
+                self.assertFalse(self.store_memory().exists())
+
+    def test_nothing_newer_that_cannot_reopen_codex_reports_restart_failed_and_still_remembers_it(self):
+        self.run_main()
+        with mock.patch.object(desktop, 'reopen_windows', side_effect=common.UpdateFailure('restart_failed')):
+            value, run = self.store_run(common.UpdateFailure(exit_code=0x8A150061))
+        self.assertEqual(self.events, ['close'])
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('restart_failed', 'restart_failed', True))
+        self.assert_remembered_now()
+
+    def test_a_memory_that_cannot_be_written_does_not_change_the_nothing_newer_answer(self):
+        self.run_main()
+        with mock.patch.object(desktop, 'write_private_json', side_effect=OSError('read-only')):
+            value, run = self.store_run(self.installs_nothing_newer)
+        self.assertEqual((value['status'], value['messageCode'], value['restartedProcesses']), ('current', 'store_no_newer', 1))
+        self.assertFalse(self.store_memory().exists())
+
+    def test_a_failed_command_keeps_the_exit_code_it_returned(self):
+        with mock.patch.object(common, '_run_bounded', return_value=(0x8A15002B, b'')):
+            with self.assertRaises(common.UpdateFailure) as caught:
+                common.command(['winget.exe', 'install'])
+        self.assertEqual((caught.exception.code, caught.exception.exit_code), ('update_failed', 0x8A15002B))
 
     def test_claude_reopens_its_default_by_aumid_and_named_profiles_from_the_new_exe(self):
         self.use('claude-desktop')
