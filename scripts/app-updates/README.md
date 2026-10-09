@@ -264,6 +264,14 @@ helper. Registration does **not** run an update. The helper queues that task
 from SSH session zero, so the user's interactive session must be signed in.
 Existing CCS Bar tasks are untouched.
 
+The task runs `pythonw.exe` from the same Python install (registration stops with
+an error if it is missing) and is registered hidden. Helper children, such as
+PowerShell, winget, CLI probes and the Muse installer, start with
+`CREATE_NO_WINDOW`, so none opens a console window of its own. Relaunched apps and
+the Windows Terminal tab that reopens a CLI still appear normally. Re-running
+`install-windows-task.ps1` applies the hidden setting to a task that is already
+registered.
+
 The Mac and Nas1 syncs extract with `/bin/mkdir`, `/bin/chmod` and `/usr/bin/tar`
 (macOS has no `/usr/bin/chmod`; that path silently broke every Mac sync until
 2026-10-06, so Mac kept running its Oct-2 helpers). Ubuntu's `/bin` is the same
