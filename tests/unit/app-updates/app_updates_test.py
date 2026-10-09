@@ -2552,29 +2552,21 @@ class NpmCodexTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 'unsupported')
         run.assert_not_called()
 
-    def test_the_codex_bridge_gets_the_npm_flags_only_for_an_npm_install(self):
+    def test_an_npm_install_with_an_app_server_skips_the_bridge_and_updates_with_npm(self):
         link = self.npm_codex()
         node, cli = self.npm_tools()
         install = self.detect(link.parent)
-        self.assertEqual(updater.npm_bridge_arguments(install), ['--npm-node', str(node.resolve()), '--npm-cli', str(cli.resolve()), '--npm-prefix', str(self.prefix)])
-        native = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), '1.0.0')
-        self.assertEqual(updater.npm_bridge_arguments(native), [])
-
-    def test_an_app_server_update_hands_the_npm_command_to_the_bridge(self):
-        link = self.npm_codex()
-        _, cli = self.npm_tools()
-        install = self.detect(link.parent)
         daemon = processes.Process(10, 1, 1, str(install.package_root / 'node_modules/@openai/codex-linux-x64/vendor/codex'), '10', ['codex', 'app-server'])
-        busy = {'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'action_required', 'previousVersion': '0.162.0',
-                'version': '0.162.0', 'manager': 'npm', 'messageCode': 'codex_busy', 'updateAttempted': True,
-                'restartedProcesses': 0, 'forcedStops': 0}
+        calls = []
+        def run(argv, **kwargs):
+            calls.append([str(arg) for arg in argv])
+            return ''
         with mock.patch.object(updater, 'scan', return_value=[daemon]), mock.patch.object(updater, 'family', return_value=[daemon]), \
                 mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal'), \
-                mock.patch.object(updater, 'command', return_value=json.dumps(busy)) as run:
+                mock.patch.object(updater, 'command', side_effect=run), \
+                mock.patch.object(updater, 'detect_cli', return_value=install):
             updater.update_cli(install, time.monotonic() + 15 * 60)
-        argv = run.call_args.args[0]
-        self.assertEqual(argv[argv.index('--npm-cli') + 1], str(cli.resolve()))
-        self.assertEqual(argv[argv.index('--npm-prefix') + 1], str(self.prefix))
-
+        self.assertFalse(any('app_update_codex.cjs' in ' '.join(argv) for argv in calls), calls)
+        self.assertIn([str(node.resolve()), str(cli.resolve()), 'install', '--global', '--prefix', str(self.prefix), '@openai/codex@latest'], calls)
 
 if __name__ == '__main__': unittest.main()

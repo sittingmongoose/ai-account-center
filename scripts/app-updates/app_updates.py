@@ -543,21 +543,6 @@ def perform_cli_update(install, deadline=None):
     command([path, "update"], timeout=180, env={"PATH": str(path.parent) + os.pathsep + os.environ.get("PATH", "")})
 
 
-def npm_bridge_arguments(install):
-    """The Codex bridge's npm flags for an npm-managed install: node, npm-cli.js and its prefix. None otherwise.
-
-    The bridge then runs the same npm command as perform_cli_update, under the same prefix.
-    """
-    if install.manager != "npm":
-        return []
-    prefix = npm_prefix(install)
-    resolved = resolve_npm(prefix)
-    if resolved is None:
-        raise UpdateFailure("unsupported")
-    node, cli = resolved
-    return ["--npm-node", str(node), "--npm-cli", str(cli), "--npm-prefix", str(prefix)]
-
-
 def update_cli(install, deadline):
     before = install.version
     attempted = False
@@ -584,12 +569,15 @@ def update_cli(install, deadline):
         processes = scan(install.platform)
         # Linux Codex's shared daemon needs the existing startup-lock and idle
         # protocol, not an idle TUI/PTY restart. It is handled by the fixed bridge.
-        if install.app_id == "codex-cli" and install.platform == "ubuntu" and any("app-server" in item.args for item in family(install, processes)):
+        # An npm-global Codex (Nas1) has no AAC shared daemon and is not covered by the
+        # bridge's fixed ~/.local/bin/codex runtime: it takes the ordinary CLI path below.
+        if (install.app_id == "codex-cli" and install.platform == "ubuntu" and install.manager != "npm" and
+                any("app-server" in item.args for item in family(install, processes))):
             contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])
             check_terminal(install.platform, contexts)
             bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
             seconds = max(30, min(CODEX_BRIDGE_SECONDS, int(deadline - time.monotonic())))
-            payload = json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "cli", "--timeout-seconds", str(seconds), *npm_bridge_arguments(install)], timeout=seconds + 15, capture=True))
+            payload = json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "cli", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
             if payload.get("status") == "updated" and contexts:
                 refreshed = detect_cli(install.app_id, install.platform)
                 if refreshed is None or not refreshed.version:

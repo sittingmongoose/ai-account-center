@@ -415,14 +415,13 @@ unsupervised proxies yield an explicit restart failure. A private **version-only
 pending-restart marker permits a subsequent explicit click to retry after timeout.
 No account authentication is changed.
 
-An npm global Codex CLI (Codex CLI row above) uses the same bridge with one change: the updater
-passes the npm command's node, `npm-cli.js` and prefix, and the bridge runs
-`npm install --global --prefix <prefix> @openai/codex@latest` where it would run `codex update`.
-The bridge refuses that command unless its executable really lives under that prefix. The
-stop, start and idle steps are the same, and the row's manager is reported as `npm`. Its running
-Codex processes count as Codex processes, as a managed install's do: a running app-server goes
-through this bridge, and the user's own CLI sessions are relaunched after the update. T3-started
-sessions are never stopped.
+An npm global Codex CLI (Codex CLI row above, as on Nas1) never takes this bridge: that host has
+no AAC shared daemon, and the bridge's stop/start runtime is built around the fixed
+`~/.local/bin/codex` install. It takes the ordinary CLI path instead: npm itself runs
+`npm install --global --prefix <prefix> @openai/codex@latest` under the install's own prefix
+(never `codex update`, which runs whichever npm PATH finds), T3-started sessions are never
+stopped, and the user's own terminal sessions are relaunched after the update. The row's
+manager is reported as `npm`.
 
 On a Linux host without AAC installed, the bridge loads
 `app_update_codex_runtime.cjs` from beside itself: the same stop/start runtime
