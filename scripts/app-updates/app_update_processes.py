@@ -15,6 +15,14 @@ import time
 
 from app_update_common import UpdateFailure, command, environment, powershell
 
+# T3's own server and desktop, by exact location. A CLI process started below
+# one of them belongs to a T3 session: Update all never stops, relaunches or
+# judges it. The standalone runtime is <versions>/<version>/t3 (Ubuntu, Nas1,
+# the Mac); the desktop apps run their server inside the app itself.
+T3_RUNTIME_VERSIONS = ".t3/runtime/versions"
+T3_MAC_BUNDLE = pathlib.Path("/Applications/T3 Code (Nightly).app")
+T3_WINDOWS_FOLDER = "Programs/t3code"
+
 
 @dataclasses.dataclass
 class Process:
@@ -112,10 +120,12 @@ def mac_processes():
 
 def windows_processes():
     # CIM returns arguments privately to this local helper, never to CCS.
+    # cmd.exe is listed only so a CLI that T3 starts through a shell still has
+    # T3 as a visible ancestor (see t3_owned); it is never an app family member.
     script = """$ErrorActionPreference='Stop';
 $me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
 $rows=@(); foreach($p in Get-CimInstance Win32_Process){
- if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe','ZCode.exe','muse-acp.exe')){continue};
+ if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe','ZCode.exe','muse-acp.exe','cmd.exe')){continue};
  $o=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue;
  if($o.Sid -ne $me -or -not $p.ExecutablePath){continue};
  try{$started=[Diagnostics.Process]::GetProcessById($p.ProcessId).StartTime.ToFileTimeUtc().ToString()}catch{continue};
@@ -273,29 +283,111 @@ def windows_context(pid):
         kernel.CloseHandle(handle)
 
 
-def cli_contexts(install, processes):
+def t3_servers(platform, processes):
+    """PIDs running from T3's own server or desktop location on this computer."""
+    home = pathlib.Path.home()
+    if platform == "windows":
+        local = pathlib.Path(os.environ.get("LOCALAPPDATA", str(home / "AppData/Local")))
+        return {item.pid for item in processes if is_under(item.exe, local / T3_WINDOWS_FOLDER)}
+    versions = os.path.realpath(home / T3_RUNTIME_VERSIONS)
+    found = set()
+    for item in processes:
+        executable = pathlib.PurePath(os.path.realpath(item.exe))
+        if ((executable.name == "t3" and str(executable.parent.parent) == versions) or
+                (platform == "mac" and is_under(item.exe, T3_MAC_BUNDLE))):
+            found.add(item.pid)
+    return found
+
+
+def t3_owned(install, processes):
+    """App-family processes that T3 started: T3's server or desktop is an ancestor in this table.
+
+    T3 owns their lifetime, so Update all never stops, relaunches or judges them.
+    """
     selected = family(install, processes)
-    pids = {item.pid for item in selected}
-    mains = [item for item in selected if item.ppid not in pids]
-    for item in mains:
-        if install.platform == "ubuntu":
-            try:
-                item.cwd = os.readlink("/proc/" + str(item.pid) + "/cwd")
-                raw = pathlib.Path("/proc", str(item.pid), "environ").read_bytes()
-                if len(raw) > 1024 * 1024:
-                    raise UpdateFailure("restart_context")
-                item.env = dict(value.decode("utf-8", "surrogateescape").split("=", 1) for value in raw.split(b"\0") if b"=" in value)
-            except OSError:
-                raise UpdateFailure("restart_context") from None
-        elif install.platform == "mac":
-            item.args, item.env = mac_context(item.pid)
-            output = command(["/usr/sbin/lsof", "-a", "-p", str(item.pid), "-d", "cwd", "-Fn"], timeout=10, capture=True)
-            item.cwd = next((line[1:] for line in output.splitlines() if line.startswith("n/")), None)
-        else:
-            item.cwd, item.env = windows_context(item.pid)
-        if not item.cwd or not pathlib.Path(item.cwd).is_dir():
+    servers = t3_servers(install.platform, processes) if selected else set()
+    if not servers:
+        return []
+    parents = {item.pid: item.ppid for item in processes}
+    owned = []
+    for item in selected:
+        seen, current = set(), item.ppid
+        # A PID cycle (reuse on Windows) ends the walk instead of looping.
+        while current in parents and current not in seen:
+            if current in servers:
+                owned.append(item)
+                break
+            seen.add(current)
+            current = parents[current]
+    return owned
+
+
+def user_family(install, processes):
+    """The app family without T3-owned processes: what a CLI relaunch is counted against."""
+    owned = {item.pid for item in t3_owned(install, processes)}
+    return [item for item in family(install, processes) if item.pid not in owned]
+
+
+def vanished(platform, item):
+    """True once item has exited or its PID names another process; False when unsure."""
+    if platform != "ubuntu":
+        return not live_contexts(platform, [item])
+    try:
+        stat = pathlib.Path("/proc", str(item.pid), "stat").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    except OSError:
+        return False
+    parts = stat[stat.rfind(")") + 2:].split()
+    return len(parts) < 20 or parts[0] in ("Z", "X") or parts[19] != item.identity
+
+
+def cli_context(platform, item):
+    """Read one main process's cwd and environment (and Mac arguments) into item."""
+    if platform == "ubuntu":
+        item.cwd = os.readlink("/proc/" + str(item.pid) + "/cwd")
+        raw = pathlib.Path("/proc", str(item.pid), "environ").read_bytes()
+        if len(raw) > 1024 * 1024:
             raise UpdateFailure("restart_context")
-    return mains, selected
+        item.env = dict(value.decode("utf-8", "surrogateescape").split("=", 1) for value in raw.split(b"\0") if b"=" in value)
+    elif platform == "mac":
+        item.args, item.env = mac_context(item.pid)
+        output = command(["/usr/sbin/lsof", "-a", "-p", str(item.pid), "-d", "cwd", "-Fn"], timeout=10, capture=True)
+        item.cwd = next((line[1:] for line in output.splitlines() if line.startswith("n/")), None)
+    else:
+        item.cwd, item.env = windows_context(item.pid)
+
+
+def cli_contexts(install, processes):
+    """(main processes to relaunch, processes to stop) for the user's own CLI instances.
+
+    T3-owned processes are left out entirely. A main process that exits between
+    the scan and its context read is dropped with its descendants; one that still
+    runs but cannot be read, or whose working directory is gone, fails closed.
+    """
+    selected = user_family(install, processes)
+    pids = {item.pid for item in selected}
+    mains, gone = [], set()
+    for item in (item for item in selected if item.ppid not in pids):
+        try:
+            cli_context(install.platform, item)
+            readable = bool(item.cwd) and pathlib.Path(item.cwd).is_dir()
+        except (UpdateFailure, OSError):
+            readable = False
+        if readable:
+            mains.append(item)
+        elif vanished(install.platform, item):
+            gone.add(item.pid)
+        else:
+            raise UpdateFailure("restart_context")
+    grown = bool(gone)
+    while grown:
+        grown = False
+        for item in selected:
+            if item.pid not in gone and item.ppid in gone:
+                gone.add(item.pid)
+                grown = True
+    return mains, [item for item in selected if item.pid not in gone]
 
 
 def terminate_cli(install, targets, grace=5):

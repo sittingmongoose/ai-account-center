@@ -51,7 +51,7 @@ modify or export account credentials/configuration.
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix |
-| Claude Code | Active native `claude update` |
+| Claude Code | Active native `claude update`; an install already at the newer of the official `latest` and `stable` pointers reports `current` before any process check (see [CLI instances and T3 sessions](#cli-instances-and-t3-sessions)) |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only (a turned-off repository reports `source_disabled`); Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
 | ZCode | Official release page and that release's CDN `latest.yml` (sha512 and size); Ubuntu/Nas1 through Jared's `t3-acp-update.service`; Mac verified ZIP swap (never quit); Windows same-signer NSIS installer with close, install and reopen (see [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)) |
@@ -307,6 +307,49 @@ pipe restricted to the signed-in user SID to enter the new terminal. Original te
 conversation display do not migrate. Safe result `restartTargets` identifies new
 terminal/tmux sessions; authentication environment is never serialized.
 
+### CLI instances and T3 sessions
+
+A CLI process that T3 started is **never stopped, relaunched or judged** by Update
+all. It belongs to T3 when T3's own server or desktop is one of its ancestors in
+the process table, recognised only by exact location: the standalone runtime
+`~/.t3/runtime/versions/<version>/t3` (Ubuntu, Nas1, the Mac), the Mac's
+`/Applications/T3 Code (Nightly).app` and Windows'
+`%LOCALAPPDATA%\Programs\t3code` (the Windows scan also lists `cmd.exe` so a CLI
+T3 starts through a shell still shows T3 above it). A process merely named `t3`
+elsewhere does not count. Its children (a `claude -p` an agent runs, for example)
+belong to T3 too. T3 sessions never fail the readiness check, are not counted
+when a relaunch is verified, and T3 is only ever restarted by its own `t3-code`
+row.
+
+Where the update can replace files a session is running, it proceeds and the
+session keeps its old version until T3 starts it again: the row is `updated` /
+`t3_sessions_kept` ("Running T3 sessions were left alone and keep the previous
+version until T3 starts them again"), and only the user's own terminal instances
+are stopped and reopened. That holds for native installs everywhere: Claude Code
+on Ubuntu and the Mac writes `~/.local/share/claude/versions/<version>` and
+re-points its link, and on Windows its updater moves the running
+`~/.local/bin/claude.exe` aside (`claude.exe.old.<ms>.<pid>`) before placing the
+new one, as it must for its own running copy. Windows npm cannot replace a tree a
+running process holds open, so Codex CLI on Windows with a T3 session reports
+`action_required` / `in_use`, installs nothing and stops nothing, not even the
+user's own terminal Codex. Windows Muse keeps its own rule (never stopped). The
+Ubuntu Codex bridge still decides on its own when a `codex app-server` runs.
+
+A user's own instance that exits between the process scan and the read of its
+working directory and environment is dropped with its children (gone from `/proc`,
+or its PID now has another start time; the Mac and Windows re-check its start
+identity); it is not a `restart_context` failure. One that still runs but cannot
+be read, or whose working directory no longer exists, still fails closed with
+`restart_context`, because it could not be reopened where it was.
+
+Claude Code reads the official channel pointers its native updater and
+`claude.ai/install.sh` use, `https://downloads.claude.ai/claude-code-releases/latest`
+and `.../stable` (plain text, at most 64 bytes, 10 s each, a strict `x.y.z`, the
+final URL still under that base). When both answer and the installed native
+version is at least the newer of the two, the row is `current` with no process
+scan and no `claude update`. Anything else (an unreadable pointer, an unusual
+installed version, a pending relaunch marker) takes the usual path.
+
 Ubuntu Codex updates additionally serialize against account switching via the
 existing `.ccs-activation.lock` and use the established idle/startup-lock runtime
 for the shared daemon and desktop app server. Busy Codex work is waited on for
@@ -468,7 +511,8 @@ never retry an interrupted job.
 
 `action_required` is never a failure: the job completes and the row tells the
 user exactly what to do. ZCode and the ACP adapters report `in_use` while a T3
-session uses them: nothing was changed, and Update apps finishes them later. Codex and Claude desktops on the Mac that are running report
+session uses them: nothing was changed, and Update apps finishes them later; so does
+Codex CLI on Windows (npm) while a T3 session runs it. Codex and Claude desktops on the Mac that are running report
 `quit_first` (they are never asked to quit): nothing is swapped while anything
 runs, and the next click after the user quits updates cleanly. On Windows they
 report `quit_first` only when an instance's start cannot be reproduced (see
