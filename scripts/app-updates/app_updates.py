@@ -18,14 +18,17 @@ import uuid
 
 from app_update_common import (
     APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
-    powershell, private_temporary, ps_quote, result, version_text, write_private_json,
+    powershell, private_temporary, ps_quote, resolve_npm, result, version_text, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, family, scan, terminate_cli
 from app_update_terminal import check_terminal, restart_cli
 from app_update_t3 import detect_t3, update_t3
+from app_update_zcode import detect_adapters, detect_zcode, update_adapters, update_zcode
 
 CLI_NAMES = {"antigravity-cli": "agy", "muse-code": "muse", "omp": "omp", "codex-cli": "codex", "claude-code": "claude"}
+# Apps with their own verified update flow; ZCode and the ACP adapters never stop a T3 session.
+OWN_UPDATERS = ("zcode", "t3-acp-adapters", "t3-code")
 # The Codex bridge's whole budget: lock (30 s) + update (180 s) + idle wait
 # (60 s) + proxy restart checks. It never waits hours for a busy Codex.
 CODEX_BRIDGE_SECONDS = 420
@@ -223,6 +226,10 @@ def detect_cli(app_id, platform):
 def _detect_one(app_id, platform):
     if app_id == "t3-code":
         return detect_t3(platform)
+    if app_id == "zcode":
+        return detect_zcode(platform)
+    if app_id == "t3-acp-adapters":
+        return detect_adapters(platform)
     return detect_desktop(app_id, platform) if app_id.endswith("-desktop") else detect_cli(app_id, platform)
 
 
@@ -230,7 +237,7 @@ def detect(platform):
     """Read-only version probes for every app, side by side.
 
     Each probe has its own timeout, so the slowest one bounds the whole check
-    instead of all eight adding up. Nothing here installs or stops anything.
+    instead of all ten adding up. Nothing here installs or stops anything.
     """
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=len(APP_LABELS)) as pool:
@@ -291,32 +298,6 @@ def muse_update_busy(directory):
     if not re.fullmatch(r"[1-9][0-9]{0,8}", text):
         return False
     return _pid_alive(int(text))
-
-
-def resolve_npm(prefix):
-    """Locate node.exe plus its npm-cli.js so npm runs without any shell.
-
-    cmd.exe /d /s /c mangles a quoted executable containing spaces, so the
-    previous '"C:\\Program Files\\nodejs\\npm.cmd" install ...' line died with
-    "not recognized" before npm ever started. Returns (node, cli) or None.
-    """
-    roots = []
-    located = shutil.which("npm.cmd")
-    if located:
-        roots.append(pathlib.Path(located).parent)
-    roots.append(pathlib.Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "nodejs")
-    roots.append(prefix)
-    for root in roots:
-        node, cli = root / "node.exe", root / "node_modules/npm/bin/npm-cli.js"
-        if node.is_file() and cli.is_file():
-            return node, cli
-    located_node = shutil.which("node.exe") or shutil.which("node")
-    if located_node:
-        root = pathlib.Path(located_node).parent
-        cli = root / "node_modules/npm/bin/npm-cli.js"
-        if cli.is_file():
-            return pathlib.Path(located_node), cli
-    return None
 
 
 def _clamp(seconds, deadline):
@@ -526,7 +507,7 @@ def check_readiness(install):
     try:
         if install.manager == "unsupported":
             return ("failed", "unsupported")
-        if install.app_id.endswith("-desktop") or install.app_id == "t3-code":
+        if install.app_id.endswith("-desktop") or install.app_id in OWN_UPDATERS:
             # Desktop updaters verify before stopping anything; the manager
             # check above is the whole pre-flight.
             return None
@@ -567,8 +548,9 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     with execution_lock():
         emit({"event": "app", "appId": None, "phase": "checking"})
         installations = detect(platform)
-        # Update package apps first, then the shared Codex daemon idle wait.
-        # T3 is last because its desktop/server replacement interrupts threads.
+        # Update package apps first (ZCode and the ACP adapters among them),
+        # then the shared Codex daemon idle wait. T3 is last because its
+        # desktop/server replacement interrupts threads.
         order = [app_id for app_id in APP_LABELS if app_id not in ("codex-cli", "t3-code")] + ["codex-cli", "t3-code"]
         for app_id in order:
             install = installations[app_id]
@@ -598,12 +580,13 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                     report(result(app_id, platform, status, install.version, install.version, install.manager, code))
                     continue
                 emit({"event": "app", "appId": app_id, "phase": "updating"})
-                if app_id.endswith("-desktop") or app_id == "t3-code":
+                if app_id.endswith("-desktop") or app_id in OWN_UPDATERS:
                     # A desktop app reports its long steps (a package download,
                     # then the install) so the page shows what it waits on.
                     def phase(name, app_id=app_id):
                         emit({"event": "app", "appId": app_id, "phase": name})
-                    try: report((update_t3 if app_id == "t3-code" else update_desktop)(install, deadline, phase))
+                    update = {"zcode": update_zcode, "t3-acp-adapters": update_adapters, "t3-code": update_t3}.get(app_id, update_desktop)
+                    try: report(update(install, deadline, phase))
                     except Exception: report(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
                 elif app_id == "antigravity-cli":
                     report(mark_unreviewed(update_cli(install, deadline), agy_reviewed))
@@ -783,7 +766,8 @@ def main():
         if not args.apply:
             installations = detect(args.platform)
             payload = {"inventory": True, "apps": [
-                {"appId": app_id, "installed": install is not None, "version": install.version if install else None, "manager": install.manager if install else None}
+                {"appId": app_id, "installed": install is not None, "version": install.version if install else None, "manager": install.manager if install else None,
+                 **({"parts": install.parts} if getattr(install, "parts", None) is not None else {})}
                 for app_id, install in installations.items()
             ]}
         elif args.platform == "windows" and not args.task_child:

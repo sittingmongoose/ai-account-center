@@ -222,14 +222,15 @@ class UpdaterTests(unittest.TestCase):
             return ('failed', 'unsupported') if install.app_id == 'muse-code' else None
         def cli(install, deadline, phase=None):
             return common.result(install.app_id, 'ubuntu', 'current', '1.0.0', '1.0.0', 'native', attempted=True)
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update, mock.patch.object(updater, 'update_t3', side_effect=cli) as t3_update, mock.patch.object(updater, 'antigravity_hold', return_value=None):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update, mock.patch.object(updater, 'update_t3', side_effect=cli) as t3_update, mock.patch.object(updater, 'antigravity_hold', return_value=None), \
+                mock.patch.object(updater, 'update_zcode', side_effect=cli) as zcode_update, mock.patch.object(updater, 'update_adapters', side_effect=cli) as adapters_update:
             value = updater.run_apply('ubuntu')
         rows = {item['appId']: item for item in value['results']}
         self.assertEqual(len(value['results']), len(common.APP_LABELS))
         self.assertEqual(rows['muse-code']['status'], 'failed')
         self.assertEqual(rows['muse-code']['messageCode'], 'unsupported')
         self.assertFalse(rows['muse-code']['updateAttempted'])
-        attempted = {call.args[0].app_id for call in update.call_args_list} | {call.args[0].app_id for call in desktop_update.call_args_list} | {call.args[0].app_id for call in t3_update.call_args_list}
+        attempted = {call.args[0].app_id for mocked in (update, desktop_update, t3_update, zcode_update, adapters_update) for call in mocked.call_args_list}
         self.assertNotIn('muse-code', attempted)
         self.assertEqual(len(attempted), len(common.APP_LABELS) - 1)
 

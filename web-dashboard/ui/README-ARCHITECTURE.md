@@ -274,7 +274,7 @@ policies, Update apps hosts and their lines).
   to 3600 on a log scale that snaps within 3.5% of its marks, saved on release; the auto-switch policies in %
   used; the extra usage-log host select lists each tool's hosts by label from `LOG_SOURCE_HOSTS` through
   `AcData.log-source-hosts`), Update apps results by computer (Mac, Windows, Ubuntu, Nas1; the Nas1 row uses the
-  Ubuntu glyph; "N of `expectedResults` done", 32 when a job names no count; "Waiting for its turn" and a running
+  Ubuntu glyph; "N of `expectedResults` done", 40 when a job names no count; "Waiting for its turn" and a running
   bar while a job runs), Connection (read only) and About with `AboutSlint`.
 
 ### Sign-in (shell/signin.slint)

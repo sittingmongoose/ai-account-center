@@ -34,7 +34,7 @@ function row() {
 describe('T3 Code update contract', () => {
   it('includes desktop and server in one fixed app per host and keeps exact nightly versions', () => {
     expect(UPDATE_APP_LABELS['t3-code']).toBe('T3 Code');
-    expect(EXPECTED_RESULTS).toBe(32);
+    expect(EXPECTED_RESULTS).toBe(40);
     expect(normalizeAppUpdateRow(row(), 't3-code', 'ubuntu')).toMatchObject({
       appLabel: 'T3 Code',
       status: 'updated',

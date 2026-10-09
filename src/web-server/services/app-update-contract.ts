@@ -9,6 +9,8 @@ export const UPDATE_APP_LABELS = {
   'codex-desktop': 'Codex Desktop',
   'claude-code': 'Claude Code',
   'claude-desktop': 'Claude Desktop',
+  zcode: 'ZCode',
+  't3-acp-adapters': 'T3 ACP adapters',
   't3-code': 'T3 Code',
 } as const;
 export type UpdateAppId = keyof typeof UPDATE_APP_LABELS;
@@ -39,6 +41,12 @@ export interface AppUpdateResult {
   forcedStops: number;
   /** The newest build a `held` row did not install, when the helper could read it. */
   heldVersion?: string;
+  /** The two ACP adapters a `t3-acp-adapters` row covers; each carries its own versions. */
+  parts?: Array<{
+    name: 'muse-acp' | 'zcode-acp-server';
+    previousVersion: string | null;
+    version: string | null;
+  }>;
   restartTargets: Array<{
     kind: 'tmux' | 'terminal' | 'windows-terminal' | 'desktop' | 'systemd';
     server?: string;
@@ -103,6 +111,7 @@ export const MESSAGES = {
   host_unknown: 'Unknown: this computer is not reachable.',
   readiness_unknown: 'Unknown: the readiness check could not run.',
   quit_first: 'Quit the app, then run Update apps again.',
+  in_use: 'The app is in use, so nothing changed; run Update apps again once it is closed.',
   source_disabled:
     'Its package source is turned off on this computer, so it cannot update here. An Ubuntu upgrade turns these sources off; turn it back on to update.',
   check_in_app: 'The download was blocked; open the app to check for updates.',
@@ -239,11 +248,31 @@ export function normalizeAppUpdateResults(
   });
 }
 
-/** A row's words; "quit first" names the app, so the page says exactly what to quit. */
+/** A row's words; "quit first" and "in use" name the app, so the page says what to close. */
 export function messageFor(code: MessageCode, appId: UpdateAppId): string {
   if (code === 'quit_first')
     return `Quit ${UPDATE_APP_LABELS[appId]} to finish its update, then run Update apps again.`;
+  if (code === 'in_use')
+    return `${UPDATE_APP_LABELS[appId]} is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.`;
   return MESSAGES[code];
+}
+
+const ACP_PARTS = ['muse-acp', 'zcode-acp-server'] as const;
+/** The adapter names are a closed set of two, each kept once, so a row has at most two parts. */
+function normalizeParts(value: unknown): NonNullable<AppUpdateResult['parts']> {
+  const parts: NonNullable<AppUpdateResult['parts']> = [];
+  for (const candidate of Array.isArray(value) ? value : []) {
+    const part = record(candidate);
+    const name = part?.name as (typeof ACP_PARTS)[number] | undefined;
+    if (!part || !name || !ACP_PARTS.includes(name) || parts.some((known) => known.name === name))
+      continue;
+    parts.push({
+      name,
+      previousVersion: safeVersion(part.previousVersion),
+      version: safeVersion(part.version),
+    });
+  }
+  return parts;
 }
 
 /** One helper row for a known app; anything unexpected becomes a fixed helper_invalid row. */
@@ -276,10 +305,11 @@ export function normalizeAppUpdateRow(
       : 0;
   // The Linux computers (Ubuntu and Nas1) restart T3 through its systemd service;
   // the Mac and Windows restart its desktop app. Windows alone also closes and
-  // reopens a running Codex or Claude desktop app; the Mac asks to quit first.
+  // reopens a running Codex, Claude or ZCode desktop app; the Mac asks to quit first.
   const linux = HOST_OS[platform] === 'linux';
   const reopensDesktop =
-    HOST_OS[platform] === 'windows' && (appId === 'codex-desktop' || appId === 'claude-desktop');
+    HOST_OS[platform] === 'windows' &&
+    (appId === 'codex-desktop' || appId === 'claude-desktop' || appId === 'zcode');
   const targets: AppUpdateResult['restartTargets'] = [];
   for (const candidate of (Array.isArray(row.restartTargets) ? row.restartTargets : []).slice(
     0,
@@ -309,11 +339,14 @@ export function normalizeAppUpdateRow(
     )
       targets.push({ kind: 'tmux', server: target.server, session: target.session });
   }
+  // Adapters rows name no top-level version: they are updated once a part moved to a new one.
+  const parts = appId === 't3-acp-adapters' ? normalizeParts(row.parts) : null;
+  const versioned = parts
+    ? parts.some((part) => part.version !== null && part.version !== part.previousVersion)
+    : safeVersion(row.version) !== null;
   if (
     row.status === 'updated' &&
-    (!safeVersion(row.version) ||
-      typeof row.manager !== 'string' ||
-      !MANAGERS.includes(row.manager))
+    (!versioned || typeof row.manager !== 'string' || !MANAGERS.includes(row.manager))
   )
     return failure(platform, appId, 'helper_invalid');
   // Only the Antigravity CLI is ever held, and only with a hold message.
@@ -322,6 +355,7 @@ export function normalizeAppUpdateRow(
     ((code === 't3_updated' || code === 't3_restart_scheduled') &&
       (appId !== 't3-code' || row.status !== 'updated')) ||
     (code === 'source_disabled' && row.status !== 'action_required') ||
+    (code === 'in_use' && row.status !== 'action_required') ||
     (code === 't3_restart_scheduled' &&
       (!linux || !targets.some((target) => target.kind === 'systemd'))) ||
     (code === 'desktop_reopened' && (!reopensDesktop || row.status !== 'updated')) ||
@@ -344,6 +378,7 @@ export function normalizeAppUpdateRow(
     restartedProcesses: count,
     forcedStops: forced,
     ...(heldVersion ? { heldVersion } : {}),
+    ...(parts ? { parts } : {}),
     restartTargets: targets,
   };
 }

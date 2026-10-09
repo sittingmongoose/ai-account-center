@@ -85,18 +85,18 @@ describe('fixed app update service', () => {
     expect([...calls].sort()).toEqual(['mac', 'nas1', 'ubuntu', 'windows']);
     expect(
       service.getStatus().job!.results.filter((row) => row.platform !== 'ubuntu')
-    ).toHaveLength(24);
+    ).toHaveLength(30);
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
     expect(calls).toHaveLength(4);
-    expect(job.results).toHaveLength(32);
+    expect(job.results).toHaveLength(40);
     expect(job.state).toBe('failed');
     expect(job.activePlatform).toBeNull();
     expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
     const clone = service.getStatus().job!;
     clone.results.length = 0;
-    expect(service.getStatus().job!.results).toHaveLength(32);
+    expect(service.getStatus().job!.results).toHaveLength(40);
   });
   it('executes only the four fixed host-local helpers', () => {
     const local = appUpdateInvocation('ubuntu');
@@ -294,7 +294,7 @@ describe('fixed app update service', () => {
       );
     }
   });
-  it('accepts a closed-and-reopened desktop only for Windows Codex and Claude updates', () => {
+  it('accepts a closed-and-reopened desktop only for Windows Codex, Claude and ZCode updates', () => {
     const reopened = {
       status: 'updated',
       messageCode: 'desktop_reopened',
@@ -306,7 +306,7 @@ describe('fixed app update service', () => {
       forcedStops: 1,
       restartTargets: [{ kind: 'desktop', path: 'PRIVATE_SENTINEL' }],
     };
-    for (const appId of ['codex-desktop', 'claude-desktop'] as const) {
+    for (const appId of ['codex-desktop', 'claude-desktop', 'zcode'] as const) {
       const value = normalizeAppUpdateRow({ ...reopened, appId }, appId, 'windows');
       expect(value).toMatchObject({
         status: 'updated',
@@ -336,7 +336,7 @@ describe('fixed app update service', () => {
           .restartTargets
       ).toEqual([]);
     }
-    for (const appId of ['codex-cli', 'claude-code', 't3-code', 'omp'] as const)
+    for (const appId of ['codex-cli', 'claude-code', 't3-code', 'omp', 't3-acp-adapters'] as const)
       expect(normalizeAppUpdateRow({ ...reopened, appId }, appId, 'windows').message).toBe(
         MESSAGES.helper_invalid
       );
@@ -382,7 +382,7 @@ describe('fixed app update service', () => {
     'returns fixed errors for malformed helper output',
     (raw) => {
       const rows = normalizeAppUpdateResults(raw, 'ubuntu');
-      expect(rows).toHaveLength(8);
+      expect(rows).toHaveLength(10);
       expect(rows.every((row) => row.status === 'failed')).toBe(true);
     }
   );
@@ -466,7 +466,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(first);
     expect(second.getStatus().job!.state).toBe('completed');
-    expect(second.getStatus().job!.results).toHaveLength(32);
+    expect(second.getStatus().job!.results).toHaveLength(40);
     expect(fs.existsSync(path.join(root, 'app-updates/dashboard-update.lock'))).toBe(false);
   });
   it('refuses a cancel from a process that does not own the running job', async () => {
@@ -496,7 +496,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(owner);
     expect(owner.getStatus().job!.results.filter((row) => row.status === 'skipped')).toHaveLength(
-      24
+      30
     );
   });
   it('marks an interrupted persisted job failed without replaying it', () => {

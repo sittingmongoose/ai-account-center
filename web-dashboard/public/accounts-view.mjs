@@ -738,7 +738,8 @@ function policies(data, home, ag) {
 const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows'], ['ubuntu', 'Ubuntu', 'ubuntu'], ['nas1', 'Nas1', 'ubuntu']];
 const UPDATE_APP_NAMES = {
   'antigravity-cli': 'Antigravity CLI', 'muse-code': 'Muse Code', omp: 'OMP', 'codex-cli': 'Codex CLI',
-  'codex-desktop': 'Codex Desktop', 'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop', 't3-code': 'T3 Code',
+  'codex-desktop': 'Codex Desktop', 'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop', zcode: 'ZCode',
+  't3-acp-adapters': 'T3 ACP adapters', 't3-code': 'T3 Code',
 };
 const RESULT = {
   updated: ['Updated', 'good'], current: ['Already current', ''], not_installed: ['Not installed', ''],
@@ -754,6 +755,13 @@ const heldTip = (row) => {
   const kept = text(row.version);
   return `Update held: Antigravity ${held} is waiting for a switching review${kept ? `; ${kept} stays installed` : ''}.`;
 };
+// One adapter part: "muse-acp 0.10.0 to 0.10.1" when it moved, "zcode-acp-server version 0.65.1" when not.
+const partWords = (part) => {
+  const previous = text(part.previousVersion);
+  const version = text(part.version);
+  const words = previous && version && previous !== version ? `${previous} to ${version}` : version ? `version ${version}` : '';
+  return [text(part.name), words].filter(Boolean).join(' ');
+};
 // An unknown row on an unreachable host names the computer; any other unknown stays a plain word.
 const unknownWord = (row, label) => {
   const message = text(row.message);
@@ -767,6 +775,8 @@ const actionWord = (row) => {
   const message = text(row.message);
   if (message.startsWith('Quit ')) return 'Quit to finish update';
   if (message.startsWith('Codex is busy')) return 'Codex busy, try later';
+  // The in-use words open with the app's own name, so they are matched anywhere in the message.
+  if (message.includes(' is in use (')) return 'In use, try later';
   if (message.startsWith('The download was blocked')) return 'Update it in the app';
   return RESULT.action_required[0];
 };
@@ -816,10 +826,12 @@ export function updateResultsView(job, now = Date.now()) {
     const items = rows.map((row, index) => {
       const [word, tone] = rowWord(row, label);
       const versions = text(row.previousVersion) && text(row.version) && row.previousVersion !== row.version ? `${row.previousVersion} to ${row.version}` : text(row.version) ? `version ${row.version}` : '';
+      // An ACP adapters row has no single version: each of its parts names its own instead.
+      const parts = (Array.isArray(row.parts) ? row.parts : []).filter(part => part && typeof part === 'object');
       return {
         key: `${id}|${text(row.appId) || index}`, app: text(row.appLabel) || text(row.appId) || 'App',
-        result: row.status === 'updated' && text(row.version) ? `Updated to ${row.version}` : word, tone, running: false,
-        tip: row.status === 'held' ? heldTip(row) : [text(row.message), versions].filter(Boolean).join(' · '),
+        result: row.status === 'updated' && text(row.version) && !parts.length ? `Updated to ${row.version}` : word, tone, running: false,
+        tip: row.status === 'held' ? heldTip(row) : [text(row.message), parts.length ? parts.map(partWords).join(' · ') : versions].filter(Boolean).join(' · '),
       };
     });
     if (progress) {

@@ -14,7 +14,6 @@ import plistlib
 import re
 import shutil
 import stat
-import struct
 import sys
 import time
 import urllib.request
@@ -23,7 +22,7 @@ import uuid
 import zipfile
 
 from app_update_common import (
-    Install, UpdateFailure, cli_probe, command, download, execution_lock, powershell, private_temporary,
+    Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock, powershell, private_temporary,
     ps_quote, result, write_private_json,
 )
 from app_update_processes import live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
@@ -77,21 +76,8 @@ def runtime_install():
 def windows_bundle_version(executable):
     # PE ProductVersion loses the nightly suffix. Read only the small root
     # package.json from Electron's ASAR, never execute bundled JavaScript.
-    try:
-        with (executable.parent / "resources/app.asar").open("rb") as stream:
-            prefix = stream.read(16)
-            header_size, json_size = struct.unpack("<I", prefix[4:8])[0], struct.unpack("<I", prefix[12:16])[0]
-            if not 0 < json_size <= 2 * 1024 * 1024 or not json_size + 8 <= header_size <= 2 * 1024 * 1024 + 16:
-                return None
-            entry = json.loads(stream.read(json_size))["files"]["package.json"]
-            size, offset = int(entry["size"]), int(entry["offset"])
-            if not 0 < size <= 65536 or offset < 0 or entry.get("unpacked") or entry.get("link"):
-                return None
-            stream.seek(8 + header_size + offset)
-            package = json.loads(stream.read(size))
-        return exact_version(package.get("version")) if package.get("name") == "t3code" else None
-    except (OSError, ValueError, KeyError, TypeError, struct.error):
-        return None
+    package = asar_package(executable.parent / "resources/app.asar")
+    return exact_version(package.get("version")) if package and package.get("name") == "t3code" else None
 
 
 def mac_bundle_version(bundle):
@@ -154,24 +140,33 @@ def latest_release():
 
 
 def manifest_hash(text, version, asset):
-    # A bounded subset of electron-builder's YAML; no arbitrary YAML tags,
-    # URLs or commands are accepted. Bind the hash to this exact asset/version.
+    return manifest_asset(text, version, asset)[0]
+
+
+def manifest_asset(text, version, asset):
+    """(sha512 digest, size or None) of one asset in an electron-builder latest.yml.
+
+    A bounded subset of electron-builder's YAML; no arbitrary YAML tags,
+    URLs or commands are accepted. Bind the hash to this exact asset/version.
+    """
     if len(text) > 65536 or not re.search(r"^version:\s*[\"']?" + re.escape(version) + r"[\"']?\s*$", text, re.M):
         raise UpdateFailure("signature_failed")
     entries = re.split(r"(?m)^\s*-\s+url:\s*", text)[1:]
-    hashes = []
+    found = []
     for entry in entries:
         lines = entry.splitlines()
         if lines and lines[0].strip().strip("\"'") == asset:
             match = re.search(r"(?m)^\s+sha512:\s*([A-Za-z0-9+/=]+)\s*$", entry)
             if match:
-                hashes.append(match.group(1))
-    if len(hashes) != 1:
+                # Only this entry's own indented lines: the top-level keys follow the last one.
+                size = re.search(r"\A[^\n]*\n(?:[ \t]+[^\n]*\n)*?[ \t]+size:\s*(\d{1,12})\s*$", entry, re.M)
+                found.append((match.group(1), int(size.group(1)) if size else None))
+    if len(found) != 1:
         raise UpdateFailure("signature_failed")
     try:
-        digest = base64.b64decode(hashes[0], validate=True)
+        digest = base64.b64decode(found[0][0], validate=True)
         if len(digest) == 64:
-            return digest
+            return digest, found[0][1]
     except ValueError:
         pass
     raise UpdateFailure("signature_failed")
@@ -222,16 +217,16 @@ def update_runtime(install, version, deadline):
         raise UpdateFailure("version_unknown")
 
 
-def verify_mac(bundle, version):
+def verify_mac(bundle, version, identity=MAC_ID, team=MAC_TEAM, bundle_version=None):
     # codesign reads a bare -R value as a requirement file path; "-R=" passes the text inline.
-    requirement = 'identifier "' + MAC_ID + '" and anchor apple generic and certificate leaf[subject.OU] = "' + MAC_TEAM + '"'
+    requirement = 'identifier "' + identity + '" and anchor apple generic and certificate leaf[subject.OU] = "' + team + '"'
     try:
         command(["/usr/bin/codesign", "--verify", "--deep", "--strict", bundle], timeout=60)
         command(["/usr/bin/codesign", "--verify", "-R=" + requirement, bundle], timeout=30)
         command(["/usr/sbin/spctl", "--assess", "--type", "execute", bundle], timeout=60)
     except UpdateFailure:
         raise UpdateFailure("signature_failed") from None
-    if mac_bundle_version(bundle) != version:
+    if (bundle_version or mac_bundle_version)(bundle) != version:
         raise UpdateFailure("signature_failed")
 
 
@@ -351,6 +346,18 @@ def update_mac(install, version, temporary, deadline, phase):
     return len(contexts), forced
 
 
+def nsis_silent(package, seconds):
+    """Run a verified NSIS installer with /S; its exit code decides, a timeout kills its whole tree."""
+    # Give the installer its own wait/kill budget. Killing only an outer
+    # PowerShell on timeout would leave NSIS replacing files during rollback.
+    output = powershell("$ErrorActionPreference='Stop'; $p=Start-Process -FilePath " + ps_quote(package) +
+                        " -ArgumentList '/S' -PassThru; if(-not $p.WaitForExit(" + str(seconds * 1000) + ")){" +
+                        "& taskkill.exe /PID $p.Id /T /F | Out-Null; if(-not $p.WaitForExit(10000)){exit 1}; 'timeout'; exit 0}; " +
+                        "$p.Refresh(); if($p.ExitCode -ne 0){exit 1}", timeout=seconds + 15)
+    if output and output.strip() == "timeout":
+        raise UpdateFailure("timeout")
+
+
 def update_windows(install, version, temporary, deadline, phase):
     package = verified_download("windows", version, temporary, phase, deadline)
     verify_windows(package)
@@ -363,15 +370,7 @@ def update_windows(install, version, temporary, deadline, phase):
     installed = False
     try:
         forced = terminate_desktops(install, contexts)
-        seconds = budget(deadline, 180)
-        # Give the installer its own wait/kill budget. Killing only an outer
-        # PowerShell on timeout would leave NSIS replacing files during rollback.
-        output = powershell("$ErrorActionPreference='Stop'; $p=Start-Process -FilePath " + ps_quote(package) +
-                            " -ArgumentList '/S' -PassThru; if(-not $p.WaitForExit(" + str(seconds * 1000) + ")){" +
-                            "& taskkill.exe /PID $p.Id /T /F | Out-Null; if(-not $p.WaitForExit(10000)){exit 1}; 'timeout'; exit 0}; " +
-                            "$p.Refresh(); if($p.ExitCode -ne 0){exit 1}", timeout=seconds + 15)
-        if output and output.strip() == "timeout":
-            raise UpdateFailure("timeout")
+        nsis_silent(package, budget(deadline, 180))
         installed = True
         if windows_bundle_version(install.path) != version:
             raise UpdateFailure("version_unknown")
@@ -680,7 +679,11 @@ def acp_unit_present():
 
 
 def start_acp_updater():
-    """Start Jared's own ACP/ZCode updater unit without waiting; it keeps its own lock, deferrals and log."""
+    """Start Jared's own ACP/ZCode updater unit without waiting; it keeps its own lock, deferrals and log.
+
+    Only the detached worker uses this, after a verified restart freed the adapters. Within a job the
+    zcode and t3-acp-adapters rows run the unit and wait for it (app_update_zcode).
+    """
     if not acp_unit_present():
         return "absent"
     try:
@@ -707,11 +710,13 @@ def record_components(root, **values):
 
 
 def ubuntu_companions(root, deadline, restarting, daemon_reload):
-    """Ubuntu companions beside T3 (Cursor CLI, ACP updater, old runtimes); best effort.
+    """Ubuntu companions beside T3 (Cursor CLI, old runtimes); best effort.
 
-    Nothing here may change the t3-code row. A scheduled restart stops the
-    running adapters, so the detached worker prunes and starts the ACP updater
-    after its verified restart; until then the record says "pending".
+    Nothing here may change the t3-code row. The zcode and t3-acp-adapters
+    rows already ran the ACP updater earlier in this job ("rows"). A scheduled
+    restart stops the running adapters, so the detached worker prunes and
+    starts the ACP updater again after its verified restart; until then the
+    record says "pending".
     """
     try:
         cursor = cursor_agent_update(deadline)
@@ -719,7 +724,7 @@ def ubuntu_companions(root, deadline, restarting, daemon_reload):
             acp = "pending" if acp_unit_present() else "absent"
             pruned = []
         else:
-            acp = start_acp_updater()
+            acp = "rows" if acp_unit_present() else "absent"
             pruned = prune_runtimes()
         record_components(root, cursorAgent=cursor, acpUpdater=acp, prunedRuntimes=pruned, daemonReload=daemon_reload)
     except Exception:

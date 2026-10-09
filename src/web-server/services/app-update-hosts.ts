@@ -241,6 +241,7 @@ export const HELPER_FILES = [
   'app_update_pipe.py',
   'app_update_probe.py',
   'app_update_confirmed_codex.py',
+  'app_update_zcode.py',
   'app_update_codex.cjs',
   CODEX_RUNTIME_HELPER,
 ] as const;

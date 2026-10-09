@@ -115,7 +115,7 @@ def windows_processes():
     script = """$ErrorActionPreference='Stop';
 $me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
 $rows=@(); foreach($p in Get-CimInstance Win32_Process){
- if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe')){continue};
+ if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe','ZCode.exe','muse-acp.exe')){continue};
  $o=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue;
  if($o.Sid -ne $me -or -not $p.ExecutablePath){continue};
  try{$started=[Diagnostics.Process]::GetProcessById($p.ProcessId).StartTime.ToFileTimeUtc().ToString()}catch{continue};

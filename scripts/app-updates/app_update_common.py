@@ -6,6 +6,8 @@ import json
 import os
 import pathlib
 import re
+import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -15,7 +17,8 @@ import urllib.request
 APP_LABELS = {
     "antigravity-cli": "Antigravity CLI", "muse-code": "Muse Code", "omp": "OMP",
     "codex-cli": "Codex CLI", "codex-desktop": "Codex Desktop",
-    "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", "t3-code": "T3 Code",
+    "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", "zcode": "ZCode",
+    "t3-acp-adapters": "T3 ACP adapters", "t3-code": "T3 Code",
 }
 NO_AUTO_UPDATE = {
     "MUSE_NO_AUTO_UPDATE": "1", "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
@@ -141,6 +144,54 @@ def version_text(value):
 
 def version_tuple(value):
     return tuple(int(part) for part in re.findall(r"\d+", (value or "").split("-")[0]))
+
+
+def asar_package(path, header_limit=2 * 1024 * 1024):
+    """The root package.json of an Electron app.asar, or None. Bounded reads only; nothing is executed.
+
+    ZCode's header lists its whole node_modules (about 7 MB), so callers pass their own limit.
+    """
+    try:
+        with pathlib.Path(path).open("rb") as stream:
+            prefix = stream.read(16)
+            header_size, json_size = struct.unpack("<I", prefix[4:8])[0], struct.unpack("<I", prefix[12:16])[0]
+            if not 0 < json_size <= header_limit or not json_size + 8 <= header_size <= header_limit + 16:
+                return None
+            entry = json.loads(stream.read(json_size))["files"]["package.json"]
+            size, offset = int(entry["size"]), int(entry["offset"])
+            if not 0 < size <= 65536 or offset < 0 or entry.get("unpacked") or entry.get("link"):
+                return None
+            stream.seek(8 + header_size + offset)
+            package = json.loads(stream.read(size))
+        return package if isinstance(package, dict) else None
+    except (OSError, ValueError, KeyError, TypeError, struct.error):
+        return None
+
+
+def resolve_npm(prefix):
+    """Locate node.exe plus its npm-cli.js so npm runs without any shell.
+
+    cmd.exe /d /s /c mangles a quoted executable containing spaces, so the
+    previous '"C:\\Program Files\\nodejs\\npm.cmd" install ...' line died with
+    "not recognized" before npm ever started. Returns (node, cli) or None.
+    """
+    roots = []
+    located = shutil.which("npm.cmd")
+    if located:
+        roots.append(pathlib.Path(located).parent)
+    roots.append(pathlib.Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "nodejs")
+    roots.append(prefix)
+    for root in roots:
+        node, cli = root / "node.exe", root / "node_modules/npm/bin/npm-cli.js"
+        if node.is_file() and cli.is_file():
+            return node, cli
+    located_node = shutil.which("node.exe") or shutil.which("node")
+    if located_node:
+        root = pathlib.Path(located_node).parent
+        cli = root / "node_modules/npm/bin/npm-cli.js"
+        if cli.is_file():
+            return pathlib.Path(located_node), cli
+    return None
 
 
 # Version probes run side by side now, so a busy host gets a little longer.

@@ -81,7 +81,7 @@ describe('Update apps runs every computer at once', () => {
     const elapsed = Date.now() - t0;
     const job = service.getStatus().job!;
     expect(job.state).toBe('completed');
-    expect(job.results).toHaveLength(32);
+    expect(job.results).toHaveLength(40);
     // Serial would be >= 1500 ms; parallel is the slowest host plus scheduling.
     expect(elapsed).toBeGreaterThanOrEqual(595);
     expect(elapsed).toBeLessThan(1000);
@@ -126,7 +126,7 @@ describe('Update apps runs every computer at once', () => {
     expect(Date.now() - t0).toBeLessThan(1000);
     const job = service.getStatus().job!;
     expect(aborted).toBe(1);
-    expect(job.results).toHaveLength(32);
+    expect(job.results).toHaveLength(40);
     const ubuntu = job.results.filter((value) => value.platform === 'ubuntu');
     expect(ubuntu.find((value) => value.appId === 'antigravity-cli')!.status).toBe('updated');
     const timedOut = ubuntu.filter((value) => value.appId !== 'antigravity-cli');
@@ -134,7 +134,7 @@ describe('Update apps runs every computer at once', () => {
     expect(timedOut.every((value) => value.status === 'unknown')).toBe(true);
     expect(timedOut.every((value) => value.message === MESSAGES.host_timeout)).toBe(true);
     expect(timedOut.every((value) => value.updateAttempted === false)).toBe(true);
-    expect(job.results.filter((value) => value.platform !== 'ubuntu')).toHaveLength(24);
+    expect(job.results.filter((value) => value.platform !== 'ubuntu')).toHaveLength(30);
     expect(job.state).toBe('failed');
   });
 
@@ -151,11 +151,11 @@ describe('Update apps runs every computer at once', () => {
       await finish(service);
       const job = service.getStatus().job!;
       const stuck = job.results.filter((value) => value.platform === slow);
-      expect(stuck).toHaveLength(8);
+      expect(stuck).toHaveLength(10);
       expect(stuck.every((value) => value.message === MESSAGES.host_timeout)).toBe(true);
       // The other computers finish normally while that one waits on its sync.
       const rest = job.results.filter((value) => value.platform !== slow);
-      expect(rest).toHaveLength(24);
+      expect(rest).toHaveLength(30);
       expect(rest.every((value) => value.status === 'current')).toBe(true);
     }
   );
@@ -242,8 +242,8 @@ describe('Update apps runs every computer at once', () => {
     finishUbuntu();
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(32);
-    expect(job.results.filter((value) => value.platform === 'ubuntu')).toHaveLength(8);
+    expect(job.results).toHaveLength(40);
+    expect(job.results.filter((value) => value.platform === 'ubuntu')).toHaveLength(10);
     expect(job.state).toBe('completed');
   });
 
@@ -262,7 +262,7 @@ describe('Update apps runs every computer at once', () => {
     const windows = service
       .getStatus()
       .job!.results.filter((value) => value.platform === 'windows');
-    expect(windows).toHaveLength(8);
+    expect(windows).toHaveLength(10);
     expect(windows.find((value) => value.appId === 'codex-cli')!.status).toBe('updated');
     expect(windows.find((value) => value.appId === 'claude-code')!.status).toBe('current');
     const rest = windows.filter((value) => !['codex-cli', 'claude-code'].includes(value.appId));
@@ -302,7 +302,7 @@ describe('Update apps runs every computer at once', () => {
     for (const release of releases) release();
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(32);
+    expect(job.results).toHaveLength(40);
     expect(job.results.filter((value) => value.status === 'skipped')).toHaveLength(
       4 * (APPS.length - 1)
     );
@@ -331,8 +331,8 @@ describe('Update apps runs every computer at once', () => {
     await finish(service);
     expect(runs).toEqual(['ubuntu']);
     const remote = service.getStatus().job!.results.filter((value) => value.platform !== 'ubuntu');
-    expect(remote).toHaveLength(24);
-    expect(remote.filter((value) => value.platform === 'nas1')).toHaveLength(8);
+    expect(remote).toHaveLength(30);
+    expect(remote.filter((value) => value.platform === 'nas1')).toHaveLength(10);
     expect(remote.every((value) => value.status === 'skipped')).toBe(true);
   });
 
@@ -481,6 +481,8 @@ describe('the real Python helper with fake apps', () => {
         'u.update_cli = fake',
         'u.update_desktop = fake',
         'u.update_t3 = lambda install, deadline, phase=None: fake(install, deadline)',
+        'u.update_zcode = lambda install, deadline, phase=None: fake(install, deadline)',
+        'u.update_adapters = lambda install, deadline, phase=None: fake(install, deadline)',
         'pathlib.Path.home = classmethod(lambda cls: pathlib.Path(__import__("os").environ["CCS_HOME"]))',
         "sys.argv = ['app_updates.py', '--apply', '--platform', 'ubuntu']",
         'u.main()',
@@ -507,7 +509,7 @@ describe('the real Python helper with fake apps', () => {
       control
     );
     const rows = JSON.parse(output).results as Array<{ status: string; messageCode: string }>;
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(APPS.length);
     expect(rows[0].status).toBe('current');
     const skippedRows = rows.filter((value) => value.status === 'skipped');
     // The app already started when the cancel landed may finish; nothing after it starts.
@@ -516,7 +518,7 @@ describe('the real Python helper with fake apps', () => {
     expect(rows.every((value) => ['current', 'skipped'].includes(value.status))).toBe(true);
     expect(Date.now() - t0).toBeLessThan(2000);
     expect(events[0]).toEqual({ event: 'app', appId: null, phase: 'checking' });
-    expect(events.filter((event) => event.event === 'result')).toHaveLength(8);
+    expect(events.filter((event) => event.event === 'result')).toHaveLength(APPS.length);
   });
 });
 

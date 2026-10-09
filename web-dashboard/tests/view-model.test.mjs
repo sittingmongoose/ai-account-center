@@ -518,8 +518,8 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
       running: true,
       done: false,
       count: 2,
-      // no expectedResults: 8 apps on each of the 4 computers
-      total: 32,
+      // no expectedResults: 10 apps on each of the 4 computers
+      total: 40,
       tip: 'Updating apps on Mac · running apps may restart',
       summary: '2 results',
     }
@@ -527,7 +527,7 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
   // the job's own expectedResults wins
   assert.equal(updateViewModel({ state: 'running', expectedResults: 32, results: [] }).total, 32);
   assert.equal(updateViewModel({ state: 'completed', expectedResults: 24, results: [] }).total, 24);
-  assert.equal(updateViewModel(null).total, 32);
+  assert.equal(updateViewModel(null).total, 40);
   assert.equal(
     updateViewModel({
       state: 'running',

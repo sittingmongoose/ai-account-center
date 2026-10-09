@@ -44,7 +44,7 @@ function fixtureRoot(built = true): string {
 
 describe('remote helper sync', () => {
   it('ships the source helpers and the Codex runtime', () => {
-    expect(HELPER_FILES).toHaveLength(12);
+    expect(HELPER_FILES).toHaveLength(13);
     expect(HELPER_FILES).toContain(RUNTIME);
     const source = path.resolve(__dirname, '../../../scripts/app-updates');
     for (const name of HELPER_FILES.filter((value) => value !== RUNTIME))

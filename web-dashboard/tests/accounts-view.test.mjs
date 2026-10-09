@@ -1135,8 +1135,8 @@ test('Update apps results are grouped by computer, never invented', () => {
     },
     now
   );
-  // A job that names no expectedResults counts 8 apps on each of the 4 computers.
-  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 1 of 32 done');
+  // A job that names no expectedResults counts 10 apps on each of the 4 computers.
+  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 1 of 40 done');
   assert.deepEqual(
     running.hosts.map((h) => h.items.map((i) => i.result)),
     [['Running'], [''], ['Already current'], ['']]
@@ -1460,6 +1460,96 @@ test('Update apps shows every computer working at once, each on its own app', ()
   assert.deepEqual(
     timedOut.hosts[3].items.map((i) => i.result),
     ['Unknown: Nas1 not reachable']
+  );
+});
+
+test('Update apps shows ZCode and T3 ACP adapters, names each adapter part and reads in-use as a wait', () => {
+  const row = (platform, appLabel, appId, status, extra = {}) => ({
+    appId,
+    appLabel,
+    platform,
+    status,
+    previousVersion: null,
+    version: null,
+    message: 'Done',
+    ...extra,
+  });
+  const done = updateResultsView(
+    {
+      state: 'completed',
+      startedAt: at(-30),
+      finishedAt: at(-20),
+      activePlatform: null,
+      expectedResults: 40,
+      results: [
+        row('mac', 'T3 ACP adapters', 't3-acp-adapters', 'updated', {
+          message: 'Updated and restarted running instances. CLI sessions reopen idle or resume an explicitly selected session.',
+          parts: [
+            { name: 'muse-acp', previousVersion: '0.10.0', version: '0.10.1' },
+            { name: 'zcode-acp-server', previousVersion: '0.65.1', version: '0.65.1' },
+          ],
+        }),
+        row('windows', 'ZCode', 'zcode', 'updated', {
+          previousVersion: '0.64.0',
+          version: '0.65.1',
+          message: 'Updated: it closed, installed the update and reopened.',
+        }),
+        row('ubuntu', 'ZCode', 'zcode', 'action_required', {
+          message: 'ZCode is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.',
+        }),
+      ],
+    },
+    now
+  );
+  assert.equal(
+    done.headRuns.map((r) => r.text).join(''),
+    'Last run 20m ago · 3 results, 1 need action'
+  );
+  // An adapters row says Updated and lists each part's own version after the message.
+  assert.deepEqual(
+    done.hosts[0].items.map((i) => [i.app, i.result, i.tone]),
+    [['T3 ACP adapters', 'Updated', 'good']]
+  );
+  assert.equal(
+    done.hosts[0].items[0].tip,
+    'Updated and restarted running instances. CLI sessions reopen idle or resume an explicitly selected session. · muse-acp 0.10.0 to 0.10.1 · zcode-acp-server version 0.65.1'
+  );
+  assert.deepEqual(
+    done.hosts[1].items.map((i) => [i.app, i.result, i.tone, i.tip]),
+    [['ZCode', 'Updated to 0.65.1', 'good', 'Updated: it closed, installed the update and reopened. · 0.64.0 to 0.65.1']]
+  );
+  assert.deepEqual(
+    done.hosts[2].items.map((i) => [i.app, i.result, i.tone]),
+    [['ZCode', 'In use, try later', 'warn']]
+  );
+  assert.equal(
+    done.hosts[2].items[0].tip,
+    'ZCode is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.'
+  );
+  // While a run is going, the app each computer is on is named, including the two new ones.
+  const running = updateResultsView(
+    {
+      state: 'running',
+      startedAt: at(-1),
+      finishedAt: null,
+      activePlatform: 'mac',
+      hosts: {
+        mac: { state: 'running', currentApp: 't3-acp-adapters', phase: 'checking' },
+        windows: { state: 'running', currentApp: 'zcode', phase: 'updating' },
+      },
+      expectedResults: 40,
+      results: [],
+    },
+    now
+  );
+  const byId = Object.fromEntries(running.hosts.map((h) => [h.id, h.items]));
+  assert.deepEqual(
+    [byId.mac[0].app, byId.mac[0].result, byId.mac[0].tip],
+    ['T3 ACP adapters', 'Checking', 'Mac is checking T3 ACP adapters now']
+  );
+  assert.deepEqual(
+    [byId.windows[0].app, byId.windows[0].result, byId.windows[0].tip],
+    ['ZCode', 'Updating', 'Windows is updating ZCode now']
   );
 });
 

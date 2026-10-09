@@ -62,11 +62,11 @@ function payload() {
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
 describe('Nas1 as the fourth update computer', () => {
-  it('adds one fixed platform: four computers times eight apps', () => {
+  it('adds one fixed platform: four computers times ten apps', () => {
     expect(PLATFORMS).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
-    expect(EXPECTED_RESULTS).toBe(32);
+    expect(EXPECTED_RESULTS).toBe(40);
     const rows = normalizeAppUpdateResults(payload(), 'nas1');
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(10);
     expect(rows.every((row) => row.platform === 'nas1' && row.status === 'current')).toBe(true);
   });
 
@@ -168,13 +168,17 @@ describe('Nas1 as the fourth update computer', () => {
 
 describe('a job saved before Nas1 existed', () => {
   const done = { state: 'done', currentApp: null, phase: null };
+  // The package that wrote this job had eight apps: ZCode and T3 ACP adapters came later.
+  const LATER_APPS = ['zcode', 't3-acp-adapters'];
 
   it('restores its 24 results and every host it saved, with Nas1 done and empty', async () => {
     const root = directory();
     const saved = path.join(root, 'app-updates');
     fs.mkdirSync(saved);
     const rows = (['ubuntu', 'mac', 'windows'] as const).flatMap((platform) =>
-      normalizeAppUpdateResults(payload(), platform)
+      normalizeAppUpdateResults(payload(), platform).filter(
+        (row) => !LATER_APPS.includes(row.appId)
+      )
     );
     expect(rows).toHaveLength(24);
     fs.writeFileSync(
@@ -214,8 +218,8 @@ describe('a job saved before Nas1 existed', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     const next = service.getStatus().job!;
     expect(next.state).toBe('completed');
-    expect(next.results).toHaveLength(32);
-    expect(next.expectedResults).toBe(32);
+    expect(next.results).toHaveLength(40);
+    expect(next.expectedResults).toBe(40);
     expect(Object.keys(next.hosts!)).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
   });
 

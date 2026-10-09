@@ -55,15 +55,15 @@ describe('cancellable app updates', () => {
     expect(calls).toEqual(['ubuntu']);
     const running = job.results.filter((row) => row.platform === 'ubuntu');
     const queued = job.results.filter((row) => row.platform !== 'ubuntu');
-    expect(running).toHaveLength(8);
+    expect(running).toHaveLength(10);
     expect(running.every((row) => row.status === 'current')).toBe(true);
-    expect(queued).toHaveLength(24);
-    expect(queued.filter((row) => row.platform === 'nas1')).toHaveLength(8);
+    expect(queued).toHaveLength(30);
+    expect(queued.filter((row) => row.platform === 'nas1')).toHaveLength(10);
     expect(queued.every((row) => row.status === 'skipped')).toBe(true);
     expect(queued.every((row) => row.message === MESSAGES.skipped_cancelled)).toBe(true);
     expect(queued.every((row) => row.updateAttempted === false)).toBe(true);
-    expect(job.results).toHaveLength(32);
-    expect(job.expectedResults).toBe(32);
+    expect(job.results).toHaveLength(40);
+    expect(job.expectedResults).toBe(40);
     expect(job.state).toBe('completed');
     expect(job.cancelRequested).toBe(true);
     expect(job.activePlatform).toBeNull();
@@ -101,8 +101,8 @@ describe('cancellable app updates', () => {
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(32);
-    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength(24);
+    expect(job.results).toHaveLength(40);
+    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength(30);
   });
 
   it('cancel with no job is a no-op', () => {
@@ -137,13 +137,13 @@ describe('cancellable app updates', () => {
       await finish(service);
       const job = service.getStatus().job!;
       const unreachable = job.results.filter((row) => row.platform === down);
-      expect(unreachable).toHaveLength(8);
+      expect(unreachable).toHaveLength(10);
       expect(unreachable.every((row) => row.status === 'unknown')).toBe(true);
       expect(unreachable.every((row) => row.message === MESSAGES.host_unknown)).toBe(true);
       expect(unreachable.every((row) => row.updateAttempted === false)).toBe(true);
       // The other computers still report their own rows.
       const rest = job.results.filter((row) => row.platform !== down);
-      expect(rest).toHaveLength(24);
+      expect(rest).toHaveLength(30);
       expect(rest.every((row) => row.status === 'current')).toBe(true);
       expect(job.state).toBe('failed');
       expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');

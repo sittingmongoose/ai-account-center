@@ -425,9 +425,11 @@ class T3Fixtures(unittest.TestCase):
             return common.result(install.app_id, "ubuntu", "current", "1.0.0", "1.0.0", "native")
         with mock.patch.object(updater, "detect", return_value=installations), mock.patch.object(updater, "check_readiness", return_value=None), \
                 mock.patch.object(updater, "antigravity_hold", return_value=None), mock.patch.object(updater, "update_cli", side_effect=update), \
-                mock.patch.object(updater, "update_desktop", side_effect=update), mock.patch.object(updater, "update_t3", side_effect=update):
+                mock.patch.object(updater, "update_desktop", side_effect=update), mock.patch.object(updater, "update_t3", side_effect=update), \
+                mock.patch.object(updater, "update_zcode", side_effect=update), mock.patch.object(updater, "update_adapters", side_effect=update):
             updater.run_apply("ubuntu")
-        self.assertEqual(seen[-2:], ["codex-cli", "t3-code"])
+        # ZCode and the ACP adapters update before the Codex daemon wait and T3's restart.
+        self.assertEqual(seen[-4:], ["zcode", "t3-acp-adapters", "codex-cli", "t3-code"])
         self.assertEqual(len(seen), len(common.APP_LABELS))
 
     def test_mac_archive_rejects_escape_paths_and_symlinks_before_extracting(self):
@@ -889,7 +891,7 @@ class T3Fixtures(unittest.TestCase):
             self.assertEqual(t3.cursor_agent_update(time.monotonic() - 1)["status"], "failed")
         command.assert_not_called()
 
-    def test_acp_updater_starts_from_the_row_only_when_no_restart_is_scheduled(self):
+    def test_acp_updater_is_left_to_the_zcode_rows_when_no_restart_is_scheduled(self):
         self.acp_unit()
         runtime = self.root / ".t3/runtime/versions" / NEW / "t3"
         install = t3.T3Install("t3-code", "ubuntu", runtime, NEW, runtime=runtime, runtime_version=NEW)
@@ -898,9 +900,14 @@ class T3Fixtures(unittest.TestCase):
             row = t3.update_t3(install, time.monotonic() + 60)
         self.assertEqual(row["status"], "current")
         argv = [call.args[0] for call in command.call_args_list]
-        self.assertIn(["/usr/bin/systemctl", "--user", "start", "--no-block", "t3-acp-update.service"], argv)
+        # The zcode and t3-acp-adapters rows already ran the unit and waited for it earlier in this job.
+        self.assertFalse(any("start" in call for call in argv))
         self.assertNotIn(["/usr/bin/systemctl", "--user", "daemon-reload"], argv)  # The unit query said "no".
-        self.assertEqual(self.components()["acpUpdater"], "started")
+        self.assertEqual(self.components()["acpUpdater"], "rows")
+        (self.root / ".config/systemd/user" / t3.ACP_UNIT).unlink()
+        with mock.patch.object(t3, "latest_release", return_value=NEW), mock.patch.object(t3, "command", side_effect=lambda argv, **kwargs: systemctl(argv)):
+            t3.update_t3(install, time.monotonic() + 60)
+        self.assertEqual(self.components()["acpUpdater"], "absent")
 
     def test_acp_updater_waits_for_the_verified_restart_when_one_is_scheduled(self):
         self.acp_unit()
@@ -945,7 +952,7 @@ class T3Fixtures(unittest.TestCase):
                 mock.patch.object(t3, "cli_probe", return_value=("2026.10.01-fixture", None)):
             row = t3.update_t3(install, time.monotonic() + 60)
         self.assertEqual((row["status"], row["messageCode"], row["version"], row["updateAttempted"]), ("current", "current", NEW, False))
-        self.assertEqual((self.components()["cursorAgent"]["status"], self.components()["acpUpdater"]), ("failed", "failed"))
+        self.assertEqual((self.components()["cursorAgent"]["status"], self.components()["acpUpdater"]), ("failed", "rows"))
 
     def test_muse_cmd_detection_versions_official_launcher_and_disables_auto_update(self):
         root = self.root / "local/Programs/muse"; root.mkdir(parents=True)

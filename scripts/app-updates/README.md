@@ -12,7 +12,7 @@ Nas1 is a second Ubuntu computer reached as `nas1-agent` (see [Nas1](#nas1-the-f
 Ubuntu, Mac, Windows and Nas1 run **at the same time**; each computer still
 updates its own apps one at a time (one installer per host). The job ends when
 the slowest computer finishes, so a busy or unreachable host never holds the
-others back. Four computers x eight apps give 32 result rows. Per-computer
+others back. Four computers x ten apps give 40 result rows. Per-computer
 progress is live: the helper prints one JSON line per event
 (`{"event":"app","appId":...,"phase":"checking"|"updating"}` and
 `{"event":"result","result":{...}}`) when the dashboard sets
@@ -42,7 +42,7 @@ Nothing can wait forever:
 
 The Python helper defaults to **read-only inventory**. Only `--apply` updates or
 restarts apps. It detects the active installation, skips absent apps, and returns
-one bounded, whitelist result for each of the eight fixed apps. It does not copy,
+one bounded, whitelist result for each of the ten fixed apps. It does not copy,
 modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
@@ -54,6 +54,8 @@ modify or export account credentials/configuration.
 | Claude Code | Active native `claude update` |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only (a turned-off repository reports `source_disabled`); Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
+| ZCode | Official release page and that release's CDN `latest.yml` (sha512 and size); Ubuntu/Nas1 through Jared's `t3-acp-update.service`; Mac verified ZIP swap (never quit); Windows same-signer NSIS installer with close, install and reopen (see [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)) |
+| T3 ACP adapters | `@brokkai/muse-acp` and `zcode-acp-server` from npm's `latest`, reported per package in `parts`; Ubuntu/Nas1 through the same unit run, Mac through Jared's `t3-acp-adapters-update`, Windows npm in `%APPDATA%\npm` |
 | T3 Code | One `t3-code` row per host covers its nightly desktop/bundled server and any installed standalone runtime; Ubuntu uses the native updater and a detached delayed server restart; Mac verifies SHA512, codesign and notarization before a bundle swap; Windows verifies SHA512 and the T3 Tools Inc Authenticode publisher before the silent NSIS installer |
 
 Nas1 is a second Ubuntu computer: wherever this table or the text below names
@@ -145,20 +147,22 @@ removed, and nothing is deleted when `service-state.json` is unreadable or names
 exact version. T3's own tool cache (`~/.t3/tools`, for example cloudflared) is not
 part of this: T3 downloads the tool version it pins on demand.
 
-Two companions run beside T3 on Ubuntu, best effort, and neither changes the
+Companions run beside T3 on Ubuntu, best effort, and none changes the
 `t3-code` row. The Cursor agent CLI behind T3's Cursor provider
 (`~/.local/bin/cursor-agent`, only when it resolves inside
 `~/.local/share/cursor-agent/versions`) runs its own `cursor-agent update` before
 any restart is scheduled. The Muse and ZCode ACP adapters and the extracted ZCode
-app are updated by Jared's own `t3-acp-update.service` user unit; this job only
-starts that unit, without waiting, and the unit keeps its own lock, deferrals and
-log (`~/.local/state/t3-acp-update/update.log`). When a restart is scheduled, the
-detached worker starts it right after the verified restart, because the restart has
-just stopped the running adapters; otherwise the helper starts it at once. The
-outcome goes to `t3-components.json` in the helper state directory: UTC time, the
-Cursor CLI before, after and status, the ACP updater status (`pending` until the
-worker starts it), the pruned versions and whether a reload ran. The detached
-worker also writes one line to its journal.
+app belong to their own rows now: the `zcode` and `t3-acp-adapters` rows run
+Jared's `t3-acp-update.service` and wait for it earlier in the same job (see
+[ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)), so the T3 row no
+longer starts it. When a T3 restart is scheduled, the detached worker still starts
+the unit, without waiting, right after the verified restart: the restart has just
+stopped the running adapters, so an update the unit deferred for them lands then.
+The outcome goes to `t3-components.json` in the helper state directory: UTC time,
+the Cursor CLI before, after and status, the ACP updater status (`rows` when the
+rows ran it in this job, `pending` until the worker starts it, then `started` or
+`failed`; `absent` without the unit), the pruned versions and whether a reload ran.
+The detached worker also writes one line to its journal.
 
 Hosts still run in parallel. Installers stay sequential within each host:
 T3's replacement closes its bundled server/process family, Windows installers
@@ -186,16 +190,17 @@ code instead of reporting `current`.
 
 Only the owner's explicitly authorized Update apps click should exercise real
 installers. Before that, read-only `--inventory --platform <host>` should show
-eight rows, full T3 nightly versions and Windows Muse's native manager/version.
-After an authorized click, confirm 32 result rows and simultaneous host progress.
+ten rows, full T3 nightly versions, Windows Muse's native manager/version, ZCode's
+version and the adapters' `parts`.
+After an authorized click, confirm 40 result rows and simultaneous host progress.
 When T3 updates, verify Mac/Windows bundle versions and port 3773 health, then
 wait until the completed job's scheduled Ubuntu restart has finished; inspect
 `t3 service status`, the detached unit journal, port 3773 and that
 `ccs-dashboard.service` remained active. Do not run this live check while agent
 work that must survive a T3 restart is in progress. For Nas1 (inventory there
-runs with `--platform ubuntu`) confirm its eight rows, that a T3 update there
+runs with `--platform ubuntu`) confirm its ten rows, that a T3 update there
 scheduled the restart of Nas1's own `t3code.service`, that
-`~/.ccs/app-updates/` on Nas1 holds the 12 synced helper files, and that Nas1
+`~/.ccs/app-updates/` on Nas1 holds the 13 synced helper files, and that Nas1
 has no AI Account Center package, command or service and no `~/.ccs` content
 beyond `app-updates/`.
 
@@ -327,6 +332,104 @@ and [startup lock](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/a
 implementations. Updating Codex can restart its coupled local desktop/server
 family even when only one Codex package changed.
 
+## ZCode and T3's ACP adapters
+
+Two rows cover what T3's Muse and ZCode providers run: `zcode` (the ZCode desktop
+app, manager `official-download`) and `t3-acp-adapters` (the npm packages
+`@brokkai/muse-acp` and `zcode-acp-server`, manager `npm`). Neither ever stops a T3
+session: when an update would replace files a running session uses, the row is
+`action_required` / `in_use` and nothing changes; Update apps finishes it after the
+session ends. Both run before the Codex CLI and T3, so T3's restart stays last.
+
+**ZCode versions and packages.** The installed version is read from files, never
+by running ZCode: the root `package.json` of `resources/app.asar` (`@zcode/desktop`;
+its header lists the whole node_modules, about 7 MB, so this reader allows 16 MiB
+where T3's keeps 2 MiB), `Info.plist` on the Mac (`dev.zcode.app`), and on Ubuntu
+t3-acp-update's `.installed-version` stamp when the asar is unreadable. It is
+detected at `~/.local/opt/zcode/app` (Ubuntu and Nas1, the extracted AppImage),
+`/Applications/ZCode.app` and `%LOCALAPPDATA%\Programs\ZCode\ZCode.exe`. The
+newest version is the highest one [zcode.z.ai/en](https://zcode.z.ai/en) lists as
+`releases/<version>/<platform>/latest.yml` for this computer (`linux-x64`,
+`macos-arm64`, `windows-x64` or their other architecture), compared numerically
+like t3-acp-update; ZCode's own `app-update.yml` names only a localhost
+placeholder. A ZCode at that version is `current` and nothing runs. Packages come
+from that release's `https://cdn-zcode.z.ai/zcode/electron/releases/<version>/<platform>/latest.yml`:
+its version must match, and the exact asset's sha512 and size bind the download
+(800 MiB and 10 minutes at most, within the host budget).
+
+**In use by T3** means a process of this user that is the zcode-acp-server adapter
+(`zcode-acp-server/dist/cli.js`), its child whose argv was rewritten to
+`zcode-cli` (no path to ZCode is left on that command line), or ZCode started as a
+CLI (`resources/glm/zcode.cjs`). Mac and Windows check again right before they
+replace anything.
+
+- **Ubuntu and Nas1.** Jared's `t3-acp-update.service` (a oneshot user unit running
+  `~/.local/bin/t3-acp-update`) updates both rows: it verifies and swaps ZCode,
+  keeping one backup, and installs both adapters with npm into `~/.local`, under
+  its own lock, deferrals and log (`~/.local/state/t3-acp-update/update.log`). The
+  helper starts it with a blocking `systemctl --user start` (10 minutes at most,
+  within the host budget; at the limit only the wait stops and the unit finishes
+  on its own) and runs it **once per job**: the first row that needs it runs it and
+  the other reads the result. The zcode row runs it when ZCode is behind and no
+  session uses ZCode; the adapters row runs it when an adapter is behind, unless
+  the zcode row already did or an adapter process (`muse-acp`,
+  `zcode-acp-server/dist/cli.js`, anything from either package folder) runs. Each
+  row then re-reads its own versions: newer is `updated`; unchanged while
+  something still runs from the app folder (ZCode) or an adapter runs is `in_use`,
+  because the unit defers then; otherwise the unit's failure code or
+  `update_failed`. Without `~/.config/systemd/user/t3-acp-update.service` both
+  rows are `failed` / `unsupported`.
+- **Mac.** A running ZCode (any process of the bundle that is not a CLI session)
+  reports `quit_first` before any download: like Codex and Claude, ZCode on the
+  Mac is never quit. A T3 session alone is `in_use`. Otherwise the ZIP is checked
+  like T3's: archive paths and symlinks before `ditto -x -k`, strict deep
+  `codesign`, the inline requirement `identifier "dev.zcode.app" and anchor apple
+  generic and certificate leaf[subject.OU] = "8A5X4JJ39T"`, `spctl` and the bundle
+  version. It is copied beside the app, checked again, checked for a ZCode opened
+  meanwhile (`quit_first`) and swapped in with an atomic rename; a failed final
+  check restores the old bundle. ZCode is not opened afterwards: it was not
+  running. The adapters live in `/opt/homebrew/lib/node_modules`; Jared's
+  `~/.local/bin/t3-acp-adapters-update` (his daily LaunchAgent runs it too)
+  installs both with Homebrew npm and is run and waited for, 5 minutes at most. It
+  does not defer, since macOS replaces files under running adapters safely, so an
+  unchanged result is `update_failed`; without the script the row is `unsupported`.
+- **Windows.** The NSIS installer (`ZCode-<version>-win-x64.exe`, or arm64)
+  downloads and is verified while ZCode keeps running: a valid Authenticode
+  signature whose signer subject equals that of the installed `ZCode.exe`, which
+  must be valid too and carry ZCode's registration number
+  `SERIALNUMBER=91110108MA01KP2T5U` (one PowerShell call that prints nothing; a
+  mismatch is `signature_failed` and nothing closes). Then it follows Windows Codex
+  and Claude: the running main instances are captured (one in another session is
+  `quit_first`, also before any download), closed with WM_CLOSE, a bounded 15 s
+  wait and an identity-checked stop of only ZCode's survivors (`forcedStops`), a
+  private copy of the install folder is kept, `/S` runs with T3's own wait and
+  tree kill, the asar version must equal the release, and every closed instance
+  reopens by path with its data-directory argument (`desktop_reopened`, restart
+  target `desktop`). A ZCode that was not running installs without opening
+  anything. A failed install restores the copy and reopens what closed (`failed`
+  with its code); a failed reopen after a good install is `restart_failed` with the
+  new version. `ZCode.exe` and the adapter's native `muse-acp.exe` are in the helper's Windows
+process list for this. The
+  adapters live in the global npm prefix `%APPDATA%\npm`. Windows cannot replace
+  files a running adapter holds, so a node process naming either package folder,
+  or anything running from one, is `in_use`; otherwise npm runs like the Codex
+  CLI's, without a shell: `node npm-cli.js install --global --prefix %APPDATA%\npm
+  @brokkai/muse-acp@latest zcode-acp-server@latest` (only installed packages are
+  named; 5 minutes at most).
+
+**Adapter rows.** The top-level versions stay null; `parts` lists `muse-acp` and
+`zcode-acp-server` once each with their previous and current versions (null for a
+package that is not installed). Neither package present is `not_installed`. npm's
+`latest` documents (`https://registry.npmjs.org/@brokkai%2fmuse-acp/latest`,
+`https://registry.npmjs.org/zcode-acp-server/latest`, 1 MiB at most) decide:
+every installed package at least that version is `current` and nothing runs. An
+`updated` row has at least one package whose version changed.
+
+**Unreadable sources.** When the ZCode page or the npm registry does not answer
+clearly, nothing runs and the row is `failed` / `update_failed`, as T3 and Claude
+Desktop report an unreadable release feed: nothing can be called current without
+it.
+
 ## Deployment and setup
 
 The server syncs every `app_update_*.py`, `app_updates.py`, and
@@ -364,7 +467,8 @@ does not prevent other apps/hosts from producing their own results. Status reads
 never retry an interrupted job.
 
 `action_required` is never a failure: the job completes and the row tells the
-user exactly what to do. Codex and Claude desktops on the Mac that are running report
+user exactly what to do. ZCode and the ACP adapters report `in_use` while a T3
+session uses them: nothing was changed, and Update apps finishes them later. Codex and Claude desktops on the Mac that are running report
 `quit_first` (they are never asked to quit): nothing is swapped while anything
 runs, and the next click after the user quits updates cleanly. On Windows they
 report `quit_first` only when an instance's start cannot be reproduced (see
@@ -386,7 +490,7 @@ running npm tree.
 
 Nas1 is a second Ubuntu computer reached over the fixed alias `nas1-agent`
 (label "Nas1"). Its rows are filed under their own computer, so one run returns
-4 computers x 8 apps = 32 result rows, with Nas1's progress beside the other
+4 computers x 10 apps = 40 result rows, with Nas1's progress beside the other
 three. It follows the Ubuntu rows of this guide except where noted here.
 
 - **Command.** `ssh nas1-agent` runs
@@ -397,7 +501,7 @@ three. It follows the Ubuntu rows of this guide except where noted here.
   `--state-dir` nor `--dashboard-job`; those belong to the dashboard's own
   Ubuntu run.
 - **Helper sync.** The `sha256sum` hash query and POSIX `tar` extract above fill
-  `~/.ccs/app-updates` (mode 0700) with 12 files: the 11 source helpers and the
+  `~/.ccs/app-updates` (mode 0700) with 13 files: the 12 source helpers and the
   generated Codex runtime below.
 - **Codex runtime.** Nas1 has no AI Account Center, so its Codex bridge loads
   the bundled `app_update_codex_runtime.cjs` that the sync ships beside the
@@ -410,8 +514,9 @@ three. It follows the Ubuntu rows of this guide except where noted here.
   user service waits for the helper to exit and 30 seconds, reloads Nas1's unit
   only when it is stale, restarts only Nas1's `t3code.service`, checks its health
   and that the server reports the installed version. Nas1 then prunes its old
-  runtimes, updates its Cursor CLI and starts its `t3-acp-update` unit, as the
-  Ubuntu rows above describe, where those are installed. Run without
+  runtimes and updates its Cursor CLI; its own `zcode` and `t3-acp-adapters` rows
+  run its `t3-acp-update` unit, and the worker starts it again after a T3 restart,
+  as the Ubuntu rows above describe, where those are installed. Run without
   `--dashboard-job`, it needs no dashboard job or lock.
 - **Antigravity.** Nas1 has no AI Account Center managed Antigravity runtime
   (that update branch needs `~/.ccs/antigravity-switching/runtime-installation.json`,
