@@ -31,7 +31,7 @@
     },
     {
       "path": "native_status_attestor.py",
-      "sha256": "ae3a2c512bb4ef6ffb4e4fbc78798ecc922e12a9f2041d01f217805b3a099285"
+      "sha256": "04771cb96924818c14b985e0d46df9d396a7609532a24c515f9528b5b8e1a43c"
     },
     {
       "path": "native_status_composition.py",
@@ -91,11 +91,11 @@
     },
     {
       "path": "resident_broker.py",
-      "sha256": "50d11793142f70c22de7bd87dc7c0ae3275fe72f649077f75b230013d111212e"
+      "sha256": "e8c3984734d7928a49f349d680230e143e665ac966004a4b5a48e2e8abc5b508"
     },
     {
       "path": "resident_main.py",
-      "sha256": "f26cce42b2c903dfdec229c75651f4894d6ce904f92ac8219e7d4b48e956af65"
+      "sha256": "a93842ec280f8263cbb4bb847802b0621c95d2fc100f220355ca1c46f5b7981d"
     },
     {
       "path": "runtime_continuity.py",

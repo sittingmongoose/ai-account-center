@@ -17,6 +17,7 @@ sys.path.insert(0,str(LIBRARY))
 # venv/lib/pythonX.Y, so a system Python upgrade cannot orphan them.
 PARSER=LIBRARY.parent/'parser'
 if PARSER.is_dir():sys.path.insert(0,str(PARSER))
+from native_status_attestor import StatusError
 from runtime_continuity import ContinuityError
 
 
@@ -70,5 +71,7 @@ if __name__ == '__main__':
     try:main()
     except ParserUnavailable as error:
         raise SystemExit('Managed Antigravity runtime failed: %s (runtime-parser-missing).'%error) from None
-    except (OSError, ContinuityError, ValueError):
+    except (ContinuityError, StatusError) as error:
+        raise SystemExit('Managed Antigravity runtime is unavailable (%s).'%error) from None
+    except (OSError, ValueError):
         raise SystemExit('Managed Antigravity runtime is unavailable.') from None

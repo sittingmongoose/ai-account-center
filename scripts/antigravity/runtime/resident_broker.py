@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_continuity import (ManagedPtyRuntime, ContinuityError, OwnedSession,
                                 conversation_id, digest, inspect_private, census_cli,
                                 APPROVAL_TTL_SECONDS, FORBIDDEN_REPLAY)
+from native_status_attestor import clear_stale_socket
 
 MAX_FRAME = 256 * 1024
 MAX_OUTPUT_QUEUE = 1024 * 1024
@@ -128,8 +129,8 @@ class ResidentBroker:
 
     def listen(self):
         private_directory(self.path.parent)
-        # Never unlink a preexisting socket: another broker may own a live PTY.
-        if self.path.exists() or self.path.is_symlink():raise ContinuityError('ipc-already-exists')
+        # Unlink only a dead leftover of this uid's socket; a live broker keeps its path.
+        if not clear_stale_socket(self.path):raise ContinuityError('ipc-already-exists')
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         old = os.umask(0o177)
         try:listener.bind(str(self.path))
