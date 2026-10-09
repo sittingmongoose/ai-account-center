@@ -14,7 +14,7 @@ import time
 import uuid
 
 from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command
-from app_update_processes import family, scan
+from app_update_processes import scan, user_family
 
 
 UUID = re.compile(r"^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
@@ -177,7 +177,8 @@ def restart_cli(install, contexts):
     if contexts:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            live = family(install, scan(install.platform))
+            # T3 sessions keep running through an update, so they never count as relaunched.
+            live = user_family(install, scan(install.platform))
             ids = {item.pid for item in live}
             if len([item for item in live if item.ppid not in ids]) >= len(contexts):
                 return sessions

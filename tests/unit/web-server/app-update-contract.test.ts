@@ -265,4 +265,68 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       .job!;
     expect(job.results).toEqual([inUse, adapters]);
   });
+
+  it('says a CLI update left running T3 sessions alone, only on an updated CLI row', () => {
+    const kept = {
+      status: 'updated',
+      messageCode: 't3_sessions_kept',
+      previousVersion: '2.1.294',
+      version: '2.1.295',
+      manager: 'native',
+      updateAttempted: true,
+      restartedProcesses: 1,
+      restartTargets: [
+        { kind: 'tmux', server: 'ccs-updates-0123456789ab', session: 'ccs-updated-claude-code-1' },
+      ],
+    };
+    const cli: UpdateAppId[] = ['antigravity-cli', 'muse-code', 'omp', 'codex-cli', 'claude-code'];
+    for (const platform of PLATFORMS)
+      for (const appId of cli) {
+        const row = normalizeAppUpdateRow({ ...kept, appId }, appId, platform);
+        expect(row).toMatchObject({ status: 'updated', version: '2.1.295', restartedProcesses: 1 });
+        expect(row.message).toBe(MESSAGES.t3_sessions_kept);
+        expect(row.message).toContain('keep the previous version until T3 starts them again');
+      }
+    // A failed, current or in-use row never claims it updated around T3 sessions.
+    for (const status of ['current', 'failed', 'restart_failed', 'action_required', 'skipped'])
+      expect(
+        normalizeAppUpdateRow({ ...kept, appId: 'claude-code', status }, 'claude-code', 'ubuntu')
+          .message
+      ).toBe(MESSAGES.helper_invalid);
+    // Desktop apps, ZCode, the adapters and T3 itself have their own flows and words.
+    for (const appId of [
+      'codex-desktop',
+      'claude-desktop',
+      'zcode',
+      't3-acp-adapters',
+      't3-code',
+    ] as const)
+      expect(normalizeAppUpdateRow({ ...kept, appId }, appId, 'mac').message).toBe(
+        MESSAGES.helper_invalid
+      );
+  });
+
+  it('names the CLI when a T3 session keeps Windows npm Codex from updating', () => {
+    const row = normalizeAppUpdateRow(
+      {
+        appId: 'codex-cli',
+        status: 'action_required',
+        messageCode: 'in_use',
+        previousVersion: '0.153.4',
+        version: '0.153.4',
+        manager: 'npm',
+        updateAttempted: false,
+        restartedProcesses: 0,
+      },
+      'codex-cli',
+      'windows'
+    );
+    expect(row).toMatchObject({
+      status: 'action_required',
+      updateAttempted: false,
+      forcedStops: 0,
+    });
+    expect(row.message).toBe(messageFor('in_use', 'codex-cli'));
+    expect(row.message).toContain('Codex CLI is in use (open, or running in a T3 session)');
+  });
 });

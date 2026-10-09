@@ -18,10 +18,10 @@ import uuid
 
 from app_update_common import (
     APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
-    powershell, private_temporary, ps_quote, resolve_npm, result, version_text, write_private_json,
+    powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
-from app_update_processes import cli_contexts, family, scan, terminate_cli
+from app_update_processes import cli_contexts, family, scan, t3_owned, terminate_cli
 from app_update_terminal import check_terminal, restart_cli
 from app_update_t3 import detect_t3, update_t3
 from app_update_zcode import detect_adapters, detect_zcode, update_adapters, update_zcode
@@ -152,6 +152,53 @@ def mark_unreviewed(row, reviewed):
             (reviewed is None or row.get("version") not in reviewed)):
         row["messageCode"] = "updated_unreviewed"
     return row
+
+
+# Claude Code's native updater and installer (claude.ai/install.sh) read the
+# newest version from these plain-text channel pointers. Reading them is
+# read-only; nothing named there is downloaded or run.
+CLAUDE_RELEASES = "https://downloads.claude.ai/claude-code-releases/"
+CLAUDE_VERSION = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}$")
+
+
+def claude_pointer(channel):
+    """One official channel pointer's version, or None when it does not answer clearly."""
+    import urllib.request
+    try:
+        request = urllib.request.Request(CLAUDE_RELEASES + channel, headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status != 200 or not response.geturl().startswith(CLAUDE_RELEASES):
+                return None
+            raw = response.read(65)
+        text = raw.decode("ascii").strip() if len(raw) <= 64 else ""
+        return text if CLAUDE_VERSION.fullmatch(text) else None
+    except Exception:
+        return None
+
+
+def latest_claude_version():
+    """The newer of the `latest` and `stable` pointers; None unless both are readable."""
+    found = [claude_pointer(channel) for channel in ("latest", "stable")]
+    return None if None in found else max(found, key=version_tuple)
+
+
+def claude_current(install, newest=None):
+    """A `current` row when native Claude Code is already the newest official build, else None.
+
+    Decided before any process scan or `claude update`, so a running instance can
+    never turn an install that has nothing to update into a failure. Any doubt
+    (unreadable pointers, an unusual version, a pending restart) returns None
+    and the usual checks run.
+    """
+    before = install.version
+    if install.app_id != "claude-code" or install.manager != "native" or not CLAUDE_VERSION.fullmatch(before or ""):
+        return None
+    if (pathlib.Path.home() / ".ccs/app-updates/claude-code-pending-restart.json").exists():
+        return None
+    newest = (newest or latest_claude_version)()
+    if newest is None or version_tuple(before) < version_tuple(newest):
+        return None
+    return result(install.app_id, install.platform, "current", before, before, install.manager)
 
 
 def _candidates(name, platform):
@@ -399,16 +446,24 @@ def update_cli(install, deadline):
             return payload
         if install.app_id == "muse-code" and install.platform == "windows":
             # T3's muse-acp adapter hosts `muse serve` from this folder: never stop or restart it.
-            contexts, targets = [], []
+            contexts, targets, t3_sessions = [], [], []
         else:
+            # cli_contexts leaves T3's own sessions out: they are never stopped or
+            # relaunched and keep running their current files through the update.
             contexts, targets = cli_contexts(install, processes)
+            t3_sessions = t3_owned(install, processes)
         check_terminal(install.platform, contexts)
         if install.manager == "npm" and install.platform == "windows":
-            if contexts and npm_view_latest(install) == before:
+            if (contexts or t3_sessions) and npm_view_latest(install) == before:
                 # Already current: never stop running sessions for a no-op.
                 # Anything mapped is running, so no stale marker can matter.
-                pending.unlink(missing_ok=True)
+                if contexts:
+                    pending.unlink(missing_ok=True)
                 return result(install.app_id, install.platform, "current", before, before, install.manager, attempted=False)
+            if t3_sessions:
+                # npm cannot replace files a running process holds open on
+                # Windows, and a T3 session is never stopped: change nothing.
+                return result(install.app_id, install.platform, "action_required", before, before, install.manager, "in_use")
             if contexts:
                 # Windows cannot replace a running npm tree (locked files fail
                 # the install), so mapped instances stop before npm runs. The
@@ -466,7 +521,9 @@ def update_cli(install, deadline):
             sessions = restart_cli(refreshed, contexts)
         except (UpdateFailure, OSError):
             return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", True)
-        value = result(install.app_id, install.platform, "updated", before, refreshed.version, install.manager, attempted=True, restarted=len(contexts))
+        # Running T3 sessions keep the previous version until T3 starts them again.
+        code = "t3_sessions_kept" if t3_sessions else None
+        value = result(install.app_id, install.platform, "updated", before, refreshed.version, install.manager, code, attempted=True, restarted=len(contexts))
         value.update(restartTargets=sessions, forcedStops=forced)
         pending.unlink(missing_ok=True)
         return value
@@ -514,6 +571,8 @@ def check_readiness(install):
         if install.app_id == "muse-code" and install.platform == "windows":
             # Never stopped or restarted on Windows (see update_cli), so nothing to check.
             return None
+        # Only the user's own instances are judged: T3 sessions are left out and
+        # one that exits during the check is dropped, never a failure.
         contexts, _targets = cli_contexts(install, scan(install.platform))
         check_terminal(install.platform, contexts)
     except UpdateFailure as error:
@@ -573,6 +632,14 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                         held = result(app_id, platform, "held", install.version, install.version, install.manager, "held_unchecked")
                     if held is not None:
                         report(held)
+                        continue
+                if app_id == "claude-code":
+                    try:
+                        newest = claude_current(install)
+                    except Exception:
+                        newest = None
+                    if newest is not None:
+                        report(newest)
                         continue
                 gate = check_readiness(install)
                 if gate is not None:

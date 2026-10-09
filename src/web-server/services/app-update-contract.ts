@@ -128,6 +128,8 @@ export const MESSAGES = {
   t3_restart_scheduled:
     'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect.',
   desktop_reopened: 'Updated: it closed, installed the update and reopened.',
+  t3_sessions_kept:
+    'Updated and restarted running terminal instances. Running T3 sessions were left alone and keep the previous version until T3 starts them again.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = [...DASHBOARD_HOSTS];
@@ -146,6 +148,14 @@ const STATUSES: UpdateResultStatus[] = [
 ];
 const MANAGERS = ['native', 'npm', 'brew', 'winget', 'msix', 'apt', 'official-download'];
 export const MAX_OUTPUT = 64 * 1024;
+/** The command-line apps whose running instances Update all relaunches in a terminal. */
+const CLI_APPS: readonly UpdateAppId[] = [
+  'antigravity-cli',
+  'muse-code',
+  'omp',
+  'codex-cli',
+  'claude-code',
+];
 
 export function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -361,7 +371,8 @@ export function normalizeAppUpdateRow(
     (code === 'desktop_reopened' && (!reopensDesktop || row.status !== 'updated')) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
-    (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated'))
+    (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated')) ||
+    (code === 't3_sessions_kept' && (!CLI_APPS.includes(appId) || row.status !== 'updated'))
   )
     return failure(platform, appId, 'helper_invalid');
   const heldVersion = held && code === 'held_for_review' ? safeVersion(row.heldVersion) : null;
