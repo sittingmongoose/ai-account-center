@@ -2,6 +2,8 @@
  * Other Codex or Claude copies beside a managed install. The helper names each one
  * with a fixed place word and a bounded version; nothing here reads a file or runs one.
  */
+import { record, safeVersion } from './app-update-values';
+
 export type AppUpdateStrayLocation = 'usr-local' | 'homebrew' | 'bun' | 'user-npm' | 'other';
 /** A copy beside its managed install; the helper sends only these fixed fields. */
 export interface AppUpdateStray {
@@ -64,4 +66,22 @@ function numericParts(version: string): number[] | null {
   const parts = version.split(/[-+]/)[0].split('.').map(Number);
   if (!parts.every((part) => Number.isInteger(part))) return null;
   return [...parts, ...Array<number>(VERSION_PARTS).fill(0)].slice(0, VERSION_PARTS);
+}
+
+/** At most four strays, each with a known location and a boolean; anything else is dropped. */
+export function normalizeStrays(value: unknown): AppUpdateStray[] {
+  const strays: AppUpdateStray[] = [];
+  for (const candidate of Array.isArray(value) ? value.slice(0, MAX_STRAYS) : []) {
+    const stray = record(candidate);
+    const location = stray?.location as AppUpdateStrayLocation | undefined;
+    if (
+      !stray ||
+      !location ||
+      !STRAY_LOCATIONS.includes(location) ||
+      typeof stray.shadows !== 'boolean'
+    )
+      continue;
+    strays.push({ location, version: safeVersion(stray.version), shadows: stray.shadows });
+  }
+  return strays;
 }
