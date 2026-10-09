@@ -571,7 +571,7 @@ class T3Fixtures(unittest.TestCase):
             self.assertIn("$o.Sid -ne $me -or -not $p.ExecutablePath", script)
             self.assertIn("StartTime.ToFileTimeUtc()", script)
             self.assertIn("session=[int]$p.SessionId", script)
-            return json.dumps([row for row in rows if pathlib.Path(row["exe"]).name in names])
+            return json.dumps({"rows": [row for row in rows if pathlib.Path(row["exe"]).name in names], "tree": ""})
         stopped = []
         def stop(_install, contexts):
             self.assertEqual([item.pid for item in contexts], [1])

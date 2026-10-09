@@ -5,12 +5,15 @@ replayed. Only same-user executables belonging to the detected installation
 qualify; a generic node/python/process-name match is never a control target.
 """
 
+import collections
 import ctypes
 import dataclasses
 import json
 import os
 import pathlib
+import re
 import subprocess
+import sys
 import time
 
 from app_update_common import UpdateFailure, command, environment, powershell
@@ -22,6 +25,11 @@ from app_update_common import UpdateFailure, command, environment, powershell
 T3_RUNTIME_VERSIONS = ".t3/runtime/versions"
 T3_MAC_BUNDLE = pathlib.Path("/Applications/T3 Code (Nightly).app")
 T3_WINDOWS_FOLDER = "Programs/t3code"
+
+# A terminal device on Linux (a pts or a virtual console) and on the Mac (ttys*).
+TTY_DEVICE = re.compile(r"/dev/(?:pts/[0-9]+|tty[A-Za-z0-9]*|console)")
+# Windows keeps the whole process table, at most this many entries, for ancestry only.
+LINEAGE_LIMIT = 16384
 
 
 @dataclasses.dataclass
@@ -35,6 +43,16 @@ class Process:
     cwd: str = dataclasses.field(default=None, repr=False)
     env: dict = dataclasses.field(default_factory=dict, repr=False)
     session: int = None
+
+
+class ProcessTable(list):
+    """Scanned processes; on Windows also `lineage`, every process's (parent PID, start time).
+
+    The Windows scan lists only app-relevant processes in full. Its lineage covers
+    every process, whatever its name, so T3 stays a visible ancestor however many
+    other processes (a shell, Git Bash) sit between it and a CLI.
+    """
+    lineage = None
 
 
 def linux_processes():
@@ -120,33 +138,40 @@ def mac_processes():
 
 def windows_processes():
     # CIM returns arguments privately to this local helper, never to CCS.
-    # cmd.exe is listed only so a CLI that T3 starts through a shell still has
-    # T3 as a visible ancestor (see t3_owned); it is never an app family member.
     # Anything running from the npm global tree counts whatever its name (a Muse native
     # helper, zcode-acp-martty's martty.exe): npm cannot replace those files either.
+    # `tree` is every process as "pid,parent,start;": no name, path or arguments. It
+    # keeps T3 a visible ancestor through any unlisted process (see ancestors).
     script = """$ErrorActionPreference='Stop';
 $me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
 $npm=[IO.Path]::Combine($env:APPDATA,'npm','node_modules');
-$rows=@(); foreach($p in Get-CimInstance Win32_Process){
+$rows=@(); $lineage=New-Object Text.StringBuilder; foreach($p in Get-CimInstance Win32_Process){
+ $born=0; if($p.CreationDate){$born=$p.CreationDate.ToFileTimeUtc()};
+ [void]$lineage.Append([string]$p.ProcessId+','+[string]$p.ParentProcessId+','+[string]$born+';');
  $tree=[bool]($p.ExecutablePath -and $p.ExecutablePath.StartsWith($npm,[StringComparison]::OrdinalIgnoreCase));
- if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe','ZCode.exe','muse-acp.exe','cmd.exe') -and -not $tree){continue};
+ if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe','ZCode.exe','muse-acp.exe') -and -not $tree){continue};
  $o=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue;
  if($o.Sid -ne $me -or -not $p.ExecutablePath){continue};
  try{$started=[Diagnostics.Process]::GetProcessById($p.ProcessId).StartTime.ToFileTimeUtc().ToString()}catch{continue};
  $rows+=@{pid=[int]$p.ProcessId;ppid=[int]$p.ParentProcessId;exe=$p.ExecutablePath;args=$p.CommandLine;identity=$started;session=[int]$p.SessionId}
-}; ConvertTo-Json -InputObject @($rows) -Compress -Depth 3"""
+}; ConvertTo-Json -InputObject @{rows=@($rows);tree=$lineage.ToString()} -Compress -Depth 4"""
     try:
         # This host-private process inventory can exceed a DTO's 64 KiB cap.
         # It stays in memory and is never emitted; final result stdout remains
         # under 64 KiB and excludes every argv/environment field.
-        rows = json.loads(powershell(script, timeout=20, capture_limit=2 * 1024 * 1024))
-        rows = rows if isinstance(rows, list) else [rows]
-        values = []
+        data = json.loads(powershell(script, timeout=20, capture_limit=2 * 1024 * 1024))
+        rows = data["rows"] if isinstance(data["rows"], list) else [data["rows"]]
+        values = ProcessTable()
         for row in rows[:2048]:
             args = windows_arguments(row.get("args") or "")
             values.append(Process(int(row["pid"]), int(row["ppid"]), 0, row["exe"], row["identity"], args, session=int(row["session"])))
+        values.lineage = {}
+        for entry in str(data.get("tree") or "").split(";")[:LINEAGE_LIMIT]:
+            parts = entry.split(",")
+            if len(parts) == 3 and all(part.isdigit() for part in parts):
+                values.lineage[int(parts[0])] = (int(parts[1]), int(parts[2]) or None)
         return values
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, AttributeError):
         raise UpdateFailure("restart_context") from None
 
 
@@ -303,6 +328,26 @@ def t3_servers(platform, processes):
     return found
 
 
+def ancestors(processes, item):
+    """item's ancestors' PIDs, nearest first, from the scan's whole process table where it kept one.
+
+    Windows reuses PIDs and never re-parents an orphan, so a parent PID whose
+    process started after its child names an unrelated process: the chain ends
+    there. A PID cycle ends it too, instead of looping.
+    """
+    table = getattr(processes, "lineage", None) or {row.pid: (row.ppid, None) for row in processes}
+    chain, seen = [], {item.pid}
+    current, started = item.ppid, table.get(item.pid, (None, None))[1]
+    while current in table and current not in seen:
+        parent, created = table[current]
+        if started is not None and created is not None and created > started:
+            break
+        chain.append(current)
+        seen.add(current)
+        current, started = parent, created
+    return chain
+
+
 def t3_owned(install, processes):
     """App-family processes that T3 started: T3's server or desktop is an ancestor in this table.
 
@@ -312,18 +357,7 @@ def t3_owned(install, processes):
     servers = t3_servers(install.platform, processes) if selected else set()
     if not servers:
         return []
-    parents = {item.pid: item.ppid for item in processes}
-    owned = []
-    for item in selected:
-        seen, current = set(), item.ppid
-        # A PID cycle (reuse on Windows) ends the walk instead of looping.
-        while current in parents and current not in seen:
-            if current in servers:
-                owned.append(item)
-                break
-            seen.add(current)
-            current = parents[current]
-    return owned
+    return [item for item in selected if any(pid in servers for pid in ancestors(processes, item))]
 
 
 def user_family(install, processes):
@@ -362,36 +396,171 @@ def cli_context(platform, item):
         item.cwd, item.env = windows_context(item.pid)
 
 
-def cli_contexts(install, processes):
-    """(main processes to relaunch, processes to stop) for the user's own CLI instances.
+# Runs in its own short-lived interpreter: a process attached to another console
+# receives that console's Ctrl+C and close events, which must never reach the helper.
+# argv is "pid:start" pairs; it prints the PIDs, still at that start, whose console
+# has a window the user sees: a classic console window, or the pseudo console window
+# of a Windows Terminal tab (visible itself, owned by the terminal's window). A
+# console made without a window (Node's windowsHide, CREATE_NO_WINDOW), a hidden one,
+# none at all, or another session's pseudo console has none.
+WINDOWS_CONSOLE_PROBE = """
+import ctypes, json, sys
+from ctypes import wintypes
+kernel, user = ctypes.windll.kernel32, ctypes.windll.user32
+kernel.GetConsoleWindow.restype = wintypes.HWND
+kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel.OpenProcess.restype = wintypes.HANDLE
+kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+user.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+user.GetWindow.restype = wintypes.HWND
+user.IsWindowVisible.argtypes = [wintypes.HWND]
+class FILETIME(ctypes.Structure):
+    _fields_ = [('low', wintypes.DWORD), ('high', wintypes.DWORD)]
+kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(FILETIME)] * 4
+def started(pid):
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    try:
+        times = [FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle, *[ctypes.byref(item) for item in times]):
+            return None
+        return str((times[0].high << 32) | times[0].low)
+    finally:
+        kernel.CloseHandle(handle)
+kernel.SetConsoleCtrlHandler(None, True)
+seen = []
+for value in sys.argv[1:]:
+    pid, identity = value.split(':', 1)
+    pid = int(pid)
+    kernel.FreeConsole()
+    if not kernel.AttachConsole(pid):
+        continue
+    try:
+        window = kernel.GetConsoleWindow()
+        owner = user.GetWindow(window, 4) if window else None
+        if window and (user.IsWindowVisible(window) or (owner and user.IsWindowVisible(owner))) and started(pid) == identity:
+            seen.append(pid)
+    finally:
+        kernel.FreeConsole()
+sys.stdout.write(json.dumps(seen))
+"""
 
-    T3-owned processes are left out entirely. A main process that exits between
-    the scan and its context read is dropped with its descendants; one that still
-    runs but cannot be read, or whose working directory is gone, fails closed.
+
+def terminal_attached(platform, items):
+    """PIDs of items attached to a terminal the user has, so a relaunch can reopen them there.
+
+    Ubuntu and the Mac: stdin and stdout are both a terminal device (a tmux pane,
+    an SSH session, Terminal). Windows: its console has a visible window in this
+    desktop session (a console window or a Windows Terminal tab). Anything else --
+    pipes or sockets (T3, an Agent SDK or ACP harness, `claude -p` from a script),
+    /dev/null (a service, cron), no visible console -- and anything that cannot be
+    read is not attached: such a process is left running, never stopped.
     """
-    selected = user_family(install, processes)
-    pids = {item.pid for item in selected}
-    mains, gone = [], set()
-    for item in (item for item in selected if item.ppid not in pids):
+    if not items:
+        return set()
+    if platform == "windows":
+        return windows_terminal_attached(items)
+    return {item.pid for item in items if (mac_terminal_attached if platform == "mac" else linux_terminal_attached)(item)}
+
+
+def linux_terminal_attached(item):
+    try:
+        stat = pathlib.Path("/proc", str(item.pid), "stat").read_text()
+        if stat[stat.rfind(")") + 2:].split()[19] != item.identity:
+            return False
+        return all(TTY_DEVICE.fullmatch(os.readlink("/proc/%d/fd/%d" % (item.pid, fd))) for fd in (0, 1))
+    except (OSError, IndexError):
+        return False
+
+
+def mac_terminal_attached(item):
+    # One process per call: lsof fails the whole call when any listed PID has exited.
+    try:
+        output = command(["/usr/sbin/lsof", "-a", "-p", str(item.pid), "-d", "0,1", "-F", "n"], timeout=10, capture=True)
+    except UpdateFailure:
+        return False
+    names, descriptor = {}, None
+    for line in output.splitlines():
+        if line.startswith("f"):
+            descriptor = line[1:]
+        elif line.startswith("n") and descriptor in ("0", "1"):
+            names[descriptor] = line[1:]
+    return all(TTY_DEVICE.fullmatch(names.get(fd, "")) for fd in ("0", "1"))
+
+
+def windows_terminal_attached(items):
+    # Window handles belong to one session: only this desktop session's processes are probed.
+    session = ctypes.c_ulong()
+    if not ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session)):
+        return set()
+    local = {item.pid: item for item in items if item.session == session.value}
+    python = pathlib.Path(sys.executable).with_name("python.exe")
+    if not local or not python.is_file():
+        return set()
+    try:
+        found = json.loads(command([python, "-I", "-c", WINDOWS_CONSOLE_PROBE, *("%d:%s" % (pid, item.identity) for pid, item in local.items())],
+                                   timeout=20, capture=True))
+    except (UpdateFailure, ValueError):
+        return set()
+    return {pid for pid in found if type(pid) is int and pid in local} if isinstance(found, list) else set()
+
+
+def descendants(roots, items):
+    """roots plus every item below them through parent links among items."""
+    found, grown = set(roots), bool(roots)
+    while grown:
+        grown = False
+        for item in items:
+            if item.pid not in found and item.ppid in found:
+                found.add(item.pid)
+                grown = True
+    return found
+
+
+CliInstances = collections.namedtuple("CliInstances", "contexts targets background")
+
+
+def cli_instances(install, processes):
+    """The user's terminal instances (main processes to relaunch, processes to stop) and the background sessions.
+
+    Only a main process attached to a terminal (see terminal_attached) is a
+    terminal instance: it is stopped and reopened idle in a new terminal. Every
+    other family process is a background session -- T3's own, a `claude -p` from
+    a script or cron, another harness's, a service's -- and has no terminal to
+    come back to: it is never read, stopped or relaunched and never fails the
+    readiness check. A terminal instance that exits between the scan and its
+    context read is dropped with its descendants; one that still runs but cannot
+    be read, or whose working directory is gone, fails closed.
+    """
+    selected = family(install, processes)
+    owned = {item.pid for item in t3_owned(install, processes)}
+    user = [item for item in selected if item.pid not in owned]
+    pids = {item.pid for item in user}
+    mains = [item for item in user if item.ppid not in pids]
+    attached = terminal_attached(install.platform, mains)
+    background = owned | descendants({item.pid for item in mains if item.pid not in attached}, user)
+    contexts, gone = [], set()
+    for item in (item for item in mains if item.pid in attached):
         try:
             cli_context(install.platform, item)
             readable = bool(item.cwd) and pathlib.Path(item.cwd).is_dir()
         except (UpdateFailure, OSError):
             readable = False
         if readable:
-            mains.append(item)
+            contexts.append(item)
         elif vanished(install.platform, item):
             gone.add(item.pid)
         else:
             raise UpdateFailure("restart_context")
-    grown = bool(gone)
-    while grown:
-        grown = False
-        for item in selected:
-            if item.pid not in gone and item.ppid in gone:
-                gone.add(item.pid)
-                grown = True
-    return mains, [item for item in selected if item.pid not in gone]
+    gone = descendants(gone, user)
+    return CliInstances(contexts, [item for item in user if item.pid not in gone and item.pid not in background],
+                        [item for item in selected if item.pid in background])
+
+
+def cli_contexts(install, processes):
+    """(main processes to relaunch, processes to stop) for the user's own terminal CLI instances."""
+    return tuple(cli_instances(install, processes)[:2])
 
 
 def terminate_cli(install, targets, grace=5):

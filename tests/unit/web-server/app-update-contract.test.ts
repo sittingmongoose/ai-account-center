@@ -423,6 +423,44 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       );
   });
 
+  it('says a CLI update left background sessions running; older T3-only rows still restore', () => {
+    const row = (messageCode: string, appId: UpdateAppId = 'claude-code', status = 'updated') =>
+      normalizeAppUpdateRow(
+        {
+          appId,
+          status,
+          messageCode,
+          previousVersion: '2.1.294',
+          version: '2.1.295',
+          manager: 'native',
+          updateAttempted: true,
+          restartedProcesses: 0,
+        },
+        appId,
+        'windows'
+      );
+    const kept = row('background_sessions_kept');
+    expect(kept).toMatchObject({ status: 'updated', version: '2.1.295', restartedProcesses: 0 });
+    expect(kept.message).toBe(MESSAGES.background_sessions_kept);
+    expect(kept.message).toContain('Background sessions (T3 and other runs without a terminal)');
+    expect(kept.message).toContain('keep the previous version until they are started again');
+    // Only an updated CLI row may say so, exactly as for the older T3-only code.
+    for (const status of ['current', 'failed', 'restart_failed', 'action_required', 'skipped'])
+      expect(row('background_sessions_kept', 'claude-code', status).message).toBe(
+        MESSAGES.helper_invalid
+      );
+    for (const appId of ['codex-desktop', 'zcode', 't3-acp-adapters', 't3-code'] as const)
+      expect(row('background_sessions_kept', appId).message).toBe(MESSAGES.helper_invalid);
+    // A job saved before the generalisation keeps its own words; both restore as themselves.
+    const legacy = row('t3_sessions_kept');
+    expect(legacy.message).toBe(MESSAGES.t3_sessions_kept);
+    const root = directory();
+    saveJob(root, { results: [kept, legacy], expectedResults: 40 });
+    const job = new AppUpdateService({ ccsDir: root, runHost: async () => payload() }).getStatus()
+      .job!;
+    expect(job.results).toEqual([kept, legacy]);
+  });
+
   it('names the CLI when a T3 session keeps Windows npm Codex from updating', () => {
     const row = normalizeAppUpdateRow(
       {

@@ -51,7 +51,7 @@ modify or export account credentials/configuration.
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
-| Claude Code | Active native `claude update` on its managed install (linked from `~/.local/bin/claude`); an install already at the newer of the official `latest` and `stable` pointers reports `current` before any process check (see [CLI instances and T3 sessions](#cli-instances-and-t3-sessions)); other copies are reported as strays |
+| Claude Code | Active native `claude update` on its managed install (linked from `~/.local/bin/claude`); an install already at the newer of the official `latest` and `stable` pointers reports `current` before any process check (see [CLI instances and background sessions](#cli-instances-and-background-sessions)); other copies are reported as strays |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only (a turned-off repository reports `source_disabled`); Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
 | ZCode | Official release page and that release's CDN `latest.yml` (sha512 and size); Ubuntu/Nas1 through the owner's `t3-acp-update.service`; Mac verified ZIP swap (never quit); Windows same-signer NSIS installer with close, install and reopen (see [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)) |
@@ -349,7 +349,8 @@ when `apt-cache policy` lists no package source for the Codex or Claude desktop
 package except the installed status file, the row is `action_required` /
 `source_disabled` and nothing is stopped or installed, never a false `current`.
 
-Updated interactive CLIs open new idle terminal instances. Ubuntu uses a private
+Updated CLIs that ran in a terminal open new idle terminal instances (only those:
+see [CLI instances and background sessions](#cli-instances-and-background-sessions)). Ubuntu uses a private
 `tmux -L ccs-updates-...` server; Mac uses Terminal; Windows uses Windows Terminal.
 An explicitly selected valid session UUID may be resumed. Original prompts,
 print/exec arguments, stdin and commands are never replayed. Existing cwd and
@@ -358,35 +359,76 @@ pipe restricted to the signed-in user SID to enter the new terminal. Original te
 conversation display do not migrate. Safe result `restartTargets` identifies new
 terminal/tmux sessions; authentication environment is never serialized.
 
-### CLI instances and T3 sessions
+### CLI instances and background sessions
 
-A CLI process that T3 started is **never stopped, relaunched or judged** by Update
-all. It belongs to T3 when T3's own server or desktop is one of its ancestors in
-the process table, recognised only by exact location: the standalone runtime
+Update all stops and reopens a CLI process only when it is a **terminal
+instance**: a main process of the app (one whose parent is not part of the app)
+that is attached to a terminal the user has, so an idle copy can be reopened in
+a terminal. Every other running CLI process is a **background session** and is
+**never stopped, relaunched or judged**: T3's agent sessions, a `claude -p` or
+`codex exec` from a script or cron job, another Agent SDK or ACP harness, a
+service. It has no terminal to come back to. Children of either kind go with it.
+
+What counts as attached to a terminal, checked per main process:
+
+- Ubuntu and Nas1: both `/proc/<pid>/fd/0` and `fd/1` are a terminal device
+  (`/dev/pts/N`, `/dev/ttyN`), and the process still has the start time the scan
+  read. Pipes, sockets, files and `/dev/null` are background: T3's Claude
+  sessions use sockets, Agent SDK and remote-control sessions use pipes, services
+  use `/dev/null`. A CLI in tmux, a desktop terminal or an SSH session has a pts.
+- Mac: `lsof -a -p <pid> -d 0,1` names a terminal device (`/dev/ttysNNN`) for both
+  descriptors, one `lsof` per process (it fails a whole call when any listed PID
+  has exited).
+- Windows: the process's console has a window the user sees in the helper's
+  desktop session. A short-lived `python.exe -I` child attaches to each console in
+  turn (so that console's Ctrl+C and close events can never reach the helper),
+  reads `GetConsoleWindow`, and reports the process when that window, or the
+  window that owns it, is visible and the process still has its scanned start
+  time. A Windows Terminal tab (also the default-terminal handoff of a new
+  console) shows as a visible `PseudoConsoleWindow` owned by the terminal's
+  window; a classic console window is visible itself. Node's `windowsHide` and
+  `CREATE_NO_WINDOW` consoles have no window, a hidden console's window is not
+  visible, a detached process has no console, and another session's processes
+  (an SSH session) are not probed: all background.
+
+Anything that cannot be read counts as background, so a doubt never stops a
+process. T3 sessions are recognised first and never even probed: a process
+belongs to T3 when T3's own server or desktop is one of its ancestors, recognised
+only by exact location: the standalone runtime
 `~/.t3/runtime/versions/<version>/t3` (Ubuntu, Nas1, the Mac), the Mac's
 `/Applications/T3 Code (Nightly).app` and Windows'
-`%LOCALAPPDATA%\Programs\t3code` (the Windows scan also lists `cmd.exe` so a CLI
-T3 starts through a shell still shows T3 above it). A process merely named `t3`
-elsewhere does not count. Its children (a `claude -p` an agent runs, for example)
-belong to T3 too. T3 sessions never fail the readiness check, are not counted
-when a relaunch is verified, and T3 is only ever restarted by its own `t3-code`
-row.
+`%LOCALAPPDATA%\Programs\t3code`. A process merely named `t3` elsewhere does
+not count. On Windows the scan keeps the whole process table as
+`pid,parent,start` triples (no names, paths or arguments; at most 16384 entries
+within the scan's 2 MiB private capture), so T3 stays a visible ancestor through
+any process between it, such as `claude.exe -> bash.exe -> claude.exe -p` from an
+agent's shell tool. Windows reuses PIDs and never re-parents an orphan, so a
+parent that started after its child ends the chain. T3 on Windows starts Claude
+Code directly: its Claude provider resolves the configured
+`~\.local\bin\claude.exe` and the Claude Agent SDK spawns it with piped stdio and
+`windowsHide`, no shell, as a child of the server that runs inside
+`T3 Code (Nightly).exe`.
 
-Where the update can replace files a session is running, it proceeds and the
-session keeps its old version until T3 starts it again: the row is `updated` /
-`t3_sessions_kept` ("Running T3 sessions were left alone and keep the previous
-version until T3 starts them again"), and only the user's own terminal instances
-are stopped and reopened. That holds for native installs everywhere: Claude Code
-on Ubuntu and the Mac writes `~/.local/share/claude/versions/<version>` and
-re-points its link, and on Windows its updater moves the running
-`~/.local/bin/claude.exe` aside (`claude.exe.old.<ms>.<pid>`) before placing the
-new one, as it must for its own running copy. Windows npm cannot replace a tree a
-running process holds open, so Codex CLI on Windows with a T3 session reports
+Where the update can replace files a background session is running, it
+proceeds and the session keeps its old version until it is started again: the
+row is `updated` / `background_sessions_kept` ("Background sessions (T3 and
+other runs without a terminal) were left running and keep the previous version
+until they are started again"), and only terminal instances are stopped and
+reopened. That holds for native installs everywhere: Claude Code on Ubuntu and
+the Mac writes `~/.local/share/claude/versions/<version>` and re-points its
+link, and on Windows its updater moves the running `~/.local/bin/claude.exe`
+aside (`claude.exe.old.<ms>.<pid>`) before placing the new one, as it must for
+its own running copy. Windows npm cannot replace a tree a running process holds
+open, so Codex CLI on Windows with a background session reports
 `action_required` / `in_use`, installs nothing and stops nothing, not even the
 user's own terminal Codex. Windows Muse keeps its own rule (never stopped). The
 Ubuntu Codex bridge still decides on its own when a `codex app-server` runs.
+Background sessions never fail the readiness check, and a relaunch is verified
+by counting only main processes that were not already running before it.
+Rows saved before this rule may carry the older `t3_sessions_kept` code, which
+still restores with its own words.
 
-A user's own instance that exits between the process scan and the read of its
+A terminal instance that exits between the process scan and the read of its
 working directory and environment is dropped with its children (gone from `/proc`,
 or its PID now has another start time; the Mac and Windows re-check its start
 identity); it is not a `restart_context` failure. One that still runs but cannot
@@ -582,7 +624,7 @@ never retry an interrupted job.
 `action_required` is never a failure: the job completes and the row tells the
 user exactly what to do. ZCode and the ACP adapters report `in_use` while a T3
 session uses them: nothing was changed, and Update apps finishes them later; so does
-Codex CLI on Windows (npm) while a T3 session runs it. Codex and Claude desktops on the Mac that are running report
+Codex CLI on Windows (npm) while a background session (T3's or any other) runs it. Codex and Claude desktops on the Mac that are running report
 `quit_first` (they are never asked to quit): nothing is swapped while anything
 runs, and the next click after the user quits updates cleanly. On Windows they
 report `quit_first` only when an instance's start cannot be reproduced (see
