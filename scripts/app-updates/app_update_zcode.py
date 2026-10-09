@@ -3,7 +3,8 @@
 ZCode comes only from its official release page and the CDN manifest of that
 exact release; the adapters only from npm's latest tags. Nothing here stops a
 T3 session: a row that would replace files a session uses reports
-action_required / in_use and changes nothing.
+action_required / in_use and leaves them as they were; an adapter that is free
+still updates on its own.
 """
 
 import contextlib
@@ -60,6 +61,8 @@ PART_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 SESSION_MARKERS = ("zcode-acp-server/dist/cli.js", "resources/glm/zcode.cjs")
 # The adapter names t3-acp-update's own deferral looks for.
 ADAPTER_NAMES = ("muse-acp", "muse-acp.cjs")
+# npm's words for a file a running program holds: Windows refuses to replace or remove it.
+LOCKED = re.compile(r"\b(?:EPERM|EBUSY)\b")
 # Rows that change nothing and tell the user what to do.
 ACTIONS = ("quit_first", "in_use")
 # The one t3-acp-update run of this helper process (one Update apps job); both Ubuntu rows share it.
@@ -252,16 +255,59 @@ def t3_sessions(processes):
     return found
 
 
-def adapter_processes(processes, root):
-    """Processes running either adapter: from its package folder, or by the names t3-acp-update's deferral uses."""
-    folders = [path_text(root / package) + "/" for package in PACKAGES.values()]
-    found = []
-    for item in processes:
-        texts = [path_text(value) for value in (item.exe, *item.args[:16])]
-        if (any(text.startswith(folder) for text in texts for folder in folders) or
-                any(pathlib.PurePosixPath(text).name in ADAPTER_NAMES or text.endswith(SESSION_MARKERS[0]) for text in texts[1:])):
-            found.append(item)
-    return found
+def adapter_owners(item, root):
+    """The adapter packages one process belongs to: its executable or early arguments inside a package folder
+    (any letter case, native subfolders such as native/x86_64-pc-windows-msvc too), or a name or session marker."""
+    texts = [path_text(value) for value in (item.exe, *item.args[:16])]
+    owners = {name for name, package in PACKAGES.items()
+              if any(text.startswith(path_text(root / package) + "/") for text in texts)}
+    if any(pathlib.PurePosixPath(text).name in ADAPTER_NAMES for text in texts[1:]):
+        owners.add("muse-acp")
+    if any(text.endswith(SESSION_MARKERS[0]) for text in texts[1:]):
+        owners.add("zcode-acp-server")
+    return owners
+
+
+def busy_packages(processes, root):
+    """The adapter packages a running process uses; npm cannot replace their files while it does."""
+    return {name for item in processes for name in adapter_owners(item, root)}
+
+
+def locked_here(output, name):
+    """Whether npm failed on files this package holds open: npm's error lines, not its warnings, carry EPERM
+    or EBUSY and name the package folder. A rollback that could not remove a folder is only a warning."""
+    text = output.replace("\\\\", "\\").replace("\\", "/")
+    errors = "\n".join(line for line in text.splitlines() if line.startswith("npm error"))
+    return (LOCKED.search(errors) is not None and
+            re.search(re.escape("node_modules/" + PACKAGES[name]) + r"(?![\w.@-])", errors, re.IGNORECASE) is not None)
+
+
+def npm_argv(node, cli, prefix, name, shell):
+    """One package's own global install: no other package rides along in the same npm run."""
+    argv = [str(node), str(cli), "install", "--global", "--prefix", str(prefix)]
+    if shell is not None:
+        argv += ["--script-shell", str(shell)]
+    return argv + [PACKAGES[name] + "@latest"]
+
+
+def git_bash():
+    """Git for Windows' bash.exe, the POSIX shell the adapters' postinstall scripts are written for; None when absent.
+
+    Only Git's own bin folder counts, never the WSL launcher in System32. cmd.exe, npm's default
+    script shell, cannot run `node x.js 2>/dev/null || true`: it cannot open /dev/null.
+    """
+    candidates = [pathlib.Path(os.environ[name]) / "Git/bin/bash.exe"
+                  for name in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)") if os.environ.get(name)]
+    if os.environ.get("LOCALAPPDATA"):
+        candidates.append(pathlib.Path(os.environ["LOCALAPPDATA"]) / "Programs/Git/bin/bash.exe")
+    located = shutil.which("git")
+    if located and len(pathlib.Path(located).parents) > 1:
+        candidates.append(pathlib.Path(located).parents[1] / "bin/bash.exe")
+    for candidate in candidates:
+        if (candidate.is_file() and candidate.parent.name.casefold() == "bin"
+                and candidate.parents[1].name.casefold() == "git"):
+            return candidate
+    return None
 
 
 def runs_from(processes, folder):
@@ -508,39 +554,43 @@ def update_zcode(install, deadline, phase=None):
                       "update_failed" if code == "download_blocked" else code, state["attempted"])
 
 
-def adapters_row(install, status, after=None, code=None, attempted=False):
-    """Top-level versions stay null: each adapter reports its own in parts."""
+def adapters_row(install, status, after=None, code=None, attempted=False, held=()):
+    """Top-level versions stay null: each adapter reports its own in parts. A part in held was behind and
+    skipped because it is in use: it keeps its installed version and carries inUse."""
     before = install.parts or {}
     after = before if after is None else after
     value = result("t3-acp-adapters", install.platform, status, None, None, "npm", code, attempted)
-    value["parts"] = [{"name": name, "previousVersion": before.get(name), "version": after.get(name)} for name in PACKAGES]
+    value["parts"] = [{"name": name, "previousVersion": before.get(name), "version": after.get(name),
+                       **({"inUse": True} if name in held else {})} for name in PACKAGES]
     return value
 
 
-def adapters_outcome(install, code, busy=None):
-    """updated when any adapter changed; otherwise in_use while one still runs, else failed."""
+def adapters_outcome(install, code, busy=None, behind=()):
+    """A behind adapter left unchanged while an adapter still runs is in_use; else updated when any changed; else failed."""
     after = read_parts(install.path)
-    if any(after[name] and after[name] != install.parts.get(name) for name in PACKAGES):
+    changed = [name for name in PACKAGES if after[name] and after[name] != install.parts.get(name)]
+    unchanged = [name for name in behind if name not in changed]
+    if unchanged and busy is not None and busy():
+        return adapters_row(install, "action_required", after, "in_use", True, unchanged)
+    if changed:
         return adapters_row(install, "updated", after, attempted=True)
-    if busy is not None and busy():
-        return adapters_row(install, "action_required", after, "in_use", True)
     return adapters_row(install, "failed", after, code or "update_failed", True)
 
 
-def adapters_ubuntu(install, deadline, phase, state, present):
+def adapters_ubuntu(install, deadline, phase, state, behind):
     if not acp_unit_present():
         raise UpdateFailure("unsupported")
-    busy = lambda: bool(adapter_processes(scan("ubuntu"), install.path))
+    busy = lambda: bool(busy_packages(scan("ubuntu"), install.path))
     # The zcode row may already have run t3-acp-update in this job; it never runs twice.
     if "code" not in UBUNTU_RUN and busy():
         raise UpdateFailure("in_use")
     phase("updating")
     code = run_unit(deadline)
     state["attempted"] = True
-    return adapters_outcome(install, code, busy)
+    return adapters_outcome(install, code, busy, behind)
 
 
-def adapters_mac(install, deadline, phase, state, present):
+def adapters_mac(install, deadline, phase, state, behind):
     script = pathlib.Path.home() / MAC_SCRIPT
     if not script.is_file():
         raise UpdateFailure("unsupported")
@@ -553,33 +603,51 @@ def adapters_mac(install, deadline, phase, state, present):
     except UpdateFailure as error:
         code = error.code
     # The script does not defer: macOS replaces files under running adapters safely.
-    return adapters_outcome(install, code)
+    return adapters_outcome(install, code, behind=behind)
 
 
-def adapters_windows(install, deadline, phase, state, present):
-    # Windows cannot replace files a running adapter holds, and T3 sessions are never stopped.
-    if adapter_processes(scan("windows"), install.path):
-        raise UpdateFailure("in_use")
+def adapters_windows(install, deadline, phase, state, behind):
+    """Each behind package installs in its own npm run, so none can block or roll back another.
+
+    A package a running adapter uses is held (in_use), and so is one npm reports EPERM or EBUSY on;
+    a package that is not behind is never installed. Lifecycle scripts run under Git for Windows'
+    bash when it is installed (git_bash), since zcode-acp-server's postinstall is a POSIX command.
+    """
     prefix = install.path.parent
-    resolved = resolve_npm(prefix)
-    if resolved is None:
+    busy = busy_packages(scan("windows"), install.path)
+    ready = [name for name in behind if name not in busy]
+    resolved = resolve_npm(prefix) if ready else None
+    if ready and resolved is None:
         raise UpdateFailure("unsupported")
-    node, cli = resolved
-    seconds = budget(deadline, NPM_SECONDS)
-    phase("updating")
-    state["attempted"] = True
-    try:
-        command([str(node), str(cli), "install", "--global", "--prefix", str(prefix),
-                 *(PACKAGES[name] + "@latest" for name in present)], timeout=seconds)
-        code = None
-    except UpdateFailure as error:
-        code = error.code
-    return adapters_outcome(install, code)
+    shell = git_bash() if ready else None
+    failed, held = {}, {name for name in behind if name in busy}
+    for name in ready:
+        phase("updating")
+        state["attempted"] = True
+        try:
+            command(npm_argv(*resolved, prefix, name, shell), timeout=budget(deadline, NPM_SECONDS), errors=True)
+        except UpdateFailure as error:
+            # npm's output is read here only, never shown: a lock on this package's files is in_use, not failed.
+            if locked_here(error.output, name):
+                held.add(name)
+            else:
+                failed[name] = error.code
+    after = read_parts(install.path)
+    changed = {name for name in behind if after.get(name) and after[name] != (install.parts or {}).get(name)}
+    held -= changed
+    for name in behind:
+        if name not in changed and name not in held and name not in failed:
+            failed[name] = "update_failed"  # npm finished, but this package's installed version did not move
+    if failed:
+        return adapters_row(install, "failed", after, next(iter(failed.values())), state["attempted"], held)
+    if held:
+        return adapters_row(install, "action_required", after, "in_use", state["attempted"], held)
+    return adapters_row(install, "updated", after, attempted=state["attempted"])
 
 
 def update_adapters(install, deadline, phase=None):
     phase = phase or (lambda name: None)
-    state = {"attempted": False}
+    state, behind = {"attempted": False}, []
     try:
         present = present_parts(install.path)
         if not present or not all((install.parts or {}).get(name) for name in present):
@@ -588,11 +656,13 @@ def update_adapters(install, deadline, phase=None):
         if None in latest.values():
             # Without the registry's answer nothing can be called current, so nothing runs.
             raise UpdateFailure("update_failed")
-        if all(version_tuple(latest[name]) <= version_tuple(install.parts[name]) for name in present):
+        # Only a package behind its latest is installed; one already current is never reinstalled.
+        behind = [name for name in present if version_tuple(latest[name]) > version_tuple(install.parts[name])]
+        if not behind:
             return adapters_row(install, "current")
-        return {"ubuntu": adapters_ubuntu, "mac": adapters_mac, "windows": adapters_windows}[install.platform](install, deadline, phase, state, present)
+        return {"ubuntu": adapters_ubuntu, "mac": adapters_mac, "windows": adapters_windows}[install.platform](install, deadline, phase, state, behind)
     except Exception as error:
         code = error.code if isinstance(error, UpdateFailure) else "update_failed"
         if code in ACTIONS:
-            return adapters_row(install, "action_required", code=code, attempted=state["attempted"])
+            return adapters_row(install, "action_required", code=code, attempted=state["attempted"], held=behind if code == "in_use" else ())
         return adapters_row(install, "failed", read_parts(install.path) if state["attempted"] else None, code, state["attempted"])

@@ -27,9 +27,11 @@ NO_AUTO_UPDATE = {
 
 
 class UpdateFailure(Exception):
-    def __init__(self, code="update_failed"):
+    def __init__(self, code="update_failed", output=""):
         super().__init__(code)
         self.code = code
+        # Diagnostic text for in-memory classification only; it is never emitted.
+        self.output = output
 
 
 @dataclasses.dataclass
@@ -84,21 +86,22 @@ def _stop_group(process):
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
-def _run_bounded(argv, timeout, env, capture, visible=False):
+def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False):
     """Run one fixed command with no TTY and no stdin, killed at its timeout.
 
     A new session means the child has no controlling terminal, so a prompt that
     opens /dev/tty fails at once instead of waiting forever; stdin is empty.
     On Windows a child gets no console window unless visible is set.
-    Returns (returncode, stdout bytes); raises subprocess.TimeoutExpired.
+    Returns (returncode, stdout bytes), with stderr appended when merge_errors is
+    set; raises subprocess.TimeoutExpired.
     """
     if os.name == "nt":
         options = {} if visible else {"creationflags": CREATE_NO_WINDOW}
     else:
         options = {"start_new_session": True}
     process = subprocess.Popen(
-        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL, env=env, **options,
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture or merge_errors else subprocess.DEVNULL,
+        stderr=subprocess.STDOUT if merge_errors else subprocess.DEVNULL, env=env, **options,
     )
     try:
         stdout, _ = process.communicate(timeout=timeout)
@@ -111,19 +114,21 @@ def _run_bounded(argv, timeout, env, capture, visible=False):
     return process.returncode, stdout or b""
 
 
-def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False):
+def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False):
+    """Run one fixed command; a non-zero exit raises UpdateFailure. errors keeps the run's stderr,
+    merged with its stdout, in the exception's output for in-memory classification only."""
     try:
         returncode, data = _run_bounded(
             [str(arg) for arg in argv], timeout,
-            dict(env) if preserve_env and env is not None else environment(env), capture, visible,
+            dict(env) if preserve_env and env is not None else environment(env), capture, visible, errors,
         )
     except subprocess.TimeoutExpired:
         raise UpdateFailure("timeout") from None
     except OSError:
         raise UpdateFailure("update_failed") from None
     if returncode != 0:
-        raise UpdateFailure()
-    if len(data) > min(2 * 1024 * 1024, capture_limit):
+        raise UpdateFailure(output=data.decode("utf-8", "replace")[-262144:] if errors else "")
+    if capture and len(data) > min(2 * 1024 * 1024, capture_limit):
         raise UpdateFailure()
     return data.decode("utf-8", "replace") if capture else ""
 

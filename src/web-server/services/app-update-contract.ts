@@ -37,6 +37,14 @@ export type UpdateResultStatus =
   | 'action_required'
   /** Not installed on purpose: the newest build is waiting for a review (Antigravity CLI). */
   | 'held';
+/** One ACP adapter on a `t3-acp-adapters` row. `inUse` is set only for a part that was behind and skipped
+ * because it is in use: it keeps its installed version, while another part may still have updated. */
+export interface AdapterPart {
+  name: 'muse-acp' | 'zcode-acp-server';
+  previousVersion: string | null;
+  version: string | null;
+  inUse?: true;
+}
 export interface AppUpdateResult {
   appId: UpdateAppId;
   appLabel: string;
@@ -52,11 +60,7 @@ export interface AppUpdateResult {
   /** The newest build a `held` row did not install, when the helper could read it. */
   heldVersion?: string;
   /** The two ACP adapters a `t3-acp-adapters` row covers; each carries its own versions. */
-  parts?: Array<{
-    name: 'muse-acp' | 'zcode-acp-server';
-    previousVersion: string | null;
-    version: string | null;
-  }>;
+  parts?: AdapterPart[];
   /** Other Codex or Claude copies beside a managed install; present only when there are some. */
   strays?: AppUpdateStray[];
   restartTargets: Array<{
@@ -273,12 +277,22 @@ export function normalizeAppUpdateResults(
 }
 
 /** A row's words; "quit first" and "in use" name the app, so the page says what to close. */
-function codeWords(code: MessageCode, appId: UpdateAppId): string {
+function codeWords(code: MessageCode, appId: UpdateAppId, parts: AdapterPart[]): string {
   if (code === 'quit_first')
     return `Quit ${UPDATE_APP_LABELS[appId]} to finish its update, then run Update apps again.`;
+  // An adapters row that holds a part names it; without one (a row saved before parts held) the words stay generic.
+  if (code === 'in_use' && appId === 't3-acp-adapters' && parts.some((part) => part.inUse === true))
+    return adapterInUseMessage(parts);
   if (code === 'in_use')
     return `${UPDATE_APP_LABELS[appId]} is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.`;
   return MESSAGES[code];
+}
+
+/** What a row's words may depend on besides its code: its strays, its own version and its adapter parts. */
+export interface MessageContext {
+  strays?: AppUpdateStray[];
+  version?: string | null;
+  parts?: AdapterPart[];
 }
 
 /**
@@ -288,10 +302,9 @@ function codeWords(code: MessageCode, appId: UpdateAppId): string {
 export function messageFor(
   code: MessageCode,
   appId: UpdateAppId,
-  strays: AppUpdateStray[] = [],
-  version: string | null = null
+  { strays = [], version = null, parts = [] }: MessageContext = {}
 ): string {
-  const words = codeWords(code, appId);
+  const words = codeWords(code, appId, parts);
   const older = olderShadow(strays, version);
   if (!older) return words;
   // Some words end without a full stop ("Skipped: cancelled"); the sentence needs one before it.
@@ -305,12 +318,11 @@ export function rowMessage(
   appId: UpdateAppId,
   code: MessageCode
 ): string {
-  return messageFor(
-    code,
-    appId,
-    rowStrays(row, appId),
-    safeVersion(row.version) ?? safeVersion(row.previousVersion)
-  );
+  return messageFor(code, appId, {
+    strays: rowStrays(row, appId),
+    version: safeVersion(row.version) ?? safeVersion(row.previousVersion),
+    parts: appId === 't3-acp-adapters' ? normalizeParts(row.parts) : [],
+  });
 }
 
 /** A row's strays: only Codex and Claude rows carry them, at most four, each with a known location and a boolean. */
@@ -332,10 +344,28 @@ function rowStrays(row: Record<string, unknown>, appId: UpdateAppId): AppUpdateS
   return strays;
 }
 
+/** Names each held adapter and says which one updated, so a row with a held part never claims nothing changed. */
+function adapterInUseMessage(parts: AdapterPart[]): string {
+  const held = parts.filter((part) => part.inUse === true).map((part) => part.name);
+  const updated = parts
+    .filter(
+      (part) =>
+        part.inUse !== true && part.version !== null && part.version !== part.previousVersion
+    )
+    .map((part) => `${part.name} updated`);
+  const names = held.join(' and ');
+  const state =
+    held.length === 1
+      ? `${names} is in use (open, or running in a T3 session), so it stayed at its installed version`
+      : `${names} are in use (open, or running in T3 sessions), so they stayed at their installed versions`;
+  const closing = held.length === 1 ? 'once it is closed' : 'once they are closed';
+  return [state, ...updated, `run Update apps again ${closing}`].join('; ') + '.';
+}
+
 const ACP_PARTS = ['muse-acp', 'zcode-acp-server'] as const;
 /** The adapter names are a closed set of two, each kept once, so a row has at most two parts. */
-function normalizeParts(value: unknown): NonNullable<AppUpdateResult['parts']> {
-  const parts: NonNullable<AppUpdateResult['parts']> = [];
+export function normalizeParts(value: unknown): AdapterPart[] {
+  const parts: AdapterPart[] = [];
   for (const candidate of Array.isArray(value) ? value : []) {
     const part = record(candidate);
     const name = part?.name as (typeof ACP_PARTS)[number] | undefined;
@@ -345,6 +375,8 @@ function normalizeParts(value: unknown): NonNullable<AppUpdateResult['parts']> {
       name,
       previousVersion: safeVersion(part.previousVersion),
       version: safeVersion(part.version),
+      // Only a boolean true marks a held part; any other value is ignored.
+      ...(part.inUse === true ? { inUse: true as const } : {}),
     });
   }
   return parts;

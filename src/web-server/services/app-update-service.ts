@@ -493,8 +493,8 @@ export class AppUpdateService {
           continue;
         // Saved rows keep only their words; map them back through rowMessage so a
         // row whose words name the app ("Quit Codex Desktop to finish its update")
-        // restores as itself instead of as helper_invalid. Its saved strays take
-        // part, so a Codex or Claude row with a shadowing copy restores too.
+        // restores as itself instead of as helper_invalid. Its saved strays and adapter
+        // parts take part, so a row whose words name a stray or a held part restores too.
         const appId = row.appId as UpdateAppId;
         const code =
           (Object.keys(MESSAGES) as MessageCode[]).find(
