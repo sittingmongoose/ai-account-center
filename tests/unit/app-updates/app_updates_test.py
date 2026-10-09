@@ -27,6 +27,16 @@ import app_update_confirmed_codex as confirmed
 import app_update_pipe as pipes
 
 
+# Real `apt-cache policy chatgpt` text: the VM's Codex repository is disabled, so only the installed status row remains.
+APT_POLICY_VM = ('chatgpt:\n  Installed: 26.930.51102\n  Candidate: 26.930.51102\n  Version table:\n'
+                 ' *** 26.930.51102 100\n        100 /var/lib/dpkg/status\n')
+# Nas1 after its update: the repository is enabled and the installed copy is also its candidate.
+APT_POLICY_NAS1 = ('chatgpt:\n  Installed: 26.1007.21434\n  Candidate: 26.1007.21434\n  Version table:\n'
+                   ' *** 26.1007.21434 500\n'
+                   '        500 https://persistent.oaistatic.com/codex-app-prod/linux/deb stable/main amd64 Packages\n'
+                   '        100 /var/lib/dpkg/status\n')
+
+
 class UpdaterTests(unittest.TestCase):
     def test_inventory_has_no_update_side_effect(self):
         installations = {key: None for key in common.APP_LABELS}
@@ -141,13 +151,41 @@ class UpdaterTests(unittest.TestCase):
     def test_untrusted_apt_origin_never_stops_or_installs(self):
         install = common.Install('codex-desktop', 'ubuntu', pathlib.Path('/usr/lib/chatgpt/ChatGPT'), '1.0.0', 'apt', 'chatgpt')
         def command(argv, **kwargs):
-            if 'policy' in argv: return 'Candidate: 2.0.0\n'
+            if 'policy' in argv: return 'Candidate: 2.0.0\n Version table:\n     2.0.0 500\n        500 https://impostor.test/deb stable/main amd64 Packages\n'
             if 'madison' in argv: return 'chatgpt | 2.0.0 | https://impostor.test/deb stable/main amd64 Packages'
             return ''
-        with mock.patch.object(desktop, 'command', side_effect=command), mock.patch.object(desktop, 'terminate_desktops') as stop:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(desktop, 'command', side_effect=command), mock.patch.object(desktop, 'terminate_desktops') as stop:
             value = desktop.update_linux(install)
         self.assertEqual(value['messageCode'], 'signature_failed')
         stop.assert_not_called()
+
+    def test_apt_sources_come_only_from_enabled_repositories(self):
+        self.assertEqual(desktop.apt_package_sources(APT_POLICY_VM), [])
+        self.assertEqual(desktop.apt_package_sources(APT_POLICY_NAS1), ['https://persistent.oaistatic.com/codex-app-prod/linux/deb'])
+        # A version row whose version is all digits must not read as a "500" source.
+        self.assertEqual(desktop.apt_package_sources('     2026 500\n'), [])
+
+    def test_disabled_apt_source_reports_source_disabled_and_never_reports_current(self):
+        install = common.Install('codex-desktop', 'ubuntu', pathlib.Path('/usr/lib/chatgpt/ChatGPT'), '26.930.51102', 'apt', 'chatgpt')
+        calls = []
+        def command(argv, **kwargs):
+            calls.append(list(argv))
+            return APT_POLICY_VM if 'policy' in argv else ''
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(desktop, 'command', side_effect=command), mock.patch.object(desktop, 'terminate_desktops') as stop:
+            value = desktop.update_linux(install)
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted'], value['version']),
+                         ('action_required', 'source_disabled', False, '26.930.51102'))
+        stop.assert_not_called()
+        self.assertFalse(any('madison' in argv or 'install' in argv for argv in calls))
+
+    def test_enabled_apt_source_with_the_installed_copy_as_candidate_is_current(self):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/usr/lib/claude-desktop/claude-desktop'), '26.1007.21434', 'apt', 'claude-desktop')
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(desktop, 'command', side_effect=lambda argv, **kwargs: APT_POLICY_NAS1 if 'policy' in argv else ''):
+            value = desktop.update_linux(install)
+        self.assertEqual(value['status'], 'current')
 
     def test_absent_apps_never_install(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value={key: None for key in common.APP_LABELS}), mock.patch.object(updater, 'perform_cli_update') as update:

@@ -37,6 +37,11 @@ MAC_TEAM = "ARK85ZXQ4Z"
 WINDOWS_NAME = "T3 Code (Nightly).exe"
 WINDOWS_PUBLISHER = "T3 Tools Inc"
 MAX_PACKAGE = 800 * 1024 * 1024
+# Read-only process table; tests point this at a fake one.
+PROC_ROOT = "/proc"
+ACP_UNIT = "t3-acp-update.service"
+PRUNE_LIMIT = 20
+COMPONENT_KEYS = ("utc", "cursorAgent", "acpUpdater", "prunedRuntimes", "daemonReload")
 
 
 @dataclasses.dataclass
@@ -461,9 +466,18 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
                         with os.fdopen(descriptor, "w") as output:
                             json.dump({"pid": os.getpid()}, output)
                         if marker.exists() and job_finished(root, dashboard):
+                            # Without a readable target version the restart cannot be verified; do not start one.
+                            expected = marker_version(marker)
+                            if expected is None:
+                                raise UpdateFailure("restart_failed")
+                            daemon_reload = reload_unit()
                             command(["/usr/bin/systemctl", "--user", "restart", "t3code.service"], timeout=60)
                             health_check("ubuntu")
+                            # A stale launcher can keep an old server up; keep the marker for a retry.
+                            if running_runtime_version() != expected:
+                                raise UpdateFailure("restart_failed")
                             marker.unlink(missing_ok=True)
+                            finish_ubuntu_restart(root, daemon_reload)
                             return
                     finally:
                         lock.unlink(missing_ok=True)
@@ -476,19 +490,259 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
     raise UpdateFailure("restart_failed")
 
 
+def reload_unit():
+    """Re-read t3code.service after the native updater rewrote it; a reload never restarts anything.
+
+    The updater rewrites the unit without a daemon-reload, so systemd keeps
+    starting the old launcher until one runs. Returns whether a reload ran.
+    """
+    try:
+        stale = command(["/usr/bin/systemctl", "--user", "show", "--property=NeedDaemonReload", "--value", "t3code.service"], timeout=10, capture=True)
+        if stale.strip() != "yes":
+            return False
+        command(["/usr/bin/systemctl", "--user", "daemon-reload"], timeout=30)
+        return True
+    except UpdateFailure:
+        return False
+
+
+def real_path(path):
+    # Unlike Path.resolve(), realpath never raises on a symlink loop.
+    return pathlib.Path(os.path.realpath(path))
+
+
+def runtime_under(path, versions):
+    """The runtime version directory that path lies in, or None."""
+    try:
+        parts = path.relative_to(versions).parts
+    except ValueError:
+        return None
+    return parts[0] if len(parts) > 1 else None
+
+
+def runtime_of(pid, versions):
+    """(version, argv) when a process runs a managed runtime's t3 binary, else None."""
+    try:
+        executable = pathlib.Path(os.readlink(os.path.join(PROC_ROOT, pid, "exe")).removesuffix(" (deleted)"))
+    except OSError:
+        return None
+    if executable.name != "t3" or executable.parent.parent != versions or not exact_version(executable.parent.name):
+        return None
+    try:
+        with pathlib.Path(PROC_ROOT, pid, "cmdline").open("rb") as stream:
+            argv = stream.read(4096).decode("utf-8", "replace").split("\0")
+    except OSError:
+        argv = []
+    return executable.parent.name, argv
+
+
+def child_pids(pid):
+    """Direct children of pid from the kernel's per-thread child lists; read-only and bounded."""
+    children = []
+    try:
+        tasks = sorted(os.listdir(os.path.join(PROC_ROOT, pid, "task")))[:64]
+    except OSError:
+        return children
+    for task in tasks:
+        try:
+            children += pathlib.Path(PROC_ROOT, pid, "task", task, "children").read_text(encoding="ascii").split()
+        except (OSError, UnicodeError):
+            continue
+    return [child for child in children[:256] if child.isdigit()]
+
+
 def running_runtime_version():
-    """Read the service's installed executable identity without restarting it."""
+    """Read which installed runtime the service runs, without restarting it.
+
+    The unit's main process is a launcher that starts the real server from the
+    runtime named in service-state.json, so for a launcher the server's version
+    is the one that matters.
+    """
     try:
         pid = command(["/usr/bin/systemctl", "--user", "show", "--property=MainPID", "--value", "t3code.service"], timeout=10, capture=True).strip()
         if not pid.isdigit() or int(pid) <= 1:
             return None
-        executable = pathlib.Path(os.readlink("/proc/" + pid + "/exe").removesuffix(" (deleted)"))
-        versions = pathlib.Path.home() / ".t3/runtime/versions"
-        if executable.name == "t3" and executable.parent.parent == versions:
-            return exact_version(executable.parent.name)
+        versions = real_path(pathlib.Path.home() / ".t3/runtime/versions")
+        main = runtime_of(pid, versions)
+        if main is None:
+            return None
+        if main[1][1:2] != ["__service-launcher"]:
+            return exact_version(main[0])
+        servers = set()
+        for child in child_pids(pid):
+            found = runtime_of(child, versions)
+            if found and found[1][1:2] == ["serve"]:
+                servers.add(found[0])
+        return servers.pop() if len(servers) == 1 else None
     except (UpdateFailure, OSError):
         pass
     return None
+
+
+def running_runtime_versions(versions):
+    """Runtime versions that a process of this user executes or names right now; None when /proc is unreadable."""
+    try:
+        with os.scandir(PROC_ROOT) as entries:
+            pids = [entry.name for entry in entries if entry.name.isdigit()]
+    except OSError:
+        return None
+    # A name ends at a slash, NUL or space, so a bare "<versions>/<v>" argument counts too.
+    pattern = re.compile(re.escape(str(versions) + "/") + r"([^/\x00\s]+)")
+    kept = set()
+    for pid in pids:
+        try:
+            executable = pathlib.Path(os.readlink(os.path.join(PROC_ROOT, pid, "exe")).removesuffix(" (deleted)"))
+            version = runtime_under(executable, versions)
+        except OSError:
+            # A non-dumpable helper hides its exe even from this user, but its argv still names its files.
+            version = None
+        if version:
+            kept.add(version)
+        try:
+            with pathlib.Path(PROC_ROOT, pid, "cmdline").open("rb") as stream:
+                text = stream.read(65536).decode("utf-8", "replace")
+        except OSError:
+            continue
+        kept.update(name for name in pattern.findall(text) if exact_version(name))
+    return kept
+
+
+def active_runtime_version(home):
+    try:
+        with (home / ".t3/runtime/service-state.json").open("rb") as stream:
+            state = json.loads(stream.read(65537))
+    except (OSError, ValueError):
+        return None
+    return exact_version(state.get("activeVersion")) if isinstance(state, dict) else None
+
+
+def real_directory(path):
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def prune_runtimes():
+    """Delete superseded managed runtimes on Ubuntu and return the names deleted.
+
+    Keeps the active version, the one ~/.local/bin/t3 resolves to, the newest
+    older version as one rollback copy, and any version a running process of
+    this user executes from or names in its command line. Symlinks are never
+    followed or removed, at most PRUNE_LIMIT directories go per run, and every
+    failure only deletes less.
+    """
+    home = pathlib.Path.home()
+    versions = real_path(home / ".t3/runtime/versions")
+    deleted = []
+    try:
+        active = active_runtime_version(home)
+        if active is None:
+            return deleted
+        running = running_runtime_versions(versions)
+        if running is None:
+            return deleted
+        keep = {active, runtime_under(real_path(home / ".local/bin/t3"), versions), *running}
+        older = sorted((name for name in os.listdir(versions) if exact_version(name) and version_key(name) < version_key(active)
+                        and real_directory(versions / name)), key=version_key)
+        if older:
+            keep.add(older[-1])
+        for name in [name for name in older if name not in keep][:PRUNE_LIMIT]:
+            try:
+                shutil.rmtree(versions / name)
+            except OSError:
+                continue
+            deleted.append(name)
+    except OSError:
+        pass
+    return deleted
+
+
+def cursor_agent_update(deadline):
+    """Update the Cursor agent CLI behind T3's Cursor provider; returns a fixed record and never raises."""
+    home = pathlib.Path.home()
+    link = home / ".local/bin/cursor-agent"
+    if not link.exists():
+        return {"before": None, "after": None, "status": "absent"}
+    if not real_path(link).is_relative_to(real_path(home / ".local/share/cursor-agent/versions")):
+        return {"before": None, "after": None, "status": "unmanaged"}
+    before = cli_probe(link)[0]
+    try:
+        command([link, "update"], timeout=budget(deadline, 180))
+    except UpdateFailure:
+        return {"before": before, "after": cli_probe(link)[0], "status": "failed"}
+    after = cli_probe(link)[0]
+    return {"before": before, "after": after, "status": "updated" if after and after != before else "current"}
+
+
+def acp_unit_present():
+    return (pathlib.Path.home() / ".config/systemd/user" / ACP_UNIT).exists()
+
+
+def start_acp_updater():
+    """Start Jared's own ACP/ZCode updater unit without waiting; it keeps its own lock, deferrals and log."""
+    if not acp_unit_present():
+        return "absent"
+    try:
+        command(["/usr/bin/systemctl", "--user", "start", "--no-block", ACP_UNIT], timeout=15)
+    except UpdateFailure:
+        return "failed"
+    return "started"
+
+
+def record_components(root, **values):
+    """Private record of the last Ubuntu companion outcome; only COMPONENT_KEYS are kept."""
+    path = root / "t3-components.json"
+    try:
+        previous = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        previous = {}
+    if not isinstance(previous, dict):
+        previous = {}
+    record = {key: previous.get(key) for key in COMPONENT_KEYS}
+    record.update(values)
+    record["utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    write_private_json(path, record)
+    return record
+
+
+def ubuntu_companions(root, deadline, restarting, daemon_reload):
+    """Ubuntu companions beside T3 (Cursor CLI, ACP updater, old runtimes); best effort.
+
+    Nothing here may change the t3-code row. A scheduled restart stops the
+    running adapters, so the detached worker prunes and starts the ACP updater
+    after its verified restart; until then the record says "pending".
+    """
+    try:
+        cursor = cursor_agent_update(deadline)
+        if restarting:
+            acp = "pending" if acp_unit_present() else "absent"
+            pruned = []
+        else:
+            acp = start_acp_updater()
+            pruned = prune_runtimes()
+        record_components(root, cursorAgent=cursor, acpUpdater=acp, prunedRuntimes=pruned, daemonReload=daemon_reload)
+    except Exception:
+        pass  # A companion bug must never change the T3 row.
+
+
+def finish_ubuntu_restart(root, daemon_reload):
+    """After a verified restart, in the detached worker: prune, start the ACP updater, record both."""
+    try:
+        pruned = prune_runtimes()
+        acp = start_acp_updater()
+        record_components(root, acpUpdater=acp, prunedRuntimes=pruned, daemonReload=daemon_reload)
+    except Exception:
+        return  # The restart already succeeded; these are best effort.
+    print("T3 companions: ACP updater " + acp + "; pruned " + (", ".join(pruned) or "none")
+          + "; daemon-reload " + ("yes" if daemon_reload else "no"), flush=True)
+
+
+def marker_version(marker):
+    try:
+        return exact_version(json.loads(marker.read_bytes()).get("version"))
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def update_t3(install, deadline, phase=None):
@@ -500,23 +754,32 @@ def update_t3(install, deadline, phase=None):
         version = latest_release()
         desktop_needed = install.desktop and version_key(version) > version_key(before)
         runtime_needed = install.runtime and version_key(version) > version_key(install.runtime_version)
-        pending = state_root() / "t3-code-pending-restart.json"
+        root = state_root()
+        pending = root / "t3-code-pending-restart.json"
         if not desktop_needed and not runtime_needed:
             if install.platform == "ubuntu" and pending.exists():
                 # A failed probe leaves intent behind. If an external restart
                 # already activated this exact version, no restart is needed.
                 if running_runtime_version() == install.runtime_version:
                     pending.unlink()
+                    ubuntu_companions(root, deadline, False, reload_unit())
                     return result("t3-code", "ubuntu", "current", before, before, install.manager)
                 value = result("t3-code", "ubuntu", "updated", before, before, install.manager, "t3_restart_scheduled")
+                ubuntu_companions(root, deadline, True, False)
                 value["restartTargets"] = [schedule_restart(before)]
                 return value
+            if install.platform == "ubuntu":
+                # A unit left stale by an earlier run is reloaded here, never restarted.
+                ubuntu_companions(root, deadline, False, reload_unit())
             return result("t3-code", install.platform, "current", before, before, install.manager)
         restarted = forced = 0
+        daemon_reload = False
         with private_temporary() as temporary:
             if runtime_needed:
                 attempted = True
                 update_runtime(install, version, deadline)
+                if install.platform == "ubuntu":
+                    daemon_reload = reload_unit()
                 if not install.desktop:
                     after = version
             if desktop_needed:
@@ -526,7 +789,12 @@ def update_t3(install, deadline, phase=None):
         code = "t3_restart_scheduled" if install.platform == "ubuntu" else "t3_updated"
         value = result("t3-code", install.platform, "updated", before, after, install.manager, code, attempted, restarted)
         value["forcedStops"] = forced
-        value["restartTargets"] = [schedule_restart(after)] if install.platform == "ubuntu" else ([{"kind": "desktop"}] if desktop_needed else [])
+        if install.platform == "ubuntu":
+            # Companions run before the restart is scheduled; the worker starts the ACP updater after it.
+            ubuntu_companions(root, deadline, True, daemon_reload)
+            value["restartTargets"] = [schedule_restart(after)]
+        else:
+            value["restartTargets"] = [{"kind": "desktop"}] if desktop_needed else []
         return value
     except UpdateFailure as error:
         # Rollback can itself fail (locked files, app refusing to close).
