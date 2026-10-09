@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import pty
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1790,5 +1791,135 @@ class AntigravityReviewHoldTests(unittest.TestCase):
             request.write_text(json.dumps(body))
             self.assertEqual(updater.read_task_request(request), expected, body)
         self.assertEqual(updater.read_task_request(self.root / 'missing.json'), (None, None))
+
+def _isolated_candidates():
+    """Only fixture folders are searched: this machine's /usr/local and Homebrew copies are never probed."""
+    real = updater._candidates
+    return mock.patch.object(updater, '_candidates', side_effect=lambda name, platform: [
+        path for path in real(name, platform) if not str(path).startswith(('/usr/local/', '/opt/homebrew/'))])
+
+
+class ManagedCliStrayTests(unittest.TestCase):
+    """A managed Codex or Claude install always wins; other copies are strays: reported, never updated."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix='ccs-update-managed-')
+        self.addCleanup(self.directory.cleanup)
+        self.root = pathlib.Path(self.directory.name)
+        self.home = self.root / 'home'
+        self.home.mkdir()
+        home = mock.patch.object(pathlib.Path, 'home', return_value=self.home)
+        home.start()
+        self.addCleanup(home.stop)
+
+    def managed_codex(self, release='0.162.0-x86_64-unknown-linux-musl', version='0.162.0'):
+        """The standalone layout: releases/<release>, current -> that release, and ~/.local/bin/codex -> current."""
+        binary = _script(self.home / '.codex/packages/standalone/releases' / release / 'bin/codex', f'echo "codex-cli {version}"')
+        (self.home / '.codex/packages/standalone/current').symlink_to(binary.parents[1])
+        link = self.home / '.local/bin/codex'
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(self.home / '.codex/packages/standalone/current/bin/codex')
+        return link
+
+    def stray(self, folder, version):
+        return _script(self.root / folder / 'codex', f'echo "codex-cli {version}"')
+
+    def detect(self, folders, app_id='codex-cli'):
+        with _isolated_candidates(), mock.patch.dict(os.environ, {'PATH': os.pathsep.join(str(folder) for folder in folders)}):
+            return updater.detect_cli(app_id, 'ubuntu')
+
+    def test_managed_install_wins_over_an_earlier_path_copy(self):
+        link = self.managed_codex()
+        install = self.detect([self.stray('stale', '0.153.4').parent, link.parent])
+        self.assertEqual((install.path, install.version), (link, '0.162.0'))
+        self.assertEqual(install.package_root, self.home / '.codex/packages/standalone/releases')
+        self.assertEqual(install.strays, [{'location': 'other', 'version': '0.153.4', 'shadows': True}])
+
+    def test_a_stray_later_on_path_is_reported_without_shadowing(self):
+        link = self.managed_codex()
+        install = self.detect([link.parent, self.stray('stale', '0.153.4').parent])
+        self.assertEqual(install.path, link)
+        self.assertEqual(install.strays, [{'location': 'other', 'version': '0.153.4', 'shadows': False}])
+
+    def test_a_stray_on_path_shadows_a_managed_install_that_is_not_on_path(self):
+        link = self.managed_codex()
+        install = self.detect([self.stray('stale', '0.153.4').parent])
+        self.assertEqual(install.path, link)
+        self.assertEqual(install.strays, [{'location': 'other', 'version': '0.153.4', 'shadows': True}])
+
+    def test_without_a_managed_install_detection_keeps_the_first_path_copy(self):
+        first = self.stray('first', '0.153.4')
+        install = self.detect([first.parent, self.stray('second', '0.160.0').parent])
+        self.assertEqual((install.path, install.version, install.strays), (first, '0.153.4', []))
+
+    def test_strays_are_capped_at_four_and_a_second_copy_of_the_managed_file_is_not_one(self):
+        link = self.managed_codex()
+        copies = [self.stray(f'copy{index}', f'0.15{index}.0') for index in range(6)]
+        install = self.detect([*(copy.parent for copy in copies), link.parent, link.parent])
+        self.assertEqual(install.path, link)
+        self.assertEqual(install.strays, [{'location': 'other', 'version': f'0.15{index}.0', 'shadows': True} for index in range(4)])
+
+    def test_a_hanging_stray_probe_is_bounded_and_reports_no_version(self):
+        link = self.managed_codex()
+        # The absolute interpreter: the fixture PATH has no /bin, so a bare `sleep` would fail at once.
+        hung = _script(self.root / 'hung/codex', f'exec {shlex.quote(sys.executable)} -c "import time; time.sleep(60)"')
+        started = time.monotonic()
+        with mock.patch.object(common, 'VERSION_PROBE_TIMEOUT', 1):
+            install = self.detect([hung.parent, link.parent])
+        elapsed = time.monotonic() - started
+        self.assertTrue(0.9 < elapsed < 8, elapsed)  # the probe timed out; it did not fail at once
+        self.assertEqual(install.path, link)
+        self.assertEqual(install.strays, [{'location': 'other', 'version': None, 'shadows': True}])
+
+    def test_claude_managed_install_wins_and_its_stray_is_reported(self):
+        managed = _script(self.home / '.local/share/claude/versions/2.1.295', 'echo "2.1.295 (Claude Code)"')
+        link = self.home / '.local/bin/claude'
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(managed)
+        install = self.detect([_script(self.root / 'stale/claude', 'echo "2.1.0 (Claude Code)"').parent, link.parent], app_id='claude-code')
+        self.assertEqual((install.path, install.version), (link, '2.1.295'))
+        self.assertEqual(install.package_root, self.home / '.local/share/claude/versions')
+        self.assertEqual(install.strays, [{'location': 'other', 'version': '2.1.0', 'shadows': True}])
+
+    def test_stray_locations_are_fixed_words_and_managed_matches_whole_folders_only(self):
+        self.assertEqual(updater._stray_location(pathlib.Path('/usr/local/bin/codex'), pathlib.Path('/usr/local/lib/node_modules/@openai/codex/bin/codex.js')), 'usr-local')
+        self.assertEqual(updater._stray_location(pathlib.Path('/opt/homebrew/bin/codex'), pathlib.Path('/opt/homebrew/Cellar/codex/1/bin/codex')), 'homebrew')
+        self.assertEqual(updater._stray_location(self.home / '.bun/bin/codex', self.home / '.bun/bin/codex'), 'bun')
+        self.assertEqual(updater._stray_location(self.home / '.npm-global/bin/codex', self.home / '.npm-global/lib/node_modules/@openai/codex/bin/codex.js'), 'user-npm')
+        self.assertEqual(updater._stray_location(self.home / 'bin/codex', self.home / 'bin/codex'), 'other')
+        self.assertTrue(updater._within(pathlib.Path('/x/versions/2.1.295'), pathlib.Path('/x/versions')))
+        self.assertFalse(updater._within(pathlib.Path('/x/versions-old/2.1.295'), pathlib.Path('/x/versions')))
+        link = self.managed_codex()
+        self.assertIsNone(updater._managed_copy('codex', 'windows', [link]))
+
+    def test_update_runs_the_managed_install_and_never_a_stray(self):
+        link = self.managed_codex()
+        install = self.detect([self.stray('stale', '0.153.4').parent, link.parent])
+        with mock.patch.object(updater, 'command', return_value='') as run:
+            updater.perform_cli_update(install)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], [link, 'update'])
+
+    def test_inventory_and_job_rows_name_the_strays_beside_the_managed_install(self):
+        link = self.managed_codex()
+        stale = self.stray('stale', '0.153.4')
+        stray = [{'location': 'other', 'version': '0.153.4', 'shadows': True}]
+
+        def detect_all(platform):
+            return {app_id: updater.detect_cli('codex-cli', platform) if app_id == 'codex-cli' else None for app_id in common.APP_LABELS}
+
+        with _isolated_candidates(), mock.patch.dict(os.environ, {'PATH': os.pathsep.join([str(stale.parent), str(link.parent)])}), \
+                mock.patch.object(updater, 'detect', side_effect=detect_all):
+            output = io.StringIO()
+            with mock.patch.object(sys, 'argv', ['helper', '--inventory', '--platform', 'ubuntu']), contextlib.redirect_stdout(output):
+                updater.main()
+            apps = {app['appId']: app for app in json.loads(output.getvalue())['apps']}
+            with mock.patch.object(updater, 'check_readiness', return_value=None), \
+                    mock.patch.object(updater, 'update_cli', side_effect=lambda install, deadline: common.result(install.app_id, 'ubuntu', 'current', install.version, install.version, install.manager, attempted=True)):
+                rows = {row['appId']: row for row in updater.run_apply('ubuntu')['results']}
+        self.assertEqual((apps['codex-cli']['version'], apps['codex-cli']['strays']), ('0.162.0', stray))
+        self.assertNotIn('strays', apps['claude-code'])
+        self.assertEqual((rows['codex-cli']['version'], rows['codex-cli']['strays']), ('0.162.0', stray))
+        self.assertNotIn('strays', rows['claude-code'])
 
 if __name__ == '__main__': unittest.main()

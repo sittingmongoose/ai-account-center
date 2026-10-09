@@ -46,6 +46,9 @@ class Install:
     # "timeout" when the read-only detection probe ran out of time: the app
     # is reported as "Check timed out", never as not installed or failed.
     probe: str = None
+    # Other copies beside a managed Codex or Claude install: fixed location word,
+    # bounded version and whether they shadow it on PATH. Set by app_updates.detect_cli.
+    strays: list = dataclasses.field(default_factory=list)
 
 
 def environment(extra=None):

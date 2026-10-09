@@ -18,6 +18,7 @@ import {
   messageFor,
   normalizeAppUpdateRow,
   PLATFORMS,
+  rowMessage,
 } from '../../../src/web-server/services/app-update-contract';
 
 const directories: string[] = [];
@@ -264,5 +265,134 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     const job = new AppUpdateService({ ccsDir: root, runHost: async () => payload() }).getStatus()
       .job!;
     expect(job.results).toEqual([inUse, adapters]);
+  });
+});
+
+describe('stray copies beside a managed Codex or Claude install', () => {
+  const sentence = (version: string, place = '/usr/local/bin', label = 'Codex CLI') =>
+    ` An older ${label} copy (${version}) in ${place} comes first on some PATHs; remove it so it never runs instead.`;
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    appId: 'codex-cli',
+    status: 'current',
+    messageCode: 'current',
+    previousVersion: '0.162.0',
+    version: '0.162.0',
+    manager: 'native',
+    updateAttempted: false,
+    restartedProcesses: 0,
+    ...overrides,
+  });
+  const copy = (version: string | null, shadows = true, location = 'usr-local') => ({
+    location,
+    version,
+    shadows,
+  });
+
+  it('keeps only fixed stray fields and names an older shadowing copy in one sentence', () => {
+    const value = normalizeAppUpdateRow(
+      row({
+        strays: [
+          {
+            location: 'usr-local',
+            version: '0.145.0',
+            shadows: true,
+            path: '/usr/local/bin/codex',
+          },
+          { location: '/usr/local/bin', version: '0.145.0', shadows: true },
+          { location: 'bun', version: 'latest', shadows: false },
+          { location: 'other', version: '0.150.0', shadows: 'yes' },
+        ],
+      }),
+      'codex-cli',
+      'mac'
+    );
+    expect(value.strays).toEqual([
+      { location: 'usr-local', version: '0.145.0', shadows: true },
+      { location: 'bun', version: null, shadows: false },
+    ]);
+    expect(value.message).toBe(MESSAGES.current + sentence('0.145.0'));
+    expect(JSON.stringify(value)).not.toContain('/usr/local/bin/codex');
+  });
+
+  it('caps strays at four and leaves a row without strays exactly as before', () => {
+    const strays = Array.from({ length: 6 }, (_, index) => copy(`0.1${index}.0`, false, 'other'));
+    expect(normalizeAppUpdateRow(row({ strays }), 'codex-cli', 'ubuntu').strays).toEqual(
+      strays.slice(0, 4)
+    );
+    const plain = normalizeAppUpdateRow(row(), 'codex-cli', 'ubuntu');
+    expect('strays' in plain).toBe(false);
+    expect(plain.message).toBe(MESSAGES.current);
+  });
+
+  it('names a copy only when it shadows the managed install and is older than the row version', () => {
+    const message = (value: Record<string, unknown>) =>
+      normalizeAppUpdateRow(value, 'codex-cli', 'mac').message;
+    // A newer copy is listed but never called older.
+    expect(message(row({ strays: [copy('0.170.0')] }))).toBe(MESSAGES.current);
+    // Behind the managed install on PATH: not shadowing.
+    expect(message(row({ strays: [copy('0.145.0', false)] }))).toBe(MESSAGES.current);
+    // Without a version it cannot be called older.
+    expect(message(row({ strays: [copy(null)] }))).toBe(MESSAGES.current);
+    expect(message(row({ strays: [copy('0.162.0')] }))).toBe(MESSAGES.current);
+    // Numbers compare as numbers: 0.9.0 is older than 0.10.0.
+    expect(
+      message(row({ strays: [copy('0.9.0')], previousVersion: '0.10.0', version: '0.10.0' }))
+    ).toBe(MESSAGES.current + sentence('0.9.0'));
+    // Words without a full stop get one before the sentence: a cancelled row reads "Skipped: cancelled."
+    expect(
+      message(
+        row({ strays: [copy('0.145.0')], status: 'skipped', messageCode: 'skipped_cancelled' })
+      )
+    ).toBe(MESSAGES.skipped_cancelled + '.' + sentence('0.145.0'));
+    // A failed row with no new version is compared against the version it started from.
+    expect(
+      message(
+        row({
+          strays: [copy('0.145.0')],
+          status: 'failed',
+          messageCode: 'update_failed',
+          version: null,
+        })
+      )
+    ).toBe(MESSAGES.update_failed + sentence('0.145.0'));
+  });
+
+  it('names a Claude Code copy with its own label and a fixed place', () => {
+    const value = normalizeAppUpdateRow(
+      row({
+        appId: 'claude-code',
+        version: '2.1.295',
+        previousVersion: '2.1.295',
+        strays: [copy('2.1.0', true, 'homebrew')],
+      }),
+      'claude-code',
+      'mac'
+    );
+    expect(value.message).toBe(
+      MESSAGES.current + sentence('2.1.0', 'the Homebrew bin folder', 'Claude Code')
+    );
+  });
+
+  it('never reads strays from another app row', () => {
+    const value = normalizeAppUpdateRow(
+      row({ appId: 'omp', strays: [copy('0.145.0')] }),
+      'omp',
+      'mac'
+    );
+    expect('strays' in value).toBe(false);
+    expect(value.message).toBe(MESSAGES.current);
+    expect(messageFor('current', 'codex-cli')).toBe(MESSAGES.current);
+  });
+
+  it('restores a saved Codex row with its strays and the same words from disk', () => {
+    const root = directory();
+    const saved = normalizeAppUpdateRow(row({ strays: [copy('0.145.0')] }), 'codex-cli', 'mac');
+    expect(rowMessage(JSON.parse(JSON.stringify(saved)), 'codex-cli', 'current')).toBe(
+      saved.message
+    );
+    saveJob(root, { results: [saved], expectedResults: 40 });
+    const job = new AppUpdateService({ ccsDir: root, runHost: async () => payload() }).getStatus()
+      .job!;
+    expect(job.results).toEqual([saved]);
   });
 });

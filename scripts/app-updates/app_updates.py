@@ -172,12 +172,97 @@ def _candidates(name, platform):
         # launcher shim; native version/help/update controls remain pass-through.
         if not (name == 'agy' and platform == 'ubuntu' and located == managed):
             paths.insert(0, located)
+    if platform != "windows" and name in MANAGED_RELEASES:
+        # Every PATH copy is a candidate, so a stray ahead on PATH is seen beside the managed install.
+        paths = list(dict.fromkeys(_path_copies(name) + paths))
     return paths
+
+
+# A managed Codex or Claude install is a release folder that its ~/.local/bin link
+# resolves into. Detection picks that copy whatever the PATH order. Any other copy
+# that resolves to a different file is a stray: probed and reported, never updated.
+MANAGED_RELEASES = {"codex": ".codex/packages/standalone/releases", "claude": ".local/share/claude/versions"}
+STRAY_LIMIT = 4
+
+
+def _path_copies(name):
+    """`name` in every PATH folder, in PATH order (an empty entry is the current folder, as in shutil.which)."""
+    return [pathlib.Path(folder or ".") / name for folder in os.environ.get("PATH", os.defpath).split(os.pathsep)]
+
+
+def _path_position(path):
+    """Where path's folder sits on this process's PATH (0 first), or None when it is not on PATH."""
+    folder = os.path.realpath(path.parent)
+    for index, entry in enumerate(os.environ.get("PATH", os.defpath).split(os.pathsep)):
+        if os.path.realpath(entry or ".") == folder:
+            return index
+    return None
+
+
+def _within(path, root):
+    """True when the resolved `path` is `root` itself or a file inside it (case-folded on Windows only)."""
+    text, base = os.path.normcase(str(path)), os.path.normcase(str(root))
+    return text == base or text.startswith(base + os.sep)
+
+
+def _managed_copy(name, platform, found):
+    """The first existing copy that resolves into this CLI's managed release folder, or None.
+
+    Windows and the other CLIs have no managed folder, so they always get None.
+    """
+    if platform == "windows" or name not in MANAGED_RELEASES:
+        return None
+    release = (pathlib.Path.home() / MANAGED_RELEASES[name]).resolve()
+    return next((path for path in found if _within(path.resolve(), release)), None)
+
+
+def _stray_location(path, resolved):
+    """One fixed word for where a stray sits; its folder is never reported."""
+    text, home = str(path), str(pathlib.Path.home())
+    if text.startswith("/usr/local/"):
+        return "usr-local"
+    if text.startswith(("/opt/homebrew/", "/home/linuxbrew/")):
+        return "homebrew"
+    if text.startswith(os.path.join(home, ".bun") + os.sep):
+        return "bun"
+    if text.startswith(home + os.sep) and "node_modules" in str(resolved):
+        return "user-npm"
+    return "other"
+
+
+def _strays(found, managed):
+    """The other copies that resolve to a file different from the managed install.
+
+    Each kept copy gets one bounded, read-only version probe, run side by side.
+    At most STRAY_LIMIT are kept, in PATH order. `shadows` is true when a copy comes
+    before the managed install on this PATH, or when that install is not on PATH at all.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    target = managed.resolve()
+    seen, copies = {target}, []
+    for path in found:
+        real = path.resolve()
+        if real not in seen and len(copies) < STRAY_LIMIT:
+            seen.add(real)
+            copies.append((path, real))
+    if not copies:
+        return []
+    managed_at = _path_position(managed)
+    with ThreadPoolExecutor(max_workers=len(copies)) as pool:
+        versions = list(pool.map(lambda item: cli_probe(item[0])[0], copies))
+    strays = []
+    for (path, real), version in zip(copies, versions):
+        at = _path_position(path)
+        strays.append({"location": _stray_location(path, real), "version": version,
+                       "shadows": at is not None and (managed_at is None or at < managed_at)})
+    return strays
 
 
 def detect_cli(app_id, platform):
     name = CLI_NAMES[app_id]
-    path = next((path for path in _candidates(name, platform) if path.is_file()), None)
+    found = [path for path in _candidates(name, platform) if path.is_file()]
+    managed = _managed_copy(name, platform, found)
+    path = managed if managed is not None else (found[0] if found else None)
     if path is None:
         return None
     manager, root = "native", None
@@ -220,7 +305,8 @@ def detect_cli(app_id, platform):
         root = home / ".codex/packages/standalone/releases"
     elif app_id == "claude-code" and os.path.normcase(str(home / ".local/share/claude/versions")) in resolved_text:
         root = home / ".local/share/claude/versions"
-    return Install(app_id, platform, path, version, manager, package_root=root)
+    strays = _strays(found, managed) if managed is not None else []
+    return Install(app_id, platform, path, version, manager, package_root=root, strays=strays)
 
 
 def _detect_one(app_id, platform):
@@ -542,6 +628,10 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     deadline = time.monotonic() + HOST_DEADLINE_SECONDS
 
     def report(row):
+        # A Codex or Claude row names the stray copies beside its managed install.
+        strays = getattr(installations.get(row.get("appId")), "strays", None)
+        if strays:
+            row["strays"] = strays
         results.append(row)
         emit({"event": "result", "result": row})
 
@@ -767,7 +857,8 @@ def main():
             installations = detect(args.platform)
             payload = {"inventory": True, "apps": [
                 {"appId": app_id, "installed": install is not None, "version": install.version if install else None, "manager": install.manager if install else None,
-                 **({"parts": install.parts} if getattr(install, "parts", None) is not None else {})}
+                 **({"parts": install.parts} if getattr(install, "parts", None) is not None else {}),
+                 **({"strays": install.strays} if getattr(install, "strays", None) else {})}
                 for app_id, install in installations.items()
             ]}
         elif args.platform == "windows" and not args.task_child:
