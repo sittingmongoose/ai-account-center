@@ -254,7 +254,18 @@ is unchanged and cheap: Windows reads only the published MSIX manifest over HTTP
 ranges (three requests, under 1 MB); Windows Codex first reads the app's own
 Microsoft Store feed (`codex-app-prod/windows-store-update.json`, product
 `9PLM9XGG6VKS`), because the direct MSIX stopped at 26.930.7945.0, and installs a
-newer Store build with `winget install --source msstore`. A current app keeps
+newer Store build with `winget install --source msstore`. Before anything closes,
+two read-only winget listings (30 s each at most) ask whether the Store offers
+that upgrade here: the installed listing must name `9PLM9XGG6VKS`, and the upgrade
+listing must exit 0 without naming it. When the Store offers nothing newer the row
+is `current` with `store_no_newer` ("Already current from the Microsoft Store: the
+Store offers no newer build to this computer yet.") and Codex is never closed. An
+unclear check still closes and installs as before; an install that then exits
+`0x8A15002B` (no applicable update) or `0x8A150061` (already installed) reopens
+Codex and reports the same current row, or `restart_failed` when Codex cannot
+reopen. Any other winget exit is `failed` with `update_failed`. winget reads no
+version for this Store product (`Version: Unknown`), so `store_no_newer` reports
+what winget and the Store say, not a comparison of versions. A current app keeps
 running, and an app that is not running installs without opening anything. The
 MSIX download and its verification finish while the app keeps running. Right
 before closing, the updater captures the running main instances again (the app

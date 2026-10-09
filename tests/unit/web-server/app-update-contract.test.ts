@@ -118,6 +118,36 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       );
   });
 
+  it('accepts store_no_newer only as a current Windows row for Codex', () => {
+    const noNewer = {
+      appId: 'codex-desktop',
+      status: 'current',
+      messageCode: 'store_no_newer',
+      previousVersion: '26.1002.7124.0',
+      version: '26.1002.7124.0',
+      manager: 'msix',
+      updateAttempted: false,
+      restartedProcesses: 0,
+    };
+    expect(normalizeAppUpdateRow(noNewer, 'codex-desktop', 'windows')).toMatchObject({
+      status: 'current',
+      manager: 'msix',
+      message: MESSAGES.store_no_newer,
+    });
+    // Only Codex on Windows names the Store check: every other computer and app is refused.
+    for (const platform of PLATFORMS.filter((value) => value !== 'windows'))
+      expect(normalizeAppUpdateRow(noNewer, 'codex-desktop', platform).message).toBe(
+        MESSAGES.helper_invalid
+      );
+    expect(normalizeAppUpdateRow(noNewer, 'claude-desktop', 'windows').message).toBe(
+      MESSAGES.helper_invalid
+    );
+    for (const status of ['failed', 'action_required', 'restart_failed', 'unknown'])
+      expect(
+        normalizeAppUpdateRow({ ...noNewer, status }, 'codex-desktop', 'windows').message
+      ).toBe(MESSAGES.helper_invalid);
+  });
+
   it('keeps parts only on the adapters row, one per known name, with safe versions', () => {
     const adapters = {
       appId: 't3-acp-adapters',

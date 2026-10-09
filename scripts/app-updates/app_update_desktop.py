@@ -37,6 +37,9 @@ CLAUDE_DARWIN_PREFIX = "https://downloads.claude.ai/releases/darwin/"
 # stopped moving at 26.930.7945.0. The app itself reads this feed for updates.
 CODEX_STORE_FEED = "https://persistent.oaistatic.com/codex-app-prod/windows-store-update.json"
 CODEX_STORE_ID = "9PLM9XGG6VKS"
+# winget exit codes (read unsigned) for a Store package with nothing newer to install here:
+# 0x8A15002B "No applicable update found" and 0x8A150061 "Found at least one version ... installed".
+WINGET_NO_NEWER = {0x8A15002B, 0x8A150061}
 
 
 def download_desktop(url, destination):
@@ -520,7 +523,7 @@ def reopen_windows(install, plans):
         time.sleep(.5)
 
 
-def windows_replace(install, before, deploy, accepted):
+def windows_replace(install, before, deploy, accepted, current_codes=()):
     """Install a newer package; a running app is closed first and reopened as each instance was started.
 
     The instances are captured right before closing (the app may have been
@@ -529,6 +532,8 @@ def windows_replace(install, before, deploy, accepted):
     a stop of only identity-checked family survivors (forcedStops). A failed
     close or install reopens what was closed from the old package, which is
     still registered; a failed reopen after a good install is restart_failed.
+    A failure code in current_codes means nothing newer was installed: once
+    reopened the row is current, not failed.
     """
     app_id, manager = install.app_id, install.manager
     try:
@@ -555,11 +560,19 @@ def windows_replace(install, before, deploy, accepted):
             raise UpdateFailure("version_unknown")
     except Exception as error:
         # Reopen from whatever package is registered now: the old one when the install failed.
+        reopened = 0
         with contextlib.suppress(Exception):
-            reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
+            reopened = reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
         code = error.code if isinstance(error, UpdateFailure) else "update_failed"
         # A needs-closing rejection even after the close still asks the user to quit.
-        return quit_first(install, before) if code == "quit_first" else result(app_id, "windows", "failed", before, before, manager, code, True)
+        if code == "quit_first":
+            return quit_first(install, before)
+        if code in current_codes:
+            # Nothing newer was installed, so the app is current; a reopen that failed is still reported.
+            if reopened != len(plans):
+                return result(app_id, "windows", "restart_failed", before, before, manager, "restart_failed", True)
+            return result(app_id, "windows", "current", before, before, manager, code, True, reopened)
+        return result(app_id, "windows", "failed", before, before, manager, code, True)
     try:
         restarted = reopen_windows(refreshed, plans)
     except Exception:
@@ -571,21 +584,53 @@ def windows_replace(install, before, deploy, accepted):
     return value
 
 
+def store_upgrade_state(winget):
+    """'available', 'none' or 'unknown' for a Store upgrade of Codex on this computer, read-only.
+
+    Two bounded listings: the installed one must name the product, and the upgrade
+    one must exit 0. Naming the product in the upgrade listing means available;
+    exiting 0 without naming it means none. Anything else is unknown, and the
+    install then decides as before. Product IDs are language-neutral; the
+    listing's wording is never parsed.
+    """
+    query = [winget, "list", "--id", CODEX_STORE_ID, "--exact", "--source", "msstore",
+             "--accept-source-agreements", "--disable-interactivity"]
+    try:
+        if CODEX_STORE_ID not in command(query, timeout=30, capture=True):
+            return "unknown"
+        listed = command([*query, "--upgrade-available"], timeout=30, capture=True)
+    except UpdateFailure:
+        return "unknown"
+    return "available" if CODEX_STORE_ID in listed else "none"
+
+
 def update_windows_store(install, phase):
-    """Install the newer Codex Store build through winget's msstore source, reopening a running Codex."""
+    """Install the newer Codex Store build through winget's msstore source, reopening a running Codex.
+
+    winget is asked first, read-only: when it offers no upgrade nothing closes and
+    the row is current. When the install itself reports nothing newer, the closed
+    Codex is reopened and the row is current as well.
+    """
     winget = shutil.which("winget.exe") or shutil.which("winget")
     if not winget:
         return result(install.app_id, "windows", "failed", install.version, install.version, install.manager, "unsupported")
+    if store_upgrade_state(winget) == "none":
+        return result(install.app_id, "windows", "current", install.version, install.version, install.manager, "store_no_newer")
     phase("updating")
 
     def deploy():
         # The Store verifies the package and upgrades the same OpenAI.Codex family in place.
-        command([winget, "install", "--id", CODEX_STORE_ID, "--source", "msstore", "--exact", "--silent",
-                 "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=900)
+        try:
+            command([winget, "install", "--id", CODEX_STORE_ID, "--source", "msstore", "--exact", "--silent",
+                     "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=900)
+        except UpdateFailure as error:
+            if error.exit_code is not None and (error.exit_code & 0xFFFFFFFF) in WINGET_NO_NEWER:
+                raise UpdateFailure("store_no_newer") from None
+            raise
 
     def accepted(refreshed):
         return refreshed.publisher == install.publisher and bool(refreshed.version) and version_tuple(refreshed.version) > version_tuple(install.version)
-    return windows_replace(install, install.version, deploy, accepted)
+    return windows_replace(install, install.version, deploy, accepted, current_codes=("store_no_newer",))
 
 
 def update_windows(install, phase=None):

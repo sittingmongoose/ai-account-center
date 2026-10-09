@@ -1029,6 +1029,7 @@ class DesktopWaitTests(unittest.TestCase):
         install = self._windows_codex()
         refreshed = common.Install('codex-desktop', 'windows', pathlib.Path('/fixture/ChatGPT.exe'), '26.1002.7124.0', 'msix', 'OpenAI.Codex', 'CN=fixture', pathlib.Path('/fixture'))
         with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
+                mock.patch.object(desktop, 'store_upgrade_state', return_value='available'), \
                 mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
                 mock.patch.object(desktop, 'command') as run, mock.patch.object(desktop, 'windows_package', return_value=refreshed), \
                 mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('stale MSIX downloaded')):
@@ -1040,6 +1041,7 @@ class DesktopWaitTests(unittest.TestCase):
     def test_windows_codex_store_install_that_changes_nothing_is_not_updated(self):
         install = self._windows_codex()
         with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
+                mock.patch.object(desktop, 'store_upgrade_state', return_value='available'), \
                 mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
                 mock.patch.object(desktop, 'command'), mock.patch.object(desktop, 'windows_package', return_value=install):
             value = desktop.update_windows(install)
@@ -1440,18 +1442,119 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.assertEqual(self.launches(), [self.aumid_launch()])
         self.assert_reopened(value, 1, forced=1)
 
+    # What winget says for the Store check: the installed listing names the product; the upgrade listing
+    # names it when the Store offers an upgrade, and otherwise exits 0 with no row for it.
+    LISTED = 'Name Id Version\nChatGPT 9PLM9XGG6VKS 26.1002.7124.0\n'
+    UPGRADE = 'Name Id Version Available Source\nChatGPT 9PLM9XGG6VKS 26.1002.7124.0 26.1007.2314.0 msstore\n'
+    NO_UPGRADE = 'No installed package found matching input criteria.\n'
+
+    def winget(self, listed=LISTED, upgrade=NO_UPGRADE, install=None):
+        """A fake winget: each listing answers its text or raises its failure; an install runs `install`."""
+        def run(argv, **kwargs):
+            if 'install' in argv:
+                if install is None:
+                    raise AssertionError('winget install was not expected')
+                return install(argv, **kwargs)
+            answer = upgrade if '--upgrade-available' in argv else listed
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+        return run
+
     def test_running_codex_store_build_closes_installs_through_winget_and_reopens(self):
         self.run_main()
-        def winget(argv, **kwargs):
+        def install(argv, **kwargs):
             self.assertEqual(argv[:6], ['C:/winget.exe', 'install', '--id', '9PLM9XGG6VKS', '--source', 'msstore'])
             self.install(None)
         with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
                 mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
-                mock.patch.object(desktop, 'command', side_effect=winget):
+                mock.patch.object(desktop, 'command', side_effect=self.winget(upgrade=self.UPGRADE, install=install)):
             value = desktop.update_desktop(self.package(self.old_root, self.OLD))
         self.assertEqual(self.events, ['close', 'install', 'launch'])
         self.assertEqual(self.launches(), [self.aumid_launch()])
         self.assert_reopened(value, 1)
+
+    def test_running_codex_with_no_store_upgrade_is_current_and_never_closed(self):
+        self.run_main()
+        with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
+                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
+                mock.patch.object(desktop, 'command', side_effect=self.winget()) as run:
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.launched, [])
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['previousVersion']), ('current', 'store_no_newer', self.OLD, self.OLD))
+        self.assertEqual((value['updateAttempted'], value['restartedProcesses']), (False, 0))
+        # The two listings ran and nothing else: no install was asked for.
+        self.assertEqual([call.args[0][1] for call in run.call_args_list], ['list', 'list'])
+
+    def test_unclear_store_check_installs_and_a_nothing_newer_answer_reopens_codex_as_current(self):
+        self.run_main()
+        def install(argv, **kwargs):
+            raise common.UpdateFailure(exit_code=0x8A15002B)
+        with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
+                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
+                mock.patch.object(desktop, 'command', side_effect=self.winget(listed=common.UpdateFailure('timeout'), install=install)):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual(self.events, ['close', 'launch'])
+        self.assertEqual(self.launches(), [self.aumid_launch()])
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted'], value['restartedProcesses']), ('current', 'store_no_newer', self.OLD, True, 1))
+
+    def test_store_install_that_really_fails_stays_failed_and_reopens_codex(self):
+        self.run_main()
+        def install(argv, **kwargs):
+            raise common.UpdateFailure(exit_code=1)
+        with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
+                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
+                mock.patch.object(desktop, 'command', side_effect=self.winget(upgrade=self.UPGRADE, install=install)):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual(self.events, ['close', 'launch'])
+        self.assertEqual(self.launches(), [self.aumid_launch()])
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('failed', 'update_failed', self.OLD, True))
+
+    def test_store_nothing_newer_that_cannot_reopen_codex_reports_restart_failed(self):
+        self.run_main()
+        def install(argv, **kwargs):
+            raise common.UpdateFailure(exit_code=0x8A150061)
+        with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
+                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
+                mock.patch.object(desktop, 'reopen_windows', side_effect=common.UpdateFailure('restart_failed')), \
+                mock.patch.object(desktop, 'command', side_effect=self.winget(upgrade=self.UPGRADE, install=install)):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual(self.events, ['close'])
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('restart_failed', 'restart_failed', True))
+
+    def test_store_check_says_available_only_when_the_upgrade_listing_names_codex(self):
+        timed_out = common.UpdateFailure('timeout')
+        cases = [
+            (self.LISTED, self.UPGRADE, 'available'),
+            (self.LISTED, self.NO_UPGRADE, 'none'),
+            (self.NO_UPGRADE, self.UPGRADE, 'unknown'),  # the installed listing does not name Codex
+            (timed_out, self.UPGRADE, 'unknown'),
+            (self.LISTED, timed_out, 'unknown'),
+            (self.LISTED, common.UpdateFailure(exit_code=1), 'unknown'),
+        ]
+        for listed, upgrade, state in cases:
+            with self.subTest(state=state), mock.patch.object(desktop, 'command', side_effect=self.winget(listed=listed, upgrade=upgrade)):
+                self.assertEqual(desktop.store_upgrade_state('C:/winget.exe'), state)
+
+    def test_store_check_is_two_bounded_listings_and_never_an_install(self):
+        with mock.patch.object(desktop, 'command', side_effect=self.winget()) as run:
+            self.assertEqual(desktop.store_upgrade_state('C:/winget.exe'), 'none')
+        self.assertEqual(len(run.call_args_list), 2)
+        for call in run.call_args_list:
+            argv = call.args[0]
+            self.assertEqual(argv[1], 'list')
+            self.assertNotIn('install', argv)
+            self.assertLessEqual(call.kwargs['timeout'], 30)
+            self.assertTrue(call.kwargs['capture'])
+        self.assertEqual(run.call_args_list[0].args[0][2:], ['--id', '9PLM9XGG6VKS', '--exact', '--source', 'msstore', '--accept-source-agreements', '--disable-interactivity'])
+        self.assertEqual(run.call_args_list[1].args[0][-1], '--upgrade-available')
+
+    def test_a_failed_command_keeps_the_exit_code_it_returned(self):
+        with mock.patch.object(common, '_run_bounded', return_value=(0x8A15002B, b'')):
+            with self.assertRaises(common.UpdateFailure) as caught:
+                common.command(['winget.exe', 'install'])
+        self.assertEqual((caught.exception.code, caught.exception.exit_code), ('update_failed', 0x8A15002B))
 
     def test_claude_reopens_its_default_by_aumid_and_named_profiles_from_the_new_exe(self):
         self.use('claude-desktop')
