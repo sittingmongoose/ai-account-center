@@ -116,6 +116,7 @@ export const MESSAGES = {
   t3_updated: 'Updated T3 Code and its installed server runtime.',
   t3_restart_scheduled:
     'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect.',
+  desktop_reopened: 'Updated: it closed, installed the update and reopened.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = [...DASHBOARD_HOSTS];
@@ -272,8 +273,11 @@ export function normalizeAppUpdateRow(
       ? row.forcedStops
       : 0;
   // The Linux computers (Ubuntu and Nas1) restart T3 through its systemd service;
-  // the Mac and Windows restart its desktop app.
+  // the Mac and Windows restart its desktop app. Windows alone also closes and
+  // reopens a running Codex or Claude desktop app; the Mac asks to quit first.
   const linux = HOST_OS[platform] === 'linux';
+  const reopensDesktop =
+    HOST_OS[platform] === 'windows' && (appId === 'codex-desktop' || appId === 'claude-desktop');
   const targets: AppUpdateResult['restartTargets'] = [];
   for (const candidate of (Array.isArray(row.restartTargets) ? row.restartTargets : []).slice(
     0,
@@ -282,7 +286,7 @@ export function normalizeAppUpdateRow(
     const target = record(candidate);
     if (target?.kind === 'terminal' || target?.kind === 'windows-terminal')
       targets.push({ kind: target.kind });
-    else if (target?.kind === 'desktop' && appId === 't3-code' && !linux)
+    else if (target?.kind === 'desktop' && ((appId === 't3-code' && !linux) || reopensDesktop))
       targets.push({ kind: 'desktop' });
     else if (
       target?.kind === 'systemd' &&
@@ -317,6 +321,7 @@ export function normalizeAppUpdateRow(
       (appId !== 't3-code' || row.status !== 'updated')) ||
     (code === 't3_restart_scheduled' &&
       (!linux || !targets.some((target) => target.kind === 'systemd'))) ||
+    (code === 'desktop_reopened' && (!reopensDesktop || row.status !== 'updated')) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated'))

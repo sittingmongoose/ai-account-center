@@ -95,7 +95,7 @@ Both desktops close only the captured T3 process family, reopen in the user's
 desktop session and check `http://127.0.0.1:3773/`. The Windows flow reuses the
 existing `CCS App Updates` InteractiveToken task and process/session guards.
 This explicit T3 close/swap/reopen flow is the exception to Codex and Claude's
-Mac/Windows quit-first behavior described below.
+Mac quit-first behavior; Windows Codex and Claude close and reopen as described below.
 
 On Ubuntu, `t3 update <version> --channel nightly` runs with empty, non-TTY stdin
 and **without `--yes`**. Its native updater verifies the runtime and rewrites the
@@ -197,24 +197,64 @@ Restart scope is the **same user's exact app executable/package family**,
 validated against PID creation identity. Generic Node/Python/terminal processes
 are never selected. Desktop updates preserve existing absolute profile directory
 arguments. Mac uses verified atomic bundle replacement; Windows runs in an
-interactive task and Add-AppxPackage preserves MSIX LocalState. Desktop apps on
-Mac and Windows for Codex and Claude are **never quit, closed, restarted or killed**: the updater
-does not even ask them to quit. A running app with a newer version reports the
-actionable `action_required`/`quit_first` row ("Quit Codex Desktop to finish
-its update") within seconds, before any package download: Windows reads only
-the published MSIX manifest over HTTP ranges (three requests, under 1 MB);
-Windows Codex first reads the app's own Microsoft Store feed
-(`codex-app-prod/windows-store-update.json`, product `9PLM9XGG6VKS`), because the
-direct MSIX stopped at 26.930.7945.0, and installs a newer Store build with
-`winget install --source msstore` only while Codex is closed;
-Claude on Mac reads its release feed, and Codex on Mac remembers the version of
-the last verified DMG by its HEAD fingerprint. Only when that version is
-unknown does the full download decide, shown live on the page as
-"Downloading" with its elapsed time. The app is checked again right before
-the install, so one opened during the download is left alone (Ubuntu desktops
-keep the previous bounded terminate-and-relaunch flow). CLI forced stops stay
-bounded, app-family-only and counted.
-A successful result verifies
+interactive task and Add-AppxPackage preserves MSIX LocalState.
+
+Codex and Claude desktop apps on the **Mac are never quit, closed, restarted or
+killed**: the updater does not even ask them to quit. A running Mac app with a
+newer version reports the actionable `action_required`/`quit_first` row ("Quit
+Codex Desktop to finish its update") within seconds, before any package
+download: Claude on Mac reads its release feed, and Codex on Mac remembers the
+version of the last verified DMG by its HEAD fingerprint. Only when that version
+is unknown does the full download decide, shown live on the page as
+"Downloading" with its elapsed time. The app is checked again right before the
+swap, so one opened during the download is left alone.
+
+On **Windows**, Update all closes a running Codex or Claude desktop app
+gracefully, installs the update and reopens it by itself (`desktop_reopened`:
+"Updated: it closed, installed the update and reopened."). The version decision
+is unchanged and cheap: Windows reads only the published MSIX manifest over HTTP
+ranges (three requests, under 1 MB); Windows Codex first reads the app's own
+Microsoft Store feed (`codex-app-prod/windows-store-update.json`, product
+`9PLM9XGG6VKS`), because the direct MSIX stopped at 26.930.7945.0, and installs a
+newer Store build with `winget install --source msstore`. A current app keeps
+running, and an app that is not running installs without opening anything. The
+MSIX download and its verification finish while the app keeps running. Right
+before closing, the updater captures the running main instances again (the app
+may have been opened or closed meanwhile) and plans how to reopen each the way
+it was started:
+
+- an instance with a data-directory argument reopens the way AAC's launcher
+  starts a Claude profile: the updated package's `app\Claude.exe` by path, its
+  folder as the working directory and the same
+  `--user-data-dir="%APPDATA%\Claude-<id>"`. Package identity does not change
+  this; AAC's named profile on the Windows PC has it too;
+- an instance without arguments and with package identity (the Start menu, or
+  Claude's default instance launched through `explorer.exe shell:AppsFolder\...`)
+  reopens by its AUMID (`OpenAI.Codex_2p2nqsd0c76g0!App`,
+  `Claude_pzs8sxrjxfjjc!Claude`); an unpackaged instance without arguments
+  reopens by path.
+
+The packages also run session-0 Windows services (`codex-windows-sandbox-service.exe`,
+`cowork-svc.exe`, parent `services.exe`). They are not the user's processes: they
+are outside the updater's process list, so it never closes them, and the
+Store/MSIX deployment handles them.
+
+It still answers `quit_first` and closes nothing when an instance runs in another
+Windows session, belongs to another package, is packaged without arguments but has
+no AUMID to reopen it by, or cannot be inspected: its start could not be
+reproduced. Such an instance is found before the download when the manifest was
+readable. Closing posts WM_CLOSE to the
+captured instances' windows, waits a bounded 15 s, then stops only
+identity-checked survivors of that app family (counted as `forcedStops`); nothing
+is force-stopped without that graceful attempt first. After the install every
+planned instance starts detached, and the row is `updated` once as many main
+processes of the updated package run (45 s at most); otherwise it is
+`restart_failed` with the new version. A failed close or install reopens what was
+closed from the previous package, which is still registered, and reports the
+failure (`quit_first` when the deployment still asks for the app to close).
+
+Ubuntu desktops keep the previous bounded terminate-and-relaunch flow. CLI forced
+stops stay bounded, app-family-only and counted. A successful result verifies
 that replacement processes exist.
 
 Updated interactive CLIs open new idle terminal instances. Ubuntu uses a private
@@ -288,14 +328,15 @@ does not prevent other apps/hosts from producing their own results. Status reads
 never retry an interrupted job.
 
 `action_required` is never a failure: the job completes and the row tells the
-user exactly what to do. Codex and Claude desktops on Mac and Windows that are running report
-`quit_first` (they are never asked to quit): nothing is swapped or
-deployed while anything runs, and the next click after the user quits updates
-cleanly. MSIX deployments rejected for apps that need closing also report
-`quit_first`. Codex/Claude desktop downloads refused by a bot challenge (HTTP 403 or a
+user exactly what to do. Codex and Claude desktops on the Mac that are running report
+`quit_first` (they are never asked to quit): nothing is swapped while anything
+runs, and the next click after the user quits updates cleanly. On Windows they
+report `quit_first` only when an instance's start cannot be reproduced (see
+above) or an MSIX deployment is still rejected for apps that need closing. Codex/Claude desktop downloads refused by a bot challenge (HTTP 403 or a
 challenge page) report `check_in_app` after bounded retries. Desktop downloads
-allow 2 GiB and 10-minute timeouts; Codex/Claude Mac and Windows desktops are never
-force-stopped (Ubuntu desktops keep the previous terminate-and-relaunch flow).
+allow 2 GiB and 10-minute timeouts; Codex/Claude Mac desktops are never
+force-stopped, Windows ones only after the bounded WM_CLOSE wait (Ubuntu desktops
+keep the previous terminate-and-relaunch flow).
 Claude's Mac update reads the publisher's own `RELEASES.json` feed on
 downloads.claude.ai and checks its version before any package download, so a
 current app fetches nothing; its ZIP is extracted with `ditto` and passes the

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest import mock
 import zipfile
@@ -918,13 +919,17 @@ def _fake_msix(version, name='OpenAI.Codex', publisher='CN=fixture', filler=3 * 
 
 REAL_REMOTE_MSIX_IDENTITY = desktop.remote_msix_identity
 REAL_CODEX_STORE_VERSION = desktop.codex_store_version
+REAL_WINDOWS_PACKAGE = desktop.windows_package
+REAL_PROCESS_PACKAGE = desktop.process_package
 
 
 class DesktopWaitTests(unittest.TestCase):
-    """A running Codex or Claude desktop app is never quit, closed, restarted or killed.
+    """A running Mac Codex or Claude desktop app is never quit, closed, restarted or killed.
 
     Its update reports "quit first" within seconds instead of after a full
     package download plus a close request (the 2026-10-06 five-minute wait).
+    Windows closes and reopens a running one (WindowsDesktopReopenTests); the
+    Windows cases here have nothing running, so nothing may close.
     Every process scan, network call and installer here is a fixture.
     """
 
@@ -981,18 +986,10 @@ class DesktopWaitTests(unittest.TestCase):
         with mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure()):
             self.assertIsNone(REAL_CODEX_STORE_VERSION(install))
 
-    def test_windows_running_codex_with_newer_store_build_reports_quit_first(self):
-        install = self._windows_codex()
-        with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
-                mock.patch.object(desktop, 'desktop_running', return_value=True), \
-                mock.patch.object(desktop, 'command', side_effect=AssertionError('winget ran')):
-            self._assert_quit_first(desktop.update_windows(install), '26.930.3748.0')
-
-    def test_windows_codex_store_build_installs_through_winget_without_closing(self):
+    def test_windows_closed_codex_store_build_installs_through_winget_without_reopening(self):
         install = self._windows_codex()
         refreshed = common.Install('codex-desktop', 'windows', pathlib.Path('/fixture/ChatGPT.exe'), '26.1002.7124.0', 'msix', 'OpenAI.Codex', 'CN=fixture', pathlib.Path('/fixture'))
         with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
-                mock.patch.object(desktop, 'desktop_running', return_value=False), \
                 mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
                 mock.patch.object(desktop, 'command') as run, mock.patch.object(desktop, 'windows_package', return_value=refreshed), \
                 mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('stale MSIX downloaded')):
@@ -1004,17 +1001,22 @@ class DesktopWaitTests(unittest.TestCase):
     def test_windows_codex_store_install_that_changes_nothing_is_not_updated(self):
         install = self._windows_codex()
         with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
-                mock.patch.object(desktop, 'desktop_running', return_value=False), \
                 mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
                 mock.patch.object(desktop, 'command'), mock.patch.object(desktop, 'windows_package', return_value=install):
             value = desktop.update_windows(install)
         self.assertEqual((value['status'], value['messageCode']), ('failed', 'version_unknown'))
 
-    # ---------------------------------------------------------------- the quit request is gone
-    def test_updater_has_no_way_to_ask_a_desktop_app_to_quit(self):
+    # ---------------------------------------------------------------- the Mac quit request is gone
+    def test_mac_flow_has_no_way_to_ask_a_desktop_app_to_quit(self):
+        import inspect
         for name in ('request_desktop_quit', 'mac_quit_request', 'windows_close_broadcast'):
             self.assertFalse(hasattr(processes, name), name)
             self.assertFalse(hasattr(desktop, name), name)
+        # Only the Windows flow closes, and only through the bounded terminate_desktops.
+        mac = inspect.getsource(desktop.update_mac)
+        for name in ('terminate_desktops', 'restart_desktops', 'windows_replace', 'reopen_windows'):
+            self.assertNotIn(name, mac)
+        self.assertIn('terminate_desktops(install, contexts)', inspect.getsource(desktop.windows_replace))
 
     def test_running_is_any_process_of_the_app_family(self):
         install = self._windows_codex()
@@ -1024,55 +1026,17 @@ class DesktopWaitTests(unittest.TestCase):
         self.assertFalse(desktop.desktop_running(install))
 
     # ---------------------------------------------------------------- Windows (MSIX)
-    def test_windows_running_codex_with_newer_manifest_reports_quit_first_at_once(self):
-        install = self._windows_codex()
-        events = []
-        with mock.patch.object(desktop, 'desktop_running', return_value=True), \
-                mock.patch.object(desktop, 'remote_msix_identity', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.7945.0', 'ProcessorArchitecture': 'x64'}), \
-                mock.patch.object(desktop, 'download') as fetch, \
-                mock.patch.object(desktop, 'add_appx_package') as deploy:
-            started = time.monotonic()
-            value = desktop.update_desktop(install, phase=events.append)
-            elapsed = time.monotonic() - started
-        self._assert_quit_first(value, '26.930.3748.0')
-        fetch.assert_not_called()
-        deploy.assert_not_called()
-        self.assertEqual(events, [], 'no download phase: the answer came from the manifest alone')
-        self.assertLess(elapsed, 2)
-
-    def test_windows_current_manifest_skips_the_package_download(self):
+    def test_windows_running_app_with_current_manifest_is_left_running_without_download(self):
         install = common.Install('claude-desktop', 'windows', pathlib.Path('/fixture/Claude.exe'), '2.19675.1.0', 'msix', 'Claude', 'CN=fixture', pathlib.Path('/fixture'))
-        with mock.patch.object(desktop, 'desktop_running', return_value=True), \
+        running = processes.Process(31, 1, 1, '/fixture/Claude.exe', '31', ['/fixture/Claude.exe'], session=1)
+        with mock.patch.object(desktop, 'scan', return_value=[running]), \
                 mock.patch.object(desktop, 'remote_msix_identity', return_value={'Name': 'Claude', 'Publisher': 'CN=fixture', 'Version': '2.19675.1.0', 'ProcessorArchitecture': 'x64'}), \
                 mock.patch.object(desktop, 'download') as fetch:
             value = desktop.update_desktop(install)
         self.assertEqual(value['status'], 'current')
         fetch.assert_not_called()
 
-    def test_windows_unknown_manifest_downloads_live_then_reports_quit_first(self):
-        install = self._windows_codex()
-        events = []
-        with mock.patch.object(desktop, 'desktop_running', return_value=True), \
-                mock.patch.object(desktop, 'download') as fetch, \
-                mock.patch.object(desktop, 'msix_info', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.7945.0', 'ProcessorArchitecture': 'x64'}), \
-                mock.patch.object(desktop, 'add_appx_package') as deploy:
-            value = desktop.update_desktop(install, phase=events.append)
-        self._assert_quit_first(value, '26.930.3748.0')
-        fetch.assert_called_once()
-        deploy.assert_not_called()
-        self.assertEqual(events, ['downloading', 'updating'])
-
-    def test_windows_app_opened_during_the_download_is_left_alone(self):
-        install = self._windows_codex()
-        with mock.patch.object(desktop, 'desktop_running', side_effect=[False, True]), \
-                mock.patch.object(desktop, 'download'), \
-                mock.patch.object(desktop, 'msix_info', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.7945.0', 'ProcessorArchitecture': 'x64'}), \
-                mock.patch.object(desktop, 'add_appx_package') as deploy:
-            value = desktop.update_desktop(install)
-        self._assert_quit_first(value, '26.930.3748.0')
-        deploy.assert_not_called()
-
-    def test_windows_deploy_needing_close_reports_quit_first(self):
+    def test_windows_closed_app_needing_close_at_deploy_reports_quit_first(self):
         install = self._windows_codex()
         with mock.patch.object(desktop, 'download'), \
                 mock.patch.object(desktop, 'msix_info', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.7945.0', 'ProcessorArchitecture': 'x64'}), \
@@ -1106,8 +1070,7 @@ class DesktopWaitTests(unittest.TestCase):
 
     def test_windows_impostor_manifest_does_not_decide_current(self):
         install = self._windows_codex()
-        with mock.patch.object(desktop, 'desktop_running', return_value=True), \
-                mock.patch.object(desktop, 'remote_msix_identity', return_value={'Name': 'Impostor', 'Publisher': 'Other', 'Version': '1.0.0.0', 'ProcessorArchitecture': 'x64'}), \
+        with mock.patch.object(desktop, 'remote_msix_identity', return_value={'Name': 'Impostor', 'Publisher': 'Other', 'Version': '1.0.0.0', 'ProcessorArchitecture': 'x64'}), \
                 mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure('timeout')) as fetch:
             value = desktop.update_desktop(install)
         fetch.assert_called_once()
@@ -1115,7 +1078,8 @@ class DesktopWaitTests(unittest.TestCase):
 
     def test_windows_process_scan_timeout_reports_its_code_before_any_download(self):
         install = self._windows_codex()
-        with mock.patch.object(desktop, 'desktop_running', side_effect=common.UpdateFailure('timeout')), \
+        with mock.patch.object(desktop, 'scan', side_effect=common.UpdateFailure('timeout')), \
+                mock.patch.object(desktop, 'remote_msix_identity', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.7945.0', 'ProcessorArchitecture': 'x64'}), \
                 mock.patch.object(desktop, 'download') as fetch:
             value = desktop.update_desktop(install)
         fetch.assert_not_called()
@@ -1323,6 +1287,289 @@ class DesktopWaitTests(unittest.TestCase):
             updater.run_apply('windows', emit=events.append)
         phases = [event['phase'] for event in events if event.get('event') == 'app' and event.get('appId') == 'codex-desktop']
         self.assertEqual(phases, ['checking', 'updating', 'downloading'])
+
+
+class WindowsDesktopReopenTests(unittest.TestCase):
+    """Windows closes a running Codex or Claude desktop, installs, and reopens each instance as it was started.
+
+    Process scans, package identities, the close, the installer and every
+    launch are fixtures: nothing real runs, and these pass on any OS.
+    """
+
+    OLD, NEW = '26.930.3748.0', '26.1002.7124.0'
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix='ccs-desktop-reopen-')
+        self.root = pathlib.Path(self.directory.name)
+        self.addCleanup(self.directory.cleanup)
+        (self.root / 'explorer.exe').touch()
+        self.events, self.launched, self.processes, self.packages = [], [], [], {}
+        self.session, self.forced, self.next_pid = 1, 0, 900
+        self.use('codex-desktop')
+        kernel = mock.Mock()
+        kernel.ProcessIdToSessionId.side_effect = lambda pid, value: (setattr(value._obj, 'value', self.session), True)[1]
+        patches = [
+            mock.patch.object(pathlib.Path, 'home', return_value=self.root),
+            mock.patch.dict(os.environ, {'WINDIR': str(self.root)}),
+            mock.patch.object(desktop.ctypes, 'windll', types.SimpleNamespace(kernel32=kernel), create=True),
+            mock.patch.object(desktop, 'scan', side_effect=lambda platform: list(self.processes)),
+            mock.patch.object(desktop, 'process_package', side_effect=lambda item: self.packages.get(item.pid)),
+            mock.patch.object(desktop, 'terminate_desktops', side_effect=self.close),
+            mock.patch.object(desktop, 'restart_desktops', side_effect=AssertionError('Ubuntu relaunch used on Windows')),
+            mock.patch.object(desktop.subprocess, 'Popen', side_effect=self.popen),
+            mock.patch.object(desktop, 'windows_package', side_effect=lambda app_id: self.package(self.registered, self.registered_version)),
+            mock.patch.object(desktop, 'add_appx_package', side_effect=self.install),
+            mock.patch.object(desktop, 'download_desktop', side_effect=lambda url, target: self.events.append('download')),
+            mock.patch.object(desktop, 'msix_info', side_effect=lambda path: self.manifest()),
+            mock.patch.object(desktop, 'remote_msix_identity', side_effect=lambda url: self.manifest()),
+            mock.patch.object(desktop, 'codex_store_version', return_value=None),
+            mock.patch.object(desktop.time, 'sleep'),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def use(self, app_id):
+        identity, executable, _ = desktop.WINDOWS[app_id]
+        self.app_id, self.identity, self.executable = app_id, identity, executable
+        self.publisher_id = '2p2nqsd0c76g0' if app_id == 'codex-desktop' else 'pzs8sxrjxfjjc'
+        self.old_root, self.new_root = (self.root / 'WindowsApps' / ('%s_%s_x64__%s' % (identity, version, self.publisher_id)) for version in (self.OLD, self.NEW))
+        self.registered, self.registered_version = self.old_root, self.OLD
+
+    def package(self, root, version):
+        return desktop.MsixInstall(self.app_id, 'windows', root / self.executable, version, 'msix', self.identity, 'CN=fixture', root,
+                                   package_family=self.identity + '_' + self.publisher_id)
+
+    def manifest(self):
+        return {'Name': self.identity, 'Publisher': 'CN=fixture', 'Version': self.NEW, 'ProcessorArchitecture': 'x64'}
+
+    def run_main(self, args=(), packaged=True, session=1, root=None):
+        """One running main instance with a renderer child, as Windows reports it."""
+        exe = str((root or self.old_root) / self.executable)
+        pid = self.next_pid = self.next_pid + 10
+        self.processes += [processes.Process(pid, 4, 0, exe, str(pid), [exe, *args], session=session),
+                           processes.Process(pid + 1, pid, 0, exe, str(pid + 1), [exe, '--type=renderer'], session=session)]
+        if packaged:
+            self.packages[pid] = '%s_%s_x64__%s' % (self.identity, self.OLD, self.publisher_id)
+        return pid
+
+    def close(self, install, contexts):
+        self.events.append('close')
+        mains = {item.pid for item in contexts}
+        self.processes = [item for item in self.processes if item.pid not in mains and item.ppid not in mains]
+        return self.forced
+
+    def install(self, package):
+        self.events.append('install')
+        self.registered, self.registered_version = self.new_root, self.NEW
+
+    def popen(self, argv, **kwargs):
+        self.events.append('launch')
+        self.launched.append((argv, kwargs))
+        # A shell (AUMID) start opens whatever version is registered; a direct start opens that exe.
+        exe = str(self.registered / self.executable) if argv[0] == str(self.root / 'explorer.exe') else argv[0]
+        self.next_pid += 10
+        self.processes.append(processes.Process(self.next_pid, 4, 0, exe, str(self.next_pid), list(argv)))
+        return mock.Mock()
+
+    def launches(self):
+        return sorted((argv, kwargs['cwd']) for argv, kwargs in self.launched)
+
+    def aumid_launch(self):
+        aumid = self.identity + '_' + self.publisher_id + ('!App' if self.app_id == 'codex-desktop' else '!Claude')
+        return ([str(self.root / 'explorer.exe'), 'shell:AppsFolder\\' + aumid], None)
+
+    def assert_reopened(self, value, count, forced=0):
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['previousVersion']), ('updated', 'desktop_reopened', self.NEW, self.OLD))
+        self.assertEqual((value['restartedProcesses'], value['forcedStops'], value['updateAttempted']), (count, forced, True))
+        self.assertEqual(value['restartTargets'], [{'kind': 'desktop'}])
+        self.assertTrue(all(kwargs['creationflags'] == desktop.DETACHED for _, kwargs in self.launched))
+
+    def assert_quit_first_untouched(self, value):
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('action_required', 'quit_first', self.OLD, False))
+        self.assertNotIn('close', self.events)
+        self.assertNotIn('install', self.events)
+        self.assertEqual(self.launched, [])
+
+    def test_running_codex_msix_downloads_first_then_closes_installs_and_reopens_by_aumid(self):
+        self.run_main()
+        self.forced = 1
+        phases = []
+        value = desktop.update_desktop(self.package(self.old_root, self.OLD), phase=phases.append)
+        self.assertEqual(self.events, ['download', 'close', 'install', 'launch'])
+        self.assertEqual(phases, ['downloading', 'updating'])
+        self.assertEqual(self.launches(), [self.aumid_launch()])
+        self.assert_reopened(value, 1, forced=1)
+
+    def test_running_codex_store_build_closes_installs_through_winget_and_reopens(self):
+        self.run_main()
+        def winget(argv, **kwargs):
+            self.assertEqual(argv[:6], ['C:/winget.exe', 'install', '--id', '9PLM9XGG6VKS', '--source', 'msstore'])
+            self.install(None)
+        with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
+                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
+                mock.patch.object(desktop, 'command', side_effect=winget):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual(self.events, ['close', 'install', 'launch'])
+        self.assertEqual(self.launches(), [self.aumid_launch()])
+        self.assert_reopened(value, 1)
+
+    def test_claude_reopens_its_default_by_aumid_and_named_profiles_from_the_new_exe(self):
+        self.use('claude-desktop')
+        self.run_main()
+        work, home = '/fixture/Roaming/Claude-work', '/fixture/Roaming/Claude-home'
+        self.run_main(['--user-data-dir=' + work], packaged=False)
+        self.run_main(['--user-data-dir=' + home], packaged=False)
+        value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        new_exe = str(self.new_root / self.executable)
+        self.assertEqual(self.launches(), sorted([
+            self.aumid_launch(),
+            ([new_exe, '--user-data-dir=' + home], str(self.new_root / 'app')),
+            ([new_exe, '--user-data-dir=' + work], str(self.new_root / 'app')),
+        ]))
+        self.assertEqual(self.events, ['download', 'close', 'install', 'launch', 'launch', 'launch'])
+        self.assert_reopened(value, 3)
+
+    def test_real_claude_shape_reopens_packaged_default_by_aumid_and_packaged_profile_by_path(self):
+        """Today's real Windows shape: the default has no arguments; the packaged named profile has one."""
+        self.use('claude-desktop')
+        self.run_main()
+        profile = '/fixture/Roaming/Claude-work'
+        self.run_main(['--user-data-dir=' + profile])
+        value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        new_exe = str(self.new_root / self.executable)
+        self.assertEqual(self.launches(), sorted([
+            self.aumid_launch(),
+            ([new_exe, '--user-data-dir=' + profile], str(self.new_root / 'app')),
+        ]))
+        self.assertEqual(self.events, ['download', 'close', 'install', 'launch', 'launch'])
+        self.assert_reopened(value, 2)
+
+    def test_an_instance_that_cannot_be_reopened_reports_quit_first_before_any_download_or_close(self):
+        self.use('claude-desktop')
+        cases = {
+            'another session': dict(session=2),
+            'not this package': dict(),
+            'not this package with a data directory': dict(args=['--user-data-dir=/fixture/Roaming/Claude-work']),
+        }
+        for name, case in cases.items():
+            with self.subTest(name):
+                self.events, self.launched, self.processes, self.packages = [], [], [], {}
+                pid = self.run_main(**case)
+                if name.startswith('not this package'):
+                    self.packages[pid] = 'Impostor_1.0.0.0_x64__pzs8sxrjxfjjc'
+                self.run_main(['--user-data-dir=/fixture/Roaming/Claude-home'], packaged=False)
+                self.assert_quit_first_untouched(desktop.update_desktop(self.package(self.old_root, self.OLD)))
+                self.assertNotIn('download', self.events)
+
+    def test_unreadable_instance_reports_quit_first_and_closes_nothing(self):
+        self.run_main()
+        with mock.patch.object(desktop, 'process_package', side_effect=common.UpdateFailure('restart_context')):
+            self.assert_quit_first_untouched(desktop.update_desktop(self.package(self.old_root, self.OLD)))
+
+    def test_packaged_default_without_a_package_family_has_no_aumid_and_reports_quit_first(self):
+        self.use('claude-desktop')
+        self.run_main()
+        install = self.package(self.old_root, self.OLD)
+        install.package_family = None
+        self.assert_quit_first_untouched(desktop.update_desktop(install))
+        self.assertNotIn('download', self.events)
+
+    def test_install_failure_after_close_reopens_the_old_version_and_reports_failed(self):
+        self.use('claude-desktop')
+        for code, status in (('update_failed', 'failed'), ('timeout', 'failed'), ('quit_first', 'action_required')):
+            with self.subTest(code):
+                self.events, self.launched, self.processes, self.packages = [], [], [], {}
+                self.run_main()
+                self.run_main(['--user-data-dir=/fixture/Roaming/Claude-work'], packaged=False)
+                with mock.patch.object(desktop, 'add_appx_package', side_effect=common.UpdateFailure(code)):
+                    value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+                self.assertEqual((value['status'], value['messageCode'], value['version']), (status, code, self.OLD))
+                old_exe = str(self.old_root / self.executable)
+                self.assertEqual(self.launches(), sorted([self.aumid_launch(), ([old_exe, '--user-data-dir=/fixture/Roaming/Claude-work'], str(self.old_root / 'app'))]))
+                self.assertEqual(self.events, ['download', 'close', 'launch', 'launch'])
+
+    def test_close_failure_reopens_only_what_closed_from_the_old_install(self):
+        self.use('claude-desktop')
+        stuck = self.run_main()
+        self.run_main(['--user-data-dir=/fixture/Roaming/Claude-work'], packaged=False)
+        def close(install, contexts):
+            self.events.append('close')
+            self.processes = [item for item in self.processes if item.pid == stuck or item.ppid == stuck]
+            raise common.UpdateFailure('restart_failed')
+        with mock.patch.object(desktop, 'terminate_desktops', side_effect=close), \
+                mock.patch.object(desktop, 'live_contexts', side_effect=lambda platform, contexts: [item for item in contexts if item.pid == stuck]):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual((value['status'], value['messageCode'], value['version']), ('failed', 'restart_failed', self.OLD))
+        self.assertNotIn('install', self.events)
+        self.assertEqual(self.launches(), [([str(self.old_root / self.executable), '--user-data-dir=/fixture/Roaming/Claude-work'], str(self.old_root / 'app'))])
+
+    def test_reopen_that_never_shows_reports_restart_failed_with_the_new_version(self):
+        self.run_main()
+        with mock.patch.object(desktop, 'WINDOWS_REOPEN_SECONDS', 0), \
+                mock.patch.object(desktop.subprocess, 'Popen', side_effect=lambda argv, **kwargs: self.launched.append((argv, kwargs))):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('restart_failed', 'restart_failed', self.NEW, True))
+        self.assertEqual(self.launches(), [self.aumid_launch()])
+
+    def test_not_running_installs_without_closing_or_reopening(self):
+        value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual(self.events, ['download', 'install'])
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['restartedProcesses'], value['forcedStops']), ('updated', 'updated', self.NEW, 0, 0))
+        self.assertNotIn('restartTargets', value)
+
+    def test_app_opened_during_the_download_is_captured_right_before_closing(self):
+        def scan(platform):
+            if self.events == ['download'] and not self.processes:
+                self.run_main()
+            return list(self.processes)
+        with mock.patch.object(desktop, 'scan', side_effect=scan):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual(self.events, ['download', 'close', 'install', 'launch'])
+        self.assert_reopened(value, 1)
+
+    def test_mac_running_app_still_reports_quit_first(self):
+        app = self.root / 'Applications/Claude.app'
+        install = common.Install('claude-desktop', 'mac', app, '2.0.0', 'official-download', 'com.anthropic.claudefordesktop', package_root=app)
+        with mock.patch.object(desktop, 'desktop_running', return_value=True), \
+                mock.patch.object(desktop, 'claude_release_url', return_value=desktop.CLAUDE_DARWIN_PREFIX + '3.0.0/Claude.zip'):
+            value = desktop.update_desktop(install)
+        self.assertEqual((value['status'], value['messageCode']), ('action_required', 'quit_first'))
+        self.assertEqual(self.events, [])
+
+    def test_process_package_names_identity_and_treats_no_package_as_unpackaged(self):
+        item = processes.Process(77, 4, 0, 'C:/fixture/app/Claude.exe', '77')
+        kernel = mock.Mock()
+        kernel.OpenProcess.return_value = 5
+        def answer(status, name=''):
+            def call(handle, length, buffer):
+                self.assertEqual(handle, 5)
+                buffer.value = name
+                return status
+            return call
+        with mock.patch.object(desktop.ctypes, 'windll', types.SimpleNamespace(kernel32=kernel), create=True):
+            kernel.GetPackageFullName.side_effect = answer(0, 'Claude_1.0.0.0_x64__pzs8sxrjxfjjc')
+            self.assertEqual(REAL_PROCESS_PACKAGE(item), 'Claude_1.0.0.0_x64__pzs8sxrjxfjjc')
+            kernel.GetPackageFullName.side_effect = answer(15700)
+            self.assertIsNone(REAL_PROCESS_PACKAGE(item))
+            kernel.GetPackageFullName.side_effect = answer(122)
+            with self.assertRaisesRegex(common.UpdateFailure, 'restart_context'):
+                REAL_PROCESS_PACKAGE(item)
+            self.assertEqual(kernel.CloseHandle.call_count, 3)
+            self.assertEqual(kernel.OpenProcess.call_args.args, (0x1000, False, 77))
+            kernel.OpenProcess.return_value = 0
+            with self.assertRaisesRegex(common.UpdateFailure, 'restart_context'):
+                REAL_PROCESS_PACKAGE(item)
+
+    def test_windows_package_keeps_only_an_exact_package_family(self):
+        root = self.root / 'Claude_pkg'
+        (root / 'app').mkdir(parents=True)
+        (root / 'app/Claude.exe').touch()
+        for value, expected in (('Claude_pzs8sxrjxfjjc', 'Claude_pzs8sxrjxfjjc'), ('Claude_PZS8SXRJXFJJC', None), ('Other_pzs8sxrjxfjjc', None), (None, None)):
+            body = json.dumps({'name': 'Claude', 'version': '1.2.3.0', 'publisher': 'CN=fixture', 'root': str(root), 'family': value})
+            with self.subTest(value), mock.patch.object(desktop, 'powershell', return_value=body):
+                found = REAL_WINDOWS_PACKAGE('claude-desktop')
+            self.assertEqual((found.version, found.package_family), ('1.2.3.0', expected))
 
 
 class _Manifest:
