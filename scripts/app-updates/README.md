@@ -408,14 +408,27 @@ replace anything.
   target `desktop`). A ZCode that was not running installs without opening
   anything. A failed install restores the copy and reopens what closed (`failed`
   with its code); a failed reopen after a good install is `restart_failed` with the
-  new version. `ZCode.exe` and the adapter's native `muse-acp.exe` are in the helper's Windows
-process list for this. The
-  adapters live in the global npm prefix `%APPDATA%\npm`. Windows cannot replace
-  files a running adapter holds, so a node process naming either package folder,
-  or anything running from one, is `in_use`; otherwise npm runs like the Codex
-  CLI's, without a shell: `node npm-cli.js install --global --prefix %APPDATA%\npm
-  @brokkai/muse-acp@latest zcode-acp-server@latest` (only installed packages are
-  named; 5 minutes at most).
+  new version. The adapters live in the global npm prefix `%APPDATA%\npm`. Each
+  package behind its latest installs in its own run, `node npm-cli.js install
+  --global --prefix %APPDATA%\npm <package>@latest` without a shell (5 minutes at
+  most), so one never blocks or rolls back the other, and a current package is never
+  reinstalled. Windows cannot replace files a running adapter holds, so a package
+  is `in_use` and not installed while any process runs from its package folder: a
+  file in it at any depth, in any letter case, including Muse's
+  `native\x86_64-pc-windows-msvc\muse-acp.exe` and zcode-acp-martty's `martty.exe`,
+  or a zcode-acp-server `dist/cli.js` or a `muse-acp` name in its arguments. The
+  process scan lists anything running from the npm global tree whatever its name,
+  and nothing is ever stopped. npm's error lines (not its warnings) that name EPERM or
+  EBUSY on a package's folder make that package `in_use`; the output is read in memory
+  and never shown.
+  zcode-acp-server's postinstall is the POSIX command `node dist/remote/hub-upgrade-notify.js
+  2>/dev/null || true`, which cmd.exe (npm's default shell) cannot run: it failed the
+  whole combined install and rolled muse-acp back. When Git for Windows is installed
+  (its `bin\bash.exe`, never the WSL launcher), each adapter install passes it as
+  `--script-shell`, so the script runs as its author wrote it; that script only pokes
+  a running local ZCode hub to re-check its build, and the hub restarts itself only
+  when the disk build is newer. Without Git's bash the zcode install fails alone and
+  rolls back.
 
 **Adapter rows.** The top-level versions stay null; `parts` lists `muse-acp` and
 `zcode-acp-server` once each with their previous and current versions (null for a
@@ -423,7 +436,13 @@ package that is not installed). Neither package present is `not_installed`. npm'
 `latest` documents (`https://registry.npmjs.org/@brokkai%2fmuse-acp/latest`,
 `https://registry.npmjs.org/zcode-acp-server/latest`, 1 MiB at most) decide:
 every installed package at least that version is `current` and nothing runs. An
-`updated` row has at least one package whose version changed.
+`updated` row has at least one package whose version changed. A part that was
+behind and skipped because it is in use carries `inUse: true` and keeps its version.
+Status precedence: any part that really failed makes the row `failed` with its code;
+else a held part makes it `action_required` / `in_use`, whose words name the held
+adapter and say the other one updated when it did; else `updated`. Each part still
+reports its before and after versions. On Ubuntu and Nas1 the same rule holds for a
+behind part left unchanged while an adapter still runs; the Mac script never defers.
 
 **Unreadable sources.** When the ZCode page or the npm registry does not answer
 clearly, nothing runs and the row is `failed` / `update_failed`, as T3 and Claude

@@ -565,7 +565,7 @@ class T3Fixtures(unittest.TestCase):
         for pid, name in enumerate(("t3-resource-monitor.exe", "cursorsandbox.exe", "rg.exe", "OpenConsole.exe", "elevate.exe"), 4):
             rows.append({"pid": pid, "ppid": 1, "exe": str(executable.parent / "resources" / name), "args": name, "identity": "helper-start-" + str(pid), "session": 10})
         def inventory(script, **kwargs):
-            allowed = re.search(r"\$p.Name -notin @\((.*?)\)\)\{continue\}", script).group(1)
+            allowed = re.search(r"\$p\.Name -notin @\((.*?)\) -and -not \$tree\)\{continue\}", script).group(1)
             names = re.findall(r"'([^']+)'", allowed)
             self.assertIn("$o.Sid -ne $me -or -not $p.ExecutablePath", script)
             self.assertIn("StartTime.ToFileTimeUtc()", script)

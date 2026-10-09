@@ -200,6 +200,92 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     expect(update([moved], 'omp', '0.10.1').status).toBe('updated');
   });
 
+  it('marks a skipped adapter part inUse only for a strict true, and keeps the flag on any status', () => {
+    const adapters = (status: string, messageCode: string, parts: unknown) =>
+      normalizeAppUpdateRow(
+        {
+          appId: 't3-acp-adapters',
+          status,
+          messageCode,
+          previousVersion: null,
+          version: null,
+          manager: 'npm',
+          updateAttempted: true,
+          restartedProcesses: 0,
+          parts,
+        },
+        't3-acp-adapters',
+        'windows'
+      );
+    const held = { name: 'muse-acp', previousVersion: '0.10.0', version: '0.10.0', inUse: true };
+    const moved = { name: 'zcode-acp-server', previousVersion: '0.65.0', version: '0.65.1' };
+    // Only a boolean true keeps the flag; any other value is dropped with the rest of the part.
+    const loose = adapters('action_required', 'in_use', [
+      { ...held, inUse: 'true' },
+      { ...moved, inUse: 1 },
+    ]);
+    expect(loose.parts).toEqual([
+      { name: 'muse-acp', previousVersion: '0.10.0', version: '0.10.0' },
+      { name: 'zcode-acp-server', previousVersion: '0.65.0', version: '0.65.1' },
+    ]);
+    expect(loose.parts!.some((part) => 'inUse' in part)).toBe(false);
+    const named = adapters('action_required', 'in_use', [held, moved]);
+    expect(named.parts).toEqual([held, moved]);
+    expect(named.status).toBe('action_required');
+    expect(named.message).toBe(
+      'muse-acp is in use (open, or running in a T3 session), so it stayed at its installed version; zcode-acp-server updated; run Update apps again once it is closed.'
+    );
+    // A held flag on another status is kept as data; the row's own words are its failure words.
+    const failed = adapters('failed', 'update_failed', [held]);
+    expect(failed.parts).toEqual([held]);
+    expect(failed.message).toBe(MESSAGES.update_failed);
+  });
+
+  it('names each held adapter in the in-use words, so no row claims nothing changed when one did', () => {
+    const adapters = (parts: unknown[]) =>
+      normalizeAppUpdateRow(
+        {
+          appId: 't3-acp-adapters',
+          status: 'action_required',
+          messageCode: 'in_use',
+          previousVersion: null,
+          version: null,
+          manager: 'npm',
+          updateAttempted: true,
+          restartedProcesses: 0,
+          parts,
+        },
+        't3-acp-adapters',
+        'windows'
+      ).message;
+    const held = { name: 'muse-acp', previousVersion: '0.10.0', version: '0.10.0', inUse: true };
+    const still = { name: 'zcode-acp-server', previousVersion: '0.65.1', version: '0.65.1' };
+    const moved = { name: 'zcode-acp-server', previousVersion: '0.65.0', version: '0.65.1' };
+    const heldZcode = {
+      name: 'zcode-acp-server',
+      previousVersion: '0.65.1',
+      version: '0.65.1',
+      inUse: true,
+    };
+    expect(adapters([held, still])).toBe(
+      'muse-acp is in use (open, or running in a T3 session), so it stayed at its installed version; run Update apps again once it is closed.'
+    );
+    expect(adapters([held, moved])).toBe(
+      'muse-acp is in use (open, or running in a T3 session), so it stayed at its installed version; zcode-acp-server updated; run Update apps again once it is closed.'
+    );
+    expect(adapters([held, heldZcode])).toBe(
+      'muse-acp and zcode-acp-server are in use (open, or running in T3 sessions), so they stayed at their installed versions; run Update apps again once they are closed.'
+    );
+    // Without a held part the words stay generic, as rows saved before parts held read back.
+    expect(adapters([])).toBe(
+      'T3 ACP adapters is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.'
+    );
+    // The generic in-use words stay for every other app, which only ever holds the whole app.
+    expect(messageFor('in_use', 'zcode')).toBe(
+      'ZCode is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.'
+    );
+  });
+
   it('restores a saved 32-row job from before ZCode and the adapters existed', async () => {
     const root = directory();
     const before = [
@@ -264,5 +350,40 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     const job = new AppUpdateService({ ccsDir: root, runHost: async () => payload() }).getStatus()
       .job!;
     expect(job.results).toEqual([inUse, adapters]);
+  });
+
+  it('restores an adapters row with a held part from disk with the same words and flag', () => {
+    const root = directory();
+    const held = normalizeAppUpdateRow(
+      {
+        appId: 't3-acp-adapters',
+        status: 'action_required',
+        messageCode: 'in_use',
+        previousVersion: null,
+        version: null,
+        manager: 'npm',
+        updateAttempted: true,
+        restartedProcesses: 0,
+        parts: [
+          { name: 'muse-acp', previousVersion: '0.10.0', version: '0.10.0', inUse: true },
+          { name: 'zcode-acp-server', previousVersion: '0.65.0', version: '0.65.1' },
+        ],
+      },
+      't3-acp-adapters',
+      'windows'
+    );
+    expect(held.message).toContain('muse-acp is in use');
+    saveJob(root, { results: [held], expectedResults: 40 });
+    const job = new AppUpdateService({ ccsDir: root, runHost: async () => payload() }).getStatus()
+      .job!;
+    // Had the saved words not mapped back, the row would restore as helper_invalid.
+    expect(job.results).toEqual([held]);
+    expect(job.results[0]!.status).toBe('action_required');
+    expect(job.results[0]!.parts![0]).toEqual({
+      name: 'muse-acp',
+      previousVersion: '0.10.0',
+      version: '0.10.0',
+      inUse: true,
+    });
   });
 });

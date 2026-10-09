@@ -28,6 +28,10 @@ import app_updates as updater
 
 OLD, NEW = "3.14.4", "3.14.5"
 UNIT_START = ["/usr/bin/systemctl", "--user", "start", "t3-acp-update.service"]
+# Windows paths for the npm runs and the Git for Windows shell; the tests run on any host.
+NODE = pathlib.PureWindowsPath(r"C:\Program Files\nodejs\node.exe")
+CLI = pathlib.PureWindowsPath(r"C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js")
+GIT_BASH = pathlib.PureWindowsPath(r"C:\Program Files\Git\bin\bash.exe")
 
 
 def write_asar(resources, version, name="@zcode/desktop", filler=0):
@@ -694,43 +698,231 @@ class ZCodeFixtures(unittest.TestCase):
         install = zcode.detect_zcode("windows")
         rows = [{"pid": 1, "ppid": 0, "exe": str(executable), "args": str(executable), "identity": "start", "session": 1}]
         def inventory(script, **kwargs):
-            names = re.findall(r"'([^']+)'", re.search(r"\$p.Name -notin @\((.*?)\)\)\{continue\}", script).group(1))
+            names = re.findall(r"'([^']+)'", re.search(r"\$p\.Name -notin @\((.*?)\) -and -not \$tree\)\{continue\}", script).group(1))
             self.assertIn("ZCode.exe", names)
             self.assertIn("node.exe", names)
             self.assertIn("$o.Sid -ne $me -or -not $p.ExecutablePath", script)
+            # Anything running from the npm global tree is listed whatever its name (martty.exe, Muse's native exe).
+            self.assertIn("$npm=[IO.Path]::Combine($env:APPDATA,'npm','node_modules');", script)
+            self.assertIn("$p.ExecutablePath.StartsWith($npm,[StringComparison]::OrdinalIgnoreCase)", script)
             return json.dumps([row for row in rows if pathlib.Path(row["exe"]).name in names])
         with mock.patch.object(processes, "powershell", side_effect=inventory), \
                 mock.patch.object(processes, "windows_arguments", side_effect=lambda value: [value]):
             self.assertEqual([item.pid for item in processes.main_contexts(install, processes.scan("windows"))], [1])
 
-    def test_windows_adapters_in_use_while_an_adapter_runs_otherwise_npm_runs_without_a_shell(self):
-        install = self.adapters("windows")
-        prefix = self.root / "roaming/npm"
-        for args in (["node.exe", str(prefix / "node_modules/@brokkai/muse-acp/dist/index.js")],
-                     ["node.exe", str(prefix / "node_modules/zcode-acp-server/dist/cli.js")]):
-            running = processes.Process(80, 4, 0, "C:/Program Files/nodejs/node.exe", "80", args, session=1)
-            with self.subTest(args=args[1]), self.registry(), mock.patch.object(zcode, "scan", return_value=[running]), \
-                    mock.patch.object(zcode, "command") as run:
-                row = zcode.update_adapters(install, self.deadline)
-            self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "in_use", False))
-            run.assert_not_called()
-        node, cli = self.root / "nodejs/node.exe", self.root / "nodejs/node_modules/npm/bin/npm-cli.js"
-        with self.registry(), mock.patch.object(zcode, "scan", return_value=[]), mock.patch.object(zcode, "resolve_npm", return_value=None), \
-                mock.patch.object(zcode, "command") as run:
+    # Windows adapters: each behind package has its own npm run; a running or locked one is held, never failed.
+    def windows_npm_run(self, installed, latest, running=(), outcomes=None, shell=True):
+        """update_adapters on Windows with npm faked: outcomes maps a package to "updated", "unchanged" or an
+        UpdateFailure to raise. Returns (row, [(npm argv, timeout), ...])."""
+        install = self.adapters("windows", muse=installed["muse-acp"], acp=installed["zcode-acp-server"])
+        prefix, runs = self.root / "roaming/npm", []
+        def npm(argv, **kwargs):
+            name = next(name for name, package in zcode.PACKAGES.items() if argv[-1] == package + "@latest")
+            runs.append((argv, kwargs["timeout"]))
+            outcome = (outcomes or {}).get(name, "updated")
+            if isinstance(outcome, Exception):
+                raise outcome
+            if outcome == "updated":
+                write_package(prefix / "node_modules", zcode.PACKAGES[name], latest[name])
+        with self.registry(muse=latest["muse-acp"], acp=latest["zcode-acp-server"]), \
+                mock.patch.object(zcode, "scan", return_value=list(running)), \
+                mock.patch.object(zcode, "resolve_npm", return_value=(NODE, CLI)), \
+                mock.patch.object(zcode, "git_bash", return_value=GIT_BASH if shell else None), \
+                mock.patch.object(zcode, "command", side_effect=npm):
             row = zcode.update_adapters(install, self.deadline)
-        self.assertEqual((row["status"], row["messageCode"]), ("failed", "unsupported"))
-        run.assert_not_called()
-        for outcome, expected in ((lambda argv, **kwargs: write_package(prefix / "node_modules", "@brokkai/muse-acp", "0.10.1"), ("updated", "updated")),
-                                  (common.UpdateFailure(), ("failed", "update_failed"))):
-            write_package(prefix / "node_modules", "@brokkai/muse-acp", "0.10.0")
-            with self.subTest(expected=expected), self.registry(), mock.patch.object(zcode, "scan", return_value=[]), \
-                    mock.patch.object(zcode, "resolve_npm", return_value=(node, cli)), mock.patch.object(zcode, "command", side_effect=outcome) as run:
-                row = zcode.update_adapters(install, self.deadline)
-            self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), (*expected, True))
-            self.assertEqual(run.call_args.args[0], [str(node), str(cli), "install", "--global", "--prefix", str(prefix),
-                                                     "@brokkai/muse-acp@latest", "zcode-acp-server@latest"])
-            self.assertLessEqual(run.call_args.kwargs["timeout"], zcode.NPM_SECONDS)
-        self.assertEqual(self.parts(row), [("muse-acp", "0.10.0", "0.10.0"), ("zcode-acp-server", "0.65.1", "0.65.1")])
+        return row, runs
+
+    def muse_running(self, pid=80):
+        """The native muse-acp.exe of the npm tree, as the process scan reports it."""
+        exe = str(self.root / "roaming/npm/node_modules/@brokkai/muse-acp/native/x86_64-pc-windows-msvc/muse-acp.exe")
+        return processes.Process(pid, 4, 0, exe, str(pid), [exe], session=1)
+
+    def test_windows_adapters_each_install_in_its_own_npm_run_with_git_bash_as_script_shell(self):
+        row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"})
+        prefix = str(self.root / "roaming/npm")
+        self.assertEqual([argv for argv, _ in runs], [
+            [str(NODE), str(CLI), "install", "--global", "--prefix", prefix, "--script-shell", str(GIT_BASH), "@brokkai/muse-acp@latest"],
+            [str(NODE), str(CLI), "install", "--global", "--prefix", prefix, "--script-shell", str(GIT_BASH), "zcode-acp-server@latest"],
+        ])
+        self.assertTrue(all(timeout <= zcode.NPM_SECONDS for _, timeout in runs))
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("updated", "updated", True))
+        self.assertEqual(self.parts(row), [("muse-acp", "0.10.0", "0.10.1"), ("zcode-acp-server", "0.65.0", "0.65.1")])
+        self.assertTrue(all("inUse" not in part for part in row["parts"]))
+
+    def test_windows_current_package_is_never_reinstalled(self):
+        row, runs = self.windows_npm_run({"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"})
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("current", "current", False))
+        self.assertEqual(runs, [])
+        row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.1"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"})
+        self.assertEqual([argv[-1] for argv, _ in runs], ["@brokkai/muse-acp@latest"])
+
+    def test_windows_zcode_postinstall_failure_leaves_muse_acp_updated(self):
+        row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                         outcomes={"zcode-acp-server": common.UpdateFailure()})
+        self.assertEqual(len(runs), 2)
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("failed", "update_failed", True))
+        self.assertEqual(self.parts(row), [("muse-acp", "0.10.0", "0.10.1"), ("zcode-acp-server", "0.65.0", "0.65.0")])
+
+    def test_windows_running_muse_is_never_installed_while_zcode_still_updates(self):
+        row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                         running=[self.muse_running()])
+        self.assertEqual([argv[-1] for argv, _ in runs], ["zcode-acp-server@latest"])
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "in_use", True))
+        self.assertEqual(row["parts"], [
+            {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.0", "inUse": True},
+            {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.1"},
+        ])
+
+    def test_windows_running_muse_alone_is_in_use_and_npm_never_runs(self):
+        row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.1"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                         running=[self.muse_running()])
+        self.assertEqual(runs, [])
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "in_use", False))
+        self.assertEqual([part.get("inUse", False) for part in row["parts"]], [True, False])
+
+    def test_windows_npm_lock_on_a_package_is_in_use_for_that_package_only(self):
+        # npm's fatal error lines name the lock and its folder; the path is read with and without escaped backslashes.
+        escaped = "\n".join([
+            r"npm error code EPERM",
+            r"npm error syscall rmdir",
+            r"npm error path C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native",
+            r"npm error Error: EPERM: operation not permitted, rmdir 'C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native'",
+        ])
+        row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                      outcomes={"muse-acp": common.UpdateFailure("update_failed", escaped)})
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "in_use", True))
+        self.assertEqual(row["parts"], [
+            {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.0", "inUse": True},
+            {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.1"},
+        ])
+        busy = "\n".join([
+            r"npm error code EBUSY",
+            r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server",
+            r"npm error Error: EBUSY: resource busy or locked, unlink 'C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\dist\cli.js'",
+        ])
+        row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                      outcomes={"zcode-acp-server": common.UpdateFailure("update_failed", busy)})
+        self.assertEqual((row["status"], row["messageCode"]), ("action_required", "in_use"))
+        self.assertEqual(row["parts"], [
+            {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.1"},
+            {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.0", "inUse": True},
+        ])
+
+    def test_windows_npm_permission_error_naming_no_such_package_is_a_failure(self):
+        other = "\n".join([r"npm error code EPERM", r"npm error path C:\Users\sitti\AppData\Local\npm-cache\_cacache\tmp"])
+        cross = "\n".join([r"npm error code EPERM", r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\dist"])
+        for text in (other, cross):
+            with self.subTest(text=text[:40]):
+                row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.1"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                              outcomes={"muse-acp": common.UpdateFailure("update_failed", text)})
+                self.assertEqual((row["status"], row["messageCode"]), ("failed", "update_failed"))
+                self.assertEqual(self.parts(row), [("muse-acp", "0.10.0", "0.10.0"), ("zcode-acp-server", "0.65.1", "0.65.1")])
+
+    def test_windows_clean_npm_run_that_moves_nothing_is_a_failure(self):
+        row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                      outcomes={"muse-acp": "unchanged", "zcode-acp-server": "unchanged"})
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("failed", "update_failed", True))
+        self.assertEqual(self.parts(row), [("muse-acp", "0.10.0", "0.10.0"), ("zcode-acp-server", "0.65.0", "0.65.0")])
+
+    def test_windows_without_git_bash_npm_gets_no_script_shell_and_zcode_fails_visibly(self):
+        row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                         outcomes={"zcode-acp-server": common.UpdateFailure()}, shell=False)
+        self.assertTrue(all("--script-shell" not in argv for argv, _ in runs))
+        self.assertEqual((row["status"], row["messageCode"]), ("failed", "update_failed"))
+
+    def test_git_bash_is_found_only_in_git_for_windows_own_bin(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            base = pathlib.Path(directory)
+            git = base / "Program Files/Git/bin/bash.exe"
+            git.parent.mkdir(parents=True)
+            git.touch()
+            system = base / "Windows/System32/bash.exe"
+            system.parent.mkdir(parents=True)
+            system.touch()
+            stack.enter_context(mock.patch.dict(os.environ, {"ProgramFiles": str(base / "Program Files")}))
+            for key in ("ProgramW6432", "ProgramFiles(x86)"):
+                stack.enter_context(mock.patch.dict(os.environ, {key: ""}))
+                os.environ.pop(key)
+            stack.enter_context(mock.patch.object(zcode.shutil, "which", return_value=None))
+            self.assertEqual(zcode.git_bash(), git)
+            os.environ["ProgramFiles"] = str(base / "Nothing")
+            self.assertIsNone(zcode.git_bash())
+            stack.enter_context(mock.patch.object(zcode.shutil, "which", return_value=str(base / "Program Files/Git/cmd/git.exe")))
+            self.assertEqual(zcode.git_bash(), git)
+
+    def test_adapter_owners_match_the_muse_native_exe_in_any_letter_case_on_windows(self):
+        root = pathlib.PureWindowsPath(r"C:\Users\sitti\AppData\Roaming\npm\node_modules")
+        native = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native\x86_64-pc-windows-msvc\muse-acp.exe"
+        for exe in (native, native.lower(), native.upper(), r"c:\Users\Sitti\AppData\Roaming\NPM\node_modules\@Brokkai\Muse-Acp\native\x86_64-pc-windows-msvc\muse-acp.exe"):
+            with self.subTest(exe=exe):
+                item = processes.Process(40, 4, 0, exe, "40", [exe], session=1)
+                self.assertEqual(zcode.adapter_owners(item, root), {"muse-acp"})
+                self.assertEqual(zcode.busy_packages([item], root), {"muse-acp"})
+        node = r"C:\Program Files\nodejs\node.exe"
+        script = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\bin\muse-acp.cjs"
+        self.assertEqual(zcode.adapter_owners(processes.Process(41, 4, 0, node, "41", [node, script], session=1), root), {"muse-acp"})
+        martty = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\node_modules\zcode-acp-martty\vendor\win32-x64\martty.exe"
+        self.assertEqual(zcode.adapter_owners(processes.Process(42, 4, 0, martty, "42", [martty], session=1), root), {"zcode-acp-server"})
+        cli = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\dist\cli.js"
+        self.assertEqual(zcode.adapter_owners(processes.Process(43, 4, 0, node, "43", [node, cli], session=1), root), {"zcode-acp-server"})
+        sibling = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp-tools\muse-acp-tools.exe"
+        self.assertEqual(zcode.busy_packages([processes.Process(44, 4, 0, sibling, "44", [sibling], session=1)], root), set())
+
+    def test_only_npm_error_lines_naming_a_package_folder_lock_that_package(self):
+        escaped = "\n".join([r"npm error code EPERM", r"npm error path C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native"])
+        plain = "\n".join([r"npm error code EBUSY", r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native"])
+        for text in (escaped, plain):
+            self.assertTrue(zcode.locked_here(text, "muse-acp"))
+            self.assertFalse(zcode.locked_here(text, "zcode-acp-server"))
+        # npm's warnings are not failures: a rollback that could not remove a folder names no lock.
+        warning = r"npm warn cleanup [ 'C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp', [Error: EPERM: operation not permitted, rmdir 'C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native'] ]"
+        self.assertFalse(zcode.locked_here(warning + "\nnpm error code 1\nnpm error path C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp", "muse-acp"))
+        self.assertFalse(zcode.locked_here("npm error code ENOENT\nnpm error path C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp", "muse-acp"))
+        # A sibling folder with a longer name is not this package.
+        self.assertFalse(zcode.locked_here(r"npm error code EPERM" + "\n" + r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp-tools", "muse-acp"))
+
+    def test_windows_postinstall_failure_with_a_rollback_warning_is_failed_not_in_use(self):
+        # The 14:14 job: npm's rollback warned of EPERM on zcode's folder, but the failure was the postinstall.
+        incident = "\n".join([
+            r"npm warn cleanup Failed to remove some directories [",
+            r"npm warn cleanup   [",
+            r"npm warn cleanup     'C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\zcode-acp-server',",
+            r"npm warn cleanup     [Error: EPERM: operation not permitted, rmdir 'C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\node_modules\zod\src'] {",
+            r"npm warn cleanup       code: 'EPERM',",
+            r"npm warn cleanup     }",
+            r"npm warn cleanup   ]",
+            r"npm warn cleanup ]",
+            r"npm error code 1",
+            r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server",
+            r"npm error command failed",
+            r"npm error command C:\WINDOWS\system32\cmd.exe /d /s /c node dist/remote/hub-upgrade-notify.js 2>/dev/null || true",
+            r"npm error The system cannot find the path specified.",
+        ])
+        row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
+                                      outcomes={"zcode-acp-server": common.UpdateFailure("update_failed", incident)})
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("failed", "update_failed", True))
+        self.assertEqual(self.parts(row), [("muse-acp", "0.10.0", "0.10.1"), ("zcode-acp-server", "0.65.0", "0.65.0")])
+        self.assertTrue(all("inUse" not in part for part in row["parts"]))
+
+    def test_ubuntu_partial_run_with_an_adapter_still_running_holds_the_unchanged_part(self):
+        self.unit()
+        acp = processes.Process(50, 1, 1, "/usr/bin/node", "50", ["node", str(self.node_modules() / "zcode-acp-server/dist/cli.js")])
+        install = self.adapters(muse="0.10.0", acp="0.65.0")
+        def run(argv, **kwargs):
+            # The unit moves muse-acp only; zcode-acp-server stays put while its session runs.
+            write_package(self.node_modules(), "@brokkai/muse-acp", "0.10.1")
+        scans = iter([[], [acp]])
+        with contextlib.ExitStack() as stack, self.registry(muse="0.10.1", acp="0.65.1"):
+            patches = self.ubuntu_patches(run)
+            patches[3] = mock.patch.object(zcode, "scan", side_effect=lambda host: next(scans))
+            command = [stack.enter_context(patch) for patch in patches][2]
+            row = zcode.update_adapters(install, self.deadline)
+        command.assert_called_once()
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "in_use", True))
+        self.assertEqual(row["parts"], [
+            {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.1"},
+            {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.0", "inUse": True},
+        ])
 
     def test_adapter_rows_always_carry_both_parts_and_null_top_level_versions(self):
         install = self.adapters(acp=None)

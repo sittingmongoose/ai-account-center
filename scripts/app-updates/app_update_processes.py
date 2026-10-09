@@ -112,10 +112,14 @@ def mac_processes():
 
 def windows_processes():
     # CIM returns arguments privately to this local helper, never to CCS.
+    # Anything running from the npm global tree counts whatever its name (a Muse native
+    # helper, zcode-acp-martty's martty.exe): npm cannot replace those files either.
     script = """$ErrorActionPreference='Stop';
 $me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
+$npm=[IO.Path]::Combine($env:APPDATA,'npm','node_modules');
 $rows=@(); foreach($p in Get-CimInstance Win32_Process){
- if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe','ZCode.exe','muse-acp.exe')){continue};
+ $tree=[bool]($p.ExecutablePath -and $p.ExecutablePath.StartsWith($npm,[StringComparison]::OrdinalIgnoreCase));
+ if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe','ZCode.exe','muse-acp.exe') -and -not $tree){continue};
  $o=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue;
  if($o.Sid -ne $me -or -not $p.ExecutablePath){continue};
  try{$started=[Diagnostics.Process]::GetProcessById($p.ProcessId).StartTime.ToFileTimeUtc().ToString()}catch{continue};

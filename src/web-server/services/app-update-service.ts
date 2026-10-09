@@ -17,6 +17,7 @@ import {
   isUpdateAppId,
   normalizeAppUpdateResults,
   normalizeAppUpdateRow,
+  normalizeParts,
   messageFor,
   type MessageCode,
   type UpdateAppId,
@@ -493,11 +494,13 @@ export class AppUpdateService {
           continue;
         // Saved rows keep only their words; map them back through messageFor so a
         // row whose words name the app ("Quit Codex Desktop to finish its update")
-        // restores as itself instead of as helper_invalid.
+        // restores as itself instead of as helper_invalid. An adapters row's words name
+        // its held parts, so its saved parts are read back to rebuild the same words.
         const appId = row.appId as UpdateAppId;
+        const savedParts = appId === 't3-acp-adapters' ? normalizeParts(row.parts) : [];
         const code =
           (Object.keys(MESSAGES) as MessageCode[]).find(
-            (candidate) => messageFor(candidate, appId) === row.message
+            (candidate) => messageFor(candidate, appId, savedParts) === row.message
           ) ?? 'helper_invalid';
         const restored = normalizeAppUpdateResults(
           JSON.stringify({ results: [{ ...row, messageCode: code }] }),
