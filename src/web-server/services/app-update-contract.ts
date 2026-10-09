@@ -134,8 +134,11 @@ export const MESSAGES = {
   t3_restart_scheduled:
     'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect.',
   desktop_reopened: 'Updated: it closed, installed the update and reopened.',
+  // Older helpers and saved rows: T3 sessions were the only background sessions recognised.
   t3_sessions_kept:
     'Updated and restarted running terminal instances. Running T3 sessions were left alone and keep the previous version until T3 starts them again.',
+  background_sessions_kept:
+    'Updated; running terminal instances reopened idle. Background sessions (T3 and other runs without a terminal) were left running and keep the previous version until they are started again.',
   store_no_newer:
     'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',
 } as const;
@@ -397,7 +400,8 @@ export function normalizeAppUpdateRow(
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated')) ||
-    (code === 't3_sessions_kept' && (!CLI_APPS.includes(appId) || row.status !== 'updated'))
+    ((code === 't3_sessions_kept' || code === 'background_sessions_kept') &&
+      (!CLI_APPS.includes(appId) || row.status !== 'updated'))
   )
     return failure(platform, appId, 'helper_invalid');
   const heldVersion = held && code === 'held_for_review' ? safeVersion(row.heldVersion) : null;

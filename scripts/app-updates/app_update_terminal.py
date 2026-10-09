@@ -157,6 +157,9 @@ def _broker_terminal(install, context, args):
 def restart_cli(install, contexts):
     sessions = []
     check_terminal(install.platform, contexts)
+    # Background sessions keep running through an update, so only a main process
+    # that was not running before these relaunches counts as reopened.
+    before = {(item.pid, item.identity) for item in user_family(install, scan(install.platform))} if contexts else set()
     for index, context in enumerate(contexts):
         args = resume_arguments(install.app_id, context.args)
         if install.platform == "ubuntu":
@@ -177,10 +180,9 @@ def restart_cli(install, contexts):
     if contexts:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            # T3 sessions keep running through an update, so they never count as relaunched.
             live = user_family(install, scan(install.platform))
             ids = {item.pid for item in live}
-            if len([item for item in live if item.ppid not in ids]) >= len(contexts):
+            if len([item for item in live if item.ppid not in ids and (item.pid, item.identity) not in before]) >= len(contexts):
                 return sessions
             time.sleep(.2)
         raise UpdateFailure("restart_failed")

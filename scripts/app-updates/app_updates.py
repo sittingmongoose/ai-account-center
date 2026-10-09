@@ -21,7 +21,7 @@ from app_update_common import (
     powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
-from app_update_processes import cli_contexts, family, scan, t3_owned, terminate_cli
+from app_update_processes import cli_contexts, cli_instances, family, scan, terminate_cli
 from app_update_terminal import check_terminal, restart_cli
 from app_update_t3 import detect_t3, update_t3
 from app_update_zcode import detect_adapters, detect_zcode, update_adapters, update_zcode
@@ -537,23 +537,23 @@ def update_cli(install, deadline):
             return payload
         if install.app_id == "muse-code" and install.platform == "windows":
             # T3's muse-acp adapter hosts `muse serve` from this folder: never stop or restart it.
-            contexts, targets, t3_sessions = [], [], []
+            contexts, targets, background = [], [], []
         else:
-            # cli_contexts leaves T3's own sessions out: they are never stopped or
-            # relaunched and keep running their current files through the update.
-            contexts, targets = cli_contexts(install, processes)
-            t3_sessions = t3_owned(install, processes)
+            # Only terminal instances are stopped and reopened. Background sessions
+            # (T3's, scripts', services') are never stopped or relaunched and keep
+            # running their current files through the update.
+            contexts, targets, background = cli_instances(install, processes)
         check_terminal(install.platform, contexts)
         if install.manager == "npm" and install.platform == "windows":
-            if (contexts or t3_sessions) and npm_view_latest(install) == before:
+            if (contexts or background) and npm_view_latest(install) == before:
                 # Already current: never stop running sessions for a no-op.
                 # Anything mapped is running, so no stale marker can matter.
                 if contexts:
                     pending.unlink(missing_ok=True)
                 return result(install.app_id, install.platform, "current", before, before, install.manager, attempted=False)
-            if t3_sessions:
+            if background:
                 # npm cannot replace files a running process holds open on
-                # Windows, and a T3 session is never stopped: change nothing.
+                # Windows, and a background session is never stopped: change nothing.
                 return result(install.app_id, install.platform, "action_required", before, before, install.manager, "in_use")
             if contexts:
                 # Windows cannot replace a running npm tree (locked files fail
@@ -612,8 +612,8 @@ def update_cli(install, deadline):
             sessions = restart_cli(refreshed, contexts)
         except (UpdateFailure, OSError):
             return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", True)
-        # Running T3 sessions keep the previous version until T3 starts them again.
-        code = "t3_sessions_kept" if t3_sessions else None
+        # Background sessions keep the previous version until they are started again.
+        code = "background_sessions_kept" if background else None
         value = result(install.app_id, install.platform, "updated", before, refreshed.version, install.manager, code, attempted=True, restarted=len(contexts))
         value.update(restartTargets=sessions, forcedStops=forced)
         pending.unlink(missing_ok=True)
@@ -662,8 +662,8 @@ def check_readiness(install):
         if install.app_id == "muse-code" and install.platform == "windows":
             # Never stopped or restarted on Windows (see update_cli), so nothing to check.
             return None
-        # Only the user's own instances are judged: T3 sessions are left out and
-        # one that exits during the check is dropped, never a failure.
+        # Only the user's terminal instances are judged: background sessions are
+        # left out and one that exits during the check is dropped, never a failure.
         contexts, _targets = cli_contexts(install, scan(install.platform))
         check_terminal(install.platform, contexts)
     except UpdateFailure as error:

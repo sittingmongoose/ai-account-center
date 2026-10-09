@@ -321,7 +321,10 @@ in `APP_UPDATE_SSH_HOSTS`, so one run covers four computers x eight apps = 32
 result rows. Helper deployment and the
 existing Windows interactive task are required for remote updates. Absent
 apps are skipped; per-app readiness checks tell unknown from failure, and an
-unreachable computer reports Unknown rows. No update runs merely by opening
+unreachable computer reports Unknown rows. Only CLI instances running in a
+terminal are stopped and reopened idle; background sessions (T3's agents, a
+`claude -p` from a script, services) are never stopped and keep their version
+until they start again. No update runs merely by opening
 the dashboard or reading its status. See
 [app update setup and behavior](scripts/app-updates/README.md).
 

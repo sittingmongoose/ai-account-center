@@ -281,7 +281,7 @@ class UpdaterTests(unittest.TestCase):
         context = processes.Process(11, 1, 1, '/fixture/node', '11', ['node', '/fixture/npm/node_modules/@openai/codex/bin/codex.js'])
         calls = []
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
-                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([context], [context])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_instances', return_value=processes.CliInstances([context], [context], [])), mock.patch.object(updater, 'check_terminal'), \
                 mock.patch.object(updater, 'npm_view_latest', return_value=None), \
                 mock.patch.object(updater, 'terminate_cli', side_effect=lambda *args: calls.append('stop') or 0), \
                 mock.patch.object(updater, 'perform_cli_update', side_effect=lambda item, deadline=None: calls.append('install') or (_ for _ in ()).throw(common.UpdateFailure())), \
@@ -301,7 +301,7 @@ class UpdaterTests(unittest.TestCase):
         install = common.Install('codex-cli', 'windows', pathlib.Path('/fixture/npm/codex.cmd'), '0.160.0', 'npm', package_root=pathlib.Path('/fixture/npm/node_modules/@openai/codex'))
         context = processes.Process(12, 1, 1, '/fixture/node', '12', ['node', '/fixture/npm/node_modules/@openai/codex/bin/codex.js'])
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
-                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([context], [context])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_instances', return_value=processes.CliInstances([context], [context], [])), mock.patch.object(updater, 'check_terminal'), \
                 mock.patch.object(updater, 'npm_view_latest', return_value='0.160.0'), \
                 mock.patch.object(updater, 'terminate_cli') as stop, mock.patch.object(updater, 'perform_cli_update') as install_step:
             value = updater.update_cli(install, time.monotonic() + 60)
@@ -313,7 +313,7 @@ class UpdaterTests(unittest.TestCase):
         install = common.Install('codex-cli', 'windows', pathlib.Path('/fixture/npm/codex.cmd'), '0.153.4', 'npm', package_root=pathlib.Path('/fixture/npm/node_modules/@openai/codex'))
         context = processes.Process(13, 1, 1, '/fixture/node', '13', ['node', '/fixture/npm/node_modules/@openai/codex/bin/codex.js'])
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
-                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([context], [context])), mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_instances', return_value=processes.CliInstances([context], [context], [])), mock.patch.object(updater, 'check_terminal'), \
                 mock.patch.object(updater, 'npm_view_latest', return_value=None), \
                 mock.patch.object(updater, 'terminate_cli', return_value=0) as stop, \
                 mock.patch.object(updater, 'perform_cli_update') as install_step, \
@@ -398,11 +398,11 @@ class UpdaterTests(unittest.TestCase):
     def test_ubuntu_tmux_restart_escapes_service_cgroup(self):
         install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), '0.160.0')
         context = mock.Mock(cwd='/tmp', args=[], env={'HOME': '/tmp', 'PATH': '/usr/bin'})
-        alive = [mock.Mock(pid=4242, ppid=1)]
+        alive = [mock.Mock(pid=4242, ppid=1, identity='4242')]
         which = lambda name: {'tmux': '/usr/bin/tmux', 'systemd-run': '/usr/bin/systemd-run'}.get(name)
         with mock.patch.object(terminal.shutil, 'which', side_effect=which), \
              mock.patch.object(terminal, 'command') as run, \
-             mock.patch.object(terminal, 'user_family', return_value=alive), \
+             mock.patch.object(terminal, 'user_family', side_effect=[[], alive]), \
              mock.patch.object(terminal, 'scan', return_value=[]):
             sessions = terminal.restart_cli(install, [context])
         self.assertEqual(sessions[0]['kind'], 'tmux')
@@ -629,7 +629,7 @@ class WindowsMuseUpdateTests(unittest.TestCase):
     def test_windows_muse_update_never_stops_or_restarts_its_running_binary(self):
         # The installer writes the new muse-bin beside the running one; its host keeps the old version.
         refreshed = common.Install('muse-code', 'windows', self.folder / 'muse.cmd', '1.5.0', 'native')
-        with mock.patch.object(updater, 'scan', return_value=[self.host]), mock.patch.object(updater, 'cli_contexts', return_value=([self.host], [self.host])), \
+        with mock.patch.object(updater, 'scan', return_value=[self.host]), mock.patch.object(updater, 'cli_instances', return_value=processes.CliInstances([self.host], [self.host], [])), \
                 mock.patch.object(updater, 'check_terminal', side_effect=self.refuse_running_instances), mock.patch.object(updater, 'perform_cli_update') as installer, \
                 mock.patch.object(updater, 'detect_cli', return_value=refreshed), mock.patch.object(updater, 'terminate_cli') as stop, \
                 mock.patch.object(updater, 'restart_cli', return_value=[]) as restart:
@@ -1967,14 +1967,15 @@ def _row(pid, ppid, exe, args=None, session=1):
     return processes.Process(pid, ppid, 1, str(exe), 'start-%d' % pid, list(args or [pathlib.PurePath(str(exe)).name]), session=session)
 
 
-class T3SessionTests(unittest.TestCase):
-    """Update all never stops, relaunches or judges a CLI process that T3 started.
+class _SessionTables(unittest.TestCase):
+    """Process tables copied from the real shapes read on 2026-10-09.
 
-    The tables copy the real shapes read on 2026-10-09: Ubuntu runs `t3 serve`
-    from ~/.t3/runtime/versions/<v>/t3 under its service launcher; the Mac runs
-    the server inside 'T3 Code (Nightly).app'; Windows inside
-    %LOCALAPPDATA%\\Programs\\t3code\\T3 Code (Nightly).exe. Claude Code is the
-    native install everywhere.
+    Ubuntu runs `t3 serve` from ~/.t3/runtime/versions/<v>/t3 under its service
+    launcher; the Mac runs the server inside 'T3 Code (Nightly).app'; Windows
+    inside %LOCALAPPDATA%\\Programs\\t3code\\T3 Code (Nightly).exe, whose server
+    starts the native ~\\.local\\bin\\claude.exe directly. Claude Code is the
+    native install everywhere. `terminals` are the PIDs a terminal check finds
+    attached; terminal_attached itself is tested on real processes below.
     """
 
     RUNTIME = '.t3/runtime/versions/0.0.46-nightly.20261009.2873/t3'
@@ -1990,6 +1991,15 @@ class T3SessionTests(unittest.TestCase):
         self.versions = self.home / '.local/share/claude/versions'
         self.binary = self.versions / '2.1.295'
         self.readable = []
+        self.probed = []
+        self.terminals = {1925309, 70001, 60001, 61000}
+
+    def attached(self, platform, items):
+        self.probed += [item.pid for item in items]
+        return {item.pid for item in items if item.pid in self.terminals}
+
+    def terminal_check(self):
+        return mock.patch.object(processes, 'terminal_attached', side_effect=self.attached)
 
     def claude(self, platform, version='2.1.294'):
         if platform == 'windows':
@@ -2020,31 +2030,52 @@ class T3SessionTests(unittest.TestCase):
     def windows_table(self, user_claude=True):
         app = self.home / 'AppData/Local/Programs/t3code/T3 Code (Nightly).exe'
         exe = self.home / '.local/bin/claude.exe'
-        rows = [_row(23628, 66232, app), _row(48880, 23628, app),
-                _row(50000, 48880, '/fixture/Windows/System32/cmd.exe'), _row(50001, 50000, exe), _row(50002, 48880, exe)]
+        rows = processes.ProcessTable([_row(23628, 66232, app), _row(48880, 23628, app), _row(50002, 48880, exe),
+                                       _row(50001, 50000, exe, ['claude.exe', '-p'])])
+        # The scan's whole table: 50000 is Git Bash under T3's Claude, outside the listed names.
+        rows.lineage = {23628: (66232, 100), 48880: (23628, 110), 50002: (48880, 120), 50000: (50002, 130), 50001: (50000, 140)}
         if user_claude:
-            rows.append(_row(60001, 60000, exe))  # its pwsh.exe is outside the scanned names
+            rows.append(_row(60001, 60000, exe))  # in a Windows Terminal tab
+            rows.lineage.update({60000: (1, 90), 60001: (60000, 150)})
         return rows
 
     def contexts(self, install, table):
-        with mock.patch.object(processes, 'cli_context', side_effect=self.read_context):
+        with mock.patch.object(processes, 'cli_context', side_effect=self.read_context), self.terminal_check():
             return updater.cli_contexts(install, table)
+
+    def update(self, install, table, refreshed='2.1.295', **patches):
+        after = common.Install(install.app_id, install.platform, install.path, refreshed, install.manager, package_root=install.package_root)
+        with mock.patch.object(updater, 'scan', return_value=table), mock.patch.object(processes, 'cli_context', side_effect=self.read_context), \
+                self.terminal_check(), \
+                mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'detect_cli', return_value=after), \
+                mock.patch.object(updater, 'perform_cli_update', **patches.pop('perform', {})) as installer, \
+                mock.patch.object(updater, 'terminate_cli', return_value=0) as stop, \
+                mock.patch.object(updater, 'restart_cli', side_effect=lambda item, contexts: [{'kind': 'terminal'} for _ in contexts]) as restart, \
+                mock.patch.object(updater, 'npm_view_latest', return_value=patches.pop('registry', None)):
+            value = updater.update_cli(install, time.monotonic() + 60)
+        return value, installer, stop, restart
+
+
+class T3SessionTests(_SessionTables):
+    """Update all never stops, relaunches or judges a CLI process that T3 started."""
 
     def test_t3_sessions_are_left_out_of_contexts_and_targets_on_every_host(self):
         for platform, table, t3, user in (('ubuntu', self.ubuntu_table(), {3873428}, 1925309),
                                           ('mac', self.mac_table(), {81000}, 70001),
                                           ('windows', self.windows_table(), {50001, 50002}, 60001)):
             with self.subTest(platform=platform):
-                self.readable = []
+                self.readable, self.probed = [], []
                 install = self.claude(platform)
                 self.assertEqual({item.pid for item in processes.t3_owned(install, table)}, t3)
                 mains, targets = self.contexts(install, table)
                 self.assertEqual([item.pid for item in mains], [user])
                 self.assertEqual([item.pid for item in targets], [user])
                 self.assertEqual(self.readable, [user], 'a T3 session is never even read')
+                self.assertEqual(self.probed, [user], 'nor checked for a terminal')
 
     def test_t3_is_recognised_by_its_exact_location_never_by_name(self):
         install = self.claude('ubuntu')
+        self.terminals.add(11)
         for impostor in ('/fixture/bin/t3', str(self.home / '.t3/runtime/t3'), str(self.home / '.t3/runtime/versions/t3')):
             with self.subTest(impostor=impostor):
                 table = [_row(10, 1, impostor, [impostor, 'serve']), _row(11, 10, self.binary)]
@@ -2057,12 +2088,28 @@ class T3SessionTests(unittest.TestCase):
         renamed = [_row(30, 1, '/Applications/T3 Code Copy.app/Contents/MacOS/T3 Code (Nightly)'), _row(31, 30, self.binary)]
         self.assertEqual(processes.t3_owned(mac, renamed), [])
 
-    def test_windows_scan_keeps_the_shell_between_t3_and_a_cli_it_starts(self):
-        with mock.patch.object(processes, 'powershell', return_value='[]') as run:
-            self.assertEqual(processes.windows_processes(), [])
+    def test_windows_scan_keeps_the_whole_table_for_ancestry_only(self):
+        app = str(self.home / 'AppData/Local/Programs/t3code/T3 Code (Nightly).exe')
+        exe = str(self.home / '.local/bin/claude.exe')
+        rows = [{'pid': 48880, 'ppid': 23628, 'exe': app, 'args': '', 'identity': '1', 'session': 1},
+                {'pid': 50001, 'ppid': 50000, 'exe': exe, 'args': '', 'identity': '2', 'session': 1}]
+        # bash.exe (50000) is not listed in full: only its pid, parent and start reach the helper.
+        tree = '48880,23628,110;50002,48880,120;50000,50002,130;50001,50000,140;0,0,0;bad,row;'
+        with mock.patch.object(processes, 'powershell', return_value=json.dumps({'rows': rows, 'tree': tree})) as run, \
+                mock.patch.object(processes, 'windows_arguments', return_value=[]):
+            table = processes.windows_processes()
         script = run.call_args.args[0]
-        for name in ("'T3 Code (Nightly).exe'", "'cmd.exe'", "'claude.exe'", "'node.exe'"):
+        for name in ("'T3 Code (Nightly).exe'", "'claude.exe'", "'node.exe'"):
             self.assertIn(name, script)
+        self.assertNotIn("'cmd.exe'", script, 'no shell needs to be listed any more')
+        self.assertIn('CreationDate.ToFileTimeUtc()', script)
+        self.assertEqual([item.pid for item in table], [48880, 50001])
+        self.assertEqual(table.lineage, {48880: (23628, 110), 50002: (48880, 120), 50000: (50002, 130), 50001: (50000, 140), 0: (0, None)})
+        self.assertEqual(processes.ancestors(table, table[1]), [50000, 50002, 48880])
+        self.assertEqual([item.pid for item in processes.t3_owned(self.claude('windows'), table)], [50001])
+        # Without its tree the scan cannot be trusted at all.
+        with mock.patch.object(processes, 'powershell', return_value=json.dumps(rows)), self.assertRaises(common.UpdateFailure):
+            processes.windows_processes()
 
     def test_mac_standalone_runtime_and_a_pid_cycle_are_handled(self):
         server = self.home / self.RUNTIME
@@ -2081,18 +2128,20 @@ class T3SessionTests(unittest.TestCase):
     def test_readiness_with_only_t3_sessions_passes_without_reading_them(self):
         for platform, table in (('ubuntu', self.ubuntu_table(user_claude=False)), ('mac', self.mac_table(user_claude=False)),
                                 ('windows', self.windows_table(user_claude=False))):
-            with self.subTest(platform=platform), mock.patch.object(updater, 'scan', return_value=table), \
+            self.probed = []
+            with self.subTest(platform=platform), mock.patch.object(updater, 'scan', return_value=table), self.terminal_check(), \
                     mock.patch.object(processes, 'cli_context', side_effect=AssertionError('T3 session read')), \
                     mock.patch.object(processes, 'vanished', side_effect=AssertionError('T3 session judged')), \
                     mock.patch.object(updater, 'check_terminal') as check:
                 self.assertIsNone(updater.check_readiness(self.claude(platform)))
                 check.assert_called_once_with(platform, [])
+                self.assertEqual(self.probed, [])
 
     def test_a_t3_session_in_a_deleted_folder_never_gates(self):
         # The likely 2026-10-09 failure shape: a T3 session whose folder was gone.
         def deleted(platform, item):
             item.cwd = str(self.home / 'removed-worktree') + ' (deleted)'
-        with mock.patch.object(updater, 'scan', return_value=self.ubuntu_table(user_claude=False)), \
+        with mock.patch.object(updater, 'scan', return_value=self.ubuntu_table(user_claude=False)), self.terminal_check(), \
                 mock.patch.object(processes, 'cli_context', side_effect=deleted), mock.patch.object(updater, 'check_terminal'):
             self.assertIsNone(updater.check_readiness(self.claude('ubuntu')))
 
@@ -2102,16 +2151,22 @@ class T3SessionTests(unittest.TestCase):
         install = common.Install('claude-code', 'ubuntu', pathlib.Path('/fixture/claude'), '2.1.294')
         main = _row(child.pid, os.getpid(), '/fixture/claude')
         helper = _row(child.pid + 100000, child.pid, '/fixture/claude')  # its descendant goes with it
-        self.assertEqual(processes.cli_contexts(install, [main, helper]), ([], []))
+        everything = mock.patch.object(processes, 'terminal_attached', side_effect=lambda platform, items: {item.pid for item in items})
+        with everything:
+            self.assertEqual(processes.cli_contexts(install, [main, helper]), ([], []))
         # A PID that now names another process (its start time changed) counts as gone too.
         reused = _row(os.getpid(), 1, '/fixture/claude')
-        with mock.patch.object(processes, 'cli_context', side_effect=OSError('raced')):
+        with everything, mock.patch.object(processes, 'cli_context', side_effect=OSError('raced')):
             self.assertEqual(processes.cli_contexts(install, [reused]), ([], []))
+        # The real check never finds either attached to a terminal: gone, or no longer that process.
+        self.assertEqual(processes.terminal_attached('ubuntu', [main, reused]), set())
 
     @unittest.skipUnless(sys.platform.startswith('linux'), 'reads the real /proc')
-    def test_a_running_user_instance_whose_folder_was_deleted_still_fails_closed(self):
+    def test_a_running_terminal_instance_whose_folder_was_deleted_still_fails_closed(self):
         folder = tempfile.mkdtemp(prefix='ccs-update-deleted-cwd-')
-        child = subprocess.Popen(['/bin/sleep', '30'], cwd=folder)
+        leader, follower = pty.openpty()
+        child = subprocess.Popen(['/bin/sleep', '30'], cwd=folder, stdin=follower, stdout=follower, stderr=follower)
+        os.close(follower)
         try:
             os.rmdir(folder)
             stat = pathlib.Path('/proc', str(child.pid), 'stat').read_text()
@@ -2125,29 +2180,19 @@ class T3SessionTests(unittest.TestCase):
             with mock.patch.object(processes, 'cli_context', side_effect=PermissionError('hidden')), self.assertRaises(common.UpdateFailure):
                 processes.cli_contexts(install, [user])
         finally:
-            child.kill(); child.wait()
+            child.kill(); child.wait(); os.close(leader)
 
     def test_mac_and_windows_drop_only_a_process_that_is_really_gone(self):
         for platform, table, user in (('mac', self.mac_table(), 70001), ('windows', self.windows_table(), 60001)):
             install = self.claude(platform)
             with self.subTest(platform=platform, alive=False), mock.patch.object(processes, 'cli_context', side_effect=common.UpdateFailure('restart_context')), \
-                    mock.patch.object(processes, 'live_contexts', return_value=[]) as live:
+                    self.terminal_check(), mock.patch.object(processes, 'live_contexts', return_value=[]) as live:
                 self.assertEqual(processes.cli_contexts(install, table), ([], []))
                 self.assertEqual([item.pid for item in live.call_args.args[1]], [user])
             with self.subTest(platform=platform, alive=True), mock.patch.object(processes, 'cli_context', side_effect=common.UpdateFailure('restart_context')), \
-                    mock.patch.object(processes, 'live_contexts', side_effect=lambda platform, items: items), self.assertRaises(common.UpdateFailure):
+                    self.terminal_check(), mock.patch.object(processes, 'live_contexts', side_effect=lambda platform, items: items), \
+                    self.assertRaises(common.UpdateFailure):
                 processes.cli_contexts(install, table)
-
-    def update(self, install, table, refreshed='2.1.295', **patches):
-        after = common.Install(install.app_id, install.platform, install.path, refreshed, install.manager, package_root=install.package_root)
-        with mock.patch.object(updater, 'scan', return_value=table), mock.patch.object(processes, 'cli_context', side_effect=self.read_context), \
-                mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'detect_cli', return_value=after), \
-                mock.patch.object(updater, 'perform_cli_update', **patches.pop('perform', {})) as installer, \
-                mock.patch.object(updater, 'terminate_cli', return_value=0) as stop, \
-                mock.patch.object(updater, 'restart_cli', side_effect=lambda item, contexts: [{'kind': 'terminal'} for _ in contexts]) as restart, \
-                mock.patch.object(updater, 'npm_view_latest', return_value=patches.pop('registry', None)):
-            value = updater.update_cli(install, time.monotonic() + 60)
-        return value, installer, stop, restart
 
     def test_update_with_only_t3_sessions_installs_and_stops_nothing(self):
         # Native Claude writes versions/<new> and re-points its link (Ubuntu, Mac); on
@@ -2161,14 +2206,14 @@ class T3SessionTests(unittest.TestCase):
                 stop.assert_not_called()
                 self.assertEqual([call.args[1] for call in restart.call_args_list], [[]])
                 self.assertEqual((value['status'], value['messageCode'], value['version'], value['restartedProcesses'], value['forcedStops']),
-                                 ('updated', 't3_sessions_kept', '2.1.295', 0, 0))
+                                 ('updated', 'background_sessions_kept', '2.1.295', 0, 0))
 
     def test_update_stops_and_relaunches_only_the_users_own_terminal_instance(self):
         value, installer, stop, restart = self.update(self.claude('ubuntu'), self.ubuntu_table())
         self.assertEqual([item.pid for item in stop.call_args.args[1]], [1925309])
         self.assertEqual([item.pid for item in restart.call_args.args[1]], [1925309])
-        self.assertEqual((value['status'], value['messageCode'], value['restartedProcesses']), ('updated', 't3_sessions_kept', 1))
-        # Without a T3 session the row keeps its usual words.
+        self.assertEqual((value['status'], value['messageCode'], value['restartedProcesses']), ('updated', 'background_sessions_kept', 1))
+        # Without a background session the row keeps its usual words.
         value, *_ = self.update(self.claude('ubuntu'), self.ubuntu_table(t3_claude=False))
         self.assertEqual((value['status'], value['messageCode'], value['restartedProcesses']), ('updated', 'updated', 1))
 
@@ -2195,6 +2240,184 @@ class T3SessionTests(unittest.TestCase):
         value, installer, stop, _ = self.update(install, table + [user], refreshed='0.160.0')
         installer.assert_not_called(); stop.assert_not_called()
         self.assertEqual(value['messageCode'], 'in_use')
+
+
+class BackgroundSessionTests(_SessionTables):
+    """A CLI process without a terminal (a script's `claude -p`, cron, another harness,
+    a service) is treated like a T3 session: never stopped, relaunched or judged."""
+
+    def headless(self, platform):
+        """A `claude -p` started by a script or cron with pipes, and its own child."""
+        exe = self.home / '.local/bin/claude.exe' if platform == 'windows' else self.binary
+        rows = [_row(90001, 90000, exe, ['claude', '-p', 'summarise']), _row(90002, 90001, exe, ['claude', '-p'])]
+        return rows
+
+    def table(self, platform, user_claude=True):
+        table = getattr(self, platform + '_table')(user_claude=user_claude)
+        rows = self.headless(platform)
+        table += rows
+        if platform == 'windows':
+            table.lineage.update({90000: (1, 50), 90001: (90000, 160), 90002: (90001, 170)})
+        return table
+
+    def test_headless_processes_are_background_on_every_platform(self):
+        for platform in ('ubuntu', 'mac', 'windows'):
+            with self.subTest(platform=platform):
+                self.readable, self.probed = [], []
+                install = self.claude(platform)
+                with mock.patch.object(processes, 'cli_context', side_effect=self.read_context), self.terminal_check():
+                    contexts, targets, background = processes.cli_instances(install, self.table(platform, user_claude=False))
+                self.assertEqual((contexts, targets), ([], []))
+                self.assertIn(90001, self.probed)
+                self.assertNotIn(90002, self.probed, 'only main processes are checked')
+                self.assertEqual(self.readable, [], 'a background session is never read')
+                self.assertTrue({90001, 90002} <= {item.pid for item in background})
+
+    def test_update_with_only_headless_sessions_installs_and_stops_nothing(self):
+        for platform in ('ubuntu', 'mac', 'windows'):
+            table = self.table(platform, user_claude=False)
+            with self.subTest(platform=platform):
+                value, installer, stop, restart = self.update(self.claude(platform), table)
+                installer.assert_called_once()
+                stop.assert_not_called()
+                self.assertEqual([call.args[1] for call in restart.call_args_list], [[]])
+                self.assertEqual((value['status'], value['messageCode'], value['restartedProcesses'], value['forcedStops']),
+                                 ('updated', 'background_sessions_kept', 0, 0))
+
+    def test_mixed_terminal_and_headless_relaunches_only_the_terminal_instance(self):
+        for platform, user in (('ubuntu', 1925309), ('mac', 70001), ('windows', 60001)):
+            with self.subTest(platform=platform):
+                self.readable = []
+                value, installer, stop, restart = self.update(self.claude(platform), self.table(platform))
+                self.assertEqual([item.pid for item in stop.call_args.args[1]], [user])
+                self.assertEqual([item.pid for item in restart.call_args.args[1]], [user])
+                self.assertEqual(self.readable, [user])
+                self.assertEqual((value['status'], value['messageCode'], value['restartedProcesses']), ('updated', 'background_sessions_kept', 1))
+
+    def test_readiness_never_judges_a_headless_session(self):
+        # Unreadable, or in a removed folder: either would fail a terminal instance closed.
+        with mock.patch.object(updater, 'scan', return_value=self.table('ubuntu', user_claude=False)), self.terminal_check(), \
+                mock.patch.object(processes, 'cli_context', side_effect=AssertionError('background session read')), \
+                mock.patch.object(updater, 'check_terminal') as check:
+            self.assertIsNone(updater.check_readiness(self.claude('ubuntu')))
+        check.assert_called_once_with('ubuntu', [])
+
+    def test_windows_npm_codex_with_a_headless_session_is_in_use(self):
+        npm = self.home / 'AppData/Roaming/npm'
+        install = common.Install('codex-cli', 'windows', npm / 'codex.cmd', '0.153.4', 'npm', package_root=npm / 'node_modules/@openai/codex')
+        script = str(npm / 'node_modules/@openai/codex/bin/codex.js')
+        table = [_row(53000, 52999, '/fixture/nodejs/node.exe', ['node.exe', script, 'exec', 'review'])]
+        value, installer, stop, restart = self.update(install, table, refreshed='0.160.0')
+        installer.assert_not_called(); stop.assert_not_called(); restart.assert_not_called()
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('action_required', 'in_use', False))
+        # With a terminal Codex beside it, still nothing is stopped or installed.
+        value, installer, stop, _ = self.update(install, table + [_row(61000, 60000, '/fixture/nodejs/node.exe', ['node.exe', script])], refreshed='0.160.0')
+        installer.assert_not_called(); stop.assert_not_called()
+        self.assertEqual(value['messageCode'], 'in_use')
+
+    def test_windows_chain_through_unlisted_processes_resolves_to_t3(self):
+        install = self.claude('windows')
+        table = self.windows_table(user_claude=False)
+        # T3 -> claude.exe -> bash.exe (unlisted) -> claude.exe -p
+        self.assertEqual({item.pid for item in processes.t3_owned(install, table)}, {50001, 50002})
+        # Without the whole table that chain breaks at bash.exe.
+        self.assertEqual({item.pid for item in processes.t3_owned(install, list(table))}, {50002})
+        # A parent PID now held by a process that started after the child is not its parent.
+        reused = processes.ProcessTable(table)
+        reused.lineage = {**table.lineage, 50000: (50002, 999)}
+        self.assertEqual({item.pid for item in processes.t3_owned(install, reused)}, {50002})
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'reads the real /proc')
+    def test_linux_terminal_check_on_real_processes(self):
+        leader, follower = pty.openpty()
+        shapes = {
+            'pty': dict(stdin=follower, stdout=follower, stderr=follower),
+            'pipes': dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL),
+            'null': dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+            'pty-in-pipe-out': dict(stdin=follower, stdout=subprocess.PIPE, stderr=follower),
+        }
+        children = {name: subprocess.Popen(['/bin/sleep', '30'], start_new_session=True, **options) for name, options in shapes.items()}
+        os.close(follower)
+        try:
+            rows = {}
+            for name, child in children.items():
+                stat = pathlib.Path('/proc', str(child.pid), 'stat').read_text()
+                rows[name] = processes.Process(child.pid, os.getpid(), os.getuid(), '/bin/sleep', stat[stat.rfind(')') + 2:].split()[19])
+            found = processes.terminal_attached('ubuntu', list(rows.values()))
+            self.assertEqual({name for name, row in rows.items() if row.pid in found}, {'pty'})
+            # The same PID with another start time is another process: never attached.
+            stale = processes.Process(rows['pty'].pid, 1, os.getuid(), '/bin/sleep', 'another-start')
+            self.assertEqual(processes.terminal_attached('ubuntu', [stale]), set())
+        finally:
+            for child in children.values():
+                child.kill(); child.wait()
+            os.close(leader)
+
+    def test_mac_terminal_check_reads_stdin_and_stdout_per_process(self):
+        # lsof -F n output read from real Mac processes on 2026-10-09.
+        outputs = {
+            1: 'p1\nf0\nn/dev/ttys000\nf1\nn/dev/ttys000\n',            # script(1) pty, Terminal
+            2: 'p2\nf0\nn\nf1\nn->0x20786e11c2f11ae1\n',                 # pipes (an SSH command, a harness)
+            3: 'p3\nf0\nn/dev/null\nf1\nn/dev/null\n',                   # nohup, a launchd job
+            4: 'p4\nf0\nn/dev/ttys001\nf1\nn->0x20786e11c2f11ae2\n',     # piped output
+        }
+        calls = []
+        def lsof(argv, **kwargs):
+            calls.append(argv)
+            pid = int(argv[argv.index('-p') + 1])
+            if pid not in outputs:
+                raise common.UpdateFailure()
+            return outputs[pid]
+        with mock.patch.object(processes, 'command', side_effect=lsof):
+            found = processes.terminal_attached('mac', [_row(pid, 1, self.binary) for pid in (1, 2, 3, 4, 5)])
+        self.assertEqual(found, {1})
+        self.assertEqual(len(calls), 5, 'one lsof per process: a gone PID fails the whole call')
+        self.assertEqual(calls[0], ['/usr/sbin/lsof', '-a', '-p', '1', '-d', '0,1', '-F', 'n'])
+
+    def test_windows_terminal_check_probes_this_sessions_consoles_in_a_child(self):
+        folder = self.home / 'Python'
+        folder.mkdir()
+        (folder / 'python.exe').write_text('fixture')
+        def session(pid, reference):
+            reference._obj.value = 1
+            return 1
+        windll = types.SimpleNamespace(kernel32=types.SimpleNamespace(ProcessIdToSessionId=session))
+        rows = [_row(60001, 60000, 'C:/fixture/claude.exe'), _row(90001, 90000, 'C:/fixture/claude.exe'),
+                _row(70001, 70000, 'C:/fixture/claude.exe', session=0)]
+        with mock.patch.object(processes.ctypes, 'windll', windll, create=True), \
+                mock.patch.object(processes.sys, 'executable', str(folder / 'pythonw.exe')), \
+                mock.patch.object(processes, 'command', return_value='[60001, 70001, "x"]') as run:
+            found = processes.terminal_attached('windows', rows)
+        self.assertEqual(found, {60001}, 'only probed PIDs in this session count')
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], [folder / 'python.exe', '-I', '-c', processes.WINDOWS_CONSOLE_PROBE])
+        self.assertEqual(argv[4:], ['60001:start-60001', '90001:start-90001'], 'another session is never probed')
+        compile(processes.WINDOWS_CONSOLE_PROBE, 'probe', 'exec')
+        self.assertNotIn('"', processes.WINDOWS_CONSOLE_PROBE, 'its command line needs no quote escaping')
+        # A probe that fails or answers nonsense finds nothing attached: nothing is stopped.
+        for answer in (common.UpdateFailure(), 'not json', '{"60001": true}'):
+            with mock.patch.object(processes.ctypes, 'windll', windll, create=True), \
+                    mock.patch.object(processes.sys, 'executable', str(folder / 'pythonw.exe')), \
+                    mock.patch.object(processes, 'command', side_effect=answer if isinstance(answer, Exception) else None,
+                                      return_value=answer):
+                self.assertEqual(processes.terminal_attached('windows', rows), set())
+
+    def test_a_relaunch_is_verified_only_by_new_processes(self):
+        install = common.Install('claude-code', 'ubuntu', self.home / '.local/bin/claude', '2.1.295', package_root=self.versions)
+        context = processes.Process(1925309, 1925308, 1, str(self.binary), 'old', ['claude'], cwd=str(self.home), env={'HOME': str(self.home)})
+        kept = _row(90001, 90000, self.binary, ['claude', '-p'])
+        which = lambda name: {'tmux': '/usr/bin/tmux', 'systemd-run': '/usr/bin/systemd-run'}.get(name)
+        clock = iter(range(0, 1000, 5))
+        with mock.patch.object(terminal.shutil, 'which', side_effect=which), mock.patch.object(terminal, 'command'), \
+                mock.patch.object(terminal, 'scan', return_value=[]), mock.patch.object(terminal, 'user_family', return_value=[kept]), \
+                mock.patch.object(terminal.time, 'monotonic', side_effect=lambda: next(clock)), mock.patch.object(terminal.time, 'sleep'):
+            with self.assertRaises(common.UpdateFailure) as raised:
+                terminal.restart_cli(install, [context])
+        self.assertEqual(raised.exception.code, 'restart_failed', 'a background session that kept running is no relaunch')
+        fresh = _row(1930000, 1929999, self.binary, ['claude'])
+        with mock.patch.object(terminal.shutil, 'which', side_effect=which), mock.patch.object(terminal, 'command'), \
+                mock.patch.object(terminal, 'scan', return_value=[]), mock.patch.object(terminal, 'user_family', side_effect=[[kept], [kept, fresh]]):
+            self.assertEqual(terminal.restart_cli(install, [context])[0]['kind'], 'tmux')
 
 
 class ClaudeLatestPointerTests(unittest.TestCase):

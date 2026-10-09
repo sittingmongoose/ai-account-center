@@ -705,7 +705,7 @@ class ZCodeFixtures(unittest.TestCase):
             # Anything running from the npm global tree is listed whatever its name (martty.exe, Muse's native exe).
             self.assertIn("$npm=[IO.Path]::Combine($env:APPDATA,'npm','node_modules');", script)
             self.assertIn("$p.ExecutablePath.StartsWith($npm,[StringComparison]::OrdinalIgnoreCase)", script)
-            return json.dumps([row for row in rows if pathlib.Path(row["exe"]).name in names])
+            return json.dumps({"rows": [row for row in rows if pathlib.Path(row["exe"]).name in names], "tree": ""})
         with mock.patch.object(processes, "powershell", side_effect=inventory), \
                 mock.patch.object(processes, "windows_arguments", side_effect=lambda value: [value]):
             self.assertEqual([item.pid for item in processes.main_contexts(install, processes.scan("windows"))], [1])
