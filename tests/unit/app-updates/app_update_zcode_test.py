@@ -785,8 +785,8 @@ class ZCodeFixtures(unittest.TestCase):
         escaped = "\n".join([
             r"npm error code EPERM",
             r"npm error syscall rmdir",
-            r"npm error path C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native",
-            r"npm error Error: EPERM: operation not permitted, rmdir 'C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native'",
+            r"npm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native",
+            r"npm error Error: EPERM: operation not permitted, rmdir 'C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native'",
         ])
         row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
                                       outcomes={"muse-acp": common.UpdateFailure("update_failed", escaped)})
@@ -797,8 +797,8 @@ class ZCodeFixtures(unittest.TestCase):
         ])
         busy = "\n".join([
             r"npm error code EBUSY",
-            r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server",
-            r"npm error Error: EBUSY: resource busy or locked, unlink 'C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\dist\cli.js'",
+            r"npm error path C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server",
+            r"npm error Error: EBUSY: resource busy or locked, unlink 'C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\dist\cli.js'",
         ])
         row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
                                       outcomes={"zcode-acp-server": common.UpdateFailure("update_failed", busy)})
@@ -809,8 +809,8 @@ class ZCodeFixtures(unittest.TestCase):
         ])
 
     def test_windows_npm_permission_error_naming_no_such_package_is_a_failure(self):
-        other = "\n".join([r"npm error code EPERM", r"npm error path C:\Users\sitti\AppData\Local\npm-cache\_cacache\tmp"])
-        cross = "\n".join([r"npm error code EPERM", r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\dist"])
+        other = "\n".join([r"npm error code EPERM", r"npm error path C:\Users\user\AppData\Local\npm-cache\_cacache\tmp"])
+        cross = "\n".join([r"npm error code EPERM", r"npm error path C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\dist"])
         for text in (other, cross):
             with self.subTest(text=text[:40]):
                 row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.1"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
@@ -851,49 +851,49 @@ class ZCodeFixtures(unittest.TestCase):
             self.assertEqual(zcode.git_bash(), git)
 
     def test_adapter_owners_match_the_muse_native_exe_in_any_letter_case_on_windows(self):
-        root = pathlib.PureWindowsPath(r"C:\Users\sitti\AppData\Roaming\npm\node_modules")
-        native = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native\x86_64-pc-windows-msvc\muse-acp.exe"
-        for exe in (native, native.lower(), native.upper(), r"c:\Users\Sitti\AppData\Roaming\NPM\node_modules\@Brokkai\Muse-Acp\native\x86_64-pc-windows-msvc\muse-acp.exe"):
+        root = pathlib.PureWindowsPath(r"C:\Users\user\AppData\Roaming\npm\node_modules")
+        native = r"C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native\x86_64-pc-windows-msvc\muse-acp.exe"
+        for exe in (native, native.lower(), native.upper(), r"c:\Users\User\AppData\Roaming\NPM\node_modules\@Brokkai\Muse-Acp\native\x86_64-pc-windows-msvc\muse-acp.exe"):
             with self.subTest(exe=exe):
                 item = processes.Process(40, 4, 0, exe, "40", [exe], session=1)
                 self.assertEqual(zcode.adapter_owners(item, root), {"muse-acp"})
                 self.assertEqual(zcode.busy_packages([item], root), {"muse-acp"})
         node = r"C:\Program Files\nodejs\node.exe"
-        script = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\bin\muse-acp.cjs"
+        script = r"C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\bin\muse-acp.cjs"
         self.assertEqual(zcode.adapter_owners(processes.Process(41, 4, 0, node, "41", [node, script], session=1), root), {"muse-acp"})
-        martty = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\node_modules\zcode-acp-martty\vendor\win32-x64\martty.exe"
+        martty = r"C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\node_modules\zcode-acp-martty\vendor\win32-x64\martty.exe"
         self.assertEqual(zcode.adapter_owners(processes.Process(42, 4, 0, martty, "42", [martty], session=1), root), {"zcode-acp-server"})
-        cli = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\dist\cli.js"
+        cli = r"C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\dist\cli.js"
         self.assertEqual(zcode.adapter_owners(processes.Process(43, 4, 0, node, "43", [node, cli], session=1), root), {"zcode-acp-server"})
-        sibling = r"C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp-tools\muse-acp-tools.exe"
+        sibling = r"C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp-tools\muse-acp-tools.exe"
         self.assertEqual(zcode.busy_packages([processes.Process(44, 4, 0, sibling, "44", [sibling], session=1)], root), set())
 
     def test_only_npm_error_lines_naming_a_package_folder_lock_that_package(self):
-        escaped = "\n".join([r"npm error code EPERM", r"npm error path C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native"])
-        plain = "\n".join([r"npm error code EBUSY", r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native"])
+        escaped = "\n".join([r"npm error code EPERM", r"npm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp\\native"])
+        plain = "\n".join([r"npm error code EBUSY", r"npm error path C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native"])
         for text in (escaped, plain):
             self.assertTrue(zcode.locked_here(text, "muse-acp"))
             self.assertFalse(zcode.locked_here(text, "zcode-acp-server"))
         # npm's warnings are not failures: a rollback that could not remove a folder names no lock.
-        warning = r"npm warn cleanup [ 'C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp', [Error: EPERM: operation not permitted, rmdir 'C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native'] ]"
-        self.assertFalse(zcode.locked_here(warning + "\nnpm error code 1\nnpm error path C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp", "muse-acp"))
-        self.assertFalse(zcode.locked_here("npm error code ENOENT\nnpm error path C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp", "muse-acp"))
+        warning = r"npm warn cleanup [ 'C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp', [Error: EPERM: operation not permitted, rmdir 'C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp\native'] ]"
+        self.assertFalse(zcode.locked_here(warning + "\nnpm error code 1\nnpm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp", "muse-acp"))
+        self.assertFalse(zcode.locked_here("npm error code ENOENT\nnpm error path C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\@brokkai\\muse-acp", "muse-acp"))
         # A sibling folder with a longer name is not this package.
-        self.assertFalse(zcode.locked_here(r"npm error code EPERM" + "\n" + r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\@brokkai\muse-acp-tools", "muse-acp"))
+        self.assertFalse(zcode.locked_here(r"npm error code EPERM" + "\n" + r"npm error path C:\Users\user\AppData\Roaming\npm\node_modules\@brokkai\muse-acp-tools", "muse-acp"))
 
     def test_windows_postinstall_failure_with_a_rollback_warning_is_failed_not_in_use(self):
         # The 14:14 job: npm's rollback warned of EPERM on zcode's folder, but the failure was the postinstall.
         incident = "\n".join([
             r"npm warn cleanup Failed to remove some directories [",
             r"npm warn cleanup   [",
-            r"npm warn cleanup     'C:\\Users\\sitti\\AppData\\Roaming\\npm\\node_modules\\zcode-acp-server',",
-            r"npm warn cleanup     [Error: EPERM: operation not permitted, rmdir 'C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server\node_modules\zod\src'] {",
+            r"npm warn cleanup     'C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules\\zcode-acp-server',",
+            r"npm warn cleanup     [Error: EPERM: operation not permitted, rmdir 'C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server\node_modules\zod\src'] {",
             r"npm warn cleanup       code: 'EPERM',",
             r"npm warn cleanup     }",
             r"npm warn cleanup   ]",
             r"npm warn cleanup ]",
             r"npm error code 1",
-            r"npm error path C:\Users\sitti\AppData\Roaming\npm\node_modules\zcode-acp-server",
+            r"npm error path C:\Users\user\AppData\Roaming\npm\node_modules\zcode-acp-server",
             r"npm error command failed",
             r"npm error command C:\WINDOWS\system32\cmd.exe /d /s /c node dist/remote/hub-upgrade-notify.js 2>/dev/null || true",
             r"npm error The system cannot find the path specified.",

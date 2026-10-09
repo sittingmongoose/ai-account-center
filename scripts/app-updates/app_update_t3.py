@@ -679,7 +679,7 @@ def acp_unit_present():
 
 
 def start_acp_updater():
-    """Start Jared's own ACP/ZCode updater unit without waiting; it keeps its own lock, deferrals and log.
+    """Start the owner's own ACP/ZCode updater unit without waiting; it keeps its own lock, deferrals and log.
 
     Only the detached worker uses this, after a verified restart freed the adapters. Within a job the
     zcode and t3-acp-adapters rows run the unit and wait for it (app_update_zcode).

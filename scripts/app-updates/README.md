@@ -54,8 +54,8 @@ modify or export account credentials/configuration.
 | Claude Code | Active native `claude update` on its managed install (linked from `~/.local/bin/claude`); an install already at the newer of the official `latest` and `stable` pointers reports `current` before any process check (see [CLI instances and T3 sessions](#cli-instances-and-t3-sessions)); other copies are reported as strays |
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only (a turned-off repository reports `source_disabled`); Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
-| ZCode | Official release page and that release's CDN `latest.yml` (sha512 and size); Ubuntu/Nas1 through Jared's `t3-acp-update.service`; Mac verified ZIP swap (never quit); Windows same-signer NSIS installer with close, install and reopen (see [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)) |
-| T3 ACP adapters | `@brokkai/muse-acp` and `zcode-acp-server` from npm's `latest`, reported per package in `parts`; Ubuntu/Nas1 through the same unit run, Mac through Jared's `t3-acp-adapters-update`, Windows npm in `%APPDATA%\npm` |
+| ZCode | Official release page and that release's CDN `latest.yml` (sha512 and size); Ubuntu/Nas1 through the owner's `t3-acp-update.service`; Mac verified ZIP swap (never quit); Windows same-signer NSIS installer with close, install and reopen (see [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)) |
+| T3 ACP adapters | `@brokkai/muse-acp` and `zcode-acp-server` from npm's `latest`, reported per package in `parts`; Ubuntu/Nas1 through the same unit run, Mac through the owner's `t3-acp-adapters-update`, Windows npm in `%APPDATA%\npm` |
 | T3 Code | One `t3-code` row per host covers its nightly desktop/bundled server and any installed standalone runtime; Ubuntu uses the native updater and a detached delayed server restart; Mac verifies SHA512, codesign and notarization before a bundle swap; Windows verifies SHA512 and the T3 Tools Inc Authenticode publisher before the silent NSIS installer |
 
 Nas1 is a second Ubuntu computer: wherever this table or the text below names
@@ -184,7 +184,7 @@ Companions run beside T3 on Ubuntu, best effort, and none changes the
 `~/.local/share/cursor-agent/versions`) runs its own `cursor-agent update` before
 any restart is scheduled. The Muse and ZCode ACP adapters and the extracted ZCode
 app belong to their own rows now: the `zcode` and `t3-acp-adapters` rows run
-Jared's `t3-acp-update.service` and wait for it earlier in the same job (see
+the owner's `t3-acp-update.service` and wait for it earlier in the same job (see
 [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)), so the T3 row no
 longer starts it. When a T3 restart is scheduled, the detached worker still starts
 the unit, without waiting, right after the verified restart: the restart has just
@@ -457,7 +457,7 @@ its version must match, and the exact asset's sha512 and size bind the download
 CLI (`resources/glm/zcode.cjs`). Mac and Windows check again right before they
 replace anything.
 
-- **Ubuntu and Nas1.** Jared's `t3-acp-update.service` (a oneshot user unit running
+- **Ubuntu and Nas1.** The owner's `t3-acp-update.service` (a oneshot user unit running
   `~/.local/bin/t3-acp-update`) updates both rows: it verifies and swaps ZCode,
   keeping one backup, and installs both adapters with npm into `~/.local`, under
   its own lock, deferrals and log (`~/.local/state/t3-acp-update/update.log`). The
@@ -482,7 +482,7 @@ replace anything.
   version. It is copied beside the app, checked again, checked for a ZCode opened
   meanwhile (`quit_first`) and swapped in with an atomic rename; a failed final
   check restores the old bundle. ZCode is not opened afterwards: it was not
-  running. The adapters live in `/opt/homebrew/lib/node_modules`; Jared's
+  running. The adapters live in `/opt/homebrew/lib/node_modules`; the owner's
   `~/.local/bin/t3-acp-adapters-update` (his daily LaunchAgent runs it too)
   installs both with Homebrew npm and is run and waited for, 5 minutes at most. It
   does not defer, since macOS replaces files under running adapters safely, so an

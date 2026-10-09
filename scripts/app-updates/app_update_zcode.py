@@ -45,7 +45,7 @@ MAX_PACKAGE = 800 * 1024 * 1024
 PAGE_LIMIT = 4 * 1024 * 1024
 # The asar header lists ZCode's whole node_modules (about 7 MB in 3.14.5).
 ASAR_HEADER_LIMIT = 16 * 1024 * 1024
-# Jared's own updaters: the Ubuntu oneshot unit (adapters and ZCode, with its
+# The owner's own updaters: the Ubuntu oneshot unit (adapters and ZCode, with its
 # own lock, deferrals and log) and the Mac script (Homebrew npm, both adapters).
 UNIT_SECONDS = 600
 MAC_SCRIPT = ".local/bin/t3-acp-adapters-update"
