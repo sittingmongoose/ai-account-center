@@ -201,6 +201,27 @@ def resolve_npm(prefix):
         cli = root / "node_modules/npm/bin/npm-cli.js"
         if cli.is_file():
             return pathlib.Path(located_node), cli
+    return None if os.name == "nt" else _posix_npm(prefix)
+
+
+def _posix_npm(prefix):
+    """(node, npm-cli.js) of one POSIX install, both as real paths, or None.
+
+    The prefix's own bin/node comes first (the node its `bin/codex` runs), then PATH's node.
+    npm-cli.js must sit beside that node's real install: lib/node_modules/npm, or Homebrew's
+    libexec copy. PATH's npm-cli.js is the last resort, for distribution layouts.
+    """
+    for candidate in (pathlib.Path(prefix) / "bin/node", shutil.which("node")):
+        if candidate and pathlib.Path(candidate).is_file():
+            node = pathlib.Path(candidate).resolve()
+            for cli in (node.parents[1] / "lib/node_modules/npm/bin/npm-cli.js", node.parents[1] / "libexec/lib/node_modules/npm/bin/npm-cli.js"):
+                if cli.is_file():
+                    return node, cli
+    located_npm, located_node = shutil.which("npm"), shutil.which("node")
+    if located_npm and located_node:
+        cli = pathlib.Path(located_npm).resolve()
+        if cli.name == "npm-cli.js" and cli.is_file():
+            return pathlib.Path(located_node).resolve(), cli
     return None
 
 
