@@ -828,6 +828,53 @@ class BoundedUpdateTests(unittest.TestCase):
         self.assertLessEqual(timeout, updater.CODEX_BRIDGE_SECONDS + 15)
 
 
+class WindowsConsoleTests(unittest.TestCase):
+    """pythonw has no console, so each console child needs CREATE_NO_WINDOW or it opens its own window."""
+
+    @staticmethod
+    def popen_options(os_name, launch):
+        """The keyword options Popen received for the child that launch() starts."""
+        child = mock.Mock(returncode=0, pid=1)
+        child.communicate.return_value = (b'', None)
+        with mock.patch.object(common.os, 'name', os_name), mock.patch.object(common.subprocess, 'Popen', return_value=child) as popen:
+            launch()
+        return popen.call_args.kwargs
+
+    def test_windows_children_start_without_a_console_window(self):
+        options = self.popen_options('nt', lambda: common.command(['codex.exe', '--version'], capture=True))
+        self.assertEqual(options['creationflags'], 0x08000000)  # CREATE_NO_WINDOW
+        self.assertNotIn('startupinfo', options)  # never SW_HIDE: relaunched GUI apps must still show
+        options = self.popen_options('nt', lambda: common.powershell('Get-Date'))
+        self.assertEqual(options['creationflags'], 0x08000000)
+
+    def test_visible_launch_keeps_the_default_console(self):
+        options = self.popen_options('nt', lambda: common.command(['wt.exe', '-w', '0'], timeout=15, visible=True))
+        self.assertNotIn('creationflags', options)
+        self.assertNotIn('startupinfo', options)
+
+    def test_posix_children_keep_their_own_session_and_no_console_flags(self):
+        options = self.popen_options('posix', lambda: common.command(['tool', '--version']))
+        self.assertTrue(options['start_new_session'])
+        self.assertNotIn('creationflags', options)
+        options = self.popen_options('posix', lambda: common.command(['tool'], visible=True))
+        self.assertTrue(options['start_new_session'])
+        self.assertNotIn('creationflags', options)
+
+    def test_windows_terminal_tab_for_a_relaunched_cli_is_visible(self):
+        install = common.Install('omp', 'windows', pathlib.Path('C:/omp/omp.exe'))
+        context = processes.Process(1, 0, 1, 'C:/omp/omp.exe', '1', cwd='C:/work', env={'CCS_TEST': '1'})
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                mock.patch.object(pathlib.Path, 'is_file', return_value=True), \
+                mock.patch.object(terminal.shutil, 'which', return_value='C:/wt.exe'), \
+                mock.patch.object(pipes, 'PrivatePipe') as pipe, \
+                mock.patch.object(terminal, 'command') as launch:
+            pipe.return_value.endpoint = 'fixture-endpoint'
+            terminal._broker_terminal(install, context, [])
+        self.assertEqual(launch.call_args.args[0][:4], ['C:/wt.exe', '-w', '0', 'new-tab'])
+        self.assertIs(launch.call_args.kwargs['visible'], True)
+
+
 class _FakeRangeServer:
     """urlopen stand-in that serves one in-memory file by HTTP byte range (or ignores ranges)."""
 

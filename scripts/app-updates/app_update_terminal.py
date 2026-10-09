@@ -137,10 +137,11 @@ def _broker_terminal(install, context, args):
         else:
             # Task Scheduler launches pythonw without a console. The terminal
             # child must use python.exe so the reopened CLI receives WT's PTY.
+            # wt.exe stays visible: it opens the user's new terminal tab.
             console_python = pathlib.Path(sys.executable).with_name("python.exe")
             if not console_python.is_file():
                 raise UpdateFailure("restart_context")
-            command([shutil.which("wt.exe"), "-w", "0", "new-tab", "-d", context.cwd, "--", str(console_python), str(child), "--pipe", str(endpoint)], timeout=15)
+            command([shutil.which("wt.exe"), "-w", "0", "new-tab", "-d", context.cwd, "--", str(console_python), str(child), "--pipe", str(endpoint)], timeout=15, visible=True)
         if not complete.wait(25) or failures:
             raise UpdateFailure("restart_failed")
     finally:

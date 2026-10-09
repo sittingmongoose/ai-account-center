@@ -73,14 +73,23 @@ def _stop_group(process):
         pass
 
 
-def _run_bounded(argv, timeout, env, capture):
+# pythonw (the task's interpreter) has no console, so Windows would give each
+# console child a new visible window. GUI programs ignore this flag.
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _run_bounded(argv, timeout, env, capture, visible=False):
     """Run one fixed command with no TTY and no stdin, killed at its timeout.
 
     A new session means the child has no controlling terminal, so a prompt that
     opens /dev/tty fails at once instead of waiting forever; stdin is empty.
+    On Windows a child gets no console window unless visible is set.
     Returns (returncode, stdout bytes); raises subprocess.TimeoutExpired.
     """
-    options = {} if os.name == "nt" else {"start_new_session": True}
+    if os.name == "nt":
+        options = {} if visible else {"creationflags": CREATE_NO_WINDOW}
+    else:
+        options = {"start_new_session": True}
     process = subprocess.Popen(
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, env=env, **options,
@@ -96,11 +105,11 @@ def _run_bounded(argv, timeout, env, capture):
     return process.returncode, stdout or b""
 
 
-def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536):
+def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False):
     try:
         returncode, data = _run_bounded(
             [str(arg) for arg in argv], timeout,
-            dict(env) if preserve_env and env is not None else environment(env), capture,
+            dict(env) if preserve_env and env is not None else environment(env), capture, visible,
         )
     except subprocess.TimeoutExpired:
         raise UpdateFailure("timeout") from None
