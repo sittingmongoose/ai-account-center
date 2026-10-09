@@ -254,23 +254,31 @@ is unchanged and cheap: Windows reads only the published MSIX manifest over HTTP
 ranges (three requests, under 1 MB); Windows Codex first reads the app's own
 Microsoft Store feed (`codex-app-prod/windows-store-update.json`, product
 `9PLM9XGG6VKS`), because the direct MSIX stopped at 26.930.7945.0, and installs a
-newer Store build with `winget install --source msstore`. Before anything closes,
-two read-only winget listings (30 s each at most) ask whether the Store offers
-that upgrade here: the installed listing must name `9PLM9XGG6VKS`, and the upgrade
-listing must exit 0 without naming it. When the Store offers nothing newer the row
-is `current` with `store_no_newer` ("Already current from the Microsoft Store: the
-Store offers no newer build to this computer yet.") and Codex is never closed. An
-unclear check still closes and installs as before; an install that then exits
-`0x8A15002B` (no applicable update) or `0x8A150061` (already installed) reopens
-Codex and reports the same current row, or `restart_failed` when Codex cannot
-reopen. Any other winget exit is `failed` with `update_failed`. winget reads no
-version for this Store product (`Version: Unknown`), so `store_no_newer` reports
-what winget and the Store say, not a comparison of versions. A current app keeps
-running, and an app that is not running installs without opening anything. The
-MSIX download and its verification finish while the app keeps running. Right
-before closing, the updater captures the running main instances again (the app
-may have been opened or closed meanwhile) and plans how to reopen each the way
-it was started:
+newer Store build with `winget install --source msstore`. Nothing read before the
+install says whether the Store offers that build here: winget's listings cannot
+answer it (this product shows `Version: Unknown`, has no available-version column,
+and the upgrade listing never names it), so only the install's own exit code
+counts. `0x8A15002B` (no applicable update) and `0x8A150061` (package already
+installed) mean nothing newer was installed. A running Codex is then closed,
+reopened as it was started, and the row is `current` with `store_no_newer`
+("Already current from the Microsoft Store: the Store offers no newer build to
+this computer yet."), or `restart_failed` when it cannot reopen. Any other winget
+exit is `failed` with `update_failed`, and Codex reopens from the old package.
+`store_no_newer` reports what winget and the Store say, not a comparison of
+versions. That answer is remembered for 6 hours in
+`~/.ccs/app-updates/codex-desktop-windows-store.json` (the feed build, the
+installed version and the check time; 4 KiB at most). While the feed build and the
+installed version are unchanged and the memory is fresh, Update all reports
+`current` with `store_no_newer` at once: winget is not asked and a running Codex
+stays open. The memory is ignored when it is unreadable, malformed, older than 6
+hours or dated in the future (the clock went backwards). It is dropped when the
+installed version changes or an install succeeds. So while the Store keeps
+answering nothing newer, a running Codex is closed at most once every 6 hours. A
+current app keeps running, and an app that is not running installs without
+opening anything. The MSIX download and its verification finish while the app
+keeps running. Right before closing, the updater captures the running main
+instances again (the app may have been opened or closed meanwhile) and plans how
+to reopen each the way it was started:
 
 - an instance with a data-directory argument reopens the way AAC's launcher
   starts a Claude profile: the updated package's `app\Claude.exe` by path, its

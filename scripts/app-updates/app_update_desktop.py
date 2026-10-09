@@ -38,8 +38,11 @@ CLAUDE_DARWIN_PREFIX = "https://downloads.claude.ai/releases/darwin/"
 CODEX_STORE_FEED = "https://persistent.oaistatic.com/codex-app-prod/windows-store-update.json"
 CODEX_STORE_ID = "9PLM9XGG6VKS"
 # winget exit codes (read unsigned) for a Store package with nothing newer to install here:
-# 0x8A15002B "No applicable update found" and 0x8A150061 "Found at least one version ... installed".
+# 0x8A15002B UPDATE_NOT_APPLICABLE ("No applicable update found") and 0x8A150061 PACKAGE_ALREADY_INSTALLED.
 WINGET_NO_NEWER = {0x8A15002B, 0x8A150061}
+# winget's "nothing newer" answer is trusted this long for the same feed build and installed version.
+STORE_NO_NEWER_SECONDS = 6 * 60 * 60
+STORE_MEMORY_BYTES = 4096
 
 
 def download_desktop(url, destination):
@@ -584,38 +587,65 @@ def windows_replace(install, before, deploy, accepted, current_codes=()):
     return value
 
 
-def store_upgrade_state(winget):
-    """'available', 'none' or 'unknown' for a Store upgrade of Codex on this computer, read-only.
+def store_memory(install):
+    """Where winget's last "nothing newer" answer for Codex is remembered, beside the Mac package memory."""
+    return pathlib.Path.home() / ".ccs/app-updates" / (install.app_id + "-windows-store.json")
 
-    Two bounded listings: the installed one must name the product, and the upgrade
-    one must exit 0. Naming the product in the upgrade listing means available;
-    exiting 0 without naming it means none. Anything else is unknown, and the
-    install then decides as before. Product IDs are language-neutral; the
-    listing's wording is never parsed.
+
+def remembered_store_answer(install, feed):
+    """True while winget's "nothing newer" answer holds for this feed build and installed version.
+
+    The answer holds for STORE_NO_NEWER_SECONDS from when it was given. A memory
+    for another installed version is dropped. A missing, unreadable, oversized,
+    malformed, expired or future-dated (the clock went backwards) memory is not
+    trusted, so the install decides.
     """
-    query = [winget, "list", "--id", CODEX_STORE_ID, "--exact", "--source", "msstore",
-             "--accept-source-agreements", "--disable-interactivity"]
     try:
-        if CODEX_STORE_ID not in command(query, timeout=30, capture=True):
-            return "unknown"
-        listed = command([*query, "--upgrade-available"], timeout=30, capture=True)
-    except UpdateFailure:
-        return "unknown"
-    return "available" if CODEX_STORE_ID in listed else "none"
+        with store_memory(install).open("rb") as handle:
+            raw = handle.read(STORE_MEMORY_BYTES + 1)
+        if len(raw) > STORE_MEMORY_BYTES:
+            return False
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):  # Some JSON parsers recurse: a deeply nested file exhausts them.
+        return False
+    if not isinstance(value, dict):
+        return False
+    remembered_feed, remembered_installed, checked = value.get("feedBuild"), value.get("installedVersion"), value.get("checkedAt")
+    if not isinstance(remembered_feed, str) or not isinstance(remembered_installed, str) or type(checked) is not int:
+        return False
+    if remembered_installed != install.version:
+        forget_store_answer(install)
+        return False
+    return remembered_feed == feed and 0 <= time.time() - checked < STORE_NO_NEWER_SECONDS
 
 
-def update_windows_store(install, phase):
+def remember_store_answer(install, feed):
+    """Remember that winget found nothing newer than the installed version for this feed build."""
+    try:
+        write_private_json(store_memory(install), {"feedBuild": feed, "installedVersion": install.version, "checkedAt": int(time.time())})
+    except (OSError, ValueError):
+        pass
+
+
+def forget_store_answer(install):
+    with contextlib.suppress(OSError):
+        store_memory(install).unlink(missing_ok=True)
+
+
+def update_windows_store(install, phase, feed):
     """Install the newer Codex Store build through winget's msstore source, reopening a running Codex.
 
-    winget is asked first, read-only: when it offers no upgrade nothing closes and
-    the row is current. When the install itself reports nothing newer, the closed
-    Codex is reopened and the row is current as well.
+    Only winget's install can say whether the Store offers a newer build here: its
+    listings never name this product. So its "nothing newer" answer is remembered
+    for STORE_NO_NEWER_SECONDS, and while that holds a running Codex is not closed
+    again. Otherwise the install decides: when it reports nothing newer, the closed
+    Codex is reopened and the row is current; any other failure stays failed.
     """
+    if remembered_store_answer(install, feed):
+        return result(install.app_id, "windows", "current", install.version, install.version, install.manager, "store_no_newer")
     winget = shutil.which("winget.exe") or shutil.which("winget")
     if not winget:
         return result(install.app_id, "windows", "failed", install.version, install.version, install.manager, "unsupported")
-    if store_upgrade_state(winget) == "none":
-        return result(install.app_id, "windows", "current", install.version, install.version, install.manager, "store_no_newer")
     phase("updating")
 
     def deploy():
@@ -625,8 +655,10 @@ def update_windows_store(install, phase):
                      "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=900)
         except UpdateFailure as error:
             if error.exit_code is not None and (error.exit_code & 0xFFFFFFFF) in WINGET_NO_NEWER:
+                remember_store_answer(install, feed)
                 raise UpdateFailure("store_no_newer") from None
             raise
+        forget_store_answer(install)
 
     def accepted(refreshed):
         return refreshed.publisher == install.publisher and bool(refreshed.version) and version_tuple(refreshed.version) > version_tuple(install.version)
@@ -657,7 +689,7 @@ def update_windows(install, phase=None):
     if install.app_id == "codex-desktop":
         store = codex_store_version(install)
         if store and version_tuple(store) > version_tuple(before):
-            return update_windows_store(install, phase)
+            return update_windows_store(install, phase, store)
     try:
         remote = remote_msix_identity(url)
         available = published(remote) if remote is not None else None
