@@ -457,6 +457,58 @@ test('codex rows summarise credits and banked resets of that account only', () =
   assert.equal(row.amountsLine, '62.5K credits · 1 banked');
 });
 
+test('Codex banked totals include every expiration group and stay bound to each account', () => {
+  const banked = (key, remaining, expiresAt = null) => ({
+    key,
+    label: 'Banked resets',
+    kind: 'balance',
+    unit: 'resets',
+    remaining,
+    expiresAt,
+  });
+  const two = account({
+    windows: [
+      window(),
+      banked('banked_resets_0', 1, at(60 * 24 * 2)),
+      banked('banked_resets_1', 1, at(60 * 24 * 5)),
+    ],
+  });
+  const zero = account({ id: 'codex:two', windows: [banked('banked_resets', 0)] });
+  const one = account({ id: 'codex:three', windows: [banked('banked_resets_0', 1)] });
+  const rows = section(dashboardViewModel(data([two, zero, one]), { now }), 'codex').rows;
+  assert.deepEqual(
+    rows.map((row) => row.amountsLine),
+    ['2 banked', '0 banked', '1 banked']
+  );
+  assert.equal(
+    section(
+      dashboardViewModel(data([{ ...two, windows: [...two.windows].reverse() }]), { now }),
+      'codex'
+    ).rows[0].amountsLine,
+    '2 banked'
+  );
+  const details = detailsViewModel(data([two]), two.id, { now });
+  assert.equal(details.amounts.filter((item) => /Banked resets/.test(item.label)).length, 2);
+});
+
+test('Codex banked totals do not report a partial count when a group is unknown', () => {
+  const row = section(
+    dashboardViewModel(
+      data([
+        account({
+          windows: [
+            { key: 'banked_resets_0', kind: 'balance', unit: 'resets', remaining: 1 },
+            { key: 'banked_resets_1', kind: 'balance', unit: 'resets', remaining: null },
+          ],
+        }),
+      ]),
+      { now }
+    ),
+    'codex'
+  ).rows[0];
+  assert.equal(row.amountsLine, '');
+});
+
 test('the header status line is derived from the data and never claims live for cached readings', () => {
   assert.deepEqual(
     chromeView(data([account({ status: 'cached' })]), { now, intervalSeconds: 60 }).statusMore,

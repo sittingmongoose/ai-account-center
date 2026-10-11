@@ -48,6 +48,13 @@ rejected as needing Sign in again, and Sign in again restores it. Automatic
 switching never chooses such a login. Set `CCS_CODEX_RENEWAL=0` to turn renewal
 off; a rejected login still shows Sign in again.
 
+Usage requests keep their timeout through response-body reads. A stalled body
+times out and retries once, so later refreshes can retrieve a new reading rather
+than staying attached to a stuck request. Temporary failures retain the last
+successful reading as cached and do not change saved credentials. Banked resets
+are totaled across all expiration groups for that account; Details retains each
+group's own expiration. Reading usage never redeems a reset.
+
 ## Activation and automatic switching
 
 [Activation](activate-in-place.md) changes the selected native login in the

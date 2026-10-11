@@ -791,8 +791,6 @@ async function runCodexUsageFetch(
         },
       });
 
-      clearTimeout(timeoutId);
-
       if (verbose)
         logger.info('quota.fetch.status', `Codex API status: ${response.status}`, {
           provider: 'codex',
@@ -874,7 +872,6 @@ async function runCodexUsageFetch(
         accountId,
       };
     } catch (err) {
-      clearTimeout(timeoutId);
       const isAbortError = err instanceof Error && err.name === 'AbortError';
       lastErrorMsg = isAbortError
         ? 'Request timeout'
@@ -916,6 +913,11 @@ async function runCodexUsageFetch(
           : 'Retry later or inspect network connectivity.',
         retryable: true,
       };
+    } finally {
+      // Fetch resolves at the headers. Keep the deadline armed while json()/text()
+      // consumes the body so a stalled stream cannot hold a profile's shared
+      // in-flight refresh forever and leave its old usage on the dashboard.
+      clearTimeout(timeoutId);
     }
   }
 

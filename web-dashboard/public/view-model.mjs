@@ -487,7 +487,12 @@ function codexAmountsRuns(account) {
   const credits = windows.find(
     (w) => w.key === 'credits_balance' || (w.kind === 'balance' && w.unit === 'credits')
   );
-  const banked = windows.find((w) => /^banked[_-]?resets/i.test(text(w.key)));
+  // The backend groups resets by expiration. Every group belongs to this account's total.
+  const banked = windows.filter((w) => /^banked[_-]?resets/i.test(text(w.key)));
+  const bankedTotal =
+    banked.length && banked.every((w) => finite(w.remaining) && w.remaining >= 0)
+      ? banked.reduce((total, w) => total + w.remaining, 0)
+      : null;
   const parts = [];
   if (credits) {
     if (credits.enabled === false) parts.push([run('Credits off')]);
@@ -502,8 +507,7 @@ function codexAmountsRuns(account) {
         run(' credits'),
       ]);
   }
-  if (banked && finite(banked.remaining))
-    parts.push([run(nf2.format(banked.remaining), true), run(' banked')]);
+  if (bankedTotal !== null) parts.push([run(nf2.format(bankedTotal), true), run(' banked')]);
   return parts.flatMap((part, index) => (index ? [run(' · '), ...part] : part));
 }
 const runsText = (runs) => runs.map((r) => r.text).join('');

@@ -713,6 +713,70 @@ describe('Codex Quota Fetcher', () => {
   });
 
   describe('fetchCodexQuotaWithToken', () => {
+    it('times out a stalled successful response body and retries with a fresh reading', async () => {
+      const originalSetTimeout = global.setTimeout;
+      spyOn(global, 'setTimeout').mockImplementation(((callback, delay, ...args) =>
+        originalSetTimeout(callback, Math.min(delay ?? 0, 20), ...args)) as typeof setTimeout);
+      let calls = 0;
+      global.fetch = mock(async (_url: unknown, options?: RequestInit) => {
+        calls += 1;
+        if (calls === 1) {
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                options?.signal?.addEventListener(
+                  'abort',
+                  () => controller.error(new DOMException('Response body timed out', 'AbortError')),
+                  { once: true }
+                );
+              },
+            })
+          );
+        }
+        return Response.json({
+          plan_type: 'pro',
+          rate_limit: { primary_window: { used_percent: 4, limit_window_seconds: 604800 } },
+        });
+      }) as unknown as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
+      expect(calls).toBe(2);
+      expect(result.success).toBe(true);
+      expect(result.coreUsage?.weekly?.remainingPercent).toBe(96);
+      expect(result.needsReauth).toBeUndefined();
+    }, 500);
+
+    it('returns a retryable timeout when an error response body stalls on both attempts', async () => {
+      const originalSetTimeout = global.setTimeout;
+      spyOn(global, 'setTimeout').mockImplementation(((callback, delay, ...args) =>
+        originalSetTimeout(callback, Math.min(delay ?? 0, 20), ...args)) as typeof setTimeout);
+      let calls = 0;
+      global.fetch = mock(async (_url: unknown, options?: RequestInit) => {
+        calls += 1;
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              options?.signal?.addEventListener(
+                'abort',
+                () => controller.error(new DOMException('Error body timed out', 'AbortError')),
+                { once: true }
+              );
+            },
+          }),
+          { status: 503 }
+        );
+      }) as unknown as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
+      expect(calls).toBe(2);
+      expect(result).toMatchObject({
+        success: false,
+        errorCode: 'network_timeout',
+        retryable: true,
+      });
+      expect(result.needsReauth).toBeUndefined();
+    }, 500);
+
     it('uses supplied native headers without looking up CLIProxy auth', async () => {
       const configGenerator = await import('../../config/path-resolver');
       const accountManager = await import('../../accounts/account-manager');
