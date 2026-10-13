@@ -47,7 +47,7 @@ modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
 | --- | --- |
-| Antigravity CLI | Active native `agy update`, only to a build in the switching review set (held otherwise, see below) |
+| Antigravity CLI | Active native `agy update`; managed switching installations require a reviewed build (see below) |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
@@ -239,11 +239,23 @@ scheduled the restart of Nas1's own `t3code.service`, that
 has no AI Account Center package, command or service and no `~/.ccs` content
 beyond `app-updates/`.
 
-**Antigravity CLI review hold (all four computers).** Account switching works only
+**Antigravity CLI review hold (managed switching installations).** Account switching works only
 with native builds listed in `scripts/antigravity/runtime/release.json`
-(`reviewedNatives`), and `agy update` always installs the newest build. Before it
-runs, the helper reads the official release manifest for this computer (the fixed
-`.../manifests/<os>_<arch>.json` the CLI's own updater and installer use, 16 KB at
+(`reviewedNatives`), and `agy update` always installs the newest build. An ordinary
+CLI installation uses its native updater without waiting for a switching review.
+Saved usage profiles alone cannot activate accounts and do not require this hold.
+
+When `antigravity-switching/runtime-installation.json` is present in any relevant
+AAC configuration directory, the helper preserves the managed runtime's review
+gate. It checks the default `~/.ccs`, `CCS_DIR`, `CCS_HOME/.ccs`, and the parent of
+the explicit update state directory (`--state-dir`/`AAC_UPDATE_STATE_DIR`, which
+carries the dashboard's resolved `--config-dir` scope). These checks are additive;
+an override cannot hide a default-scope runtime. Malformed descriptors, symlinks
+(including dangling ancestors), Windows junctions, unreadable paths and unexpected
+file types also keep that gate; only certainly absent runtime paths allow the
+ordinary updater.
+Before a managed update runs, the helper reads the official release manifest for
+this computer (the fixed `.../manifests/<os>_<arch>.json` the CLI's own updater and installer use, 16 KB at
 most) and compares its version with the reviewed versions the dashboard passes as
 `--agy-reviewed` (on Windows they travel in the task request file; a manual Ubuntu
 run reads the packaged release file):
@@ -258,8 +270,13 @@ run reads the packaged release file):
 - an update that still lands outside the list (a release published between the
   check and `agy update`) reports `updated_unreviewed`, never silently.
 
-The hold covers Update all only. The CLI also updates itself in the background
-during ordinary runs, which no dashboard button can hold; switching then pauses
+The hold covers Update all for managed runtimes on any host. Managed execution
+uses the existing default-scope Ubuntu account lock and resident PTY coordinator.
+A custom-scope managed marker or one on another platform reports unsupported
+instead of falling through to the ordinary updater; the installed bridge cannot
+safely manage those scopes.
+The CLI also updates itself in the background during ordinary runs, which no
+dashboard button can hold; switching then pauses
 until a review, as before.
 
 Inventory disables background CLI updates (`MUSE_NO_AUTO_UPDATE=1`,
@@ -688,7 +705,7 @@ three. It follows the Ubuntu rows of this guide except where noted here.
 - **Antigravity.** Nas1 has no AI Account Center managed Antigravity runtime
   (that update branch needs `~/.ccs/antigravity-switching/runtime-installation.json`,
   which is never created there), so the CLI updates through the generic
-  `agy update` behind the same reviewed-version hold.
+  `agy update` without a switching-review hold.
 - **Only fixed commands.** For updates the dashboard runs three fixed commands
   on Nas1: the hash query, the extract and this helper. None reads or writes
   `auth.json`, `.credentials.json` or a saved profile, and restarts reuse each

@@ -12,7 +12,7 @@ let loads = 0;
  * Loads a fresh copy of bridge.js. `server(method, path, body)` answers each request with { status, payload }
  * (or a Promise of it). Returns the dispatcher, every sign-in view handed to Slint, every toast and every request.
  */
-async function loadBridge(server, { hostname = '192.168.10.179', pathname = '/accounts', login = null } = {}) {
+async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accounts', login = null } = {}) {
   const base = new URL('../public/', import.meta.url);
   let source = await readFile(new URL('bridge.js', base), 'utf8');
   const first = source.split('\n')[0];

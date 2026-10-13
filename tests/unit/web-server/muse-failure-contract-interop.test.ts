@@ -41,6 +41,7 @@ const childEnvironment = {
 const fixtures: {
   cases: Scenario[];
   nativeRateLimited: Scenario;
+  planChangedRateLimited: Scenario;
   blankPortalEmail: Record<string, unknown>;
 } = JSON.parse(
   execFileSync(
@@ -115,6 +116,31 @@ function serviceFixture(sequence: Record<string, unknown>[]) {
 }
 
 describe('real Python Muse helper to Node cache boundary', () => {
+  it('discards previous plan counters after a native plan change, including failed and cold retries', async () => {
+    const fixture = fixtures.planChangedRateLimited;
+    expect(fixture.nativeCleared).toBe(true);
+    expect(fixture.failed.plan).toBe('Muse Code Standard');
+    expect(fixture.nextRequestAt).toBe(3200);
+    const service = serviceFixture([
+      fixture.initial,
+      fixture.failed,
+      fixture.subsequent,
+      fixture.recovered,
+    ]);
+    expect((await service.read(0)).windows).toHaveLength(2);
+    for (const phase of [1, 2]) {
+      const account = await service.read(phase);
+      expect(account.status).toBe('unavailable');
+      expect(account.plan).toBe('Muse Code Standard');
+      expect(account.windows).toEqual([]);
+      expect(account.sampledAt).toBeNull();
+    }
+    const recovered = await service.read(3);
+    expect(recovered.status).toBe('ok');
+    expect(recovered.plan).toBe('Muse Code Standard');
+    expect(recovered.windows).toHaveLength(1);
+  });
+
   it.each(fixtures.cases.filter((fixture) => !transient.has(fixture.code)))(
     'clears Node and native old quota for $code and does not resurrect it on a later network error',
     async (fixture) => {

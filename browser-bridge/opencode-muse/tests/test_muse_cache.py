@@ -53,6 +53,7 @@ def concurrent_reader(root, counter, identities, results):
     def identify():
         with identities.get_lock():
             identities.value += 1
+        return PLAN
     try:
         value = muse.quota_sample(root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(counter=counter), identity_loader=identify)
         results.put((value["cached"], value["sampledAt"]))
@@ -101,7 +102,7 @@ class CacheTests(unittest.TestCase):
             client = Client()
             with patch.object(client, "get", side_effect=portal), \
                     patch.object(muse, "PortalClient", return_value=client), \
-                    patch.object(muse, "verify_device_identity"), patch.object(usage, "request_json") as request:
+                    patch.object(muse, "verify_device_identity", return_value=PLAN), patch.object(usage, "request_json") as request:
                 result = helpers.account("muse", "mac")
                 usage.fetch_muse(helpers.Credential(ACCESS, email=EMAIL), result, home)
             self.assertEqual(result["status"], "unavailable")
@@ -136,7 +137,7 @@ class CacheTests(unittest.TestCase):
             client = Client()
             with patch.object(client, "get", side_effect=portal), \
                     patch.object(muse, "PortalClient", return_value=client), \
-                    patch.object(muse, "verify_device_identity") as identity, \
+                    patch.object(muse, "verify_device_identity", return_value=PLAN) as identity, \
                     patch.object(muse.time, "time", return_value=1790945300), \
                     patch.object(usage, "request_json") as request:
                 result = helpers.account("muse", "mac")
@@ -176,7 +177,7 @@ class CacheTests(unittest.TestCase):
                 return {"subscription_quota": QUOTA}
 
             with patch("desktop_usage.muse_credentials", return_value=helpers.Credential(ACCESS, email=EMAIL)), \
-                    patch("muse_console.verify_device_identity"), \
+                    patch("muse_console.verify_device_identity", return_value=PLAN), \
                     patch("muse_console.PortalClient.get", side_effect=portal), \
                     patch("desktop_usage.request_json") as native_request:
                 with self.assertRaises(muse.MuseError) as several:
@@ -471,7 +472,7 @@ class ProviderObservationTimeTests(unittest.TestCase):
             muse.write_capsule(root, [COOKIE], "42", EMAIL, PLAN)
             client = Client(quota=dict(QUOTA, as_of=self.NOW - 3600))
             with patch("desktop_usage.muse_credentials", return_value=helpers.Credential(ACCESS, email=EMAIL)), \
-                 patch("muse_console.verify_device_identity") as identity, \
+                 patch("muse_console.verify_device_identity", return_value=PLAN) as identity, \
                  patch("muse_console.PortalClient.get", side_effect=client.get), \
                  patch("muse_console.time.time", return_value=self.NOW), \
                  patch("desktop_helpers.utc_now", return_value=self.ARRIVAL), \
@@ -566,12 +567,15 @@ class BrowserMigrationTests(unittest.TestCase):
         self.assertNotIn("synthetic", (Path(self.root) / muse.CACHE_NAME).read_text())
 
     def test_other_account_plan_team_source_and_native_credential_are_not_inherited(self):
-        mutations = [{"email": "other@example.com"}, {"plan": "Other"}, {"source": "Arbitrary web response"}, {"platform": "ubuntu"}]
+        mutations = [{"email": "other@example.com"}, {"source": "Arbitrary web response"}, {"platform": "ubuntu"}]
         for changes in mutations:
             value = copy.deepcopy(self.previous)
             value["sample"].update(changes)
             with self.subTest(changes=changes), self.assertRaises(muse.MuseError):
                 muse.restore_browser_sample(self.root, value, now=1790863800)
+        previous_plan = copy.deepcopy(self.previous)
+        previous_plan["sample"]["plan"] = "Other"
+        self.assertFalse(muse.restore_browser_sample(self.root, previous_plan, now=1790863800))
         with self.assertRaises(muse.MuseError):
             muse.restore_browser_sample(self.root, dict(self.previous, teamId="43"), now=1790863800)
         with patch("desktop_usage.muse_credentials", return_value=helpers.Credential("dca:different", email=EMAIL)):

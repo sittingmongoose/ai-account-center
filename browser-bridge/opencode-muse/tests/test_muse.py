@@ -390,7 +390,7 @@ class EmailLessSyncTests(unittest.TestCase):
         self.clock, self.teams, self.email, self.calls = [1790863200.0], [42], "", []
         for target, options in (
                 ("desktop_usage.muse_credentials", {"return_value": helpers.Credential(self.ACCESS, email=EMAIL)}),
-                ("muse_console.verify_device_identity", {}),
+                ("muse_console.verify_device_identity", {"return_value": PLAN}),
                 ("desktop_usage.request_json", {"return_value": {"user_email": EMAIL, "subs_tier_name": PLAN,
                                                                  "is_subs_active": True}}),
                 ("muse_console.PortalClient.get", {"autospec": True, "side_effect": self.portal}),

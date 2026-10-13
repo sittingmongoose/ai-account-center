@@ -1782,15 +1782,26 @@ class _Manifest:
 
 
 class AntigravityReviewHoldTests(unittest.TestCase):
-    """Update all never installs an Antigravity CLI build without a switching review."""
+    """Switching reviews protect managed runtimes without freezing ordinary CLIs."""
 
     REVIEWED = frozenset({'1.2.14', '1.2.16'})
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='ccs-agy-hold-')
         self.root = pathlib.Path(self.directory.name)
+        self.home_patch = mock.patch.object(pathlib.Path, 'home', return_value=self.root)
+        self.home_patch.start()
+        self.scope_patch = mock.patch.dict(os.environ, {'AAC_UPDATE_STATE_DIR': '', 'CCS_DIR': '', 'CCS_HOME': ''})
+        self.scope_patch.start()
+        self.descriptor = self.root / '.ccs/antigravity-switching/runtime-installation.json'
+        self.descriptor.parent.mkdir(parents=True)
+        # Even an invalid descriptor requires the managed gate. Only absence
+        # permits an ordinary native update; no real account data is read.
+        self.descriptor.write_text('fixture-managed-runtime')
 
     def tearDown(self):
+        self.scope_patch.stop()
+        self.home_patch.stop()
         self.directory.cleanup()
 
     def install(self, version='1.2.16', platform='ubuntu'):
@@ -1871,7 +1882,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
             value = updater.run_apply(install.platform, agy_reviewed=reviewed)
         return {row['appId']: row for row in value['results']}, ready, run
 
-    def test_run_apply_holds_antigravity_on_every_host_and_still_updates_the_rest(self):
+    def test_run_apply_holds_managed_antigravity_on_every_host_and_still_updates_the_rest(self):
         for platform in ('ubuntu', 'mac', 'windows'):
             rows, ready, run = self.run_apply(self.install(platform=platform), self.REVIEWED, '1.3.0')
             self.assertEqual(rows['antigravity-cli']['status'], 'held', platform)
@@ -1888,7 +1899,146 @@ class AntigravityReviewHoldTests(unittest.TestCase):
         rows, _, _ = self.run_apply(self.install('1.2.14'), self.REVIEWED, '1.2.16', update=reviewed)
         self.assertEqual(rows['antigravity-cli']['messageCode'], 'updated')
 
-    def test_fake_cli_is_never_asked_to_update_past_the_review(self):
+    def test_ordinary_installs_update_without_a_switching_review_on_every_host(self):
+        self.descriptor.unlink()
+        # Saved profiles supply usage, but cannot enable native activation.
+        (self.root / '.ccs/antigravity-profiles').mkdir()
+        moved = lambda item, deadline: common.result(item.app_id, item.platform, 'updated', item.version, '1.3.4', 'native', 'background_sessions_kept', attempted=True)
+        for platform in ('ubuntu', 'mac', 'windows'):
+            for review in (None, self.REVIEWED):
+                rows, ready, run = self.run_apply(self.install(platform=platform), review, '1.3.4', update=moved)
+                row = rows['antigravity-cli']
+                self.assertEqual((row['status'], row['messageCode'], row['version']), ('updated', 'background_sessions_kept', '1.3.4'))
+                self.assertTrue(row['updateAttempted'])
+                self.assertIn('antigravity-cli', [call.args[0].app_id for call in ready.call_args_list])
+                self.assertIn('antigravity-cli', [call.args[0].app_id for call in run.call_args_list])
+        probe = mock.Mock(side_effect=AssertionError('Ordinary updates need no switching manifest check'))
+        self.assertIsNone(updater.antigravity_hold(self.install(), None, latest=probe))
+        probe.assert_not_called()
+
+    def test_unsafe_or_unreadable_runtime_paths_keep_the_review_gate(self):
+        self.descriptor.unlink()
+        self.assertFalse(updater.antigravity_runtime_present())
+        for target in (self.descriptor, self.descriptor.parent, self.descriptor.parent.parent):
+            original = pathlib.Path.lstat
+            def unreadable(path, *args, **kwargs):
+                if path == target:
+                    raise PermissionError('fixture denied')
+                return original(path, *args, **kwargs)
+            with mock.patch.object(pathlib.Path, 'lstat', unreadable):
+                self.assertTrue(updater.antigravity_runtime_present())
+                row = updater.antigravity_hold(self.install(), self.REVIEWED, latest=lambda platform: '1.3.4')
+                self.assertEqual(row['status'], 'held')
+        # A dangling marker or ancestor cannot be mistaken for absence.
+        self.descriptor.symlink_to(self.root / 'missing-descriptor')
+        self.assertTrue(updater.antigravity_runtime_present())
+        self.descriptor.unlink()
+        self.descriptor.parent.rmdir()
+        self.descriptor.parent.symlink_to(self.root / 'missing-runtime', target_is_directory=True)
+        self.assertTrue(updater.antigravity_runtime_present())
+
+    def test_managed_marker_never_falls_through_to_ordinary_update(self):
+        for platform in ('ubuntu', 'mac', 'windows'):
+            with mock.patch.object(updater, 'perform_cli_update') as native, \
+                    mock.patch.object(updater, 'command', side_effect=common.UpdateFailure('unsupported')), \
+                    mock.patch.object(updater, 'scan') as scan:
+                row = updater.update_cli(self.install(platform=platform), time.monotonic() + 60)
+            self.assertEqual(row['status'], 'failed')
+            self.assertFalse(row['updateAttempted'])
+            native.assert_not_called()
+            scan.assert_not_called()
+
+    def test_custom_scopes_preserve_review_and_cannot_use_the_default_bridge(self):
+        self.descriptor.unlink()
+        for variable in ('AAC_UPDATE_STATE_DIR', 'CCS_DIR', 'CCS_HOME'):
+            custom = self.root / variable
+            config = custom / '.ccs' if variable == 'CCS_HOME' else custom
+            descriptor = config / 'antigravity-switching/runtime-installation.json'
+            descriptor.parent.mkdir(parents=True)
+            descriptor.write_text('fixture-custom-runtime')
+            value = custom / 'app-updates' if variable == 'AAC_UPDATE_STATE_DIR' else custom
+            # Check all scopes, even if a higher-precedence selector names an
+            # absent directory. A default-scope bridge cannot own these states.
+            scopes = {key: str(self.root / ('missing-' + key)) for key in ('AAC_UPDATE_STATE_DIR', 'CCS_DIR', 'CCS_HOME')}
+            scopes['AAC_UPDATE_STATE_DIR'] += '/app-updates'
+            scopes[variable] = str(value)
+            with mock.patch.dict(os.environ, scopes):
+                self.assertTrue(updater.antigravity_runtime_present(), variable)
+                self.assertTrue(updater.antigravity_runtime_present(custom_only=True), variable)
+                row = updater.antigravity_hold(self.install(), self.REVIEWED, latest=lambda platform: '1.3.4')
+                self.assertEqual(row['messageCode'], 'held_for_review')
+                with mock.patch.object(updater, 'perform_cli_update') as native, \
+                        mock.patch.object(updater, 'command') as bridge, \
+                        mock.patch.object(updater, 'scan') as scan:
+                    row = updater.update_cli(self.install('1.2.14'), time.monotonic() + 60)
+                self.assertEqual((row['status'], row['messageCode'], row['updateAttempted']), ('failed', 'unsupported', False))
+                native.assert_not_called()
+                bridge.assert_not_called()
+                scan.assert_not_called()
+
+    def test_custom_selectors_do_not_hide_default_runtime_or_duplicate_its_scope(self):
+        with mock.patch.dict(os.environ, {'CCS_DIR': str(self.root / 'missing-custom')}):
+            self.assertTrue(updater.antigravity_runtime_present())
+            self.assertFalse(updater.antigravity_runtime_present(custom_only=True))
+        with mock.patch.dict(os.environ, {'CCS_DIR': str(self.root / '.ccs'), 'CCS_HOME': str(self.root),
+                                         'AAC_UPDATE_STATE_DIR': str(self.root / '.ccs/app-updates')}):
+            self.assertTrue(updater.antigravity_runtime_present())
+            self.assertFalse(updater.antigravity_runtime_present(custom_only=True))
+
+    def test_custom_path_ancestors_are_checked_without_following_links(self):
+        self.descriptor.unlink()
+        ancestor = self.root / 'custom-parent'
+        config = ancestor / 'nested/config'
+        with mock.patch.dict(os.environ, {'CCS_DIR': str(config)}):
+            self.assertFalse(updater.antigravity_runtime_present())
+            ancestor.write_text('fixture-file-instead-of-directory')
+            self.assertTrue(updater.antigravity_runtime_present())
+            ancestor.unlink()
+            ancestor.symlink_to(self.root / 'missing-parent', target_is_directory=True)
+            self.assertTrue(updater.antigravity_runtime_present())
+            ancestor.unlink()
+            ancestor.mkdir()
+            original = pathlib.Path.lstat
+            def unreadable(path, *args, **kwargs):
+                if path == ancestor:
+                    raise PermissionError('fixture custom ancestor denied')
+                return original(path, *args, **kwargs)
+            with mock.patch.object(pathlib.Path, 'lstat', unreadable):
+                self.assertTrue(updater.antigravity_runtime_present())
+            def junction(path, *args, **kwargs):
+                if path == ancestor:
+                    return types.SimpleNamespace(st_mode=0o40700, st_file_attributes=0x400)
+                return original(path, *args, **kwargs)
+            with mock.patch.object(pathlib.Path, 'lstat', junction):
+                self.assertTrue(updater.antigravity_runtime_present())
+
+    def test_relative_ccs_directory_matches_dashboard_resolution(self):
+        self.descriptor.unlink()
+        custom = self.root / 'custom'
+        descriptor = custom / 'antigravity-switching/runtime-installation.json'
+        descriptor.parent.mkdir(parents=True)
+        descriptor.write_text('fixture-custom-runtime')
+        with mock.patch.dict(os.environ, {'CCS_DIR': 'custom'}), mock.patch.object(os, 'getcwd', return_value=str(self.root)):
+            self.assertTrue(updater.antigravity_runtime_present())
+            self.assertTrue(updater.antigravity_runtime_present(custom_only=True))
+
+    def test_state_dir_argument_preserves_the_dashboards_config_scope(self):
+        self.descriptor.unlink()
+        config = self.root / 'dashboard-config'
+        descriptor = config / 'antigravity-switching/runtime-installation.json'
+        descriptor.parent.mkdir(parents=True)
+        descriptor.write_text('fixture-custom-runtime')
+        seen = []
+        def apply(*args):
+            seen.append(updater.antigravity_runtime_present(custom_only=True))
+            return {'results': []}
+        with mock.patch.object(updater, 'run_apply', side_effect=apply), \
+                mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu', '--state-dir', str(config / 'app-updates')]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            updater.main()
+        self.assertEqual(seen, [True])
+
+    def test_fake_ordinary_cli_updates_past_the_switching_review(self):
         # A fixture `agy` on a fixture HOME: --version prints its version file,
         # `update` records the call and moves to the version the manifest named.
         home = self.root / 'home'
@@ -1903,17 +2053,16 @@ class AntigravityReviewHoldTests(unittest.TestCase):
             pathlib.Path(str(state) + '.next').write_text(newest)
             with mock.patch.object(pathlib.Path, 'home', return_value=home), mock.patch.dict(os.environ, env), \
                     mock.patch.object(updater, 'detect', side_effect=lambda platform: {**installs, 'antigravity-cli': updater.detect_cli('antigravity-cli', platform)}), \
-                    mock.patch.object(updater, 'latest_agy_version', return_value=newest), \
+                    mock.patch.object(updater, 'latest_agy_version', side_effect=AssertionError('No switching manifest needed')), \
                     mock.patch.object(updater, 'scan', return_value=[]):
                 return updater.run_apply('ubuntu', agy_reviewed=reviewed)['results'][0]
 
-        held = run('1.3.0', self.REVIEWED)
-        self.assertEqual((held['status'], held['heldVersion'], held['version']), ('held', '1.3.0', '1.2.16'))
-        self.assertNotIn('update', calls.read_text().split())
-        self.assertEqual(state.read_text(), '1.2.16')
-        updated = run('1.3.0', self.REVIEWED | {'1.3.0'})
-        self.assertEqual((updated['status'], updated['version'], updated['messageCode']), ('updated', '1.3.0', 'updated'))
+        updated = run('1.3.4', self.REVIEWED)
+        self.assertEqual((updated['status'], updated['version'], updated['messageCode']), ('updated', '1.3.4', 'updated'))
         self.assertIn('update', calls.read_text().split())
+        updated = run('1.3.5', None)
+        self.assertEqual((updated['status'], updated['version'], updated['messageCode']), ('updated', '1.3.5', 'updated'))
+        self.assertEqual(state.read_text(), '1.3.5')
 
     def test_main_passes_the_dashboard_list_and_falls_back_to_the_release_file(self):
         seen = []

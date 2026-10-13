@@ -12,6 +12,7 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 import sys
 import time
 import uuid
@@ -35,10 +36,12 @@ CODEX_BRIDGE_SECONDS = 420
 
 # Antigravity switching works only with native CLI builds that passed a
 # switching review (scripts/antigravity/runtime/release.json, reviewedNatives).
-# `agy update` always installs the newest build, so Update all reads the
-# official release manifest first (the same fixed URL the CLI's own updater and
+# `agy update` always installs the newest build, so for managed switching
+# installations Update all reads the official release manifest first
+# (the same fixed URL the CLI's own updater and
 # installer use) and holds the installed build when the newest one is not
-# reviewed. Nothing here installs, stops or restarts anything.
+# reviewed. Ordinary CLI installations have no switching runtime to preserve
+# and use the native updater independently of that review.
 AGY_MANIFEST_BASE = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/"
 AGY_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[A-Za-z0-9_.-]+)?$")
 AGY_MAX_REVIEWED = 16
@@ -120,15 +123,63 @@ def latest_agy_version(platform):
         return None
 
 
+def _antigravity_runtime_at(root):
+    """Check every ancestor without following symlinks or Windows junctions."""
+    descriptor = root / 'antigravity-switching/runtime-installation.json'
+    for current in (*reversed(descriptor.parents), descriptor):
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            return False
+        except (OSError, ValueError):
+            return True
+        if (current == descriptor or not stat.S_ISDIR(info.st_mode) or
+                getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            return True
+    return True
+
+
+def antigravity_runtime_present(custom_only=False):
+    """False only when managed runtimes are absent in every configured scope.
+
+    The descriptor is needed for native activation; saved usage profiles alone
+    cannot switch accounts. Do not parse the descriptor here: malformed files,
+    symlinks (including dangling ancestors) and unreadable paths must keep the
+    review gate and managed update path, never fall through to a native update.
+    Scopes are additive: --state-dir carries the dashboard's resolved config
+    directory, environment overrides may name others, and the default scope is
+    always checked. The installed update bridge supports only that default.
+    """
+    try:
+        default = pathlib.Path(os.path.abspath(pathlib.Path.home() / '.ccs'))
+        roots = [default]
+        state = os.environ.get('AAC_UPDATE_STATE_DIR')
+        if state:
+            roots.append(pathlib.Path(os.path.abspath(state)).parent)
+        directory = os.environ.get('CCS_DIR')
+        if directory:
+            roots.append(pathlib.Path(os.path.abspath(directory)))
+        home = os.environ.get('CCS_HOME')
+        if home:
+            roots.append(pathlib.Path(os.path.abspath(home)) / '.ccs')
+        return any(_antigravity_runtime_at(root) for root in dict.fromkeys(roots)
+                   if not custom_only or root != default)
+    except (OSError, ValueError):
+        return True
+
+
 def antigravity_hold(install, reviewed, latest=None):
     """None when the update may run; otherwise the finished row for this app.
 
-    A newest build outside the reviewed set is never installed: the row is
-    `held` and names that build. When the reviewed set or the newest version
+    Ordinary native installs do not need a switching review. For an existing
+    managed runtime, a newest build outside the reviewed set is never installed:
+    the row is `held` and names that build. When the reviewed set or the newest version
     cannot be read, nothing is installed either (fail closed). An installed
     build that already is the newest one reports current without running the
     official updater, so no later publication can slip in.
     """
+    if not antigravity_runtime_present():
+        return None
     before = install.version
     if not before:
         return None
@@ -147,9 +198,9 @@ def antigravity_hold(install, reviewed, latest=None):
 
 
 def mark_unreviewed(row, reviewed):
-    """An update that still landed outside the reviewed set says so, never silently."""
+    """A managed update that landed outside the reviewed set says so, never silently."""
     if (isinstance(row, dict) and row.get("appId") == "antigravity-cli" and row.get("status") == "updated" and
-            (reviewed is None or row.get("version") not in reviewed)):
+            (reviewed is None or row.get("version") not in reviewed) and antigravity_runtime_present()):
         row["messageCode"] = "updated_unreviewed"
     return row
 
@@ -553,8 +604,9 @@ def update_cli(install, deadline):
     try:
         if not before:
             raise UpdateFailure("version_unknown")
-        descriptor = pathlib.Path.home() / '.ccs/antigravity-switching/runtime-installation.json'
-        if install.app_id == 'antigravity-cli' and install.platform == 'ubuntu' and (descriptor.exists() or descriptor.is_symlink()):
+        if install.app_id == 'antigravity-cli' and antigravity_runtime_present():
+            if install.platform != 'ubuntu' or antigravity_runtime_present(custom_only=True):
+                raise UpdateFailure('unsupported')
             # The same account lock and proved resident PTY coordinator owns
             # managed updates. Never move this session into a replacement tmux.
             bridge = pathlib.Path(__file__).parents[2] / 'dist/antigravity/managed-update-command.js'
@@ -741,7 +793,8 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     update, and {"event": "result", ...} as soon as its row is known, so the
     dashboard can show live progress. cancelled() is polled between apps: once
     true, every app not yet started is reported as skipped. agy_reviewed is the
-    Antigravity CLI's reviewed version set (None: unknown, so it is held).
+    Antigravity CLI's reviewed version set (None: unknown, so managed switching
+    installations are held).
     """
     emit = emit or (lambda event: None)
     cancelled = cancelled or (lambda: False)

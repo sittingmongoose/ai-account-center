@@ -65,8 +65,8 @@ capsule; the capsule and cache formats are unchanged.
 - After that, any session of the pinned user may read, and another user is
   `account_mismatch`.
 - In every case the collector reads only the capsule's team, the live CLI
-  identity must still match the capsule's email and plan, and the team's tier
-  must equal the plan. It never selects or switches teams on this path.
+  identity must still match the capsule's email, and the team's tier must equal
+  the live CLI plan. It never selects or switches teams on this path.
 - A browser Sync replaces the capsule's cookies only with a session a fresh
   reading verified (email, pinned user, or the capsule session itself), or,
   for a cached reading, while a pin guards the next fresh one.
@@ -74,6 +74,14 @@ capsule; the capsule and cache formats are unchanged.
 Anything else stays `identity_unavailable`, including auth/me without a
 `userId`. Choosing another team in the popup needs an email-verified reading.
 A provider 429 also holds back a team switch until its cooldown ends.
+
+Plan upgrades and downgrades are detected on the next due refresh without
+another browser sync. The saved capsule tier is a hint, not an account identity:
+the verified web user and team binding survive a plan change. Once the native
+account reports a new plan, old quota counters are discarded and the portal
+must confirm that same plan before new usage is shown. A failed refresh never
+relabels old limits as the new plan. Shared cooldowns still apply, and cached
+readings keep the plan and observation time of their own quota.
 
 The dashboard labels Muse windows with the official dev.meta.ai/usage card
 names: "Current usage (5-hour)" for the rolling window and "Weekly limit". The

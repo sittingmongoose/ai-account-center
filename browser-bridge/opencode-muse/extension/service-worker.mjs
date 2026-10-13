@@ -17,7 +17,8 @@ async function museSync(teamId = null) {
     if (!response || response.schemaVersion !== 1 || response.ok !== true) {
       const teams = response?.code === 'choose_team' ? projectMuseTeams(response.teams) : [];
       const code = safeMuseCode(response?.code);
-      await chrome.storage.local.set({lastMuseError: code, museTeams: teams});
+      const changedPlan = typeof response?.plan === 'string' && response.plan !== saved.lastMuseSample?.plan;
+      await chrome.storage.local.set({lastMuseError: code, museTeams: teams, ...(changedPlan ? {lastMuseSample: null} : {})});
       return {ok: false, code, teams};
     }
     const sample = projectMuseSample(response.sample);

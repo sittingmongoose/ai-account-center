@@ -172,10 +172,10 @@ def fetch_muse(credential, result, home=None):
         if credential.email and credential.email.lower() == bound_email.lower():
             result.update(email=bound_email, plan=bound_plan)
             cached = quota_sample(root, cookies, bound_email, bound_plan, team, credential.access,
-                                  identity_loader=lambda: verify_device_identity(credential, bound_email, bound_plan),
+                                  identity_loader=lambda: verify_device_identity(credential, bound_email),
                                   bound_team=team)
         if cached:
-            result.update(email=bound_email, plan=bound_plan, status="cached" if cached["cached"] else "ok", message=cached["message"],
+            result.update(email=bound_email, plan=cached["quota"]["tier"], status="cached" if cached["cached"] else "ok", message=cached["message"],
                           sampledAt=cached["sampledAt"], windows=normalize_muse({"subscription_quota": cached["quota"]}))
             result["source"] += " + authenticated Meta web quota"
             return
@@ -183,6 +183,8 @@ def fetch_muse(credential, result, home=None):
         pass
     except MuseError as error:
         if error.code not in {"no_browser_cookie", "local_storage_error"}:
+            if error.plan is not None:
+                result["plan"] = error.plan
             failed(error.code, ERROR_MESSAGES[error.code])
             return
     try:
@@ -213,7 +215,7 @@ def fetch_muse(credential, result, home=None):
         return
     try:
         cookies, team, bound_email, bound_plan = read_capsule(root)
-        if not result["email"] or not result["plan"] or bound_email.lower() != result["email"].lower() or bound_plan != result["plan"]:
+        if not result["email"] or not result["plan"] or bound_email.lower() != result["email"].lower():
             failed("account_mismatch", ERROR_MESSAGES["account_mismatch"])
             return
         sample = quota_sample(root, cookies, result["email"], result["plan"], team, credential.access, bound_team=team)
@@ -224,6 +226,8 @@ def fetch_muse(credential, result, home=None):
             result.pop("failureCode", None)
             result["source"] += " + authenticated Meta web quota"
     except MuseError as error:
+        if error.plan is not None:
+            result["plan"] = error.plan
         failed(error.code, result["message"] if error.code == "no_browser_cookie"
                else ERROR_MESSAGES.get(error.code, ERROR_MESSAGES["error"]))
 

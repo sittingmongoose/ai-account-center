@@ -410,12 +410,24 @@ different bytes under that name (a bundle rebuild keeps the pin), this one is
 kept beside it as `<old pin>-<sha16>.json`, the name the rebuild uses. Existing
 backups are never overwritten.
 
-### Update all holds unreviewed builds
+### Update all preserves managed switching runtimes
 
-The dashboard's Update all never installs an Antigravity CLI build that is not
-in the reviewed set, on any of the four computers it updates (Ubuntu, Mac,
-Windows and Nas1). Account switching exists on Ubuntu only: the other
-computers, Nas1 included, are only ever updated. The helper reads the
+The dashboard's Update all updates ordinary Antigravity CLI installations through
+the native updater. A new release does not need a switching review when no managed
+runtime is installed. Saved usage profiles alone cannot enable native activation.
+
+An installation with `antigravity-switching/runtime-installation.json` in any
+relevant AAC configuration directory keeps the reviewed-build requirement. The
+helper checks `~/.ccs`, `CCS_DIR`, `CCS_HOME/.ccs`, and the explicit update state
+directory's parent (the dashboard passes its resolved `--config-dir` scope there).
+Overrides cannot hide the default scope. Malformed descriptors, symlinks,
+Windows junctions, unreadable ancestors and unexpected file types keep the gate
+too; only certainly absent runtime paths permit the ordinary updater. Account
+switching exists on Ubuntu only: the managed update still uses the default-scope
+account lock and resident PTY coordinator. A custom-scope managed marker or one
+on another platform reports unsupported if an update is needed; it cannot fall
+through to a native update or use the default-scope bridge.
+For a managed installation, the helper reads the
 official release manifest first; when its newest version is not reviewed, the
 row reads "Update held: Antigravity X is waiting for a switching review" and
 the installed build stays. When the review list or the manifest cannot be read,
@@ -423,7 +435,7 @@ nothing is installed either. A version check is the right gate here: the
 manifest names a version and a hash of the download archive, not the hash of
 the installed binary the review pins, and the official updater cannot install a
 chosen version, so the only safe choices are "update to a reviewed version" or
-"hold". The switching gate itself
+"hold" for a managed runtime. The switching gate itself
 stays hash-based: a held or skipped update changes nothing, and a binary that
 somehow differs from its reviewed hash still pauses switching. No automatic
 compatibility check replaces the review: several reviewed surfaces (token

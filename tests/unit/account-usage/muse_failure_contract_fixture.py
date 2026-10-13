@@ -24,7 +24,7 @@ CODES = ["needs_sign_in", "inactive_subscription", "account_mismatch", "identity
 TRANSIENT = {"rate_limited", "provider_error", "network_error"}
 
 
-def scenario(code, retain_native=False):
+def scenario(code, retain_native=False, changed_plan=None):
     with tempfile.TemporaryDirectory(prefix="muse-contract-") as folder:
         home = Path(folder)
         cache_root = home / ".ccs/account-usage"
@@ -33,6 +33,7 @@ def scenario(code, retain_native=False):
         stamp = ["2026-10-01T12:00:00Z"]
         failure = [None]
         quota = [dict(QUOTA)]
+        plan = [PLAN]
 
         def portal(*_args, **_kwargs):
             if failure[0] == "unexpected_failure":
@@ -47,7 +48,7 @@ def scenario(code, retain_native=False):
         with patch("desktop_usage.muse_credentials", return_value=helpers.Credential(
                 "dca:synthetic-fixture", email=EMAIL)), \
              patch("muse_console.read_capsule", return_value=([COOKIE], "42", EMAIL, PLAN)), \
-             patch("muse_console.verify_device_identity", return_value=None), \
+             patch("muse_console.verify_device_identity", side_effect=lambda *_: plan[0]), \
              patch("muse_console.fetch_quota", side_effect=portal), \
              patch("muse_console.time.time", side_effect=lambda: clock[0]), \
              patch("desktop_helpers.utc_now", side_effect=lambda: stamp[0]), \
@@ -60,6 +61,7 @@ def scenario(code, retain_native=False):
             if code in TRANSIENT and not retain_native:
                 (cache_root / muse.CACHE_NAME).unlink()
             failure[0], clock[0], stamp[0] = code, 1400, "2026-10-01T12:10:00Z"
+            plan[0] = changed_plan or PLAN
             failed = usage.collect("muse", "mac", home)
             state = muse.read_usage_state(cache_root)
             native_cleared = state["quota"] is None and state["sampledAt"] is None
@@ -69,7 +71,7 @@ def scenario(code, retain_native=False):
             subsequent = usage.collect("muse", "mac", home)
             # A successful partial reading with real zero/null values is valid.
             failure[0], clock[0], stamp[0] = None, 4000, "2026-10-01T12:30:00Z"
-            quota[0] = {"tier": PLAN, "weekly_weighted_used": "0", "weekly_weighted_limit": "1000",
+            quota[0] = {"tier": plan[0], "weekly_weighted_used": "0", "weekly_weighted_limit": "1000",
                         "weekly_resets_at": None}
             recovered = usage.collect("muse", "mac", home)
             key_request.assert_not_called()
@@ -99,7 +101,7 @@ def blank_portal_email():
         with patch("desktop_usage.muse_credentials", return_value=helpers.Credential(
                 "dca:synthetic-fixture", email=EMAIL)), \
              patch("muse_console.read_capsule", return_value=([COOKIE], "42", EMAIL, PLAN)), \
-             patch("muse_console.verify_device_identity", return_value=None), \
+             patch("muse_console.verify_device_identity", return_value=PLAN), \
              patch("muse_console.PortalClient.get", autospec=True, side_effect=portal), \
              patch("muse_console.time.time", return_value=1790945300), \
              patch("desktop_usage.request_json", side_effect=offline), \
@@ -110,5 +112,6 @@ def blank_portal_email():
 if __name__ == "__main__":
     result = {"cases": [scenario(code) for code in CODES],
               "nativeRateLimited": scenario("rate_limited", retain_native=True),
+              "planChangedRateLimited": scenario("rate_limited", retain_native=True, changed_plan="Muse Code Standard"),
               "blankPortalEmail": blank_portal_email()}
     print(json.dumps(result, allow_nan=False, separators=(",", ":")))

@@ -83,3 +83,13 @@ test('cached helper sample stays cached with its original observation time in br
   assert.equal(value.store.lastMuseSample.windows[0].usedPercent, 0);
   assert.equal(JSON.stringify(value.store).includes('sk-private'), false);
 });
+
+test('a native plan change clears the old browser quota even when the new reading is rate limited', async () => {
+  const value = await worker({schemaVersion: 1, ok: false, code: 'rate_limited', plan: 'Muse Code Standard'});
+  await value.listeners.startup();
+  assert.equal(value.store.lastMuseSample, null);
+  assert.equal(value.store.lastMuseError, 'rate_limited');
+  await value.listeners.alarm({name: 'ccs-muse-refresh'});
+  assert.equal(value.requests[1].request.previousSample, null);
+  assert.deepEqual(value.alarms.get('ccs-muse-refresh'), {periodInMinutes: 5});
+});

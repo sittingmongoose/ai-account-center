@@ -91,6 +91,8 @@ def main():
             from muse_console import MuseError
             if isinstance(error, MuseError):
                 response = {"schemaVersion": 1, "ok": False, "code": error.code}
+                if error.plan is not None:
+                    response["plan"] = error.plan
                 if error.code == "choose_team":
                     response["teams"] = error.teams
             else:

@@ -61,13 +61,26 @@ const museSaved = await chrome.storage.local.get(['lastMuseSample', 'lastMuseErr
 renderMuse(museSaved.lastMuseSample); renderTeams(museSaved.museTeams ?? []);
 if (museSaved.lastMuseError) museStatus.textContent = MUSE_ERROR_MESSAGES[safeMuseCode(museSaved.lastMuseError)];
 else if (museSaved.lastMuseSample?.status === 'cached') museStatus.textContent = museSaved.lastMuseSample.message;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.lastMuseSample) renderMuse(changes.lastMuseSample.newValue);
+  if (changes.lastMuseError) {
+    museStatus.textContent = changes.lastMuseError.newValue
+      ? MUSE_ERROR_MESSAGES[safeMuseCode(changes.lastMuseError.newValue)]
+      : changes.lastMuseSample?.newValue?.message ?? 'Muse usage synced for AI Account Center.';
+  }
+});
 museButton.addEventListener('click', async () => {
   museButton.disabled = true; museStatus.textContent = 'Reading Muse usage…';
   try {
     const teamId = museTeamLabel.hidden ? museSaved.selectedMuseTeamId ?? null : museTeamSelect.value || null;
     const result = await chrome.runtime.sendMessage({action: 'museSync', teamId});
     if (result?.ok) { renderMuse(result.sample); museTeamLabel.hidden = true; museStatus.textContent = result.sample.status === 'cached' ? result.sample.message : 'Muse usage synced for AI Account Center.'; }
-    else { if (result?.teams) renderTeams(result.teams); museStatus.textContent = MUSE_ERROR_MESSAGES[safeMuseCode(result?.code)]; }
+    else {
+      renderMuse((await chrome.storage.local.get(['lastMuseSample'])).lastMuseSample);
+      if (result?.teams) renderTeams(result.teams);
+      museStatus.textContent = MUSE_ERROR_MESSAGES[safeMuseCode(result?.code)];
+    }
   } catch { museStatus.textContent = MUSE_ERROR_MESSAGES.host_unavailable; }
   finally { museButton.disabled = false; }
 });
