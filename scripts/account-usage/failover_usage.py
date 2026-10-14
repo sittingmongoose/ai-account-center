@@ -359,7 +359,7 @@ def _run(request):
         return _failure("invalid_response", public)
     code = result.get("failureCode")
     sample = public_sample(result.get("sample"), provider, platform)
-    observed_plan = _text(result.get("observedPlan")) if provider == "muse" else None
+    observed_plan = _text(result.get("observedPlan")) if provider in {"muse", "cursor"} else None
     observed_plan_at = _timestamp(result.get("observedPlanAt"), observation=True)
     plan_metadata = {"observedPlan": observed_plan, "observedPlanAt": observed_plan_at} if observed_plan and observed_plan_at else {}
     if code is not None:

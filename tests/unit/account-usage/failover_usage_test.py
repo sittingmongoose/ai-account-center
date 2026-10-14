@@ -13,6 +13,7 @@ from unittest import mock
 HELPERS = Path(__file__).resolve().parents[3] / "scripts" / "account-usage"
 sys.path.insert(0, str(HELPERS))
 import failover_usage as usage
+from cursor_failure_contract_fixture import scenario as cursor_scenario, PRIVATE as CURSOR_PRIVATE, token as cursor_token
 
 TOKEN = "fixture-private-access-token"
 EMAIL = "fixture@example.com"
@@ -398,6 +399,48 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(result["failureCode"])
         self.assertEqual(adapter.inventory_calls[0][0][1], self.home)
         self.assertEqual(adapter.inventory_calls[0][1], {"ccs_dir": root})
+
+
+class CursorDispatcherContractTests(unittest.TestCase):
+    def test_real_cursor_http_failures_preserve_verified_plan_at_dispatcher_boundary(self):
+        for status, code in ((415, "provider_error"), (429, "rate_limited")):
+            with self.subTest(status=status):
+                case = cursor_scenario(status)
+                result = case["failed"]
+                self.assertEqual(case["initial"]["sample"]["plan"], "ultra")
+                self.assertEqual(result["failureCode"], code)
+                self.assertIsNone(result["sample"])
+                self.assertEqual(result["observedPlan"], "premium")
+                self.assertEqual(result["observedPlanAt"], "2026-10-14T12:01:00.000Z")
+                self.assertEqual(result["candidate"], case["candidate"])
+                self.assertEqual(case["providerRequests"], 2)
+                self.assertEqual(case["externalRequests"], 0)
+                if status == 429:
+                    self.assertEqual(result["retryAfterSeconds"], 1800)
+                else:
+                    self.assertNotIn("retryAfterSeconds", result)
+                for private in (CURSOR_PRIVATE, cursor_token(), "auth0|cursor-fixture", "auth.json", "accessToken"):
+                    self.assertNotIn(private, json.dumps(case))
+
+    def test_real_cursor_rotation_strips_plan_observation_but_preserves_http_cooldown(self):
+        for change in ("revision", "identity"):
+            with self.subTest(change=change):
+                result = cursor_scenario(429, change)["failed"]
+                self.assertEqual(result["failureCode"], "source_changed")
+                self.assertIsNone(result["sample"])
+                self.assertIsNone(result["candidate"])
+                self.assertNotIn("observedPlan", result)
+                self.assertNotIn("observedPlanAt", result)
+                self.assertTrue(result["rateLimited"])
+                self.assertEqual(result["retryAfterSeconds"], 1800)
+
+    def test_real_cursor_account_mismatch_strips_plan_observation(self):
+        result = cursor_scenario(415, "account_mismatch")["failed"]
+        self.assertEqual(result["failureCode"], "account_mismatch")
+        self.assertIsNone(result["sample"])
+        self.assertNotIn("observedPlan", result)
+        self.assertNotIn("observedPlanAt", result)
+        self.assertNotIn("retryAfterSeconds", result)
 
 
 class CommandTests(unittest.TestCase):
