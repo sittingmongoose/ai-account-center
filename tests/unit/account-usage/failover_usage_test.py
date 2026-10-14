@@ -117,6 +117,32 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn(TOKEN, json.dumps(result))
         self.assertNotIn("private-account-id", json.dumps(result))
 
+    def test_private_claude_profile_context_is_forwarded_for_both_inventory_checks(self):
+        selected = {"id": "work", "email": EMAIL, "profilePath": str(self.home / "PrivateProfile"), "isDefault": False}
+        row = candidate("claude")
+        adapter = FakeAdapter(before=[row], result={"sample": sample("claude"), "failureCode": None})
+        result, adapter = self.run_helper(self.request(provider="claude", row=row, claudeProfile=selected), adapter)
+        self.assertIsNone(result["failureCode"])
+        self.assertEqual(len(adapter.inventory_calls), 2)
+        for _, kwargs in adapter.inventory_calls + adapter.collect_calls:
+            self.assertEqual(kwargs, {"ccs_dir": self.home / ".ccs", "claude_profile": selected})
+        self.assertNotIn("PrivateProfile", json.dumps(result))
+
+    def test_claude_profile_context_rejects_ambiguous_or_untrusted_fields(self):
+        good = {"id": "work", "email": EMAIL, "profilePath": str(self.home / "PrivateProfile")}
+        bad = [None, {}, {**good, "token": TOKEN}, {**good, "id": "../work"},
+               {**good, "email": "not-email"}, {**good, "isDefault": "true"},
+               {**good, "profilePath": "relative/Profile"}, {**good, "profilePath": "//server/share"},
+               {**good, "profilePath": str(self.home) + "\x00private"}]
+        for value in bad:
+            with self.subTest(value=value):
+                result, adapter = self.run_helper(self.request("inventory", provider="claude", claudeProfile=value))
+                self.assertEqual(result["candidates"], [])
+                self.assertEqual(adapter.inventory_calls, [])
+        result, adapter = self.run_helper(self.request("inventory", provider="codex", claudeProfile=good))
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(adapter.inventory_calls, [])
+
     def test_rotated_revision_before_collection_never_queries_provider(self):
         adapter = FakeAdapter(before=[candidate(revision="4" * 64)])
         result, _ = self.run_helper(self.request(), adapter)
@@ -201,6 +227,45 @@ class ProtocolTests(unittest.TestCase):
             result, _ = self.run_helper(self.request(), adapter)
             self.assertEqual(result["failureCode"], "unavailable")
             self.assertNotIn("retryAfterSeconds", result)
+
+    def test_valid_cached_quota_survives_transient_failure_but_not_identity_failure(self):
+        for code in ("rate_limited", "network_error", "provider_error", "busy", "unavailable"):
+            adapter = FakeAdapter(result={"sample": sample(status="cached"), "failureCode": code,
+                                          "retryAfterSeconds": 180, "rawResponse": TOKEN})
+            result, _ = self.run_helper(self.request(), adapter)
+            self.assertEqual(result["failureCode"], code)
+            self.assertEqual(result["sample"]["status"], "cached")
+            self.assertEqual(result["retryAfterSeconds"], 180)
+            self.assertNotIn(TOKEN, json.dumps(result))
+        for code in ("needs_sign_in", "account_mismatch", "plan_mismatch", "source_changed"):
+            adapter = FakeAdapter(result={"sample": sample(), "failureCode": code})
+            result, _ = self.run_helper(self.request(), adapter)
+            self.assertIsNone(result["sample"])
+
+    def test_healthy_refresh_budget_is_bounded_and_never_exposed_after_failure(self):
+        adapter = FakeAdapter(result={"sample": sample(status="cached"), "failureCode": None,
+                                      "refreshAfterSeconds": 270})
+        result, _ = self.run_helper(self.request(), adapter)
+        self.assertEqual(result["refreshAfterSeconds"], 270)
+        for refresh in (-1, 0, True, float("nan"), float("inf"), 86401, TOKEN):
+            adapter.result["refreshAfterSeconds"] = refresh
+            result, _ = self.run_helper(self.request(), adapter)
+            self.assertNotIn("refreshAfterSeconds", result)
+        adapter.result.update(failureCode="network_error", refreshAfterSeconds=270)
+        result, _ = self.run_helper(self.request(), adapter)
+        self.assertNotIn("refreshAfterSeconds", result)
+
+    def test_failed_muse_refresh_can_report_a_sanitized_plan_without_inventing_quota(self):
+        row = candidate("muse")
+        adapter = FakeAdapter(before=[row], result={"sample": None, "failureCode": "rate_limited",
+                                                   "observedPlan": "Max", "retryAfterSeconds": 180})
+        result, _ = self.run_helper(self.request(provider="muse", row=row), adapter)
+        self.assertEqual(result["observedPlan"], "Max")
+        self.assertEqual(result["retryAfterSeconds"], 180)
+        self.assertIsNone(result["sample"])
+        adapter.result["observedPlan"] = "Bearer " + TOKEN
+        result, _ = self.run_helper(self.request(provider="muse", row=row), adapter)
+        self.assertNotIn("observedPlan", result)
 
     def test_adapter_error_and_output_are_not_forwarded(self):
         adapter = FakeAdapter(result=ValueError("Bearer " + TOKEN))

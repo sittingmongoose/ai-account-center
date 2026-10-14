@@ -3,10 +3,15 @@ import * as path from 'path';
 import type { DashboardAccount } from './account-dashboard-types';
 import { HOST_LABELS, DASHBOARD_HOSTS } from './dashboard-hosts';
 import { configuredUsageHosts, runUsageHelper } from './usage-failover-transport';
-import { holdUsageCooldown, readUsageCooldown } from './usage-failover-cooldown';
+import {
+  holdUsageCooldown,
+  identityUsageCooldownKey,
+  readUsageCooldown,
+} from './usage-failover-cooldown';
 import {
   projectClaudeFailoverExtras,
   retainClaudeFailoverExtras,
+  stripClaudeFailoverExtras,
 } from './usage-failover-claude-extras';
 import { readUsageCache, writeUsageCache } from './usage-failover-cache';
 import {
@@ -16,6 +21,8 @@ import {
   parseUsageIdentity,
   parseUsageReading,
   sameUsageIdentity,
+  safeUsageText,
+  USAGE_FAILURE_CODES,
   type UsageCandidate,
   type UsageFailoverTarget,
   type UsageHelperRequest,
@@ -39,6 +46,8 @@ interface State {
   pending: Promise<void> | null;
   fresh: boolean;
   primarySignIn: Set<'mac' | 'windows'>;
+  primaryFailure: string | null;
+  observedPlan: string | null;
 }
 export interface UsageFailoverDeps {
   transport?: (host: UsageHost, request: UsageHelperRequest) => Promise<UsageHelperResponse>;
@@ -105,17 +114,32 @@ export class UsageFailoverService {
       pending: null,
       fresh: false,
       primarySignIn: new Set(),
+      primaryFailure: null,
+      observedPlan: null,
     };
     try {
       const file = this.file(target);
       const value = readUsageCache(file);
       if (isRecord(value) && value.version === 1 && value.key === key) {
+        if (
+          Array.isArray(value.primarySignIn) &&
+          value.primarySignIn.length <= 2 &&
+          value.primarySignIn.every((host) => host === 'mac' || host === 'windows')
+        )
+          state.primarySignIn = new Set(value.primarySignIn as Array<'mac' | 'windows'>);
+        if (
+          typeof value.primaryFailure === 'string' &&
+          USAGE_FAILURE_CODES.has(value.primaryFailure)
+        )
+          state.primaryFailure = value.primaryFailure;
         const identity = parseUsageIdentity(value.identity);
         if (
           identity &&
           (!target.expectedIdentity || sameUsageIdentity(target.expectedIdentity, identity))
         ) {
           state.identity = identity;
+          state.observedPlan =
+            target.provider === 'muse' ? safeUsageText(value.observedPlan) : null;
           state.primary = parseUsageCandidate(value.primary);
           if (
             isRecord(value.saved) &&
@@ -162,6 +186,9 @@ export class UsageFailoverService {
       primary: state.primary,
       saved: state.saved,
       nextAttempt: state.nextAttempt,
+      primaryFailure: state.primaryFailure,
+      primarySignIn: [...state.primarySignIn],
+      observedPlan: state.observedPlan,
     });
   }
   private async request(
@@ -195,6 +222,9 @@ export class UsageFailoverService {
       version: 1,
       action: 'inventory',
       provider: target.provider,
+      ...(this.claudeProfile(target, host)
+        ? { claudeProfile: this.claudeProfile(target, host) }
+        : {}),
       ...(host.sshHost === null ? { ccsDir: target.ccsDir } : {}),
     })
       .then((value) => {
@@ -215,7 +245,17 @@ export class UsageFailoverService {
     return pending;
   }
   private inventoryKey(target: UsageFailoverTarget, host: UsageHost): string {
-    return JSON.stringify([target.ccsDir, target.provider, hostKey(host)]);
+    return JSON.stringify([
+      target.ccsDir,
+      target.provider,
+      hostKey(host),
+      this.claudeProfile(target, host),
+    ]);
+  }
+  private claudeProfile(target: UsageFailoverTarget, host: UsageHost) {
+    return target.provider === 'claude'
+      ? target.primarySources.find((source) => hostKey(source) === hostKey(host))?.claudeProfile
+      : undefined;
   }
   private applyInventorySignIn(target: UsageFailoverTarget, state: State, host: UsageHost): void {
     if (target.provider !== 'claude' || (host.host !== 'mac' && host.host !== 'windows')) return;
@@ -253,9 +293,21 @@ export class UsageFailoverService {
       message: stale ? 'Showing the last successful reading; live usage is unavailable.' : null,
       capabilities: {
         ...template.capabilities,
-        ...(template.provider === 'antigravity' ? { antigravityCanActivate: false } : {}),
+        ...(template.provider === 'antigravity' && fallback
+          ? { antigravityCanActivate: false }
+          : {}),
       },
     };
+    if (template.status === 'needs_sign_in') {
+      result.status = 'needs_sign_in';
+      result.message = template.message;
+      if (stale)
+        result.windows = result.windows.map((window) => ({
+          ...window,
+          status: 'cached',
+          sampledAt: window.sampledAt ?? reading.sampledAt ?? undefined,
+        }));
+    }
     // Claude's platform selects its launcher. Source identifies where quota was read.
     if (template.provider !== 'claude') result.platform = host === 'nas1' ? 'ubuntu' : host;
     if (host === 'nas1') result.host = 'nas1';
@@ -263,6 +315,42 @@ export class UsageFailoverService {
     return this.withSignIn(result, state);
   }
   private withSignIn(account: DashboardAccount, state: State): DashboardAccount {
+    const messages: Record<string, string> = {
+      needs_sign_in: 'Sign in again on the configured source to refresh usage.',
+      no_browser_cookie: 'Connect a browser quota session for the configured account.',
+      choose_team: 'Choose a team in the configured browser quota session.',
+      inactive_subscription: 'The configured account subscription is inactive.',
+      rate_limited: 'Usage refresh is rate limited. The provider cooldown is being respected.',
+      identity_mismatch: 'The configured source no longer matches this account.',
+      account_mismatch: 'The configured source no longer matches this account.',
+      source_changed: 'The configured sign-in changed; usage will refresh shortly.',
+      identity_unavailable: 'The configured account identity could not be verified.',
+      plan_mismatch: 'The configured quota session no longer matches this subscription.',
+      team_mismatch: 'The configured quota session no longer matches this team.',
+    };
+    const code = state.primaryFailure;
+    const requiresSignIn =
+      code && ['needs_sign_in', 'no_browser_cookie', 'choose_team'].includes(code);
+    if (
+      code &&
+      messages[code] &&
+      account.status !== 'needs_sign_in' &&
+      (!hasUsage(account) || (requiresSignIn && account.provider !== 'claude'))
+    )
+      account = {
+        ...account,
+        status: requiresSignIn ? 'needs_sign_in' : 'unavailable',
+        message: messages[code],
+        ...(account.status === 'cached'
+          ? {
+              windows: account.windows.map((window) => ({
+                ...window,
+                status: 'cached' as const,
+                sampledAt: window.sampledAt ?? account.sampledAt ?? undefined,
+              })),
+            }
+          : {}),
+      };
     if (account.provider !== 'claude') return account;
     const signInNeeded = [...new Set([...(account.signInNeeded ?? []), ...state.primarySignIn])];
     const result = projectClaudeFailoverExtras({ ...account }, this.now());
@@ -304,6 +392,28 @@ export class UsageFailoverService {
   recover(target: UsageFailoverTarget, primary: DashboardAccount): Promise<DashboardAccount> {
     return this.run(target, primary, true);
   }
+  /** Native collectors can inspect the same account hold before their own provider request. */
+  cooldownUntil(target: UsageFailoverTarget): number {
+    const identity = target.expectedIdentity ?? this.state(target).identity;
+    if (!identity) return 0;
+    const key = identityUsageCooldownKey(target.ccsDir, target.provider, identity);
+    const until = Math.max(
+      this.cooldowns.get(key) ?? 0,
+      readUsageCooldown(target.ccsDir, key, this.now())
+    );
+    return until > this.now() ? until : 0;
+  }
+  holdCooldown(target: UsageFailoverTarget, requestedUntil: number): number {
+    const state = this.state(target);
+    const identity = target.expectedIdentity ?? state.identity;
+    if (!identity) return 0;
+    const key = identityUsageCooldownKey(target.ccsDir, target.provider, identity);
+    const until = holdUsageCooldown(target.ccsDir, key, requestedUntil, this.now());
+    this.cooldowns.set(key, until);
+    state.nextAttempt = Math.max(state.nextAttempt, until);
+    this.persist(target, state);
+    return until;
+  }
   private async run(
     target: UsageFailoverTarget,
     template: DashboardAccount,
@@ -339,6 +449,7 @@ export class UsageFailoverService {
   ): Promise<void> {
     state.nextAttempt = this.now() + 15_000;
     state.fresh = false;
+    state.primaryFailure = template.status === 'needs_sign_in' ? 'needs_sign_in' : null;
     const primaries: Array<{ host: UsageHost; candidate: UsageCandidate }> = [];
     let missingPrimary = false;
     for (const source of target.primarySources) {
@@ -352,6 +463,7 @@ export class UsageFailoverService {
         state.identity = target.expectedIdentity ?? null;
         state.primary = null;
         state.saved = null;
+        state.observedPlan = null;
         return;
       }
       if (!candidate) {
@@ -361,13 +473,17 @@ export class UsageFailoverService {
       if (!state.identity || !sameUsageIdentity(state.identity, candidate.identity)) {
         state.identity = candidate.identity;
         state.saved = null;
+        state.observedPlan = null;
         state.primary = candidate;
       } else if (
         state.primary &&
         state.primary.locator === candidate.locator &&
         state.primary.revision !== candidate.revision
       ) {
-        state.saved = null;
+        // Token renewal does not erase a dated reading for the same verified
+        // account. Browser-derived Claude extras need their original revision.
+        if (target.provider === 'claude' && state.saved)
+          state.saved.reading = stripClaudeFailoverExtras(state.saved.reading);
       }
       state.primary = candidate;
       primaries.push({ host: source, candidate });
@@ -377,6 +493,7 @@ export class UsageFailoverService {
       state.identity = null;
       state.primary = null;
       state.saved = null;
+      state.observedPlan = null;
       return;
     }
     let lists: Array<{ host: UsageHost; candidates: UsageCandidate[] | null }> | null = null;
@@ -395,7 +512,7 @@ export class UsageFailoverService {
       return lists;
     };
     if (!state.identity) return; // Never bootstrap from an unrelated peer login.
-    const cooldownKey = digest([path.resolve(target.ccsDir), target.provider, state.identity]);
+    const cooldownKey = identityUsageCooldownKey(target.ccsDir, target.provider, state.identity);
     const applyCooldown = (): boolean => {
       const until = Math.max(
         this.cooldowns.get(cooldownKey) ?? 0,
@@ -409,8 +526,7 @@ export class UsageFailoverService {
       state.nextAttempt = Math.max(state.nextAttempt, until);
       return true;
     };
-    if (applyCooldown()) return;
-    if (primaryAlreadyRead && hasUsage(template) && template.status === 'ok' && primaries.length) {
+    if (primaryAlreadyRead && hasUsage(template) && primaries.length) {
       const reading = parseUsageReading(template, this.now());
       if (hasUsage(reading) && emailMatches(target.expectedEmail, reading.email)) {
         state.saved = {
@@ -425,12 +541,16 @@ export class UsageFailoverService {
           host: primaries[0].host.host,
           fallback: false,
         };
-        state.fresh = true;
-        if (primaries[0].host.host === 'mac' || primaries[0].host.host === 'windows')
-          state.primarySignIn.delete(primaries[0].host.host);
-        return;
+        state.fresh = template.status === 'ok';
+        if (state.fresh) {
+          state.primaryFailure = null;
+          if (primaries[0].host.host === 'mac' || primaries[0].host.host === 'windows')
+            state.primarySignIn.delete(primaries[0].host.host);
+          return;
+        }
       }
     }
+    if (applyCooldown()) return;
     if (
       primaryAlreadyRead &&
       /(?:rate.?limit|\b429\b|too many requests)/i.test(template.message ?? '')
@@ -468,6 +588,9 @@ export class UsageFailoverService {
             action: 'collect',
             provider: target.provider,
             candidate,
+            ...(this.claudeProfile(target, host)
+              ? { claudeProfile: this.claudeProfile(target, host) }
+              : {}),
             ...(host.sshHost === null ? { ccsDir: target.ccsDir } : {}),
           },
           () => !applyCooldown(),
@@ -491,6 +614,7 @@ export class UsageFailoverService {
         (source) =>
           hostKey(source) === hostKey(host) && candidate.selectors.includes(source.selector)
       );
+      if (primarySource) state.primaryFailure = response.failureCode;
       if (
         target.provider === 'claude' &&
         primarySource &&
@@ -512,7 +636,22 @@ export class UsageFailoverService {
         state.saved.host === host.host
       )
         state.saved = null;
-      if (response.failureCode === 'rate_limited') {
+      const blocked = response.failureCode === 'rate_limited';
+      if (
+        primarySource &&
+        [
+          'identity_mismatch',
+          'account_mismatch',
+          'identity_unavailable',
+          'source_changed',
+          'plan_mismatch',
+          'team_mismatch',
+        ].includes(response.failureCode ?? '')
+      ) {
+        state.identity = target.expectedIdentity ?? null;
+        state.primary = null;
+        state.saved = null;
+        state.observedPlan = null;
         return 'done';
       }
       if (
@@ -521,9 +660,20 @@ export class UsageFailoverService {
         response.candidate.revision !== candidate.revision ||
         !sameUsageIdentity(candidate.identity, response.candidate.identity)
       )
-        return 'next';
+        return blocked ? 'done' : 'next';
+      const observedPlan = safeUsageText(response.observedPlan);
+      if (target.provider === 'muse' && primarySource && observedPlan) {
+        state.observedPlan = observedPlan;
+        if (state.saved && state.saved.reading.plan !== state.observedPlan) state.saved = null;
+      }
       const reading = parseUsageReading(response.sample, this.now());
-      if (!hasUsage(reading) || !emailMatches(target.expectedEmail, reading.email)) return 'next';
+      if (!hasUsage(reading) || !emailMatches(target.expectedEmail, reading.email))
+        return blocked ? 'done' : 'next';
+      if (target.provider === 'muse') {
+        if (reading.status === 'ok') state.observedPlan = reading.plan;
+        else if (state.observedPlan && reading.plan !== state.observedPlan)
+          return blocked ? 'done' : 'next';
+      }
       if (
         target.provider === 'claude' &&
         primarySource &&
@@ -542,6 +692,18 @@ export class UsageFailoverService {
           fallback,
         };
         state.fresh = reading.status === 'ok';
+      }
+      if (blocked) return 'done';
+      if (
+        response.failureCode === null &&
+        response.refreshAfterSeconds &&
+        response.refreshAfterSeconds > 0
+      ) {
+        state.nextAttempt = Math.max(
+          state.nextAttempt,
+          this.now() + Math.min(86400, response.refreshAfterSeconds) * 1000
+        );
+        return 'done';
       }
       return reading.status === 'ok' ? 'done' : 'next';
     };

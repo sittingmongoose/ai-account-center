@@ -245,8 +245,9 @@ def _scope(value, fallback):
     return Path(os.path.abspath(value))
 
 
-def _inventory(adapter, provider, home, platform, ccs):
-    values = adapter.inventory(provider, home, platform, ccs_dir=ccs)
+def _inventory(adapter, provider, home, platform, ccs, claude_profile=None):
+    context = {"claude_profile": claude_profile} if claude_profile is not None else {}
+    values = adapter.inventory(provider, home, platform, ccs_dir=ccs, **context)
     if not isinstance(values, list) or len(values) > 512:
         return [], []
     # Conflicting identities at one locator cannot silently pick the first login.
@@ -282,6 +283,28 @@ def _same(left, right):
     return all(left.get(key) == right.get(key) for key in ("locator", "identity", "revision"))
 
 
+def _claude_profile(value):
+    """Private server-owned launcher context; never a provider identity proof."""
+    if (not isinstance(value, dict) or not {"id", "email"}.issubset(value) or
+            not set(value).issubset({"id", "email", "profilePath", "isDefault"}) or
+            not isinstance(value.get("id"), str) or
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", value["id"]) or
+            _email(value.get("email")) is None or
+            ("isDefault" in value and type(value["isDefault"]) is not bool)):
+        raise ValueError()
+    result = {"id": value["id"], "email": _email(value["email"])}
+    if "profilePath" in value:
+        supplied = value["profilePath"]
+        if (not isinstance(supplied, str) or not supplied or len(supplied) > 4096 or
+                re.search(r"[\x00-\x1f\x7f]", supplied) or not Path(supplied).is_absolute() or
+                supplied.startswith(("\\\\", "//"))):
+            raise ValueError()
+        result["profilePath"] = supplied
+    if "isDefault" in value:
+        result["isDefault"] = value["isDefault"]
+    return result
+
+
 def _run(request):
     if not isinstance(request, dict):
         return _failure("invalid_response")
@@ -289,11 +312,14 @@ def _run(request):
     inventory_error = {"version": 1, "action": "inventory", "candidates": []}
     failed = inventory_error if action == "inventory" else _failure("invalid_response")
     provider = request.get("provider")
-    allowed = {"version", "action", "provider", "ccsDir", "homeDir"} | ({"candidate"} if action == "collect" else set())
+    allowed = {"version", "action", "provider", "ccsDir", "homeDir", "claudeProfile"} | ({"candidate"} if action == "collect" else set())
     if (type(request.get("version")) is not int or request["version"] != 1 or
             action not in ("inventory", "collect") or not isinstance(provider, str) or provider not in KINDS or
             not set(request).issubset(allowed)):
         return failed
+    if "claudeProfile" in request and provider != "claude":
+        return failed
+    claude_profile = _claude_profile(request["claudeProfile"]) if "claudeProfile" in request else None
     wanted = public_candidate(request.get("candidate"), provider, request=True) if action == "collect" else None
     if action == "collect" and wanted is None:
         return failed
@@ -301,7 +327,7 @@ def _run(request):
     ccs = _scope(request.get("ccsDir"), home / ".ccs")
     platform = "windows" if sys.platform == "win32" else "mac" if sys.platform == "darwin" else "ubuntu"
     adapter = _adapter(provider)
-    before, sign_in_needed = _inventory(adapter, provider, home, platform, ccs)
+    before, sign_in_needed = _inventory(adapter, provider, home, platform, ccs, claude_profile)
     if action == "inventory":
         return {"version": 1, "action": "inventory", "candidates": [public for public, _ in before],
                 **({"signInNeededSelectors": sign_in_needed} if sign_in_needed else {})}
@@ -311,19 +337,30 @@ def _run(request):
     public, private = selected
     # Caller display metadata must not substitute for current source identity.
     # It remains only selection data; collection always receives the private row.
-    result = adapter.collect(private, home, platform, ccs_dir=ccs)
-    after, _ = _inventory(adapter, provider, home, platform, ccs)
+    context = {"claude_profile": claude_profile} if claude_profile is not None else {}
+    result = adapter.collect(private, home, platform, ccs_dir=ccs, **context)
+    after, _ = _inventory(adapter, provider, home, platform, ccs, claude_profile)
     if not any(_same(current, public) for current, _ in after):
         return _failure("source_changed")
     if not isinstance(result, dict):
         return _failure("invalid_response", public)
     code = result.get("failureCode")
-    if code is not None:
-        return _failure(code, public, result.get("retryAfterSeconds"))
     sample = public_sample(result.get("sample"), provider, platform)
+    if code is not None:
+        response = _failure(code, public, result.get("retryAfterSeconds"))
+        observed_plan = _text(result.get("observedPlan")) if provider == "muse" else None
+        if observed_plan is not None:
+            response["observedPlan"] = observed_plan
+        if code in {"rate_limited", "network_error", "provider_error", "busy", "unavailable"} and sample is not None:
+            response["sample"] = sample
+        return response
     if sample is None:
         return _failure("invalid_response", public)
-    return {"version": 1, "action": "collect", "candidate": public, "sample": sample, "failureCode": None}
+    response = {"version": 1, "action": "collect", "candidate": public, "sample": sample, "failureCode": None}
+    refresh = _number(result.get("refreshAfterSeconds"), nonnegative=True)
+    if refresh is not None and 0 < refresh <= 86400:
+        response["refreshAfterSeconds"] = refresh
+    return response
 
 
 def run(request):

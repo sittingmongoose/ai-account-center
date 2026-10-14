@@ -360,12 +360,19 @@ def _configured_windows_profile_root(value):
         return None
 
 
-def _claude_desktop_candidates(home, platform, ccs_dir):
+def _claude_desktop_candidates(home, platform, ccs_dir, claude_profile=None):
     if platform != "windows" or sys.platform != "win32":
         return []
     manifest = _read(ccs_dir, ccs_dir / "claude-desktop-profiles.json") or {}
     profiles = manifest.get("profiles") if manifest.get("version") == 1 else None
     profiles = profiles if isinstance(profiles, list) else []
+    if claude_profile is not None:
+        selected = {"id": claude_profile.get("id"), "email": claude_profile.get("email"),
+                    "windows": {"isDefault": claude_profile.get("isDefault", False),
+                                **({"profilePath": claude_profile["profilePath"]} if "profilePath" in claude_profile else {})}}
+        # Only this selected server-owned entry overrides a remote copy. The
+        # request is not written to the host's manifest or login storage.
+        profiles = [selected] + [item for item in profiles if _object(item).get("id") != selected["id"]]
     roots, configured_roots = {}, set()
     for root in (claude_usage.windows_profile_path("default", home, True),
                  home / "AppData/Roaming/Claude"):
@@ -392,6 +399,8 @@ def _claude_desktop_candidates(home, platform, ccs_dir):
         native = roots.get(str(root))
         selectors = sorted(set((native[1] if native else []) +
                                ["claude-profile:" + identifier, "claude-desktop-profile:" + identifier]))
+        if launcher.get("isDefault") is True or root.name.lower() == "claude":
+            selectors = sorted(set(selectors + ["claude-profile:default", "claude-desktop-profile:default"]))
         roots[str(root)] = (root, selectors, address, identifier)
     for root, selectors, address, identifier in list(roots.values())[:MAX_SOURCES]:
         # Validate both files before the existing DPAPI reader opens them.
@@ -423,13 +432,13 @@ def _claude_desktop_candidates(home, platform, ccs_dir):
     return result
 
 
-def inventory(provider, home, platform, ccs_dir=None):
+def inventory(provider, home, platform, ccs_dir=None, claude_profile=None):
     """Bounded local inventory; account names only select, never prove identity."""
     if provider not in ("codex", "claude") or platform not in ("ubuntu", "mac", "windows"):
         return []
     home = Path(os.path.abspath(home))
     ccs_dir = Path(os.path.abspath(ccs_dir)) if ccs_dir is not None else home / ".ccs"
-    desktop = _claude_desktop_candidates(home, platform, ccs_dir) if provider == "claude" else []
+    desktop = _claude_desktop_candidates(home, platform, ccs_dir, claude_profile) if provider == "claude" else []
     candidates = (_codex_candidates(home, ccs_dir) if provider == "codex" else
                   _claude_cli_candidates(home, platform, ccs_dir) + desktop)
     unique = {}
@@ -608,7 +617,7 @@ def _claude_optional_windows(candidate, home):
     return windows, extras
 
 
-def collect(candidate, home, platform, ccs_dir=None):
+def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
     """Collect only a revalidated candidate; provider rejection never becomes zero."""
     try:
         if platform not in ("ubuntu", "mac", "windows"):

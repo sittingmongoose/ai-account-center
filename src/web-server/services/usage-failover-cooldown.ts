@@ -1,11 +1,49 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isRecord } from './usage-failover-contract';
+import type { FailoverProvider, UsageIdentity } from './usage-failover-contract';
 
 const DAY_MS = 86_400_000;
 const MAX_BYTES = 1024;
 const KEY = /^[a-f0-9]{64}$/;
+const inProcessCooldowns = new Map<string, number>();
+const memoryKey = (ccsDir: string, key: string) => JSON.stringify([path.resolve(ccsDir), key]);
+
+/** Native and alternate collectors use the same private provider/account gate. */
+export function identityUsageCooldownKey(
+  ccsDir: string,
+  provider: FailoverProvider,
+  identity: UsageIdentity
+): string {
+  return createHash('sha256')
+    .update(JSON.stringify([path.resolve(ccsDir), provider, identity]))
+    .digest('hex');
+}
+
+export function readIdentityUsageCooldown(
+  ccsDir: string,
+  provider: FailoverProvider,
+  identity: UsageIdentity,
+  now: number
+): number {
+  return readUsageCooldown(ccsDir, identityUsageCooldownKey(ccsDir, provider, identity), now);
+}
+
+export function holdIdentityUsageCooldown(
+  ccsDir: string,
+  provider: FailoverProvider,
+  identity: UsageIdentity,
+  requestedUntil: number,
+  now: number
+): number {
+  return holdUsageCooldown(
+    ccsDir,
+    identityUsageCooldownKey(ccsDir, provider, identity),
+    requestedUntil,
+    now
+  );
+}
 
 function file(ccsDir: string, key: string): string {
   return path.join(ccsDir, 'account-usage-failover', `cooldown-${key}.json`);
@@ -18,7 +56,7 @@ function privateOwner(stat: fs.Stats): boolean {
 }
 
 /** Only a bounded, owner-held cooldown may suppress a request after restart. */
-export function readUsageCooldown(ccsDir: string, key: string, now: number): number {
+function readPersistedUsageCooldown(ccsDir: string, key: string, now: number): number {
   if (!KEY.test(key)) return 0;
   let descriptor: number | undefined;
   try {
@@ -56,6 +94,14 @@ export function readUsageCooldown(ccsDir: string, key: string, now: number): num
   }
 }
 
+export function readUsageCooldown(ccsDir: string, key: string, now: number): number {
+  if (!KEY.test(key)) return 0;
+  const id = memoryKey(ccsDir, key);
+  const memory = inProcessCooldowns.get(id) ?? 0;
+  if (memory <= now) inProcessCooldowns.delete(id);
+  return Math.max(memory > now ? memory : 0, readPersistedUsageCooldown(ccsDir, key, now));
+}
+
 /** Keep the longer provider cooldown; a failed save does not erase the in-memory one. */
 export function holdUsageCooldown(
   ccsDir: string,
@@ -68,6 +114,9 @@ export function holdUsageCooldown(
     readUsageCooldown(ccsDir, key, now),
     Math.max(now, Math.min(requestedUntil, now + DAY_MS))
   );
+  inProcessCooldowns.set(memoryKey(ccsDir, key), until);
+  if (inProcessCooldowns.size > 2048)
+    for (const [id, expiry] of inProcessCooldowns) if (expiry <= now) inProcessCooldowns.delete(id);
   const destination = file(ccsDir, key);
   const temporary = `${destination}.${randomUUID()}.tmp`;
   try {

@@ -42,6 +42,14 @@ export interface UsageHost {
 }
 export interface UsagePrimarySource extends UsageHost {
   selector: string;
+  /** Private server-owned launcher context, never accepted from an HTTP usage request. */
+  claudeProfile?: UsageClaudeProfile;
+}
+export interface UsageClaudeProfile {
+  id: string;
+  email: string;
+  profilePath?: string;
+  isDefault?: boolean;
 }
 export interface UsageFailoverTarget {
   accountId: string;
@@ -93,6 +101,10 @@ export interface UsageCollection {
   sample: UsageReading | null;
   failureCode: string | null;
   retryAfterSeconds?: number;
+  /** Healthy source-local caching; no provider request is due before this interval. */
+  refreshAfterSeconds?: number;
+  /** Verified Muse plan even when quota failed; never part of a dashboard row. */
+  observedPlan?: string;
 }
 export type UsageHelperRequest =
   | {
@@ -101,6 +113,7 @@ export type UsageHelperRequest =
       provider: FailoverProvider;
       ccsDir?: string;
       homeDir?: string;
+      claudeProfile?: UsageClaudeProfile;
     }
   | {
       version: 1;
@@ -109,6 +122,7 @@ export type UsageHelperRequest =
       candidate: UsageCandidate;
       ccsDir?: string;
       homeDir?: string;
+      claudeProfile?: UsageClaudeProfile;
     };
 export type UsageHelperResponse =
   | {

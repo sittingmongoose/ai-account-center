@@ -5,6 +5,7 @@ the usage key does not expose a workspace identifier. Secrets stay within the
 owning OS user and requests to the fixed HTTPS console origin.
 """
 import datetime as dt
+import email.utils
 import hashlib
 import json
 import math
@@ -24,8 +25,27 @@ COOKIE_NAMES = {"auth", "__Host-console_session"}
 
 
 class Unavailable(Exception):
-    def __init__(self, code):
+    def __init__(self, code, retry_after_seconds=None):
         self.code = code
+        self.retry_after_seconds = retry_after_seconds
+
+
+def retry_after(value):
+    if not isinstance(value, str) or len(value) > 128:
+        return None
+    try:
+        seconds = float(value)
+        if not math.isfinite(seconds):
+            return None
+    except ValueError:
+        try:
+            parsed = email.utils.parsedate_to_datetime(value)
+            if parsed.tzinfo is None:
+                return None
+            seconds = parsed.timestamp() - time.time()
+        except (ValueError, TypeError, OverflowError, OSError):
+            return None
+    return min(86400, max(0, math.ceil(seconds)))
 
 
 def now_iso():
@@ -113,6 +133,8 @@ class ConsoleClient:
             try:
                 if response.status_code in (401, 403):
                     raise Unavailable("needs_sign_in")
+                if response.status_code == 429:
+                    raise Unavailable("rate_limited", retry_after(response.headers.get("Retry-After")))
                 if response.status_code != 200:
                     raise Unavailable("provider_error")
                 body = bytearray()
@@ -205,8 +227,9 @@ def collect(cookies, requested=None, client=None):
     windows = []
     try:
         windows = go_windows(client.get("/console/api/go/status", workspace))
-    except Unavailable:
-        pass
+    except Unavailable as error:
+        if error.code == "rate_limited":
+            raise
     windows.append(wallet)
     checked = now_iso()
     suffix = hashlib.sha256(workspace.encode()).hexdigest()[:12]

@@ -260,37 +260,67 @@ def _raise_identity():
     raise plans.CollectionError("unavailable", "The saved account identity could not be verified.", failure_code="account_mismatch")
 
 
-def _muse(credential, result, ccs_dir, client, context):
-    current = _muse_context(ccs_dir, credential)
-    if current != context:
-        return _failure("source_changed")
+def _muse_identity(credential, client):
     payload = client.get(desktop_usage.MUSE_URL, {"Authorization": "Bearer " + credential.access,
         "x-api-version": "1.0.0", "Content-Type": "application/json"}, body=b"{}")
     address = desktop.email(payload.get("user_email"))
     if not address or credential.email and address.lower() != credential.email.lower():
         _raise_identity()
-    result.update(email=address, plan=desktop.safe_text(payload.get("subs_tier_name")))
     if payload.get("is_subs_active") is False:
-        return _failure("inactive_subscription")
+        raise plans.CollectionError("unavailable", "The subscription is inactive.", failure_code="inactive_subscription")
+    return payload, address, desktop.safe_text(payload.get("subs_tier_name"))
+
+
+def _muse(credential, result, ccs_dir, client, context):
+    current = _muse_context(ccs_dir, credential)
+    if current != context:
+        return _failure("source_changed")
     if context is None:
         # A native response has no proven portal-team scope. Keep it isolated
         # from portal readings, even when the native email matches.
-        result["windows"] = desktop_usage.normalize_muse(payload)
-        return None if result["windows"] else _failure("no_browser_cookie")
+        import muse_native
+        def read_native():
+            payload, address, plan = _muse_identity(credential, client)
+            result.update(email=address, plan=plan, windows=desktop_usage.normalize_muse(payload))
+            if not result["windows"]:
+                return dict(_failure("no_browser_cookie"), _verifiedPlan=plan)
+            result.update(fetchedAt=desktop.utc_now(), sampledAt=desktop.utc_now())
+            return {"sample": result, "failureCode": None}
+        return muse_native.collect(ccs_dir / "account-usage", credential.access,
+                                   credential.email, result["platform"], read_native)
     # A portal identity must read its exact team, even if /key also reports
     # quota whose subscription scope cannot be independently established.
     import muse_console as muse
     root = ccs_dir / "account-usage"
-    cookies, team, address_bound, _ = muse.read_capsule(root)
-    if address_bound.lower() != address.lower():
+    cookies, team, address_bound, bound_plan = muse.read_capsule(root)
+    if not credential.email or address_bound.lower() != credential.email.lower():
         _raise_identity()
     if (team != context["team"] or address_bound.lower() != context["email"] or
             muse.session_values(cookies) != context["session"]):
         return _failure("source_changed")
-    sample = muse.quota_sample(root, cookies, address, result["plan"], team, credential.access, bound_team=team)
-    result.update(windows=desktop_usage.normalize_muse({"subscription_quota": sample["quota"]}),
+    def identify():
+        try:
+            _, address, plan = _muse_identity(credential, client)
+            if address.lower() != address_bound.lower():
+                _raise_identity()
+            return plan
+        except plans.CollectionError as error:
+            raise muse.MuseError(error.failure_code or ("needs_sign_in" if error.status == "needs_sign_in" else "provider_error"),
+                                 retry_after=error.retry_after) from None
+    try:
+        sample = muse.quota_sample(root, cookies, address_bound, bound_plan, team, credential.access,
+                                   identity_loader=identify, bound_team=team)
+    except muse.MuseError as error:
+        failure = _failure(error.code, error.retry_after)
+        if desktop.safe_text(error.plan):
+            # Plan metadata can invalidate incompatible old limits even when
+            # no replacement quota exists. Keep the original 429/failure code.
+            failure["observedPlan"] = desktop.safe_text(error.plan)
+        return failure
+    result.update(email=address_bound, plan=sample["quota"]["tier"],
+                  windows=desktop_usage.normalize_muse({"subscription_quota": sample["quota"]}),
                   status="cached" if sample["cached"] else "ok", sampledAt=sample["sampledAt"], message=sample["message"])
-    return None
+    return {key: sample[key] for key in ("failureCode", "retryAfterSeconds", "refreshAfterSeconds") if key in sample}
 
 
 def _cursor(credential, result, client):
@@ -300,9 +330,11 @@ def _cursor(credential, result, client):
                   windows=desktop_usage.normalize_cursor(payload))
     try:
         profile = client.get(desktop_usage.CURSOR_PROFILE_URL, headers)
-    except plans.CollectionError:
+    except plans.CollectionError as error:
         # A valid quota response authenticates the exact subject-bearing token.
         # Absence of optional profile metadata does not change that subject.
+        if error.failure_code == "rate_limited":
+            return {"failureCode": "rate_limited", "retryAfterSeconds": error.retry_after or 600}
         return
     user = profile.get("user") if isinstance(profile.get("user"), dict) else profile
     address = desktop.email(user.get("email"))
@@ -326,8 +358,11 @@ def _plan(provider, credential, result, home, client):
         try:
             packs = client.get("https://api.z.ai/api/biz/customer-package-reset/list?targetType=PERSONAL", {"Authorization": "Bearer " + secret})
             windows.extend(plan_usage.parse_zai_reset_packs(packs))
-        except plans.CollectionError:
+        except plans.CollectionError as error:
             result["message"] = "Account usage is current; reset pack inventory is unavailable."
+            if error.failure_code == "rate_limited":
+                result.update(plan=plan, windows=windows)
+                return {"failureCode": "rate_limited", "retryAfterSeconds": error.retry_after or 600}
     elif provider == "opencode-go":
         installation = hashlib.sha256(str(home).encode()).hexdigest()[:32]
         payload = client.get("https://opencode.ai/zen/go/v1/usage", {"Authorization": "Bearer " + secret, "x-opencode-session": "ccs-usage-" + installation})
@@ -358,13 +393,13 @@ def collect(candidate, home, platform, ccs_dir=None):
             failure = _cursor(credential, result, client)
         else:
             failure = _plan(provider, credential, result, home, client)
-        if failure:
+        if failure and "sample" in failure:
             return failure
         if not result["windows"]:
             return _failure("invalid_response")
         result["fetchedAt"] = desktop.utc_now()
         result["sampledAt"] = result["sampledAt"] or result["fetchedAt"]
-        return {"sample": result, "failureCode": None}
+        return {"sample": result, "failureCode": None, **(failure or {})}
     except plans.CollectionError as error:
         return _failure(error.failure_code or ("needs_sign_in" if error.status == "needs_sign_in" else "provider_error"), error.retry_after)
     except desktop.UsageError as error:

@@ -482,12 +482,20 @@ def matches(state, email, plan, team, access):
             and (team is None or state["teamId"] == team) and state["credentialFingerprint"] == fingerprint(access))
 
 
-def state_sample(state, cached):
+def state_sample(state, cached, now=None):
+    now = time.time() if now is None else now
     message = None
     if cached and state["lastError"] == "rate_limited":
         message = "Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically."
-    return {"teamId": state["teamId"], "quota": state["quota"], "sampledAt": state["sampledAt"],
-            "cached": cached, "message": message}
+    result = {"teamId": state["teamId"], "quota": state["quota"], "sampledAt": state["sampledAt"],
+              "cached": cached, "message": message, "failureCode": state["lastError"] if cached else None}
+    remaining = min(MAX_RETRY_SECONDS, max(0, state["nextRequestAt"] - now))
+    if remaining > 0:
+        if result["failureCode"] == "rate_limited":
+            result["retryAfterSeconds"] = remaining
+        elif result["failureCode"] is None:
+            result["refreshAfterSeconds"] = remaining
+    return result
 
 
 def cached_quota(root, email, plan, team, access, now=None):
@@ -497,8 +505,9 @@ def cached_quota(root, email, plan, team, access, now=None):
         state = read_usage_state(root)
         if matches(state, email, plan, team, access) and state["nextRequestAt"] > now:
             if state["quota"] is not None:
-                return state_sample(state, True)
-            raise MuseError(state["lastError"] or "provider_error", plan=state["plan"])
+                return state_sample(state, True, now)
+            raise MuseError(state["lastError"] or "provider_error", plan=state["plan"],
+                            retry_after=state["nextRequestAt"] - now if state["lastError"] == "rate_limited" else None)
     return None
 
 
@@ -542,8 +551,9 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             state = None
         if state and state["nextRequestAt"] > now:
             if state["quota"] is not None:
-                return state_sample(state, True)
-            raise MuseError(state["lastError"] or "provider_error", plan=state["plan"])
+                return state_sample(state, True, now)
+            raise MuseError(state["lastError"] or "provider_error", plan=state["plan"],
+                            retry_after=state["nextRequestAt"] - now if state["lastError"] == "rate_limited" else None)
         # Reserve the next request before network I/O so a process crash cannot
         # cause a stream of retry requests from independent collector callers.
         if state is None and requested is not None:
@@ -580,7 +590,7 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
                      "nextRequestAt": now + REFRESH_SECONDS, "lastError": None}
             atomic_private_json(root, CACHE_NAME, state)
             pin_user(root, expected_email, expected_plan, team, observed)
-            return dict(state_sample(state, False), binding=observed.get("mode"))
+            return dict(state_sample(state, False, now), binding=observed.get("mode"))
         except MuseError as error:
             # Choosing a team has no quota request and no resolved cache key.
             resolved_team = requested or error.team_id
@@ -600,7 +610,7 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
                                                if error.code == "rate_limited" else REFRESH_SECONDS)
             atomic_private_json(root, CACHE_NAME, state)
             if transient and state["quota"] is not None:
-                return state_sample(state, True)
+                return state_sample(state, True, now)
             # Downstream caches must see the current plan even on an outage,
             # or they could retain counters that the native cache discarded.
             error.plan = state["plan"]

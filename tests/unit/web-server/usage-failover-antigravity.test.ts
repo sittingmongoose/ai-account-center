@@ -51,6 +51,7 @@ function reading(
     sampledAt: STAMP,
     source: 'Verified quota on Mac (fallback)',
     platform: 'mac',
+    capabilities: { ...primary.capabilities, antigravityCanActivate: false },
     windows: [
       {
         key: 'model',
@@ -157,6 +158,7 @@ describe('registered Antigravity display failover', () => {
     const primary = reading(account(), {
       source: 'Antigravity saved login on Ubuntu',
       platform: 'ubuntu',
+      capabilities: account().capabilities,
     });
     const [result] = await recoverAntigravityUsage([primary], 'fixture', {
       readBinding: binding,
@@ -182,6 +184,47 @@ describe('registered Antigravity display failover', () => {
     expect(result.status).toBe('unavailable');
     expect(result.sampledAt).toBeNull();
     expect(result.capabilities.antigravityCanActivate).toBe(false);
+  });
+
+  it('preserves independently proven activation for a cloned cached native projection only', async () => {
+    const primary = reading(account(), {
+      status: 'cached',
+      source: 'Antigravity saved login on Ubuntu',
+      platform: 'ubuntu',
+      capabilities: account().capabilities,
+    });
+    const deps: AntigravityUsageFailoverDeps = {
+      readBinding: binding,
+      failover: {
+        recover: async (_, row) => structuredClone(row),
+        peek: (_, row) => structuredClone(row),
+      },
+    };
+    const [result] = await recoverAntigravityUsage([primary], 'fixture', deps);
+    expect(result).not.toBe(primary);
+    expect(result.capabilities.antigravityCanActivate).toBe(true);
+    expect(peekAntigravityUsage(primary, 'fixture', deps).capabilities.antigravityCanActivate).toBe(
+      true
+    );
+    const unproven = {
+      ...primary,
+      capabilities: { ...primary.capabilities, antigravityCanActivate: false },
+    };
+    expect(
+      peekAntigravityUsage(unproven, 'fixture', deps).capabilities.antigravityCanActivate
+    ).toBe(false);
+    const fallback = {
+      ...deps,
+      failover: {
+        recover: async (_: UsageFailoverTarget, row: DashboardAccount) =>
+          reading(row, { platform: 'ubuntu', source: 'Verified quota on Ubuntu (fallback)' }),
+        peek: (_: UsageFailoverTarget, row: DashboardAccount) => row,
+      },
+    };
+    expect(
+      (await recoverAntigravityUsage([primary], 'fixture', fallback))[0].capabilities
+        .antigravityCanActivate
+    ).toBe(false);
   });
 
   it('does not publish a reading after a saved profile is removed', async () => {

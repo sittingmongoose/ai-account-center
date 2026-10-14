@@ -45,11 +45,19 @@ revision metadata; the helper verifies them again after collection. Successful
 observations persist under private `account-usage-failover/` storage with their
 original sample times. Temporary source failures can therefore display cached
 usage after restart. Identity changes invalidate the associated reading, and
-fallback cannot grant account activation or switching authority.
+fallback cannot grant account activation or switching authority. A dated primary
+reading can preserve independently established native activation eligibility.
+Renewal of credentials for an unchanged verified identity can preserve core
+quota, while Claude browser extras still require their original revision and
+capsule context. Primary sign-in warnings remain visible alongside fallback
+usage. Obsolete observation files are pruned to 256 recognized private records.
 
 A provider's HTTP 429 applies one persisted identity cooldown across source
-aliases and computers, honoring the bounded `Retry-After` value. Alternate hosts
-are not queried for that account during the cooldown. Explicit account sources,
+aliases and computers, including native Codex and Antigravity collectors,
+honoring the bounded `Retry-After` value. Alternate hosts are not queried for
+quota during the cooldown. Muse's healthy cached reading retains its existing
+300-second refresh budget without requesting another inference key or a peer
+refresh. Explicit account sources,
 registry bindings and lifecycle ownership remain unchanged.
 
 Private `~/.ccs/account-usage-sources.json` (or the selected CCS home) uses a
@@ -89,7 +97,9 @@ reads version 1 keeps working. Each account has its own source-bound observation
 cache; provider rate limits are shared by verified identity. The packaged usage
 bundle selects `discover`, key, capsule, config-home or Antigravity profile
 credentials through bounded identifiers, never caller-supplied credential paths
-or secrets. Direct legacy collectors retain their existing arguments and helper
+or secrets. The dashboard's trusted Claude Desktop profile configuration is
+forwarded privately to its Windows host so existing custom paths do not require
+a second manifest on that computer. Direct legacy collectors retain their existing arguments and helper
 compatibility checks. See the [registry](../../src/web-server/services/account-registry-v2.ts).
 
 The display-only visibility file `account-visibility.json` (0600) holds two

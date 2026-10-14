@@ -309,10 +309,10 @@ class NativeProtocolTests(unittest.TestCase):
 
 
 class HTTPBoundaryTests(unittest.TestCase):
-    def run_request(self, status=200, body=b'[{"id":"org_SYNTHETIC"}]', route="/console/api/orgs", workspace=None):
+    def run_request(self, status=200, body=b'[{"id":"org_SYNTHETIC"}]', route="/console/api/orgs", workspace=None, headers=None):
         calls = []
         closed = []
-        response = SimpleNamespace(status_code=status, iter_content=lambda **_: iter([body]), close=lambda: closed.append(True))
+        response = SimpleNamespace(status_code=status, headers=headers or {}, iter_content=lambda **_: iter([body]), close=lambda: closed.append(True))
         fake = SimpleNamespace(requests=SimpleNamespace(get=lambda *args, **kwargs: calls.append((args, kwargs)) or response))
         with mock.patch.dict(sys.modules, {"curl_cffi": fake}):
             value = core.ConsoleClient([COOKIE]).get(route, workspace)
@@ -339,6 +339,36 @@ class HTTPBoundaryTests(unittest.TestCase):
         for status in (301, 302, 401, 403, 404, 500):
             with self.subTest(status=status), self.assertRaises(core.Unavailable):
                 self.run_request(status=status)
+
+    def test_rate_limit_preserves_only_bounded_retry_metadata_and_closes_response(self):
+        for header, expected in (("123", 123), ("999999", 86400), ("-1", 0),
+                                 ("NaN", None), ("private-token-body", None), (None, None)):
+            closed = []
+            response = SimpleNamespace(status_code=429, headers={"Retry-After": header},
+                                       iter_content=lambda **_: self.fail("429 body must not be read"),
+                                       close=lambda: closed.append(True))
+            fake = SimpleNamespace(requests=SimpleNamespace(get=lambda *_, **__: response))
+            with self.subTest(header=header), mock.patch.dict(sys.modules, {"curl_cffi": fake}), \
+                    self.assertRaises(core.Unavailable) as caught:
+                core.ConsoleClient([COOKIE]).get("/console/api/orgs")
+            self.assertEqual(caught.exception.code, "rate_limited")
+            self.assertEqual(caught.exception.retry_after_seconds, expected)
+            self.assertEqual(closed, [True])
+
+    def test_rate_limit_http_date_uses_current_time(self):
+        with mock.patch.object(core.time, "time", return_value=0):
+            self.assertEqual(core.retry_after("Thu, 01 Jan 1970 00:02:00 GMT"), 120)
+
+    def test_optional_go_rate_limit_is_not_swallowed_after_wallet_success(self):
+        class LimitedClient(FakeClient):
+            def get(self, route, workspace=None):
+                if route == "/console/api/go/status":
+                    raise core.Unavailable("rate_limited", 432)
+                return super().get(route, workspace)
+        with self.assertRaises(core.Unavailable) as caught:
+            core.collect([COOKIE], WORKSPACE, LimitedClient())
+        self.assertEqual(caught.exception.code, "rate_limited")
+        self.assertEqual(caught.exception.retry_after_seconds, 432)
 
     def test_oversized_or_malformed_json_is_not_forwarded(self):
         for body in (b'x' * (core.MAX_BYTES + 1), b'token=private'):

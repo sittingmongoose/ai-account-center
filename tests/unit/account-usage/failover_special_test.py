@@ -298,6 +298,16 @@ class SpecialFailoverTests(unittest.TestCase):
             self.assertEqual(special.collect(candidate, self.home, "mac"),
                              {"sample": None, "failureCode": "identity_mismatch"})
 
+    def test_wallet_rate_limit_reaches_shared_identity_coordinator_without_partial_sample(self):
+        self.wallet_fixture()
+        candidate = special.inventory("opencode-wallet", self.home, "mac")[0]
+        with patch.object(console, "collect", side_effect=console.Unavailable("rate_limited", 321)):
+            self.assertEqual(special.collect(candidate, self.home, "mac"),
+                             {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 321})
+        with patch.object(console, "collect", side_effect=console.Unavailable("rate_limited")):
+            self.assertEqual(special.collect(candidate, self.home, "mac"),
+                             {"sample": None, "failureCode": "rate_limited"})
+
     def test_windows_without_supported_capsule_is_truthfully_unavailable(self):
         self.assertEqual(special.inventory("opencode-wallet", self.home, "windows"), [])
 

@@ -3,13 +3,14 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { analyticsHelperCommand, resolveAnalyticsRemoteHosts } from './analytics-remote-transport';
+import { resolveAnalyticsRemoteHosts } from './analytics-remote-transport';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import { helperPlatform } from './dashboard-hosts';
 import {
   isRecord,
   parseUsageCandidate,
   parseUsageReading,
+  safeUsageText,
   USAGE_FAILURE_CODES,
   type UsageHelperRequest,
   type UsageHelperResponse,
@@ -26,16 +27,19 @@ const MODULES = [
   'plan_common',
   'plan_usage',
   'muse_console',
+  'muse_native',
   'claude_usage',
 ] as const;
 const MAX_BYTES = 2 * 1024 * 1024;
 const BOOTSTRAP =
   "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));sys.stdin=io.StringIO(json.dumps(_p['request']));exec(compile(_p['helperSource'],'managed-usage','exec'))";
 
-/** Reuse the existing Windows desktop decryptor environment when it is installed. */
+/** Reuse the installed private environment, including the Mac wallet's curl_cffi dependency. */
 export function usageHelperCommand(platform: UsageHost['platform']): string {
-  if (platform !== 'windows')
-    return analyticsHelperCommand(platform === 'ubuntu' ? 'nas1' : platform);
+  if (platform !== 'windows') {
+    const quoted = `'${BOOTSTRAP.replace(/'/g, `'"'"'`)}'`;
+    return `if [ -x "$HOME/.ccs/claude-session-migration/venv/bin/python3" ]; then exec "$HOME/.ccs/claude-session-migration/venv/bin/python3" -c ${quoted}; else exec /usr/bin/python3 -c ${quoted}; fi`;
+  }
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
@@ -48,6 +52,28 @@ export function usageHelperCommand(platform: UsageHost['platform']): string {
     'exit $LASTEXITCODE',
   ].join('; ');
   return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+}
+
+/** Resolve only the known installed environment; never install or search arbitrary account paths. */
+export function localUsagePython(
+  request: Pick<UsageHelperRequest, 'homeDir' | 'ccsDir'>,
+  platform: NodeJS.Platform = process.platform
+): string {
+  const venv = path.join(
+    request.ccsDir ?? path.join(request.homeDir ?? os.homedir(), '.ccs'),
+    'claude-session-migration',
+    'venv',
+    platform === 'win32' ? 'Scripts/python.exe' : 'bin/python3'
+  );
+  try {
+    if (fs.statSync(venv).isFile()) {
+      fs.accessSync(venv, platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK);
+      return venv;
+    }
+  } catch {
+    // Hosts without the installed environment can still collect standard-library providers.
+  }
+  return platform === 'win32' ? 'python' : '/usr/bin/python3';
 }
 /** Sources come from this package, never a request, a remote installation, or an account file. */
 export async function usageHelperBundle(): Promise<string> {
@@ -126,14 +152,20 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
     throw new ValidationError('Invalid usage response.');
   }
   const retry = value.retryAfterSeconds;
+  const refresh = value.refreshAfterSeconds;
+  const observedPlan = safeUsageText(value.observedPlan);
   return {
     version: 1,
     action: 'collect',
     candidate,
     sample,
     failureCode: value.failureCode as string | null,
+    ...(observedPlan ? { observedPlan } : {}),
     ...(typeof retry === 'number' && Number.isFinite(retry) && retry >= 0
       ? { retryAfterSeconds: Math.min(86400, retry) }
+      : {}),
+    ...(typeof refresh === 'number' && Number.isFinite(refresh) && refresh > 0
+      ? { refreshAfterSeconds: Math.min(86400, refresh) }
       : {}),
   };
 }
@@ -148,17 +180,7 @@ export async function runUsageHelper(
     throw new ValidationError('Usage source is not local.');
   const helperSource = await usageHelperBundle();
   const input = JSON.stringify({ helperSource, request });
-  const windowsVenv = path.join(
-    request.ccsDir ?? path.join(request.homeDir ?? os.homedir(), '.ccs'),
-    'claude-session-migration/venv/Scripts/python.exe'
-  );
-  const executable = host.sshHost
-    ? 'ssh'
-    : process.platform === 'win32'
-      ? fs.existsSync(windowsVenv)
-        ? windowsVenv
-        : 'python'
-      : '/usr/bin/python3';
+  const executable = host.sshHost ? 'ssh' : localUsagePython(request);
   const args = host.sshHost
     ? [
         '-T',

@@ -252,6 +252,45 @@ class InventoryTests(unittest.TestCase):
             self.assertIn("claude-desktop-profile:work", rows[0]["selectors"])
             decrypt.assert_called_once_with(root.resolve())
 
+    def test_server_selected_desktop_context_works_without_a_remote_manifest(self):
+        with tempfile.TemporaryDirectory() as external:
+            root = Path(external) / "ApprovedProfile"
+            write(root / "config.json", {})
+            write(root / "Local State", {})
+            selected = {"id": "work", "email": EMAIL, "profilePath": str(root), "isDefault": False}
+            with mock.patch.object(core.sys, "platform", "win32"), \
+                    mock.patch.object(core.claude_usage, "decrypt_cache", return_value=(ACCOUNT, {})) as decrypt, \
+                    mock.patch.object(core.claude_usage, "eligible_entries", return_value=[(time.time() * 1000 + 3600000, [ACCOUNT, CLIENT, ORG], TOKEN)]):
+                rows = core.inventory("claude", self.home, "windows", claude_profile=selected)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["email"], EMAIL)
+            self.assertIn("claude-desktop-profile:work", rows[0]["selectors"])
+            self.assertFalse((self.home / ".ccs/claude-desktop-profiles.json").exists())
+            decrypt.assert_called_once_with(root.resolve())
+
+    def test_selected_default_folder_has_default_alias_without_a_manifest_flag(self):
+        root = self.home / "AppData/Roaming/Claude"
+        write(root / "config.json", {})
+        write(root / "Local State", {})
+        selected = {"id": "work", "email": EMAIL, "profilePath": str(root)}
+        with mock.patch.object(core.sys, "platform", "win32"), \
+                mock.patch.object(core.claude_usage, "decrypt_cache", return_value=(ACCOUNT, {})), \
+                mock.patch.object(core.claude_usage, "eligible_entries", return_value=[(time.time() * 1000 + 3600000, [ACCOUNT, CLIENT, ORG], TOKEN)]):
+            rows = core.inventory("claude", self.home, "windows", claude_profile=selected)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue({"claude-desktop-profile:default", "claude-desktop-profile:work"}.issubset(rows[0]["selectors"]))
+
+    def test_selected_named_profile_uses_native_path_when_optional_context_is_omitted(self):
+        root = core.claude_usage.windows_profile_path("work", self.home)
+        write(root / "config.json", {})
+        write(root / "Local State", {})
+        with mock.patch.object(core.sys, "platform", "win32"), \
+                mock.patch.object(core.claude_usage, "decrypt_cache", return_value=(ACCOUNT, {})), \
+                mock.patch.object(core.claude_usage, "eligible_entries", return_value=[(1, [ACCOUNT, CLIENT, ORG], TOKEN)]):
+            rows = core.inventory("claude", self.home, "windows", claude_profile={"id": "work", "email": EMAIL})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["email"], EMAIL)
+
     def test_configured_desktop_paths_reject_shares_reparse_points_and_symlink_ancestors(self):
         for supplied in ("//server/share/Profile", "\\\\server\\share\\Profile"):
             self.assertIsNone(core._configured_windows_profile_root(Path(supplied)))

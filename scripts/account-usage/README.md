@@ -21,9 +21,21 @@ Antigravity OAuth application metadata, still apply on each source computer.
 Verified readings and original sample times persist under the dashboard's private
 `account-usage-failover/` directory. A temporary failure can show the last
 successful reading as cached across dashboard restarts; changed identities and
-hard identity failures cannot inherit that reading. HTTP 429 and `Retry-After`
-set a shared cooldown for the provider account across all alternate computers,
-so changing hosts does not bypass a rate limit.
+hard identity failures cannot inherit that reading. Renewal of a credential for
+the same verified account can retain dated core quota; Claude browser extras
+still require the original credential and capsule binding. Primary sign-in
+warnings remain visible when a fallback supplies quota. Observation storage
+retains at most 256 recognized private cache files, keeping recent readings.
+HTTP 429 and `Retry-After` set a shared cooldown for the provider account across
+native collectors and alternate computers, so changing hosts does not bypass a
+rate limit. Muse's 300-second refresh budget is checked before requesting an
+inference key; a healthy cached reading does not trigger peer refreshes.
+
+The transport reuses the existing private
+`claude-session-migration/venv` interpreter when present. OpenCode wallet live
+collection needs its existing `curl_cffi` dependency there; no dependency is
+installed by fallback. Private Claude Desktop profile paths are forwarded only
+to the configured Windows source and validated before discovery.
 
 Explicit source configuration and lifecycle ownership are unchanged. Nas1 is
 still represented as `platform: "ubuntu"` with `sshHost: "nas1-agent"` and reads

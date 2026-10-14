@@ -508,7 +508,8 @@ coordinator can use an existing sign-in for the exact provider account on anothe
 configured computer. Credentials stay on their owner host, and the packaged
 helper runs in memory over SSH. Verified readings keep their original timestamps
 in a persistent cache; source outages can show cached usage after restart.
-Provider rate limits apply across all alternate hosts for the same identity.
+Provider rate limits apply across native collectors and all alternate hosts for
+the same identity. Sign-in warnings stay visible alongside recovered quota.
 A first-ever unavailable source without a known identity stays unavailable.
 Explicit source and lifecycle configuration is unchanged. Follow the
 [provider boundaries](docs/system-architecture/provider-flows.md),

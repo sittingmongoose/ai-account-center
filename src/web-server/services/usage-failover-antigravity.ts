@@ -119,7 +119,12 @@ function project(account: DashboardAccount, reading: DashboardAccount): Dashboar
     // Usage may come from any host; activation still addresses the registered
     // Ubuntu runtime. A display fallback cannot supply a runtime identity proof.
     platform: 'ubuntu',
-    capabilities: { ...account.capabilities, antigravityCanActivate: false },
+    capabilities: {
+      ...account.capabilities,
+      antigravityCanActivate:
+        account.capabilities.antigravityCanActivate === true &&
+        reading.capabilities.antigravityCanActivate === true,
+    },
   };
   delete result.host;
   delete result.antigravityPlan;

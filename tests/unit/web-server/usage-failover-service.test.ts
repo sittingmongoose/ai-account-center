@@ -247,14 +247,216 @@ describe('identity-bound usage source failover', () => {
     ).toBe(false);
   });
 
-  it('drops an old sample after rotation of the configured credential before a failed refresh', async () => {
+  it('retains dated quota when credentials renew for the same verified account', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());
     h.advance();
     h.inventories.set('mac', [candidate({ revision: 'e'.repeat(64) })]);
     h.collections.set('mac', { sample: null, failureCode: 'network_error' });
     h.inventories.set('windows', []);
+    const row = await h.service.collect(h.target, template());
+    expect(row.status).toBe('cached');
+    expect(row.sampledAt).toBe(new Date(BASE_TIME).toISOString());
+    expect(row.windows).toHaveLength(1);
+  });
+
+  it('drops browser extras on Claude token renewal while retaining dated core quota', async () => {
+    const h = await harness();
+    const target = { ...h.target, provider: 'claude' as const, accountId: 'claude:personal' };
+    const claude = { ...template(), provider: 'claude' as const, id: target.accountId };
+    const sample = reading(BASE_TIME, { optionalExtrasContext: 'c'.repeat(64) });
+    sample.windows.push({ ...sample.windows[0], key: 'prepaid_balance', remaining: 5 });
+    h.collections.set('mac', { sample, failureCode: null });
+    await h.service.collect(target, claude);
+    h.advance();
+    h.inventories.set('mac', [candidate({ revision: 'e'.repeat(64) })]);
+    h.collections.set('mac', { sample: null, failureCode: 'network_error' });
+    h.inventories.set('windows', []);
+    const row = await h.service.collect(target, claude);
+    expect(row.windows.map((window) => window.key)).toEqual(['weekly']);
+    expect(row.status).toBe('cached');
+    expect(row.sampledAt).toBe(new Date(BASE_TIME).toISOString());
+  });
+
+  it('keeps cached quota accompanying a 429 and blocks every peer through restart', async () => {
+    const h = await harness();
+    h.collections.set('mac', {
+      sample: reading(BASE_TIME, { status: 'cached' }),
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 120,
+    });
+    const row = await h.service.collect(h.target, template());
+    expect(row.status).toBe('cached');
+    expect(row.sampledAt).toBe(new Date(BASE_TIME).toISOString());
+    expect(h.collected().map((call) => call.host)).toEqual(['mac']);
+    const count = h.calls.length;
+    h.advance(119_000);
+    const restored = await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(restored.status).toBe('cached');
+    expect(h.calls).toHaveLength(count);
+  });
+
+  it('respects a healthy collector refresh budget without trying another host', async () => {
+    const h = await harness();
+    h.collections.set('mac', {
+      sample: reading(BASE_TIME, { status: 'cached' }),
+      failureCode: null,
+      refreshAfterSeconds: 270,
+    });
+    expect((await h.service.collect(h.target, template())).status).toBe('cached');
+    expect(h.collected().map((call) => call.host)).toEqual(['mac']);
+    const count = h.calls.length;
+    h.advance(269_000);
+    await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(h.calls).toHaveLength(count);
+  });
+
+  it('clears changed-plan quota while preserving a simultaneous provider cooldown', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.collections.set('mac', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 120,
+      observedPlan: 'Max',
+    });
+    const row = await h.service.collect(h.target, template());
+    expect(row.windows).toHaveLength(0);
+    expect(row.message).toContain('rate limited');
+    const count = h.collected().length;
+    h.advance(119_000);
+    await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(h.collected()).toHaveLength(count);
+  });
+
+  it('rejects cached Muse quota for an obsolete plan after restart but accepts a verified new plan', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.collections.set('mac', { sample: null, failureCode: 'network_error', observedPlan: 'Max' });
+    h.collections.set('windows', {
+      sample: reading(BASE_TIME, { status: 'cached' }),
+      failureCode: null,
+    });
     expect((await h.service.collect(h.target, template())).windows).toHaveLength(0);
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    const restarted = new UsageFailoverService(h.deps);
+    expect((await restarted.collect(h.target, template())).windows).toHaveLength(0);
+    h.advance();
+    h.collections.set('windows', { sample: reading(h.now(), { plan: 'Max' }), failureCode: null });
+    const row = await restarted.collect(h.target, template());
+    expect(row.status).toBe('ok');
+    expect(row.plan).toBe('Max');
+    expect(row).not.toHaveProperty('observedPlan');
+  });
+
+  it('retains the dated Muse quota when a failed refresh verifies the same plan', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.collections.set('mac', { sample: null, failureCode: 'network_error', observedPlan: 'Pro' });
+    h.inventories.set('windows', []);
+    const row = await h.service.collect(h.target, template());
+    expect(row.status).toBe('cached');
+    expect(row.sampledAt).toBe(new Date(BASE_TIME).toISOString());
+    expect(row).not.toHaveProperty('observedPlan');
+  });
+
+  it('still tries a matching peer when cached quota accompanies a transient failure', async () => {
+    const h = await harness();
+    h.collections.set('mac', {
+      sample: reading(BASE_TIME, { status: 'cached' }),
+      failureCode: 'network_error',
+    });
+    const row = await h.service.collect(h.target, template());
+    expect(row.status).toBe('ok');
+    expect(row.platform).toBe('windows');
+    expect(h.collected().map((call) => call.host)).toEqual(['mac', 'windows']);
+  });
+
+  it('does not hide a primary renewal message behind fallback or retained quota', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    const renewal: DashboardAccount = {
+      ...template(),
+      status: 'needs_sign_in',
+      message: 'Renew the configured login.',
+    };
+    const row = await h.service.recover(h.target, renewal);
+    expect(row.status).toBe('needs_sign_in');
+    expect(row.message).toBe(renewal.message);
+    expect(row.windows).toHaveLength(1);
+    expect(h.service.peek(h.target, renewal).status).toBe('needs_sign_in');
+  });
+
+  it('maps actionable primary browser failures even when no quota has ever succeeded', async () => {
+    const h = await harness();
+    h.collections.set('mac', { sample: null, failureCode: 'choose_team' });
+    h.inventories.set('windows', []);
+    const row = await h.service.collect(h.target, template());
+    expect(row.status).toBe('needs_sign_in');
+    expect(row.message).toContain('Choose a team');
+  });
+
+  it('invalidates the original identity and stops peers when the primary changes during collection', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.collections.set('mac', { sample: null, failureCode: 'source_changed' });
+    const count = h.collected().length;
+    const row = await h.service.collect(h.target, template());
+    expect(row.windows).toHaveLength(0);
+    expect(
+      h
+        .collected()
+        .slice(count)
+        .map((call) => call.host)
+    ).toEqual(['mac']);
+  });
+
+  it('preserves native Antigravity activation eligibility but cannot grant it from fallback', async () => {
+    const h = await harness();
+    const target = { ...h.target, provider: 'antigravity' as const };
+    const native: DashboardAccount = {
+      ...template(),
+      ...reading(),
+      provider: 'antigravity',
+      status: 'cached',
+      capabilities: { ...template().capabilities, antigravityCanActivate: true },
+    };
+    h.inventories.set('windows', []);
+    expect((await h.service.recover(target, native)).capabilities.antigravityCanActivate).toBe(
+      true
+    );
+    h.advance();
+    h.inventories.set('windows', [candidate({ locator: '3'.repeat(64) })]);
+    const peer = await h.service.recover(target, { ...native, status: 'unavailable', windows: [] });
+    expect(peer.capabilities.antigravityCanActivate).toBe(false);
+  });
+
+  it('forwards private Claude context to its host and isolates inventories between profiles', async () => {
+    const h = await harness();
+    const target = (id: string): UsageFailoverTarget => ({
+      ...h.target,
+      provider: 'claude',
+      accountId: `claude:${id}`,
+      primarySources: [
+        {
+          ...MAC,
+          selector: 'discover',
+          claudeProfile: { id, email: 'same@example.test', profilePath: `C:\\Private\\${id}` },
+        },
+      ],
+    });
+    await h.service.collect(target('one'), template());
+    await h.service.collect(target('two'), template());
+    const inventories = h.calls.filter((call) => call.request.action === 'inventory');
+    expect(inventories).toHaveLength(2);
+    expect(inventories.map((call) => call.request.claudeProfile?.id)).toEqual(['one', 'two']);
+    expect(h.collected().map((call) => call.request.claudeProfile?.id)).toEqual(['one', 'two']);
   });
 
   it('does not revive a removed primary credential from another host', async () => {
@@ -513,6 +715,7 @@ describe('identity-bound usage source failover', () => {
     expect(row.status).toBe('ok');
     expect(row.signInNeeded).toEqual(['windows']);
     expect(h.service.peek(target, claude).signInNeeded).toEqual(['windows']);
+    expect(new UsageFailoverService(h.deps).peek(target, claude).signInNeeded).toEqual(['windows']);
     h.advance();
     h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
     expect((await h.service.collect(target, claude)).signInNeeded).toBeUndefined();
@@ -528,7 +731,7 @@ describe('identity-bound usage source failover', () => {
       provider: 'claude',
       id: target.accountId,
     });
-    expect(row.status).toBe('unavailable');
+    expect(row.status).toBe('needs_sign_in');
     expect(row.signInNeeded).toEqual(['mac']);
   });
 

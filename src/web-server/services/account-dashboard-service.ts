@@ -72,6 +72,8 @@ import { localUsageHost } from './usage-failover-transport';
 import type { UsageFailoverTarget, UsagePrimarySource } from './usage-failover-contract';
 import { recoverAntigravityUsage, peekAntigravityUsage } from './usage-failover-antigravity';
 import { codexUsageTarget, recoverCodexUsage, peekCodexUsage } from './usage-failover-codex';
+import { projectClaudeFailoverExtras } from './usage-failover-claude-extras';
+import { isDefaultClaudeDataFolder } from './claude-account-records';
 
 import {
   ADDITIONAL_PROVIDERS,
@@ -157,7 +159,8 @@ interface DashboardState {
 export class AccountDashboardService {
   private readonly states = new Map<string, DashboardState>();
   private readonly codexInventories = new Map<string, CodexAuthProfilesSummary>();
-  private readonly codexTargets = new Map<string, Map<string, UsageFailoverTarget | null>>();
+  /** A published reading keeps the exact auth snapshot taken before its collection. */
+  private readonly codexRowTargets = new WeakMap<DashboardAccount, UsageFailoverTarget | null>();
   /** Last renewal entries per scope, for the cached Codex rows that cannot await a read. */
   private readonly codexRenewals = new Map<string, CodexRenewalEntries>();
   private readonly claudeInventories = new Map<string, ClaudeDesktopProfile[]>();
@@ -174,11 +177,19 @@ export class AccountDashboardService {
     for (const platform of ['windows'] as const) {
       const launcher = profile[platform];
       if (!launcher || (!launcher.sshHost && local.platform !== platform)) continue;
+      const isDefault =
+        launcher.isDefault === true || isDefaultClaudeDataFolder(launcher.profilePath);
       primarySources.push({
         host: platform,
         platform,
         sshHost: launcher.sshHost ?? null,
-        selector: `claude-desktop-profile:${launcher.isDefault ? 'default' : (profile.id ?? 'default')}`,
+        selector: `claude-desktop-profile:${isDefault ? 'default' : (profile.id ?? 'default')}`,
+        claudeProfile: {
+          id: profile.id ?? 'default',
+          email: profile.email,
+          ...(launcher.profilePath ? { profilePath: launcher.profilePath } : {}),
+          isDefault,
+        },
       });
     }
     return {
@@ -262,7 +273,6 @@ export class AccountDashboardService {
     const targets = recoverUsage
       ? new Map(summary.profiles.map((profile) => [profile.name, codexUsageTarget(scope, profile)]))
       : null;
-    if (targets) this.codexTargets.set(scope, targets);
     // Kept as soon as read, so a slow quota fetch still lets the cached rows show notes.
     const renewals = readCodexRenewalEntries(this.deps.getRenewalStatus).then((entries) => {
       this.codexRenewals.set(scope, entries);
@@ -279,20 +289,20 @@ export class AccountDashboardService {
       renewals,
     ]);
     return Promise.all(
-      summary.profiles.map((profile) => {
+      summary.profiles.map(async (profile) => {
         const account = codexAccount(
           profile,
           summary.activated,
           rows.find((row) => row.profile === profile.name),
           entries.get(profile.name)
         );
-        return targets
-          ? recoverCodexUsage(
-              targets.get(profile.name) ?? null,
-              account,
-              this.deps.failover ?? undefined
-            )
+        if (!targets) return account;
+        const target = targets.get(profile.name) ?? null;
+        const recovered = profile.authValid
+          ? await recoverCodexUsage(target, account, this.deps.failover ?? undefined)
           : account;
+        this.codexRowTargets.set(recovered, target);
+        return recovered;
       })
     );
   }
@@ -300,6 +310,12 @@ export class AccountDashboardService {
   private cachedCodex(scope: string): DashboardAccount[] {
     const summary = this.codexInventories.get(scope);
     if (!summary) return [];
+    const recoverUsage =
+      this.deps.failover !== null &&
+      (this.deps.failover || (!this.deps.getCodexSummary && !this.deps.getCodexRows));
+    const targets = recoverUsage
+      ? new Map(summary.profiles.map((profile) => [profile.name, codexUsageTarget(scope, profile)]))
+      : null;
     const rows = (this.deps.getCachedCodexRows ?? getCachedCodexProfileQuotaRows)(
       summary.profiles.map((profile) => profile.name)
     );
@@ -311,11 +327,13 @@ export class AccountDashboardService {
         rows.find((row) => row.profile === profile.name),
         renewals?.get(profile.name)
       );
-      return peekCodexUsage(
-        this.codexTargets.get(scope)?.get(profile.name) ?? null,
-        account,
-        this.deps.failover ?? undefined
-      );
+      if (!targets) return account;
+      const target = targets.get(profile.name) ?? null;
+      const cached = profile.authValid
+        ? peekCodexUsage(target, account, this.deps.failover ?? undefined)
+        : account;
+      this.codexRowTargets.set(cached, target);
+      return cached;
     });
   }
 
@@ -812,16 +830,16 @@ export class AccountDashboardService {
           );
         }
       }
-      if (account.provider === 'codex') {
+      if (account.provider === 'codex' && codexAuthValid !== false) {
         // A slow or failed summary must not bypass the saved auth check for a
         // previously collected fallback. It needs no asynchronous inventory.
-        const name = account.capabilities.codexProfile;
         current = peekCodexUsage(
-          (name ? this.codexTargets.get(scope)?.get(name) : null) ?? null,
+          this.codexRowTargets.get(account) ?? null,
           current,
           this.deps.failover ?? undefined
         );
       }
+      if (current.provider === 'claude') current = projectClaudeFailoverExtras(current, now);
       return [
         {
           ...withJobState(

@@ -5,9 +5,11 @@ import os from 'os';
 import path from 'path';
 import {
   localUsageHost,
+  localUsagePython,
   parseUsageHelperResponse,
   runUsageHelper,
   usageHelperBundle,
+  usageHelperCommand,
 } from '../../../src/web-server/services/usage-failover-transport';
 import type {
   UsageHelperRequest,
@@ -80,6 +82,65 @@ async function fixture() {
 }
 
 describe('packaged usage failover transport', () => {
+  it('uses the installed private interpreter on Mac, Linux and Windows without installing one', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-failover-python-'));
+    temporary.push(home);
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      const ccsDir = path.join(home, platform);
+      const interpreter = path.join(
+        ccsDir,
+        'claude-session-migration',
+        'venv',
+        platform === 'win32' ? 'Scripts/python.exe' : 'bin/python3'
+      );
+      expect(localUsagePython({ ccsDir }, platform)).toBe(
+        platform === 'win32' ? 'python' : '/usr/bin/python3'
+      );
+      await fs.mkdir(path.dirname(interpreter), { recursive: true });
+      await fs.writeFile(interpreter, 'fixture interpreter', { mode: 0o700 });
+      expect(localUsagePython({ ccsDir }, platform)).toBe(interpreter);
+    }
+    const remote = usageHelperCommand('mac');
+    expect(remote).toContain('$HOME/.ccs/claude-session-migration/venv/bin/python3');
+    expect(remote).toContain('else exec /usr/bin/python3');
+    expect(remote).not.toContain('pip');
+    expect(remote).not.toContain('install');
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'executes the remote bootstrap through the installed POSIX interpreter',
+    async () => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-failover-python-run-'));
+      temporary.push(home);
+      const interpreter = path.join(home, '.ccs/claude-session-migration/venv/bin/python3');
+      await fs.mkdir(path.dirname(interpreter), { recursive: true });
+      await fs.writeFile(
+        interpreter,
+        '#!/bin/sh\nexport AAC_FIXTURE_PRIVATE_PYTHON=selected\nexec /usr/bin/python3 "$@"\n',
+        { mode: 0o700 }
+      );
+      const output = await new Promise<string>((resolve, reject) => {
+        const child = execFile(
+          '/bin/sh',
+          ['-c', usageHelperCommand('mac').replaceAll('$HOME', '$AAC_FIXTURE_HOME')],
+          {
+            encoding: 'utf8',
+            env: { ...process.env, AAC_FIXTURE_HOME: home },
+          },
+          (error, stdout) => (error ? reject(error) : resolve(stdout))
+        );
+        child.stdin?.end(
+          JSON.stringify({
+            helperSource:
+              'import os,json,sys;print(json.dumps([os.environ.get("AAC_FIXTURE_PRIVATE_PYTHON"),json.load(sys.stdin)]))',
+            request: { fixture: true },
+          })
+        );
+      });
+      expect(JSON.parse(output)).toEqual(['selected', { fixture: true }]);
+    }
+  );
+
   it('runs the in-memory bundle against an empty synthetic home without installed host helpers', async () => {
     const h = await fixture();
     expect(await h.request({ version: 1, action: 'inventory', provider: 'muse' })).toEqual({
@@ -174,6 +235,43 @@ describe('packaged usage failover transport', () => {
       failureCode: 'rate_limited',
       retryAfterSeconds: 86400,
     });
+  });
+
+  it('preserves a bounded healthy refresh budget and rejects invalid budgets', () => {
+    const response = {
+      version: 1,
+      action: 'collect',
+      candidate: null,
+      sample: null,
+      failureCode: null,
+    };
+    expect(
+      parseUsageHelperResponse(JSON.stringify({ ...response, refreshAfterSeconds: 270 }))
+    ).toMatchObject({ refreshAfterSeconds: 270 });
+    for (const refreshAfterSeconds of [-1, 0, true, '270'])
+      expect(
+        parseUsageHelperResponse(JSON.stringify({ ...response, refreshAfterSeconds }))
+      ).not.toHaveProperty('refreshAfterSeconds');
+    expect(
+      parseUsageHelperResponse(JSON.stringify({ ...response, refreshAfterSeconds: 999999 }))
+    ).toMatchObject({ refreshAfterSeconds: 86400 });
+  });
+
+  it('preserves only sanitized observed plan metadata for an unsuccessful quota read', () => {
+    const response = {
+      version: 1,
+      action: 'collect',
+      candidate: null,
+      sample: null,
+      failureCode: 'rate_limited',
+    };
+    expect(
+      parseUsageHelperResponse(JSON.stringify({ ...response, observedPlan: 'Max' }))
+    ).toMatchObject({ observedPlan: 'Max', sample: null });
+    for (const observedPlan of ['Bearer private-token', 'x'.repeat(161), true, null])
+      expect(
+        parseUsageHelperResponse(JSON.stringify({ ...response, observedPlan }))
+      ).not.toHaveProperty('observedPlan');
   });
 
   it('preserves both bounded aliases reported for a signed-out desktop profile', () => {

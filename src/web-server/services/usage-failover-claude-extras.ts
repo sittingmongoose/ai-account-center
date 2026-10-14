@@ -8,6 +8,17 @@ function group(key: string): 'resetCredits' | 'prepaidBalance' | null {
   return key === 'reset_credits_available' || RESET_GRANT_KEY.test(key) ? 'resetCredits' : null;
 }
 
+/** Optional browser data is invalid after native credential renewal. */
+export function stripClaudeFailoverExtras(reading: UsageReading): UsageReading {
+  const result = {
+    ...reading,
+    windows: reading.windows.filter((window) => group(window.key) === null),
+  };
+  delete result.optionalExtras;
+  delete result.optionalExtrasContext;
+  return result;
+}
+
 /** Reapply the retained-extra age bound on cached responses and after restart. */
 export function projectClaudeFailoverExtras<T extends Pick<UsageReading, 'windows'>>(
   reading: T,

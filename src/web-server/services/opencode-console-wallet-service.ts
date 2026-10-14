@@ -7,7 +7,12 @@ import { getCcsDir } from '../../utils/config-manager';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
 import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
-import type { UsageFailoverTarget } from './usage-failover-contract';
+import {
+  parseUsageCandidate,
+  type UsageCandidate,
+  type UsageFailoverTarget,
+} from './usage-failover-contract';
+import { runUsageHelper } from './usage-failover-transport';
 
 const SOURCE = 'Authenticated OpenCode console workspace on Mac';
 const MAX_BYTES = 64 * 1024;
@@ -21,6 +26,7 @@ export interface OpenCodeWalletDeps {
   ccsDir?: string;
   readSource?: () => Promise<string | null>;
   runSource?: (sshHost: string) => Promise<string>;
+  inventorySource?: (sshHost: string) => Promise<UsageCandidate[]>;
   failover?: Pick<UsageFailoverService, 'collect' | 'recover'>;
   now?: () => number;
 }
@@ -46,7 +52,7 @@ async function privateCacheDirectory(ccsDir: string): Promise<boolean> {
   }
 }
 
-/** Non-secret pointer only; the common service owns identity and last-good usage. */
+/** Non-secret workspace pointer only; the common service owns verified identity and usage. */
 async function readBoundAccount(ccsDir: string, binding: string): Promise<string | null> {
   try {
     if (!(await privateCacheDirectory(ccsDir))) return null;
@@ -315,6 +321,14 @@ async function runSource(sshHost: string): Promise<string> {
   });
 }
 
+async function inventorySource(sshHost: string): Promise<UsageCandidate[]> {
+  const response = await runUsageHelper(
+    { host: 'mac', platform: 'mac', sshHost },
+    { version: 1, action: 'inventory', provider: 'opencode-wallet' }
+  );
+  return response.action === 'inventory' ? response.candidates : [];
+}
+
 /** Missing browser capsules produce no account, rather than a phantom sign-in card. */
 export class OpenCodeConsoleWalletService {
   private source: string | null = null;
@@ -335,6 +349,14 @@ export class OpenCodeConsoleWalletService {
   }
 
   private async collectSource(sshHost: string, binding: string): Promise<DashboardAccount | null> {
+    // Legacy injected readers remain available to isolated compatibility fixtures.
+    // Production discovers only local metadata, then lets the coordinator own
+    // every provider request and its shared workspace cooldown.
+    const failover =
+      this.deps.failover ??
+      (this.deps.runSource || this.deps.readSource ? null : getUsageFailoverService());
+    if (failover && !this.deps.runSource)
+      return this.collectManagedSource(sshHost, binding, failover);
     const primary = await Promise.resolve()
       .then(() => (this.deps.runSource ?? runSource)(sshHost))
       .then(normalize)
@@ -350,9 +372,6 @@ export class OpenCodeConsoleWalletService {
     };
     // Existing isolated legacy fixtures supply runSource/readSource. They must
     // explicitly inject the new transport rather than touching real accounts.
-    const failover =
-      this.deps.failover ??
-      (this.deps.runSource || this.deps.readSource ? null : getUsageFailoverService());
     const result = failover
       ? await (
           primary
@@ -401,6 +420,54 @@ export class OpenCodeConsoleWalletService {
           message: `Live console wallet usage is unavailable; showing the last saved sample. ${WORKSPACE_NOTE}`,
         }
       : null;
+  }
+
+  private async collectManagedSource(
+    sshHost: string,
+    binding: string,
+    failover: Pick<UsageFailoverService, 'collect' | 'recover'>
+  ): Promise<DashboardAccount | null> {
+    let accountId = this.accountId ?? this.result?.id;
+    try {
+      const candidates = (await (this.deps.inventorySource ?? inventorySource)(sshHost))
+        .map(parseUsageCandidate)
+        .filter(
+          (candidate) =>
+            candidate?.identity.kind === 'opencode-workspace' &&
+            candidate.selectors.includes('wallet')
+        );
+      const selected = candidates.length === 1 ? candidates[0] : null;
+      if (selected && this.source === binding) {
+        accountId = `plan-opencode-go-console-mac-${selected.identity.key.slice(0, 12)}`;
+        this.accountId = accountId;
+        if (this.deps.ccsDir) await rememberBoundAccount(this.deps.ccsDir, binding, accountId);
+      }
+    } catch {
+      // An offline primary may still use the previously bound workspace cache.
+    }
+    if (!accountId || this.source !== binding) return null;
+    const target: UsageFailoverTarget = {
+      accountId,
+      provider: 'opencode-wallet',
+      ccsDir: this.deps.ccsDir ?? getCcsDir(),
+      binding,
+      primarySources: [{ host: 'mac', platform: 'mac', sshHost, selector: 'wallet' }],
+    };
+    const result = await failover.collect(target, missingWallet(accountId)).catch(() => null);
+    if (this.source !== binding || result?.id !== accountId || result.provider !== 'opencode-go')
+      return null;
+    if ((result.status === 'ok' || result.status === 'cached') && result.windows.length) {
+      this.accountId = accountId;
+      if (this.deps.ccsDir) await rememberBoundAccount(this.deps.ccsDir, binding, accountId);
+    }
+    return {
+      ...result,
+      message:
+        result.message && result.message !== WORKSPACE_NOTE
+          ? `${result.message} ${WORKSPACE_NOTE}`
+          : WORKSPACE_NOTE,
+      capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
+    };
   }
 
   async get(opts: { refresh?: boolean } = {}): Promise<DashboardAccount[]> {

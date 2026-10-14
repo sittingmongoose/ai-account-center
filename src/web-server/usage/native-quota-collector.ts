@@ -19,9 +19,10 @@
  * (fetchCodexQuotaWithToken). Only the bare default may fall back to the local
  * session logs (getCodexLocalQuota), because those logs belong to ~/.codex.
  *
- * Each profile has its own ProviderState, so a 429 on one profile never trips
- * the breaker of another. State is keyed by the CCS home as well as the profile
- * name, and a changed auth file discards the cached quota and cooldowns.
+ * Each profile has its own ProviderState and breaker. A durable provider/account
+ * hold also covers aliases and peer sources for that same verified identity.
+ * Changed auth bytes discard that profile's quota and local backoff; rotating a
+ * token for the same account does not erase its shared provider hold.
  */
 
 import { fetchCodexQuotaWithToken } from '../../cliproxy/quota/quota-fetcher-codex';
@@ -37,6 +38,12 @@ import * as os from 'node:os';
 import { createHash } from 'node:crypto';
 import { getCcsDir } from '../../utils/config-manager';
 import { resolveCodexProfileDir } from '../../codex-auth/codex-profile-paths';
+import { codexUsageIdentity } from '../services/usage-failover-codex-identity';
+import type { UsageIdentity } from '../services/usage-failover-contract';
+import {
+  readIdentityUsageCooldown,
+  holdIdentityUsageCooldown,
+} from '../services/usage-failover-cooldown';
 
 // ============================================================================
 // Safety constants (concrete, named, module-level)
@@ -108,6 +115,8 @@ interface NativeCodexAuth {
   accountId: string;
   /** Internal digest of the saved file; never returned on a dashboard DTO. */
   cacheSignature?: string;
+  /** Account/person identity for the provider-wide rate limit, independent of file revision. */
+  identity?: UsageIdentity | null;
 }
 
 // ============================================================================
@@ -211,7 +220,11 @@ function defaultSleep(ms: number): Promise<void> {
 }
 
 /** Parse Retry-After (seconds or HTTP-date) into ms, capped at MAX_BACKOFF_MS. */
-function parseRetryAfterMs(detail: string | undefined, now: number): number | null {
+function parseRetryAfterMs(
+  detail: string | undefined,
+  now: number,
+  maximum = MAX_BACKOFF_MS
+): number | null {
   if (!detail) return null;
   const match = /retry-after:(.+)$/.exec(detail);
   if (!match) return null;
@@ -219,12 +232,12 @@ function parseRetryAfterMs(detail: string | undefined, now: number): number | nu
 
   const asSeconds = Number(raw);
   if (Number.isFinite(asSeconds)) {
-    return Math.min(Math.max(0, asSeconds) * 1000, MAX_BACKOFF_MS);
+    return Math.min(Math.max(0, asSeconds) * 1000, maximum);
   }
 
   const asDate = Date.parse(raw);
   if (Number.isFinite(asDate)) {
-    return Math.min(Math.max(0, asDate - now), MAX_BACKOFF_MS);
+    return Math.min(Math.max(0, asDate - now), maximum);
   }
   return null;
 }
@@ -405,6 +418,7 @@ function readCodexNativeAuthFromDisk(profile: string): NativeCodexAuth | null {
       accessToken,
       accountId: typeof accountId === 'string' ? accountId : '',
       cacheSignature: createHash('sha256').update(raw).digest('hex'),
+      identity: codexUsageIdentity(tokens),
     };
   } catch {
     return null;
@@ -584,14 +598,39 @@ async function collectCodexRowForProfile(
       // any synchronous return below runs the finally that nulls it (otherwise a
       // sync return leaves a stale resolved promise the next call would reuse).
       await Promise.resolve();
+      // A peer collector or another profile alias may have received a 429 since
+      // this collection began. Check the same durable account gate at the fetch.
+      const requestNow = (deps.now ?? Date.now)();
+      const sharedUntil = nativeAuth?.identity
+        ? readIdentityUsageCooldown(getCcsDir(), 'codex', nativeAuth.identity, requestNow)
+        : 0;
+      state.rateLimitUntil = Math.max(state.rateLimitUntil, sharedUntil);
       // ----------------------------------------------------------------
       // PRIMARY: live network fetch (skipped when breaker/cooldown active)
       // ----------------------------------------------------------------
-      if (!breakerOrCooldownActive) {
+      if (!breakerOrCooldownActive && requestNow >= state.rateLimitUntil) {
         // Use the on-disk accountId for the network call; fall through to local
         // when the auth file is absent (parked profile).
         if (nativeAuth) {
           const quota = await fetchNetwork(nativeAuth.accessToken, nativeAuth.accountId);
+          if (quota.httpStatus === 429 && nativeAuth.identity) {
+            const responseNow = (deps.now ?? Date.now)();
+            const delay = parseRetryAfterMs(quota.errorDetail, responseNow, 86_400_000) ?? 60_000;
+            // Persist even if the saved token changed while the request was in
+            // flight: its account still received this provider-wide response.
+            state.rateLimitUntil = holdIdentityUsageCooldown(
+              getCcsDir(),
+              'codex',
+              nativeAuth.identity,
+              responseNow +
+                Math.max(
+                  60_000,
+                  delay,
+                  state.consecutive429 + 1 >= CB_TRIP_THRESHOLD ? CB_COOLDOWN_MS : 0
+                ),
+              responseNow
+            );
+          }
           const currentState = getProfileState(profile);
           if (currentState !== state) {
             return currentState ? serveCached(currentState) : null;
@@ -660,7 +699,7 @@ async function collectCodexRowForProfile(
             const retryAfter = parseRetryAfterMs(quota.errorDetail, now);
             const backoff = retryAfter ?? computeBackoffMs(state.backoffAttempt);
             state.cooldownUntil = now + backoff;
-            state.rateLimitUntil = state.cooldownUntil;
+            state.rateLimitUntil = Math.max(state.rateLimitUntil, state.cooldownUntil);
             state.backoffAttempt += 1;
             void sleep; // retained as an injectable seam for future inline retry
           } else if (quota.retryable) {

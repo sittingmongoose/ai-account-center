@@ -423,6 +423,12 @@ def collect(candidate, home: Path, platform: str, ccs_dir=None):
         return {"sample": None, "failureCode": "needs_sign_in" if error.status == "needs_sign_in" else "provider_error"}
     except Exception as error:
         code = getattr(error, "code", None)
+        if code == "rate_limited":
+            retry = getattr(error, "retry_after_seconds", None)
+            result = {"sample": None, "failureCode": "rate_limited"}
+            if isinstance(retry, (int, float)) and not isinstance(retry, bool) and math.isfinite(retry):
+                result["retryAfterSeconds"] = min(86400, max(0, retry))
+            return result
         failure = ("needs_sign_in" if code in ("needs_sign_in", "no_browser_cookie") else
                    "identity_mismatch" if code == "workspace_mismatch" else "provider_error")
         return {"sample": None, "failureCode": failure}

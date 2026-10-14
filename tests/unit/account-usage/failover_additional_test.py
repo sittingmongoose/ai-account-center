@@ -136,7 +136,8 @@ class AdditionalFailoverTests(unittest.TestCase):
             result = adapter.collect(self.read("muse")[0], self.home, "ubuntu", ccs_dir=self.ccs)
         self.assertTrue(all(call.args == (self.ccs / "account-usage",) for call in capsule.call_args_list))
         self.assertEqual(sample.call_args.kwargs["bound_team"], "42")
-        self.assertEqual(sample.call_args.args[3], "Pro")
+        self.assertEqual(sample.call_args.args[3], "Old Plan")
+        self.assertTrue(callable(sample.call_args.kwargs["identity_loader"]))
         self.assertEqual(result["sample"]["sampledAt"], "2026-10-14T00:00:00Z")
         self.assertEqual(result["sample"]["status"], "cached")
 
@@ -285,6 +286,50 @@ class AdditionalFailoverTests(unittest.TestCase):
         self.assertEqual(result["failureCode"], "account_mismatch")
         self.assertIsNone(result["sample"])
 
+    def test_cursor_optional_profile_rate_limit_preserves_main_quota_and_retry(self):
+        self.write(".config/Cursor/auth.json", {"accessToken": jwt("auth0|one")})
+        client = self.fake_client(None)
+        client.get.side_effect = [{"individualUsage": {"plan": {"used": 10, "limit": 100}}},
+            plan_common.CollectionError("error", "private", failure_code="rate_limited", retry_after=900)]
+        result = adapter.collect(self.read("cursor")[0], self.home, "ubuntu", ccs_dir=self.ccs)
+        self.assertEqual(result["failureCode"], "rate_limited")
+        self.assertEqual(result["retryAfterSeconds"], 900)
+        self.assertEqual(result["sample"]["status"], "ok")
+        self.assertEqual(result["sample"]["windows"][0]["usedPercent"], 10)
+
+    def test_cursor_optional_profile_network_failure_keeps_main_quota_without_cooldown(self):
+        self.write(".config/Cursor/auth.json", {"accessToken": jwt("auth0|one")})
+        client = self.fake_client(None)
+        client.get.side_effect = [{"individualUsage": {"plan": {"used": 0, "limit": 100}}},
+            plan_common.CollectionError("error", "private", failure_code="network_error")]
+        result = adapter.collect(self.read("cursor")[0], self.home, "ubuntu", ccs_dir=self.ccs)
+        self.assertIsNone(result["failureCode"])
+        self.assertEqual(result["sample"]["windows"][0]["usedPercent"], 0)
+        self.assertNotIn("retryAfterSeconds", result)
+
+    def test_zai_optional_pack_rate_limit_preserves_main_quota_and_retry(self):
+        self.plaintext_fixture_keys()
+        self.key("zai", "11111111", "sk-zai-fixture")
+        client = self.fake_client(None)
+        client.get.side_effect = [{"data": {"limits": [{"type": "TOKENS_LIMIT", "percentage": 15}]}},
+            plan_common.CollectionError("error", "private", failure_code="rate_limited", retry_after=700)]
+        result = adapter.collect(self.read("zai")[0], self.home, "ubuntu", ccs_dir=self.ccs)
+        self.assertEqual(result["failureCode"], "rate_limited")
+        self.assertEqual(result["retryAfterSeconds"], 700)
+        self.assertEqual(result["sample"]["status"], "ok")
+        self.assertTrue(result["sample"]["windows"])
+
+    def test_zai_optional_pack_network_failure_keeps_main_quota_without_cooldown(self):
+        self.plaintext_fixture_keys()
+        self.key("zai", "11111111", "sk-zai-fixture")
+        client = self.fake_client(None)
+        client.get.side_effect = [{"data": {"limits": [{"type": "TOKENS_LIMIT", "percentage": 15}]}},
+            plan_common.CollectionError("error", "private", failure_code="network_error")]
+        result = adapter.collect(self.read("zai")[0], self.home, "ubuntu", ccs_dir=self.ccs)
+        self.assertIsNone(result["failureCode"])
+        self.assertTrue(result["sample"]["windows"])
+        self.assertNotIn("retryAfterSeconds", result)
+
     def test_second_saved_api_key_is_collected_without_default_credential_substitution(self):
         self.plaintext_fixture_keys()
         self.key("opencode-go", "11111111", "sk-fixture-first")
@@ -376,7 +421,7 @@ class AdditionalFailoverTests(unittest.TestCase):
         client = self.fake_client({})
         client.get.side_effect = ValueError("Authorization: Bearer dca:do-not-leak")
         result = adapter.collect(self.read("muse")[0], self.home, "ubuntu", ccs_dir=self.ccs)
-        self.assertEqual(result, {"sample": None, "failureCode": "provider_error"})
+        self.assertEqual(result, {"sample": None, "failureCode": "error"})
 
 
 if __name__ == "__main__":

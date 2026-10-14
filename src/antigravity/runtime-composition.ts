@@ -19,6 +19,10 @@ import type {
   AntigravityUsageSample,
 } from './usage-contract';
 import { publicRuntimeServiceProblem } from './runtime-health';
+import {
+  holdIdentityUsageCooldown,
+  readIdentityUsageCooldown,
+} from '../web-server/services/usage-failover-cooldown';
 import { DEFAULT_ANTIGRAVITY_AUTO_SWITCH_SETTINGS } from './auto-switch/settings';
 import {
   AntigravityAutoSwitchService,
@@ -53,6 +57,8 @@ export interface SavedQuotaSnapshot extends AntigravityUsageSample {
 
 export interface AntigravityRuntimeDependencies {
   registry: AntigravityProfileRegistry;
+  /** Shared private usage scope, supplied by persistent production construction. */
+  ccsDirectory?: string;
   driver: AntigravitySwitchDriver;
   store: AntigravityAutoSwitchStore;
   collectQuota(request: SavedQuotaRequest): Promise<SavedQuotaSnapshot>;
@@ -187,11 +193,51 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
       credential: saved.credential,
       identity: saved.identity,
     };
+    const identity = { kind: 'antigravity-subject' as const, key: profile.identityKey };
+    if (deps.ccsDirectory) {
+      const now = (deps.now ?? Date.now)();
+      const until = readIdentityUsageCooldown(deps.ccsDirectory, 'antigravity', identity, now);
+      if (until > now)
+        return {
+          ...unavailableQuota(request),
+          status: 'rate_limited',
+          retryAfterSeconds: Math.ceil((until - now) / 1000),
+        };
+    }
     let snapshot: SavedQuotaSnapshot;
     try {
       snapshot = await deps.collectQuota(request);
     } catch {
       return unavailableQuota(request);
+    }
+    const matchesRequest =
+      snapshot.profileId === profileId &&
+      snapshot.identityKey === request.identityKey &&
+      snapshot.credentialRevision === request.credentialRevision &&
+      snapshot.source === 'native-consumer' &&
+      snapshot.email?.toLowerCase() === request.email.toLowerCase();
+    // A provider throttled this immutable request even if its local token was
+    // replaced while it was in flight. Quota publication still rechecks below.
+    if (
+      matchesRequest &&
+      snapshot.status === 'rate_limited' &&
+      snapshot.identityValidation !== 'mismatch' &&
+      snapshot.identityValidation !== 'needs_sign_in' &&
+      deps.ccsDirectory
+    ) {
+      const now = (deps.now ?? Date.now)();
+      const retry = snapshot.retryAfterSeconds;
+      const seconds = Math.max(
+        60,
+        Math.min(86400, typeof retry === 'number' && Number.isFinite(retry) ? retry : 60)
+      );
+      holdIdentityUsageCooldown(
+        deps.ccsDirectory,
+        'antigravity',
+        identity,
+        now + seconds * 1000,
+        now
+      );
     }
     // The response must still refer to the original immutable registered bundle.
     try {
@@ -199,11 +245,7 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
       if (
         current.credentialRevision !== request.credentialRevision ||
         identityKey(current.identity) !== request.identityKey ||
-        snapshot.profileId !== profileId ||
-        snapshot.identityKey !== request.identityKey ||
-        snapshot.credentialRevision !== request.credentialRevision ||
-        snapshot.source !== 'native-consumer' ||
-        snapshot.email?.toLowerCase() !== request.email.toLowerCase()
+        !matchesRequest
       ) {
         return {
           ...unavailableQuota(request),
@@ -409,6 +451,7 @@ export function createPersistentAntigravityRuntime(
     throw new AntigravityError('Antigravity switching is managed on Ubuntu.');
   return createAntigravityRuntime({
     ...deps,
+    ccsDirectory,
     registry: new AntigravityProfileRegistry(ccsDirectory),
     store: new AntigravityAutoSwitchFileStore(path.join(ccsDirectory, 'antigravity-switching')),
   });
