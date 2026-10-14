@@ -11,6 +11,7 @@ import {
   parseUsageCandidate,
   parseUsageReading,
   safeUsageText,
+  usageTimestamp,
   USAGE_FAILURE_CODES,
   type UsageHelperRequest,
   type UsageHelperResponse,
@@ -154,13 +155,17 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
   const retry = value.retryAfterSeconds;
   const refresh = value.refreshAfterSeconds;
   const observedPlan = safeUsageText(value.observedPlan);
+  const observedPlanAt = usageTimestamp(value.observedPlanAt);
   return {
     version: 1,
     action: 'collect',
     candidate,
     sample,
     failureCode: value.failureCode as string | null,
-    ...(observedPlan ? { observedPlan } : {}),
+    ...(value.failureCode === 'source_changed' && value.rateLimited === true
+      ? { rateLimited: true }
+      : {}),
+    ...(observedPlan && observedPlanAt ? { observedPlan, observedPlanAt } : {}),
     ...(typeof retry === 'number' && Number.isFinite(retry) && retry >= 0
       ? { retryAfterSeconds: Math.min(86400, retry) }
       : {}),

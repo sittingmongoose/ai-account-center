@@ -430,7 +430,7 @@ class CollectTests(unittest.TestCase):
     def test_windows_desktop_preserves_verified_optional_balances_with_bound_context(self):
         self.capsule()
 
-        def optional(identifier, account, organization, home, availability, address):
+        def optional(identifier, account, organization, home, availability, address, cooldown=None):
             self.assertEqual((identifier, account, organization, home, address), ("work", ACCOUNT, ORG, self.home, EMAIL))
             availability.update(resetCredits="ok", prepaidBalance="ok")
             return [core.claude_usage.balance_window("reset_credits_available", "Rate-limit resets available", 0, "resets"),
@@ -451,6 +451,56 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(result["sample"]["optionalExtras"], {"resetCredits": "unavailable", "prepaidBalance": "unavailable"})
         self.assertRegex(result["sample"]["optionalExtrasContext"], r"^[a-f0-9]{64}$")
         self.assertNotIn("fixture-private-cookie", json.dumps(result))
+
+    def test_optional_web_rate_limit_preserves_native_sample_and_stops_remaining_requests(self):
+        self.capsule()
+        web_account = {"uuid": ACCOUNT, "email_address": EMAIL,
+                       "memberships": [{"organization": {"uuid": ORG}}]}
+        reset = {"cedar_ember": {"eligible": True, "grants": []}}
+        for position in range(3):
+            with self.subTest(position=position):
+                client = FakeClient(profile(), {"five_hour": {"utilization": 0}})
+                web = mock.Mock()
+                web.get.side_effect = [web_account, reset][:position] + [core.claude_usage.UsageUnavailable("rate_limited", 1800)]
+                candidate = {**self.claude, "_mode": "desktop", "_profile": "work"}
+                with mock.patch.object(core, "Client", return_value=client), \
+                        mock.patch.object(core.claude_usage, "capsule_cookies", return_value=[]), \
+                        mock.patch.object(core.claude_usage, "WebClient", return_value=web):
+                    result = core.collect(candidate, self.home, "windows")
+                self.assertEqual(result["failureCode"], "rate_limited")
+                self.assertEqual(result["retryAfterSeconds"], 1800)
+                self.assertEqual(web.get.call_count, position + 1)
+                self.assertEqual(result["sample"]["status"], "ok")
+                self.assertEqual(result["sample"]["windows"][0]["usedPercent"], 0)
+                self.assertEqual([window["key"] for window in result["sample"]["windows"]],
+                                 ["five_hour", "reset_credits_available"] if position == 2 else ["five_hour"])
+                self.assertEqual(result["sample"]["optionalExtras"], {
+                    "resetCredits": "ok" if position == 2 else "unavailable", "prepaidBalance": "unavailable"})
+                self.assertRegex(result["sample"]["optionalExtrasContext"], r"^[a-f0-9]{64}$")
+                for private in (TOKEN, ACCOUNT, ORG, "fixture-private-capsule"):
+                    self.assertNotIn(private, json.dumps(result))
+
+    def test_optional_rate_limit_survives_changed_capsule_without_retaining_its_balances(self):
+        capsule = self.capsule()
+
+        def optional(*args):
+            capsule.write_bytes(b"rotated-private-capsule")
+            args[-1].update(failureCode="rate_limited", retryAfterSeconds=60)
+            return [core.claude_usage.balance_window("prepaid_balance", "Prepaid balance", 10, "USD")]
+
+        result, _ = self.desktop_optional(optional)
+        self.assertEqual(result["failureCode"], "rate_limited")
+        self.assertEqual(result["retryAfterSeconds"], 60)
+        self.assertEqual([window["key"] for window in result["sample"]["windows"]], ["five_hour"])
+        self.assertNotIn("optionalExtrasContext", result["sample"])
+
+    def test_optional_rate_limit_without_retry_after_still_holds_provider_and_preserves_quota(self):
+        self.capsule()
+        result, _ = self.desktop_optional(core.claude_usage.UsageUnavailable("rate_limited"))
+        self.assertEqual(result["failureCode"], "rate_limited")
+        self.assertNotIn("retryAfterSeconds", result)
+        self.assertEqual(result["sample"]["status"], "ok")
+        self.assertEqual(result["sample"]["windows"][0]["usedPercent"], 0)
 
     def test_rotated_or_missing_optional_cookie_context_never_retains_optional_reading(self):
         capsule = self.capsule()

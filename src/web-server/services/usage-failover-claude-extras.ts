@@ -20,13 +20,17 @@ export function stripClaudeFailoverExtras(reading: UsageReading): UsageReading {
 }
 
 /** Reapply the retained-extra age bound on cached responses and after restart. */
-export function projectClaudeFailoverExtras<T extends Pick<UsageReading, 'windows'>>(
-  reading: T,
-  now: number
-): T {
+export function projectClaudeFailoverExtras<
+  T extends Pick<UsageReading, 'windows'> &
+    Partial<Pick<UsageReading, 'status' | 'sampledAt' | 'fetchedAt'>>,
+>(reading: T, now: number): T {
   const windows = reading.windows.filter((window) => {
-    if (window.status !== 'cached' || group(window.key) === null) return true;
-    const sampledAt = Date.parse(window.sampledAt ?? '');
+    if (group(window.key) === null || (window.status !== 'cached' && reading.status !== 'cached'))
+      return true;
+    const original =
+      window.sampledAt ??
+      (reading.status === 'cached' ? (reading.sampledAt ?? reading.fetchedAt) : undefined);
+    const sampledAt = Date.parse(original ?? '');
     return Number.isFinite(sampledAt) && sampledAt <= now && now - sampledAt <= MAX_AGE_MS;
   });
   return windows.length === reading.windows.length ? reading : { ...reading, windows };

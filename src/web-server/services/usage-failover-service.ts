@@ -22,6 +22,7 @@ import {
   parseUsageReading,
   sameUsageIdentity,
   safeUsageText,
+  usageTimestamp,
   USAGE_FAILURE_CODES,
   type UsageCandidate,
   type UsageFailoverTarget,
@@ -48,6 +49,7 @@ interface State {
   primarySignIn: Set<'mac' | 'windows'>;
   primaryFailure: string | null;
   observedPlan: string | null;
+  observedPlanAt: string | null;
 }
 export interface UsageFailoverDeps {
   transport?: (host: UsageHost, request: UsageHelperRequest) => Promise<UsageHelperResponse>;
@@ -71,6 +73,10 @@ const candidateMatchesTarget = (target: UsageFailoverTarget, candidate: UsageCan
   walletMatches(target, candidate) &&
   (!target.expectedIdentity || sameUsageIdentity(target.expectedIdentity, candidate.identity)) &&
   (!candidate.email || emailMatches(target.expectedEmail, candidate.email));
+const responseIsRateLimited = (response: UsageHelperResponse): boolean =>
+  response.action === 'collect' &&
+  (response.failureCode === 'rate_limited' ||
+    (response.failureCode === 'source_changed' && response.rateLimited === true));
 
 /** Display-only quota recovery. It cannot activate accounts or produce an activation proof. */
 export class UsageFailoverService {
@@ -116,6 +122,7 @@ export class UsageFailoverService {
       primarySignIn: new Set(),
       primaryFailure: null,
       observedPlan: null,
+      observedPlanAt: null,
     };
     try {
       const file = this.file(target);
@@ -140,6 +147,8 @@ export class UsageFailoverService {
           state.identity = identity;
           state.observedPlan =
             target.provider === 'muse' ? safeUsageText(value.observedPlan) : null;
+          state.observedPlanAt = usageTimestamp(value.observedPlanAt, this.now());
+          if (!state.observedPlanAt) state.observedPlan = null;
           state.primary = parseUsageCandidate(value.primary);
           if (
             isRecord(value.saved) &&
@@ -189,6 +198,7 @@ export class UsageFailoverService {
       primaryFailure: state.primaryFailure,
       primarySignIn: [...state.primarySignIn],
       observedPlan: state.observedPlan,
+      observedPlanAt: state.observedPlanAt,
     });
   }
   private async request(
@@ -464,6 +474,7 @@ export class UsageFailoverService {
         state.primary = null;
         state.saved = null;
         state.observedPlan = null;
+        state.observedPlanAt = null;
         return;
       }
       if (!candidate) {
@@ -474,6 +485,7 @@ export class UsageFailoverService {
         state.identity = candidate.identity;
         state.saved = null;
         state.observedPlan = null;
+        state.observedPlanAt = null;
         state.primary = candidate;
       } else if (
         state.primary &&
@@ -494,6 +506,7 @@ export class UsageFailoverService {
       state.primary = null;
       state.saved = null;
       state.observedPlan = null;
+      state.observedPlanAt = null;
       return;
     }
     let lists: Array<{ host: UsageHost; candidates: UsageCandidate[] | null }> | null = null;
@@ -529,20 +542,25 @@ export class UsageFailoverService {
     if (primaryAlreadyRead && hasUsage(template) && primaries.length) {
       const reading = parseUsageReading(template, this.now());
       if (hasUsage(reading) && emailMatches(target.expectedEmail, reading.email)) {
-        state.saved = {
-          reading: this.retainExtras(
-            target,
-            state,
-            reading,
-            primaries[0].candidate,
-            primaries[0].host.host
-          ),
-          candidate: primaries[0].candidate,
-          host: primaries[0].host.host,
-          fallback: false,
-        };
-        state.fresh = template.status === 'ok';
-        if (state.fresh) {
+        if (
+          !state.saved ||
+          Date.parse(reading.sampledAt ?? '') >= Date.parse(state.saved.reading.sampledAt ?? '')
+        ) {
+          state.saved = {
+            reading: this.retainExtras(
+              target,
+              state,
+              reading,
+              primaries[0].candidate,
+              primaries[0].host.host
+            ),
+            candidate: primaries[0].candidate,
+            host: primaries[0].host.host,
+            fallback: false,
+          };
+          state.fresh = template.status === 'ok';
+        }
+        if (template.status === 'ok') {
           state.primaryFailure = null;
           if (primaries[0].host.host === 'mac' || primaries[0].host.host === 'windows')
             state.primarySignIn.delete(primaries[0].host.host);
@@ -595,7 +613,7 @@ export class UsageFailoverService {
           },
           () => !applyCooldown(),
           (value) => {
-            if (value.action !== 'collect' || value.failureCode !== 'rate_limited') return;
+            if (value.action !== 'collect' || !responseIsRateLimited(value)) return;
             state.nextAttempt = holdUsageCooldown(
               target.ccsDir,
               cooldownKey,
@@ -636,7 +654,7 @@ export class UsageFailoverService {
         state.saved.host === host.host
       )
         state.saved = null;
-      const blocked = response.failureCode === 'rate_limited';
+      const blocked = responseIsRateLimited(response);
       if (
         primarySource &&
         [
@@ -652,6 +670,7 @@ export class UsageFailoverService {
         state.primary = null;
         state.saved = null;
         state.observedPlan = null;
+        state.observedPlanAt = null;
         return 'done';
       }
       if (
@@ -662,16 +681,36 @@ export class UsageFailoverService {
       )
         return blocked ? 'done' : 'next';
       const observedPlan = safeUsageText(response.observedPlan);
-      if (target.provider === 'muse' && primarySource && observedPlan) {
+      const observedPlanAt = usageTimestamp(response.observedPlanAt, this.now());
+      if (
+        target.provider === 'muse' &&
+        primarySource &&
+        observedPlan &&
+        observedPlanAt &&
+        Date.parse(observedPlanAt) >=
+          Math.max(
+            Date.parse(state.observedPlanAt ?? '') || 0,
+            Date.parse(state.saved?.reading.sampledAt ?? '') || 0
+          )
+      ) {
         state.observedPlan = observedPlan;
+        state.observedPlanAt = observedPlanAt;
         if (state.saved && state.saved.reading.plan !== state.observedPlan) state.saved = null;
       }
       const reading = parseUsageReading(response.sample, this.now());
       if (!hasUsage(reading) || !emailMatches(target.expectedEmail, reading.email))
         return blocked ? 'done' : 'next';
       if (target.provider === 'muse') {
-        if (reading.status === 'ok') state.observedPlan = reading.plan;
-        else if (state.observedPlan && reading.plan !== state.observedPlan)
+        const sampled = Date.parse(reading.sampledAt ?? '') || 0;
+        const knownPlanAt = Date.parse(state.observedPlanAt ?? '') || 0;
+        if (
+          reading.status === 'ok' &&
+          sampled >= knownPlanAt &&
+          sampled >= (Date.parse(state.saved?.reading.sampledAt ?? '') || 0)
+        ) {
+          state.observedPlan = reading.plan;
+          state.observedPlanAt = reading.sampledAt;
+        } else if (state.observedPlan && reading.plan !== state.observedPlan)
           return blocked ? 'done' : 'next';
       }
       if (

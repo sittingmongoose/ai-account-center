@@ -101,10 +101,13 @@ export interface UsageCollection {
   sample: UsageReading | null;
   failureCode: string | null;
   retryAfterSeconds?: number;
+  /** Original request received 429 even though later source validation rejected its quota. */
+  rateLimited?: boolean;
   /** Healthy source-local caching; no provider request is due before this interval. */
   refreshAfterSeconds?: number;
   /** Verified Muse plan even when quota failed; never part of a dashboard row. */
   observedPlan?: string;
+  observedPlanAt?: string;
 }
 export type UsageHelperRequest =
   | {

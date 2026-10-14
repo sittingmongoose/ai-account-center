@@ -164,6 +164,49 @@ class ProtocolTests(unittest.TestCase):
             self.assertIsNone(result["sample"])
             self.assertEqual(len(adapter.collect_calls), 1)
 
+    def test_rotation_or_removal_discards_quota_but_preserves_original_request_429(self):
+        for after in ([], [candidate(revision="4" * 64)],
+                      [candidate(identity={"kind": "codex-principal-v1", "key": "4" * 64})]):
+            adapter = FakeAdapter(after=after, result={"sample": sample(), "failureCode": "rate_limited",
+                                                      "retryAfterSeconds": 1800})
+            result, _ = self.run_helper(self.request(), adapter)
+            self.assertEqual(result, {"version": 1, "action": "collect", "candidate": None,
+                                      "sample": None, "failureCode": "source_changed",
+                                      "rateLimited": True, "retryAfterSeconds": 1800})
+        for retry in (None, -1, float("nan"), TOKEN, 86401, True):
+            adapter = FakeAdapter(after=[], result={"failureCode": "rate_limited", "retryAfterSeconds": retry})
+            result, _ = self.run_helper(self.request(), adapter)
+            self.assertIs(result["rateLimited"], True)
+            self.assertNotIn("retryAfterSeconds", result)
+        adapter = FakeAdapter(after=[], result={"failureCode": "network_error", "retryAfterSeconds": 1800})
+        result, _ = self.run_helper(self.request(), adapter)
+        self.assertNotIn("rateLimited", result)
+        self.assertNotIn("retryAfterSeconds", result)
+
+    def test_failed_post_collection_inventory_preserves_original_rate_limit(self):
+        adapter = FakeAdapter(result={"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 1800})
+        inventory = adapter.inventory
+        def changed_inventory(*args, **kwargs):
+            if adapter.inventory_calls:
+                raise OSError("private source disappeared")
+            return inventory(*args, **kwargs)
+        adapter.inventory = changed_inventory
+        result, _ = self.run_helper(self.request(), adapter)
+        self.assertEqual(result["failureCode"], "source_changed")
+        self.assertIs(result["rateLimited"], True)
+        self.assertEqual(result["retryAfterSeconds"], 1800)
+        self.assertIsNone(result["sample"])
+
+    def test_adapter_binding_rejection_preserves_its_original_rate_limit(self):
+        for after in (None, []):
+            adapter = FakeAdapter(after=after, result={"sample": sample(), "failureCode": "source_changed",
+                                                      "rateLimited": True, "retryAfterSeconds": 1800})
+            result, _ = self.run_helper(self.request(), adapter)
+            self.assertEqual(result["failureCode"], "source_changed")
+            self.assertIs(result["rateLimited"], True)
+            self.assertEqual(result["retryAfterSeconds"], 1800)
+            self.assertIsNone(result["sample"])
+
     def test_conflicting_same_locator_sources_are_not_selected(self):
         adapter = FakeAdapter(before=[candidate(), candidate(revision="4" * 64)])
         result, _ = self.run_helper(self.request("inventory"), adapter)
@@ -258,14 +301,27 @@ class ProtocolTests(unittest.TestCase):
     def test_failed_muse_refresh_can_report_a_sanitized_plan_without_inventing_quota(self):
         row = candidate("muse")
         adapter = FakeAdapter(before=[row], result={"sample": None, "failureCode": "rate_limited",
-                                                   "observedPlan": "Max", "retryAfterSeconds": 180})
+                                                   "observedPlan": "Max", "observedPlanAt": "2026-10-14T12:00:00.000Z", "retryAfterSeconds": 180})
         result, _ = self.run_helper(self.request(provider="muse", row=row), adapter)
         self.assertEqual(result["observedPlan"], "Max")
+        self.assertEqual(result["observedPlanAt"], "2026-10-14T12:00:00.000Z")
         self.assertEqual(result["retryAfterSeconds"], 180)
         self.assertIsNone(result["sample"])
         adapter.result["observedPlan"] = "Bearer " + TOKEN
         result, _ = self.run_helper(self.request(provider="muse", row=row), adapter)
         self.assertNotIn("observedPlan", result)
+        self.assertNotIn("observedPlanAt", result)
+        adapter.result["observedPlan"] = "Max"
+        for at in (None, True, TOKEN, "2099-01-01T00:00:00Z"):
+            adapter.result["observedPlanAt"] = at
+            result, _ = self.run_helper(self.request(provider="muse", row=row), adapter)
+            self.assertNotIn("observedPlan", result)
+            self.assertNotIn("observedPlanAt", result)
+        adapter.result.update(sample=sample("muse"), failureCode=None,
+                              observedPlanAt="2026-10-14T12:00:00.000Z")
+        result, _ = self.run_helper(self.request(provider="muse", row=row), adapter)
+        self.assertEqual(result["observedPlan"], "Max")
+        self.assertEqual(result["observedPlanAt"], "2026-10-14T12:00:00.000Z")
 
     def test_adapter_error_and_output_are_not_forwarded(self):
         adapter = FakeAdapter(result=ValueError("Bearer " + TOKEN))

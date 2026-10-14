@@ -22,6 +22,11 @@ MAX_COOKIES = 20
 CAPSULE_NAME = "opencode-console-session.json"
 WORKSPACE = re.compile(r"(?:wrk_|org_)[A-Za-z0-9_-]{1,128}\Z")
 COOKIE_NAMES = {"auth", "__Host-console_session"}
+PUBLIC_SAMPLE_KEYS = {
+    "id", "provider", "providerLabel", "label", "email", "plan", "platform", "source", "status",
+    "message", "fetchedAt", "sampledAt", "isActive", "windows", "capabilities",
+}
+GO_RATE_LIMIT_MESSAGE = "Wallet balance is current. OpenCode Go usage is rate limited; try again later."
 
 
 class Unavailable(Exception):
@@ -225,11 +230,14 @@ def collect(cookies, requested=None, client=None):
     workspace = select_workspace(client.get("/console/api/orgs"), requested)
     wallet = balance_window(client.get("/console/api/billing/status", workspace))
     windows = []
+    failure = None
     try:
         windows = go_windows(client.get("/console/api/go/status", workspace))
     except Unavailable as error:
         if error.code == "rate_limited":
-            raise
+            failure = {"code": "rate_limited"}
+            if finite(error.retry_after_seconds):
+                failure["retryAfterSeconds"] = min(86400, max(0, error.retry_after_seconds))
     windows.append(wallet)
     checked = now_iso()
     suffix = hashlib.sha256(workspace.encode()).hexdigest()[:12]
@@ -240,7 +248,21 @@ def collect(cookies, requested=None, client=None):
               "message": "Console workspace; API-key account identity has not been linked.",
               "fetchedAt": checked, "sampledAt": checked, "isActive": False, "windows": windows,
               "capabilities": {"codexProfile": None, "claudeProfileId": None, "claudePlatforms": []}}
+    if failure:
+        # Private collection metadata: the shared coordinator needs the hold,
+        # while browser sync can still save the verified session and balance.
+        sample["_usageFailure"] = failure
     return workspace, sample
+
+
+def public_sample(sample):
+    """Public native/browser projection; private collection metadata never leaves the helper."""
+    result = {key: value for key, value in sample.items() if key in PUBLIC_SAMPLE_KEYS}
+    failure = sample.get("_usageFailure")
+    if isinstance(failure, dict) and failure.get("code") == "rate_limited":
+        result["goUsageStatus"] = "rate_limited"
+        result["message"] = GO_RATE_LIMIT_MESSAGE
+    return result
 
 
 def private_directory(root):

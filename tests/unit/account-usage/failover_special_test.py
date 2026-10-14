@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "scripts/account-usage"))
 sys.path.insert(0, str(ROOT / "browser-bridge/opencode-muse/native-host"))
 import failover_special as special
 import opencode_console as console
+import failover_usage as protocol
 
 EMAIL = "alice@example.test"
 SUBJECT = "123456789"
@@ -307,6 +308,71 @@ class SpecialFailoverTests(unittest.TestCase):
         with patch.object(console, "collect", side_effect=console.Unavailable("rate_limited")):
             self.assertEqual(special.collect(candidate, self.home, "mac"),
                              {"sample": None, "failureCode": "rate_limited"})
+
+    def test_optional_wallet_go_rate_limit_preserves_balance_in_the_shared_protocol(self):
+        workspace = self.wallet_fixture()
+        calls = []
+        class Client:
+            def get(self, route, selected=None):
+                calls.append(route)
+                if route.endswith("/orgs"):
+                    return [{"id": workspace}]
+                if route.endswith("/billing/status"):
+                    return {"mode": "pay-as-you-go", "billingMode": "prepaid", "balanceMicroCents": "-250000000"}
+                if route.endswith("/go/status"):
+                    raise console.Unavailable("rate_limited", 321)
+                raise AssertionError("unexpected request after rate limit")
+        scope = {"version": 1, "provider": "opencode-wallet", "homeDir": str(self.home), "ccsDir": str(self.ccs)}
+        inventory = protocol.run({**scope, "action": "inventory"})
+        self.assertEqual(len(inventory["candidates"]), 1)
+        real_collect = console.collect
+        with patch.object(console, "collect", side_effect=lambda cookies, requested: real_collect(cookies, requested, Client())):
+            result = protocol.run({**scope, "action": "collect", "candidate": inventory["candidates"][0]})
+        self.assertEqual(result["failureCode"], "rate_limited")
+        self.assertEqual(result["retryAfterSeconds"], 321)
+        self.assertEqual(result["sample"]["status"], "ok")
+        self.assertEqual(result["sample"]["windows"][0]["remaining"], -2.5)
+        self.assertEqual([window["key"] for window in result["sample"]["windows"]], ["zen-balance"])
+        self.assertEqual(calls, ["/console/api/orgs", "/console/api/billing/status", "/console/api/go/status"])
+        self.assertEqual(result["candidate"]["identity"], {"kind": "opencode-workspace", "key": special._digest(workspace)})
+        public = json.dumps(result)
+        for private in ("_usageFailure", "goUsageStatus", "PRIVATE-WALLET-COOKIE", workspace):
+            self.assertNotIn(private, public)
+
+    def test_wallet_partial_rate_limit_hold_survives_token_rotation_and_failed_post_inventory(self):
+        workspace = self.wallet_fixture()
+        class Client:
+            def get(self, route, selected=None):
+                if route.endswith("/orgs"):
+                    return [{"id": workspace}]
+                if route.endswith("/billing/status"):
+                    return {"mode": "pay-as-you-go", "billingMode": "prepaid", "balanceMicroCents": "250000000"}
+                raise console.Unavailable("rate_limited", 123)
+        real_collect = console.collect
+        def rotated(cookies, requested):
+            result = real_collect(cookies, requested, Client())
+            file = self.ccs / "account-usage/opencode-console-session.json"
+            capsule = json.loads(file.read_text())
+            capsule["cookies"][0]["value"] += "-rotated"
+            file.write_text(json.dumps(capsule))
+            return result
+        candidate = special.inventory("opencode-wallet", self.home, "mac")[0]
+        with patch.object(console, "collect", side_effect=rotated):
+            changed = special.collect(candidate, self.home, "mac")
+        self.assertEqual(changed, {"sample": None, "failureCode": "source_changed", "rateLimited": True,
+                                   "retryAfterSeconds": 123})
+        candidate = special.inventory("opencode-wallet", self.home, "mac")[0]
+        with patch.object(console, "collect", side_effect=lambda cookies, requested: real_collect(cookies, requested, Client())), \
+                patch.object(special, "inventory", side_effect=OSError("PRIVATE-READ-FAILURE")):
+            changed = special.collect(candidate, self.home, "mac")
+        self.assertEqual(changed, {"sample": None, "failureCode": "source_changed", "rateLimited": True,
+                                   "retryAfterSeconds": 123})
+        scope = {"version": 1, "provider": "opencode-wallet", "homeDir": str(self.home), "ccsDir": str(self.ccs)}
+        inventory = protocol.run({**scope, "action": "inventory"})
+        with patch.object(console, "collect", side_effect=rotated):
+            changed = protocol.run({**scope, "action": "collect", "candidate": inventory["candidates"][0]})
+        self.assertEqual(changed, {"version": 1, "action": "collect", "candidate": None, "sample": None,
+                                  "failureCode": "source_changed", "rateLimited": True, "retryAfterSeconds": 123})
 
     def test_windows_without_supported_capsule_is_truthfully_unavailable(self):
         self.assertEqual(special.inventory("opencode-wallet", self.home, "windows"), [])

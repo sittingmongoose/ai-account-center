@@ -22,8 +22,11 @@ import urllib.request
 ORIGIN = "https://dev.meta.ai"
 CAPSULE_NAME = "muse-console-session.json"
 CACHE_NAME = "muse-console-usage.json"
+PLAN_NAME = "muse-console-plan-verification.json"
+USAGE_FIELDS = {"schemaVersion", "email", "plan", "teamId", "credentialFingerprint",
+                "quota", "sampledAt", "nextRequestAt", "lastError"}
 # Sidecar pin of the web user bound to the capsule (a hash of /api/auth/me
-# userId, never the id itself). Separate file: capsule and cache schemas stay.
+# userId, never the id itself), separate from the capsule and quota state.
 BINDING_NAME = "muse-console-binding.json"
 REFRESH_SECONDS = 300
 RATE_LIMIT_SECONDS = 600
@@ -57,12 +60,13 @@ ERROR_MESSAGES = {
 
 
 class MuseError(Exception):
-    def __init__(self, code, teams=None, retry_after=None, plan=None):
+    def __init__(self, code, teams=None, retry_after=None, plan=None, plan_at=None):
         self.code = code if code in ERROR_MESSAGES else "error"
         self.teams = teams or []
         self.team_id = None
         self.retry_after = retry_after
         self.plan = plan if valid_plan(plan) else None
+        self.plan_at = plan_at if self.plan is not None else None
         super().__init__(self.code)
 
 
@@ -394,9 +398,9 @@ def read_usage_state(root):
     value = private_json(root, CACHE_NAME)
     if value is None:
         return None
-    if (not isinstance(value, dict) or set(value) != {"schemaVersion", "email", "plan", "teamId", "credentialFingerprint",
-            "quota", "sampledAt", "nextRequestAt", "lastError"} or type(value["schemaVersion"]) is not int
-            or value["schemaVersion"] != 1 or not valid_email(value["email"]) or not valid_plan(value["plan"])
+    if (not isinstance(value, dict) or type(value.get("schemaVersion")) is not int
+            or value["schemaVersion"] != 1 or set(value) != USAGE_FIELDS
+            or not valid_email(value["email"]) or not valid_plan(value["plan"])
             or not isinstance(value["teamId"], str) or not re.fullmatch(r"[0-9]{1,32}", value["teamId"])
             or not isinstance(value["credentialFingerprint"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["credentialFingerprint"])
             or not finite(value["nextRequestAt"]) or value["nextRequestAt"] < 0
@@ -414,7 +418,62 @@ def read_usage_state(root):
                 or not isinstance(value["sampledAt"], str) or reset_at(value["sampledAt"]) is None
                 or not normalize_muse({"subscription_quota": quota})):
             raise MuseError("local_storage_error")
+    # These fields are in-memory only. Existing installed bridge helpers read
+    # the exact v1 cache schema, so verification provenance lives separately.
+    verified_at = read_plan_verification(root, value)
+    value.update(planVerified=quota is not None or verified_at is not None, planVerifiedAt=verified_at)
     return value
+
+
+def verified_state_plan(state):
+    return state["plan"] if state is not None and state["planVerifiedAt"] is not None else None
+
+
+def plan_timestamp(now):
+    return dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def valid_plan_timestamp(value, now=None):
+    if not isinstance(value, str) or len(value) > 40:
+        return False
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        stamp = parsed.timestamp()
+        return parsed.tzinfo is not None and 0 <= stamp <= (time.time() if now is None else now) + 5
+    except (ValueError, OverflowError, OSError):
+        return False
+
+
+def usage_state_fingerprint(state):
+    payload = {key: state[key] for key in USAGE_FIELDS}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=True, allow_nan=False,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def read_plan_verification(root, state):
+    try:
+        value = private_json(root, PLAN_NAME)
+        if (not isinstance(value, dict) or set(value) != {"schemaVersion", "stateHash", "verifiedAt"}
+                or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+                or value["stateHash"] != usage_state_fingerprint(state)
+                or not valid_plan_timestamp(value["verifiedAt"])):
+            return None
+        return value["verifiedAt"]
+    except (MuseError, OSError, ValueError, TypeError):
+        return None
+
+
+def write_usage_state(root, state):
+    # The shared cache remains byte-schema compatible with older collectors.
+    payload = {key: state[key] for key in USAGE_FIELDS}
+    atomic_private_json(root, CACHE_NAME, payload)
+    try:
+        atomic_private_json(root, PLAN_NAME, {"schemaVersion": 1, "stateHash": usage_state_fingerprint(payload),
+                                            "verifiedAt": state.get("planVerifiedAt")})
+    except (MuseError, OSError, ValueError, TypeError):
+        # A missing or interrupted sidecar only loses optional provenance.
+        # The complete state digest prevents a stale sidecar from being reused.
+        pass
 
 
 def read_binding(root):
@@ -489,6 +548,8 @@ def state_sample(state, cached, now=None):
         message = "Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically."
     result = {"teamId": state["teamId"], "quota": state["quota"], "sampledAt": state["sampledAt"],
               "cached": cached, "message": message, "failureCode": state["lastError"] if cached else None}
+    if state["planVerifiedAt"] is not None:
+        result.update(observedPlan=state["plan"], observedPlanAt=state["planVerifiedAt"])
     remaining = min(MAX_RETRY_SECONDS, max(0, state["nextRequestAt"] - now))
     if remaining > 0:
         if result["failureCode"] == "rate_limited":
@@ -506,7 +567,7 @@ def cached_quota(root, email, plan, team, access, now=None):
         if matches(state, email, plan, team, access) and state["nextRequestAt"] > now:
             if state["quota"] is not None:
                 return state_sample(state, True, now)
-            raise MuseError(state["lastError"] or "provider_error", plan=state["plan"],
+            raise MuseError(state["lastError"] or "provider_error", plan=verified_state_plan(state), plan_at=state["planVerifiedAt"],
                             retry_after=state["nextRequestAt"] - now if state["lastError"] == "rate_limited" else None)
     return None
 
@@ -525,10 +586,14 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
     Its callers may start with an older capsule plan: a due refresh adopts the
     live plan, discards the old counters, and requires the portal tier to match.
     During cooldown the cache retains its own plan, never the capsule's label.
+    When the loader is omitted, the caller must already have verified the
+    expected plan through the native credential in this collection attempt.
     """
     from desktop_usage import normalize_muse
     from desktop_helpers import utc_now
+    live_clock = now is None
     now = time.time() if now is None else now
+    verified_at = plan_timestamp(now) if identity_loader is None else None
     if not valid_email(expected_email) or not valid_plan(expected_plan):
         raise MuseError("account_mismatch")
     if bound_team is not None and requested not in (None, bound_team):
@@ -543,16 +608,17 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             # A provider 429 limits this web session, not one team or plan.
             # A known plan change cannot reuse the previous limits while waiting.
             if identity_loader is None and state["plan"] != expected_plan:
-                state.update(plan=expected_plan, quota=None, sampledAt=None)
-                atomic_private_json(root, CACHE_NAME, state)
-            raise MuseError("rate_limited", retry_after=state["nextRequestAt"] - now, plan=state["plan"])
+                state.update(plan=expected_plan, planVerified=True, planVerifiedAt=plan_timestamp(now), quota=None, sampledAt=None)
+                write_usage_state(root, state)
+            raise MuseError("rate_limited", retry_after=state["nextRequestAt"] - now,
+                            plan=verified_state_plan(state), plan_at=state["planVerifiedAt"])
         cache_plan = None if identity_loader is not None else expected_plan
         if not matches(state, expected_email, cache_plan, requested, access):
             state = None
         if state and state["nextRequestAt"] > now:
             if state["quota"] is not None:
                 return state_sample(state, True, now)
-            raise MuseError(state["lastError"] or "provider_error", plan=state["plan"],
+            raise MuseError(state["lastError"] or "provider_error", plan=verified_state_plan(state), plan_at=state["planVerifiedAt"],
                             retry_after=state["nextRequestAt"] - now if state["lastError"] == "rate_limited" else None)
         # Reserve the next request before network I/O so a process crash cannot
         # cause a stream of retry requests from independent collector callers.
@@ -561,20 +627,29 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
                 raise MuseError("team_mismatch")
             state = {"schemaVersion": 1, "email": expected_email, "plan": expected_plan, "teamId": requested,
                      "credentialFingerprint": fingerprint(access), "quota": None, "sampledAt": None,
-                     "nextRequestAt": now, "lastError": "network_error"}
+                     "nextRequestAt": now, "lastError": "network_error", "planVerified": identity_loader is None,
+                     "planVerifiedAt": verified_at}
         if state:
             state["nextRequestAt"] = now + REFRESH_SECONDS
-            atomic_private_json(root, CACHE_NAME, state)
+            write_usage_state(root, state)
+        verified_plan = identity_loader is None
         try:
             if identity_loader is not None:
                 expected_plan = identity_loader()
                 if not valid_plan(expected_plan):
                     raise MuseError("invalid_response")
-                if state is not None and state["plan"] != expected_plan:
+                verified_plan = True
+                verified_at = plan_timestamp(time.time() if live_clock else now)
+                if state is not None:
                     # Even a subsequent 429/outage must not retain the old
                     # plan's denominator or restore it on a cold retry.
-                    state.update(plan=expected_plan, quota=None, sampledAt=None)
-                    atomic_private_json(root, CACHE_NAME, state)
+                    if state["plan"] != expected_plan:
+                        state.update(quota=None, sampledAt=None)
+                    state.update(plan=expected_plan, planVerified=True, planVerifiedAt=verified_at)
+                    write_usage_state(root, state)
+            elif state is not None:
+                state.update(planVerified=True, planVerifiedAt=verified_at)
+                write_usage_state(root, state)
             binding = {"bound_team": bound_team}
             if bound_team is not None:
                 binding.update(bound_user=pinned_user(root, expected_email, bound_team),
@@ -587,8 +662,9 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             state = {"schemaVersion": 1, "email": expected_email, "plan": expected_plan, "teamId": team,
                      "credentialFingerprint": fingerprint(access), "quota": quota,
                      "sampledAt": provider_sampled_at(quota, now) or utc_now(),
-                     "nextRequestAt": now + REFRESH_SECONDS, "lastError": None}
-            atomic_private_json(root, CACHE_NAME, state)
+                     "nextRequestAt": now + REFRESH_SECONDS, "lastError": None, "planVerified": True,
+                     "planVerifiedAt": verified_at}
+            write_usage_state(root, state)
             pin_user(root, expected_email, expected_plan, team, observed)
             return dict(state_sample(state, False, now), binding=observed.get("mode"))
         except MuseError as error:
@@ -599,7 +675,8 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             if state is None:
                 state = {"schemaVersion": 1, "email": expected_email, "plan": expected_plan, "teamId": resolved_team,
                          "credentialFingerprint": fingerprint(access), "quota": None, "sampledAt": None,
-                         "nextRequestAt": now, "lastError": None}
+                         "nextRequestAt": now, "lastError": None, "planVerified": verified_plan,
+                         "planVerifiedAt": verified_at if verified_plan else None}
             # invalid_response may come from identity/team parsing, so it does
             # not establish a verified quota-only failure safe for retention.
             transient = error.code in {"rate_limited", "provider_error", "network_error"}
@@ -608,12 +685,13 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             state["lastError"] = error.code
             state["nextRequestAt"] = now + (min(MAX_RETRY_SECONDS, max(REFRESH_SECONDS, error.retry_after or RATE_LIMIT_SECONDS))
                                                if error.code == "rate_limited" else REFRESH_SECONDS)
-            atomic_private_json(root, CACHE_NAME, state)
+            write_usage_state(root, state)
             if transient and state["quota"] is not None:
                 return state_sample(state, True, now)
             # Downstream caches must see the current plan even on an outage,
             # or they could retain counters that the native cache discarded.
-            error.plan = state["plan"]
+            error.plan = verified_state_plan(state)
+            error.plan_at = state["planVerifiedAt"]
             raise
         except Exception:
             # An unexpected failure is not evidence of a temporary quota-only
@@ -622,8 +700,9 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
                 state["quota"], state["sampledAt"] = None, None
                 state["lastError"] = "error"
                 state["nextRequestAt"] = now + REFRESH_SECONDS
-                atomic_private_json(root, CACHE_NAME, state)
-            raise MuseError("error", plan=state["plan"] if state is not None else None) from None
+                write_usage_state(root, state)
+            raise MuseError("error", plan=verified_state_plan(state),
+                            plan_at=state["planVerifiedAt"] if state is not None else None) from None
 
 
 def write_capsule(root, cookies, team, email, plan):
@@ -765,14 +844,14 @@ def restore_browser_sample(root, previous, now=None):
             return False
         # A first rate-limit observation follows live native identity validation.
         # A failed key lookup or expired web sign-in cannot bootstrap a reading.
-        if state["quota"] is None and state["lastError"] != "rate_limited":
+        if not state["planVerified"] or state["quota"] is None and state["lastError"] != "rate_limited":
             return False
         if state["quota"] is not None:
             existing = dt.datetime.fromisoformat(state["sampledAt"].replace("Z", "+00:00")).timestamp()
             if existing >= observed:
                 return False
         state["quota"], state["sampledAt"] = quota, sampled
-        atomic_private_json(root, CACHE_NAME, state)
+        write_usage_state(root, state)
         return True
 
 

@@ -312,15 +312,17 @@ def _muse(credential, result, ccs_dir, client, context):
                                    identity_loader=identify, bound_team=team)
     except muse.MuseError as error:
         failure = _failure(error.code, error.retry_after)
-        if desktop.safe_text(error.plan):
+        if desktop.safe_text(error.plan) and muse.valid_plan_timestamp(error.plan_at):
             # Plan metadata can invalidate incompatible old limits even when
             # no replacement quota exists. Keep the original 429/failure code.
             failure["observedPlan"] = desktop.safe_text(error.plan)
+            failure["observedPlanAt"] = error.plan_at
         return failure
     result.update(email=address_bound, plan=sample["quota"]["tier"],
                   windows=desktop_usage.normalize_muse({"subscription_quota": sample["quota"]}),
                   status="cached" if sample["cached"] else "ok", sampledAt=sample["sampledAt"], message=sample["message"])
-    return {key: sample[key] for key in ("failureCode", "retryAfterSeconds", "refreshAfterSeconds") if key in sample}
+    return {key: sample[key] for key in ("failureCode", "retryAfterSeconds", "refreshAfterSeconds",
+                                       "observedPlan", "observedPlanAt") if key in sample}
 
 
 def _cursor(credential, result, client):

@@ -434,11 +434,11 @@ class WebExtraTests(unittest.TestCase):
         for value in ({}, {"amount": True}, {"amount": -1}, {"amount": 0, "currency": "unknown"}):
             self.assertEqual(usage.normalize_prepaid(value), [])
 
-    def web_windows(self, *responses, availability=None):
+    def web_windows(self, *responses, availability=None, cooldown=None):
         client = mock.Mock()
         client.get.side_effect = responses
         with mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]), mock.patch.object(usage, "WebClient", return_value=client):
-            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, availability=availability, expected_email=EMAIL)
+            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, availability=availability, expected_email=EMAIL, cooldown=cooldown)
         return windows, client
 
     def web_account(self, **overrides):
@@ -464,6 +464,25 @@ class WebExtraTests(unittest.TestCase):
         self.assertEqual([window["key"] for window in windows], ["reset_credits_available"])
         with mock.patch.object(usage, "capsule_cookies", side_effect=RuntimeError("private-path")):
             self.assertEqual(usage.optional_web_windows("gmail", ACCOUNT, ORG, expected_email=EMAIL), [])
+
+    def test_optional_rate_limits_stop_at_each_endpoint_with_bounded_metadata(self):
+        reset = {"cedar_ember": {"eligible": True, "grants": []}}
+        for position in range(3):
+            with self.subTest(position=position):
+                cooldown, availability = {}, {}
+                responses = [self.web_account(), reset][:position] + [usage.UsageUnavailable("rate_limited", 1800)]
+                windows, client = self.web_windows(*responses, availability=availability, cooldown=cooldown)
+                self.assertEqual(client.get.call_count, position + 1)
+                self.assertEqual(cooldown, {"failureCode": "rate_limited", "retryAfterSeconds": 1800})
+                self.assertEqual([window["key"] for window in windows], ["reset_credits_available"] if position == 2 else [])
+                self.assertEqual(availability, {"resetCredits": "ok" if position == 2 else "unavailable",
+                                                "prepaidBalance": "unavailable"})
+
+    def test_default_optional_caller_keeps_list_result_and_stops_on_429_without_an_output_parameter(self):
+        windows, client = self.web_windows(self.web_account(), usage.UsageUnavailable("rate_limited", 60),
+                                          {"amount": 0, "currency": "USD"})
+        self.assertEqual(windows, [])
+        self.assertEqual(client.get.call_count, 2)
 
     def test_optional_group_markers_distinguish_failure_from_successful_empty_null_and_zero(self):
         availability = {}
@@ -500,6 +519,44 @@ class WebExtraTests(unittest.TestCase):
         self.assertEqual(result["windows"][0]["usedPercent"], 7)
         self.assertEqual(result["optionalExtras"], {"resetCredits": "unavailable", "prepaidBalance": "unavailable"})
         self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_legacy_native_quota_survives_optional_429_with_signature_and_cooldown(self):
+        client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+        web = mock.Mock()
+        web.get.side_effect = [self.web_account(), usage.UsageUnavailable("rate_limited", 1800)]
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), \
+                mock.patch.object(usage, "Client", return_value=client), \
+                mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]), \
+                mock.patch.object(usage, "WebClient", return_value=web):
+            result = usage.collect("gmail", "windows", expected_email=EMAIL)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["windows"][0]["usedPercent"], 7)
+        self.assertEqual(result["failureCode"], "rate_limited")
+        self.assertEqual(result["retryAfterSeconds"], 1800)
+        self.assertTrue(result["accountVerified"] and result["organizationVerified"])
+        self.assertRegex(result["sourceContextFingerprint"], r"^[a-f0-9]{64}$")
+        self.assertEqual(web.get.call_count, 2)
+
+    def test_web_client_preserves_rate_limit_without_reading_its_response_body(self):
+        for header, delay in [("1800", 1800), ("999999999", 86400), ("-1", None),
+                              (None, None), ("Bearer PRIVATE", None), ("9" * 129, None)]:
+            with self.subTest(header=header):
+                response = mock.Mock(status_code=429, headers={"Retry-After": header})
+                if header == "1800":
+                    response.close.side_effect = RuntimeError("PRIVATE-close-error")
+                requests = mock.Mock()
+                requests.get.return_value = response
+                with mock.patch.dict(sys.modules, {"curl_cffi": mock.Mock(requests=requests)}):
+                    client = usage.WebClient([{"name": "sessionKey", "value": "fixture-private-session"}], ORG)
+                with self.assertRaises(usage.UsageUnavailable) as caught:
+                    client.get("/api/account")
+                self.assertEqual(caught.exception.status, "rate_limited")
+                self.assertEqual(caught.exception.retry_after, delay)
+                response.iter_content.assert_not_called()
+                response.close.assert_called_once()
+        with mock.patch.object(usage.time, "time", return_value=0):
+            self.assertEqual(usage.retry_after_seconds("Thu, 01 Jan 1970 00:30:00 GMT"), 1800)
 
     def test_web_client_hosts_routes_redirect_and_response_boundaries(self):
         requests = mock.Mock()

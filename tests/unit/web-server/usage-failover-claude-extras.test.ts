@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'bun:test';
-import type { DashboardAccountWindow } from '../../../src/web-server/services/account-dashboard-types';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import type {
+  DashboardAccount,
+  DashboardAccountWindow,
+} from '../../../src/web-server/services/account-dashboard-types';
 import {
   parseUsageReading,
+  type UsageCandidate,
+  type UsageFailoverTarget,
+  type UsageHelperRequest,
+  type UsageHelperResponse,
   type UsageReading,
 } from '../../../src/web-server/services/usage-failover-contract';
+import { UsageFailoverService } from '../../../src/web-server/services/usage-failover-service';
 import {
   projectClaudeFailoverExtras,
   retainClaudeFailoverExtras,
@@ -52,6 +63,159 @@ function previous(): UsageReading {
 }
 
 describe('private Claude failover optional extras', () => {
+  it('removes expired optional balances after an offline refresh and coordinator reconstruction', async () => {
+    const ccsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-claude-extra-expiry-'));
+    try {
+      let now = NOW;
+      let online = true;
+      const candidate: UsageCandidate = {
+        locator: '1'.repeat(64),
+        revision: '2'.repeat(64),
+        selectors: ['claude-desktop-profile:fixture'],
+        identity: { kind: 'claude-account-org-v1', key: '3'.repeat(64) },
+        email: 'same@example.test',
+        plan: 'max',
+      };
+      const target: UsageFailoverTarget = {
+        ccsDir,
+        accountId: 'claude:fixture',
+        provider: 'claude',
+        binding: 'fixture-binding',
+        primarySources: [
+          {
+            host: 'windows',
+            platform: 'windows',
+            sshHost: 'fixture-windows',
+            selector: candidate.selectors[0],
+          },
+        ],
+      };
+      const template: DashboardAccount = {
+        id: target.accountId,
+        provider: 'claude',
+        providerLabel: 'Claude',
+        label: 'Fixture',
+        email: candidate.email,
+        plan: null,
+        platform: 'windows',
+        source: 'Fixture',
+        status: 'unavailable',
+        message: null,
+        sampledAt: null,
+        fetchedAt: null,
+        windows: [],
+        isActive: false,
+        capabilities: {
+          codexProfile: null,
+          claudeProfileId: 'fixture',
+          claudePlatforms: ['windows'],
+        },
+      };
+      const deps = {
+        now: () => now,
+        hosts: async () => [],
+        transport: async (
+          _host: unknown,
+          request: UsageHelperRequest
+        ): Promise<UsageHelperResponse> => {
+          if (!online) throw new Error('Fixture offline');
+          if (request.action === 'inventory')
+            return { version: 1, action: 'inventory', candidates: [candidate] };
+          return {
+            version: 1,
+            action: 'collect',
+            candidate,
+            failureCode: null,
+            sample: reading(NOW, {
+              windows: [window('five_hour'), window('prepaid_balance')],
+            }),
+          };
+        },
+      };
+      const service = new UsageFailoverService(deps);
+      const live = await service.collect(target, template);
+      expect(live.windows.map((item) => item.key)).toEqual(['five_hour', 'prepaid_balance']);
+      expect(live.windows[1].status).toBeUndefined();
+      online = false;
+      now += 25 * 60 * 60 * 1000;
+      const offline = await service.collect(target, template);
+      expect(offline.status).toBe('cached');
+      expect(offline.windows.map((item) => item.key)).toEqual(['five_hour']);
+      expect(offline.sampledAt).toBe(live.sampledAt);
+      const restored = new UsageFailoverService(deps).peek(target, template);
+      expect(restored.status).toBe('cached');
+      expect(restored.windows.map((item) => item.key)).toEqual(['five_hour']);
+      expect(restored.sampledAt).toBe(live.sampledAt);
+    } finally {
+      fs.rmSync(ccsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('expires previously fresh extras when the whole source is cached, including a restored observation', () => {
+    const live = previous();
+    expect(live.windows.every((item) => item.status === undefined)).toBe(true);
+    const restored = parseUsageReading(JSON.parse(JSON.stringify(live)), NOW + DAY + 1)!;
+    const cached = { ...restored, status: 'cached' as const };
+    const projected = projectClaudeFailoverExtras(cached, NOW + DAY + 1);
+    expect(projected.windows.map((item) => item.key)).toEqual(['five_hour']);
+    expect(projected.windows[0]).toEqual(live.windows[0]);
+    expect(projected.sampledAt).toBe(live.sampledAt);
+    expect(projected.fetchedAt).toBe(live.fetchedAt);
+    expect(cached.windows).toHaveLength(4);
+  });
+
+  it('ages a cached source from original window or sample time before the fetch time', () => {
+    const old = new Date(NOW - DAY - 1).toISOString();
+    const recent = new Date(NOW - 60_000).toISOString();
+    const sample = reading(undefined, {
+      status: 'cached',
+      sampledAt: old,
+      windows: [
+        window('five_hour'),
+        window('prepaid_balance'),
+        { ...window('reset_credit_saved_grant_1'), sampledAt: recent },
+      ],
+    });
+    const projected = projectClaudeFailoverExtras(sample, NOW);
+    expect(projected.windows.map((item) => item.key)).toEqual([
+      'five_hour',
+      'reset_credit_saved_grant_1',
+    ]);
+    expect(projected.windows[1].sampledAt).toBe(recent);
+    const noSample = reading(NOW - DAY - 1, {
+      status: 'cached',
+      sampledAt: null,
+      windows: [window('five_hour'), window('prepaid_balance')],
+    });
+    expect(projectClaudeFailoverExtras(noSample, NOW).windows.map((item) => item.key)).toEqual([
+      'five_hour',
+    ]);
+    const oldWindow = reading(undefined, {
+      status: 'cached',
+      windows: [window('five_hour'), { ...window('prepaid_balance'), sampledAt: old }],
+    });
+    expect(projectClaudeFailoverExtras(oldWindow, NOW).windows.map((item) => item.key)).toEqual([
+      'five_hour',
+    ]);
+  });
+
+  it('keeps whole-source cached extras at the 24-hour boundary and removes them immediately after', () => {
+    const sample = reading(NOW - DAY, {
+      status: 'cached',
+      windows: [window('five_hour'), window('prepaid_balance', 0)],
+    });
+    expect(projectClaudeFailoverExtras(sample, NOW)).toBe(sample);
+    expect(projectClaudeFailoverExtras(sample, NOW + 1).windows.map((item) => item.key)).toEqual([
+      'five_hour',
+    ]);
+    for (const timestamp of [null, 'invalid', new Date(NOW + 1).toISOString()]) {
+      const invalid = { ...sample, sampledAt: timestamp, fetchedAt: timestamp };
+      expect(projectClaudeFailoverExtras(invalid, NOW).windows.map((item) => item.key)).toEqual([
+        'five_hour',
+      ]);
+    }
+  });
+
   it('expires retained extras on cache projection while preserving base quota and original timestamps', () => {
     const old = new Date(NOW - DAY - 1).toISOString();
     const boundary = new Date(NOW - DAY).toISOString();

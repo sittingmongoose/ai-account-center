@@ -283,6 +283,16 @@ def _same(left, right):
     return all(left.get(key) == right.get(key) for key in ("locator", "identity", "revision"))
 
 
+def _changed_after_collection(result):
+    """Reject raced quota but retain a provider hold for the original request."""
+    response = _failure("source_changed")
+    if isinstance(result, dict) and (result.get("failureCode") == "rate_limited" or
+            result.get("failureCode") == "source_changed" and result.get("rateLimited") is True):
+        response.update(_failure("source_changed", retry=result.get("retryAfterSeconds")))
+        response["rateLimited"] = True
+    return response
+
+
 def _claude_profile(value):
     """Private server-owned launcher context; never a provider identity proof."""
     if (not isinstance(value, dict) or not {"id", "email"}.issubset(value) or
@@ -339,24 +349,31 @@ def _run(request):
     # It remains only selection data; collection always receives the private row.
     context = {"claude_profile": claude_profile} if claude_profile is not None else {}
     result = adapter.collect(private, home, platform, ccs_dir=ccs, **context)
-    after, _ = _inventory(adapter, provider, home, platform, ccs, claude_profile)
+    try:
+        after, _ = _inventory(adapter, provider, home, platform, ccs, claude_profile)
+    except Exception:
+        return _changed_after_collection(result)
     if not any(_same(current, public) for current, _ in after):
-        return _failure("source_changed")
+        return _changed_after_collection(result)
     if not isinstance(result, dict):
         return _failure("invalid_response", public)
     code = result.get("failureCode")
     sample = public_sample(result.get("sample"), provider, platform)
+    observed_plan = _text(result.get("observedPlan")) if provider == "muse" else None
+    observed_plan_at = _timestamp(result.get("observedPlanAt"), observation=True)
+    plan_metadata = {"observedPlan": observed_plan, "observedPlanAt": observed_plan_at} if observed_plan and observed_plan_at else {}
     if code is not None:
         response = _failure(code, public, result.get("retryAfterSeconds"))
-        observed_plan = _text(result.get("observedPlan")) if provider == "muse" else None
-        if observed_plan is not None:
-            response["observedPlan"] = observed_plan
+        if code == "source_changed" and result.get("rateLimited") is True:
+            response["rateLimited"] = True
+        response.update(plan_metadata)
         if code in {"rate_limited", "network_error", "provider_error", "busy", "unavailable"} and sample is not None:
             response["sample"] = sample
         return response
     if sample is None:
         return _failure("invalid_response", public)
     response = {"version": 1, "action": "collect", "candidate": public, "sample": sample, "failureCode": None}
+    response.update(plan_metadata)
     refresh = _number(result.get("refreshAfterSeconds"), nonnegative=True)
     if refresh is not None and 0 < refresh <= 86400:
         response["refreshAfterSeconds"] = refresh

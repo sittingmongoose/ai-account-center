@@ -8,7 +8,7 @@ import sys
 # Public installed usage modules; credentials never become command arguments.
 sys.path.insert(0, str(Path.home() / ".ccs/account-usage"))
 
-from opencode_console import MAX_BYTES, Unavailable, collect, read_capsule, write_capsule, validate_cookies
+from opencode_console import MAX_BYTES, Unavailable, collect, public_sample, read_capsule, write_capsule, validate_cookies
 
 EXTENSION_ID = "nkabpjmpmbdklhknjnjgmapmcjcmmlop"
 ORIGIN = "chrome-extension://" + EXTENSION_ID + "/"
@@ -62,7 +62,7 @@ def handle_request(request, root, collector=collect, writer=write_capsule):
     cookies = validate_cookies(request.get("cookies"))
     workspace, sample = collector(cookies, request.get("workspaceId"))
     writer(root, cookies, workspace)
-    return {"schemaVersion": 1, "ok": True, "sample": sample}
+    return {"schemaVersion": 1, "ok": True, "sample": public_sample(sample)}
 
 
 def main():
@@ -71,7 +71,7 @@ def main():
         try:
             cookies, workspace = read_capsule(root)
             _, sample = collect(cookies, workspace)
-            print(json.dumps(sample, allow_nan=False, separators=(",", ":")))
+            print(json.dumps(public_sample(sample), allow_nan=False, separators=(",", ":")))
         except (Unavailable, OSError, ValueError) as error:
             print(json.dumps({"provider": "opencode-go", "platform": "mac", "status": "unavailable",
                               "code": error.code if isinstance(error, Unavailable) else "local_storage_error", "windows": []}, separators=(",", ":")))

@@ -32,7 +32,9 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         auth.parent.mkdir(parents=True)
         auth.write_text(json.dumps({"providers": {"meta": {"access_token": TOKEN, "user_email": EMAIL}}}))
         muse.write_capsule(self.root, [COOKIE], "42", EMAIL, "Pro")
-        self.clock = int(time.time())
+        # Advance cooldowns without making fixture observations future-dated
+        # to the dispatcher's independent real-clock output validation.
+        self.clock = int(time.time()) - 3600
         self.native = {"user_email": EMAIL, "subs_tier_name": "Pro", "is_subs_active": True,
                        "api_key": "sk-do-not-persist"}
         self.quota = {"tier": "Pro", "window_weighted_used": 10, "window_weighted_limit": 100,
@@ -72,6 +74,7 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         cached = self.collect()
         self.assertEqual(cached["sample"]["status"], "cached")
         self.assertEqual(cached["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertEqual(cached["observedPlanAt"], first["observedPlanAt"])
         self.assertEqual(cached["refreshAfterSeconds"], 299)
         self.assertEqual(self.native_client.get.call_count, 1)
         self.assertEqual(len(self.portal_calls), 3)
@@ -100,8 +103,11 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         self.assertEqual(limited["failureCode"], "rate_limited")
         self.assertEqual(limited["retryAfterSeconds"], 1200)
         self.assertEqual(limited["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertEqual(limited["observedPlanAt"], first["observedPlanAt"])
         self.clock += 1
-        self.assertEqual(self.collect()["retryAfterSeconds"], 1199)
+        cached = self.collect()
+        self.assertEqual(cached["retryAfterSeconds"], 1199)
+        self.assertEqual(cached["observedPlanAt"], first["observedPlanAt"])
         self.assertEqual(self.native_client.get.call_count, 2)
         self.assertEqual(len(self.portal_calls), 3)
 
@@ -122,12 +128,120 @@ class MuseFailoverBudgetTests(unittest.TestCase):
     def test_first_identity_failure_reserves_and_preserves_429_without_a_sample(self):
         self.native_client.get.side_effect = plans.CollectionError("error", "private", failure_code="rate_limited", retry_after=900)
         limited = self.collect()
-        self.assertEqual(limited, {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 900,
-                                   "observedPlan": "Pro"})
+        self.assertEqual(limited, {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 900})
         self.clock += 1
-        self.assertEqual(self.collect()["retryAfterSeconds"], 899)
+        self.assertEqual(self.collect(), {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 899})
         self.assertEqual(self.native_client.get.call_count, 1)
         self.assertEqual(self.portal_calls, [])
+
+    def test_stale_capsule_plan_is_unverified_on_cold_identity_failure_and_retry(self):
+        self.native["subs_tier_name"] = "Ultra"
+        self.native_client.get.side_effect = plans.CollectionError("error", "private", failure_code="network_error")
+        failed = self.collect()
+        self.assertEqual(failed, {"sample": None, "failureCode": "network_error"})
+        self.assertFalse(muse.read_usage_state(self.root)["planVerified"])
+        self.clock += 1
+        self.assertEqual(self.collect(), failed)
+        self.assertEqual(self.native_client.get.call_count, 1)
+        self.assertEqual(self.portal_calls, [])
+        # Only an eventual successful native lookup can promote the tier.
+        self.clock += 300
+        self.native_client.get.side_effect = lambda *args, **kwargs: dict(self.native)
+        self.portal_error = muse.MuseError("network_error")
+        verified = self.collect()
+        self.assertEqual(verified, {"sample": None, "failureCode": "network_error", "observedPlan": "Ultra",
+                                    "observedPlanAt": muse.plan_timestamp(self.clock)})
+        self.assertTrue(muse.read_usage_state(self.root)["planVerified"])
+        self.clock += 1
+        self.assertEqual(self.collect(), verified)
+        self.assertEqual(self.native_client.get.call_count, 2)
+
+    def test_token_rotation_cannot_promote_stale_capsule_plan_after_identity_failure(self):
+        self.native["subs_tier_name"] = "Ultra"
+        self.quota["tier"] = "Ultra"
+        self.assertEqual(self.collect()["sample"]["plan"], "Ultra")
+        auth = self.home / ".config/muse/auth.json"
+        auth.write_text(json.dumps({"providers": {"meta": {"access_token": "dca:rotated-fixture", "user_email": EMAIL}}}))
+        self.native_client.get.side_effect = plans.CollectionError("error", "private", failure_code="network_error")
+        self.clock += 1
+        failed = self.collect()
+        self.assertEqual(failed, {"sample": None, "failureCode": "network_error"})
+        state = muse.read_usage_state(self.root)
+        self.assertEqual(state["plan"], "Pro")
+        self.assertFalse(state["planVerified"])
+        self.clock += 1
+        self.assertEqual(self.collect(), failed)
+        self.assertEqual(self.native_client.get.call_count, 2)
+        self.assertEqual(len(self.portal_calls), 3)
+
+    def test_legacy_empty_reservation_cannot_claim_verified_plan(self):
+        self.native_client.get.side_effect = plans.CollectionError("error", "private", failure_code="network_error")
+        self.collect()
+        state = muse.read_usage_state(self.root)
+        state.pop("planVerified")
+        state.pop("planVerifiedAt")
+        state["schemaVersion"] = 1
+        muse.atomic_private_json(self.root, muse.CACHE_NAME, state)
+        self.clock += 1
+        self.assertEqual(self.collect(), {"sample": None, "failureCode": "network_error"})
+        self.assertFalse(muse.read_usage_state(self.root)["planVerified"])
+        self.assertEqual(self.native_client.get.call_count, 1)
+
+    def test_legacy_successful_quota_retains_verified_plan_provenance(self):
+        first = self.collect()
+        state = muse.read_usage_state(self.root)
+        state.pop("planVerified")
+        state.pop("planVerifiedAt")
+        state["schemaVersion"] = 1
+        muse.atomic_private_json(self.root, muse.CACHE_NAME, state)
+        (self.root / muse.PLAN_NAME).unlink()
+        self.assertTrue(muse.read_usage_state(self.root)["planVerified"])
+        self.assertIsNone(muse.read_usage_state(self.root)["planVerifiedAt"])
+        self.clock += 301
+        self.native_client.get.side_effect = plans.CollectionError("error", "private", failure_code="network_error")
+        failed = self.collect()
+        self.assertEqual(failed["failureCode"], "network_error")
+        self.assertEqual(failed["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertTrue(muse.read_usage_state(self.root)["planVerified"])
+        self.assertNotIn("observedPlanAt", failed)
+
+    def test_new_usage_cache_remains_readable_by_exact_legacy_schema(self):
+        def legacy_read():
+            # Frozen predicate from the deployed reader, independent of the
+            # current helper's constants and sidecar implementation.
+            value = json.loads((self.root / "muse-console-usage.json").read_text())
+            fields = {"schemaVersion", "email", "plan", "teamId", "credentialFingerprint",
+                      "quota", "sampledAt", "nextRequestAt", "lastError"}
+            if (not isinstance(value, dict) or set(value) != fields or
+                    type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1):
+                raise ValueError("local_storage_error")
+            return value
+        first = self.collect()
+        self.assertEqual(legacy_read()["sampledAt"], first["sample"]["sampledAt"])
+        self.clock += 301
+        self.portal_error = muse.MuseError("rate_limited", retry_after=900)
+        limited = self.collect()
+        legacy = legacy_read()
+        self.assertEqual(legacy["lastError"], "rate_limited")
+        self.assertEqual(legacy["nextRequestAt"], self.clock + 900)
+        self.assertEqual(legacy["sampledAt"], limited["sample"]["sampledAt"])
+        self.assertEqual(legacy["quota"]["tier"], "Pro")
+        self.assertTrue((self.root / muse.PLAN_NAME).exists())
+
+    def test_older_writer_changing_cache_invalidates_sidecar_provenance(self):
+        self.native["subs_tier_name"] = "Ultra"
+        self.quota["tier"] = "Ultra"
+        self.collect()
+        state = json.loads((self.root / muse.CACHE_NAME).read_text())
+        state.update(plan="Pro", quota=None, sampledAt=None, lastError="network_error",
+                     nextRequestAt=self.clock + 600)
+        # An old helper has no knowledge of the sidecar and only replaces v1.
+        muse.atomic_private_json(self.root, muse.CACHE_NAME, state)
+        self.clock += 1
+        self.assertEqual(self.collect(), {"sample": None, "failureCode": "network_error"})
+        self.assertFalse(muse.read_usage_state(self.root)["planVerified"])
+        self.assertIsNone(muse.read_usage_state(self.root)["planVerifiedAt"])
+        self.assertEqual(self.native_client.get.call_count, 1)
 
     def test_new_plan_uses_verified_cache_tier_without_repeating_identity_lookup(self):
         self.collect()
@@ -149,7 +263,8 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         self.native["subs_tier_name"] = "Ultra"
         self.portal_error = muse.MuseError("network_error")
         failed = self.collect()
-        self.assertEqual(failed, {"sample": None, "failureCode": "network_error", "observedPlan": "Ultra"})
+        self.assertEqual(failed, {"sample": None, "failureCode": "network_error", "observedPlan": "Ultra",
+                                  "observedPlanAt": muse.plan_timestamp(self.clock)})
         self.clock += 1
         self.assertEqual(self.collect(), failed)
         self.assertEqual(self.native_client.get.call_count, 2)
@@ -165,12 +280,14 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         failed = dispatcher.run(request)
         self.assertEqual(failed["failureCode"], "rate_limited")
         self.assertEqual(failed["observedPlan"], "Ultra")
+        self.assertEqual(failed["observedPlanAt"], muse.plan_timestamp(self.clock))
         self.assertEqual(failed["retryAfterSeconds"], 900)
         self.assertIsNone(failed["sample"])
         self.clock += 1
         repeated = dispatcher.run(request)
         self.assertEqual(repeated["failureCode"], "rate_limited")
         self.assertEqual(repeated["observedPlan"], "Ultra")
+        self.assertEqual(repeated["observedPlanAt"], failed["observedPlanAt"])
         self.assertEqual(repeated["retryAfterSeconds"], 899)
         self.assertEqual(self.native_client.get.call_count, 2)
 
@@ -193,7 +310,8 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         self.native["subs_tier_name"] = "Pro"
         self.portal_error = muse.MuseError("network_error")
         failed = self.collect()
-        self.assertEqual(failed, {"sample": None, "failureCode": "network_error", "observedPlan": "Pro"})
+        self.assertEqual(failed, {"sample": None, "failureCode": "network_error", "observedPlan": "Pro",
+                                  "observedPlanAt": muse.plan_timestamp(self.clock)})
         self.clock += 1
         self.assertEqual(self.collect(), failed)
         self.assertEqual(self.native_client.get.call_count, 2)

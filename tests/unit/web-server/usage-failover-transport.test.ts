@@ -264,14 +264,39 @@ describe('packaged usage failover transport', () => {
       candidate: null,
       sample: null,
       failureCode: 'rate_limited',
+      observedPlanAt: '2026-10-14T12:00:00.000Z',
     };
     expect(
       parseUsageHelperResponse(JSON.stringify({ ...response, observedPlan: 'Max' }))
     ).toMatchObject({ observedPlan: 'Max', sample: null });
+    for (const observedPlanAt of [undefined, null, 'invalid', '2099-01-01T00:00:00Z']) {
+      const parsed = parseUsageHelperResponse(
+        JSON.stringify({ ...response, observedPlan: 'Max', observedPlanAt })
+      );
+      expect(parsed).not.toHaveProperty('observedPlan');
+      expect(parsed).not.toHaveProperty('observedPlanAt');
+    }
     for (const observedPlan of ['Bearer private-token', 'x'.repeat(161), true, null])
       expect(
         parseUsageHelperResponse(JSON.stringify({ ...response, observedPlan }))
       ).not.toHaveProperty('observedPlan');
+  });
+
+  it('preserves an original-request 429 while the source-change result discards its quota', () => {
+    const response = {
+      version: 1,
+      action: 'collect',
+      candidate: null,
+      sample: null,
+      failureCode: 'source_changed',
+      rateLimited: true,
+      retryAfterSeconds: 1800,
+    };
+    expect(parseUsageHelperResponse(JSON.stringify(response))).toEqual(response);
+    for (const changed of [{ rateLimited: 'true' }, { rateLimited: 1 }, { failureCode: null }])
+      expect(
+        parseUsageHelperResponse(JSON.stringify({ ...response, ...changed }))
+      ).not.toHaveProperty('rateLimited');
   });
 
   it('preserves both bounded aliases reported for a signed-out desktop profile', () => {

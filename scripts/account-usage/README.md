@@ -30,6 +30,12 @@ HTTP 429 and `Retry-After` set a shared cooldown for the provider account across
 native collectors and alternate computers, so changing hosts does not bypass a
 rate limit. Muse's 300-second refresh budget is checked before requesting an
 inference key; a healthy cached reading does not trigger peer refreshes.
+An in-flight credential change rejects its quota but preserves any 429 hold for
+the original account. Newer verified quota is never replaced by an older source
+cache. Claude optional balances expire after 24 hours even when an entire source
+is offline. Muse plan changes require dated native verification; an outdated
+capsule label cannot discard a newer reading. Its shared browser cache keeps the
+existing v1 format, with verification provenance in a separate private sidecar.
 
 The transport reuses the existing private
 `claude-session-migration/venv` interpreter when present. OpenCode wallet live

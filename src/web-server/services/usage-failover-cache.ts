@@ -75,6 +75,9 @@ function observation(value: unknown, key: string): boolean {
     (record.observedPlan === undefined ||
       record.observedPlan === null ||
       typeof record.observedPlan === 'string') &&
+    (record.observedPlanAt === undefined ||
+      record.observedPlanAt === null ||
+      typeof record.observedPlanAt === 'string') &&
     Object.keys(record).every((field) =>
       [
         'version',
@@ -86,6 +89,7 @@ function observation(value: unknown, key: string): boolean {
         'primaryFailure',
         'primarySignIn',
         'observedPlan',
+        'observedPlanAt',
       ].includes(field)
     )
   );

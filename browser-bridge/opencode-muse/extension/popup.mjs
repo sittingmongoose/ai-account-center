@@ -1,4 +1,4 @@
-import {ERROR_MESSAGES, safeCode, MUSE_ERROR_MESSAGES, safeMuseCode, projectMuseTeams} from './bridge-core.mjs';
+import {ERROR_MESSAGES, safeCode, GO_RATE_LIMIT_MESSAGE, MUSE_ERROR_MESSAGES, safeMuseCode, projectMuseTeams} from './bridge-core.mjs';
 const status = document.getElementById('status');
 const display = document.getElementById('sample');
 const button = document.getElementById('sync');
@@ -20,12 +20,13 @@ function render(sample) {
 const saved = await chrome.storage.local.get(['lastSample', 'lastError']);
 render(saved.lastSample);
 if (saved.lastError) status.textContent = ERROR_MESSAGES[safeCode(saved.lastError)];
+else if (saved.lastSample?.goUsageStatus === 'rate_limited') status.textContent = GO_RATE_LIMIT_MESSAGE;
 button.addEventListener('click', async () => {
   button.disabled = true; status.textContent = 'Reading console usage…';
   try {
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
     const result = await chrome.runtime.sendMessage({action: 'sync', tabURL: tab?.url ?? null});
-    if (result?.ok) { render(result.sample); status.textContent = 'Usage synced for AI Account Center.'; }
+    if (result?.ok) { render(result.sample); status.textContent = result.sample.goUsageStatus === 'rate_limited' ? GO_RATE_LIMIT_MESSAGE : 'Usage synced for AI Account Center.'; }
     else status.textContent = ERROR_MESSAGES[safeCode(result?.code)];
   } catch { status.textContent = ERROR_MESSAGES.host_unavailable; }
   finally { button.disabled = false; }
@@ -63,6 +64,13 @@ if (museSaved.lastMuseError) museStatus.textContent = MUSE_ERROR_MESSAGES[safeMu
 else if (museSaved.lastMuseSample?.status === 'cached') museStatus.textContent = museSaved.lastMuseSample.message;
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
+  if (changes.lastSample) { saved.lastSample = changes.lastSample.newValue; render(saved.lastSample); }
+  if (changes.lastError) saved.lastError = changes.lastError.newValue;
+  if (changes.lastSample || changes.lastError) {
+    status.textContent = saved.lastError ? ERROR_MESSAGES[safeCode(saved.lastError)]
+      : saved.lastSample?.goUsageStatus === 'rate_limited' ? GO_RATE_LIMIT_MESSAGE
+        : saved.lastSample ? 'Usage synced for AI Account Center.' : '';
+  }
   if (changes.lastMuseSample) renderMuse(changes.lastMuseSample.newValue);
   if (changes.lastMuseError) {
     museStatus.textContent = changes.lastMuseError.newValue

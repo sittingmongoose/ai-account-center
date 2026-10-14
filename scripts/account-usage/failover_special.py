@@ -399,9 +399,17 @@ def _collect_wallet(candidate, platform):
             or candidate["identity"] != {"kind": WALLET_KIND, "key": _digest(workspace)}
             or sample.get("id") != "plan-opencode-go-console-mac-" + _digest(workspace)[:12]):
         return {"sample": None, "failureCode": "identity_mismatch"}
+    failure = sample.get("_usageFailure")
+    sample = console.public_sample(sample)
     sample["platform"] = platform
     sample["source"] = "Authenticated OpenCode console workspace on " + PLATFORMS[platform]
-    return {"sample": sample, "failureCode": None}
+    result = {"sample": sample, "failureCode": None}
+    if isinstance(failure, dict) and failure.get("code") == "rate_limited":
+        result["failureCode"] = "rate_limited"
+        retry = failure.get("retryAfterSeconds")
+        if isinstance(retry, (int, float)) and not isinstance(retry, bool) and math.isfinite(retry):
+            result["retryAfterSeconds"] = min(86400, max(0, retry))
+    return result
 
 
 def collect(candidate, home: Path, platform: str, ccs_dir=None):
@@ -412,10 +420,23 @@ def collect(candidate, home: Path, platform: str, ccs_dir=None):
             return {"sample": None, "failureCode": "unavailable"}
         result = (_collect_antigravity(candidate, Path(home), platform) if provider == "antigravity"
                   else _collect_wallet(candidate, platform))
-        if result["sample"] is not None and not any(
-                all(current.get(key) == candidate.get(key) for key in ("locator", "identity", "revision"))
-                for current in inventory(provider, home, platform, ccs_dir)):
-            return {"sample": None, "failureCode": "source_changed"}
+        if result["sample"] is not None:
+            try:
+                unchanged = any(
+                    all(current.get(key) == candidate.get(key) for key in ("locator", "identity", "revision"))
+                    for current in inventory(provider, home, platform, ccs_dir))
+            except Exception:
+                unchanged = False
+            if not unchanged:
+                failed = {"sample": None, "failureCode": "source_changed"}
+                # A provider throttled the original request even when a later
+                # credential read invalidates its quota publication.
+                if result.get("failureCode") == "rate_limited":
+                    failed["rateLimited"] = True
+                    retry = result.get("retryAfterSeconds")
+                    if isinstance(retry, (int, float)) and not isinstance(retry, bool) and math.isfinite(retry):
+                        failed["retryAfterSeconds"] = min(86400, max(0, retry))
+                return failed
         return result
     except RateLimited as error:
         return {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": error.retry_after_seconds}

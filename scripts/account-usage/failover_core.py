@@ -592,7 +592,7 @@ def _sample(candidate, platform, windows, plan):
             "capabilities": {"codexProfile": None, "claudeProfileId": None, "claudePlatforms": []}}
 
 
-def _claude_optional_windows(candidate, home):
+def _claude_optional_windows(candidate, home, cooldown=None):
     availability = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
     extras = {"optionalExtras": availability}
     identifier = candidate.get("_profile")
@@ -607,7 +607,14 @@ def _claude_optional_windows(candidate, home):
     try:
         windows = claude_usage.optional_web_windows(identifier, candidate["_account"],
                                                     candidate["_organization"], home,
-                                                    availability, candidate["email"])
+                                                    availability, candidate["email"], cooldown)
+    except claude_usage.UsageUnavailable as error:
+        windows = []
+        availability.update(resetCredits="unavailable", prepaidBalance="unavailable")
+        if error.status == "rate_limited" and cooldown is not None:
+            cooldown["failureCode"] = "rate_limited"
+            if error.retry_after is not None:
+                cooldown["retryAfterSeconds"] = error.retry_after
     except Exception:
         windows = []
         availability.update(resetCredits="unavailable", prepaidBalance="unavailable")
@@ -625,6 +632,7 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
         provider = candidate.get("_provider")
         client = Client()
         extras = {}
+        cooldown = {}
         if provider == "codex":
             payload = client.get(CODEX_URL, candidate["_token"], candidate["_account"])
             windows = _codex_windows(payload, time.time())
@@ -647,13 +655,13 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
                 raise Failure("invalid_response")
             plan = "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else candidate["plan"]
             if platform == "windows" and candidate.get("_mode") == "desktop":
-                optional_windows, extras = _claude_optional_windows(candidate, home)
+                optional_windows, extras = _claude_optional_windows(candidate, home, cooldown)
                 windows.extend(optional_windows)
         else:
             raise Failure()
         if not windows:
             raise Failure("invalid_response")
-        return {"sample": {**_sample(candidate, platform, windows, plan), **extras}, "failureCode": None}
+        return {"sample": {**_sample(candidate, platform, windows, plan), **extras}, "failureCode": None, **cooldown}
     except Failure as error:
         return {"sample": None, "failureCode": error.code,
                 **({"retryAfterSeconds": error.retry_after} if error.retry_after is not None else {})}

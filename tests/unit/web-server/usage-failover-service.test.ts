@@ -296,6 +296,62 @@ describe('identity-bound usage source failover', () => {
     expect(h.calls).toHaveLength(count);
   });
 
+  it('keeps the original account cooldown when in-flight rotation rejects its quota', async () => {
+    const h = await harness();
+    h.collections.set('mac', {
+      sample: null,
+      failureCode: 'source_changed',
+      rateLimited: true,
+      retryAfterSeconds: 1800,
+    });
+    const row = await h.service.collect(h.target, template());
+    expect(row.windows).toHaveLength(0);
+    expect(h.collected().map((call) => call.host)).toEqual(['mac']);
+    h.advance(31_000);
+    h.inventories.set('mac', [candidate({ revision: 'e'.repeat(64) })]);
+    h.collections.set('mac', { sample: reading(h.now()), failureCode: null });
+    await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(h.collected()).toHaveLength(1);
+    h.advance(1_768_000);
+    await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(h.collected()).toHaveLength(1);
+    h.inventories.set('mac', [candidate({ identity: { kind: 'muse-team', key: 'b'.repeat(64) } })]);
+    const other = { ...h.target, binding: 'different-verified-account' };
+    expect((await new UsageFailoverService(h.deps).collect(other, template())).status).toBe('ok');
+    expect(h.collected()).toHaveLength(2);
+  });
+
+  for (const failureCode of ['network_error', 'rate_limited'])
+    it(`never replaces newer peer quota with an old native cache during ${failureCode}`, async () => {
+      const h = await harness();
+      const target = { ...h.target, provider: 'codex' as const, accountId: 'codex:fixture' };
+      const identity = { kind: 'codex-principal-v1', key: 'a'.repeat(64) };
+      h.inventories.set('mac', [candidate({ identity })]);
+      h.inventories.set('windows', [candidate({ identity, locator: '3'.repeat(64) })]);
+      const oldNative: DashboardAccount = {
+        ...template(),
+        ...reading(BASE_TIME - 2 * 86400_000),
+        id: target.accountId,
+        provider: 'codex',
+        status: 'cached',
+      };
+      const first = await h.service.recover(target, oldNative);
+      expect(first.sampledAt).toBe(new Date(BASE_TIME).toISOString());
+      expect(first.source).toContain('fallback');
+      h.advance();
+      h.collections.set('windows', { sample: null, failureCode, retryAfterSeconds: 1800 });
+      const next = await h.service.recover(target, oldNative);
+      for (const row of [
+        next,
+        h.service.peek(target, oldNative),
+        new UsageFailoverService(h.deps).peek(target, oldNative),
+      ]) {
+        expect(row.status).toBe('cached');
+        expect(row.sampledAt).toBe(first.sampledAt);
+        expect(row.source).toBe(first.source);
+      }
+    });
+
   it('respects a healthy collector refresh budget without trying another host', async () => {
     const h = await harness();
     h.collections.set('mac', {
@@ -320,6 +376,7 @@ describe('identity-bound usage source failover', () => {
       failureCode: 'rate_limited',
       retryAfterSeconds: 120,
       observedPlan: 'Max',
+      observedPlanAt: new Date(h.now()).toISOString(),
     });
     const row = await h.service.collect(h.target, template());
     expect(row.windows).toHaveLength(0);
@@ -334,7 +391,12 @@ describe('identity-bound usage source failover', () => {
     const h = await harness();
     await h.service.collect(h.target, template());
     h.advance();
-    h.collections.set('mac', { sample: null, failureCode: 'network_error', observedPlan: 'Max' });
+    h.collections.set('mac', {
+      sample: null,
+      failureCode: 'network_error',
+      observedPlan: 'Max',
+      observedPlanAt: new Date(h.now()).toISOString(),
+    });
     h.collections.set('windows', {
       sample: reading(BASE_TIME, { status: 'cached' }),
       failureCode: null,
@@ -356,7 +418,12 @@ describe('identity-bound usage source failover', () => {
     const h = await harness();
     await h.service.collect(h.target, template());
     h.advance();
-    h.collections.set('mac', { sample: null, failureCode: 'network_error', observedPlan: 'Pro' });
+    h.collections.set('mac', {
+      sample: null,
+      failureCode: 'network_error',
+      observedPlan: 'Pro',
+      observedPlanAt: new Date(h.now()).toISOString(),
+    });
     h.inventories.set('windows', []);
     const row = await h.service.collect(h.target, template());
     expect(row.status).toBe('cached');
@@ -374,6 +441,51 @@ describe('identity-bound usage source failover', () => {
     expect(row.status).toBe('ok');
     expect(row.platform).toBe('windows');
     expect(h.collected().map((call) => call.host)).toEqual(['mac', 'windows']);
+  });
+
+  it('keeps newer peer quota when an older verified Muse plan returns after restart', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.collections.set('mac', new Error('offline'));
+    h.collections.set('windows', { sample: reading(h.now(), { plan: 'Max' }), failureCode: null });
+    const latest = await h.service.collect(h.target, template());
+    h.advance();
+    h.collections.set('mac', {
+      sample: null,
+      failureCode: 'network_error',
+      observedPlan: 'Pro',
+      observedPlanAt: new Date(BASE_TIME).toISOString(),
+    });
+    h.collections.set('windows', new Error('offline'));
+    const restarted = new UsageFailoverService(h.deps);
+    const row = await restarted.collect(h.target, template());
+    expect(row.status).toBe('cached');
+    expect(row.plan).toBe('Max');
+    expect(row.sampledAt).toBe(latest.sampledAt);
+    expect(row.windows).toEqual(latest.windows);
+    expect(row).not.toHaveProperty('observedPlanAt');
+    h.advance();
+    h.collections.set('mac', { sample: reading(BASE_TIME), failureCode: null });
+    expect((await restarted.collect(h.target, template())).plan).toBe('Max');
+  });
+
+  it('does not invalidate Muse quota from unproven or future plan metadata', async () => {
+    for (const observedPlanAt of [undefined, 'invalid', '2099-01-01T00:00:00Z']) {
+      const h = await harness();
+      await h.service.collect(h.target, template());
+      h.advance();
+      h.collections.set('mac', {
+        sample: null,
+        failureCode: 'network_error',
+        observedPlan: 'Max',
+        observedPlanAt,
+      });
+      h.collections.set('windows', new Error('offline'));
+      const row = await h.service.collect(h.target, template());
+      expect(row.status).toBe('cached');
+      expect(row.plan).toBe('Pro');
+    }
   });
 
   it('does not hide a primary renewal message behind fallback or retained quota', async () => {

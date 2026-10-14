@@ -286,6 +286,45 @@ describe('account dashboard shared usage failover integration', () => {
     expect(collections).toBe(1);
   });
 
+  it('expires previously fresh Claude optional balances when the dashboard serves the whole row from cache', async () => {
+    let now = NOW;
+    let collections = 0;
+    const sampledAt = new Date(NOW - 86_400_000 + 10).toISOString();
+    const service = new AccountDashboardService(
+      deps({
+        now: () => now,
+        failover: {
+          peek: (_, template) => template,
+          collect: async (_, template) => {
+            collections++;
+            const row = quota(template);
+            return {
+              ...row,
+              sampledAt,
+              fetchedAt: sampledAt,
+              windows: [
+                ...row.windows,
+                { ...row.windows[0], key: 'prepaid_balance', label: 'Prepaid balance' },
+              ],
+            };
+          },
+          recover: async (_, template) => template,
+        },
+      })
+    );
+    const initial = (await service.get('mac')).accounts[0];
+    expect(initial.status).toBe('ok');
+    expect(initial.windows).toHaveLength(2);
+    expect(initial.windows[1].status).toBeUndefined();
+    now += 100;
+    const cached = (await service.peek('mac')).accounts[0];
+    expect(cached.status).toBe('cached');
+    expect(cached.windows.map((window) => window.key)).toEqual(['five_hour']);
+    expect(cached.sampledAt).toBe(sampledAt);
+    expect(cached.fetchedAt).toBe(sampledAt);
+    expect(collections).toBe(1);
+  });
+
   for (const summaryFailure of ['timeout', 'error'] as const) {
     for (const authChange of ['replaced', 'removed'] as const) {
       it(`revalidates cached Codex auth after it is ${authChange} when the summary returns ${summaryFailure}`, async () => {

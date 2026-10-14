@@ -52,6 +52,7 @@ class NativeMuseBudgetTests(unittest.TestCase):
         self.assertEqual(loader.call_count, 1)
         self.assertEqual(second["sample"]["status"], "cached")
         self.assertEqual(second["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertEqual(second["observedPlanAt"], first["observedPlanAt"])
         self.assertEqual(second["refreshAfterSeconds"], 290)
 
     def test_cached_quota_preserves_429_deadline_and_prevents_more_key_mints(self):
@@ -61,9 +62,11 @@ class NativeMuseBudgetTests(unittest.TestCase):
         self.assertEqual(limited["failureCode"], "rate_limited")
         self.assertEqual(limited["retryAfterSeconds"], 900)
         self.assertEqual(limited["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertEqual(limited["observedPlanAt"], first["observedPlanAt"])
         again = self.collect(loader, now=1401)
         self.assertEqual(loader.call_count, 1)
         self.assertEqual(again["retryAfterSeconds"], 800)
+        self.assertEqual(again["observedPlanAt"], first["observedPlanAt"])
         self.assertNotIn("refreshAfterSeconds", again)
 
     def test_network_failure_retains_dated_quota_without_hiding_peer_recovery(self):
@@ -80,7 +83,8 @@ class NativeMuseBudgetTests(unittest.TestCase):
     def test_hard_identity_failure_clears_native_cache(self):
         self.collect(lambda: {"sample": reading(), "failureCode": None})
         failed = self.collect(lambda: {"sample": None, "failureCode": "account_mismatch"}, now=1301)
-        self.assertEqual(failed, {"sample": None, "failureCode": "account_mismatch", "observedPlan": "Pro"})
+        self.assertEqual(failed, {"sample": None, "failureCode": "account_mismatch", "observedPlan": "Pro",
+                                  "observedPlanAt": muse_native.plan_timestamp(1000)})
         loader = Mock()
         self.assertEqual(self.collect(loader, now=1302), failed)
         loader.assert_not_called()
@@ -88,10 +92,50 @@ class NativeMuseBudgetTests(unittest.TestCase):
     def test_verified_plan_change_without_native_quota_invalidates_old_limits(self):
         self.collect(lambda: {"sample": reading(), "failureCode": None})
         failed = self.collect(lambda: {"sample": None, "failureCode": "no_browser_cookie", "_verifiedPlan": "Ultra"}, now=1301)
-        self.assertEqual(failed, {"sample": None, "failureCode": "no_browser_cookie", "observedPlan": "Ultra"})
+        self.assertEqual(failed, {"sample": None, "failureCode": "no_browser_cookie", "observedPlan": "Ultra",
+                                  "observedPlanAt": muse_native.plan_timestamp(1301)})
         loader = Mock()
         self.assertEqual(self.collect(loader, now=1302), failed)
         loader.assert_not_called()
+
+    def test_cold_identity_failure_never_invents_plan_on_cached_retry(self):
+        loader = Mock(side_effect=CollectionError("error", "private", failure_code="rate_limited", retry_after=900))
+        failed = self.collect(loader)
+        self.assertEqual(failed, {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 900})
+        importlib.reload(muse_native)
+        self.assertEqual(self.collect(loader, now=1001),
+                         {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 899})
+        self.assertEqual(loader.call_count, 1)
+        state = json.loads(next(self.root.glob("muse-native-*.json")).read_text())
+        self.assertIsNone(state["observedPlan"])
+
+    def test_rotated_credential_does_not_reuse_old_verified_plan(self):
+        original = reading()
+        original["plan"] = "Ultra"
+        self.collect(lambda: {"sample": original, "failureCode": None})
+        loader = Mock(side_effect=CollectionError("error", "private", failure_code="network_error"))
+        failed = self.collect(loader, now=1001, token="dca:rotated-native")
+        self.assertEqual(failed, {"sample": None, "failureCode": "network_error"})
+        self.assertEqual(self.collect(loader, now=1002, token="dca:rotated-native"), failed)
+        self.assertEqual(loader.call_count, 1)
+
+    def test_older_native_cache_does_not_invent_a_verification_time(self):
+        first = self.collect(lambda: {"sample": reading(), "failureCode": None})
+        file = next(self.root.glob("muse-native-*.json"))
+        state = json.loads(file.read_text())
+        state.update(version=1)
+        state.pop("observedPlanAt")
+        file.write_text(json.dumps(state))
+        loader = Mock(side_effect=CollectionError("error", "private", failure_code="network_error"))
+        cached = self.collect(loader, now=1001)
+        self.assertEqual(cached["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertNotIn("observedPlan", cached)
+        self.assertNotIn("observedPlanAt", cached)
+        loader.assert_not_called()
+        failed = self.collect(loader, now=1301)
+        self.assertEqual(failed["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertNotIn("observedPlan", failed)
+        self.assertNotIn("observedPlanAt", failed)
 
     def test_same_email_other_device_credential_has_an_independent_cache(self):
         first = self.collect(lambda: {"sample": reading(10), "failureCode": None})
@@ -104,7 +148,8 @@ class NativeMuseBudgetTests(unittest.TestCase):
         self.collect(lambda: {"sample": reading(), "failureCode": None})
         loader = Mock()
         self.assertEqual(self.collect(loader, email="other@example.test"),
-                         {"sample": None, "failureCode": "account_mismatch", "observedPlan": "Pro"})
+                         {"sample": None, "failureCode": "account_mismatch", "observedPlan": "Pro",
+                          "observedPlanAt": muse_native.plan_timestamp(1000)})
         loader.assert_not_called()
 
     def test_raw_inference_keys_and_response_fields_are_never_persisted(self):

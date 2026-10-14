@@ -14,7 +14,7 @@ import stat
 import tempfile
 import time
 
-from muse_console import MuseError, ERROR_MESSAGES, REFRESH_SECONDS, MAX_RETRY_SECONDS
+from muse_console import MuseError, ERROR_MESSAGES, REFRESH_SECONDS, MAX_RETRY_SECONDS, plan_timestamp, valid_plan_timestamp
 from plan_common import CollectionError
 from desktop_helpers import safe_text
 
@@ -109,13 +109,18 @@ def _read(root, key, platform, now):
     if len(raw) > MAX_BYTES:
         raise MuseError("local_storage_error")
     value = json.loads(raw)
-    if (not isinstance(value, dict) or set(value) != {"version", "key", "sample", "failureCode", "nextRequestAt", "observedPlan"}
-            or type(value["version"]) is not int or value["version"] != 1 or value["key"] != key
+    fields = {"version", "key", "sample", "failureCode", "nextRequestAt", "observedPlan"}
+    if (not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] not in {1, 2}
+            or set(value) != (fields if value["version"] == 1 else fields | {"observedPlanAt"}) or value["key"] != key
             or value["failureCode"] is not None and value["failureCode"] not in ERROR_MESSAGES
             or isinstance(value["nextRequestAt"], bool) or not isinstance(value["nextRequestAt"], (int, float))
             or not math.isfinite(value["nextRequestAt"]) or not 0 <= value["nextRequestAt"] <= now + MAX_RETRY_SECONDS):
         raise MuseError("local_storage_error")
     if value["observedPlan"] is not None and safe_text(value["observedPlan"]) != value["observedPlan"]:
+        raise MuseError("local_storage_error")
+    if value["version"] == 1:
+        value.update(version=2, observedPlanAt=None)
+    elif value["observedPlanAt"] is not None and (value["observedPlan"] is None or not valid_plan_timestamp(value["observedPlanAt"], now)):
         raise MuseError("local_storage_error")
     sample = None if value["sample"] is None else _sample(value["sample"], platform)
     if value["sample"] is not None and sample is None:
@@ -147,8 +152,9 @@ def _result(state, now, cached):
     if sample is not None and cached:
         sample["status"] = "cached"
     result = {"sample": sample, "failureCode": state["failureCode"]}
-    if state["observedPlan"] is not None:
+    if state["observedPlan"] is not None and state["observedPlanAt"] is not None:
         result["observedPlan"] = state["observedPlan"]
+        result["observedPlanAt"] = state["observedPlanAt"]
     remaining = min(MAX_RETRY_SECONDS, max(0, state["nextRequestAt"] - now))
     if remaining > 0:
         if state["failureCode"] == "rate_limited":
@@ -160,6 +166,7 @@ def _result(state, now, cached):
 
 def collect(root, access, expected_email, platform, loader, now=None):
     """Reserve the request before calling /key, including on the first reading."""
+    live_clock = now is None
     now = time.time() if now is None else now
     key = hashlib.sha256(("muse-native-v1:" + access).encode()).hexdigest()
     try:
@@ -175,8 +182,9 @@ def collect(root, access, expected_email, platform, loader, now=None):
                 return _result(state, now, True)
             previous = state["sample"] if state else None
             previous_plan = state["observedPlan"] if state else None
-            state = {"version": 1, "key": key, "sample": previous, "failureCode": None,
-                     "nextRequestAt": now + REFRESH_SECONDS, "observedPlan": previous_plan}
+            previous_plan_at = state["observedPlanAt"] if state else None
+            state = {"version": 2, "key": key, "sample": previous, "failureCode": None,
+                     "nextRequestAt": now + REFRESH_SECONDS, "observedPlan": previous_plan, "observedPlanAt": previous_plan_at}
             _write(root, key, state)
             try:
                 response = loader()
@@ -195,10 +203,12 @@ def collect(root, access, expected_email, platform, loader, now=None):
             verified_plan = response.get("_verifiedPlan")
             if safe_text(verified_plan):
                 state["observedPlan"] = safe_text(verified_plan)
+                state["observedPlanAt"] = plan_timestamp(time.time() if live_clock else now)
                 if previous is not None and verified_plan != previous["plan"]:
                     previous = None
             elif sample is not None:
                 state["observedPlan"] = sample["plan"]
+                state["observedPlanAt"] = plan_timestamp(time.time() if live_clock else now) if sample["plan"] is not None else None
             state.update(sample=sample if sample is not None else previous if code in TRANSIENT else None,
                          failureCode=code)
             if code == "rate_limited":

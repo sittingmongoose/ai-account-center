@@ -50,6 +50,14 @@ class FakeClient:
         raise AssertionError("Unexpected route")
 
 
+class GoLimitedClient(FakeClient):
+    def get(self, route, workspace=None):
+        if route == "/console/api/go/status":
+            self.calls.append((route, workspace))
+            raise core.Unavailable("rate_limited", 432)
+        return super().get(route, workspace)
+
+
 class CookieTests(unittest.TestCase):
     def test_real_expiration_preserved(self):
         self.assertEqual(core.validate_cookies([COOKIE], now=1900000000), [COOKIE])
@@ -236,6 +244,55 @@ class CapsuleTests(unittest.TestCase):
 
 
 class NativeProtocolTests(unittest.TestCase):
+    def test_optional_go_rate_limit_still_syncs_verified_wallet_and_capsule(self):
+        client = GoLimitedClient()
+        writer = mock.Mock()
+        collector = lambda cookies, workspace: core.collect(cookies, workspace, client)
+        response = host.handle_request(
+            {"schemaVersion": 1, "action": "sync", "cookies": [COOKIE], "workspaceId": WORKSPACE},
+            "/unused", collector, writer)
+        writer.assert_called_once_with("/unused", [COOKIE], WORKSPACE)
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["sample"]["windows"][0]["remaining"], 12.3456789)
+        self.assertEqual(response["sample"]["goUsageStatus"], "rate_limited")
+        self.assertEqual(response["sample"]["message"], core.GO_RATE_LIMIT_MESSAGE)
+        self.assertEqual(client.calls, [("/console/api/orgs", None),
+                                       ("/console/api/billing/status", WORKSPACE),
+                                       ("/console/api/go/status", WORKSPACE)])
+        output = json.dumps(response)
+        for private in ("_usageFailure", "retryAfterSeconds", COOKIE["value"], WORKSPACE):
+            self.assertNotIn(private, output)
+
+    @unittest.skipIf(os.name != "posix", "POSIX browser capsule storage")
+    def test_optional_go_rate_limit_updates_existing_capsule_with_the_verified_session(self):
+        with tempfile.TemporaryDirectory() as folder:
+            os.chmod(folder, 0o700)
+            core.write_capsule(folder, [dict(COOKIE, value="old-private-session")], WORKSPACE)
+            collector = lambda cookies, workspace: core.collect(cookies, workspace, GoLimitedClient())
+            response = host.handle_request(
+                {"schemaVersion": 1, "action": "sync", "cookies": [COOKIE], "workspaceId": WORKSPACE},
+                folder, collector)
+            self.assertTrue(response["ok"])
+            self.assertEqual(core.read_capsule(folder), ([COOKIE], WORKSPACE))
+            self.assertEqual(response["sample"]["windows"][0]["remaining"], 12.3456789)
+
+    def test_collect_cli_strips_internal_rate_limit_metadata_from_a_good_wallet(self):
+        _, sample = core.collect([COOKIE], WORKSPACE, GoLimitedClient())
+        sample["_privateSentinel"] = "PRIVATE-INTERNAL-DATA"
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(host.Path, "home", return_value=Path(folder)), \
+                mock.patch.object(host, "read_capsule", return_value=([COOKIE], WORKSPACE)), \
+                mock.patch.object(host, "collect", return_value=(WORKSPACE, sample)), \
+                mock.patch.object(host.sys, "argv", ["host", "--collect"]), \
+                mock.patch.object(host.sys, "stdout", output):
+            host.main()
+        public = json.loads(output.getvalue())
+        self.assertEqual(public["goUsageStatus"], "rate_limited")
+        self.assertEqual(public["windows"][0]["remaining"], 12.3456789)
+        for private in ("_usageFailure", "retryAfterSeconds", "PRIVATE-INTERNAL-DATA", COOKIE["value"], WORKSPACE):
+            self.assertNotIn(private, output.getvalue())
+
     def test_schema_version_requires_integer_one_before_collection_or_storage(self):
         for version in (True, False, 1.0, "1", None, 0, 2):
             collector, writer = mock.Mock(), mock.Mock()
@@ -359,16 +416,15 @@ class HTTPBoundaryTests(unittest.TestCase):
         with mock.patch.object(core.time, "time", return_value=0):
             self.assertEqual(core.retry_after("Thu, 01 Jan 1970 00:02:00 GMT"), 120)
 
-    def test_optional_go_rate_limit_is_not_swallowed_after_wallet_success(self):
-        class LimitedClient(FakeClient):
-            def get(self, route, workspace=None):
-                if route == "/console/api/go/status":
-                    raise core.Unavailable("rate_limited", 432)
-                return super().get(route, workspace)
-        with self.assertRaises(core.Unavailable) as caught:
-            core.collect([COOKIE], WORKSPACE, LimitedClient())
-        self.assertEqual(caught.exception.code, "rate_limited")
-        self.assertEqual(caught.exception.retry_after_seconds, 432)
+    def test_optional_go_rate_limit_preserves_wallet_with_internal_retry_metadata(self):
+        client = GoLimitedClient()
+        workspace, sample = core.collect([COOKIE], WORKSPACE, client)
+        self.assertEqual(workspace, WORKSPACE)
+        self.assertEqual(sample["_usageFailure"], {"code": "rate_limited", "retryAfterSeconds": 432})
+        self.assertEqual(sample["status"], "ok")
+        self.assertEqual([window["key"] for window in sample["windows"]], ["zen-balance"])
+        self.assertEqual(sample["windows"][0]["remaining"], 12.3456789)
+        self.assertEqual(len(client.calls), 3)
 
     def test_oversized_or_malformed_json_is_not_forwarded(self):
         for body in (b'x' * (core.MAX_BYTES + 1), b'token=private'):

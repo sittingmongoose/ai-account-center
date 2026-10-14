@@ -887,6 +887,7 @@ describe('consolidated account dashboard', () => {
     const history = deps().getClaudeUsage!;
     const service = new AccountDashboardService(
       deps({
+        now: () => Date.parse('2026-10-01T12:00:00Z'),
         responseBudgetMs: 10,
         getClaudeUsage: async (platform) => {
           await blocked;
@@ -1051,7 +1052,7 @@ describe('consolidated account dashboard', () => {
   });
 
   it('shares matching verified Claude quota across launcher platforms and retains it through offline refreshes', async () => {
-    let now = 0;
+    let now = Date.parse('2026-10-01T12:00:00Z');
     let online = true;
     const service = new AccountDashboardService(
       deps({
@@ -1070,7 +1071,7 @@ describe('consolidated account dashboard', () => {
     expect(mac?.source).toBe('Claude Desktop live quota on Windows');
     expect(mac?.status).toBe('cached');
     expect(mac?.windows).toEqual(windows?.windows);
-    now = 61_000;
+    now += 61_000;
     const offline = (await service.get('mac', true)).accounts.find(
       (account) => account.id === 'claude:gmail'
     );

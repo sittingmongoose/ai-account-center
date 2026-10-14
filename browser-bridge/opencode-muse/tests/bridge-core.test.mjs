@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {filterCookies, projectSample, safeCode, workspaceFromURL, safeMuseCode, MUSE_ERROR_MESSAGES} from '../extension/bridge-core.mjs';
+import {filterCookies, projectSample, safeCode, workspaceFromURL, safeMuseCode, MUSE_ERROR_MESSAGES, GO_RATE_LIMIT_MESSAGE} from '../extension/bridge-core.mjs';
 const cookie = {name: '__Host-console_session', value: 'synthetic-private', domain: 'opencode.ai', path: '/', secure: true, hostOnly: true, expirationDate: 2000000000};
 const sample = {id: 'plan-opencode-go-console-mac-123456abcdef', provider: 'opencode-go', platform: 'mac', status: 'ok', fetchedAt: '2026-10-01T04:00:00Z', sampledAt: '2026-10-01T04:00:00Z', windows: [{key: 'zen-balance', label: 'SECRET', kind: 'balance', remaining: -1.25, unit: 'USD', expiresAt: null}]};
 test('missing Muse identity has fixed truthful copy and rejects upstream secret text', () => {
@@ -36,6 +36,22 @@ test('native projection keeps signed balances and emits only public fields', () 
   assert.equal(projected.label, 'OpenCode console wallet');
   assert.ok(!JSON.stringify(projected).includes('synthetic-private'));
   assert.ok(!JSON.stringify(projected).includes('secret-token'));
+});
+test('a partial wallet sync keeps only the bounded Go rate-limit marker and real balance', () => {
+  const projected = projectSample({...sample, goUsageStatus: 'rate_limited',
+    _usageFailure: {code: 'rate_limited', retryAfterSeconds: 432}, message: 'PRIVATE-UPSTREAM-TEXT'});
+  assert.equal(projected.goUsageStatus, 'rate_limited');
+  assert.equal(projected.status, 'ok');
+  assert.equal(projected.windows[0].remaining, -1.25);
+  assert.match(GO_RATE_LIMIT_MESSAGE, /Wallet balance is current/);
+  assert.match(GO_RATE_LIMIT_MESSAGE, /Go usage is rate limited/);
+  assert.equal(safeCode('rate_limited'), 'rate_limited');
+  for (const privateField of ['_usageFailure', 'retryAfterSeconds', 'PRIVATE-UPSTREAM-TEXT']) {
+    assert.equal(JSON.stringify(projected).includes(privateField), false);
+  }
+  for (const status of ['PRIVATE-UPSTREAM-TEXT', {code: 'rate_limited'}, true, null]) {
+    assert.equal(Object.hasOwn(projectSample({...sample, goUsageStatus: status}), 'goUsageStatus'), false);
+  }
 });
 test('wallet must come from the correct provider/platform', () => {
   for (const change of [{provider: 'claude'}, {platform: 'windows'}, {status: 'error'}, {id: 'wrk_SECRET'}, {fetchedAt: 'tomorrow'}]) assert.throws(() => projectSample({...sample, ...change}), /protocol_error/);

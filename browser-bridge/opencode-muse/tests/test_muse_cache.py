@@ -13,7 +13,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[3]
 if not (ROOT / "scripts/account-usage").exists():
@@ -582,6 +582,16 @@ class BrowserMigrationTests(unittest.TestCase):
             self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=1790863800))
         self.assertIsNone(muse.read_usage_state(self.root)["quota"])
 
+    def test_failed_identity_lookup_cannot_authorize_browser_sample_restore(self):
+        (Path(self.root) / muse.CACHE_NAME).unlink()
+        identity = Mock(side_effect=muse.MuseError("rate_limited"))
+        with self.assertRaises(muse.MuseError):
+            muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(),
+                              now=1790863200, identity_loader=identity)
+        self.assertFalse(muse.read_usage_state(self.root)["planVerified"])
+        self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=1790863800))
+        self.assertIsNone(muse.read_usage_state(self.root)["quota"])
+
     def test_real_weighted_counts_preserve_the_existing_four_decimal_percent_projection(self):
         previous = copy.deepcopy(self.previous)
         previous["sample"]["windows"] = usage.normalize_muse({"subscription_quota": dict(QUOTA,
@@ -614,14 +624,14 @@ class BrowserMigrationTests(unittest.TestCase):
     def test_newer_real_host_observation_is_never_replaced_by_old_browser_cache(self):
         state = muse.read_usage_state(self.root)
         state.update(quota=QUOTA, sampledAt="2026-10-01T14:00:00Z", lastError=None)
-        muse.atomic_private_json(self.root, muse.CACHE_NAME, state)
+        muse.write_usage_state(self.root, state)
         self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=1790863800))
         self.assertEqual(muse.read_usage_state(self.root)["sampledAt"], "2026-10-01T14:00:00Z")
 
     def test_absent_state_or_failed_identity_cannot_bootstrap_an_unverified_account(self):
         state = muse.read_usage_state(self.root)
         state["lastError"] = "needs_sign_in"
-        muse.atomic_private_json(self.root, muse.CACHE_NAME, state)
+        muse.write_usage_state(self.root, state)
         self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=1790863800))
         (Path(self.root) / muse.CACHE_NAME).unlink()
         self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=1790863800))

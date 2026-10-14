@@ -6,6 +6,8 @@ The browser sends only `auth` and `__Host-console_session` cookies for the exact
 
 The console workspace is kept separate from an existing API-key Go account. Go's API-key usage endpoint does not expose a workspace identifier, so provider names alone cannot prove that two sources own the same wallet. The normalizer emits a distinct account ID with an opaque workspace hash. It selects the signed-in workspace from the open console URL or from a single returned workspace; multiple workspaces require the user to open the desired billing page.
 
+If the optional Go request is rate-limited after the wallet succeeds, sync still saves the verified session and displays the real balance with a Go warning. The dashboard coordinator receives the bounded retry delay privately and pauses requests for that workspace.
+
 ## Install on the Mac
 
 Run `install-macos.py` with the existing private Python environment containing pinned `curl_cffi==0.16.3`. It installs source files under `~/.ccs/opencode-usage-bridge/` and standard user-level Brave/Chrome native messaging manifests. It does not force-install the extension.

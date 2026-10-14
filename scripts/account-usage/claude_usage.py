@@ -11,6 +11,7 @@ import argparse
 import base64
 import ctypes
 import datetime as dt
+from email.utils import parsedate_to_datetime
 import hashlib
 import json
 import math
@@ -47,8 +48,27 @@ UTC = dt.timezone.utc
 
 
 class UsageUnavailable(Exception):
-    def __init__(self, status="unavailable"):
+    def __init__(self, status="unavailable", retry_after=None):
         self.status = status
+        self.retry_after = (min(86400, retry_after) if isinstance(retry_after, (int, float)) and
+                            not isinstance(retry_after, bool) and math.isfinite(retry_after) and retry_after >= 0 else None)
+
+
+def retry_after_seconds(value):
+    """Only a bounded provider delay leaves the HTTP boundary, never its body."""
+    if not isinstance(value, str) or len(value) > 128:
+        return None
+    try:
+        if re.fullmatch(r"\d+", value.strip()):
+            seconds = int(value.strip())
+        else:
+            timestamp = parsedate_to_datetime(value)
+            if timestamp.tzinfo is None:
+                return None
+            seconds = math.ceil(timestamp.timestamp() - time.time())
+        return min(86400, max(0, seconds))
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def now_iso():
@@ -489,6 +509,8 @@ class WebClient:
             headers={"Cookie": self.cookie, "Accept": "application/json", "Origin": "https://claude.ai", "Referer": "https://claude.ai/"},
             impersonate="chrome", verify=True, allow_redirects=False, timeout=min(3, remaining), stream=True)
         try:
+            if response.status_code == 429:
+                raise UsageUnavailable("rate_limited", retry_after_seconds(response.headers.get("Retry-After")))
             if response.status_code != 200:
                 raise UsageUnavailable()
             body = bytearray()
@@ -501,14 +523,29 @@ class WebClient:
                 raise UsageUnavailable()
             return value
         finally:
-            response.close()
+            try:
+                response.close()
+            except Exception:
+                # Closing a failed transfer must not replace its provider hold.
+                pass
 
 
-def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None):
-    # This optional path must never turn a valid native OAuth quota failure
-    # into a sign-in request, nor an unreadable web balance into a false zero.
+def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None, cooldown=None):
+    # Optional balances never turn valid native OAuth quota into a sign-in
+    # request or an unreadable balance into zero. Existing callers keep a list;
+    # the optional output parameter carries only a bounded provider cooldown.
     if availability is not None:
         availability.update(resetCredits="unavailable", prepaidBalance="unavailable")
+
+    def rate_limited(error):
+        if not isinstance(error, UsageUnavailable) or error.status != "rate_limited":
+            return False
+        if cooldown is not None:
+            cooldown["failureCode"] = "rate_limited"
+            if error.retry_after is not None:
+                cooldown["retryAfterSeconds"] = error.retry_after
+        return True
+
     expected = resolve_expected_email(expected_email)
     if expected is None:
         return []
@@ -525,7 +562,8 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
             if isinstance(membership, dict) and isinstance(membership.get("organization"), dict)}
         if organization_uuid not in organizations:
             return []
-    except Exception:
+    except Exception as error:
+        rate_limited(error)
         return []
     windows = []
     try:
@@ -533,15 +571,16 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
         if availability is not None:
             availability["resetCredits"] = "ok"
         windows.extend(normalize_reset_credits(usage.get("cedar_ember")))
-    except Exception:
-        pass
+    except Exception as error:
+        if rate_limited(error):
+            return windows
     try:
         prepaid = client.get("/api/organizations/" + organization_uuid + "/prepaid/credits")
         if availability is not None:
             availability["prepaidBalance"] = "ok"
         windows.extend(normalize_prepaid(prepaid))
-    except Exception:
-        pass
+    except Exception as error:
+        rate_limited(error)
     return windows
 
 
@@ -584,7 +623,8 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             if not windows:
                 raise UsageUnavailable()
             optional_extras = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
-            windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected))
+            cooldown = {}
+            windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown))
             result.update(
                 status="ok", email=expected,
                 plan="max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
@@ -595,6 +635,7 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                     organization["uuid"].lower(), identities[1].lower(), "https://api.anthropic.com",
                 ], separators=(",", ":")).encode("ascii")).hexdigest(),
             )
+            result.update(cooldown)
             return result
         raise UsageUnavailable("needs_sign_in")
     except UsageUnavailable as error:

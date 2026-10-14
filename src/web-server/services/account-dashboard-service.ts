@@ -839,6 +839,7 @@ export class AccountDashboardService {
           this.deps.failover ?? undefined
         );
       }
+      if (usedCache && current.status === 'ok') current = { ...current, status: 'cached' };
       if (current.provider === 'claude') current = projectClaudeFailoverExtras(current, now);
       return [
         {
@@ -846,7 +847,6 @@ export class AccountDashboardService {
             withAccountState(
               {
                 ...current,
-                status: usedCache && current.status === 'ok' ? 'cached' : current.status,
                 isActive:
                   current.provider === 'codex'
                     ? summary?.activated?.name === current.capabilities.codexProfile

@@ -12,6 +12,7 @@ export const ERROR_MESSAGES = Object.freeze({
   invalid_response: 'OpenCode returned no usable workspace wallet.',
   network_error: 'The OpenCode usage request did not finish. Try again later.',
   provider_error: 'OpenCode could not return the wallet right now.',
+  rate_limited: 'OpenCode is limiting requests. Try again after a cooldown.',
   local_storage_error: 'The private local usage capsule could not be saved.',
   protocol_error: 'The local usage helper returned an invalid response.',
   busy: 'An OpenCode usage refresh is already running.',
@@ -58,6 +59,7 @@ function iso(raw) {
   return Number.isFinite(date.getTime()) && date.getUTCFullYear() >= 2000 && date.getUTCFullYear() <= 2200 ? date.toISOString() : null;
 }
 const LABELS = {'zen-balance': 'Zen balance', 'console-fiveHour': '5 hours', 'console-week': 'Weekly', 'console-month': 'Monthly'};
+export const GO_RATE_LIMIT_MESSAGE = 'Wallet balance is current. OpenCode Go usage is rate limited; try again later.';
 export function projectSample(value) {
   if (!value || typeof value !== 'object' || value.provider !== 'opencode-go' || value.platform !== 'mac' || value.status !== 'ok' ||
       typeof value.id !== 'string' || !/^plan-opencode-go-console-mac-[a-f0-9]{12}$/.test(value.id) ||
@@ -78,7 +80,8 @@ export function projectSample(value) {
   }
   if (!seen.has('zen-balance')) throw new Error('protocol_error');
   return {id: value.id, provider: 'opencode-go', platform: 'mac', status: 'ok', label: 'OpenCode console wallet',
-    source: 'Authenticated console workspace on Mac', fetchedAt: iso(value.fetchedAt), sampledAt: iso(value.sampledAt), windows};
+    source: 'Authenticated console workspace on Mac', fetchedAt: iso(value.fetchedAt), sampledAt: iso(value.sampledAt), windows,
+    ...(value.goUsageStatus === 'rate_limited' ? {goUsageStatus: 'rate_limited'} : {})};
 }
 
 export const MUSE_ERROR_MESSAGES = Object.freeze({
