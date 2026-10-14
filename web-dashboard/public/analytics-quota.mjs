@@ -192,15 +192,17 @@ export function focusChart(acc, payload, ctx) {
   const obsW = Math.round(plotW * 0.7), gap = 18;
   const obsEnd = pad.l + obsW, fStart = pad.l + obsW + gap;
   const t0 = Math.max(now - 7 * D, histStart(payload, now) - 20 * 60e3), t1 = now;
-  const peers = (ctx.accounts || []).filter(a => a.provider === acc.provider);
+  const prim = mainOf(acc);
+  // Cursor's legacy monthly pools and X subscription pool are different allowances, even when
+  // their reported durations happen to match. Only the same pool key is a comparable series.
+  const peers = (ctx.accounts || []).filter(a => a.provider === acc.provider && (acc.provider !== 'cursor' || (prim && a.windows.some(w => w.meter && w.key === prim.key))));
   const comparable = peers.length > 1;
   const cmp = !!ctx.compare && comparable;
-  const prim = mainOf(acc);
   const shadeOf = i => Math.min(2, i);
   let series;
   if (cmp && prim) {
     series = peers.map((a, i) => {
-      const w = a.windows.find(x => x.key === prim.key && x.meter) || meters(a).find(x => !x.fable && x.period === prim.period);
+      const w = a.windows.find(x => x.key === prim.key && x.meter) || (acc.provider !== 'cursor' && meters(a).find(x => !x.fable && x.period === prim.period));
       return w ? { acc: a, w, shade: shadeOf(i), dash: i % 3, width: a.id === acc.id ? 2.4 : 1.9, name: tagOf(a) + (a.active ? ' (active)' : ''), tag: tagOf(a) } : null;
     }).filter(Boolean);
   } else {
@@ -481,7 +483,7 @@ export function quotaView(payload, ctx = {}) {
       const spark = sparkRuns(acc, w, axis.t0, now);
       if (open.has(acc.id)) focus.push(focusChart(acc, payload, { now, width: ctx.focusWidth, height: ctx.focusHeight, compare: compare.has(acc.id), thresholds: ctx.thresholds, accounts }));
       return {
-        id: acc.id, provider, label: acc.email, active: acc.active, plan: planLabel(acc.plan),
+        id: acc.id, provider, label: acc.email, active: acc.active, plan: planLabel(acc.plan, provider),
         win: w && w.short !== common ? w.short : '',
         hasValue: finite(v), value: finite(v) ? v : 0, valueText: finite(v) ? valueText(v) : '', sev: SEV_INT[sev(v)],
         next: nextR ? untilTxt(nextR.resetAt, now) : '', nextTip: nextR ? `${nextR.short} resets ${timeTxt(nextR.resetAt)}` : '',

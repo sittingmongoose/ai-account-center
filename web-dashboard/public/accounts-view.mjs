@@ -1102,7 +1102,7 @@ export function accountsViewModel(data, ctx = {}) {
       const sampled = opening?.text || sampledLine;
       const sampledTip = opening?.text || sampledLineTip;
       const email = text(account.email) || text(account.label) || 'Account identity unavailable';
-      const meta = [planLabel(text(account.plan)), text(account.label) && text(account.label) !== email ? text(account.label) : ''].filter(Boolean).join(' · ');
+      const meta = [planLabel(text(account.plan), account.provider), text(account.label) && text(account.label) !== email ? text(account.label) : ''].filter(Boolean).join(' · ');
       const switchable = SWITCHABLE.includes(entry.id);
       const line = c.lines?.[account.id];
       return {

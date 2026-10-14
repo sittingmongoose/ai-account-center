@@ -268,6 +268,7 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         state = muse.read_usage_state(self.root)
         state.pop("planVerified")
         state.pop("planVerifiedAt")
+        state.pop("restoreAllowed")
         state["schemaVersion"] = 1
         muse.atomic_private_json(self.root, muse.CACHE_NAME, state)
         self.clock += 1
@@ -280,6 +281,7 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         state = muse.read_usage_state(self.root)
         state.pop("planVerified")
         state.pop("planVerifiedAt")
+        state.pop("restoreAllowed")
         state["schemaVersion"] = 1
         muse.atomic_private_json(self.root, muse.CACHE_NAME, state)
         (self.root / muse.PLAN_NAME).unlink()

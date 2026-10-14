@@ -512,7 +512,17 @@ public static class Formatting
         _ => string.IsNullOrWhiteSpace(reported) ? provider : reported!
     };
 
-    public static string PlanLabel(string? plan) => string.IsNullOrWhiteSpace(plan) ? "" : plan.Length <= 5 ? char.ToUpperInvariant(plan[0]) + plan[1..] : plan;
+    public static string PlanLabel(string? plan, string provider)
+    {
+        if (string.IsNullOrWhiteSpace(plan)) return "";
+        if (provider == "cursor") return plan switch
+        {
+            "plus" => "X Plus", "premium" => "X Premium", "super" => "X Super", "unified_ultra" => "X Ultra",
+            "free" => "Free", "pro" => "Pro", "pro_plus" => "Pro+", "ultra" => "Cursor Ultra",
+            "team" => "Team", "enterprise" => "Enterprise", _ => plan
+        };
+        return plan.Length <= 5 ? char.ToUpperInvariant(plan[0]) + plan[1..] : plan;
+    }
     public static string PlatformName(string? platform) => platform switch { "mac" => "Mac", "windows" => "Windows", "ubuntu" => "Ubuntu", "linux" => "Linux", null or "" => "", _ => char.ToUpperInvariant(platform[0]) + platform[1..] };
 
     /// <summary>Clock for relative times; fixture renders pin it to the fixture's capture time.</summary>

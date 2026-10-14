@@ -1470,6 +1470,17 @@ private func checkDashboardAdditions() throws {
 // MARK: Tray presentation rules
 
 private func checkTrayPresentation() throws {
+  try expect(TrayFormat.planLabel("plus", provider: "cursor") == "X Plus"
+    && TrayFormat.planLabel("plus", provider: "codex") == "Plus",
+    "Cursor X plan names must not rename another provider's plan")
+  try expect(TrayFormat.planLabel("unified_ultra", provider: "cursor") == "X Ultra"
+    && TrayFormat.planLabel("ultra", provider: "cursor") == "Cursor Ultra"
+    && TrayFormat.planLabel("ultra", provider: "antigravity") == "Ultra",
+    "New and legacy Cursor Ultra subscriptions must remain distinct")
+  try expect(TrayFormat.planLabel("pro_plus", provider: "cursor") == "Pro+"
+    && TrayFormat.planLabel("future-plan", provider: "cursor") == "future-plan"
+    && TrayFormat.planLabel(nil, provider: "cursor").isEmpty,
+    "Legacy Cursor plans stay readable; unknown or absent plans must not acquire an X plan name")
   func window(_ key: String, _ label: String, _ values: [String: Any] = [:]) -> [String: Any] {
     var result: [String: Any] = [
       "key": key, "label": label, "usedPercent": NSNull(), "remainingPercent": NSNull(), "resetAt": NSNull(),

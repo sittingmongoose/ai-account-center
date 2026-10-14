@@ -36,6 +36,38 @@ cache. Claude optional balances expire after 24 hours even when an entire source
 is offline. Muse plan changes require dated native verification; an outdated
 capsule label cannot discard a newer reading. Its shared browser cache keeps the
 existing v1 format, with verification provenance in a separate private sidecar.
+The sidecar separately records whether the latest attempt verified the native
+identity, so a throttled identity lookup cannot restore a browser reading that
+an earlier sign-in failure discarded.
+
+Cursor reads the current subscription from its authenticated membership endpoint,
+so changing plans does not depend on the desktop application's cached plan name.
+Legacy Cursor plans retain their existing included, Cursor-model and other-model
+usage fields. X Plus, Premium, Super and Ultra use the shared Grok pool; the new
+Ultra code (`unified_ultra`) remains distinct from legacy Cursor Ultra (`ultra`).
+Cards, account details and analytics choose their labels and meters from each
+reported plan and its current usage windows. Additional usage spend stays separate
+from included quota.
+
+The shared pool uses `GetCurrentPeriodUsage.planUsage.totalPercentUsed` from
+Cursor's DashboardService. Its cadence comes from
+`GetPlanInfo.planInfo.includedUsagePeriod`; weekly resets use
+`includedUsageResetsAt`. An explicitly monthly period uses its reported billing
+cycle end. A missing period or reset stays unknown, and prices and legacy dollar
+allowances never supply a new quota denominator.
+Weekly, monthly and unspecified shared periods have different history keys from
+the legacy pools. Changing plans therefore cannot turn old monthly model usage
+into a new shared-pool forecast. A newly verified plan also invalidates cached
+quota from the previous plan when usage itself is unavailable.
+
+`cursor_usage.py` is shared by the standalone desktop helper and the streamed
+failover bundle. Standalone installations must update it together with
+`desktop_usage.py`, `desktop_helpers.py` and `plan_common.py`. The collector uses
+the fixed first-party DashboardService routes with Connect JSON and a bounded
+request budget; missing fields or an unsupported response remain unavailable.
+The endpoint and field definitions come from Cursor's shipped client. Offline
+fixtures validate parsing and transport shape; they do not establish live API
+availability for a particular account.
 
 The transport reuses the existing private
 `claude-session-migration/venv` interpreter when present. OpenCode wallet live

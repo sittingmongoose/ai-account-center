@@ -431,6 +431,90 @@ describe('identity-bound usage source failover', () => {
     expect(row).not.toHaveProperty('observedPlan');
   });
 
+  it('automatically replaces Cursor legacy and X-plan meters using the verified current plan', async () => {
+    const h = await harness();
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+    };
+    const rowTemplate: DashboardAccount = { ...template(), provider: 'cursor', id: 'cursor:usage' };
+    // Local desktop membership can lag the server-side subscription change.
+    h.inventories.set('mac', [candidate({ plan: 'ultra' })]);
+    for (const [plan, key, windowMinutes] of [
+      ['ultra', 'apiPercentUsed', null],
+      ['premium', 'grok-shared-weekly', 10080],
+      ['unified_ultra', 'grok-shared-weekly', 10080],
+      ['pro', 'apiPercentUsed', null],
+    ] as const) {
+      h.advance();
+      h.collections.set('mac', {
+        sample: reading(h.now(), {
+          plan,
+          windows: [{ ...reading().windows[0], key, windowMinutes }],
+        }),
+        failureCode: null,
+        observedPlan: plan,
+        observedPlanAt: new Date(h.now()).toISOString(),
+      });
+      const row = await h.service.collect(target, rowTemplate);
+      expect(row.plan).toBe(plan);
+      expect(row.windows.map((window) => window.key)).toEqual([key]);
+      expect(row).not.toHaveProperty('observedPlanAt');
+    }
+  });
+
+  it('keeps Cursor plan changes across restart without restoring obsolete legacy quota', async () => {
+    const h = await harness();
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+    };
+    const rowTemplate: DashboardAccount = { ...template(), provider: 'cursor', id: 'cursor:usage' };
+    await h.service.collect(target, rowTemplate);
+    h.advance();
+    h.collections.set('mac', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 1800,
+      observedPlan: 'premium',
+      observedPlanAt: new Date(h.now()).toISOString(),
+    });
+    const changed = await h.service.collect(target, rowTemplate);
+    expect(changed.plan).toBe('premium');
+    expect(changed.windows).toHaveLength(0);
+    const count = h.collected().length;
+    h.advance(1799_000);
+    const restarted = new UsageFailoverService(h.deps);
+    const held = await restarted.collect(target, rowTemplate);
+    expect(held.plan).toBe('premium');
+    expect(held.windows).toHaveLength(0);
+    expect(h.collected()).toHaveLength(count);
+    h.advance(1001);
+    h.inventories.set('mac', new Error('offline'));
+    h.collections.set('windows', {
+      sample: reading(BASE_TIME, { status: 'cached' }),
+      failureCode: null,
+      observedPlan: 'Pro',
+      observedPlanAt: new Date(BASE_TIME).toISOString(),
+    });
+    const stale = await restarted.collect(target, rowTemplate);
+    expect(stale.plan).toBe('premium');
+    expect(stale.windows).toHaveLength(0);
+    h.advance();
+    h.collections.set('windows', {
+      sample: reading(h.now(), {
+        plan: 'premium',
+        windows: [{ ...reading().windows[0], key: 'grok-shared-weekly' }],
+      }),
+      failureCode: null,
+    });
+    const current = await restarted.collect(target, rowTemplate);
+    expect(current.plan).toBe('premium');
+    expect(current.windows[0].key).toBe('grok-shared-weekly');
+  });
+
   it('still tries a matching peer when cached quota accompanies a transient failure', async () => {
     const h = await harness();
     h.collections.set('mac', {

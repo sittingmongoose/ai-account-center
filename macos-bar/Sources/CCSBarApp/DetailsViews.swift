@@ -139,7 +139,7 @@ struct AccountDetailsBody: View {
   }
 
   private var details: String {
-    var parts = [TrayFormat.planLabel(account.plan), TrayFormat.platformName(account.platform), account.source].filter { !$0.isEmpty }
+    var parts = [TrayFormat.planLabel(account.plan, provider: account.provider), TrayFormat.platformName(account.platform), account.source].filter { !$0.isEmpty }
     if let sampled = AccountFormatting.date(account.sampledAt ?? account.fetchedAt) {
       parts.append("sampled \(TrayFormat.relative(sampled))")
     }

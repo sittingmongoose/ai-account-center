@@ -1,4 +1,5 @@
 import { visibleUsageWindows } from './visible-usage.mjs';
+import { cursorPlanLabel } from './cursor-data.mjs';
 import { displayFormat } from './time-format.mjs';
 
 export const PROVIDERS = [
@@ -63,7 +64,7 @@ export function accountView(account, inventory = [], clientPlatform = 'mac') {
   const showFable = account.provider === 'claude' && /(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)/i.test(String(account.plan || '').replace(/[_-]/g, ' '));
   return {
     id: account.id, profile: account.capabilities?.codexProfile || account.capabilities?.claudeProfileId || '',
-    email: account.email || account.label || 'Account identity unavailable', plan: account.plan || '',
+    email: account.email || account.label || 'Account identity unavailable', plan: account.provider === 'cursor' ? cursorPlanLabel(account.plan) : account.plan || '',
     status: statusLabel(account), active: account.isActive === true,
     canMac: !!launcher?.mac?.canOpen, canWindows: launcher?.windows?.canOpen === true || (clientPlatform === 'windows' && !!launcher?.windows?.launchUri),
     five: usageView(primaryWindow(windows, false, account.provider), true), weekly: usageView(primaryWindow(windows, true, account.provider), true),
@@ -78,7 +79,7 @@ export function dashboardView(data, inventory = [], clientPlatform = 'mac') {
     const rows = accounts.filter(account => account.provider === id);
     return {
       id, name, glyph, identity: rows.map(row => row.email || row.label).filter(Boolean).join(' · '),
-      plan: rows.map(row => row.plan).filter(Boolean).join(' · '),
+      plan: rows.map(row => row.provider === 'cursor' ? cursorPlanLabel(row.plan) : row.plan).filter(Boolean).join(' · '),
       status: rows.length ? rows.map(statusLabel).filter((item, index, all) => all.indexOf(item) === index).join(' · ') : 'Unavailable',
       note: rows.map(row => row.message).filter(Boolean).join(' · ') || 'Usage unavailable',
       source: rows.map(row => [row.source, row.provider === 'muse' && row.status === 'cached'

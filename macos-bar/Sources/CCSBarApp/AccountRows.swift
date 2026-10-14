@@ -121,7 +121,7 @@ struct AccountRow: View {
     if let signIn = account.signInNeededText {
       // Claude: which computer needs a sign-in before Open; the plan and last reading follow.
       let needed = Text(verbatim: signIn).foregroundColor(palette.warnText).fontWeight(.semibold)
-      var rest = [TrayFormat.planLabel(account.plan)].filter { !$0.isEmpty }
+      var rest = [TrayFormat.planLabel(account.plan, provider: account.provider)].filter { !$0.isEmpty }
       if let sampled = AccountFormatting.date(account.sampledAt ?? account.fetchedAt) { rest.append(TrayFormat.relative(sampled)) }
       return rest.isEmpty ? needed : Text("\(needed) · \(rest.joined(separator: " · "))")
     }
@@ -129,7 +129,7 @@ struct AccountRow: View {
       let needed = Text(verbatim: "Sign-in needed").foregroundColor(palette.warnText).fontWeight(.semibold)
       return Text("\(needed) · \(TrayFormat.platformName(account.platform))")
     }
-    var parts = [TrayFormat.planLabel(account.plan), TrayFormat.platformName(account.platform)].filter { !$0.isEmpty }
+    var parts = [TrayFormat.planLabel(account.plan, provider: account.provider), TrayFormat.platformName(account.platform)].filter { !$0.isEmpty }
     if let sampled = AccountFormatting.date(account.sampledAt ?? account.fetchedAt) { parts.append(TrayFormat.relative(sampled)) }
     if account.status == "cached" && AccountFormatting.date(account.sampledAt ?? account.fetchedAt) == nil { parts.append("Cached") }
     if account.status == "error" { parts.append("Refresh failed") }

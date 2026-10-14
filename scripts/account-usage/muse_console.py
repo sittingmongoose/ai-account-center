@@ -420,8 +420,9 @@ def read_usage_state(root):
             raise MuseError("local_storage_error")
     # These fields are in-memory only. Existing installed bridge helpers read
     # the exact v1 cache schema, so verification provenance lives separately.
-    verified_at = read_plan_verification(root, value)
-    value.update(planVerified=quota is not None or verified_at is not None, planVerifiedAt=verified_at)
+    verified_at, restore_allowed = read_plan_verification(root, value)
+    value.update(planVerified=quota is not None or verified_at is not None, planVerifiedAt=verified_at,
+                 restoreAllowed=restore_allowed)
     return value
 
 
@@ -453,14 +454,19 @@ def usage_state_fingerprint(state):
 def read_plan_verification(root, state):
     try:
         value = private_json(root, PLAN_NAME)
-        if (not isinstance(value, dict) or set(value) != {"schemaVersion", "stateHash", "verifiedAt"}
-                or type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1
+        if (not isinstance(value, dict) or type(value.get("schemaVersion")) is not int
+                or value["schemaVersion"] not in {1, 2}
+                or set(value) != ({"schemaVersion", "stateHash", "verifiedAt"}
+                                  | ({"restoreAllowed"} if value["schemaVersion"] == 2 else set()))
+                or value["schemaVersion"] == 2 and type(value["restoreAllowed"]) is not bool
                 or value["stateHash"] != usage_state_fingerprint(state)
                 or not valid_plan_timestamp(value["verifiedAt"])):
-            return None
-        return value["verifiedAt"]
+            return None, False
+        # Historical plan proof does not establish that the latest attempt's
+        # identity check succeeded. Older sidecars cannot authorize restore.
+        return value["verifiedAt"], value.get("restoreAllowed", False)
     except (MuseError, OSError, ValueError, TypeError):
-        return None
+        return None, False
 
 
 def write_usage_state(root, state):
@@ -468,8 +474,9 @@ def write_usage_state(root, state):
     payload = {key: state[key] for key in USAGE_FIELDS}
     atomic_private_json(root, CACHE_NAME, payload)
     try:
-        atomic_private_json(root, PLAN_NAME, {"schemaVersion": 1, "stateHash": usage_state_fingerprint(payload),
-                                            "verifiedAt": state.get("planVerifiedAt")})
+        atomic_private_json(root, PLAN_NAME, {"schemaVersion": 2, "stateHash": usage_state_fingerprint(payload),
+                                            "verifiedAt": state.get("planVerifiedAt"),
+                                            "restoreAllowed": state.get("restoreAllowed") is True})
     except (MuseError, OSError, ValueError, TypeError):
         # A missing or interrupted sidecar only loses optional provenance.
         # The complete state digest prevents a stale sidecar from being reused.
@@ -608,7 +615,8 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             # A provider 429 limits this web session, not one team or plan.
             # A known plan change cannot reuse the previous limits while waiting.
             if identity_loader is None and state["plan"] != expected_plan:
-                state.update(plan=expected_plan, planVerified=True, planVerifiedAt=plan_timestamp(now), quota=None, sampledAt=None)
+                state.update(plan=expected_plan, planVerified=True, planVerifiedAt=plan_timestamp(now),
+                             quota=None, sampledAt=None, restoreAllowed=True)
                 write_usage_state(root, state)
             raise MuseError("rate_limited", retry_after=state["nextRequestAt"] - now,
                             plan=verified_state_plan(state), plan_at=state["planVerifiedAt"])
@@ -628,9 +636,12 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             state = {"schemaVersion": 1, "email": expected_email, "plan": expected_plan, "teamId": requested,
                      "credentialFingerprint": fingerprint(access), "quota": None, "sampledAt": None,
                      "nextRequestAt": now, "lastError": "network_error", "planVerified": identity_loader is None,
-                     "planVerifiedAt": verified_at}
+                     "planVerifiedAt": verified_at, "restoreAllowed": False}
         if state:
             state["nextRequestAt"] = now + REFRESH_SECONDS
+            # Revoke restoration before I/O, including if identity lookup is
+            # interrupted. Dated plan metadata remains valid historical proof.
+            state["restoreAllowed"] = False
             write_usage_state(root, state)
         verified_plan = identity_loader is None
         try:
@@ -663,7 +674,7 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
                      "credentialFingerprint": fingerprint(access), "quota": quota,
                      "sampledAt": provider_sampled_at(quota, now) or utc_now(),
                      "nextRequestAt": now + REFRESH_SECONDS, "lastError": None, "planVerified": True,
-                     "planVerifiedAt": verified_at}
+                     "planVerifiedAt": verified_at, "restoreAllowed": True}
             write_usage_state(root, state)
             pin_user(root, expected_email, expected_plan, team, observed)
             return dict(state_sample(state, False, now), binding=observed.get("mode"))
@@ -676,12 +687,13 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
                 state = {"schemaVersion": 1, "email": expected_email, "plan": expected_plan, "teamId": resolved_team,
                          "credentialFingerprint": fingerprint(access), "quota": None, "sampledAt": None,
                          "nextRequestAt": now, "lastError": None, "planVerified": verified_plan,
-                         "planVerifiedAt": verified_at if verified_plan else None}
+                         "planVerifiedAt": verified_at if verified_plan else None, "restoreAllowed": False}
             # invalid_response may come from identity/team parsing, so it does
             # not establish a verified quota-only failure safe for retention.
             transient = error.code in {"rate_limited", "provider_error", "network_error"}
             if not transient:
                 state["quota"], state["sampledAt"] = None, None
+            state["restoreAllowed"] = verified_plan and error.code == "rate_limited"
             state["lastError"] = error.code
             state["nextRequestAt"] = now + (min(MAX_RETRY_SECONDS, max(REFRESH_SECONDS, error.retry_after or RATE_LIMIT_SECONDS))
                                                if error.code == "rate_limited" else REFRESH_SECONDS)
@@ -698,6 +710,7 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             # outage. Clear any old observation before the next cold caller.
             if state is not None:
                 state["quota"], state["sampledAt"] = None, None
+                state["restoreAllowed"] = False
                 state["lastError"] = "error"
                 state["nextRequestAt"] = now + REFRESH_SECONDS
                 write_usage_state(root, state)
@@ -846,7 +859,7 @@ def restore_browser_sample(root, previous, now=None):
             return False
         # A first rate-limit observation follows live native identity validation.
         # A failed key lookup or expired web sign-in cannot bootstrap a reading.
-        if not state["planVerified"] or state["quota"] is None and state["lastError"] != "rate_limited":
+        if not state["restoreAllowed"] or state["quota"] is None and state["lastError"] != "rate_limited":
             return False
         if state["quota"] is not None:
             existing = dt.datetime.fromisoformat(state["sampledAt"].replace("Z", "+00:00")).timestamp()

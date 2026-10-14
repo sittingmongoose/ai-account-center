@@ -281,7 +281,7 @@ class AdditionalFailoverTests(unittest.TestCase):
     def test_cursor_rejects_live_email_conflict(self):
         self.write(".config/Cursor/auth.json", {"accessToken": jwt("auth0|one")})
         client = self.fake_client(None)
-        client.get.side_effect = [{"individualUsage": {"plan": {"used": 0, "limit": 100}}}, {"email": "other@example.test"}]
+        client.get.side_effect = [{"membershipType": "pro"}, {"individualUsage": {"plan": {"used": 0, "limit": 100}}}, {"email": "other@example.test"}]
         result = adapter.collect(self.read("cursor")[0], self.home, "ubuntu", ccs_dir=self.ccs)
         self.assertEqual(result["failureCode"], "account_mismatch")
         self.assertIsNone(result["sample"])
@@ -289,7 +289,7 @@ class AdditionalFailoverTests(unittest.TestCase):
     def test_cursor_optional_profile_rate_limit_preserves_main_quota_and_retry(self):
         self.write(".config/Cursor/auth.json", {"accessToken": jwt("auth0|one")})
         client = self.fake_client(None)
-        client.get.side_effect = [{"individualUsage": {"plan": {"used": 10, "limit": 100}}},
+        client.get.side_effect = [{"membershipType": "pro"}, {"individualUsage": {"plan": {"used": 10, "limit": 100}}},
             plan_common.CollectionError("error", "private", failure_code="rate_limited", retry_after=900)]
         result = adapter.collect(self.read("cursor")[0], self.home, "ubuntu", ccs_dir=self.ccs)
         self.assertEqual(result["failureCode"], "rate_limited")
@@ -300,7 +300,7 @@ class AdditionalFailoverTests(unittest.TestCase):
     def test_cursor_optional_profile_network_failure_keeps_main_quota_without_cooldown(self):
         self.write(".config/Cursor/auth.json", {"accessToken": jwt("auth0|one")})
         client = self.fake_client(None)
-        client.get.side_effect = [{"individualUsage": {"plan": {"used": 0, "limit": 100}}},
+        client.get.side_effect = [{"membershipType": "pro"}, {"individualUsage": {"plan": {"used": 0, "limit": 100}}},
             plan_common.CollectionError("error", "private", failure_code="network_error")]
         result = adapter.collect(self.read("cursor")[0], self.home, "ubuntu", ccs_dir=self.ccs)
         self.assertIsNone(result["failureCode"])

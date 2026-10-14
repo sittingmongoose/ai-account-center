@@ -484,8 +484,15 @@ public enum TrayFormat {
     return date.timeIntervalSince(now) < 7200
   }
 
-  public static func planLabel(_ plan: String?) -> String {
+  public static func planLabel(_ plan: String?, provider: String) -> String {
     guard let plan, !plan.isEmpty else { return "" }
+    if provider == "cursor" {
+      return [
+        "plus": "X Plus", "premium": "X Premium", "super": "X Super", "unified_ultra": "X Ultra",
+        "free": "Free", "pro": "Pro", "pro_plus": "Pro+", "ultra": "Cursor Ultra",
+        "team": "Team", "enterprise": "Enterprise",
+      ][plan] ?? plan
+    }
     return plan.count <= 5 ? plan.prefix(1).uppercased() + plan.dropFirst() : plan
   }
 

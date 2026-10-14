@@ -783,7 +783,7 @@ public partial class MainWindow : Window
         var email = Ui.Text(account.Email ?? account.Label, 13, "Ink", active ? FontWeights.SemiBold : FontWeights.Medium, trim: true);
         identity.Children.Add(email);
         identity.Children.Add(RowMeta(account, OpenText(account.Id)));
-        identity.ToolTip = Ui.Tip(string.Join(" · ", new[] { account.Email ?? account.Label, Formatting.PlanLabel(account.Plan), Formatting.PlatformName(account.Platform), account.SampledAt is null ? "" : "sampled " + Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part))));
+        identity.ToolTip = Ui.Tip(string.Join(" · ", new[] { account.Email ?? account.Label, Formatting.PlanLabel(account.Plan, account.Provider), Formatting.PlatformName(account.Platform), account.SampledAt is null ? "" : "sampled " + Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part))));
         Grid.SetColumn(identity, 2); grid.Children.Add(identity);
         if (account.Status == "needs_sign_in" && !Meters(account).Any())
         {
@@ -819,13 +819,13 @@ public partial class MainWindow : Window
     private static TextBlock RowMeta(DashboardAccount account, string? openText)
     {
         if (openText is not null) return Ui.Text(openText, 11.5, "Ink3", trim: true);
-        var parts = new[] { Formatting.PlanLabel(account.Plan), Formatting.PlatformName(account.Platform), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part));
+        var parts = new[] { Formatting.PlanLabel(account.Plan, account.Provider), Formatting.PlatformName(account.Platform), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part));
         var text = Ui.Text(string.Join(" · ", parts), 11.5, "Ink3", trim: true);
         if (account.SignInNeededText is { } needed)
         {
             // Claude: say which computer needs a sign-in before Open; the plan and last reading follow.
             text.Text = ""; text.Inlines.Add(new Run(needed) { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold });
-            var rest = string.Join(" · ", new[] { Formatting.PlanLabel(account.Plan), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part)));
+            var rest = string.Join(" · ", new[] { Formatting.PlanLabel(account.Plan, account.Provider), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part)));
             if (rest.Length > 0) text.Inlines.Add(new Run(" · " + rest));
         }
         else if (account.Status == "needs_sign_in") { text.Text = ""; text.Inlines.Add(new Run("Sign-in needed") { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold }); text.Inlines.Add(new Run(" · " + Formatting.PlatformName(account.Platform))); }
@@ -1375,7 +1375,7 @@ public partial class MainWindow : Window
             var block = new StackPanel { Margin = new Thickness(0, i == 0 ? 0 : 12, 0, 0) };
             if (accounts.Length > 1)
             {
-                var head = Ui.Text(string.Join(" · ", new[] { account.Email ?? account.Label, Formatting.PlanLabel(account.Plan), StatusWord(account) }.Where(part => !string.IsNullOrEmpty(part))), 12, "Ink2", FontWeights.SemiBold, trim: true);
+                var head = Ui.Text(string.Join(" · ", new[] { account.Email ?? account.Label, Formatting.PlanLabel(account.Plan, account.Provider), StatusWord(account) }.Where(part => !string.IsNullOrEmpty(part))), 12, "Ink2", FontWeights.SemiBold, trim: true);
                 head.Margin = new Thickness(0, 0, 0, 8); block.Children.Add(head);
             }
             block.Children.Add(DetailWindows(account));

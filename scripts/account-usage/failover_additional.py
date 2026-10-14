@@ -16,6 +16,7 @@ import time
 
 import desktop_helpers as desktop
 import desktop_usage as desktop_usage
+import cursor_usage
 import plan_common as plans
 import plan_usage
 
@@ -326,24 +327,7 @@ def _muse(credential, result, ccs_dir, client, context):
 
 
 def _cursor(credential, result, client):
-    headers = {"Cookie": desktop_usage.cursor_cookie(credential)}
-    payload = client.get(desktop_usage.CURSOR_SUMMARY_URL, headers)
-    result.update(plan=desktop.safe_text(payload.get("membershipType")) or credential.plan,
-                  windows=desktop_usage.normalize_cursor(payload))
-    try:
-        profile = client.get(desktop_usage.CURSOR_PROFILE_URL, headers)
-    except plans.CollectionError as error:
-        # A valid quota response authenticates the exact subject-bearing token.
-        # Absence of optional profile metadata does not change that subject.
-        if error.failure_code == "rate_limited":
-            return {"failureCode": "rate_limited", "retryAfterSeconds": error.retry_after or 600}
-        return
-    user = profile.get("user") if isinstance(profile.get("user"), dict) else profile
-    address = desktop.email(user.get("email"))
-    if address and credential.email and address.lower() != credential.email.lower():
-        _raise_identity()
-    if address:
-        result["email"] = address
+    return cursor_usage.collect(credential, result, client)
 
 
 def _plan(provider, credential, result, home, client):
@@ -388,7 +372,7 @@ def collect(candidate, home, platform, ccs_dir=None):
     source = credential.source if isinstance(credential, desktop.Credential) else credential["source"]
     result["source"] = source + " on " + HOST_LABELS[platform]
     try:
-        client = plans.HttpClient(deadline_seconds=16 if provider == "muse" else 7)
+        client = plans.HttpClient(deadline_seconds=16 if provider in {"muse", "cursor"} else 7)
         if provider == "muse":
             failure = _muse(credential, result, ccs_dir, client, candidate.get("_muse_context"))
         elif provider == "cursor":
@@ -398,12 +382,14 @@ def collect(candidate, home, platform, ccs_dir=None):
         if failure and "sample" in failure:
             return failure
         if not result["windows"]:
-            return _failure("invalid_response")
+            return {**_failure("invalid_response"), **(cursor_usage.observation(result) if provider == "cursor" else {})}
         result["fetchedAt"] = desktop.utc_now()
         result["sampledAt"] = result["sampledAt"] or result["fetchedAt"]
         return {"sample": result, "failureCode": None, **(failure or {})}
     except plans.CollectionError as error:
-        return _failure(error.failure_code or ("needs_sign_in" if error.status == "needs_sign_in" else "provider_error"), error.retry_after)
+        code = error.failure_code or ("needs_sign_in" if error.status == "needs_sign_in" else "provider_error")
+        return {**_failure(code, error.retry_after),
+                **(cursor_usage.observation(result, code) if provider == "cursor" else {})}
     except desktop.UsageError as error:
         return _failure("needs_sign_in" if error.status == "needs_sign_in" else "provider_error")
     except Exception as error:
@@ -411,4 +397,4 @@ def collect(candidate, home, platform, ccs_dir=None):
         import muse_console as muse
         if isinstance(error, muse.MuseError):
             return _failure(error.code, error.retry_after)
-        return _failure("provider_error")
+        return {**_failure("provider_error"), **(cursor_usage.observation(result) if provider == "cursor" else {})}

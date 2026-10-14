@@ -105,7 +105,7 @@ export interface UsageCollection {
   rateLimited?: boolean;
   /** Healthy source-local caching; no provider request is due before this interval. */
   refreshAfterSeconds?: number;
-  /** Verified Muse plan even when quota failed; never part of a dashboard row. */
+  /** Verified Muse/Cursor plan even when quota failed; timestamp stays private. */
   observedPlan?: string;
   observedPlanAt?: string;
 }

@@ -77,6 +77,8 @@ const responseIsRateLimited = (response: UsageHelperResponse): boolean =>
   response.action === 'collect' &&
   (response.failureCode === 'rate_limited' ||
     (response.failureCode === 'source_changed' && response.rateLimited === true));
+const tracksVerifiedPlan = (target: UsageFailoverTarget): boolean =>
+  target.provider === 'muse' || target.provider === 'cursor';
 
 /** Display-only quota recovery. It cannot activate accounts or produce an activation proof. */
 export class UsageFailoverService {
@@ -145,8 +147,9 @@ export class UsageFailoverService {
           (!target.expectedIdentity || sameUsageIdentity(target.expectedIdentity, identity))
         ) {
           state.identity = identity;
-          state.observedPlan =
-            target.provider === 'muse' ? safeUsageText(value.observedPlan) : null;
+          state.observedPlan = tracksVerifiedPlan(target)
+            ? safeUsageText(value.observedPlan)
+            : null;
           state.observedPlanAt = usageTimestamp(value.observedPlanAt, this.now());
           if (!state.observedPlanAt) state.observedPlan = null;
           state.primary = parseUsageCandidate(value.primary);
@@ -283,8 +286,16 @@ export class UsageFailoverService {
     state: State,
     cached: boolean
   ): DashboardAccount {
-    if (!state.saved || template.statusReason === 'identity_unbound')
+    if (!state.saved || template.statusReason === 'identity_unbound') {
+      if (
+        target.provider === 'cursor' &&
+        state.observedPlan &&
+        state.identity &&
+        template.statusReason !== 'identity_unbound'
+      )
+        template = { ...template, plan: state.observedPlan };
       return this.withSignIn(template, state);
+    }
     const { reading, host, fallback } = state.saved;
     if (!emailMatches(target.expectedEmail, reading.email)) return this.withSignIn(template, state);
     const stale = cached || reading.status === 'cached';
@@ -683,7 +694,7 @@ export class UsageFailoverService {
       const observedPlan = safeUsageText(response.observedPlan);
       const observedPlanAt = usageTimestamp(response.observedPlanAt, this.now());
       if (
-        target.provider === 'muse' &&
+        tracksVerifiedPlan(target) &&
         observedPlan &&
         observedPlanAt &&
         Date.parse(observedPlanAt) >=
@@ -699,7 +710,7 @@ export class UsageFailoverService {
       const reading = parseUsageReading(response.sample, this.now());
       if (!hasUsage(reading) || !emailMatches(target.expectedEmail, reading.email))
         return blocked ? 'done' : 'next';
-      if (target.provider === 'muse') {
+      if (tracksVerifiedPlan(target)) {
         const sampled = Date.parse(reading.sampledAt ?? '') || 0;
         const knownPlanAt = Date.parse(state.observedPlanAt ?? '') || 0;
         if (

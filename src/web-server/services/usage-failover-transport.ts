@@ -25,6 +25,7 @@ const MODULES = [
   'failover_special',
   'desktop_helpers',
   'desktop_usage',
+  'cursor_usage',
   'plan_common',
   'plan_usage',
   'muse_console',

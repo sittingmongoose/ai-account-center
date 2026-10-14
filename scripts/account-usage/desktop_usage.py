@@ -14,7 +14,7 @@ import re
 import stat
 import subprocess
 import sys
-import urllib.parse
+import cursor_usage
 
 from desktop_helpers import (
     Credential, PROVIDERS, UsageError, account, config_home, counter, email, jwt_claims,
@@ -24,8 +24,8 @@ from desktop_helpers import (
 
 MUSE_URL = "https://api.meta.ai/muse-code/key"
 AGY_BASE = "https://cloudcode-pa.googleapis.com/v1internal:"
-CURSOR_SUMMARY_URL = "https://cursor.com/api/usage-summary"
-CURSOR_PROFILE_URL = "https://cursor.com/api/auth/me"
+CURSOR_SUMMARY_URL = cursor_usage.SUMMARY_URL
+CURSOR_PROFILE_URL = cursor_usage.PROFILE_URL
 
 
 def credential_from_omp(provider, value):
@@ -464,66 +464,26 @@ def fetch_antigravity_quota(credential, result):
 
 
 def cursor_cookie(credential):
-    claims = jwt_claims(credential.access)
-    subject = claims.get("sub")
-    if not isinstance(subject, str) or not subject.strip() or len(subject) > 256:
-        raise UsageError("needs_sign_in", "The saved Cursor account has no usable session identity.")
-    user_id = subject.split("|")[-1].strip()
-    if not user_id or any(ord(char) < 32 for char in user_id):
-        raise UsageError("needs_sign_in", "The saved Cursor account has no usable session identity.")
-    return "WorkosCursorSessionToken=" + urllib.parse.quote(user_id + "::" + credential.access, safe="")
+    try:
+        return cursor_usage.cookie(credential)
+    except cursor_usage.CollectionError as error:
+        raise UsageError(error.status, error.message) from None
 
 
 def normalize_cursor(payload):
-    usage = payload.get("individualUsage")
-    if not isinstance(usage, dict):
-        return []
-    reset = payload.get("billingCycleEnd") or payload.get("endOfMonth") or payload.get("resetsAt") or payload.get("nextReset")
-    windows = []
-    for key, label in (("plan", "Plan spend"), ("onDemand", "On-demand spend")):
-        bucket = usage.get(key)
-        if not isinstance(bucket, dict):
-            continue
-        used, limit = nonnegative(bucket.get("used")), nonnegative(bucket.get("limit"))
-        reported_percentage = percent(bucket.get("totalPercentUsed"))
-        spend_percentage = min(100, used / limit * 100) if used is not None and limit is not None and limit > 0 else None
-        # Cursor can report model allowance percentages that differ from its
-        # dollars-spent ratio. Keep those two server measures in separate rows.
-        if reported_percentage is not None:
-            windows.append(quota_window(key + "-reported", "Included usage" if key == "plan" else "On-demand usage",
-                                        used_percent=reported_percentage, reset=reset,
-                                        enabled=bucket.get("enabled"), unlimited=payload.get("isUnlimited") if key == "plan" else bucket.get("unlimited")))
-        if key == "plan":
-            for field, detail_label in (("autoPercentUsed", "Cursor models"), ("apiPercentUsed", "Other models")):
-                if percent(bucket.get(field)) is not None:
-                    windows.append(quota_window(field, detail_label, used_percent=bucket[field], reset=reset,
-                                                enabled=bucket.get("enabled"), unlimited=payload.get("isUnlimited")))
-        if used is not None:
-            windows.append(quota_window(key, label, used_percent=spend_percentage, reset=reset,
-                                        used=used / 100 if used is not None else None,
-                                        limit=limit / 100 if limit is not None else None, unit="USD",
-                                        remaining=nonnegative(bucket.get("remaining")) / 100 if nonnegative(bucket.get("remaining")) is not None else None,
-                                        kind="spend" if key == "plan" else "extra_usage",
-                                        enabled=bucket.get("enabled"), unlimited=bucket.get("unlimited")))
-    if not windows and isinstance(usage.get("overall"), dict):
-        value = dict(payload)
-        value["individualUsage"] = {"plan": usage["overall"]}
-        return normalize_cursor(value)
-    return windows
+    return cursor_usage.normalize_legacy(payload)
 
 
 def fetch_cursor(credential, result):
-    headers = {"Cookie": cursor_cookie(credential)}
-    payload = request_json(CURSOR_SUMMARY_URL, headers)
-    result["plan"] = safe_text(payload.get("membershipType")) or credential.plan
-    result["windows"] = normalize_cursor(payload)
+    from plan_common import HttpClient, CollectionError
     try:
-        profile = request_json(CURSOR_PROFILE_URL, headers)
-        user = profile.get("user") if isinstance(profile.get("user"), dict) else profile
-        result["email"] = email(user.get("email")) or credential.email
-    except UsageError:
-        # A separate identity endpoint failing must not erase a successful quota.
-        pass
+        result.update(cursor_usage.collect(credential, result, HttpClient(deadline_seconds=16)))
+    except CollectionError as error:
+        result.update(status="needs_sign_in" if error.status == "needs_sign_in" else "unavailable",
+                      failureCode=error.failure_code or ("needs_sign_in" if error.status == "needs_sign_in" else "provider_error"),
+                      message=error.message, windows=[])
+        if error.retry_after is not None:
+            result["retryAfterSeconds"] = error.retry_after
 
 
 def collect(provider, platform, home=None):

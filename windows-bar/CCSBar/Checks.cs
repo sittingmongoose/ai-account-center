@@ -30,6 +30,9 @@ public static partial class Checks
     public static async Task<CheckReport> Run()
     {
         var report = new CheckReport();
+        report.Checks["cursor_plan_names_are_provider_scoped"] = Formatting.PlanLabel("plus", "cursor") == "X Plus" && Formatting.PlanLabel("plus", "codex") == "Plus";
+        report.Checks["new_and_legacy_cursor_ultra_remain_distinct"] = Formatting.PlanLabel("unified_ultra", "cursor") == "X Ultra" && Formatting.PlanLabel("ultra", "cursor") == "Cursor Ultra" && Formatting.PlanLabel("ultra", "antigravity") == "Ultra";
+        report.Checks["cursor_legacy_and_unknown_plans_are_preserved"] = Formatting.PlanLabel("pro_plus", "cursor") == "Pro+" && Formatting.PlanLabel("future-plan", "cursor") == "future-plan" && Formatting.PlanLabel(null, "cursor") == "";
         var interval = JsonSerializer.Deserialize<AccountRefreshSettings>("{\"refreshIntervalSeconds\":120}", Formatting.Json)!;
         report.Checks["saved_usage_refresh_interval_decoded"] = interval.ValidatedInterval == 120;
         report.Checks["invalid_usage_refresh_interval_defaults"] = new AccountRefreshSettings { RefreshIntervalSeconds = 1 }.ValidatedInterval == 60;

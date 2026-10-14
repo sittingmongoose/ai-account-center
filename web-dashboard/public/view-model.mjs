@@ -4,6 +4,7 @@
 // added or averaged across accounts or windows; at most two decimals; the product visibility rules of
 // visible-usage.mjs; Fable only for Claude Max plans, from the seven_day_fable window.
 import { visibleUsageWindows } from './visible-usage.mjs';
+import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
   antigravityView,
   antigravityColumns,
@@ -128,8 +129,14 @@ export const platformLabel = (id) =>
  * computer whose sources keep platform 'ubuntu'), else its platform.
  */
 export const hostLabel = (account) => platformLabel(account?.host ?? account?.platform);
-export const planLabel = (plan) =>
-  !plan ? '' : plan.length <= 5 ? plan[0].toUpperCase() + plan.slice(1) : plan;
+export const planLabel = (plan, provider) =>
+  provider === 'cursor'
+    ? cursorPlanLabel(plan)
+    : !plan
+      ? ''
+      : plan.length <= 5
+        ? plan[0].toUpperCase() + plan.slice(1)
+        : plan;
 /** At most two decimals, locale grouping, never rounding a real reading up to a different integer label. */
 export const valueText = (value) => (finite(value) ? nf2.format(value) : '');
 export function duration(ms) {
@@ -1071,7 +1078,8 @@ function providerCards(accounts, hidden, now) {
         text(account.plan).replace(
           new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i'),
           ''
-        )
+        ),
+        account.provider
       );
       return {
         id: account.id,
@@ -1092,7 +1100,12 @@ function providerCards(accounts, hidden, now) {
         flag: !normal ? statusWord(account) : stale ? 'Stale' : '',
         sampled: validDate(sampledAt) ? `sampled ${relative(sampledAt, now)}` : 'never sampled',
         platform: hostLabel(account),
-        planNote: planExpiry ? exact(planExpiry.expiresAt, 'Plan subscription ends ') : '',
+        planNote: [
+          cursorPlanNote(account),
+          planExpiry ? exact(planExpiry.expiresAt, 'Plan subscription ends ') : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
         packsNote: sameExpiry ? exact(packs[0].expiresAt, `All ${packs.length} packs expire `) : '',
         note: text(account.message) || (meters.length ? '' : 'Usage unavailable'),
         meters,
@@ -1253,10 +1266,17 @@ export function detailsViewModel(data, id, ctx = {}) {
     id: account.id,
     provider: account.provider,
     title: text(account.email) || text(account.label) || 'Account identity unavailable',
-    sub: [provider?.label || text(account.providerLabel), planLabel(text(account.plan)), state]
+    sub: [
+      provider?.label || text(account.providerLabel),
+      planLabel(text(account.plan), account.provider),
+      state,
+    ]
       .filter(Boolean)
       .join(' · '),
-    subLead: [provider?.label || text(account.providerLabel), planLabel(text(account.plan))]
+    subLead: [
+      provider?.label || text(account.providerLabel),
+      planLabel(text(account.plan), account.provider),
+    ]
       .filter(Boolean)
       .join(' · '),
     state,
@@ -1277,6 +1297,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     canWindows: !!row?.canWindows,
     note: [
       antigravityPlanNote(account),
+      cursorPlanNote(account),
       opening,
       missingFable
         ? 'Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.'

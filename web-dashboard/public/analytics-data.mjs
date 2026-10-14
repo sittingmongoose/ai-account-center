@@ -1,4 +1,5 @@
 import { visibleUsageWindows } from './visible-usage.mjs';
+import { cursorPlanLabel } from './cursor-data.mjs';
 import { mainWindow } from './analytics-quota.mjs';
 import { lazyFormat } from './time-format.mjs';
 
@@ -240,7 +241,7 @@ export function analyticsView(payload, { catalog = [], metricKey = '', activityI
       if (outside) return { id, label, accounts: '—', availability: 'Outside filter', sample: 'Select to view this provider' };
       return { id, label, accounts: `${Number.isInteger(provider?.accountCount) ? provider.accountCount : accounts.filter(account => account.provider === id).length} accounts`, availability: `${Number.isInteger(provider?.availableAccounts) ? provider.availableAccounts : accounts.filter(account => account.provider === id && ['ok', 'cached'].includes(account.status)).length} available`, sample: dateLabel(provider?.latestSampleAt) || 'No observations' };
     }),
-    accounts: accounts.map(account => ({ id: text(account.id), label: text(account.email) || text(account.label) || 'Account identity unavailable', provider: text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider', status: status(account.status), platform: text(account.platform), source: text(account.source), plan: text(account.plan), active: account.provider === 'codex' && account.isActive === true, samples: `${Number.isInteger(account.sampleCount) ? account.sampleCount : 0} observations` })),
+    accounts: accounts.map(account => ({ id: text(account.id), label: text(account.email) || text(account.label) || 'Account identity unavailable', provider: text(account.providerLabel) || ANALYTICS_PROVIDERS.find(row => row[0] === account.provider)?.[1] || 'Provider', status: status(account.status), platform: text(account.platform), source: text(account.source), plan: account.provider === 'cursor' ? cursorPlanLabel(text(account.plan)) : text(account.plan), active: account.provider === 'codex' && account.isActive === true, samples: `${Number.isInteger(account.sampleCount) ? account.sampleCount : 0} observations` })),
     quotaCharts,
     // Legacy single-chart bindings are empty; all histories are rendered by quotaCharts.
     metrics: [], points: [], chartTitle: 'Account histories', chartNote: '', chartHasPoints: false,
@@ -279,7 +280,7 @@ export function quotaHistory(accounts, histories, range, now = Date.now()) {
       return {
         id: text(account.id), key: key || text(account.id), provider,
         label: text(account.email) || text(account.label) || 'Account identity unavailable',
-        sub: [text(account.plan), text(account.platform)].filter(Boolean).join(' · '),
+        sub: [provider === 'cursor' ? cursorPlanLabel(text(account.plan)) : text(account.plan), text(account.platform)].filter(Boolean).join(' · '),
         windowLabel: window ? text(window.label) || 'Usage' : 'No quota reported',
         hasValue: current !== null, value: current ?? 0, valueText: current === null ? '' : number(current),
         reset: window ? relativeReset(window.resetAt, now) : '',

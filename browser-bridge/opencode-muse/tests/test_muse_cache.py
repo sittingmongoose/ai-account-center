@@ -559,6 +559,7 @@ class BrowserMigrationTests(unittest.TestCase):
         after = muse.read_usage_state(self.root)
         self.assertEqual(after["sampledAt"], self.previous["sample"]["sampledAt"])
         self.assertEqual(after["nextRequestAt"], before["nextRequestAt"])
+        self.assertEqual(after["planVerifiedAt"], before["planVerifiedAt"])
         self.assertEqual(after["lastError"], "rate_limited")
         self.assertEqual((Path(self.root) / muse.CAPSULE_NAME).read_bytes(), cookie_bytes)
         sample = muse.cached_quota(self.root, EMAIL, PLAN, "42", ACCESS, now=1790863300)
@@ -589,8 +590,100 @@ class BrowserMigrationTests(unittest.TestCase):
             muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS, Client(),
                               now=1790863200, identity_loader=identity)
         self.assertFalse(muse.read_usage_state(self.root)["planVerified"])
+        self.assertFalse(muse.read_usage_state(self.root)["restoreAllowed"])
         self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=1790863800))
         self.assertIsNone(muse.read_usage_state(self.root)["quota"])
+
+    def test_expired_portal_then_identity_429_cannot_revive_old_browser_quota(self):
+        now = 1790863800
+        identity = Mock(return_value=PLAN)
+        muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS,
+                          Client(quota=dict(QUOTA, as_of=1790859600)), now=now, identity_loader=identity)
+        with self.assertRaises(muse.MuseError):
+            muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS,
+                              Client(muse.MuseError("needs_sign_in")), now=now + 301, identity_loader=identity)
+        expired = muse.read_usage_state(self.root)
+        self.assertIsNone(expired["quota"])
+        self.assertFalse(expired["restoreAllowed"])
+        self.assertEqual(expired["planVerifiedAt"], muse.plan_timestamp(now + 301))
+
+        identity = Mock(side_effect=muse.MuseError("rate_limited", retry_after=1800))
+        portal = Client()
+        with self.assertRaises(muse.MuseError) as limited:
+            muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS, portal,
+                              now=now + 602, identity_loader=identity)
+        identity.assert_called_once()
+        self.assertEqual(portal.calls, [])
+        self.assertEqual(limited.exception.plan_at, expired["planVerifiedAt"])
+        self.assertEqual(limited.exception.retry_after, 1800)
+        importlib.reload(muse)
+        limited_state = muse.read_usage_state(self.root)
+        self.assertEqual(limited_state["planVerifiedAt"], expired["planVerifiedAt"])
+        self.assertTrue(limited_state["planVerified"])
+        self.assertFalse(limited_state["restoreAllowed"])
+        self.assertEqual(limited_state["nextRequestAt"], now + 2402)
+        before = (Path(self.root) / muse.CACHE_NAME).read_bytes()
+        self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=now + 603))
+        self.assertEqual((Path(self.root) / muse.CACHE_NAME).read_bytes(), before)
+        self.assertIsNone(muse.read_usage_state(self.root)["quota"])
+
+        cold_identity = Mock(return_value=PLAN)
+        with self.assertRaises(muse.MuseError) as cold:
+            muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS, portal,
+                              now=now + 603, identity_loader=cold_identity)
+        self.assertEqual((cold.exception.code, cold.exception.retry_after), ("rate_limited", 1799))
+        self.assertEqual(cold.exception.plan_at, expired["planVerifiedAt"])
+        self.assertEqual(portal.calls, [])
+        cold_identity.assert_not_called()
+
+    def test_verified_identity_then_first_portal_429_still_restores_after_cold_read(self):
+        (Path(self.root) / muse.CACHE_NAME).unlink()
+        identity = Mock(return_value=PLAN)
+        with self.assertRaises(muse.MuseError):
+            muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS,
+                              Client(muse.MuseError("rate_limited", retry_after=1800)),
+                              now=1790863200, identity_loader=identity)
+        identity.assert_called_once()
+        importlib.reload(muse)
+        before = muse.read_usage_state(self.root)
+        self.assertTrue(before["restoreAllowed"])
+        self.assertTrue(muse.restore_browser_sample(self.root, self.previous, now=1790863300))
+        after = muse.read_usage_state(self.root)
+        self.assertEqual(after["planVerifiedAt"], before["planVerifiedAt"])
+        self.assertEqual(after["nextRequestAt"], before["nextRequestAt"])
+        self.assertEqual(after["sampledAt"], self.previous["sample"]["sampledAt"])
+
+    def test_invalid_or_interrupted_identity_revokes_restore_without_retiming_plan(self):
+        for outcome in ("invalid-plan", "interrupted"):
+            with self.subTest(outcome=outcome):
+                now = 1790863800
+                muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS,
+                                  Client(quota=dict(QUOTA, as_of=1790856000)), now=now)
+                before = muse.read_usage_state(self.root)
+                self.assertTrue(before["restoreAllowed"])
+                identity = Mock(return_value=None) if outcome == "invalid-plan" else Mock(side_effect=SystemExit())
+                error = muse.MuseError if outcome == "invalid-plan" else SystemExit
+                with self.assertRaises(error):
+                    muse.quota_sample(self.root, [COOKIE], EMAIL, PLAN, "42", ACCESS,
+                                      Client(), now=now + 301, identity_loader=identity)
+                importlib.reload(muse)
+                after = muse.read_usage_state(self.root)
+                self.assertEqual(after["planVerifiedAt"], before["planVerifiedAt"])
+                self.assertFalse(after["restoreAllowed"])
+                self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=now + 302))
+                (Path(self.root) / muse.CACHE_NAME).unlink()
+
+    def test_legacy_sidecar_keeps_dated_plan_proof_but_cannot_authorize_restore(self):
+        state = muse.read_usage_state(self.root)
+        muse.atomic_private_json(self.root, muse.PLAN_NAME,
+                                 {"schemaVersion": 1, "stateHash": muse.usage_state_fingerprint(state),
+                                  "verifiedAt": state["planVerifiedAt"]})
+        importlib.reload(muse)
+        legacy = muse.read_usage_state(self.root)
+        self.assertEqual(legacy["planVerifiedAt"], state["planVerifiedAt"])
+        self.assertTrue(legacy["planVerified"])
+        self.assertFalse(legacy["restoreAllowed"])
+        self.assertFalse(muse.restore_browser_sample(self.root, self.previous, now=1790863300))
 
     def test_real_weighted_counts_preserve_the_existing_four_decimal_percent_projection(self):
         previous = copy.deepcopy(self.previous)
