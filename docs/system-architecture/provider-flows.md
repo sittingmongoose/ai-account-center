@@ -20,6 +20,38 @@ owner host. Existing approved SSH aliases are transport configuration, not an
 invitation to create new grants or move raw credentials to the dashboard.
 Browser/native messaging host IDs remain compatible with current installations.
 
+All quota providers share [verified usage fallback](../../src/web-server/services/usage-failover-service.ts).
+The configured primary source is tried first. A failed or unreachable source can
+use an existing sign-in on another configured Mac, Windows, Ubuntu or Nas1
+computer only when its provider account identity matches. Identity includes the
+provider workspace/organization or credential fingerprint where required; labels
+and email alone do not bind unrelated accounts. A first-ever source with no
+known identity cannot be recovered by guessing from a peer's current login.
+
+Muse portal usage is bound to the exact selected team and account in each
+computer's own verified browser capsule. The same email or subscription tier
+does not prove that two computers selected the same team. A Muse sign-in without
+that capsule can supply native quota only for the exact matching device
+credential; native quota does not identify a portal team and is not mixed with
+portal quota. Existing Analytics history has no Muse team binding, so a cold
+deployment cannot use it to authorize fallback. The configured primary must first
+establish a verified scope; later failures can retain that scope's dated reading.
+
+The [transport](../../src/web-server/services/usage-failover-transport.ts) streams
+the packaged Python bundle over existing SSH aliases and imports it in memory.
+It installs no remote helper and copies no credentials. Each computer reads its
+own supported sign-ins and returns normalized usage plus nonsecret identity and
+revision metadata; the helper verifies them again after collection. Successful
+observations persist under private `account-usage-failover/` storage with their
+original sample times. Temporary source failures can therefore display cached
+usage after restart. Identity changes invalidate the associated reading, and
+fallback cannot grant account activation or switching authority.
+
+A provider's HTTP 429 applies one persisted identity cooldown across source
+aliases and computers, honoring the bounded `Retry-After` value. Alternate hosts
+are not queried for that account during the cooldown. Explicit account sources,
+registry bindings and lifecycle ownership remain unchanged.
+
 Private `~/.ccs/account-usage-sources.json` (or the selected CCS home) uses a
 version-1 manifest with a `sources` array. Each entry names one retained provider,
 its `ubuntu`, `mac` or `windows` platform, and optionally an already approved
@@ -32,19 +64,16 @@ before changing an existing deployment.
 
 Nas1, the fourth computer, is a second Ubuntu computer and needs no new
 `platform` value. A source runs on Nas1 when it is saved as `platform: "ubuntu"` with
-`sshHost: "nas1-agent"`; the same command a remote Ubuntu already gets
-(`/usr/bin/python3 "$HOME/.ccs/account-usage/<helper>" ... --platform 'ubuntu'`)
-runs over ssh, and the dashboard derives the display host from that pair, so the
-account reads "on Nas1" and "Update the usage helper on Nas1". The persisted
+`sshHost: "nas1-agent"`; the usage bundle runs over SSH with Nas1's existing
+Python runtime, and the dashboard derives the display host from that pair. The persisted
 platform stays `ubuntu`, so the version-1 manifest, registry v2, quota history
 and every earlier package read and collect such a source unchanged. A quota
-reading belongs to a provider account, not to a computer, and Nas1 signs in to
-the same provider accounts as the dashboard computer, so by default no source
-moves there. Claude quota stays with the Mac and Windows Claude desktop apps (no
-Claude desktop exists on Nas1), Codex quota with the dashboard computer's saved
-logins and the OpenCode console wallet with the Mac. Lifecycle that writes to a
-computer (add, sign in again, replace key) is not offered for Nas1: it stores no
-keys and holds no sign-in state, and the key store refuses an Ubuntu source that
+reading belongs to a provider account, not to a computer. Nas1 can supply a
+verified fallback reading without moving the primary source or adding a duplicate
+account row. Each provider still needs its supported sign-in or capsule there;
+the service does not infer credentials from usage logs. Lifecycle that writes to a
+computer (add, sign in again, replace key) is not offered for Nas1: AAC stores no
+keys or managed sign-in state there, and the key store refuses an Ubuntu source that
 has an `sshHost`. Remove only stops the dashboard reading a source saved for
 Nas1 and says so ("Its sign-in on Nas1 is not changed."); it runs nothing there.
 
@@ -56,12 +85,12 @@ safely" and the version 1 defaults are not used; when it is absent the version 1
 manifest is read exactly as before. The dashboard never writes version 1: the
 first lifecycle write copies the effective version 1 sources into v2 as
 `discover` entries with ids `<provider>:usage`, so an older package that only
-reads version 1 keeps working. Each account has its own cache and backoff. A
-`discover` account keeps today's collector call; any other credential kind adds
-only `--account <id> --credential <kind>` and `--key-id`, `--capsule-id` or
-`--home-id`, never a path, host or secret. A helper that rejects those arguments
-(an older helper) shows the account as unavailable with "Update the usage helper
-on <host>". See the [registry](../../src/web-server/services/account-registry-v2.ts).
+reads version 1 keeps working. Each account has its own source-bound observation
+cache; provider rate limits are shared by verified identity. The packaged usage
+bundle selects `discover`, key, capsule, config-home or Antigravity profile
+credentials through bounded identifiers, never caller-supplied credential paths
+or secrets. Direct legacy collectors retain their existing arguments and helper
+compatibility checks. See the [registry](../../src/web-server/services/account-registry-v2.ts).
 
 The display-only visibility file `account-visibility.json` (0600) holds two
 independent pairs of lists: `hiddenProviders` and `hiddenAccountIds` for the

@@ -2,19 +2,34 @@ The desktop collectors read existing accounts on the computer that owns them.
 They emit normalized account usage only and never write account tokens, change
 the selected account, or send a model prompt.
 
-A collector runs on the computer its source names: the dashboard computer
-itself, or a Mac, Windows or Ubuntu computer reached over an approved ssh alias.
-Nas1, a second Ubuntu computer, is one of those: a source runs there when it is
-saved as `platform: "ubuntu"` with `sshHost: "nas1-agent"`. The helper then gets
-`--platform ubuntu` and reads Nas1's own files as it does on Ubuntu (a manual
-run there still says Ubuntu; the dashboard derives the "on Nas1" label from the
-alias). By default no source is saved for Nas1: it signs in to the same provider
-accounts as the dashboard computer, so a second reading would show the same
-numbers again. These helpers are copied by hand into `~/.ccs/account-usage/` on
-a remote computer; they are not synced like the update helpers. A Nas1 source
-needs only `desktop_usage.py` with `desktop_helpers.py` (plus `muse_console.py`
-for Muse) or `plan_usage.py` with `plan_common.py`; it never uses
-`claude_usage.py` (no Claude desktop on Nas1) or `key_store.py`.
+A collector first uses the computer and credential named by its configured
+source. The shared usage coordinator can then read the same verified provider
+account on the dashboard computer or a configured Mac, Windows, Ubuntu or Nas1
+source. It matches provider account identity, workspace/organization or key
+fingerprint as applicable; an email or matching display label alone cannot
+authorize another login. A first-ever unavailable source with no saved identity
+remains unavailable because a peer login cannot establish the original account.
+
+The coordinator streams the packaged `failover_usage.py` bundle over SSH stdin
+and imports its modules in memory. No helper installation or credential copying
+is required on alternate computers. Each helper reads that computer's existing
+supported sign-ins, capsules and keys, verifies the selected identity and local
+credential revision before and after collection, and returns normalized usage
+and nonsecret identity metadata. Native application requirements, such as
+Antigravity OAuth application metadata, still apply on each source computer.
+
+Verified readings and original sample times persist under the dashboard's private
+`account-usage-failover/` directory. A temporary failure can show the last
+successful reading as cached across dashboard restarts; changed identities and
+hard identity failures cannot inherit that reading. HTTP 429 and `Retry-After`
+set a shared cooldown for the provider account across all alternate computers,
+so changing hosts does not bypass a rate limit.
+
+Explicit source configuration and lifecycle ownership are unchanged. Nas1 is
+still represented as `platform: "ubuntu"` with `sshHost: "nas1-agent"` and reads
+only its own existing sign-ins; fallback adds no account row, key storage,
+activation or sign-in control there. Standalone legacy collector commands below
+remain available and require their helper files when invoked directly.
 
 Antigravity refresh uses the native application's OAuth metadata from
 `~/.ccs/account-usage/antigravity-oauth-client.json`. Provision that file outside

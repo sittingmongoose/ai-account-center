@@ -127,6 +127,8 @@ interface ProviderState {
   breakerOpenUntil: number;
   /** Epoch ms until which a Retry-After / backoff cooldown holds. */
   cooldownUntil: number;
+  /** Account-wide 429 hold; source failures may still recover on another computer. */
+  rateLimitUntil: number;
   /** Attempt counter feeding exponential backoff. */
   backoffAttempt: number;
   authSignature?: string;
@@ -141,6 +143,7 @@ function freshProviderState(): ProviderState {
     consecutive429: 0,
     breakerOpenUntil: 0,
     cooldownUntil: 0,
+    rateLimitUntil: 0,
     backoffAttempt: 0,
   };
 }
@@ -600,6 +603,7 @@ async function collectCodexRowForProfile(
             state.consecutive429 = 0;
             state.breakerOpenUntil = 0;
             state.cooldownUntil = 0;
+            state.rateLimitUntil = 0;
             state.backoffAttempt = 0;
             // At least one core window (5h/weekly) resolved -> full quota row.
             if (quota.coreUsage?.fiveHour || quota.coreUsage?.weekly) {
@@ -656,6 +660,7 @@ async function collectCodexRowForProfile(
             const retryAfter = parseRetryAfterMs(quota.errorDetail, now);
             const backoff = retryAfter ?? computeBackoffMs(state.backoffAttempt);
             state.cooldownUntil = now + backoff;
+            state.rateLimitUntil = state.cooldownUntil;
             state.backoffAttempt += 1;
             void sleep; // retained as an injectable seam for future inline retry
           } else if (quota.retryable) {
@@ -765,4 +770,12 @@ export function getCachedCodexProfileQuotaRows(profiles: string[]): BarSummaryRo
     const row = state ? serveCached(state) : null;
     return row ? [row] : [];
   });
+}
+
+/** Display failover must not race native refresh or bypass an account-wide 429 hold. */
+export function getCodexProfileRetryBlocked(profile: string): boolean {
+  const state = getProfileState(profile);
+  if (!state) return false;
+  const now = Date.now();
+  return state.pending !== null || now < state.rateLimitUntil || now < state.breakerOpenUntil;
 }

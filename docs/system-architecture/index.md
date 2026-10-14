@@ -25,11 +25,11 @@ source; there is no configurable host list.
 | Ubuntu | Local; runs the dashboard | Dashboard, account state, guarded Codex activation and auto-switch, Antigravity, local collectors and log scans, app updates |
 | Mac | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native bar |
 | Windows | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native tray |
-| Nas1 | Fixed SSH alias `nas1-agent` | App updates and the Analytics scan only |
+| Nas1 | Fixed SSH alias `nas1-agent` | App updates, Analytics scan and verified usage fallback |
 
 Nas1 is a second Ubuntu computer. Its fixed helpers run with `--platform
 ubuntu`, and the dashboard files their results under their own computer, Nas1.
-Nas1 runs no dashboard and holds no account state: AI Account Center is not
+Nas1 runs no dashboard and holds no AAC-managed account state: AI Account Center is not
 installed there, and no account switching, Codex or Antigravity activation,
 key storage, sign-in or Claude desktop flow targets it (those APIs take host
 types that exclude it). The dashboard computer runs exactly these fixed
@@ -42,15 +42,19 @@ commands on Nas1, each built only from fixed strings:
    --apply --platform ubuntu`.
 4. The pinned, read-only analytics helper streamed over SSH stdin to
    `/usr/bin/python3 -c`; it writes nothing on Nas1.
-5. Only for a quota source saved for Nas1, the usage collector helper with
-   `--platform ubuntu`; the helpers never write account tokens or change the
-   selected account.
+5. The packaged read-only usage bundle streamed over SSH stdin to
+   `/usr/bin/python3 -c`, for an explicit source or verified fallback. It imports
+   helper code in memory, reads only Nas1's own existing sign-ins and never
+   installs helpers, writes account tokens or changes the selected account.
 
-A quota reading belongs to a provider account, not to a computer, and Nas1
-signs in to the same provider accounts as the dashboard computer, so by default
-no source moves there. A source runs on Nas1 when it is saved as
-`platform: "ubuntu"` with `sshHost: "nas1-agent"`; persisted usage-source and
-registry files keep their schema, and the account reads "on Nas1".
+A quota reading belongs to a provider account. All providers can recover a
+reading from a matching verified identity on another configured computer;
+fallback preserves primary source configuration and adds no duplicate row.
+Persisted readings retain their original timestamps across dashboard restarts,
+and provider rate limits apply across every source for that identity. Unknown
+identities cannot be guessed from a peer login. An explicit Nas1 source remains
+`platform: "ubuntu"` with `sshHost: "nas1-agent"`; usage-source and registry files
+keep their schemas. See [provider usage flows](provider-flows.md).
 
 ## API and data ownership
 

@@ -67,6 +67,11 @@ import {
 } from './account-dashboard-state';
 import { getDashboardServerInfo } from './dashboard-server-info';
 import { markPassedResets } from './account-window-reset';
+import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
+import { localUsageHost } from './usage-failover-transport';
+import type { UsageFailoverTarget, UsagePrimarySource } from './usage-failover-contract';
+import { recoverAntigravityUsage, peekAntigravityUsage } from './usage-failover-antigravity';
+import { codexUsageTarget, recoverCodexUsage, peekCodexUsage } from './usage-failover-codex';
 
 import {
   ADDITIONAL_PROVIDERS,
@@ -125,6 +130,8 @@ export interface AccountDashboardDeps {
   scope?: () => string;
   refreshIntervalSeconds?: () => number;
   serverInfo?: () => DashboardServerInfo | undefined;
+  /** Display-only usage failover; injected legacy collectors keep their offline fixture path. */
+  failover?: Pick<UsageFailoverService, 'collect' | 'recover' | 'peek'> | null;
 }
 
 /** Per-request facts the cached collection does not know. */
@@ -150,6 +157,7 @@ interface DashboardState {
 export class AccountDashboardService {
   private readonly states = new Map<string, DashboardState>();
   private readonly codexInventories = new Map<string, CodexAuthProfilesSummary>();
+  private readonly codexTargets = new Map<string, Map<string, UsageFailoverTarget | null>>();
   /** Last renewal entries per scope, for the cached Codex rows that cannot await a read. */
   private readonly codexRenewals = new Map<string, CodexRenewalEntries>();
   private readonly claudeInventories = new Map<string, ClaudeDesktopProfile[]>();
@@ -159,6 +167,74 @@ export class AccountDashboardService {
   private readonly visibility = new VisibilityMemory(MAX_SCOPES);
 
   constructor(private readonly deps: AccountDashboardDeps = {}) {}
+
+  private claudeTarget(scope: string, profile: ClaudeDesktopProfile): UsageFailoverTarget {
+    const primarySources: UsagePrimarySource[] = [];
+    const local = localUsageHost();
+    for (const platform of ['windows'] as const) {
+      const launcher = profile[platform];
+      if (!launcher || (!launcher.sshHost && local.platform !== platform)) continue;
+      primarySources.push({
+        host: platform,
+        platform,
+        sshHost: launcher.sshHost ?? null,
+        selector: `claude-desktop-profile:${launcher.isDefault ? 'default' : (profile.id ?? 'default')}`,
+      });
+    }
+    return {
+      accountId: `claude:${profile.id ?? profile.email}`,
+      provider: 'claude',
+      ccsDir: scope,
+      binding: JSON.stringify(profile),
+      expectedEmail: profile.email,
+      primarySources,
+    };
+  }
+
+  private async collectClaudeFailover(
+    scope: string,
+    platform: ClaudeDashboardPlatform,
+    profiles: ClaudeDesktopProfile[],
+    refresh: boolean,
+    publish: (accounts: DashboardAccount[]) => void
+  ): Promise<DashboardAccount[]> {
+    const failover = this.deps.failover ?? getUsageFailoverService();
+    const targets = profiles.map((profile) => this.claudeTarget(scope, profile));
+    const accounts = profiles.map((profile, index) =>
+      failover.peek(targets[index], claudeAccount(profile, platform))
+    );
+    // A Mac-only Desktop profile has no supported native quota identity yet;
+    // retain its existing dated history until a verified source is available.
+    const macHistory = profiles.some((profile) => !profile.windows)
+      ? (this.deps.getClaudeUsage ?? getClaudeDesktopUsage)('mac').catch(() => null)
+      : Promise.resolve(null);
+    publish([...accounts]);
+    await Promise.all(
+      profiles.map(async (profile, index) => {
+        const history = profile.windows ? null : await macHistory;
+        const row = profile.windows
+          ? await failover.collect(targets[index], claudeAccount(profile, platform))
+          : claudeAccount(
+              profile,
+              platform,
+              history?.profiles.find((sample) =>
+                profile.id ? sample.id === profile.id : sample.email === profile.email
+              )
+            );
+        const macState = profile.mac
+          ? await (
+              this.deps.getClaudeMacSignIn ??
+              ((candidate, force) => getClaudeMacSignInState(candidate, { refresh: force }))
+            )(profile, refresh).catch(() => null)
+          : null;
+        const signIn = new Set(row.signInNeeded ?? []);
+        if (macState === 'signed-out') signIn.add('mac');
+        accounts[index] = withClaudeSignIn(row, signIn);
+        publish([...accounts]);
+      })
+    );
+    return accounts;
+  }
 
   private async bounded<T>(
     pending: Promise<T>,
@@ -180,6 +256,13 @@ export class AccountDashboardService {
     const summary = await (this.deps.getCodexSummary ?? getCodexAuthProfilesSummary)();
     this.codexInventories.set(scope, summary);
     const names = summary.profiles.map((profile) => profile.name);
+    const recoverUsage =
+      this.deps.failover !== null &&
+      (this.deps.failover || (!this.deps.getCodexSummary && !this.deps.getCodexRows));
+    const targets = recoverUsage
+      ? new Map(summary.profiles.map((profile) => [profile.name, codexUsageTarget(scope, profile)]))
+      : null;
+    if (targets) this.codexTargets.set(scope, targets);
     // Kept as soon as read, so a slow quota fetch still lets the cached rows show notes.
     const renewals = readCodexRenewalEntries(this.deps.getRenewalStatus).then((entries) => {
       this.codexRenewals.set(scope, entries);
@@ -195,13 +278,22 @@ export class AccountDashboardService {
       ),
       renewals,
     ]);
-    return summary.profiles.map((profile) =>
-      codexAccount(
-        profile,
-        summary.activated,
-        rows.find((row) => row.profile === profile.name),
-        entries.get(profile.name)
-      )
+    return Promise.all(
+      summary.profiles.map((profile) => {
+        const account = codexAccount(
+          profile,
+          summary.activated,
+          rows.find((row) => row.profile === profile.name),
+          entries.get(profile.name)
+        );
+        return targets
+          ? recoverCodexUsage(
+              targets.get(profile.name) ?? null,
+              account,
+              this.deps.failover ?? undefined
+            )
+          : account;
+      })
     );
   }
 
@@ -212,14 +304,19 @@ export class AccountDashboardService {
       summary.profiles.map((profile) => profile.name)
     );
     const renewals = this.codexRenewals.get(scope);
-    return summary.profiles.map((profile) =>
-      codexAccount(
+    return summary.profiles.map((profile) => {
+      const account = codexAccount(
         profile,
         summary.activated,
         rows.find((row) => row.profile === profile.name),
         renewals?.get(profile.name)
-      )
-    );
+      );
+      return peekCodexUsage(
+        this.codexTargets.get(scope)?.get(profile.name) ?? null,
+        account,
+        this.deps.failover ?? undefined
+      );
+    });
   }
 
   private async collectClaude(
@@ -230,6 +327,15 @@ export class AccountDashboardService {
   ): Promise<DashboardAccount[]> {
     const profiles = await (this.deps.listClaudeProfiles ?? listClaudeDesktopProfiles)();
     this.claudeInventories.set(scope, profiles);
+    if (
+      this.deps.failover !== null &&
+      (this.deps.failover ||
+        (!this.deps.listClaudeProfiles &&
+          !this.deps.getClaudeUsage &&
+          !this.deps.getLiveClaudeUsage))
+    ) {
+      return this.collectClaudeFailover(scope, platform, profiles, refresh, publishCached);
+    }
     // Launch preference never partitions a verified account's quota. Bind retained
     // samples to the complete manifest entry so a changed source cannot inherit them.
     const sampleKeys = profiles.map((profile) => JSON.stringify([scope, profile]));
@@ -461,7 +567,14 @@ export class AccountDashboardService {
                   ((force) => getAntigravityAccounts(force, scope))
                 )(refresh)
               )
-              .then((accounts) => accounts.map(publicDashboardAccount))
+              .then((accounts) => {
+                const rows = accounts.map(publicDashboardAccount);
+                return this.deps.getAntigravityAccounts || this.deps.failover === null
+                  ? rows
+                  : recoverAntigravityUsage(rows, scope, {
+                      failover: this.deps.failover ?? undefined,
+                    });
+              })
           : Promise.resolve([]),
         () =>
           registeredAntigravity
@@ -636,13 +749,20 @@ export class AccountDashboardService {
       state.antigravity = (
         this.deps.getCachedAntigravityAccounts ?? (() => getCachedAntigravityAccounts(scope))
       )().map((account) => {
-        const current = publicDashboardAccount(account);
+        const publicAccount = publicDashboardAccount(account);
+        const current =
+          this.deps.getCachedAntigravityAccounts || this.deps.failover === null
+            ? publicAccount
+            : peekAntigravityUsage(publicAccount, scope, {
+                failover: this.deps.failover ?? undefined,
+              });
         const retained = previous.find((candidate) => candidate.id === current.id);
         return {
           ...current,
           capabilities: {
             ...current.capabilities,
             antigravityCanActivate:
+              current.capabilities.antigravityCanActivate !== false &&
               (current.status === 'ok' || current.status === 'cached') &&
               current.capabilities.antigravityHostIds?.includes('ubuntu') === true &&
               retained?.email === current.email &&
@@ -691,6 +811,16 @@ export class AccountDashboardService {
             this.codexRenewals.get(scope)?.get(profile.name)
           );
         }
+      }
+      if (account.provider === 'codex') {
+        // A slow or failed summary must not bypass the saved auth check for a
+        // previously collected fallback. It needs no asynchronous inventory.
+        const name = account.capabilities.codexProfile;
+        current = peekCodexUsage(
+          (name ? this.codexTargets.get(scope)?.get(name) : null) ?? null,
+          current,
+          this.deps.failover ?? undefined
+        );
       }
       return [
         {

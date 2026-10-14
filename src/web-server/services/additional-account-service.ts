@@ -24,6 +24,8 @@ import {
   type AdditionalUsageSource,
 } from './additional-usage-transport';
 import { HOST_LABELS, NAS1_SSH_ALIAS, type DashboardHost } from './dashboard-hosts';
+import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
+import type { UsageFailoverTarget } from './usage-failover-contract';
 
 const CACHE_TTL_MS = 120_000;
 const REFRESH_DEBOUNCE_MS = 5_000;
@@ -55,6 +57,8 @@ export interface AdditionalAccountDeps {
   /** Registry v2 (`account-usage-accounts.json`); absent, invalid or valid. */
   readRegistry?: () => Promise<AccountRegistryRead>;
   runSource?: (source: AdditionalUsageSource) => Promise<string>;
+  /** Shared identity-bound source selection; null keeps the legacy collector path. */
+  failover?: Pick<UsageFailoverService, 'collect' | 'peek'> | null;
   now?: () => number;
 }
 
@@ -365,6 +369,7 @@ const DEFAULT_SOURCES = parseSourceManifest(null).sources;
  */
 export class AdditionalAccountService {
   private readonly ccsDir: string;
+  private readonly failover: Pick<UsageFailoverService, 'collect' | 'peek'> | null;
   private fingerprint = '';
   private caches = new Map<string, SourceCache>();
   private manifestPending: Promise<Manifest> | null = null;
@@ -372,6 +377,44 @@ export class AdditionalAccountService {
 
   constructor(private readonly deps: AdditionalAccountDeps = {}) {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
+    // Existing injected transports remain isolated fixtures. Production uses
+    // the shared coordinator so every account keeps one verified identity.
+    this.failover =
+      deps.failover === undefined
+        ? deps.runSource
+          ? null
+          : getUsageFailoverService()
+        : deps.failover;
+  }
+
+  private failoverTarget(source: AdditionalUsageSource): UsageFailoverTarget {
+    const credential = source.account?.credential;
+    const selector =
+      !credential || credential.kind === 'discover'
+        ? 'discover'
+        : credential.kind === 'aac-key'
+          ? `aac-key:${credential.keyId}`
+          : credential.kind === 'browser-capsule'
+            ? `browser-capsule:${credential.capsuleId}`
+            : credential.kind === 'config-home'
+              ? `config-home:${credential.homeId}`
+              : `antigravity-profile:${credential.profileId}`;
+    return {
+      accountId: source.account?.id ?? `${source.provider}:usage`,
+      provider: source.provider,
+      ccsDir: this.ccsDir,
+      // The registry row names the account and its owned credential. Labels
+      // do not establish identity and changing a label does not rebind it.
+      binding: sourceKey(source),
+      primarySources: [
+        {
+          host: sourceHost(source),
+          platform: source.platform,
+          sshHost: source.sshHost ?? null,
+          selector,
+        },
+      ],
+    };
   }
 
   private async readManifest(): Promise<Manifest> {
@@ -438,6 +481,22 @@ export class AdditionalAccountService {
     source: AdditionalUsageSource,
     cache: SourceCache
   ): Promise<DashboardAccount> {
+    if (this.failover) {
+      try {
+        cache.result = await this.failover.collect(
+          this.failoverTarget(source),
+          unavailable(source)
+        );
+      } catch {
+        cache.result = unavailable(source, 'error', 'Account usage is temporarily unavailable.');
+      }
+      // The coordinator owns identity checks, cached observations and expiry.
+      // Reapplying the old per-host lastGood cache could undo its invalidation.
+      cache.lastGood = null;
+      cache.fetchedAt = (this.deps.now ?? Date.now)();
+      cache.failed = !['ok', 'cached'].includes(cache.result.status);
+      return cache.result;
+    }
     let invalidIdentity = false;
     let museTransientFailure = false;
     try {
@@ -514,7 +573,7 @@ export class AdditionalAccountService {
     source: AdditionalUsageSource,
     refresh: boolean
   ): Promise<DashboardAccount> {
-    if (!isCollectableSource(source)) {
+    if (!this.failover && !isCollectableSource(source)) {
       return unavailable(
         source,
         'unavailable',
@@ -620,15 +679,18 @@ export class AdditionalAccountService {
         .filter(
           (source) => !(opts.excludeAntigravity === true && source.provider === 'antigravity')
         )
-        .map((source) =>
-          unavailable(
+        .map((source) => {
+          const placeholder = unavailable(
             source,
             'unavailable',
             config.mode === 'v2-invalid'
               ? 'Account list could not be read safely.'
               : 'Account usage is temporarily unavailable.'
-          )
-        ),
+          );
+          return config.valid && this.failover
+            ? this.failover.peek(this.failoverTarget(source), placeholder)
+            : placeholder;
+        }),
     };
   }
 }

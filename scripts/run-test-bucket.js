@@ -23,6 +23,8 @@ const slowTests = [
   'tests/integration/web-server/codex-profiles-endpoint.test.ts',
   'tests/unit/docker/dockerfile-lifecycle-scripts.test.ts',
   'tests/unit/web-server/muse-failure-contract-interop.test.ts',
+  'tests/unit/web-server/usage-failover-transport.test.ts',
+  'tests/unit/web-server/usage-failover-codex.test.ts',
   'tests/unit/web-server/claude-host-transport.test.ts',
   'tests/unit/web-server/signin-process.test.ts',
   'tests/unit/antigravity/signin-driver.test.ts',

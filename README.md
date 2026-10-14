@@ -11,8 +11,9 @@ TypeScript.
 
 It reaches four computers: the Ubuntu computer that runs the dashboard, a Mac,
 a Windows computer and Nas1, a second Ubuntu computer reached over a fixed SSH
-alias. Nas1 takes part in Update apps and Analytics only; it runs no dashboard
-and holds no account state ([details](#nas1-the-fourth-computer)).
+alias. Nas1 takes part in Update apps, Analytics and verified usage fallback;
+it runs no dashboard and holds no AAC-managed account state
+([details](#nas1-the-fourth-computer)).
 
 This is the continuing fork of [CCS](https://github.com/kaitranntt/ccs), now at
 [sittingmongoose/ai-account-center](https://github.com/sittingmongoose/ai-account-center).
@@ -353,16 +354,17 @@ Nas1 and no dashboard runs there.
   T3 shadow homes, OMP, Muse Code, zcode and Antigravity), and appears as a
   fourth computer beside Ubuntu, Mac and Windows. Extra usage-log roots can be
   set for Nas1 in Settings (POSIX paths).
-- **Accounts.** A quota source belongs to a provider account, not to a
-  computer. It runs on Nas1 only when it is saved as `platform: "ubuntu"` with
-  `sshHost: "nas1-agent"`; its row then reads "on Nas1". By default no source
-  moves there: Nas1 signs in to the same provider accounts as the dashboard
-  computer, so a second reading would repeat the first.
+- **Accounts.** A quota source belongs to a provider account. Nas1 can supply a
+  fallback reading from its own existing sign-in when the verified account
+  identity matches, without adding a row or moving the primary source. An
+  explicit primary source there still uses `platform: "ubuntu"` with
+  `sshHost: "nas1-agent"`. The packaged usage helper runs in memory over SSH;
+  no helper installation or credential copying is required.
 - **Never on Nas1.** Account switching, Codex and Antigravity activation, key
   storage, sign-in and Claude desktop flows do not run there. The dashboard
   computer runs exactly these fixed commands on Nas1: the helper hash query,
-  the helper extract, the update helper, the read-only analytics helper and,
-  only for a source moved to Nas1, the usage collectors.
+  the helper extract, the update helper, the read-only analytics helper and
+  the read-only usage bundle.
 
 ## Antigravity switching
 
@@ -409,7 +411,7 @@ preserved. See
 | Windows tray | Native .NET 10 WPF, Windows x64; source builds require an existing .NET 10 SDK |
 | Shared Codex activation / auto-switch | Existing configured Ubuntu Codex runtime and saved logins |
 | Usage collectors / app updates | Existing credentials and installed apps on the configured owner host; Python and approved SSH transport where needed |
-| Nas1 (fourth computer) | A second Ubuntu computer with `/usr/bin/python3`, reached over its fixed SSH alias for app updates and Analytics only; no AI Account Center install, dashboard or account state |
+| Nas1 (fourth computer) | A second Ubuntu computer with `/usr/bin/python3`, reached over its fixed SSH alias for app updates, Analytics and verified usage fallback; no AI Account Center install, dashboard or managed account state |
 
 Cross-platform source support does not make every account action available on
 every host. The dashboard reports available capabilities. A container does not
@@ -501,8 +503,14 @@ or the newer `account-usage-accounts.json` (registry v2, several accounts per
 provider) when that file exists; existing approved SSH aliases select remote
 Mac/Windows collectors, and a source saved as `platform: "ubuntu"` with
 `sshHost: "nas1-agent"` runs on Nas1 and reads "on Nas1" (see
-[Nas1](#nas1-the-fourth-computer)). Missing
-credentials or collector setup yields unavailable usage. Follow the
+[Nas1](#nas1-the-fourth-computer)). If a primary source fails, the shared
+coordinator can use an existing sign-in for the exact provider account on another
+configured computer. Credentials stay on their owner host, and the packaged
+helper runs in memory over SSH. Verified readings keep their original timestamps
+in a persistent cache; source outages can show cached usage after restart.
+Provider rate limits apply across all alternate hosts for the same identity.
+A first-ever unavailable source without a known identity stays unavailable.
+Explicit source and lifecycle configuration is unchanged. Follow the
 [provider boundaries](docs/system-architecture/provider-flows.md),
 [collector requirements](scripts/account-usage/README.md),
 [OpenCode/Muse bridge](browser-bridge/opencode-muse/README.md) and
@@ -676,11 +684,11 @@ issues and screenshots. See [Security](SECURITY.md) for reporting boundaries.
 - Update apps Cancel granularity is one computer's batch: the running
   computer's apps finish and the queued computers are skipped.
 - Nas1 adds no quota rows by default and has no add, sign-in, key or switching
-  control. Claude quota stays with the Mac and Windows Claude desktop apps,
-  Codex quota with the dashboard computer's saved logins and the OpenCode
-  console wallet with the Mac. A usage collector runs on Nas1 only for a source
-  saved for it, and the usage helpers are copied to a computer by hand, not
-  synced like the update helpers.
+  control. It can provide a verified fallback reading from an existing supported
+  sign-in or capsule. A missing sign-in, unknown identity or mismatched workspace
+  remains unavailable; usage logs do not supply account credentials. Shared
+  usage collection streams its helper bundle in memory and needs no manually
+  copied helper files.
 - Claude add, remove and restore read "coming" while the server's Claude host
   steps are off (the live service keeps them off); the default-profile
   refusal holds either way.

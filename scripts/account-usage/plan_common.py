@@ -5,6 +5,7 @@ explicit scalar allowlist; upstream bodies and exception text are never emitted.
 """
 
 import datetime as dt
+import email.utils
 from contextlib import closing
 import base64
 import hashlib
@@ -45,9 +46,27 @@ KEY_FILE_FIELDS = {"version", "provider", "keyId", "secret", "fingerprint", "las
 
 
 class CollectionError(Exception):
-    def __init__(self, status, message):
+    def __init__(self, status, message, failure_code=None, retry_after=None):
         self.status = status
         self.message = message
+        self.failure_code = failure_code
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(value):
+    """Bound Retry-After without forwarding an upstream header or response."""
+    seconds = None
+    if isinstance(value, str) and len(value) <= 128:
+        if re.fullmatch(r"[0-9]{1,12}", value.strip()):
+            seconds = int(value.strip())
+        else:
+            try:
+                parsed = email.utils.parsedate_to_datetime(value)
+                if parsed.tzinfo is not None:
+                    seconds = parsed.timestamp() - time.time()
+            except (ValueError, TypeError, OverflowError):
+                pass
+    return min(86400, max(30, seconds)) if isinstance(seconds, (int, float)) and math.isfinite(seconds) else 600
 
 
 def utc_now():
@@ -213,11 +232,12 @@ def _windows_unprotect(ciphertext, entropy=None):
         return None
 
 
-def _qwen_console_capsule(home, capsule_id="default"):
+def _qwen_console_capsule(home, capsule_id="default", ccs_dir=None):
     if not isinstance(capsule_id, str) or not CAPSULE_ID.match(capsule_id):
         return None
     name = "qwen-console-session.json" if capsule_id == "default" else "qwen-console-session-{}.json".format(capsule_id)
-    capsule = load_json(home / ".ccs" / "account-usage" / name)
+    root = Path(ccs_dir) if ccs_dir is not None else home / ".ccs"
+    capsule = load_json(root / "account-usage" / name)
     if not isinstance(capsule, dict) or capsule.get("region") not in ("intl", "cn"):
         return None
     version2 = capsule.get("version") == 2
@@ -401,12 +421,12 @@ def _key_record_text(directory, provider, key_id, windows=None):
         return None
 
 
-def aac_key_credential(provider, key_id, home=None, windows=None):
+def aac_key_credential(provider, key_id, home=None, windows=None, ccs_dir=None):
     """The dashboard-owned key of one account, and nothing else (no OMP, OpenCode or env fallback)."""
     if provider not in KEY_PROVIDERS or not isinstance(key_id, str) or not KEY_ID.match(key_id):
         return None
     home = Path.home() if home is None else Path(home)
-    directory = home / ".ccs" / "account-usage" / "keys"
+    directory = (Path(ccs_dir) if ccs_dir is not None else home / ".ccs") / "account-usage" / "keys"
     try:
         info = os.lstat(str(directory))
     except OSError:
@@ -429,14 +449,14 @@ def aac_key_credential(provider, key_id, home=None, windows=None):
     return {"secret": secret, "source": "Dashboard key", "email": None, "expires": None}
 
 
-def _selected_credentials(provider, home, credential):
+def _selected_credentials(provider, home, credential, ccs_dir=None):
     """Only the store a registry v2 account names; an unreadable store gives no candidate."""
     kind = credential.get("kind")
     if kind == "aac-key":
-        item = aac_key_credential(provider, credential.get("keyId"), home)
+        item = aac_key_credential(provider, credential.get("keyId"), home, ccs_dir=ccs_dir)
         return [item] if item else []
     if kind == "browser-capsule" and provider == "qwen":
-        capsule = _qwen_console_capsule(home, credential.get("capsuleId"))
+        capsule = _qwen_console_capsule(home, credential.get("capsuleId"), ccs_dir=ccs_dir)
         if not capsule:
             return []
         cookie, region, gateway_cookie = capsule
@@ -579,7 +599,8 @@ class HttpClient:
             if error.code == 403:
                 raise CollectionError("needs_sign_in", "The saved account cannot access this plan's usage.")
             if error.code == 429:
-                raise CollectionError("error", "The usage service asked to slow down; try again later.")
+                raise CollectionError("error", "The usage service asked to slow down; try again later.",
+                                      failure_code="rate_limited", retry_after=retry_after_seconds((error.headers or {}).get("Retry-After")))
             raise CollectionError("error", "The usage service could not complete the request.")
         except CollectionError:
             raise

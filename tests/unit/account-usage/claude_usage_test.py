@@ -91,6 +91,12 @@ class IdentityTests(unittest.TestCase):
             with self.subTest(entry=entry):
                 self.assertEqual(usage.eligible_entries(ACCOUNT, cache(**entry)), [])
 
+    def test_inventory_can_keep_typed_expired_identity_without_relaxing_token_grammar(self):
+        self.assertEqual(usage.eligible_entries(ACCOUNT, cache(expiresAt=1), allow_expired=True),
+                         [(1, [ACCOUNT, CLIENT, ORG], TOKEN)])
+        self.assertEqual(usage.eligible_entries(ACCOUNT, cache(token="bad\nheader", expiresAt=1), allow_expired=True), [])
+        self.assertEqual(usage.eligible_entries(ACCOUNT, cache(expiresAt=True), allow_expired=True), [])
+
     def test_live_profile_and_org_verified_before_quota(self):
         result, client = self.collect([profile(), {
             "five_hour": {"utilization": 0, "resets_at": None},

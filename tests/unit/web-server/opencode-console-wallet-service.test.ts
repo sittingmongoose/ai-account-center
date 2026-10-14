@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
 import { OpenCodeConsoleWalletService } from '../../../src/web-server/services/opencode-console-wallet-service';
+import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
+import type { UsageFailoverTarget } from '../../../src/web-server/services/usage-failover-contract';
 
 const source = JSON.stringify({ version: 1, platform: 'mac', sshHost: 'fixture-mac' });
 function payload(overrides: Record<string, unknown> = {}) {
@@ -109,7 +114,7 @@ describe('optional identity-bound OpenCode console wallet', () => {
     expect(calls).toBe(0);
   });
 
-  it('coalesces requests, debounces refresh and backs off missing capsules without adding cards', async () => {
+  it('coalesces requests, debounces refresh and retains dated readings while capsules are unavailable', async () => {
     let now = 0,
       calls = 0,
       online = true;
@@ -129,10 +134,13 @@ describe('optional identity-bound OpenCode console wallet', () => {
     expect(calls).toBe(1);
     now = 5_000;
     online = false;
-    expect(await service.get({ refresh: true })).toEqual([]);
+    const [saved] = await service.get({ refresh: true });
+    expect(saved.status).toBe('cached');
+    expect(saved.sampledAt).toBe('2026-10-01T12:00:00.000Z');
+    expect(saved.windows[1].remaining).toBe(-2.5);
     expect(calls).toBe(2);
     now = 34_999;
-    expect(await service.get({ refresh: true })).toEqual([]);
+    expect((await service.get({ refresh: true }))[0].status).toBe('cached');
     expect(calls).toBe(2);
     now = 35_000;
     online = true;
@@ -152,5 +160,159 @@ describe('optional identity-bound OpenCode console wallet', () => {
     expect(await service.get()).toHaveLength(1);
     host = 'second-mac';
     expect(await service.get()).toEqual([]);
+  });
+
+  it('passes a distinct workspace target to shared failover and preserves cached status', async () => {
+    let target: UsageFailoverTarget | null = null;
+    const service = new OpenCodeConsoleWalletService({
+      readSource: async () => source,
+      runSource: async () => payload(),
+      failover: {
+        recover: async (requested, primary) => {
+          target = requested;
+          return {
+            ...primary,
+            status: 'cached',
+            source: 'Verified wallet on Nas1',
+            message: 'Showing the last saved sample.',
+          };
+        },
+        collect: async () => {
+          throw new Error('unexpected collection');
+        },
+      },
+    });
+    const [wallet] = await service.get();
+    expect(target!.provider).toBe('opencode-wallet');
+    expect(target!.accountId).toBe(wallet.id);
+    expect(target!.binding).toBe(source);
+    expect(target!.primarySources).toEqual([
+      { host: 'mac', platform: 'mac', sshHost: 'fixture-mac', selector: 'wallet' },
+    ]);
+    expect(wallet.status).toBe('cached');
+    expect(wallet.source).toBe('Verified wallet on Nas1');
+    expect(wallet.message).toContain('has not been linked');
+    expect(wallet.capabilities).toEqual({
+      codexProfile: null,
+      claudeProfileId: null,
+      claudePlatforms: [],
+    });
+  });
+
+  it('restores a known wallet ID after restart and asks other hosts when the primary is offline', async () => {
+    const ccsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-wallet-failover-'));
+    try {
+      let remembered: DashboardAccount | null = null;
+      const first = new OpenCodeConsoleWalletService({
+        ccsDir,
+        readSource: async () => source,
+        runSource: async () => payload(),
+        failover: {
+          recover: async (_, primary) => {
+            remembered = primary;
+            return primary;
+          },
+          collect: async () => {
+            throw new Error('unexpected collection');
+          },
+        },
+      });
+      expect(await first.get()).toHaveLength(1);
+      const pointer = JSON.parse(
+        await fs.readFile(path.join(ccsDir, 'opencode-console-wallet-account.json'), 'utf8')
+      );
+      expect(pointer.accountId).toBe(remembered!.id);
+      expect(pointer.binding).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(pointer)).not.toContain('fixture-mac');
+      let fallbackCalls = 0;
+      const restarted = new OpenCodeConsoleWalletService({
+        ccsDir,
+        readSource: async () => source,
+        runSource: async () => {
+          throw new Error('Mac is offline');
+        },
+        failover: {
+          recover: async () => {
+            throw new Error('unexpected recovery');
+          },
+          collect: async (target, template) => {
+            fallbackCalls++;
+            expect(target.accountId).toBe(remembered!.id);
+            expect(template.windows).toEqual([]);
+            return { ...remembered!, source: 'Verified wallet on Ubuntu', status: 'ok' };
+          },
+        },
+      });
+      const [wallet] = await restarted.get();
+      expect(fallbackCalls).toBe(1);
+      expect(wallet.id).toBe(remembered!.id);
+      expect(wallet.source).toBe('Verified wallet on Ubuntu');
+      expect(wallet.windows[1].remaining).toBe(-2.5);
+      const changed = new OpenCodeConsoleWalletService({
+        ccsDir,
+        readSource: async () =>
+          JSON.stringify({ version: 1, platform: 'mac', sshHost: 'different-mac' }),
+        runSource: async () => {
+          throw new Error('offline');
+        },
+        failover: {
+          recover: async () => {
+            throw new Error('unexpected recovery');
+          },
+          collect: async () => {
+            fallbackCalls++;
+            throw new Error('wrong source binding');
+          },
+        },
+      });
+      expect(await changed.get()).toEqual([]);
+      expect(fallbackCalls).toBe(1);
+    } finally {
+      await fs.rm(ccsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not recreate a removed wallet from an in-flight source response', async () => {
+    let configured: string | null = source;
+    let resolveSource!: (value: string) => void;
+    const delayed = new Promise<string>((resolve) => {
+      resolveSource = resolve;
+    });
+    const service = new OpenCodeConsoleWalletService({
+      readSource: async () => configured,
+      runSource: async () => delayed,
+    });
+    const first = service.get();
+    await Promise.resolve();
+    await Promise.resolve();
+    configured = null;
+    expect(await service.get()).toEqual([]);
+    resolveSource(payload());
+    expect(await first).toEqual([]);
+  });
+
+  it('does not restore a wallet reading invalidated by the shared identity coordinator', async () => {
+    let online = true;
+    let now = 0;
+    const service = new OpenCodeConsoleWalletService({
+      now: () => now,
+      readSource: async () => source,
+      runSource: async () => {
+        if (!online) throw new Error('primary unavailable');
+        return payload();
+      },
+      failover: {
+        recover: async (_, primary) => primary,
+        collect: async (_, template) => template,
+      },
+    });
+    const [first] = await service.get();
+    online = false;
+    now = 5_000;
+    const [saved] = await service.get({ refresh: true });
+    expect(saved.status).toBe('unavailable');
+    expect(saved.id).toBe(first.id);
+    expect(saved.sampledAt).toBeNull();
+    expect(saved.windows).toEqual([]);
   });
 });

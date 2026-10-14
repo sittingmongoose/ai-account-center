@@ -199,7 +199,7 @@ def decrypt_cache(profile_path):
     return account_uuid, cache
 
 
-def eligible_entries(account_uuid, cache):
+def eligible_entries(account_uuid, cache, allow_expired=False):
     candidates = []
     now = time.time() * 1000
     for cache_key, entry in cache.items():
@@ -221,7 +221,7 @@ def eligible_entries(account_uuid, cache):
             or not all(re.fullmatch(r"[A-Za-z0-9_:-]+", scope) for scope in scopes)
             or not isinstance(token, str)
             or not token or len(token) > 32768 or any(ord(char) < 32 for char in token)
-            or expires is None or expires <= now + 30000
+            or expires is None or not allow_expired and expires <= now + 30000
         ):
             continue
         candidates.append((expires, identities, token))

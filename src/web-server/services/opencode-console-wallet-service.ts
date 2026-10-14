@@ -1,10 +1,13 @@
 import { execFile } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash, randomUUID } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
+import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
+import type { UsageFailoverTarget } from './usage-failover-contract';
 
 const SOURCE = 'Authenticated OpenCode console workspace on Mac';
 const MAX_BYTES = 64 * 1024;
@@ -18,7 +21,101 @@ export interface OpenCodeWalletDeps {
   ccsDir?: string;
   readSource?: () => Promise<string | null>;
   runSource?: (sshHost: string) => Promise<string>;
+  failover?: Pick<UsageFailoverService, 'collect' | 'recover'>;
   now?: () => number;
+}
+
+const ACCOUNT_CACHE = 'opencode-console-wallet-account.json';
+const WORKSPACE_NOTE = 'Console workspace; API-key account identity has not been linked.';
+
+function sourceHash(binding: string): string {
+  return createHash('sha256').update(binding).digest('hex');
+}
+
+async function privateCacheDirectory(ccsDir: string): Promise<boolean> {
+  try {
+    const info = await fs.lstat(ccsDir);
+    return (
+      info.isDirectory() &&
+      !info.isSymbolicLink() &&
+      (process.platform === 'win32' ||
+        ((info.mode & 0o077) === 0 && (!process.getuid || info.uid === process.getuid())))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Non-secret pointer only; the common service owns identity and last-good usage. */
+async function readBoundAccount(ccsDir: string, binding: string): Promise<string | null> {
+  try {
+    if (!(await privateCacheDirectory(ccsDir))) return null;
+    const file = path.join(ccsDir, ACCOUNT_CACHE);
+    const info = await fs.lstat(file);
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      info.size > 512 ||
+      (process.platform !== 'win32' &&
+        ((info.mode & 0o077) !== 0 || (process.getuid && info.uid !== process.getuid())))
+    )
+      return null;
+    const value: unknown = JSON.parse(await fs.readFile(file, 'utf8'));
+    return record(value) &&
+      value.version === 1 &&
+      value.binding === sourceHash(binding) &&
+      typeof value.accountId === 'string' &&
+      WALLET_ID.test(value.accountId) &&
+      Object.keys(value).sort().join(',') === 'accountId,binding,version'
+      ? value.accountId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function rememberBoundAccount(
+  ccsDir: string,
+  binding: string,
+  accountId: string
+): Promise<void> {
+  const temporary = path.join(ccsDir, `.opencode-console-wallet-account.${randomUUID()}.tmp`);
+  try {
+    if (!WALLET_ID.test(accountId) || !(await privateCacheDirectory(ccsDir))) return;
+    const file = path.join(ccsDir, ACCOUNT_CACHE);
+    const before = await fs.lstat(file).catch(() => null);
+    if (before && (!before.isFile() || before.isSymbolicLink())) return;
+    await fs.writeFile(
+      temporary,
+      JSON.stringify({ version: 1, binding: sourceHash(binding), accountId }),
+      { encoding: 'utf8', mode: 0o600, flag: 'wx' }
+    );
+    await fs.rename(temporary, file);
+  } catch {
+    // Persistence is best-effort; it cannot turn a valid current reading into an error.
+  } finally {
+    await fs.unlink(temporary).catch(() => undefined);
+  }
+}
+
+function missingWallet(accountId: string): DashboardAccount {
+  return {
+    id: accountId,
+    provider: 'opencode-go',
+    providerLabel: 'OpenCode Go',
+    label: 'OpenCode console wallet',
+    email: null,
+    plan: null,
+    platform: 'mac',
+    source: SOURCE,
+    status: 'unavailable',
+    message: WORKSPACE_NOTE,
+    fetchedAt: null,
+    sampledAt: null,
+    isActive: false,
+    windows: [],
+    capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
+  };
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -221,20 +318,102 @@ async function runSource(sshHost: string): Promise<string> {
 /** Missing browser capsules produce no account, rather than a phantom sign-in card. */
 export class OpenCodeConsoleWalletService {
   private source: string | null = null;
+  private accountId: string | null = null;
   private result: DashboardAccount | null = null;
   private pending: Promise<DashboardAccount | null> | null = null;
   private fetchedAt = -Infinity;
   private refreshedAt = -Infinity;
+  private failed = false;
 
   constructor(private readonly deps: OpenCodeWalletDeps = {}) {}
 
+  private clear(): void {
+    this.source = this.accountId = null;
+    this.result = this.pending = null;
+    this.fetchedAt = this.refreshedAt = -Infinity;
+    this.failed = false;
+  }
+
+  private async collectSource(sshHost: string, binding: string): Promise<DashboardAccount | null> {
+    const primary = await Promise.resolve()
+      .then(() => (this.deps.runSource ?? runSource)(sshHost))
+      .then(normalize)
+      .catch(() => null);
+    const accountId = primary?.id ?? this.accountId ?? this.result?.id;
+    if (!accountId || this.source !== binding) return null;
+    const target: UsageFailoverTarget = {
+      accountId,
+      provider: 'opencode-wallet',
+      ccsDir: this.deps.ccsDir ?? getCcsDir(),
+      binding,
+      primarySources: [{ host: 'mac', platform: 'mac', sshHost, selector: 'wallet' }],
+    };
+    // Existing isolated legacy fixtures supply runSource/readSource. They must
+    // explicitly inject the new transport rather than touching real accounts.
+    const failover =
+      this.deps.failover ??
+      (this.deps.runSource || this.deps.readSource ? null : getUsageFailoverService());
+    const result = failover
+      ? await (
+          primary
+            ? failover.recover(target, primary)
+            : failover.collect(target, missingWallet(accountId))
+        ).catch(() => primary ?? null)
+      : primary;
+    if (this.source !== binding) return null;
+    if (primary) {
+      this.accountId = primary.id;
+      if (this.deps.ccsDir) await rememberBoundAccount(this.deps.ccsDir, binding, primary.id);
+    }
+    // The legacy bridge may have verified a sample before the common inventory
+    // could establish its full workspace identity. Retain that exact wallet's
+    // dated reading during a later source outage as well.
+    if (
+      !failover &&
+      !primary &&
+      result?.statusReason !== 'identity_unbound' &&
+      (!result || result.status === 'unavailable' || result.status === 'error') &&
+      this.result?.id === accountId &&
+      (this.result.status === 'ok' || this.result.status === 'cached') &&
+      this.result.windows.length > 0
+    ) {
+      return {
+        ...this.result,
+        status: 'cached',
+        message: `Live console wallet usage is unavailable; showing the last saved sample. ${WORKSPACE_NOTE}`,
+      };
+    }
+    if (result && result.id === accountId && result.provider === 'opencode-go') {
+      return {
+        ...result,
+        message:
+          result.message && result.message !== WORKSPACE_NOTE
+            ? `${result.message} ${WORKSPACE_NOTE}`
+            : WORKSPACE_NOTE,
+        capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
+      };
+    }
+    // A previously verified legacy capsule remains an honest dated reading.
+    return !failover && this.result && this.result.id === accountId
+      ? {
+          ...this.result,
+          status: 'cached',
+          message: `Live console wallet usage is unavailable; showing the last saved sample. ${WORKSPACE_NOTE}`,
+        }
+      : null;
+  }
+
   async get(opts: { refresh?: boolean } = {}): Promise<DashboardAccount[]> {
     let sshHost: string;
+    let binding: string;
     try {
       const contents = await (
         this.deps.readSource ?? (() => readSourceFile(this.deps.ccsDir ?? getCcsDir()))
       )();
-      if (!contents || Buffer.byteLength(contents) > 4096) return [];
+      if (!contents || Buffer.byteLength(contents) > 4096) {
+        this.clear();
+        return [];
+      }
       const value: unknown = JSON.parse(contents);
       if (
         !record(value) ||
@@ -242,34 +421,38 @@ export class OpenCodeConsoleWalletService {
         value.platform !== 'mac' ||
         !isSafeUsageSshAlias(value.sshHost) ||
         Object.keys(value).some((key) => !['version', 'platform', 'sshHost'].includes(key))
-      )
+      ) {
+        this.clear();
         return [];
+      }
       sshHost = value.sshHost;
+      binding = JSON.stringify({ version: 1, platform: 'mac', sshHost });
     } catch {
+      this.clear();
       return [];
     }
-    if (sshHost !== this.source) {
-      this.source = sshHost;
-      this.result = null;
-      this.pending = null;
-      this.fetchedAt = this.refreshedAt = -Infinity;
+    if (binding !== this.source) {
+      this.clear();
+      this.source = binding;
+      if (this.deps.ccsDir) {
+        const savedId = await readBoundAccount(this.deps.ccsDir, binding);
+        if (this.source !== binding) return [];
+        this.accountId ??= savedId;
+      }
     }
     const now = (this.deps.now ?? Date.now)();
     const force = opts.refresh === true && now - this.refreshedAt >= DEBOUNCE_MS;
-    const expired = now - this.fetchedAt >= (this.result ? TTL_MS : BACKOFF_MS);
-    const backoff = !this.result && now - this.fetchedAt < BACKOFF_MS;
+    const expired = now - this.fetchedAt >= (this.result && !this.failed ? TTL_MS : BACKOFF_MS);
+    const backoff = (this.failed || !this.result) && now - this.fetchedAt < BACKOFF_MS;
     let fetched = false;
     if (!this.pending && !backoff && (force || expired)) {
       this.refreshedAt = now;
-      const currentHost = sshHost;
-      const pending = Promise.resolve()
-        .then(() => (this.deps.runSource ?? runSource)(currentHost))
-        .then(normalize)
-        .catch(() => null);
+      const pending = this.collectSource(sshHost, binding).catch(() => null);
       this.pending = pending;
       void pending.then((result) => {
-        if (this.pending !== pending || this.source !== currentHost) return;
+        if (this.pending !== pending || this.source !== binding) return;
         this.result = result;
+        this.failed = result?.status !== 'ok';
         this.fetchedAt = (this.deps.now ?? Date.now)();
         this.pending = null;
       });
@@ -279,11 +462,11 @@ export class OpenCodeConsoleWalletService {
       fetched = true;
       await pending;
     }
-    if (this.source !== sshHost || !this.result) return [];
+    if (this.source !== binding || !this.result) return [];
     return [
       {
         ...this.result,
-        status: fetched ? 'ok' : 'cached',
+        status: !fetched && this.result.status === 'ok' ? 'cached' : this.result.status,
         windows: this.result.windows.map((window) => ({ ...window })),
       },
     ];

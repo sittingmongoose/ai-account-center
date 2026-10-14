@@ -644,7 +644,12 @@ def write_capsule(root, cookies, team, email, plan):
             os.unlink(filename)
 
 
-def read_capsule(root):
+def read_capsule(root, *, allow_expired=False):
+    """Read a verified capsule; inventory may retain its binding after expiry.
+
+    allow_expired validates stored cookie structure without making that session
+    usable. Collection always uses the default real-time expiry validation.
+    """
     if not (Path(root) / CAPSULE_NAME).exists():
         raise MuseError("no_browser_cookie")
     root = private_root(root)
@@ -665,7 +670,7 @@ def read_capsule(root):
             or not valid_email(value["email"]) or not valid_plan(value["plan"])
             or not isinstance(value["teamId"], str) or not re.fullmatch(r"[0-9]{1,32}", value["teamId"])):
         raise MuseError("local_storage_error")
-    return validate_cookies(value["cookies"]), value["teamId"], value["email"], value["plan"]
+    return validate_cookies(value["cookies"], now=0 if allow_expired else None), value["teamId"], value["email"], value["plan"]
 
 
 def verify_device_identity(credential, expected_email):
