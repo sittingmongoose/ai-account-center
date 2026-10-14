@@ -684,7 +684,6 @@ export class UsageFailoverService {
       const observedPlanAt = usageTimestamp(response.observedPlanAt, this.now());
       if (
         target.provider === 'muse' &&
-        primarySource &&
         observedPlan &&
         observedPlanAt &&
         Date.parse(observedPlanAt) >=

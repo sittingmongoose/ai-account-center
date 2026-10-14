@@ -6,11 +6,14 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts/account-usage"))
 import failover_additional as adapter
 import failover_usage as dispatcher
+import desktop_helpers as helpers
+import desktop_usage as usage
 import muse_console as muse
 import plan_common as plans
 
@@ -110,6 +113,91 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         self.assertEqual(cached["observedPlanAt"], first["observedPlanAt"])
         self.assertEqual(self.native_client.get.call_count, 2)
         self.assertEqual(len(self.portal_calls), 3)
+
+    def test_standalone_bridge_http429_shares_full_hold_with_failover_adapter(self):
+        first = self.collect()
+        self.clock += 301
+        held_at = self.clock
+        body = Mock()
+        body.read.return_value = b"sk-private-response"
+        error = urllib.error.HTTPError(usage.MUSE_URL, 429, "private upstream detail",
+                                      {"Retry-After": "1800"}, body)
+        self.addCleanup(error.close)
+        opener = Mock()
+        opener.open.side_effect = error
+        with patch("desktop_helpers.urllib.request.build_opener", return_value=opener), \
+                patch.object(usage, "muse_credentials", return_value=helpers.Credential(TOKEN, email=EMAIL)):
+            _, legacy = muse.collect_browser([COOKIE], root=self.root)
+            self.assertEqual(legacy["status"], "cached")
+            self.assertEqual(legacy["sampledAt"], first["sample"]["sampledAt"])
+            self.assertNotIn("failureCode", legacy)
+            cached = self.collect()
+            self.assertEqual(cached["failureCode"], "rate_limited")
+            self.assertEqual(cached["retryAfterSeconds"], 1800)
+            self.assertEqual(cached["sample"]["sampledAt"], first["sample"]["sampledAt"])
+            self.assertEqual(cached["observedPlanAt"], first["observedPlanAt"])
+            raw = json.loads((self.root / muse.CACHE_NAME).read_text())
+            self.assertEqual(raw["schemaVersion"], 1)
+            self.assertEqual(set(raw), {"schemaVersion", "email", "plan", "teamId", "credentialFingerprint",
+                                        "quota", "sampledAt", "nextRequestAt", "lastError"})
+            self.assertEqual(raw["nextRequestAt"], held_at + 1800)
+            self.assertEqual(raw["lastError"], "rate_limited")
+            self.clock += 1799
+            _, still_cached = muse.collect_browser([COOKIE], root=self.root)
+            remaining = self.collect()
+            self.assertEqual(remaining["retryAfterSeconds"], 1)
+            self.assertEqual(still_cached["sampledAt"], first["sample"]["sampledAt"])
+            self.assertEqual(remaining["observedPlanAt"], first["observedPlanAt"])
+            self.assertEqual(opener.open.call_count, 1)
+            self.assertEqual(self.native_client.get.call_count, 1)
+            self.assertEqual(len(self.portal_calls), 3)
+            body.read.assert_not_called()
+            rendered = json.dumps([legacy, cached, raw, remaining])
+            for secret in (TOKEN, "sk-private-response", "private upstream detail"):
+                self.assertNotIn(secret, rendered)
+
+    def test_cold_bridge_http429_uses_conservative_default_without_claiming_plan(self):
+        for header in (None, "malformed-private-value"):
+            with self.subTest(header=header):
+                for name in (muse.CACHE_NAME, muse.PLAN_NAME):
+                    (self.root / name).unlink(missing_ok=True)
+                body = Mock()
+                error = urllib.error.HTTPError(usage.MUSE_URL, 429, "private", {"Retry-After": header}, body)
+                self.addCleanup(error.close)
+                opener = Mock()
+                opener.open.side_effect = error
+                with patch("desktop_helpers.urllib.request.build_opener", return_value=opener), \
+                        patch.object(usage, "muse_credentials", return_value=helpers.Credential(TOKEN, email=EMAIL)):
+                    with self.assertRaises(muse.MuseError) as caught:
+                        muse.collect_browser([COOKIE], root=self.root)
+                    self.assertEqual((caught.exception.code, caught.exception.retry_after), ("rate_limited", 600))
+                    self.assertIsNone(caught.exception.plan)
+                    self.assertEqual(self.collect(), {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 600})
+                    self.clock += 1
+                    with self.assertRaises(muse.MuseError) as cached:
+                        muse.collect_browser([COOKIE], root=self.root)
+                    self.assertEqual(cached.exception.retry_after, 599)
+                    self.assertEqual(opener.open.call_count, 1)
+                    body.read.assert_not_called()
+        self.native_client.get.assert_not_called()
+        self.assertEqual(self.portal_calls, [])
+
+    def test_initial_browser_native_request_reports_structured_429(self):
+        (self.root / muse.CAPSULE_NAME).unlink()
+        body = Mock()
+        error = urllib.error.HTTPError(usage.MUSE_URL, 429, "private", {"Retry-After": "1800"}, body)
+        self.addCleanup(error.close)
+        opener = Mock()
+        opener.open.side_effect = error
+        with patch("desktop_helpers.urllib.request.build_opener", return_value=opener), \
+                patch.object(usage, "muse_credentials", return_value=helpers.Credential(TOKEN, email=EMAIL)):
+            with self.assertRaises(muse.MuseError) as caught:
+                muse.collect_browser([COOKIE], root=self.root)
+        self.assertEqual((caught.exception.code, caught.exception.retry_after), ("rate_limited", 1800))
+        self.assertIsNone(caught.exception.plan)
+        self.assertFalse((self.root / muse.CACHE_NAME).exists())
+        self.assertEqual(self.portal_calls, [])
+        body.read.assert_not_called()
 
     def test_network_failure_retains_sample_but_allows_coordinator_peer_recovery(self):
         first = self.collect()

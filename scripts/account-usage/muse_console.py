@@ -769,6 +769,8 @@ def verify_device_identity(credential, expected_email):
         payload = usage.request_json(usage.MUSE_URL, {"Authorization": "Bearer " + credential.access,
                                      "x-api-version": "1.0.0"}, {})
     except UsageError as error:
+        if getattr(error, "failure_code", None) == "rate_limited":
+            raise MuseError("rate_limited", retry_after=getattr(error, "retry_after", None)) from None
         raise MuseError("needs_sign_in" if error.status == "needs_sign_in" else "network_error") from None
     if (email(payload.get("user_email")) or credential.email or "").lower() != expected_email.lower():
         raise MuseError("account_mismatch")
@@ -866,7 +868,7 @@ def browser_reading(cookies, requested=None, root=None):
     # The installed collector owns account identification. Browser-provided
     # email/plan claims are neither accepted nor trusted.
     import desktop_usage as usage
-    from desktop_helpers import account, email, safe_text, utc_now
+    from desktop_helpers import UsageError, account, email, safe_text, utc_now
     credential = usage.muse_credentials(Path.home())
     if credential is None:
         raise MuseError("account_mismatch")
@@ -886,8 +888,13 @@ def browser_reading(cookies, requested=None, root=None):
         if error.code not in {"no_browser_cookie", "account_mismatch", "plan_mismatch"}:
             raise
     if sample is None:
-        payload = usage.request_json(usage.MUSE_URL, {"Authorization": "Bearer " + credential.access,
-                                "x-api-version": "1.0.0"}, {})
+        try:
+            payload = usage.request_json(usage.MUSE_URL, {"Authorization": "Bearer " + credential.access,
+                                    "x-api-version": "1.0.0"}, {})
+        except UsageError as error:
+            if getattr(error, "failure_code", None) == "rate_limited":
+                raise MuseError("rate_limited", retry_after=getattr(error, "retry_after", None)) from None
+            raise
         expected_email = email(payload.get("user_email")) or credential.email
         plan = safe_text(payload.get("subs_tier_name"))
         if payload.get("is_subs_active") is False:

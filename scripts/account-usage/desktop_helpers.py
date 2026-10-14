@@ -6,6 +6,7 @@ place; SQLite connections are explicitly read-only and never copy the database.
 
 import base64
 import datetime as dt
+from email.utils import parsedate_to_datetime
 import json
 import math
 import os
@@ -26,10 +27,12 @@ PROVIDERS = {"antigravity": "Antigravity CLI", "muse": "Muse Code", "cursor": "C
 class UsageError(Exception):
     """An error with a fixed, safe description, never an upstream response."""
 
-    def __init__(self, status, message):
+    def __init__(self, status, message, *, failure_code=None, retry_after=None):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.failure_code = failure_code
+        self.retry_after = retry_after
 
 
 @dataclass
@@ -238,6 +241,23 @@ def is_invalid_grant(error):
     return isinstance(value, dict) and value.get("error") == "invalid_grant"
 
 
+def retry_after_seconds(value, now=None):
+    """Bound an HTTP Retry-After without retaining provider text or bodies."""
+    now = time.time() if now is None else now
+    seconds = None
+    if isinstance(value, str) and len(value) <= 128:
+        if re.fullmatch(r"[0-9]{1,12}", value.strip()):
+            seconds = int(value.strip())
+        else:
+            try:
+                instant = parsedate_to_datetime(value)
+                if instant.tzinfo is not None:
+                    seconds = instant.timestamp() - now
+            except (ValueError, TypeError, OverflowError, OSError):
+                pass
+    return min(86400, max(300, seconds)) if number(seconds) is not None else 600
+
+
 def request_json(url, headers=None, body=None, form=False):
     headers = dict(headers or {})
     headers["Accept"] = "application/json"
@@ -261,6 +281,10 @@ def request_json(url, headers=None, body=None, form=False):
             raise UsageError("error", "The usage service returned an unsupported response.")
         return value
     except urllib.error.HTTPError as error:
+        if error.code == 429:
+            retry = retry_after_seconds(error.headers.get("Retry-After") if error.headers else None)
+            raise UsageError("error", "The usage service is limiting requests. Refresh resumes after a cooldown.",
+                             failure_code="rate_limited", retry_after=retry) from None
         if error.code in (401, 403):
             raise UsageError("needs_sign_in", "The saved account could not authenticate with the usage service.") from None
         if error.code == 400 and is_invalid_grant(error):

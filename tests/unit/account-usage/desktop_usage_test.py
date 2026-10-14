@@ -435,6 +435,47 @@ class HttpSafetyTests(unittest.TestCase):
         self.assertNotIn("private fixture", str(context.exception))
 
     @patch("desktop_helpers.urllib.request.build_opener")
+    def test_http_429_keeps_legacy_error_status_and_safe_structured_cooldown(self, opener):
+        body = Mock()
+        body.read.return_value = b"sk-private-response"
+        error = urllib.error.HTTPError(usage.MUSE_URL, 429, "private upstream detail",
+                                      {"Retry-After": "1800"}, body)
+        self.addCleanup(error.close)
+        opener.return_value.open.side_effect = error
+        with self.assertRaises(helpers.UsageError) as caught:
+            helpers.request_json(usage.MUSE_URL, {"Authorization": "Bearer dca:private-fixture"}, {})
+        failure = caught.exception
+        self.assertEqual((failure.status, failure.failure_code, failure.retry_after), ("error", "rate_limited", 1800))
+        self.assertEqual(failure.message, "The usage service is limiting requests. Refresh resumes after a cooldown.")
+        self.assertIsNone(failure.__cause__)
+        body.read.assert_not_called()
+        for secret in ("sk-private-response", "private upstream detail", "dca:private-fixture"):
+            self.assertNotIn(secret, str(failure))
+
+    @patch("desktop_helpers.urllib.request.build_opener")
+    def test_http_429_date_and_invalid_retry_headers_are_bounded(self, opener):
+        for header, expected in (("Thu, 01 Jan 1970 00:46:40 GMT", 1800), ("0", 300),
+                                 ("999999999999", 86400), (None, 600), ("malformed-private-value", 600),
+                                 ("NaN", 600), ("-1", 600), ("x" * 129, 600)):
+            with self.subTest(header=header):
+                body = Mock()
+                error = urllib.error.HTTPError(usage.MUSE_URL, 429, "private", {"Retry-After": header}, body)
+                self.addCleanup(error.close)
+                opener.return_value.open.side_effect = error
+                with patch("desktop_helpers.time.time", return_value=1000), self.assertRaises(helpers.UsageError) as caught:
+                    helpers.request_json(usage.MUSE_URL)
+                self.assertEqual(caught.exception.status, "error")
+                self.assertEqual(caught.exception.failure_code, "rate_limited")
+                self.assertEqual(caught.exception.retry_after, expected)
+                body.read.assert_not_called()
+
+    def test_legacy_usage_error_callers_need_no_structured_arguments(self):
+        error = helpers.UsageError("error", "Fixed safe description.")
+        self.assertEqual(error.status, "error")
+        self.assertIsNone(error.failure_code)
+        self.assertIsNone(error.retry_after)
+
+    @patch("desktop_helpers.urllib.request.build_opener")
     def test_oauth_invalid_grant_is_sign_in_and_never_echoes_the_body(self, opener):
         error = urllib.error.HTTPError("https://oauth2.googleapis.com/token", 400, "Bad Request", {},
                                       io.BytesIO(b'{"error":"invalid_grant","error_description":"contains ya29.FAKE-secret"}'))

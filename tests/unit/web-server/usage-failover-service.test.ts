@@ -488,6 +488,52 @@ describe('identity-bound usage source failover', () => {
     }
   });
 
+  it('accepts a newer exact-identity peer plan while preserving its provider cooldown', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.collections.set('windows', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 1800,
+      observedPlan: 'Ultra',
+      observedPlanAt: new Date(h.now()).toISOString(),
+    });
+    const row = await h.service.collect(h.target, template());
+    expect(row.windows).toHaveLength(0);
+    const count = h.collected().length;
+    h.advance(1799_000);
+    const restarted = new UsageFailoverService(h.deps);
+    expect((await restarted.collect(h.target, template())).windows).toHaveLength(0);
+    expect(h.collected()).toHaveLength(count);
+    h.advance(1001);
+    h.collections.set('windows', {
+      sample: reading(h.now(), { plan: 'Ultra' }),
+      failureCode: null,
+    });
+    expect((await restarted.collect(h.target, template())).plan).toBe('Ultra');
+  });
+
+  it('ignores an exact-identity peer plan older than the saved quota', async () => {
+    const h = await harness();
+    h.advance();
+    h.collections.set('mac', { sample: reading(h.now(), { plan: 'Ultra' }), failureCode: null });
+    const latest = await h.service.collect(h.target, template());
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.collections.set('windows', {
+      sample: null,
+      failureCode: 'network_error',
+      observedPlan: 'Pro',
+      observedPlanAt: new Date(BASE_TIME).toISOString(),
+    });
+    const row = await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(row.plan).toBe('Ultra');
+    expect(row.sampledAt).toBe(latest.sampledAt);
+    expect(row.windows).toEqual(latest.windows);
+  });
+
   it('does not hide a primary renewal message behind fallback or retained quota', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());
