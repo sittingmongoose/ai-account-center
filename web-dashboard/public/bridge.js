@@ -139,8 +139,32 @@ function auth(signedIn, state, extra = {}) {
   syncThemeColor();
 }
 
+// A password change, Sign out other browsers and Sign out all devices give this browser a new session id. A
+// request still in flight with the old cookie would come back 401 and end the session here, or bring the old
+// cookie back with its answer, so such a change waits for the requests in flight and holds new ones until it is done.
+const ROTATES_SESSION = new Set(['/api/auth/password', '/api/auth/sessions/revoke-others', '/api/auth/devices/revoke-all']);
+let inFlight = 0;
+let idleWaiters = [];
+let rotation = null;
 /** One request: { status, payload } on success; a refusal throws with its status, payload and headers. */
 async function send(path, options = {}) {
+  const rotates = String(options.method || 'GET').toUpperCase() === 'POST' && ROTATES_SESSION.has(path);
+  while (rotation) await rotation;
+  let release = null;
+  if (rotates) {
+    rotation = new Promise(resolve => { release = resolve; });
+    if (inFlight > 0) await new Promise(resolve => idleWaiters.push(resolve));
+  }
+  inFlight++;
+  try {
+    return await sendNow(path, options);
+  } finally {
+    inFlight--;
+    if (inFlight === 0) { const waiters = idleWaiters; idleWaiters = []; for (const wake of waiters) wake(); }
+    if (rotates) { rotation = null; release(); }
+  }
+}
+async function sendNow(path, options) {
   let response;
   try {
     response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });

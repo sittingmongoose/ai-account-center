@@ -328,3 +328,36 @@ test('a server error on the launch check shows the offline card with its retry, 
     assert.deepEqual([b.lastAuth().signedIn, b.lastAuth().state], [false, 'offline']);
   } finally { b.restore(); }
 });
+
+test('Sign out other browsers waits for requests in flight and holds new ones until the new session is set', async () => {
+  // The rotation gives this browser a new session id: a request still carrying the old cookie would end it.
+  let finishRefresh = null;
+  const order = [];
+  const { s, server: base } = fixtureServer();
+  const server = async (method, path, body) => {
+    if (method === 'GET' && path.startsWith('/api/accounts/dashboard?') && finishRefresh === null && order.includes('armed')) {
+      order.push('refresh-started');
+      await new Promise(resolve => { finishRefresh = resolve; });
+      order.push('refresh-finished');
+    }
+    if (method === 'POST' && path === '/api/auth/sessions/revoke-others') { order.push('revoke'); return { payload: { signedOutBrowsers: 1 } }; }
+    if (method === 'GET' && path === '/api/accounts/settings' && order.includes('revoke-asked')) order.push('settings-after');
+    return base(method, path, body);
+  };
+  const b = await loadBridge(server, { pathname: '/accounts' });
+  try {
+    await flush();
+    order.push('armed');
+    const refreshing = b.action('refresh', '');
+    await flush();
+    order.push('revoke-asked');
+    const revoking = b.action('others-out', '');
+    await flush();
+    assert.ok(!order.includes('revoke'), 'the rotation waits for the refresh in flight');
+    finishRefresh();
+    await refreshing; await revoking; await flush(8);
+    assert.ok(order.indexOf('revoke') > order.indexOf('refresh-finished'));
+    assert.equal(s.signedIn, true);
+    assert.notEqual(b.lastAuth().state, 'expired');
+  } finally { b.restore(); }
+});
