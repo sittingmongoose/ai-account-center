@@ -71,7 +71,7 @@ interface Checkpoint {
    * oversizedLineCarriesUsage changes: a finished file is never read again, so an old verdict would
    * otherwise keep its activity partial for good (the Oct 6 Muse checkpoint rule did not bump it).
    */
-  largeLineParserVersion?: 4;
+  largeLineParserVersion?: 5;
   unfinishedTail?: boolean;
   /** Row-shape version for kinds whose parser changed (PARSER_VERSION). */
   parser?: number;
@@ -85,7 +85,7 @@ interface Checkpoint {
    */
   pendingClaude?: { key: string; entry: RawUsageEntry };
   /**
-   * Experiment requests only (collectExperimentActivity): `keyed` files keep one entry per
+   * Experiments and diverged default Claude copies: `keyed` files keep one entry per
    * in-window record with its dedup key instead of hourly rows, so copies across files collapse
    * at aggregation; `keys` files (the default Claude root, read as the reference) keep only the
    * keys of their responses.
@@ -246,7 +246,7 @@ function holdsNoLogs(kind: string, name: string): boolean {
   return kind === 'muse' && (name === 'tool-outputs' || name.startsWith('.'));
 }
 
-function filesUnder(
+export function filesUnder(
   root: string,
   kind: string,
   issues: { failed: number },
@@ -354,7 +354,7 @@ function fresh(stats: fs.Stats, minDate: number, kind: ActivityKind, mode?: Read
     complete: false,
     discardingLine: false,
     skippedLines: 0,
-    largeLineParserVersion: 4,
+    largeLineParserVersion: 5,
     unfinishedTail: false,
     ...(PARSER_VERSION[kind] === undefined ? {} : { parser: PARSER_VERSION[kind] }),
     state: createCodexNativeParserState(),
@@ -389,7 +389,7 @@ function loadCheckpoint(
       !value.state ||
       typeof value.state.sessionId !== 'string' ||
       (value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
-      (value.skippedLines > 0 && value.largeLineParserVersion !== 4) ||
+      (value.skippedLines > 0 && value.largeLineParserVersion !== 5) ||
       value.parser !== PARSER_VERSION[kind] ||
       (value.pendingClaude !== undefined &&
         (typeof value.pendingClaude.key !== 'string' ||
@@ -824,7 +824,8 @@ export function aggregateRows(
  * (The checkpoint kind itself sits ~25 KB into the line, past a huge
  * instructions string, so the prefix cannot match on kind directly.) Codex's
  * oversized lines are `response_item` conversation content, never token_count.
- * Claude/OMP can carry usage in a large assistant/message line, so stay honest.
+ * Claude's leading assistant type can carry usage; known other types cannot.
+ * Unknown envelopes and OMP stay conservative.
  */
 function oversizedLineCarriesUsage(
   kind: ActivityKind,
@@ -833,6 +834,7 @@ function oversizedLineCarriesUsage(
 ): boolean {
   if (kind === 'muse') return /"children"\s*:/.test(prefix);
   if (kind === 'codex') return recordType !== 'response_item';
+  if (kind === 'claude') return recordType === undefined || recordType === 'assistant';
   return true;
 }
 
@@ -1699,6 +1701,61 @@ export function dropOmpResumeCopies<T extends { file: string; stats: fs.Stats }>
   return dropped.size ? files.filter((item) => !dropped.has(item.file)) : files;
 }
 
+/** Claude resumes keep the filename. Compare every byte, not just head/tail: diverged
+ * copies can share both. Work is chunked and deadline-bounded; an unverified copy stays
+ * for the keyed merge. Dropped files retain their checkpoints for a later prune/resume. */
+function dropClaudePrefixCopies<T extends { file: string; stats: fs.Stats }>(
+  files: T[],
+  deadline: number
+): T[] {
+  // Prefix verification must not spend the whole pass before checkpoints advance.
+  const prefixDeadline = Math.min(deadline, Date.now() + 100);
+  const groups = new Map<string, T[]>();
+  for (const item of files) {
+    const key = path.basename(item.file);
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  const dropped = new Set<string>();
+  for (const group of groups.values()) {
+    group.sort((a, b) => b.stats.size - a.stats.size || a.file.localeCompare(b.file));
+    const kept: T[] = [];
+    for (const item of group) {
+      const copy = kept.some((larger) => {
+        if (Date.now() >= prefixDeadline || !isPrefixCopy(item, larger)) return false;
+        let left: number | undefined;
+        let right: number | undefined;
+        try {
+          left = fs.openSync(item.file, 'r');
+          right = fs.openSync(larger.file, 'r');
+          const a = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+          const b = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+          for (let offset = 0; offset < item.stats.size; offset += READ_CHUNK_BYTES) {
+            if (Date.now() >= prefixDeadline) return false;
+            const size = Math.min(READ_CHUNK_BYTES, item.stats.size - offset);
+            if (
+              fs.readSync(left, a, 0, size, offset) !== size ||
+              fs.readSync(right, b, 0, size, offset) !== size ||
+              !a.subarray(0, size).equals(b.subarray(0, size))
+            )
+              return false;
+          }
+          return true;
+        } catch {
+          return false;
+        } finally {
+          if (left !== undefined) fs.closeSync(left);
+          if (right !== undefined) fs.closeSync(right);
+        }
+      });
+      if (copy) dropped.add(item.file);
+      else kept.push(item);
+    }
+  }
+  return files.filter((item) => !dropped.has(item.file));
+}
+
 /**
  * Byte-identical copies of one session log — e.g. a Claude subagent transcript
  * written under two project dirs when a session spans two cwds (observed: 147
@@ -2562,7 +2619,20 @@ export async function collectAccountActivity(
   const scanned =
     request.kind === 'omp'
       ? dropOmpResumeCopies(files)
-      : dropExactDuplicateFiles(request.kind === 'codex' ? preferPlainCodexRollouts(files) : files);
+      : request.kind === 'claude'
+        ? dropClaudePrefixCopies(files, deadline)
+        : dropExactDuplicateFiles(
+            request.kind === 'codex' ? preferPlainCodexRollouts(files) : files
+          );
+  const claudeNames = new Map<string, number>();
+  if (request.kind === 'claude')
+    for (const { file } of scanned) {
+      const name = path.basename(file);
+      claudeNames.set(name, (claudeNames.get(name) ?? 0) + 1);
+    }
+  // Only diverged groups need per-response storage. Ordinary logs keep compact hourly
+  // checkpoints; changing group membership invalidates mode and re-reads that file.
+  const chosenClaude = new Map<string, RawUsageEntry>();
   scanned.sort(
     (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
   );
@@ -2588,7 +2658,8 @@ export async function collectAccountActivity(
     for (const { file, stats } of scanned) {
       const cache = path.join(directory, `${hash(file)}.json`);
       try {
-        const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind);
+        const mode = (claudeNames.get(path.basename(file)) ?? 0) > 1 ? 'keyed' : undefined;
+        const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind, mode);
         const before = value.offset;
         if (Date.now() < deadline) {
           await readBatch(
@@ -2598,7 +2669,8 @@ export async function collectAccountActivity(
             request.kind,
             options,
             deadline,
-            request.kind === 'jsonl' ? request.mapping : undefined
+            request.kind === 'jsonl' ? request.mapping : undefined,
+            mode
           );
           if (value.offset !== before || !fs.existsSync(cache))
             saveCheckpoint(cache, file, value, stats);
@@ -2607,6 +2679,26 @@ export async function collectAccountActivity(
         if (value.complete) completed++;
         if (value.unfinishedTail) unfinishedFiles++;
         skippedLines += value.skippedLines;
+        if (mode === 'keyed') {
+          const entries = [...(value.keyed ?? [])];
+          if (
+            value.pendingClaude &&
+            Date.parse(value.pendingClaude.entry.timestamp) >= options.minDate
+          )
+            entries.push({
+              k: experimentRecordKey('claude', value.pendingClaude.entry),
+              e: keyedEntry(value.pendingClaude.entry),
+            });
+          for (const { k, e } of entries) {
+            const key = `${path.basename(file)}:${k}`;
+            const prior = chosenClaude.get(key);
+            if (prior) {
+              if (e.outputTokens > prior.outputTokens) chosenClaude.set(key, e);
+            } else if (chosenClaude.size < MAX_TOTAL_ROWS) chosenClaude.set(key, e);
+            else skippedLines++;
+          }
+          continue;
+        }
         const available = MAX_TOTAL_ROWS - rows.length;
         if (request.kind === 'claude' && value.pendingClaude) {
           // Report the open response without storing it (R2-1): merging it
@@ -2631,6 +2723,14 @@ export async function collectAccountActivity(
       // Keep already-checkpointed records available even after the scan budget.
       // Loading every remaining small cache is bounded by MAX_FILES/MAX_TOTAL_ROWS.
     }
+  }
+  if (chosenClaude.size) {
+    const rowMap = new Map<string, CompactEntry>();
+    for (const entry of chosenClaude.values())
+      if (!addEntry(rowMap, entry, options.minDate)) skippedLines++;
+    const available = Math.max(0, MAX_TOTAL_ROWS - rows.length);
+    rows.push(...[...rowMap.values()].slice(0, available));
+    if (rowMap.size > available) failed++;
   }
   const source =
     request.kind === 'codex'

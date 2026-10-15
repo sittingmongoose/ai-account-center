@@ -113,6 +113,8 @@ MAX_ROWS = 50000
 # Per-session-model aggregates share the response with the hourly rows; the
 # session cap is separate so a host with many sessions keeps its hours too.
 MAX_SROWS = 50000
+# Per Claude copy group: bounded response storage, like the server's keyed merge.
+MAX_CLAUDE_KEYS = 100000
 SESSION_MAX_LEN = 160
 # The incremental request carries one fingerprint per known file; the Mac alone
 # holds thousands of session files, so the cap must fit tens of thousands.
@@ -339,6 +341,8 @@ class Collector(object):
         # Antigravity databases (or folders) that could not be read this scan.
         self.agy_unreadable = 0
         self.codex_compressed_unread = set()
+        self.usage_partial = set()
+        self.claude_chosen = None
 
     def keep_record(self, key):
         """False when the record is captured as a key or is a known copy."""
@@ -364,6 +368,9 @@ class Collector(object):
         current = _fingerprint(path)
         if current is None:
             return None
+        if kind == "claude":
+            current["claudeName"] = hashlib.sha256(os.path.basename(path).encode("utf-8")).hexdigest()
+            current["claudeMirror"] = _claude_mirror(path)
         if deps:
             current["tail"] = hashlib.sha256(
                 (current["tail"] + "\n" + deps).encode("utf-8")
@@ -377,6 +384,11 @@ class Collector(object):
         """Mark a fully parsed file fresh; truncated files stay unconfirmed."""
         pending = self.pending.get(kind, {}).get(key)
         if pending is not None:
+            prior = self.prior.get(kind, {}).get(key, {})
+            if _same_fingerprint(prior, pending) and prior.get("usageSkipped"):
+                pending["usageSkipped"] = True
+            if pending.get("usageSkipped"):
+                self.usage_partial.add(kind)
             self.fresh.setdefault(kind, {})[key] = pending
 
     def add(self, kind, filekey, model, provider, hour, tokens, cost):
@@ -908,13 +920,14 @@ def _collect_omp(collector, home, env, extra=()):
                 chunk = handle.readline(MAX_LINE_BYTES + 2)
                 if not chunk:
                     break
-                if len(chunk) > MAX_LINE_BYTES + 1:
+                if len(chunk.rstrip(b"\n")) > MAX_LINE_BYTES:
+                    _note_oversized(collector, "omp", filekey, chunk)
                     # Skip the oversized line without decoding content.
                     while chunk and not chunk.endswith(b"\n"):
                         chunk = handle.readline(MAX_LINE_BYTES + 2)
                     continue
                 try:
-                    line = chunk.decode("utf-8")
+                    line = chunk.decode("utf-8").lstrip("\ufeff")
                 except UnicodeDecodeError:
                     continue
                 _parse_omp_line(line, collector, "omp", filekey, session)
@@ -1040,12 +1053,13 @@ def _scan_muse_dir(collector, directory):
                 chunk = handle.readline(MAX_LINE_BYTES + 2)
                 if not chunk:
                     break
-                if len(chunk) > MAX_LINE_BYTES + 1:
+                if len(chunk.rstrip(b"\n")) > MAX_LINE_BYTES:
+                    _note_oversized(collector, "muse", filekey, chunk)
                     while chunk and not chunk.endswith(b"\n"):
                         chunk = handle.readline(MAX_LINE_BYTES + 2)
                     continue
                 try:
-                    line = chunk.decode("utf-8")
+                    line = chunk.decode("utf-8").lstrip("\ufeff")
                 except UnicodeDecodeError:
                     continue
                 _parse_muse_line(line, collector, "muse", filekey, session)
@@ -1108,6 +1122,104 @@ def _newest_first(paths):
     return [path for _, path in stamped]
 
 
+def _note_oversized(collector, kind, filekey, chunk):
+    """Same 512-byte envelope rules as oversizedLineCarriesUsage on the server.
+    Unknown types stay conservative; never search inside arbitrary content for a type.
+    Persist the verdict so an unchanged file cannot become falsely complete next scan.
+    """
+    prefix = chunk[:512].decode("utf-8", errors="replace").lstrip("\ufeff")
+    match = re.match(
+        r'^\s*\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?'
+        r'(?:"ordinal"\s*:\s*\d+\s*,\s*)?"type"\s*:\s*"([^"\\]+)"', prefix
+    )
+    record_type = match.group(1) if match else None
+    carries = (bool(re.search(r'"children"\s*:', prefix)) if kind == "muse"
+               else record_type != "response_item" if kind == "codex"
+               else record_type in (None, "assistant") if kind == "claude" else True)
+    if carries:
+        collector.usage_partial.add(kind)
+        pending = collector.pending.get(kind, {}).get(filekey)
+        if pending is not None:
+            pending["usageSkipped"] = True
+
+
+def _claude_mirror(path):
+    return any(re.fullmatch(r"ssh-[0-9a-f-]{36}", part, re.I)
+               for part in os.path.normpath(path).split(os.sep)[:-1])
+
+
+def _claude_prefix(small, large, deadline):
+    """Verify every byte in bounded chunks. A timeout keeps both for keyed dedupe."""
+    try:
+        if os.path.getsize(small) > os.path.getsize(large):
+            return False
+        with open(small, "rb") as left, open(large, "rb") as right:
+            while time.monotonic() < deadline:
+                chunk = left.read(1024 * 1024)
+                if not chunk:
+                    return True
+                if chunk != right.read(len(chunk)):
+                    return False
+    except OSError:
+        pass
+    return False
+
+
+def _scan_claude_groups(collector, paths, parse, flush):
+    # One cache identity per (mirror, filename) group. The print depends on EVERY
+    # copy, so growth, divergence, addition and pruning all invalidate the group.
+    # Mirror groups stay separate/raw for the server's order-independent host merge.
+    groups = {}
+    for path in dict.fromkeys(paths):
+        groups.setdefault((_claude_mirror(path), os.path.basename(path)), []).append(path)
+    order = {path: index for index, path in enumerate(_newest_first(paths))}
+    for group in sorted(groups.values(), key=lambda group: min(order.get(p, MAX_FILES) for p in group)):
+        if collector.expired():
+            collector.truncated = True
+            return True
+        representative = group[0]
+        deps = _deps_print("claude", group) + ":" + _filekey("claude", representative)
+        filekey = collector.note_file("claude", representative, deps)
+        for path in group[1:]:
+            collector.note_file("claude", path, deps)
+        if filekey is None:
+            for path in group:
+                collector.confirm_file("claude", _filekey("claude", path))
+            continue
+        stamped = []
+        for path in group:
+            try:
+                stamped.append((os.path.getsize(path), path))
+            except OSError:
+                collector.truncated = True
+                return True
+        kept = []
+        prefix_deadline = min(collector.deadline, time.monotonic() + 0.1)
+        for _, path in sorted(stamped, key=lambda item: (-item[0], item[1])):
+            if not any(_claude_prefix(path, larger, prefix_deadline) for larger in kept):
+                kept.append(path)
+        chosen = {} if len(kept) > 1 else None
+        collector.claude_chosen = chosen
+        try:
+            for path in kept:
+                outcome = _read_file(collector, "claude", path, filekey, parse, flush)
+                if outcome != "ok":
+                    # No partial group can replace its cached aggregates.
+                    if outcome == "unreadable":
+                        collector.truncated = True
+                    return True
+        finally:
+            collector.claude_chosen = None
+        if chosen is not None:
+            for pending in chosen.values():
+                _emit_claude_response(collector, "claude", filekey, pending)
+        if collector.row_cap:
+            return True
+        for path in group:
+            collector.confirm_file("claude", _filekey("claude", path))
+    return False
+
+
 def _read_file(collector, kind, path, filekey, parse, flush):
     """Keep compressed fingerprints unconfirmed unless decoding reaches a clean EOF."""
     if kind != "codex" or not path.endswith(".jsonl.zst"):
@@ -1164,7 +1276,8 @@ def _read_open_file(collector, kind, path, filekey, parse, flush, handle=None):
             chunk = handle.readline(MAX_LINE_BYTES + 2)
             if not chunk:
                 break
-            if len(chunk) > MAX_LINE_BYTES + 1:
+            if len(chunk.rstrip(b"\n")) > MAX_LINE_BYTES:
+                _note_oversized(collector, kind, filekey, chunk)
                 # Skip the oversized line without decoding content.
                 while chunk and not chunk.endswith(b"\n"):
                     if collector.expired():
@@ -1173,7 +1286,7 @@ def _read_open_file(collector, kind, path, filekey, parse, flush, handle=None):
                     chunk = handle.readline(MAX_LINE_BYTES + 2)
                 continue
             try:
-                line = chunk.decode("utf-8")
+                line = chunk.decode("utf-8").lstrip("\ufeff")
             except UnicodeDecodeError:
                 continue
             parse(line, collector, kind, filekey, box)
@@ -1226,7 +1339,20 @@ def _scan_kind_files(collector, kind, dirs, accept, parse, flush=None, t3_dirs=(
             paths.append(path)
         allowed = set(paths)
         refs = {p: [c for c in copies if c in allowed] for p, copies in refs.items()}
-    for path in _newest_first(paths):
+    if kind == "claude":
+        return _scan_claude_groups(collector, paths, parse, flush)
+    # The server's exact-copy rule: same size/head/tail. Keep unreadable files
+    # for the normal read path rather than declaring their usage empty.
+    seen = set()
+    distinct = []
+    for path in paths:
+        stamp = _fingerprint(path)
+        key = (stamp["size"], stamp["head"], stamp["tail"]) if stamp else None
+        if key is not None and key in seen:
+            continue
+        seen.add(key)
+        distinct.append(path)
+    for path in _newest_first(distinct):
         if collector.expired():
             collector.truncated = True
             return True
@@ -1554,18 +1680,24 @@ def _parse_claude_line(line, collector, kind, filekey, box):
     pending = box.pop("claude_pending", None)
     if pending is not None:
         _emit_claude_response(collector, kind, filekey, pending)
-    if not collector.keep_record(None):
-        return
-    # Claude Code logs no cost; the server prices the tokens at its rates.
-    collector.add(kind, filekey, model, None, hour, tokens, 0.0)
-    collector.sadd(kind, filekey, session, model, None, epoch_ms, tokens, 0.0)
+    _emit_claude_response(collector, kind, filekey, (None, model, hour, tokens, epoch_ms, session))
 
 
 def _emit_claude_response(collector, kind, filekey, pending):
     key, model, hour, tokens, epoch_ms, session = pending
+    if collector.claude_chosen is not None:
+        identity = ("m:" + key.split("\n")[0] if key is not None
+                    else (session, epoch_ms, model, tuple(tokens)))
+        prior = collector.claude_chosen.get(identity)
+        if prior is None and len(collector.claude_chosen) >= MAX_CLAUDE_KEYS:
+            collector.row_cap = collector.truncated = True
+            return
+        if prior is None or tokens[1] > prior[3][1]:
+            collector.claude_chosen[identity] = pending
+        return
     # A copy is the same API response: its message id, as the server's
     # experiment dedup keys it (a stream capture spells the request id apart).
-    if not collector.keep_record("m:" + key.split("\n")[0]):
+    if not collector.keep_record("m:" + key.split("\n")[0] if key is not None else None):
         return
     collector.add(kind, filekey, model, None, hour, tokens, 0.0)
     collector.sadd(kind, filekey, session, model, None, epoch_ms, tokens, 0.0)
@@ -2818,7 +2950,8 @@ def main():
         # short too, and a kind that ends past the deadline never flipped the flag
         # itself: mark partial where the data stops, not only where the flag flips.
         if (
-            (collector.truncated and not cut_before)
+            kind in collector.usage_partial
+            or (collector.truncated and not cut_before)
             or collector.row_cap
             or collector.expired()
         ):

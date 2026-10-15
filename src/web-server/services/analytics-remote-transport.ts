@@ -45,6 +45,11 @@ export interface AnalyticsRemoteFingerprint {
   mtimeMs: number;
   head?: string;
   tail?: string;
+  /** Claude's basename digest and SSH mirror flag; no filenames or paths travel. */
+  claudeName?: string;
+  claudeMirror?: boolean;
+  /** An oversized usage-capable line was skipped, even on an unchanged file. */
+  usageSkipped?: boolean;
   /** zcode only: the write-ahead log, where new rows wait for a checkpoint. */
   walSize?: number;
   walMtimeMs?: number;
@@ -232,6 +237,10 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
     nonNegative(print.mtimeMs) &&
     (print.head === undefined || (typeof print.head === 'string' && SHA256_HEX.test(print.head))) &&
     (print.tail === undefined || (typeof print.tail === 'string' && SHA256_HEX.test(print.tail))) &&
+    (print.claudeName === undefined ||
+      (typeof print.claudeName === 'string' && SHA256_HEX.test(print.claudeName))) &&
+    (print.claudeMirror === undefined || typeof print.claudeMirror === 'boolean') &&
+    (print.usageSkipped === undefined || typeof print.usageSkipped === 'boolean') &&
     (print.walSize === undefined || nonNegative(print.walSize)) &&
     (print.walMtimeMs === undefined || nonNegative(print.walMtimeMs))
   );

@@ -410,6 +410,72 @@ describe('claude response collapsing', () => {
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
+  it.each(['s.jsonl', 'agent-a63f20d72ecaef0dc.jsonl'])(
+    'counts exact, prefix and diverged copies of %s once across project folders',
+    async (name) => {
+      const projects = path.join(root, 'claude', 'projects');
+      const a = path.join(projects, 'a', name);
+      const b = path.join(projects, 'b', name);
+      fs.mkdirSync(path.dirname(a), { recursive: true });
+      fs.mkdirSync(path.dirname(b), { recursive: true });
+      const records = Array.from({ length: 15 }, (_, i) =>
+        JSON.stringify(line(`m${i}`, `r${i}`, 10))
+      );
+      fs.writeFileSync(a, records.slice(0, 10).join('\n') + '\n');
+      fs.copyFileSync(a, b);
+      expect((await collectClaude()).eventCount).toBe(10);
+      fs.writeFileSync(b, records.join('\n') + '\n');
+      const prefix = await collectClaude();
+      expect(prefix.eventCount).toBe(15);
+      expect(sum(prefix, 'inputTokens')).toBe(1500);
+      // Neither file is now a prefix; shared responses still count once. A newer
+      // block of m0 wins, even though each file's latest response stays pending.
+      fs.appendFileSync(a, JSON.stringify(line('unique-a', 'ra', 3)) + '\n');
+      fs.appendFileSync(b, JSON.stringify(line('m0', 'r0', 20)) + '\n');
+      const diverged = await collectClaude();
+      expect(diverged.scan?.complete).toBe(true);
+      expect(diverged.eventCount).toBe(16);
+      expect(sum(diverged, 'inputTokens')).toBe(1600);
+      expect(sum(diverged, 'outputTokens')).toBe(163);
+      const warm = await collectClaude();
+      expect(warm.scan?.readBytes).toBe(0);
+      expect(warm.hourly).toEqual(diverged.hourly);
+      fs.unlinkSync(b);
+      expect((await collectClaude()).eventCount).toBe(11);
+    }
+  );
+
+  it.each(['user', 'tool', 'assistant', 'unknown-envelope'])(
+    'only makes oversized Claude %s usage-capable envelopes partial',
+    async (type) => {
+      const record = line('m1', 'r1', 10);
+      writeClaude([
+        { type, message: { content: 'x'.repeat(8 * 1024 * 1024), usage: { input_tokens: 500 } } },
+        record,
+      ]);
+      const data = await collectClaude();
+      expect(data.eventCount).toBe(1);
+      expect(data.scan?.complete).toBe(type !== 'assistant');
+      expect(data.scan?.skippedLines).toBe(type === 'assistant' ? 1 : 0);
+      expect((await collectClaude()).scan?.complete).toBe(data.scan?.complete);
+    }
+  );
+
+  it('keeps divergent middle records even when same-name copies share size, head and tail', async () => {
+    const records = Array.from({ length: 15 }, (_, i) =>
+      JSON.stringify(line(`m${i}`, `r${i}`, 10))
+    );
+    const projects = path.join(root, 'claude', 'projects');
+    for (const project of ['a', 'b']) {
+      const directory = path.join(projects, project);
+      fs.mkdirSync(directory, { recursive: true });
+      const copy = [...records];
+      if (project === 'b') copy[7] = copy[7].replace('"id":"m7"', '"id":"z7"');
+      fs.writeFileSync(path.join(directory, 's.jsonl'), copy.join('\n') + '\n');
+    }
+    expect((await collectClaude()).eventCount).toBe(16);
+  });
+
   it('counts one multi-line API response once, keeping the last usage', async () => {
     writeClaude([
       line('m1', 'r1', 10),

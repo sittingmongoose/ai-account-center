@@ -526,6 +526,178 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     }
   );
 
+  const claude = (id: string, output = 10) =>
+    JSON.stringify({
+      type: 'assistant',
+      sessionId: 's1',
+      timestamp: '2026-10-01T15:05:00Z',
+      message: {
+        id,
+        model: 'claude-sonnet-4-6',
+        usage: { input_tokens: 100, output_tokens: output },
+      },
+    });
+  const claudeTotals = (response: Record<string, unknown>) => {
+    const rows = response.rows as Array<{ n: number; i: number; o: number }>;
+    return rows.reduce((sum, row) => ({ n: sum.n + row.n, i: sum.i + row.i, o: sum.o + row.o }), {
+      n: 0,
+      i: 0,
+      o: 0,
+    });
+  };
+
+  it.each(['s.jsonl', 'agent-a63f20d72ecaef0dc.jsonl'])(
+    'collapses exact, prefix and diverged Claude %s copies and invalidates group caches',
+    (name) => {
+      const a = path.join(home, '.claude', 'projects', 'a', name);
+      const b = path.join(home, '.claude', 'projects', 'b', name);
+      fs.mkdirSync(path.dirname(a), { recursive: true });
+      fs.mkdirSync(path.dirname(b), { recursive: true });
+      const records = Array.from({ length: 15 }, (_, i) => claude(`m${i}`));
+      fs.writeFileSync(a, records.slice(0, 10).join('\n') + '\n');
+      fs.copyFileSync(a, b);
+      expect(claudeTotals(runHelper({ kinds: ['claude'], minDateMs: MIN_DATE }))).toEqual({
+        n: 10,
+        i: 1000,
+        o: 100,
+      });
+      fs.writeFileSync(b, records.join('\n') + '\n');
+      const prefix = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+      expect(claudeTotals(prefix)).toEqual({ n: 15, i: 1500, o: 150 });
+      const fingerprints = (prefix.kinds as Record<string, { fingerprints: object }>).claude
+        .fingerprints;
+      expect(
+        runHelper({
+          kinds: ['claude'],
+          minDateMs: MIN_DATE,
+          fingerprints: { claude: fingerprints },
+        }).rows
+      ).toEqual([]);
+      fs.appendFileSync(a, claude('unique-a', 3) + '\n');
+      fs.appendFileSync(b, claude('m0', 20) + '\n');
+      const diverged = runHelper({
+        kinds: ['claude'],
+        minDateMs: MIN_DATE,
+        fingerprints: { claude: fingerprints },
+      });
+      expect(claudeTotals(diverged)).toEqual({ n: 16, i: 1600, o: 163 });
+      const changed = (diverged.kinds as Record<string, { fingerprints: object }>).claude
+        .fingerprints;
+      fs.unlinkSync(b);
+      expect(
+        claudeTotals(
+          runHelper({ kinds: ['claude'], minDateMs: MIN_DATE, fingerprints: { claude: changed } })
+        )
+      ).toEqual({ n: 11, i: 1100, o: 103 });
+    }
+  );
+
+  it('tags SSH mirrors separately from originals using only basename digests', () => {
+    const name = 'a0b63bac-f4aa-4346-b817-096dc2c15c7f.jsonl';
+    const mirror = path.join(home, '.claude', 'projects', `ssh-${name.slice(0, -6)}`, name);
+    const original = path.join(home, '.claude', 'projects', 'project', name);
+    for (const file of [mirror, original]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, claude('m1') + '\n');
+    }
+    const answer = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+    const prints = Object.values(
+      (
+        answer.kinds as Record<
+          string,
+          { fingerprints: Record<string, { claudeName: string; claudeMirror: boolean }> }
+        >
+      ).claude.fingerprints
+    );
+    expect(prints.map((p) => p.claudeMirror).sort()).toEqual([false, true]);
+    expect(new Set(prints.map((p) => p.claudeName))).toEqual(
+      new Set([createHash('sha256').update(name).digest('hex')])
+    );
+    expect(claudeTotals(answer).n).toBe(2); // Raw rows; cross-host selection belongs to the server.
+    expect(JSON.stringify(answer)).not.toContain(name);
+  });
+
+  it('does not mistake equal head/tail fingerprints for a verified Claude prefix', () => {
+    const records = Array.from({ length: 15 }, (_, i) => claude(`m${i}`));
+    for (const project of ['a', 'b']) {
+      const directory = path.join(home, '.claude', 'projects', project);
+      fs.mkdirSync(directory, { recursive: true });
+      const copy = [...records];
+      if (project === 'b') copy[7] = copy[7].replace('"id":"m7"', '"id":"z7"');
+      fs.writeFileSync(path.join(directory, 's.jsonl'), copy.join('\n') + '\n');
+    }
+    expect(claudeTotals(runHelper({ kinds: ['claude'], minDateMs: MIN_DATE })).n).toBe(16);
+  });
+
+  it.each(['user', 'assistant'])(
+    'parses BOM usage and retains the oversized Claude %s verdict on cache hits',
+    (type) => {
+      const dir = path.join(home, '.claude', 'projects', 'p');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 's.jsonl'),
+        '\ufeff' +
+          claude('bom') +
+          '\n' +
+          JSON.stringify({ type, message: { content: 'x'.repeat(8 * 1024 * 1024), usage: {} } }) +
+          '\n'
+      );
+      const first = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+      const kind = (first.kinds as Record<string, { partial?: boolean; fingerprints: object }>)
+        .claude;
+      expect(claudeTotals(first).n).toBe(1);
+      expect(kind.partial === true).toBe(type === 'assistant');
+      const warm = runHelper({
+        kinds: ['claude'],
+        minDateMs: MIN_DATE,
+        fingerprints: { claude: kind.fingerprints },
+      });
+      expect((warm.kinds as Record<string, { partial?: boolean }>).claude.partial === true).toBe(
+        type === 'assistant'
+      );
+    }
+  );
+
+  it.each([
+    { kind: 'codex', type: 'response_item', partial: false },
+    { kind: 'codex', type: 'event_msg', partial: true },
+    { kind: 'omp', type: 'message', partial: true },
+    { kind: 'muse', type: 'context_projection_checkpoint', partial: false },
+    { kind: 'muse', type: 'children', partial: true },
+  ])('matches local oversized-line rules for $kind/$type', ({ kind, type, partial }) => {
+    const relative =
+      kind === 'codex'
+        ? '.codex/sessions/rollout-test.jsonl'
+        : kind === 'omp'
+          ? '.omp/agent/sessions/p/2026-10-01T15-00_uuid.jsonl'
+          : '.local/share/muse/sessions/2026/10/01/session-1/session.jsonl';
+    const file = path.join(home, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify(
+        type === 'children'
+          ? { children: [{ record_json: 'x'.repeat(4096) }] }
+          : { type, content: 'x'.repeat(4096) }
+      ) + '\n'
+    );
+    const first = runPatchedHelper(
+      { kinds: [kind], minDateMs: MIN_DATE },
+      { MAX_LINE_BYTES: 2048 }
+    );
+    const entry = (first.kinds as Record<string, { partial?: boolean; fingerprints: object }>)[
+      kind
+    ];
+    expect(entry.partial === true).toBe(partial);
+    const warm = runPatchedHelper(
+      { kinds: [kind], minDateMs: MIN_DATE, fingerprints: { [kind]: entry.fingerprints } },
+      { MAX_LINE_BYTES: 2048 }
+    );
+    expect((warm.kinds as Record<string, { partial?: boolean }>)[kind].partial === true).toBe(
+      partial
+    );
+  });
+
   it('reaches Muse subagent logs past thousands of tool-output folders, which hold no log', () => {
     writeFixtures({ zcode: false });
     const session = path.join(home, '.local', 'share', 'muse', 'sessions', '2026', '10', '01');

@@ -26,6 +26,7 @@ import {
 } from './analytics-remote-transport';
 import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
+import { localClaudeLogNames, type ClaudeLogNames } from './analytics-claude-log-names';
 
 export type AnalyticsSourceTool = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'antigravity';
 export type AnalyticsSourceState =
@@ -56,6 +57,8 @@ export interface AnalyticsRemoteSourceDeps {
   ) => Promise<AnalyticsRemoteResponse>;
   now?: () => number;
   cacheDir?: string;
+  /** Metadata-only, independent of when the local usage workers finish. */
+  claudeLogNames?: () => ClaudeLogNames;
   /**
    * Fires when a host's scan starts and when it settles (success or failure),
    * so callers can report which remotes a refresh is waiting on.
@@ -82,11 +85,12 @@ export function analyticsRemoteTargets(host: AnalyticsRemoteHost): AnalyticsRemo
 const MAX_CACHED_ROWS = 100_000;
 
 /**
+ * 5: Claude copy groups, mirror tags and persistent oversized-line verdicts.
  * 4: Claude counts one API response, not one content block; rows cached by
  * version 3 are read again. (3: per-session aggregates ride with the hourly
  * rows, so remote sessions count like local ones.)
  */
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 
 interface RemoteCache {
   /** Per-tool last complete read, including measured empty/absent answers. */
@@ -307,13 +311,78 @@ function cachedHostSources(
   return { results, states };
 }
 
+type HostRows = Pick<RemoteCache, 'rows' | 'srows' | 'fingerprints'>;
+
+/**
+ * Caches always retain RAW mirror rows. Select only after every host has settled,
+ * including cache fallbacks, so scan order cannot change totals. Hashing basenames
+ * matches session and agent logs without exporting private paths. Re-selecting on
+ * every read (including cache-only reads) makes a pruned original's mirror count
+ * immediately, even when the helper's mirror fingerprint has not changed.
+ */
+function selectClaudeMirrors(
+  parts: Map<AnalyticsRemoteHost, HostRows>,
+  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>,
+  states: AnalyticsRemoteSourceState[],
+  local: ClaudeLogNames
+): void {
+  const originals = new Set(local.originals);
+  for (const part of parts.values())
+    for (const print of Object.values(part.fingerprints.claude ?? {}))
+      if (print.claudeName && print.claudeMirror === false) originals.add(print.claudeName);
+  const owners = new Map<string, AnalyticsRemoteHost>();
+  // Fixed host order elects one orphan mirror; network completion order never wins.
+  for (const host of REMOTE_ANALYTICS_HOSTS) {
+    const part = parts.get(host);
+    if (!part) continue;
+    for (const row of part.rows.filter((row) => row.k === 'claude')) {
+      const print = part.fingerprints.claude?.[row.f];
+      if (print?.claudeName && print.claudeMirror && !owners.has(print.claudeName))
+        owners.set(print.claudeName, host);
+    }
+  }
+  for (let index = results.length - 1; index >= 0; index--)
+    if (results[index].tool === 'claude') results.splice(index, 1);
+  for (const [host, part] of parts) {
+    const keep = (row: { f: string }): boolean => {
+      const print = part.fingerprints.claude?.[row.f];
+      return (
+        !print?.claudeMirror ||
+        !print.claudeName ||
+        (!originals.has(print.claudeName) && owners.get(print.claudeName) === host)
+      );
+    };
+    const rows = part.rows.filter((row) => row.k === 'claude' && keep(row));
+    const srows = part.srows.filter((row) => row.k === 'claude' && keep(row));
+    if (rows.length || srows.length)
+      results.push({ tool: 'claude', data: toWorkerResult(rows, srows, 'claude') });
+    const state = states.find((state) => state.host === host && state.tool === 'claude');
+    if (!state) continue;
+    state.rowCount = rows.reduce((sum, row) => sum + Math.floor(row.n), 0);
+    const suppressed = part.rows.some((row) => row.k === 'claude' && !keep(row));
+    if (state.state === 'ok' && !rows.length && !srows.length) state.state = 'no_usage';
+    if (suppressed)
+      state.detail = [
+        state.detail,
+        'SSH mirror logs already counted on another computer are excluded',
+      ]
+        .filter(Boolean)
+        .join('; ');
+    if (!local.complete && state.state !== 'not_installed' && state.state !== 'unavailable') {
+      state.state = rows.length ? 'cached' : 'scanning';
+      state.detail =
+        'the local Claude log inventory is incomplete; SSH mirror selection is partial';
+    }
+  }
+}
+
 /**
  * The remote aggregates saved by the last scans, without contacting a host:
  * what the page shows while a remote scan has not answered in time.
  */
 export function loadAnalyticsRemoteCachedSources(
   minDateMs: number,
-  deps: Pick<AnalyticsRemoteSourceDeps, 'cacheDir'> = {}
+  deps: Pick<AnalyticsRemoteSourceDeps, 'cacheDir' | 'claudeLogNames'> = {}
 ): {
   fetchedAt: string | undefined;
   results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
@@ -323,14 +392,26 @@ export function loadAnalyticsRemoteCachedSources(
   const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
   let fetchedAt: string | undefined;
+  const parts = new Map<AnalyticsRemoteHost, HostRows>();
   for (const host of REMOTE_ANALYTICS_HOSTS) {
     const cached = loadCache(cacheFile(cacheDir, host));
     if (cached.lastScanAt && (!fetchedAt || cached.lastScanAt > fetchedAt))
       fetchedAt = cached.lastScanAt;
+    parts.set(host, {
+      ...cached,
+      rows: cached.rows.filter((row) => inWindow(row, minDateMs)),
+      srows: cached.srows.filter((row) => sessionInWindow(row, minDateMs)),
+    });
     const part = cachedHostSources(host, cached, minDateMs, 'remote scan timed out');
     results.push(...part.results);
     states.push(...part.states);
   }
+  selectClaudeMirrors(
+    parts,
+    results,
+    states,
+    deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
+  );
   states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
   return { results, states, fetchedAt };
 }
@@ -486,6 +567,7 @@ export async function loadAnalyticsRemoteSources(
   const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
   const jobs: Array<Promise<void>> = [];
+  const parts = new Map<AnalyticsRemoteHost, HostRows>();
   for (const host of REMOTE_ANALYTICS_HOSTS) {
     jobs.push(
       (async (): Promise<void> => {
@@ -519,6 +601,11 @@ export async function loadAnalyticsRemoteSources(
           failure
         );
         if (!scan) {
+          parts.set(host, {
+            ...cached,
+            rows: cached.rows.filter((row) => inWindow(row, minDateMs)),
+            srows: cached.srows.filter((row) => sessionInWindow(row, minDateMs)),
+          });
           onHostScan?.(host, 'done');
           // Previous aggregates stay available; nothing remote fails the page.
           const part = cachedHostSources(
@@ -609,6 +696,7 @@ export async function loadAnalyticsRemoteSources(
           }
         }
         await yieldTurn();
+        parts.set(host, { rows: merged, srows: mergedSessions, fingerprints: prints });
         try {
           saveCache(file, {
             version: CACHE_VERSION,
@@ -736,6 +824,12 @@ export async function loadAnalyticsRemoteSources(
     );
   }
   await Promise.all(jobs);
+  selectClaudeMirrors(
+    parts,
+    results,
+    states,
+    deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
+  );
   states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
   return { results, states, fetchedAt: new Date(now()).toISOString() };
 }

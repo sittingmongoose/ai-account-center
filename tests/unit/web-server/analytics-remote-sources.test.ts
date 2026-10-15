@@ -29,6 +29,8 @@ import {
   writeDashboardPreferences,
 } from '../../../src/web-server/services/dashboard-preferences';
 import { withLfLineEndings } from '../../../src/utils/packaged-source';
+import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
+import { localClaudeLogNames } from '../../../src/web-server/services/analytics-claude-log-names';
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 let cache: string;
@@ -535,6 +537,113 @@ describe('analytics remote sources', () => {
 
   const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias' });
 
+  it('inventories current VM filenames without transcript contents and notices pruning', () => {
+    runWithScopedCcsHome(cache, () => {
+      const name = 'a0b63bac-f4aa-4346-b817-096dc2c15c7f.jsonl';
+      const original = path.join(cache, '.claude', 'projects', 'project', name);
+      const mirror = path.join(
+        cache,
+        '.claude',
+        'projects',
+        `ssh-${name.slice(0, -6)}`,
+        'agent-only.jsonl'
+      );
+      for (const file of [original, mirror]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'metadata only; deliberately not JSON');
+      }
+      expect(localClaudeLogNames(cache, MIN_DATE)).toEqual({
+        originals: new Set([createHash('sha256').update(name).digest('hex')]),
+        complete: true,
+      });
+      fs.unlinkSync(original);
+      expect(localClaudeLogNames(cache, MIN_DATE).originals.size).toBe(0);
+    });
+  });
+
+  it.each([false, true])(
+    'selects SSH mirrors after all hosts settle (Mac first: %s)',
+    async (macFirst) => {
+      const original = createHash('sha256').update('session-original.jsonl').digest('hex');
+      const orphan = createHash('sha256').update('agent-orphan.jsonl').digest('hex');
+      const remoteOriginal = createHash('sha256').update('session-remote.jsonl').digest('hex');
+      const mirrorFiles = ['11', '22', '33'].map((prefix) => prefix.repeat(32));
+      const originalFile = '44'.repeat(32);
+      let localOriginals = new Set([original]);
+      let pruned = false;
+      const claudeLogNames = () => ({ originals: localOriginals, complete: true });
+      const options = {
+        hosts,
+        cacheDir: cache,
+        claudeLogNames,
+        runHelper: async (
+          _alias: string,
+          host: AnalyticsRemoteHost,
+          request: { kinds: string[]; fingerprints: Record<string, Record<string, unknown>> }
+        ) => {
+          if (!request.kinds.includes('claude'))
+            return parseAnalyticsRemoteResponse(JSON.stringify(response({ rows: [], kinds: {} })));
+          await new Promise((resolve) =>
+            setTimeout(resolve, (host === 'mac') === macFirst ? 1 : 10)
+          );
+          const prints: Record<string, unknown> = {};
+          if (host === 'mac' || host === 'windows')
+            [original, orphan, remoteOriginal].forEach((name, index) => {
+              prints[mirrorFiles[index]] = {
+                size: 10,
+                mtimeMs: 20,
+                claudeName: name,
+                claudeMirror: true,
+              };
+            });
+          if (host === 'nas1' && !pruned)
+            prints[originalFile] = {
+              size: 10,
+              mtimeMs: 20,
+              claudeName: remoteOriginal,
+              claudeMirror: false,
+            };
+          const fresh = Object.keys(prints).filter((key) => !request.fingerprints.claude?.[key]);
+          return parseAnalyticsRemoteResponse(
+            JSON.stringify(
+              response({
+                kinds: { claude: { state: 'ok', fingerprints: prints } },
+                rows: fresh.map((f) => row({ k: 'claude', f, n: 1, c: 0 })),
+                srows: fresh.map((f) => srow({ k: 'claude', f, n: 1, c: 0 })),
+              })
+            )
+          );
+        },
+      };
+      const count = (answer: Awaited<ReturnType<typeof loadAnalyticsRemoteSources>>) =>
+        answer.results
+          .filter((r) => r.tool === 'claude')
+          .reduce((sum, r) => sum + (r.data.eventCount ?? 0), 0);
+      const first = await loadAnalyticsRemoteSources(MIN_DATE, options);
+      expect(count(first)).toBe(2); // One original on Nas1, one elected orphan mirror on Mac.
+      expect(first.states.find((s) => s.host === 'mac' && s.tool === 'claude')?.rowCount).toBe(1);
+      expect(first.states.find((s) => s.host === 'windows' && s.tool === 'claude')).toMatchObject({
+        state: 'no_usage',
+        rowCount: 0,
+      });
+      expect(count(await loadAnalyticsRemoteSources(MIN_DATE, options))).toBe(2);
+      // Cached mirror rows survive suppression. Local pruning needs no mirror re-read.
+      localOriginals = new Set();
+      expect(
+        count(loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache, claudeLogNames }))
+      ).toBe(3);
+      pruned = true;
+      const after = await loadAnalyticsRemoteSources(MIN_DATE, options);
+      expect(count(after)).toBe(3); // Both pruned originals are now represented by Mac mirrors.
+      expect(
+        after.results.filter((r) => r.tool === 'claude').flatMap((r) => r.data.session)
+      ).toHaveLength(1);
+      expect(
+        count(loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache, claudeLogNames }))
+      ).toBe(3);
+    }
+  );
+
   it('merges per-host aggregates and converts them to worker results', async () => {
     const { results, states } = await loadAnalyticsRemoteSources(MIN_DATE, {
       hosts,
@@ -687,7 +796,7 @@ describe('analytics remote sources', () => {
         version: number;
         srows: unknown[];
       };
-      expect(saved.version).toBe(4);
+      expect(saved.version).toBe(5);
       expect(saved.srows).toHaveLength(1);
       fs.writeFileSync(file, JSON.stringify({ ...saved, version: 2, srows: [] }));
     }
