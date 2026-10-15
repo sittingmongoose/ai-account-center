@@ -48,6 +48,9 @@ export component AccountsPage inherits Rectangle {
     in property <bool> first: false;
     callback settings-jump(length);
     callback theme-picked(string);
+    // Where the Settings area starts on the page, reported by its anchor (which sits inside a
+    // conditional block, so the header's jump button cannot read it directly).
+    property <length> settings-y: 0px;
     callback open-details(string);
     callback act(string, string);
 
@@ -95,7 +98,7 @@ export component AccountsPage inherits Rectangle {
                 accessible-role: button;
                 accessible-label: "Settings";
                 jump-ta := TouchArea {
-                    clicked => { root.settings-jump(settings-anchor.absolute-position.y - root.absolute-position.y); }
+                    clicked => { root.settings-jump(root.settings-y); }
                 }
                 jump := HorizontalLayout {
                     alignment: center;
@@ -134,6 +137,9 @@ export component AccountsPage inherits Rectangle {
                 }
             }
             settings-anchor := Reveal {
+                property <length> top: self.absolute-position.y - root.absolute-position.y;
+                init => { root.settings-y = self.top; }
+                changed top => { root.settings-y = self.top; }
                 delay: root.base + 80ms;
                 SettingsColumn {
                     two-col: root.settings-two-col;

@@ -33,6 +33,8 @@ test('JSONL fields retain drafts and clear only from the successful-add nonce', 
 });
 test('slider cancellation discards the preview and Settings navigation uses a measured clamped anchor', () => {
   assert.match(read('pages/accounts/ac-settings.slint'), /e.kind == PointerEventKind.cancel \{\s*root.dragging = false;\s*root.pending = 0;/);
-  assert.match(read('pages/accounts.slint'), /settings-anchor.absolute-position.y - root.absolute-position.y/);
+  // The anchor reports its measured offset; the header's jump button reads it (the anchor is in a conditional block).
+  assert.match(read('pages/accounts.slint'), /self.absolute-position.y - root.absolute-position.y/);
+  assert.match(read('pages/accounts.slint'), /root.settings-jump\(root.settings-y\)/);
   assert.match(read('dashboard.slint'), /settings-jump\(anchor\) => \{\s*scroller.content-y = clamp/);
 });
