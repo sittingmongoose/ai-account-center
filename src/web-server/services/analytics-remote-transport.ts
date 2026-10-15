@@ -1,8 +1,7 @@
 import { execFile } from 'child_process';
-import { createHash } from 'crypto';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
-import { readPackagedSource } from '../../utils/packaged-source';
+import { readAnalyticsHelper } from './analytics-remote-helper';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 import { HOST_OS, NAS1_SSH_ALIAS } from './dashboard-hosts';
@@ -21,13 +20,11 @@ export type AnalyticsRemoteKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' 
 const REMOTE_KIND_LIST = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
 const REMOTE_KINDS: ReadonlySet<string> = new Set(REMOTE_KIND_LIST);
 
-/** The packaged helper is missing, oversized or fails its pin: no host can be scanned. */
-export class AnalyticsHelperIntegrityError extends ValidationError {
-  constructor() {
-    super('Analytics remote helper is unavailable.');
-    this.name = 'AnalyticsHelperIntegrityError';
-  }
-}
+export {
+  ANALYTICS_HELPER_SHA256,
+  AnalyticsHelperIntegrityError,
+  analyticsHelperPath,
+} from './analytics-remote-helper';
 
 export class AnalyticsRemoteTransportError extends NetworkError {
   readonly timedOut: boolean;
@@ -40,16 +37,8 @@ export class AnalyticsRemoteTransportError extends NetworkError {
 }
 
 const SSH_TIMEOUT_MS = 30_000;
-const MAX_HELPER_BYTES = 128 * 1024;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ROWS = 100_000;
-/**
- * The packaged helper's SHA-256, pinned like the Claude history writer: only these exact bytes are ever run on the
- * Mac, Windows and Nas1. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`. The pin
- * covers the helper's LF text (`readPackagedSource`), so a package built from a CRLF checkout still passes.
- */
-export const ANALYTICS_HELPER_SHA256 =
-  'da65d7d1a771d7cd63f82d090a797dce3bc6aa41c2acbdc5ab7317493125e9a6';
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
@@ -134,10 +123,6 @@ export interface AnalyticsRemoteRequest {
    * they leave this host.
    */
   extraRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
-}
-
-export function analyticsHelperPath(): string {
-  return path.resolve(__dirname, '../../../scripts/analytics-remote/analytics_usage_remote.py');
 }
 
 function quoteShell(value: string): string {
@@ -394,18 +379,7 @@ export async function runAnalyticsRemoteHelper(
   ) {
     throw new ValidationError('Analytics remote request is invalid.');
   }
-  let helperBytes: Buffer;
-  try {
-    helperBytes = await readPackagedSource(deps.helperPath ?? analyticsHelperPath());
-  } catch {
-    throw new AnalyticsHelperIntegrityError();
-  }
-  if (
-    helperBytes.length > MAX_HELPER_BYTES ||
-    createHash('sha256').update(helperBytes).digest('hex') !== ANALYTICS_HELPER_SHA256
-  )
-    throw new AnalyticsHelperIntegrityError();
-  const helper = helperBytes.toString('utf8');
+  const helper = await readAnalyticsHelper(deps.helperPath);
   const input = Buffer.from(
     JSON.stringify({
       helperSource: helper,
