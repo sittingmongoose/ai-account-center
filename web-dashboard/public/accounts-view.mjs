@@ -1071,8 +1071,7 @@ export function accountsViewModel(data, ctx = {}) {
   const trayHiddenIds = new Set(trayIdsKnown ? settings.trayHiddenAccountIds : []);
   const visibilityOk = settings.visibilityAvailable !== false;
   // Every provider's rows and switch state, even for a provider or account hidden on Home.
-  const unhidden = data ? { ...data, settings: { ...settings, hiddenProviders: [], hiddenAccountIds: [] } } : data;
-  const home = dashboardViewModel(unhidden, { ...c, refreshing: false });
+  const home = dashboardViewModel(data, { ...c, refreshing: false, includeHidden: true });
   const homeRows = new Map(home.sections.flatMap(section => section.rows.map(row => [row.id, row])));
   const agAccounts = accounts.filter(account => account.provider === 'antigravity');
   const agSection = home.sections.find(section => section.id === 'antigravity');

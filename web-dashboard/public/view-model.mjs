@@ -15,7 +15,7 @@ import {
   antigravityPlanNote,
   antigravityCreditsHint,
 } from './antigravity-data.mjs';
-import { lazyFormat } from './time-format.mjs';
+import { lazyFormat, zonedParts } from './time-format.mjs';
 
 export const VIEW_MODEL_VERSION = 2;
 
@@ -259,11 +259,14 @@ export function windowLabel(provider, w) {
 export function shortWindowLabel(provider, w) {
   if (provider !== 'antigravity') return windowLabel(provider, w);
   // space, not +: crowded table heads wrap between the words, never mid-word
-  const family = /^gemini/i.test(text(w?.key)) ? 'Gemini' : 'Claude GPT';
-  const p = period(w);
-  if (p === '5h') return `${family} 5hr`;
-  if (p === 'week') return `${family} wk`;
-  return windowLabel(provider, w);
+  return (
+    {
+      'gemini-5h': 'Gemini 5hr',
+      'gemini-weekly': 'Gemini wk',
+      '3p-5h': 'Claude GPT 5hr',
+      '3p-weekly': 'Claude GPT wk',
+    }[w?.key] || windowLabel(provider, w)
+  );
 }
 export function fullWindowLabel(provider, w) {
   if (isFable(w)) return 'Fable weekly';
@@ -321,7 +324,9 @@ export const currentUsedPercent = (account, w, now = Date.now()) =>
 /** "10:15 AM" today, "Thu, Oct 1, 10:15 AM" on another day. */
 export function resetClock(value, now = Date.now()) {
   const time = new Date(value);
-  return time.toDateString() === new Date(now).toDateString()
+  const day = zonedParts(time.getTime());
+  const today = zonedParts(now);
+  return day.year === today.year && day.month === today.month && day.day === today.day
     ? clockTime.format(time)
     : dayClock.format(time);
 }
@@ -420,6 +425,14 @@ const emptyCell = (account, key) => ({
 const rolledUpPacks = (account, w) =>
   account?.provider === 'zai' && /^reset-packs-(?:5h|weekly)$/.test(text(w.key));
 
+const cacheProvenance = (account, w, now) => {
+  if (w.status !== 'cached' && account?.status !== 'cached') return '';
+  const at = validDate(w.sampledAt) ? w.sampledAt : account?.sampledAt;
+  return validDate(at) ? `cached, sampled ${relative(at, now)}` : 'cached';
+};
+const expiryText = (value, now, prefix = 'Expires ') =>
+  exact(value, validDate(value) && Date.parse(value) <= now ? 'Reported expiry passed ' : prefix);
+
 /** Packs, balances, credits and spend as an AmountView. */
 export function amountView(account, w, now = Date.now(), { noExpiry = false } = {}) {
   const unit = text(w.unit);
@@ -427,7 +440,7 @@ export function amountView(account, w, now = Date.now(), { noExpiry = false } = 
     .replace(/^Additional credit pack/i, 'Credit pack')
     .replace(/^Listed active credit packs/i, 'Active packs listed')
     .replace(/^Rate-limit resets available/i, 'Rate-limit resets left');
-  const expires = noExpiry ? '' : exact(w.expiresAt, 'Expires ');
+  const expires = noExpiry ? '' : expiryText(w.expiresAt, now);
   let value = '',
     suffix = '',
     sub = '',
@@ -442,7 +455,7 @@ export function amountView(account, w, now = Date.now(), { noExpiry = false } = 
     spent = w.remaining === 0;
     sub = [
       finite(w.used) && w.used > 0 ? `${nf2.format(w.used)} used` : '',
-      noExpiry ? '' : exact(w.expiresAt, w.remaining > 1 ? 'Next expires ' : 'Expires '),
+      noExpiry ? '' : expiryText(w.expiresAt, now, w.remaining > 1 ? 'Next expires ' : 'Expires '),
     ]
       .filter(Boolean)
       .join(' · ');
@@ -496,17 +509,22 @@ export function amountView(account, w, now = Date.now(), { noExpiry = false } = 
         : label || 'Balance',
     value,
     unit: suffix,
-    sub:
+    sub: [
+      sub,
       account.provider === 'antigravity' && w.key === 'google-ai-credits'
-        ? [sub, antigravityCreditsHint(account)].filter(Boolean).join(' · ')
-        : sub,
+        ? antigravityCreditsHint(account)
+        : '',
+      cacheProvenance(account, w, now),
+    ]
+      .filter(Boolean)
+      .join(' · '),
     icon,
     spent,
   };
 }
 
 /** Codex credits and banked resets of one account, as runs with the figures in bold ("**62.5K** credits · **1** banked"). */
-function codexAmountsRuns(account) {
+function codexAmountsRuns(account, now) {
   const windows = visibleUsageWindows('codex', account.windows);
   const credits = windows.find(
     (w) => w.key === 'credits_balance' || (w.kind === 'balance' && w.unit === 'credits')
@@ -532,6 +550,15 @@ function codexAmountsRuns(account) {
       ]);
   }
   if (bankedTotal !== null) parts.push([run(nf2.format(bankedTotal), true), run(' banked')]);
+  const provenance = [
+    ...new Set(
+      [credits, ...banked]
+        .filter(Boolean)
+        .map((w) => cacheProvenance(account, w, now))
+        .filter(Boolean)
+    ),
+  ];
+  for (const note of provenance) parts.push([run(note)]);
   return parts.flatMap((part, index) => (index ? [run(' · '), ...part] : part));
 }
 const runsText = (runs) => runs.map((r) => r.text).join('');
@@ -554,8 +581,9 @@ function confirmRuns(peak, threshold, autoOn) {
   ];
 }
 /** Codex footer: what auto-switch is doing about the active account, in the concept's words. */
-function codexFoot(accounts, auto, known, threshold, now) {
-  const short = (account) => shortIdentity(account);
+function codexFoot(accounts, auto, known, threshold, now, hiddenIds) {
+  const short = (account) =>
+    `${shortIdentity(account)}${hiddenIds.has(account.id) ? ' (hidden)' : ''}`;
   const active = accounts.find((account) => account.isActive === true);
   const checked = validDate(auto?.lastCheckedAt) ? relative(auto.lastCheckedAt, now) : 'never';
   const when = `Checked ${checked}${Number.isInteger(auto?.pollIntervalSeconds) ? ` · every ${intervalLabel(auto.pollIntervalSeconds)}` : ''}`;
@@ -588,7 +616,9 @@ function codexFoot(accounts, auto, known, threshold, now) {
         typeof auto.candidate === 'string'
           ? accounts.find((account) => account?.capabilities?.codexProfile === auto.candidate)
           : null;
-      const name = match ? text(match.email) || text(match.label) : text(auto.candidate);
+      const name = match
+        ? `${text(match.email) || text(match.label)}${hiddenIds.has(match.id) ? ' (hidden)' : ''}`
+        : text(auto.candidate);
       const runs = [run(text(auto.message) || 'Automatic switching is waiting')];
       if (auto.outcome === 'waiting_idle' && name) {
         runs.push(
@@ -600,7 +630,10 @@ function codexFoot(accounts, auto, known, threshold, now) {
       return foot(runs, true);
     }
     const next = accounts
-      .filter((account) => account !== active)
+      .filter(
+        (account) =>
+          account !== active && account.switchable !== false && account.capabilities?.codexProfile
+      )
       .map((account) => ({ account, peak: codexPeak(account, now) }))
       .filter((row) => row.peak !== null && row.peak < threshold)
       .sort((a, b) => a.peak - b.peak)[0]?.account;
@@ -681,7 +714,7 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
   const rows = accounts.map((account) => {
     const meters = visibleMeters(account);
     const five = meters.find((w) => !isFable(w) && period(w) === '5h');
-    const weekly = meters.find((w) => !isFable(w) && period(w) === 'week');
+    const weekly = meters.find((w) => w.key === 'seven_day');
     const fable = meters.find(isFable);
     const launcher = (Array.isArray(profiles) ? profiles : []).find(
       (profile) => profile.id === account.capabilities?.claudeProfileId
@@ -782,10 +815,14 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
   };
 }
 
-// `total` counts every account of the provider, the ones hidden from the dashboard too: "Show on dashboard" only
+// `allAccounts` includes the ones hidden from the dashboard too: "Show on dashboard" only
 // changes which rows Home lists, never what the user can operate (the server keeps hidden accounts as switch
 // candidates).
-function codexSection(accounts, data, now, total = accounts.length) {
+function codexSection(accounts, data, now, allAccounts = accounts) {
+  const hiddenIds = new Set(
+    allAccounts.filter((account) => !accounts.includes(account)).map((account) => account.id)
+  );
+  const total = allAccounts.length;
   const auto = data?.codexAutoSwitch;
   const known =
     !!auto &&
@@ -804,7 +841,10 @@ function codexSection(accounts, data, now, total = accounts.length) {
     ...(hasFive ? [{ key: 'five', label: '5-hour' }] : []),
     { key: 'weekly', label: 'Weekly' },
   ];
-  const active = accounts.find((account) => account.isActive === true);
+  const active = allAccounts.find((account) => account.isActive === true);
+  const activeName = active
+    ? `${shortIdentity(active)}${hiddenIds.has(active.id) ? ' (hidden)' : ''}`
+    : '';
   const rows = accounts.map((account) => {
     const windows = visibleUsageWindows('codex', account.windows);
     const five = windows.find((w) => w.key === 'five_hour');
@@ -826,7 +866,7 @@ function codexSection(accounts, data, now, total = accounts.length) {
     if (!weekly) weeklyCell.key = `${account.id}|seven_day`;
     cells.push(weeklyCell);
     const profile = account.capabilities?.codexProfile || '';
-    const amountsRuns = codexAmountsRuns(account);
+    const amountsRuns = codexAmountsRuns(account, now);
     const peak = codexPeak(account, now);
     const above = known && account.isActive !== true && peak !== null && peak >= threshold;
     const cr = above ? confirmRuns(peak, threshold, auto?.enabled === true) : [];
@@ -849,13 +889,15 @@ function codexSection(accounts, data, now, total = accounts.length) {
       note: text(account.message),
       platform: hostLabel(account),
       active: account.isActive === true,
-      activeLabel: `on ${hostLabel(account)}`,
+      activeLabel: 'on Ubuntu',
       setup: false,
-      canActivate: account.isActive !== true && !!profile,
+      canActivate: account.isActive !== true && !!profile && account.switchable !== false,
       activateKind: 'activate',
-      activateHint: profile
-        ? `Make ${text(account.email) || 'this account'} the active Codex account`
-        : 'This account has no Codex profile to activate',
+      activateHint: !profile
+        ? 'This account has no Codex profile to activate'
+        : account.switchable === false
+          ? 'This saved Codex login is invalid. Sign in again before activating it.'
+          : `Make ${text(account.email) || 'this account'} the active Codex account`,
       canMac: false,
       canWindows: false,
       amountsLine: runsText(amountsRuns),
@@ -870,7 +912,7 @@ function codexSection(accounts, data, now, total = accounts.length) {
     run(rows.length, true),
     run(` ${rows.length === 1 ? 'account' : 'accounts'} · `),
     ...(active
-      ? [run(shortIdentity(active), true, 'good'), run(' active')]
+      ? [run(activeName, true, 'good'), run(' active')]
       : [run('none active')]),
   ];
   return {
@@ -880,12 +922,14 @@ function codexSection(accounts, data, now, total = accounts.length) {
     longLabel: 'Codex',
     switchable: true,
     canSwitch: total > 1,
-    meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}${active ? ` · ${shortIdentity(active)} active` : ''}`,
+    meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}${active ? ` · ${activeName} active` : ''}`,
     metaRuns,
     metaWords: wordsOf(metaRuns),
-    foot: codexFoot(accounts, auto, known, threshold, now),
+    foot: codexFoot(allAccounts, auto, known, threshold, now, hiddenIds),
     activeId: active?.id || '',
-    activeLabel: active ? text(active.email) || text(active.label) : '',
+    activeLabel: active
+      ? `${text(active.email) || text(active.label)}${hiddenIds.has(active.id) ? ' (hidden)' : ''}`
+      : '',
     empty: 'No Codex accounts are reported yet.',
     auto: {
       known,
@@ -1124,7 +1168,7 @@ function providerCards(accounts, hidden, now) {
         ]
           .filter(Boolean)
           .join(' · '),
-        packsNote: sameExpiry ? exact(packs[0].expiresAt, `All ${packs.length} packs expire `) : '',
+        packsNote: sameExpiry ? expiryText(packs[0].expiresAt, now, `All ${packs.length} packs expire `) : '',
         note: text(account.message) || (meters.length ? '' : 'Usage unavailable'),
         meters,
         amounts: amountWindows.map((w) =>
@@ -1145,7 +1189,7 @@ export function chromeView(
   if (refreshing)
     return {
       statusLead: 'Refreshing',
-      statusStrong: `${accounts.length} accounts`,
+      statusStrong: Array.isArray(data?.accounts) ? `${accounts.length} accounts` : '',
       statusMore: '',
       statusTip: 'Asking every provider for fresh readings',
       refreshing: true,
@@ -1175,7 +1219,7 @@ export function chromeView(
 
 /**
  * The complete Home view model.
- * ctx: { profiles, platform, antigravityInventory, antigravityAuto, now, refreshing, intervalSeconds, username, host }
+ * ctx: { profiles, platform, antigravityInventory, antigravityAuto, now, refreshing, intervalSeconds, username, host, includeHidden }
  */
 export function dashboardViewModel(data, ctx = {}) {
   const now = ctx.now ?? Date.now();
@@ -1184,10 +1228,10 @@ export function dashboardViewModel(data, ctx = {}) {
     Array.isArray(data?.settings?.hiddenAccountIds) ? data.settings.hiddenAccountIds : []
   );
   const everyAccount = Array.isArray(data?.accounts) ? data.accounts : [];
-  const accounts = everyAccount.filter(
-    (account) => !hiddenIds.has(account?.id) && account?.hidden !== true
-  );
-  const hidden = hiddenProviders(data);
+  const accounts = ctx.includeHidden
+    ? everyAccount
+    : everyAccount.filter((account) => !hiddenIds.has(account?.id) && account?.hidden !== true);
+  const hidden = ctx.includeHidden ? new Set() : hiddenProviders(data);
   const of = (provider) => accounts.filter((account) => account.provider === provider);
   const countOf = (provider) =>
     everyAccount.filter((account) => account?.provider === provider).length;
@@ -1196,7 +1240,10 @@ export function dashboardViewModel(data, ctx = {}) {
     sections.push(
       claudeSection(of('claude'), ctx.profiles, ctx.platform || 'mac', now, ctx.openProgress)
     );
-  if (!hidden.has('codex')) sections.push(codexSection(of('codex'), data, now, countOf('codex')));
+  if (!hidden.has('codex'))
+    sections.push(
+      codexSection(of('codex'), data, now, everyAccount.filter((account) => account.provider === 'codex'))
+    );
   if (!hidden.has('antigravity') && of('antigravity').length)
     sections.push(
       antigravitySection(
@@ -1230,7 +1277,7 @@ export function detailsViewModel(data, id, ctx = {}) {
   const account =
     accounts.find((row) => row.id === id) || accounts.find((row) => row.provider === id);
   if (!account) return null;
-  const home = dashboardViewModel(data, ctx);
+  const home = dashboardViewModel(data, { ...ctx, includeHidden: true });
   const row = home.sections.flatMap((section) => section.rows).find((r) => r.id === account.id);
   const section = home.sections.find((s) => s.rows.some((r) => r.id === account.id));
   const switchable = SWITCHABLE.includes(account.provider);

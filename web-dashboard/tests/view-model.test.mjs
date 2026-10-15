@@ -13,7 +13,10 @@ import {
   parseIntervalLabel,
   valueText,
   wordsOf,
+  resetClock,
+  shortWindowLabel,
 } from '../public/view-model.mjs';
+import { getDisplayTimeZone, setDisplayTimeZone, displayFormat } from '../public/time-format.mjs';
 
 const now = Date.parse('2026-10-01T15:16:00Z');
 const at = (minutes) => new Date(now + minutes * 60_000).toISOString();
@@ -1302,4 +1305,127 @@ test('antigravity columns carry single-line short labels for the stacked 2x2 gri
     columns.map((col) => col.label),
     ['Gemini 5-hour', 'Gemini weekly', 'Claude and GPT 5-hour', 'Claude and GPT weekly']
   );
+});
+
+
+test('hidden server rows retain actions in the inclusive model and Details without changing Home or the DTO', () => {
+  const active = account({ isActive: true, hidden: true });
+  const other = account({ id: 'codex:two', hidden: true, capabilities: { codexProfile: 'two' } });
+  const dto = data([active, other], { settings: {
+    hiddenProviders: ['codex'], hiddenAccountIds: [active.id, other.id],
+    trayHiddenProviders: ['codex'], trayHiddenAccountIds: [other.id],
+  } });
+  const before = structuredClone(dto);
+  assert.equal(section(dashboardViewModel(dto, { now }), 'codex'), undefined);
+  const inclusive = section(dashboardViewModel(dto, { now, includeHidden: true }), 'codex');
+  assert.equal(inclusive.rows[0].active, true);
+  assert.equal(inclusive.rows[1].canActivate, true);
+  assert.equal(detailsViewModel(dto, active.id, { now }).active, true);
+  assert.equal(detailsViewModel(dto, other.id, { now }).canActivate, true);
+  assert.equal(detailsViewModel(dto, other.id, { now }).canSwitch, true);
+  assert.deepEqual(dto, before);
+});
+
+test('Codex Home keeps hidden active and next accounts in the footer and prefers a server candidate', () => {
+  const active = account({ isActive: true, hidden: true, windows: [window({ usedPercent: 98 })] });
+  const next = account({ id: 'codex:next', email: 'next@example.test', hidden: true,
+    capabilities: { codexProfile: 'next' }, windows: [window({ usedPercent: 12 })] });
+  const visible = account({ id: 'codex:visible', email: 'visible@example.test',
+    capabilities: { codexProfile: 'visible' }, windows: [window({ usedPercent: 30 })] });
+  const dto = data([active, next, visible]);
+  const home = section(dashboardViewModel(dto, { now }), 'codex');
+  assert.deepEqual(home.rows.map(row => row.id), [visible.id]);
+  assert.equal(home.activeId, active.id);
+  assert.match(home.meta, /one \(hidden\) active/);
+  assert.match(home.activeLabel, /one@example.test \(hidden\)/);
+  assert.match(home.foot.runs.map(r => r.text).join(''), /one \(hidden\).*moves to next \(hidden\)/);
+  dto.codexAutoSwitch = { ...dto.codexAutoSwitch, outcome: 'waiting_idle', candidate: 'visible', message: 'Waiting for idle.' };
+  assert.match(section(dashboardViewModel(dto, { now }), 'codex').foot.runs.map(r => r.text).join(''), /Will switch to visible@example.test/);
+  dto.codexAutoSwitch = { ...dto.codexAutoSwitch, candidate: 'next' };
+  assert.match(section(dashboardViewModel(dto, { now }), 'codex').foot.runs.map(r => r.text).join(''), /next@example.test \(hidden\)/);
+  dto.codexAutoSwitch = { ...dto.codexAutoSwitch, outcome: 'no_candidate', candidate: undefined, message: 'No valid candidate.' };
+  assert.equal(section(dashboardViewModel(dto, { now }), 'codex').foot.runs.map(r => r.text).join(''), 'No valid candidate.');
+});
+
+test('Codex activation names Ubuntu even with fallback readings and refuses invalid saved logins', () => {
+  for (const host of ['mac', 'nas1']) {
+    const active = account({ isActive: true, platform: 'mac', host });
+    const invalid = account({ id: 'codex:invalid', switchable: false, capabilities: { codexProfile: 'invalid' } });
+    const legacy = account({ id: 'codex:legacy', capabilities: { codexProfile: 'legacy' } });
+    const dto = data([active, invalid, legacy]);
+    const rows = section(dashboardViewModel(dto, { now }), 'codex').rows;
+    assert.equal(rows[0].activeLabel, 'on Ubuntu');
+    assert.equal(detailsViewModel(dto, active.id, { now }).state, 'Active on Ubuntu');
+    assert.equal(rows[0].platform, host === 'mac' ? 'Mac' : 'Nas1');
+    assert.equal(rows[1].canActivate, false);
+    assert.match(rows[1].activateHint, /invalid.*Sign in again/);
+    assert.equal(detailsViewModel(dto, invalid.id, { now }).canActivate, false);
+    assert.equal(rows[2].canActivate, true);
+  }
+});
+
+test('cached amounts keep values, window sample age and honest passed expiries', () => {
+  const a = account({ status: 'ok', sampledAt: at(-1) });
+  const credit = { key: 'credits_balance', label: 'Credits', kind: 'balance', unit: 'credits', remaining: 250,
+    status: 'cached', sampledAt: at(-180), expiresAt: at(-20) };
+  const amount = amountView(a, credit, now);
+  assert.equal(amount.value, '250 credits');
+  assert.match(amount.sub, /^Reported expiry passed .*cached, sampled 3h 0m ago$/);
+  assert.doesNotMatch(amount.sub, /Expires |plan.*end/i);
+  const banked = n => ({ ...credit, key: `banked_resets_${n}`, unit: 'resets', remaining: n });
+  const dto = data([{ ...a, windows: [credit, banked(1), banked(2)] }]);
+  const line = section(dashboardViewModel(dto, { now }), 'codex').rows[0].amountsLine;
+  assert.match(line, /^250 credits · 3 banked · cached, sampled 3h 0m ago$/);
+  assert.equal(detailsViewModel(dto, a.id, { now }).amounts.length, 3);
+  const fallback = amountView({ ...a, status: 'cached', sampledAt: at(-120) }, { ...credit, sampledAt: null }, now);
+  assert.match(fallback.sub, /cached, sampled 2h 0m ago/);
+  assert.match(amountView(a, { ...credit, expiresAt: at(60) }, now).sub, /^Expires /);
+  const live = amountView(a, { ...credit, status: 'ok', expiresAt: null }, now);
+  assert.equal(live.sub, '');
+});
+
+test('resetClock compares calendar days in the display zone across browser midnight', () => {
+  const savedZone = getDisplayTimeZone();
+  const savedTZ = process.env.TZ;
+  process.env.TZ = 'UTC';
+  try {
+    setDisplayTimeZone('America/Los_Angeles');
+    const time = '2026-10-02T00:30:00Z';
+    assert.equal(resetClock(time, Date.parse('2026-10-01T23:30:00Z')),
+      displayFormat({ hour: 'numeric', minute: '2-digit' }).format(new Date(time)));
+    setDisplayTimeZone('Asia/Tokyo');
+    assert.equal(resetClock('2026-10-01T15:30:00Z', Date.parse('2026-10-01T14:30:00Z')),
+      displayFormat({ weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date('2026-10-01T15:30:00Z')));
+    assert.match(resetClock('2027-01-01T15:30:00Z', Date.parse('2026-01-01T15:30:00Z')), /Jan/);
+  } finally {
+    setDisplayTimeZone(savedZone);
+    if (savedTZ === undefined) delete process.env.TZ; else process.env.TZ = savedTZ;
+  }
+});
+
+test('Claude Weekly uses only the aggregate seven_day window; model windows remain in Details', () => {
+  const a = claude('models', 'pro', [window({ key: 'seven_day_opus', label: 'Opus weekly', usedPercent: 44 }),
+    window({ key: 'seven_day_sonnet', label: 'Sonnet weekly', usedPercent: 22 })]);
+  let dto = data([a]);
+  const weekly = section(dashboardViewModel(dto, { now }), 'claude').rows[0].cells[1];
+  assert.equal(weekly.hasValue, false);
+  assert.equal(weekly.naText, 'Unavailable');
+  assert.equal(detailsViewModel(dto, a.id, { now }).meters.length, 2);
+  dto = data([{ ...a, windows: [...a.windows, window({ usedPercent: 18 })] }]);
+  assert.equal(section(dashboardViewModel(dto, { now }), 'claude').rows[0].cells[1].value, 18);
+});
+
+test('Antigravity short labels abbreviate only canonical quota keys', () => {
+  for (const [key, label] of Object.entries({ 'gemini-5h': 'Gemini 5hr', 'gemini-weekly': 'Gemini wk',
+    '3p-5h': 'Claude GPT 5hr', '3p-weekly': 'Claude GPT wk' })) {
+    assert.equal(shortWindowLabel('antigravity', { key }), label);
+  }
+  assert.equal(shortWindowLabel('antigravity', { key: 'future-weekly', label: 'Future weekly' }), 'Future weekly');
+  assert.equal(shortWindowLabel('antigravity', { key: 'gemini-new-5h', label: 'New Gemini quota' }), 'New Gemini quota');
+});
+
+test('refreshing chrome omits an unknown count but retains a real zero and hidden accounts', () => {
+  for (const dto of [null, {}, { accounts: null }]) assert.equal(chromeView(dto, { refreshing: true }).statusStrong, '');
+  assert.equal(chromeView({ accounts: [] }, { refreshing: true }).statusStrong, '0 accounts');
+  assert.equal(chromeView({ accounts: [account({ hidden: true })] }, { refreshing: true }).statusStrong, '1 accounts');
 });

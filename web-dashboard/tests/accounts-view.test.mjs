@@ -2458,3 +2458,17 @@ test('accountsViewModel: the install field ships hidden until the PWA wiring fee
   const vm = accountsViewModel(data([account()]), { now });
   assert.equal(vm.install, 'hidden');
 });
+
+
+test('server hidden flags preserve Accounts activation state and independent dashboard and tray choices', () => {
+  const active = account({ isActive: true, hidden: true });
+  const other = account({ id: 'codex:two', hidden: true, capabilities: { codexProfile: 'two' } });
+  const dto = data([active, other], { settings: { hiddenProviders: ['codex'], hiddenAccountIds: [active.id, other.id],
+    trayHiddenProviders: [], trayHiddenAccountIds: [other.id] } });
+  const before = structuredClone(dto);
+  const vm = accountsViewModel(dto, { now });
+  assert.equal(row(vm, active.id).active, true);
+  assert.equal(row(vm, other.id).actions[0].act, 'activate');
+  assert.equal(row(vm, other.id).actions[0].enabled, true);
+  assert.deepEqual(dto, before);
+});

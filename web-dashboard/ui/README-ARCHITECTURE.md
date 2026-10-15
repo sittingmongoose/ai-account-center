@@ -79,6 +79,8 @@ reading in Slint, never add or average across accounts, never turn a missing val
 ### View model v2 (Home)
 
 `dashboardViewModel(data, ctx)` returns `{ version, sections, cards, registry, chrome }`.
+`ctx.includeHidden` keeps every account and provider in the action model for Accounts & Settings and Details;
+Home leaves it off. The original dashboard and tray visibility choices stay in the DTO and registry.
 
 - `sections`: Claude (`kind: "claude"`), then the switchable providers Codex and Antigravity (`kind:
   "switchable"`, `switchable: true`). Each has `columns` and `rows`; every row has one `cells` entry per column,
@@ -94,7 +96,8 @@ reading in Slint, never add or average across accounts, never turn a missing val
     otherwise `auto.offRuns` ("Auto-switch **off** · needs a second account").
   - `foot` (Codex): `{ shown, warn, runs, when }`, what auto-switch does about the active account (the
     backend's own message while it is below the point; a warning naming the next account when it is above;
-    "Checked 1m ago · every 1 min").
+    "Checked 1m ago · every 1 min"). Active and candidate accounts include hidden rows, labelled "(hidden)";
+    a server-reported waiting outcome and candidate take precedence over the forecast.
   - A row's `confirm`/`confirmRuns`: activating an account already at or past the section's switch point
     asks inline first ("**99% used**, above the 95% switch point. ... Activate anyway?"); only when the
     threshold is known. "Activate anyway" then runs the existing guarded activation.
