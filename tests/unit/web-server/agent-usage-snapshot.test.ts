@@ -610,6 +610,35 @@ describe('agent usage snapshot files', () => {
     expect(words).not.toContain('full in now');
   });
 
+  it('publishes no pace for an old cached reading or an account that needs a sign-in', () => {
+    const old = new Date(NOW - 3 * 60 * 60 * 1000).toISOString();
+    const cached = account({
+      status: 'cached',
+      sampledAt: old,
+      windows: [window({ usedPercent: 60, remainingPercent: 40 })],
+    });
+    const signIn = account({
+      id: 'codex:party',
+      status: 'needs_sign_in',
+      windows: [window({ usedPercent: 60, remainingPercent: 40 })],
+    });
+    const { snapshot } = buildSnapshotFiles(
+      {
+        accounts: [cached, signIn],
+        history: history([
+          record(cached, 200, 10),
+          record(cached, 185, 60),
+          record(signIn, 30, 10),
+          record(signIn, 15, 60),
+        ]),
+        sampledAt: NOW,
+      },
+      60
+    );
+    expect(snapshot.accounts.map((row) => row.windows[0].burn)).toEqual([null, null]);
+    expect(renderSnapshotMarkdown(snapshot)).not.toContain('at its limit');
+  });
+
   it('says a missing number was not reported and skips windows of an account without a reading', () => {
     const { snapshot } = buildSnapshotFiles(
       {

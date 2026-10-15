@@ -155,6 +155,14 @@ Dashboard sign-in ([auth routes](../../src/web-server/routes/auth-routes.ts)) ke
 the username and password login for browsers and today's trays, and adds a password
 change, a first-run setup (free on loopback, a one-time code printed by the server for
 the LAN) and "sign out other browsers" through a session epoch in `~/.ccs/auth/state.json`.
+Browser sessions survive a dashboard restart: the
+[session store](../../src/web-server/middleware/dashboard-session-store.ts) keeps them in
+`~/.ccs/auth/sessions.json` (0600, keyed by a SHA-256 of the session id, never the id) and ends
+each one after its lifetime without use, 7 days by default and set in Settings. A sign-in or
+sign-out is on disk before it is answered; one dashboard process writes the file. A password set
+outside the dashboard (`ccs config auth setup` or the environment) while it was down signs every
+kept session out at the next start (`~/.ccs/auth/credential.json` holds a digest of the last
+known credential).
 Trays pair once with the password and then use a revocable
 [device token](../../src/web-server/services/dashboard-device-store.ts) as
 `Authorization: Bearer`; only its SHA-256 is stored, it reaches only the tray routes

@@ -72,7 +72,9 @@ async function showStatus(io: UsageSnapshotCommandIo): Promise<number> {
 
 async function setFolder(folder: string, io: UsageSnapshotCommandIo): Promise<number> {
   const resolved = path.resolve(folder);
-  if (!isSnapshotDirectory(folder) || resolved !== path.normalize(folder)) {
+  // join(folder, '.') drops a trailing separator as resolve() does ("/mnt/x/" is "/mnt/x"),
+  // and keeps a root ("/", "C:\\") whole; only a ".." part still differs.
+  if (!isSnapshotDirectory(folder) || resolved !== path.join(folder, '.')) {
     io.err('[X] Give an absolute folder path without "..".\n');
     return 1;
   }

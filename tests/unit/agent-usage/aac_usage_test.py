@@ -119,6 +119,21 @@ class ReaderTests(unittest.TestCase):
         self.assertTrue(window["resetPassed"])
         self.assertIsNone(window["burn"])
 
+    def test_a_reading_past_the_stale_limit_shows_no_pace(self):
+        # A snapshot that stopped updating 20 minutes ago (before its reset): its pace, projected full
+        # 5 minutes ago, no longer says where usage is, and must not read "at its limit".
+        generated = aac.now_utc() - dt.timedelta(minutes=20)
+        text = self.run_reader(generated=generated)
+        self.assertIn("70% used", text)
+        self.assertNotIn("pace", text)
+        self.assertNotIn("at its limit", text)
+        (self.folder / "usage.json").write_text(json.dumps(snapshot(generated)), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder), "--json"]), \
+                contextlib.redirect_stdout(out):
+            aac.main()
+        self.assertIsNone(json.loads(out.getvalue())["accounts"][0]["windows"][0]["burn"])
+
     def test_old_snapshot_is_called_stale(self):
         text = self.run_reader(generated=aac.now_utc() - dt.timedelta(minutes=20))
         self.assertIn("WARNING: this snapshot is 20m old", text)
@@ -208,11 +223,25 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(broken.read_text(encoding="utf-8").count(aac.BEGIN), 1)
         self.assertIn(aac.BEGIN, (self.home / ".codex" / "AGENTS.md").read_text(encoding="utf-8"))
 
+    def test_a_crlf_rules_file_keeps_its_line_endings(self):
+        rules = self.home / ".codex" / "AGENTS.md"
+        rules.parent.mkdir()
+        rules.write_bytes(b"# Rules\r\n\r\nKeep me.\r\n")
+        self.assertEqual(aac.install_block(rules, "line one\nline two\n"), "updated")
+        data = rules.read_bytes()
+        self.assertIn(b"Keep me.\r\n", data)
+        self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
+        self.assertIn(aac.BEGIN.encode() + b"\r\nline one\r\nline two\r\n" + aac.END.encode(), data)
+        # A second run with the same block changes nothing.
+        self.assertEqual(aac.install_block(rules, "line one\nline two\n"), "unchanged")
+
     def test_a_used_up_window_is_at_its_limit(self):
         now = aac.now_utc()
-        text = aac.burn_text({"pace": 0, "paceMinutes": 1440, "projectedFullAt": iso(now - dt.timedelta(minutes=1)),
-                              "runsOutBeforeReset": True}, now)
-        self.assertEqual(text, "pace 0%/h over 24 h, at its limit until the reset")
+        burn = {"pace": 0, "paceMinutes": 1440, "projectedFullAt": iso(now - dt.timedelta(minutes=1)),
+                "runsOutBeforeReset": True}
+        self.assertEqual(aac.burn_text(burn, now, 100), "pace 0%/h over 24 h, at its limit until the reset")
+        # A projection that has come due is not a measured 100%: the account is not called used up.
+        self.assertEqual(aac.burn_text(burn, now, 60), "pace 0%/h over 24 h, reaching its limit about now at this pace")
 
     def test_falling_usage_is_not_called_a_burn(self):
         text = aac.burn_text({"pace": -3.6, "paceMinutes": 5, "projectedFullAt": None}, aac.now_utc())

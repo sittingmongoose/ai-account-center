@@ -141,14 +141,23 @@ export function buildSnapshotFiles(
     now,
     recent
   );
+  // A pace says where usage is heading from now, so it is published only for a current reading: not
+  // after a passed reset (the reading is history), not for an account that failed or needs a sign-in,
+  // and not for a reading older than the snapshot's own stale limit (a retained or cached one).
+  const freshMs = staleAfterSeconds(refreshSeconds) * 1000;
+  const current = (account: { status: string }, window: { sampledAt: string | null }): boolean => {
+    if (account.status !== 'ok' && account.status !== 'cached') return false;
+    const sampled = Date.parse(window.sampledAt ?? '');
+    return Number.isFinite(sampled) && now - sampled <= freshMs;
+  };
   const accounts: SnapshotAccount[] = projected.accounts.map((account) => ({
     ...account,
     windows: account.windows.map((window) => ({
       ...window,
-      // After a passed reset the reading is history: no pace or projection is published for it.
-      burn: window.resetPassed
-        ? null
-        : (rates.get(account.id)?.get(burnKey(window.key, window.unit, window.poolId)) ?? null),
+      burn:
+        window.resetPassed || !current(account, window)
+          ? null
+          : (rates.get(account.id)?.get(burnKey(window.key, window.unit, window.poolId)) ?? null),
     })),
   }));
   const generatedAt = new Date(now).toISOString();
@@ -158,12 +167,16 @@ export function buildSnapshotFiles(
       source: 'AI Account Center',
       generatedAt,
       refreshSeconds,
-      // Three missed samples, and never under 5 minutes.
-      staleAfterSeconds: Math.max(300, refreshSeconds * 3),
+      staleAfterSeconds: staleAfterSeconds(refreshSeconds),
       accounts,
     },
     history: { version: 1, generatedAt, hours: HISTORY_HOURS, series },
   };
+}
+
+/** Three missed samples, and never under 5 minutes. */
+function staleAfterSeconds(refreshSeconds: number): number {
+  return Math.max(300, refreshSeconds * 3);
 }
 
 function utc(iso: string): string {
@@ -186,7 +199,11 @@ function amount(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
-function burnText(burn: BurnRate | null, now: number): string | null {
+function burnText(
+  burn: BurnRate | null,
+  now: number,
+  usedPercent: number | null = null
+): string | null {
   if (!burn || burn.pace === null || burn.paceMinutes === null) return null;
   const over =
     burn.paceMinutes < 60 ? `${burn.paceMinutes} min` : `${Math.round(burn.paceMinutes / 60)} h`;
@@ -195,8 +212,12 @@ function burnText(burn: BurnRate | null, now: number): string | null {
   const pace = `${amount(burn.pace)}%/h over the last ${over}${hour}`;
   if (burn.pace < 0) return `usage falling ${pace}`;
   if (!burn.projectedFullAt) return `burning ${pace}`;
-  if (Date.parse(burn.projectedFullAt) <= now)
-    return `at its limit${burn.runsOutBeforeReset === true ? ' until the reset' : ''} (${pace})`;
+  if (Date.parse(burn.projectedFullAt) <= now) {
+    // "At its limit" is a measured 100%; a projection that has just come due is not.
+    if (usedPercent !== null && usedPercent >= 100)
+      return `at its limit${burn.runsOutBeforeReset === true ? ' until the reset' : ''} (${pace})`;
+    return `reaching its limit about now at this pace (${pace})`;
+  }
   const full = `full in ${span((Date.parse(burn.projectedFullAt) - now) / 1000)}`;
   const reset =
     burn.runsOutBeforeReset === true
@@ -230,7 +251,7 @@ function windowText(window: SnapshotWindow, now: number): string {
     );
   if (window.expiresAt) parts.push(`expires ${utc(window.expiresAt)}`);
   if (!window.resetPassed) {
-    const burn = burnText(window.burn, now);
+    const burn = burnText(window.burn, now, window.usedPercent);
     if (burn) parts.push(burn);
   }
   if (parts.length === 0) parts.push('no number reported');

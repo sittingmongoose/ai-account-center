@@ -143,7 +143,7 @@ def matches(account, provider, needle, include_hidden):
     return True
 
 
-def burn_text(burn, now):
+def burn_text(burn, now, used_percent=None):
     if not burn or burn.get("pace") is None:
         return None
     if burn["pace"] < 0:
@@ -157,7 +157,11 @@ def burn_text(burn, now):
         parts.append("%s%%/h over 1 h" % number(burn["lastHour"]))
     full = parse_time(burn.get("projectedFullAt"))
     if full is not None and full <= now:
-        parts.append("at its limit" + (" until the reset" if burn.get("runsOutBeforeReset") is True else ""))
+        # "At its limit" is a measured 100%; a projection that has come due is not.
+        if used_percent is not None and used_percent >= 100:
+            parts.append("at its limit" + (" until the reset" if burn.get("runsOutBeforeReset") is True else ""))
+        else:
+            parts.append("reaching its limit about now at this pace")
     elif full is not None:
         when = "full in %s" % span((full - now).total_seconds())
         if burn.get("runsOutBeforeReset") is True:
@@ -180,7 +184,14 @@ def reset_passed(window, now, account_sampled_at=None):
     return sampled is None or sampled < reset
 
 
-def window_line(window, now, account_sampled_at=None):
+def current_reading(window, now, account_sampled_at, stale_after):
+    """Whether a pace still says where usage is heading: the reading is no older than the snapshot's
+    stale limit when read (a snapshot that stopped updating, or a retained older reading, is not)."""
+    sampled = parse_time(window.get("sampledAt")) or parse_time(account_sampled_at)
+    return sampled is not None and (now - sampled).total_seconds() <= stale_after
+
+
+def window_line(window, now, account_sampled_at=None, stale_after=300):
     parts = []
     if window.get("unlimited") is True:
         parts.append("unlimited")
@@ -206,8 +217,8 @@ def window_line(window, now, account_sampled_at=None):
             parts.append("resets " + clock(window["resetAt"], now))
     if window.get("expiresAt"):
         parts.append("expires " + clock(window["expiresAt"], now))
-    if not passed:
-        burn = burn_text(window.get("burn"), now)
+    if not passed and current_reading(window, now, account_sampled_at, stale_after):
+        burn = burn_text(window.get("burn"), now, window.get("usedPercent"))
         if burn:
             parts.append(burn)
     if window.get("cached"):
@@ -228,12 +239,16 @@ def cmd_show(args):
     if args.provider and not provider:
         sys.exit("aac-usage: unknown provider %r; use one of %s." % (args.provider, ", ".join(sorted(set(PROVIDERS)))))
     accounts = [a for a in snapshot.get("accounts", []) if matches(a, provider, args.account, args.all)]
+    stale_after = snapshot.get("staleAfterSeconds") or 300
     if args.json:
         # A reset that passed after the file was written makes its pace history, as in the text view.
         for account in accounts:
             for window in account.get("windows", []):
                 if not window.get("resetPassed") and reset_passed(window, now, account.get("sampledAt")):
                     window["resetPassed"] = True
+                    window["burn"] = None
+                # A reading older than the stale limit when read carries no pace either.
+                if not current_reading(window, now, account.get("sampledAt"), stale_after):
                     window["burn"] = None
         print(json.dumps(dict(snapshot, accounts=accounts), indent=2))
         return
@@ -266,7 +281,7 @@ def cmd_show(args):
         print("  %s  [%s]  %s, sampled %s" % ("  ".join(who), ", ".join(facts), status, age))
         if account.get("status") in ("ok", "cached"):
             for window in account.get("windows", []):
-                print(window_line(window, now, account.get("sampledAt")))
+                print(window_line(window, now, account.get("sampledAt"), stale_after))
 
 
 def cmd_history(args):
@@ -350,21 +365,26 @@ def rules_text(kind="other"):
 
 
 def install_block(path, text):
-    """Rewrites the managed block in place, so hard-linked rules files stay linked."""
-    block = "%s\n%s%s\n" % (BEGIN, text, END)
-    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    """Rewrites the managed block in place, so hard-linked rules files stay linked. The file keeps its
+    own line endings: a CRLF file stays CRLF, outside the block and in it."""
+    old = ""
+    if path.exists():
+        with open(path, "r", encoding="utf-8", newline="") as handle:
+            old = handle.read()
+    eol = "\r\n" if "\r\n" in old else "\n"
+    block = ("%s\n%s%s\n" % (BEGIN, text.replace("\r\n", "\n"), END)).replace("\n", eol)
     if BEGIN in old and END in old.split(BEGIN, 1)[1]:
         pre, rest = old.split(BEGIN, 1)
         post = rest.split(END, 1)[1].lstrip("\r\n")
-        new = pre + block + (("\n" + post) if post.strip() else "")
+        new = pre + block + ((eol + post) if post.strip() else "")
     elif BEGIN in old:
         raise ValueError("an aac-usage rules block has no end marker; fix it by hand")
     else:
-        new = (old.rstrip() + "\n\n" if old.strip() else "") + block
+        new = (old.rstrip() + eol + eol if old.strip() else "") + block
     if new == old:
         return "unchanged"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+    with open(path, "w", encoding="utf-8", newline="") as handle:
         handle.write(new)
     return "updated"
 
