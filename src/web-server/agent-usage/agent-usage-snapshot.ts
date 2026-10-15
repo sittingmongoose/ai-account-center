@@ -84,7 +84,7 @@ export interface AgentUsageHistoryFile {
   version: 1;
   generatedAt: string;
   hours: number;
-  /** Each point is [time, used percent, remaining amount]; null when that reading had none. */
+  /** Each point is [time, used percent, remaining amount, reset time]; null when that reading had none. */
   series: HistorySeries[];
 }
 

@@ -564,6 +564,10 @@ describe('agent usage snapshot files', () => {
       window: 'five_hour',
     });
     expect(file.series[0].points.map((point) => point[1])).toEqual([10, 20, 25, 30]);
+    // Each point carries its reset time, so a reader never averages across a reset.
+    expect(file.series[0].points.every((point) => point[3] === '2026-10-15T14:00:00.000Z')).toBe(
+      true
+    );
     expect(JSON.stringify(snapshot) + JSON.stringify(file)).not.toContain(SENTINEL);
     const words = renderSnapshotMarkdown(snapshot);
     expect(words).toContain(

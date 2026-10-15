@@ -106,6 +106,19 @@ class ReaderTests(unittest.TestCase):
         self.assertTrue(aac.reset_passed({"resetAt": iso(now + dt.timedelta(hours=1)), "resetPassed": True}, now))
         self.assertFalse(aac.reset_passed({"resetAt": iso(now + dt.timedelta(hours=1))}, now))
 
+    def test_json_drops_the_pace_of_a_reset_that_passed_after_writing(self):
+        generated = aac.now_utc() - dt.timedelta(minutes=3)
+        data = snapshot(generated)
+        data["accounts"][0]["windows"][0]["resetAt"] = iso(generated + dt.timedelta(minutes=1))
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder), "--json"]), \
+                contextlib.redirect_stdout(out):
+            aac.main()
+        window = json.loads(out.getvalue())["accounts"][0]["windows"][0]
+        self.assertTrue(window["resetPassed"])
+        self.assertIsNone(window["burn"])
+
     def test_old_snapshot_is_called_stale(self):
         text = self.run_reader(generated=aac.now_utc() - dt.timedelta(minutes=20))
         self.assertIn("WARNING: this snapshot is 20m old", text)

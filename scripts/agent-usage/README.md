@@ -17,7 +17,9 @@ current; edits are overwritten.
   past `staleAfterSeconds` the dashboard has stopped updating it.
 - `usage.md`: the same reading in plain words.
 - `history.json`: the measured readings of every window over the last 7 days (every changed reading
-  in the last hour, 5-minute steps to a day, hourly beyond), each point `[time, used %, remaining]`.
+  in the last hour, 5-minute steps to a day, hourly beyond), each point
+  `[time, used %, remaining, reset time]`. Never compute a rate across points whose reset times
+  differ; the `burn` values in `usage.json` already respect resets.
 - `aac-usage`, `aac-usage.cmd`: the reader below.
 
 ## Which account is which
@@ -37,8 +39,9 @@ means the reset time has passed since the reading; a new reading is pending.
 
 `burn` measures percentage points used per hour since the window last reset: `last5Minutes`,
 `last15Minutes`, `lastHour`, `last6Hours`, `last24Hours`. `pace` is the shortest span with enough
-readings (two readings at least 2 minutes apart for 5 minutes), so a burst shows within a few
-minutes. `projectedFullAt` is when the window reaches 100% at that pace and `runsOutBeforeReset`
+readings (two readings at least 2 minutes apart for 5 minutes) and, under an hour, a move of at
+least 2 points, so a burst shows within a few minutes while a single rounding step does not (a
+short-span rate can be set while `pace` comes from a longer span). `projectedFullAt` is when the window reaches 100% at that pace and `runsOutBeforeReset`
 says whether that comes first. A rate needs real readings in the same reset period; nothing is
 extrapolated across a reset.
 

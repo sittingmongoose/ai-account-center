@@ -63,8 +63,11 @@ export interface BurnRate {
   periodStartedAt: string | null;
 }
 
-/** One reading of one window: [time (ISO, minute), used percent, remaining amount]. */
-export type HistoryPoint = [string, number | null, number | null];
+/**
+ * One reading of one window: [time (ISO, minute), used percent, remaining amount, reset time (ISO)
+ * or null]. Readings with different reset times belong to different periods: never average across.
+ */
+export type HistoryPoint = [string, number | null, number | null, string | null];
 
 export interface HistorySeries {
   accountId: string;
@@ -430,7 +433,12 @@ export function usageHistory(
         pool: window.poolLabel ?? null,
         kind: window.kind ?? 'rate_limit',
         unit: window.unit ?? null,
-        points: measured.map((reading) => [minuteIso(reading.at), reading.used, reading.remaining]),
+        points: measured.map((reading) => [
+          minuteIso(reading.at),
+          reading.used,
+          reading.remaining,
+          reading.resetAt === null ? null : new Date(reading.resetAt).toISOString(),
+        ]),
       });
     }
     rates.set(account.id, perWindow);

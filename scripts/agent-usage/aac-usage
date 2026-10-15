@@ -227,6 +227,12 @@ def cmd_show(args):
         sys.exit("aac-usage: unknown provider %r; use one of %s." % (args.provider, ", ".join(sorted(set(PROVIDERS)))))
     accounts = [a for a in snapshot.get("accounts", []) if matches(a, provider, args.account, args.all)]
     if args.json:
+        # A reset that passed after the file was written makes its pace history, as in the text view.
+        for account in accounts:
+            for window in account.get("windows", []):
+                if not window.get("resetPassed") and reset_passed(window, now, account.get("sampledAt")):
+                    window["resetPassed"] = True
+                    window["burn"] = None
         print(json.dumps(dict(snapshot, accounts=accounts), indent=2))
         return
     note = stale_note(snapshot, now)
@@ -291,7 +297,8 @@ def cmd_history(args):
         pool = " [%s]" % entry["pool"] if entry.get("pool") else ""
         print("%s %s (%s) %s%s:" % (entry.get("provider"), entry.get("label"), entry.get("email") or "-",
                                     entry.get("windowLabel"), pool))
-        for time, used, remaining in entry["points"]:
+        for point in entry["points"]:
+            time, used, remaining = point[0], point[1], point[2]
             values = []
             if used is not None:
                 values.append("%s%%" % number(used))
