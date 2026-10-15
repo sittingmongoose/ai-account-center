@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -173,7 +174,7 @@ describe('dashboard session store', () => {
     expect(fs.existsSync(path.join(home, '.ccs'))).toBe(false);
   });
 
-  it('a second dashboard on the same home reads the sign-ins but leaves the file to the first', async () => {
+  it("a second dashboard on the same home keeps its sign-ins in memory and never honours the first one's", async () => {
     const first = store();
     await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
     await first.whenSaved();
@@ -183,13 +184,48 @@ describe('dashboard session store', () => {
       JSON.stringify({ pid: process.ppid, host: os.hostname() })
     );
     const second = store();
-    expect(await call<session.SessionData | null>((done) => second.get(SID, done))).not.toBeNull();
     expect(second.isWriter).toBe(false);
+    // A sign-out there could not reach the writer's file, so the writer's sessions are not valid there.
+    expect(await call<session.SessionData | null>((done) => second.get(SID, done))).toBeNull();
     const before = fs.readFileSync(sessionsFile(), 'utf8');
     await call((done) => second.set('second-browser', signedIn(NOW + DAY), done));
-    await call((done) => second.destroy(SID, done));
+    await second.whenSaved();
+    expect(
+      await call<session.SessionData | null>((done) => second.get('second-browser', done))
+    ).not.toBeNull();
     expect(fs.readFileSync(sessionsFile(), 'utf8')).toBe(before);
-    expect(await call<session.SessionData | null>((done) => second.get(SID, done))).toBeNull();
+  });
+
+  it('takes over the file from a writer that is gone', async () => {
+    const first = store();
+    await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
+    await first.whenSaved();
+    const exited = spawnSync(process.execPath, ['-e', '0']);
+    fs.writeFileSync(
+      path.join(path.dirname(sessionsFile()), 'sessions.owner'),
+      JSON.stringify({ pid: exited.pid, host: os.hostname() })
+    );
+    const next = store();
+    expect(await call<session.SessionData | null>((done) => next.get(SID, done))).not.toBeNull();
+    expect(next.isWriter).toBe(true);
+  });
+
+  it('honours no saved session when the startup credential check failed', async () => {
+    const first = store();
+    await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
+    await first.whenSaved();
+    await first.close();
+    const failed = store({ after: Promise.reject(new Error('state.json could not be written')) });
+    expect(await call<session.SessionData | null>((done) => failed.get(SID, done))).toBeNull();
+    // A new sign-in still works and replaces the untrusted file.
+    await call((done) => failed.set('fresh', signedIn(NOW + DAY), done));
+    await failed.whenSaved();
+    await failed.close();
+    const restarted = store();
+    expect(await call<session.SessionData | null>((done) => restarted.get(SID, done))).toBeNull();
+    expect(
+      await call<session.SessionData | null>((done) => restarted.get('fresh', done))
+    ).not.toBeNull();
   });
 
   it('defaults new setups to a 7-day session', () => {

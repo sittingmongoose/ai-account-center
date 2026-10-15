@@ -31,9 +31,14 @@ import { readPrivateJsonFile, writePrivateJsonFile } from '../services/private-j
  * The rolling expiry of a session in use is saved at most once a minute, and once more at
  * shutdown (`close`).
  *
- * One dashboard writes the file. Another dashboard process on the same `~/.ccs` (for example
- * `bar serve` beside `dashboard`) reads it but keeps its own changes in memory until the writer is
- * gone, so neither overwrites the other's sign-ins or brings back the other's sign-outs.
+ * One dashboard writes the file; it claims that role with an exclusive create, so two dashboards
+ * starting together cannot both win. Another dashboard process on the same `~/.ccs` (for example
+ * `bar serve` beside `dashboard`) keeps its own sign-ins in memory only, as before this store, and
+ * does not honour the writer's: a sign-out on either can then never be undone by the other. When
+ * the writer is gone, the other takes over the file.
+ *
+ * Saved sessions are honoured only after the startup credential check succeeded; if it failed,
+ * every kept session signs in again (fail closed).
  *
  * Every other check is unchanged: a loaded session still carries its epoch and credential stamp,
  * so "Sign out other browsers", a password change and the transport rules apply to it exactly as
@@ -90,6 +95,8 @@ export class DashboardSessionStore extends session.Store {
   private beat: ReturnType<typeof setInterval> | null = null;
   private saving: Promise<void> = Promise.resolve();
   private writer = false;
+  /** The startup credential check succeeded, so saved sessions may be honoured. */
+  private trusted = false;
   private closed = false;
   private warned = false;
 
@@ -101,12 +108,17 @@ export class DashboardSessionStore extends session.Store {
     const idle = options.idleMs;
     this.idleMs = typeof idle === 'function' ? idle : () => idle;
     this.ready = (options.after ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(() => this.claim())
-      .catch(() => false)
-      .then(async (writer) => {
-        this.writer = writer;
-        await this.loadFile();
+      .then(
+        () => true,
+        (error: unknown) => {
+          this.warn('load', error);
+          return false;
+        }
+      )
+      .then(async (trusted) => {
+        this.trusted = trusted;
+        this.writer = await this.claim().catch(() => false);
+        if (this.writer && this.trusted) await this.loadFile();
         if (this.closed) return;
         this.beat = setInterval(() => void this.heartbeat(), OWNER_BEAT_MS);
         this.beat.unref?.();
@@ -127,43 +139,88 @@ export class DashboardSessionStore extends session.Store {
     return JSON.stringify({ pid: process.pid, host: os.hostname() });
   }
 
-  /** Claims the writer role: free when unclaimed, held by a gone process, or not refreshed. */
+  /**
+   * Claims the writer role. The claim is created exclusively, so of two dashboards starting
+   * together only one wins. A claim held by a gone process, or not refreshed for OWNER_STALE_MS, is
+   * taken over by one process at a time (an atomic mkdir guards the takeover).
+   */
   private async claim(): Promise<boolean> {
     if (!this.homeExists()) return false;
     const mine = this.claimText();
+    await ensureAuthDirectory(path.dirname(this.ownerFile));
+    if (await this.createClaim(mine)) return true;
     const held = await fs.readFile(this.ownerFile, 'utf8').catch(() => null);
-    if (held !== null && normalClaim(held) !== mine) {
-      const stat = await fs.stat(this.ownerFile).catch(() => null);
-      let owner: { pid?: unknown; host?: unknown } = {};
-      try {
-        owner = JSON.parse(held) as typeof owner;
-      } catch {
-        /* An unreadable claim is free. */
-      }
-      const fresh = stat !== null && Date.now() - stat.mtimeMs < OWNER_STALE_MS;
-      const alive =
-        typeof owner.pid === 'number' && owner.host === os.hostname() && pidAlive(owner.pid);
-      if (fresh && alive) return false;
+    if (held !== null && normalClaim(held) === mine) return true;
+    if (held !== null && !(await this.claimIsStale(held))) return false;
+    const lock = `${this.ownerFile}.lock`;
+    const lockStat = await fs.stat(lock).catch(() => null);
+    // A takeover that crashed half way leaves its lock; it never takes a minute.
+    if (lockStat && Date.now() - lockStat.mtimeMs > OWNER_BEAT_MS) {
+      await fs.rmdir(lock).catch(() => undefined);
     }
-    await withAuthWriteGate(async () => {
-      await ensureAuthDirectory(path.dirname(this.ownerFile));
-      await writePrivateJsonFile(this.ownerFile, JSON.parse(mine));
-    });
-    return true;
+    try {
+      await fs.mkdir(lock);
+    } catch {
+      return false;
+    }
+    try {
+      const again = await fs.readFile(this.ownerFile, 'utf8').catch(() => null);
+      // Another process changed the claim meanwhile: it is theirs.
+      if (again !== held) return again === null ? await this.createClaim(mine) : false;
+      await fs.unlink(this.ownerFile).catch(() => undefined);
+      return await this.createClaim(mine);
+    } finally {
+      await fs.rmdir(lock).catch(() => undefined);
+    }
   }
 
-  /** The writer refreshes its claim; a reader takes over a claim that went stale. */
+  /** Creates the claim only if no claim exists (O_EXCL). */
+  private async createClaim(text: string): Promise<boolean> {
+    try {
+      await fs.writeFile(this.ownerFile, text, { flag: 'wx', mode: 0o600 });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
+  }
+
+  private async claimIsStale(held: string): Promise<boolean> {
+    const stat = await fs.stat(this.ownerFile).catch(() => null);
+    let owner: { pid?: unknown; host?: unknown } = {};
+    try {
+      owner = JSON.parse(held) as typeof owner;
+    } catch {
+      /* An unreadable claim is free. */
+    }
+    const fresh = stat !== null && Date.now() - stat.mtimeMs < OWNER_STALE_MS;
+    const alive =
+      typeof owner.pid === 'number' && owner.host === os.hostname() && pidAlive(owner.pid);
+    return !(fresh && alive);
+  }
+
+  /** Whether the claim on disk is still this process's (another may have taken over a stale one). */
+  private async stillWriter(): Promise<boolean> {
+    const held = await fs.readFile(this.ownerFile, 'utf8').catch(() => null);
+    return held !== null && normalClaim(held) === this.claimText();
+  }
+
+  /** The writer refreshes its claim; another process takes over a claim that went stale. */
   private async heartbeat(): Promise<void> {
     if (this.closed) return;
     if (this.writer) {
+      if (!(await this.stillWriter())) {
+        this.writer = false;
+        return;
+      }
       const at = new Date();
       await fs.utimes(this.ownerFile, at, at).catch(() => undefined);
       return;
     }
     if (!(await this.claim().catch(() => false)) || this.closed) return;
     this.writer = true;
-    // The previous writer is gone: keep what it saved, minus what this process ended.
-    await this.loadFile();
+    // The previous writer is gone: keep what it saved (once trusted), minus what this process ended.
+    if (this.trusted) await this.loadFile();
     this.ended.clear();
     await this.write().catch((error: unknown) => this.warn('save', error));
   }
@@ -259,6 +316,11 @@ export class DashboardSessionStore extends session.Store {
     const run = this.saving.then(async () => {
       await this.ready;
       if (!this.writer || this.closed || !this.homeExists()) return;
+      if (!(await this.stillWriter())) {
+        // Another dashboard took the file over: this process keeps its sessions in memory.
+        this.writer = false;
+        return;
+      }
       this.prune();
       const sessions = [...this.sessions.entries()].map(([key, entry]) => ({ key, ...entry }));
       await withAuthWriteGate(async () => {
