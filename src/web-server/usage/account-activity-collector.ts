@@ -351,27 +351,48 @@ function unresolvedCheckpointFiles(
   directory: string,
   unresolved: string[],
   known: ReadonlyArray<{ file: string }>,
+  kind: ActivityKind,
+  minDate: number,
+  legacy: Checkpoint[],
   excludeRoots: string[] = []
 ): Array<{ file: string; stats: fs.Stats; unresolved: true }> {
-  if (!unresolved.length) return [];
   const under = (file: string, root: string): boolean =>
     file === root || file.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
   const seen = new Set(known.map((item) => item.file));
+  const knownCaches = new Set(known.map((item) => `${hash(item.file)}.json`));
   const result: Array<{ file: string; stats: fs.Stats; unresolved: true }> = [];
   const caches = fs.opendirSync(directory);
   try {
     let visited = 0;
     for (
       let item = caches.readSync();
-      item !== null && visited++ < MAX_FILES;
+      item !== null && visited < MAX_FILES;
       item = caches.readSync()
     ) {
       if (!item.isFile() || !item.name.endsWith('.json')) continue;
+      visited++;
       try {
         const cache = path.join(directory, item.name);
         if (fs.statSync(cache).size > MAX_CACHE_BYTES) continue;
         const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
         const file = value.file;
+        if (file === undefined && !knownCaches.has(item.name)) {
+          if (!unresolved.length) {
+            // A complete walk confirms that an unlocated legacy source is gone.
+            // Remove it now so a later incomplete walk cannot resurrect it.
+            fs.unlinkSync(cache);
+          } else if (/^[a-f0-9]{64}\.json$/.test(item.name)) {
+            const [dev, ino] = value.identity.split(':');
+            const stats = {
+              size: value.size,
+              mtimeMs: value.mtimeMs,
+              dev,
+              ino,
+            } as unknown as fs.Stats;
+            legacy.push(loadCheckpoint(cache, '', stats, minDate, kind, value.mode, true, true));
+          }
+          continue;
+        }
         if (
           typeof file !== 'string' ||
           item.name !== `${hash(file)}.json` ||
@@ -451,7 +472,9 @@ function loadCheckpoint(
   minDate: number,
   kind: ActivityKind,
   mode?: ReadMode,
-  stale = false
+  stale = false,
+  /** Legacy checkpoints have no recoverable path until discovery finds them again. */
+  unlocated = false
 ): Checkpoint {
   try {
     if (fs.statSync(cache).size > MAX_CACHE_BYTES) return fresh(stats, minDate, kind, mode);
@@ -489,7 +512,7 @@ function loadCheckpoint(
     // rows from a failed read/save. Metadata still guards identity and parser.
     let fd: number | undefined;
     try {
-      fd = fs.openSync(file, 'r');
+      if (!unlocated) fd = fs.openSync(file, 'r');
     } catch (error) {
       if (!stale || confirmedMissing(error)) throw error;
     }
@@ -1753,7 +1776,8 @@ async function collectZcodeExperimentActivity(
 /** True when `small` is a byte prefix of `large`: the same head and the same bytes where `small` ends. */
 function isPrefixCopy(
   small: { file: string; stats: fs.Stats },
-  large: { file: string; stats: fs.Stats }
+  large: { file: string; stats: fs.Stats },
+  onUnreadable?: () => void
 ): boolean {
   const length = small.stats.size;
   if (length > large.stats.size) return false;
@@ -1769,6 +1793,7 @@ function isPrefixCopy(
       fingerprint(left, tail, length - tail) === fingerprint(right, tail, length - tail)
     );
   } catch {
+    onUnreadable?.();
     return false;
   } finally {
     if (left !== undefined) fs.closeSync(left);
@@ -1811,7 +1836,8 @@ export function dropOmpResumeCopies<T extends { file: string; stats: fs.Stats }>
  * for the keyed merge. Dropped files retain their checkpoints for a later prune/resume. */
 function dropClaudePrefixCopies<T extends { file: string; stats: fs.Stats }>(
   files: T[],
-  deadline: number
+  deadline: number,
+  unreadable?: Set<string>
 ): T[] {
   // Prefix verification must not spend the whole pass before checkpoints advance.
   const prefixDeadline = Math.min(deadline, Date.now() + 100);
@@ -1828,7 +1854,11 @@ function dropClaudePrefixCopies<T extends { file: string; stats: fs.Stats }>(
     const kept: T[] = [];
     for (const item of group) {
       const copy = kept.some((larger) => {
-        if (Date.now() >= prefixDeadline || !isPrefixCopy(item, larger)) return false;
+        if (
+          Date.now() >= prefixDeadline ||
+          !isPrefixCopy(item, larger, () => unreadable?.add(path.basename(item.file)))
+        )
+          return false;
         let left: number | undefined;
         let right: number | undefined;
         try {
@@ -1848,6 +1878,7 @@ function dropClaudePrefixCopies<T extends { file: string; stats: fs.Stats }>(
           }
           return true;
         } catch {
+          unreadable?.add(path.basename(item.file));
           return false;
         } finally {
           if (left !== undefined) fs.closeSync(left);
@@ -1872,7 +1903,8 @@ function dropClaudePrefixCopies<T extends { file: string; stats: fs.Stats }>(
  */
 export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stats }>(
   files: T[],
-  preserveSameNameCopies = false
+  preserveSameNameCopies = false,
+  unreadable?: Set<string>
 ): T[] {
   const seen = new Map<string, string>();
   const result: T[] = [];
@@ -1887,6 +1919,7 @@ export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stat
       key = `${size}:${fingerprint(fd, 0, Math.min(256, size))}:${fingerprint(fd, tailStart, size - tailStart)}`;
     } catch {
       key = null;
+      unreadable?.add(path.basename(item.file));
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
@@ -1906,6 +1939,105 @@ export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stat
     result.push(item);
   }
   return dropped ? result : files;
+}
+
+interface ActivityFile {
+  file: string;
+  stats: fs.Stats;
+  unresolved?: boolean;
+  frozen?: boolean;
+  mode?: ReadMode;
+}
+interface ClaudeSelection {
+  file: string;
+  mode?: ReadMode;
+}
+
+/** Freeze the last selection as a unit: compact and keyed copies must never overlap. */
+function claudeScanFiles(
+  files: ActivityFile[],
+  directory: string,
+  deadline: number
+): { scanned: ActivityFile[]; selections: Map<string, ClaudeSelection[]>; failed: number } {
+  const unreadable = new Set(
+    files.filter((item) => item.unresolved).map((item) => path.basename(item.file))
+  );
+  const selected = dropClaudePrefixCopies(
+    dropExactDuplicateFiles(files, true, unreadable),
+    deadline,
+    unreadable
+  );
+  const groups = new Map<string, ActivityFile[]>();
+  for (const item of files) {
+    const name = path.basename(item.file);
+    const group = groups.get(name) ?? [];
+    group.push(item);
+    groups.set(name, group);
+  }
+  const scanned: ActivityFile[] = [];
+  const selections = new Map<string, ClaudeSelection[]>();
+  const selectedFiles = new Set(selected.map((item) => item.file));
+  for (const [name, group] of groups) {
+    if (!unreadable.has(name)) {
+      const kept = group.filter((item) => selectedFiles.has(item.file));
+      const mode: ReadMode | undefined = kept.length > 1 ? 'keyed' : undefined;
+      scanned.push(...kept.map((item) => ({ ...item, mode })));
+      if (
+        group.length > 1 ||
+        fs.existsSync(path.join(directory, `${hash(`claude:${name}`)}.group`))
+      )
+        selections.set(
+          name,
+          kept.map(({ file }) => ({ file, mode }))
+        );
+      continue;
+    }
+    let prior: ClaudeSelection[];
+    let knownSelection = false;
+    try {
+      const cache = path.join(directory, `${hash(`claude:${name}`)}.group`);
+      if (fs.statSync(cache).size > MAX_CACHE_BYTES) throw new CCSError('Group exceeds limit');
+      const value: unknown = JSON.parse(fs.readFileSync(cache, 'utf8'));
+      if (
+        !Array.isArray(value) ||
+        value.length > MAX_FILES ||
+        !value.every(
+          (item) =>
+            item &&
+            typeof item.file === 'string' &&
+            path.basename(item.file) === name &&
+            (item.mode === undefined || item.mode === 'keyed')
+        )
+      )
+        throw new CCSError('Invalid group selection');
+      prior = value;
+      knownSelection = true;
+    } catch {
+      // Upgrade fallback: before selections were persisted, compact checkpoints
+      // represented the longest prefix copy; diverged groups stored keyed ones.
+      const cached = group.flatMap((item) => {
+        try {
+          const cache = path.join(directory, `${hash(item.file)}.json`);
+          if (fs.statSync(cache).size > MAX_CACHE_BYTES) return [];
+          const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
+          return [{ file: item.file, mode: value.mode, size: value.size }];
+        } catch {
+          return [];
+        }
+      });
+      const compact = cached.filter((item) => item.mode === undefined);
+      compact.sort((a, b) => b.size - a.size || a.file.localeCompare(b.file));
+      prior = compact.length ? compact.slice(0, 1) : cached;
+    }
+    for (const item of group) {
+      const previous = prior.find((entry) => entry.file === item.file);
+      if (previous) scanned.push({ ...item, mode: previous.mode, frozen: true });
+    }
+    // Even a first-pass unreadable group with no checkpoint stays visibly partial.
+    if (!prior.length && !knownSelection)
+      scanned.push(...group.map((item) => ({ ...item, frozen: true })));
+  }
+  return { scanned, selections, failed: unreadable.size };
 }
 
 /**
@@ -2745,13 +2877,13 @@ export async function collectAccountActivity(
         )
       : collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
   const issues = { failed: 0, unresolved: [] as string[] };
-  const files: Array<{ file: string; stats: fs.Stats; unresolved?: boolean }> = [];
+  const files: ActivityFile[] = [];
   // Whether traversal saw any candidate file at all, before the mtime pre-filter
   // drops out-of-window ones. "Found files but all are stale" means no usage in
   // the window (a complete, empty scan), never an unavailable source.
   let sawAnyFile = false;
   const fileIdentities = new Set<string>();
-  for (const root of roots) {
+  for (const [rootIndex, root] of roots.entries()) {
     for (const file of filesUnder(
       root,
       request.kind,
@@ -2783,28 +2915,41 @@ export async function collectAccountActivity(
         break;
       }
     }
-    if (files.length >= MAX_FILES || Date.now() >= deadline) break;
+    if (files.length >= MAX_FILES || Date.now() >= deadline) {
+      issues.failed++;
+      issues.unresolved.push(root, ...roots.slice(rootIndex + 1));
+      break;
+    }
   }
+  const legacy: Checkpoint[] = [];
   files.push(
-    ...unresolvedCheckpointFiles(directory, issues.unresolved, files, options.excludeRoots)
+    ...unresolvedCheckpointFiles(
+      directory,
+      issues.unresolved,
+      files,
+      request.kind,
+      options.minDate,
+      legacy,
+      options.excludeRoots
+    )
   );
-  if (files.length) sawAnyFile = true;
+  if (
+    files.length ||
+    legacy.some((value) => value.rows.length || value.pendingClaude || value.keyed?.length)
+  )
+    sawAnyFile = true;
   if (!sawAnyFile && issues.failed) throw new CCSError('Native log sources are unavailable');
   // Resumed OMP runs copy a session into a new root; its records count once.
-  const scanned =
+  const claude =
+    request.kind === 'claude' ? claudeScanFiles(files, directory, deadline) : undefined;
+  const scanned: ActivityFile[] =
     request.kind === 'omp'
       ? dropOmpResumeCopies(files)
       : request.kind === 'claude'
-        ? dropClaudePrefixCopies(dropExactDuplicateFiles(files, true), deadline)
+        ? (claude?.scanned ?? [])
         : dropExactDuplicateFiles(
             request.kind === 'codex' ? preferPlainCodexRollouts(files) : files
           );
-  const claudeNames = new Map<string, number>();
-  if (request.kind === 'claude')
-    for (const { file } of scanned) {
-      const name = path.basename(file);
-      claudeNames.set(name, (claudeNames.get(name) ?? 0) + 1);
-    }
   // Only diverged groups need per-response storage. Ordinary logs keep compact hourly
   // checkpoints; changing group membership invalidates mode and re-reads that file.
   const chosenClaude = new Map<string, RawUsageEntry>();
@@ -2814,7 +2959,7 @@ export async function collectAccountActivity(
   const rows: CompactEntry[] = [];
   let completed = 0;
   let skippedLines = 0;
-  let failed = issues.failed;
+  let failed = issues.failed + (claude?.failed ?? 0);
   let readBytes = 0;
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
@@ -2832,9 +2977,8 @@ export async function collectAccountActivity(
     unfinishedFiles = codex.unfinishedFiles;
     stalledCompressedFiles = codex.stalledCompressedFiles;
   } else {
-    for (const { file, stats, unresolved } of scanned) {
+    for (const { file, stats, unresolved, frozen, mode } of scanned) {
       const cache = path.join(directory, `${hash(file)}.json`);
-      const mode = (claudeNames.get(path.basename(file)) ?? 0) > 1 ? 'keyed' : undefined;
       try {
         let value = loadCheckpoint(
           cache,
@@ -2843,11 +2987,11 @@ export async function collectAccountActivity(
           options.minDate,
           request.kind,
           mode,
-          unresolved
+          unresolved || frozen
         );
         const before = value.offset;
         try {
-          if (!unresolved && Date.now() < deadline) {
+          if (!unresolved && !frozen && Date.now() < deadline) {
             await readBatch(
               file,
               value,
@@ -2860,10 +3004,13 @@ export async function collectAccountActivity(
             );
             if (value.offset !== before || value.file !== file || !fs.existsSync(cache))
               saveCheckpoint(cache, file, value, stats);
+          } else if (!frozen) {
+            claude?.selections.delete(path.basename(file));
           }
           readBytes += Math.max(0, value.offset - before);
         } catch {
           failed++;
+          claude?.selections.delete(path.basename(file));
           value = loadCheckpoint(cache, file, stats, options.minDate, request.kind, mode, true);
         }
         if (value.complete) completed++;
@@ -2909,10 +3056,55 @@ export async function collectAccountActivity(
         }
       } catch {
         failed++;
+        claude?.selections.delete(path.basename(file));
       }
       // Keep already-checkpointed records available even after the scan budget.
       // Loading every remaining small cache is bounded by MAX_FILES/MAX_TOTAL_ROWS.
     }
+  }
+  for (const [name, selection] of claude?.selections ?? []) {
+    const cache = path.join(directory, `${hash(`claude:${name}`)}.group`);
+    const temporary = `${cache}.${process.pid}.tmp`;
+    try {
+      const body = JSON.stringify(selection);
+      if (fs.existsSync(cache) && fs.readFileSync(cache, 'utf8') === body) continue;
+      if (Buffer.byteLength(body) > MAX_CACHE_BYTES) throw new CCSError('Group exceeds limit');
+      fs.writeFileSync(temporary, body, { mode: 0o600 });
+      fs.renameSync(temporary, cache);
+    } catch {
+      failed++;
+    } finally {
+      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+    }
+  }
+  for (const value of legacy) {
+    // These sources cannot be located during migration. Keep only validated,
+    // measured checkpoint entries until a complete walk can confirm removal.
+    const fileRows = new Map(
+      value.rows.map((row) => [rowKey(row), { entry: { ...row.entry }, events: row.events }])
+    );
+    if (value.mode === 'keyed') {
+      const entries = [...(value.keyed ?? [])];
+      if (value.pendingClaude)
+        entries.push({
+          k: experimentRecordKey('claude', value.pendingClaude.entry),
+          e: value.pendingClaude.entry,
+        });
+      for (const { k, e } of entries) {
+        const key = `legacy:${e.sessionId}:${k}`;
+        const prior = chosenClaude.get(key);
+        if (prior) {
+          if (e.outputTokens > prior.outputTokens) chosenClaude.set(key, e);
+        } else if (chosenClaude.size < MAX_TOTAL_ROWS) chosenClaude.set(key, e);
+        else skippedLines++;
+      }
+    } else if (request.kind === 'claude' && value.pendingClaude) {
+      if (!addEntry(fileRows, value.pendingClaude.entry, options.minDate)) skippedLines++;
+    }
+    const available = Math.max(0, MAX_TOTAL_ROWS - rows.length);
+    rows.push(...[...fileRows.values()].slice(0, available));
+    if (fileRows.size > available) failed++;
+    skippedLines += value.skippedLines;
   }
   if (chosenClaude.size) {
     const rowMap = new Map<string, CompactEntry>();
@@ -2947,7 +3139,7 @@ export async function collectAccountActivity(
         !failed &&
         !options.discoveryTruncated,
       completedFiles: completed,
-      totalFiles: scanned.length,
+      totalFiles: scanned.length + legacy.length,
       skippedLines,
       failedFiles: failed,
       readBytes,

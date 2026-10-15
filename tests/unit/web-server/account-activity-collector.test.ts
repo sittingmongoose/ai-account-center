@@ -159,9 +159,15 @@ describe('bounded native account activity checkpoints', () => {
     }
   );
 
-  it.each(['directory only', 'files too'] as const)(
-    'keeps cached Claude usage under an unlistable directory (%s) while siblings update and removed files disappear',
-    async (blockedAccess) => {
+  it.each([
+    { blockedAccess: 'directory only', legacy: false },
+    { blockedAccess: 'files too', legacy: false },
+    { blockedAccess: 'directory only', legacy: true },
+    { blockedAccess: 'files too', legacy: true },
+    { blockedAccess: 'directory only', legacy: true, removeBeforeRecovery: true },
+  ])(
+    'keeps cached Claude usage under an unlistable directory ($blockedAccess, legacy=$legacy, removed=$removeBeforeRecovery) while siblings update and removed files disappear',
+    async ({ blockedAccess, legacy, removeBeforeRecovery }) => {
       const projects = path.join(root, 'claude', 'projects');
       const hidden = path.join(projects, 'hidden');
       fs.mkdirSync(hidden, { recursive: true });
@@ -184,6 +190,20 @@ describe('bounded native account activity checkpoints', () => {
           { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
         );
       expect(sum(await collectClaude(), 'inputTokens')).toBe(150);
+      const cacheRoot = path.join(root, 'cache', 'account-activity-v1');
+      const checkpointDir = path.join(cacheRoot, fs.readdirSync(cacheRoot)[0]);
+      const hiddenCheckpoint = fs.readdirSync(checkpointDir).find((name) => {
+        return (
+          name.endsWith('.json') &&
+          JSON.parse(fs.readFileSync(path.join(checkpointDir, name), 'utf8')).file === hiddenFile
+        );
+      })!;
+      if (legacy) {
+        const cache = path.join(checkpointDir, hiddenCheckpoint);
+        const value = JSON.parse(fs.readFileSync(cache, 'utf8'));
+        delete value.file;
+        fs.writeFileSync(cache, JSON.stringify(value));
+      }
       fs.appendFileSync(sibling, usage(100, 'sibling'));
       fs.unlinkSync(removed);
       const opendir = fs.opendirSync;
@@ -214,11 +234,70 @@ describe('bounded native account activity checkpoints', () => {
         blockedStat.mockRestore();
         blockedOpen.mockRestore();
       }
-      expect((await collectClaude()).scan?.complete).toBe(true);
-      fs.unlinkSync(hiddenFile);
+      if (removeBeforeRecovery) fs.rmSync(hidden, { recursive: true });
+      const recovered = await collectClaude();
+      expect(recovered.scan?.complete).toBe(true);
+      expect(sum(recovered, 'inputTokens')).toBe(removeBeforeRecovery ? 200 : 240);
+      if (!removeBeforeRecovery) {
+        expect(
+          JSON.parse(fs.readFileSync(path.join(checkpointDir, hiddenCheckpoint), 'utf8')).file
+        ).toBe(hiddenFile);
+        fs.rmSync(hidden, { recursive: true });
+      }
       expect(sum(await collectClaude(), 'inputTokens')).toBe(200);
+      // A later incomplete pass must not resurrect the confirmed removed directory.
+      const missing = spyOn(fs, 'opendirSync').mockImplementation(((target, ...args) => {
+        if (target === projects) throw denied();
+        return opendir(target, ...args);
+      }) as typeof fs.opendirSync);
+      try {
+        const partial = await collectClaude();
+        expect(sum(partial, 'inputTokens')).toBe(200);
+        expect(partial.scan?.complete).toBe(false);
+      } finally {
+        missing.mockRestore();
+      }
     }
   );
+
+  it('keeps root B and the unfinished part of root A when the deadline stops traversal', async () => {
+    const a = path.join(root, 'a');
+    const b = path.join(root, 'b');
+    fs.mkdirSync(a);
+    fs.mkdirSync(b);
+    fs.writeFileSync(
+      path.join(a, 'a.jsonl'),
+      JSON.stringify({ input: 100, timestamp: '2026-10-01T15:00:00Z' }) + '\n'
+    );
+    fs.writeFileSync(
+      path.join(b, 'b.jsonl'),
+      JSON.stringify({ input: 40, timestamp: '2026-10-01T15:00:00Z' }) + '\n'
+    );
+    const scan = () =>
+      collectAccountActivity(
+        { kind: 'jsonl', roots: [a, b], mapping: { timestamp: 'timestamp', inputTokens: 'input' } },
+        { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache'), budgetMs: 100 }
+      );
+    expect(sum(await scan(), 'inputTokens')).toBe(140);
+    const opendir = fs.opendirSync;
+    let expired = false;
+    const clock = spyOn(Date, 'now').mockImplementation(() => NOW + (expired ? 200 : 0));
+    const blocked = spyOn(fs, 'opendirSync').mockImplementation(((target, ...args) => {
+      const directory = opendir(target, ...args);
+      if (target === a) expired = true;
+      return directory;
+    }) as typeof fs.opendirSync);
+    try {
+      const result = await scan();
+      expect(sum(result, 'inputTokens')).toBe(140);
+      expect(result.scan?.complete).toBe(false);
+    } finally {
+      clock.mockRestore();
+      blocked.mockRestore();
+    }
+    fs.rmSync(b, { recursive: true });
+    expect(sum(await scan(), 'inputTokens')).toBe(100);
+  });
 
   it.each([
     { reader: 'inline', failure: 'open' },
@@ -608,6 +687,114 @@ describe('claude response collapsing', () => {
       expect((await collectClaude()).eventCount).toBe(11);
     }
   );
+
+  it.each([
+    { failure: 'open', legacySelection: false },
+    { failure: 'read', legacySelection: false },
+    { failure: 'open', legacySelection: true },
+  ])(
+    'freezes the coherent Claude prefix group across a failed mode transition ($failure, legacy=$legacySelection)',
+    async ({ failure, legacySelection }) => {
+      const projects = path.join(root, 'claude', 'projects');
+      const a = path.join(projects, 'a', 's.jsonl');
+      const b = path.join(projects, 'b', 's.jsonl');
+      fs.mkdirSync(path.dirname(a), { recursive: true });
+      fs.mkdirSync(path.dirname(b), { recursive: true });
+      const records = Array.from({ length: 15 }, (_, i) =>
+        JSON.stringify({
+          ...line(`m${i}`, `r${i}`, 1),
+          message: {
+            id: `m${i}`,
+            model: 'claude-sonnet-4-6',
+            usage: { input_tokens: 10, output_tokens: 1 },
+          },
+        })
+      );
+      fs.writeFileSync(a, records.slice(0, 10).join('\n') + '\n');
+      // Keep an old prefix checkpoint too: adding it to the longer copy would overcount.
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(100);
+      fs.writeFileSync(b, records.join('\n') + '\n');
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(150);
+      if (legacySelection) {
+        const cacheRoot = path.join(root, 'cache', 'account-activity-v1');
+        const directory = path.join(cacheRoot, fs.readdirSync(cacheRoot)[0]);
+        for (const name of fs.readdirSync(directory)) {
+          if (name.endsWith('.group')) fs.unlinkSync(path.join(directory, name));
+        }
+      }
+      const open = fs.openSync;
+      const read = fs.readSync;
+      const blockedFds = new Set<number>();
+      const blocked = spyOn(fs, 'openSync').mockImplementation(((target, ...args) => {
+        if (target === b && failure === 'open')
+          throw Object.assign(new Error('fixture unreadable'), { code: 'EACCES' });
+        const fd = open(target, ...args);
+        if (target === b) blockedFds.add(fd);
+        else blockedFds.delete(fd);
+        return fd;
+      }) as typeof fs.openSync);
+      const blockedRead = spyOn(fs, 'readSync').mockImplementation(((fd, ...args) => {
+        if (blockedFds.has(fd)) throw new Error('fixture read failed');
+        return read(fd, ...args);
+      }) as typeof fs.readSync);
+      try {
+        for (let pass = 0; pass < 2; pass++) {
+          const result = await collectClaude();
+          expect(sum(result, 'inputTokens')).toBe(150);
+          expect(result.scan).toMatchObject({ complete: false, readBytes: 0 });
+        }
+        // A readable sibling cannot start contributing keyed rows over the frozen compact copy.
+        fs.appendFileSync(
+          a,
+          records[0].replaceAll('m0', 'unique').replaceAll('r0', 'unique') + '\n'
+        );
+        expect(sum(await collectClaude(), 'inputTokens')).toBe(150);
+      } finally {
+        blocked.mockRestore();
+        blockedRead.mockRestore();
+      }
+      const recovered = await collectClaude();
+      expect(sum(recovered, 'inputTokens')).toBe(160);
+      expect(recovered.scan?.complete).toBe(true);
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(160);
+      fs.rmSync(path.dirname(b), { recursive: true });
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(110);
+    }
+  );
+
+  it('freezes every keyed Claude group member until the unreadable copy recovers', async () => {
+    const projects = path.join(root, 'claude', 'projects');
+    const a = path.join(projects, 'a', 's.jsonl');
+    const b = path.join(projects, 'b', 's.jsonl');
+    fs.mkdirSync(path.dirname(a), { recursive: true });
+    fs.mkdirSync(path.dirname(b), { recursive: true });
+    const record = (id: string, input: number) => {
+      const value = line(id, id, 1);
+      value.message.usage.input_tokens = input;
+      return JSON.stringify(value) + '\n';
+    };
+    fs.writeFileSync(a, record('shared', 100) + record('a', 20));
+    fs.writeFileSync(b, record('shared', 100) + record('b', 30));
+    expect(sum(await collectClaude(), 'inputTokens')).toBe(150);
+    const open = fs.openSync;
+    const blocked = spyOn(fs, 'openSync').mockImplementation(((target, ...args) => {
+      if (target === b) throw new Error('fixture unreadable');
+      return open(target, ...args);
+    }) as typeof fs.openSync);
+    try {
+      fs.appendFileSync(a, record('fresh', 40));
+      for (let pass = 0; pass < 2; pass++) {
+        const result = await collectClaude();
+        expect(sum(result, 'inputTokens')).toBe(150);
+        expect(result.scan).toMatchObject({ complete: false, readBytes: 0 });
+      }
+    } finally {
+      blocked.mockRestore();
+    }
+    expect(sum(await collectClaude(), 'inputTokens')).toBe(190);
+    fs.rmSync(path.dirname(b), { recursive: true });
+    expect(sum(await collectClaude(), 'inputTokens')).toBe(160);
+  });
 
   it.each(['user', 'tool', 'assistant', 'unknown-envelope'])(
     'only makes oversized Claude %s usage-capable envelopes partial',
