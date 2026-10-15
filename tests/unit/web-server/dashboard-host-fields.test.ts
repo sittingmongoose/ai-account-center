@@ -55,6 +55,9 @@ function dashboardService(additional: AdditionalAccountDeps): AccountDashboardSe
   const accounts = new AdditionalAccountService({
     ccsDir: '/tmp/aac-host-fields-fixture',
     now: () => Date.parse(NOW),
+    // The direct ssh transport these tests pin. The shared failover coordinator keeps state
+    // across tests and is covered with Nas1 in account-dashboard-failover.test.ts.
+    failover: null,
     ...additional,
   });
   return new AccountDashboardService({

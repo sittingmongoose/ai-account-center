@@ -767,11 +767,18 @@ export class AccountDashboardService {
       state.antigravity = (
         this.deps.getCachedAntigravityAccounts ?? (() => getCachedAntigravityAccounts(scope))
       )().map((account) => {
+        // The runtime cache never proves activation (it always reports false); the proof is
+        // the one the last refresh retained below. Only a fallback or unverifiable cached
+        // reading may veto it here, so the cache's own false is not carried into the peek.
         const publicAccount = publicDashboardAccount(account);
+        const unvetoed = {
+          ...publicAccount,
+          capabilities: { ...publicAccount.capabilities, antigravityCanActivate: true },
+        };
         const current =
           this.deps.getCachedAntigravityAccounts || this.deps.failover === null
-            ? publicAccount
-            : peekAntigravityUsage(publicAccount, scope, {
+            ? unvetoed
+            : peekAntigravityUsage(unvetoed, scope, {
                 failover: this.deps.failover ?? undefined,
               });
         const retained = previous.find((candidate) => candidate.id === current.id);
