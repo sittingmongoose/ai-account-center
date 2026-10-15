@@ -220,9 +220,14 @@ describe('bounded native account activity checkpoints', () => {
     }
   );
 
-  it.each(['inline', 'partition'] as const)(
-    'keeps failed Codex file rows alongside fresh sibling rows (%s)',
-    async (reader) => {
+  it.each([
+    { reader: 'inline', failure: 'open' },
+    { reader: 'partition', failure: 'open' },
+    { reader: 'inline', failure: 'read' },
+    { reader: 'partition', failure: 'read' },
+  ])(
+    'keeps failed Codex file rows alongside fresh sibling rows ($reader, $failure)',
+    async ({ reader, failure }) => {
       write([meta(), model(), tokens(100, 0, 10)]);
       const sibling = path.join(path.dirname(file), 'rollout-sibling.jsonl');
       fs.writeFileSync(
@@ -232,10 +237,19 @@ describe('bounded native account activity checkpoints', () => {
       expect(sum(await collect(), 'inputTokens')).toBe(140);
       fs.appendFileSync(sibling, JSON.stringify(tokens(140, 0, 15)) + '\n');
       const open = fs.openSync;
+      const unreadable = new Set<number>();
       const blocked = spyOn(fs, 'openSync').mockImplementation(((target, ...args) => {
-        if (target === file) throw new Error('fixture unreadable');
-        return open(target, ...args);
+        if (target === file && failure === 'open') throw new Error('fixture unreadable');
+        const fd = open(target, ...args);
+        if (target === file) unreadable.add(fd);
+        else unreadable.delete(fd);
+        return fd;
       }) as typeof fs.openSync);
+      const read = fs.readSync;
+      const blockedRead = spyOn(fs, 'readSync').mockImplementation(((fd, ...args) => {
+        if (unreadable.has(fd)) throw new Error('fixture content read failed');
+        return read(fd, ...args);
+      }) as typeof fs.readSync);
       try {
         for (let pass = 0; pass < 2; pass++) {
           if (reader === 'inline') {
@@ -262,6 +276,7 @@ describe('bounded native account activity checkpoints', () => {
         }
       } finally {
         blocked.mockRestore();
+        blockedRead.mockRestore();
       }
       expect(sum(await collect(), 'inputTokens')).toBe(240);
     }

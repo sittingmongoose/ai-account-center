@@ -508,6 +508,9 @@ function loadCheckpoint(
             ))
       )
         return fresh(stats, minDate, kind, mode);
+    } catch (error) {
+      // A transient content read failure cannot establish a fingerprint mismatch.
+      if (!stale || confirmedMissing(error)) throw error;
     } finally {
       if (fd !== undefined) fs.closeSync(fd);
     }
