@@ -40,6 +40,13 @@ const CONFIG_SUBCOMMAND_ROUTES: readonly NamedCommandRoute[] = [
     },
   },
   {
+    name: 'usage-snapshot',
+    handle: async (args) => {
+      const { handleUsageSnapshotCommand } = await import('./usage-snapshot-command');
+      process.exitCode = await handleUsageSnapshotCommand(args);
+    },
+  },
+  {
     name: 'proxy',
     handle: async (args) => {
       const { handleProxyCommand } = await import('./dashboard-proxy-command');

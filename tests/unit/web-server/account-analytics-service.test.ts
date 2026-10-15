@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { AccountAnalyticsService } from '../../../src/web-server/services/account-analytics-service';
+import {
+  AccountAnalyticsService,
+  onAccountAnalyticsSample,
+  type AccountAnalyticsSampleEvent,
+} from '../../../src/web-server/services/account-analytics-service';
 import {
   appendAccountAnalyticsSnapshot,
   type AccountAnalyticsHistoryData,
@@ -570,6 +574,41 @@ describe('account quota analytics', () => {
     await Promise.all([first, second]);
     expect(store.data?.records).toHaveLength(1);
     expect(store.data?.records[0].platform).toBe('windows');
+  });
+
+  it('tells sample listeners what each finished sample recorded, and a failing listener changes nothing', async () => {
+    const store = memory();
+    const events: AccountAnalyticsSampleEvent[] = [];
+    const stopFailing = onAccountAnalyticsSample(() => {
+      throw new Error('listener failure');
+    });
+    const stop = onAccountAnalyticsSample((event) => events.push(event));
+    try {
+      const service = new AccountAnalyticsService({
+        getDashboard: async () => dashboard([account('codex')]),
+        createHistoryStore: () => store,
+        now: () => NOW,
+        getActivity: async () => noActivity,
+      });
+      await service.sample();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(events).toHaveLength(1);
+      expect(events[0].sampledAt).toBe(NOW);
+      expect(events[0].accounts.map((entry) => entry.provider)).toEqual(['codex']);
+      expect(events[0].history?.records).toHaveLength(1);
+      expect(store.data?.records).toHaveLength(1);
+    } finally {
+      stop();
+      stopFailing();
+    }
+    const service = new AccountAnalyticsService({
+      getDashboard: async () => dashboard([account('codex')]),
+      createHistoryStore: () => memory(),
+      now: () => NOW,
+      getActivity: async () => noActivity,
+    });
+    await service.sample();
+    expect(events).toHaveLength(1);
   });
 
   it('prefers a usable quota source over an unavailable desktop selector for the same account', async () => {

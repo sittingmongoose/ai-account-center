@@ -280,7 +280,11 @@ describe('analytics remote helper integrity', () => {
           end: (data?: Buffer) => {
             call.input = data ? data.toString('utf8') : '';
             setImmediate(() =>
-              callback(null, JSON.stringify({ version: 1, truncated: false, kinds: {}, rows: [] }), '')
+              callback(
+                null,
+                JSON.stringify({ version: 1, truncated: false, kinds: {}, rows: [] }),
+                ''
+              )
             );
           },
         },

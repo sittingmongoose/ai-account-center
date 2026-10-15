@@ -1,0 +1,294 @@
+import {
+  accountAnalyticsIdentity,
+  analyticsWindowIdentity,
+  type AccountAnalyticsHistoryData,
+  type AccountAnalyticsObservation,
+} from '../services/account-analytics-history';
+import type { DashboardAccount, DashboardAccountWindow } from '../services/account-dashboard-types';
+import type { AgentUsageAccount } from './agent-usage-projection';
+
+/**
+ * Burn rates and the rolling history for agents, from the dashboard's own quota history (every
+ * changed reading of the last hour, 5-minute buckets to a day, hourly buckets beyond) plus every
+ * one-minute reading this dashboard saw in the last hour, so a window being used up within minutes
+ * shows its pace at once. Only measured readings are used: a rate needs two real readings of the
+ * same window in the same reset period, and nothing is extrapolated across a reset.
+ */
+export const HISTORY_HOURS = 7 * 24;
+const HOUR_MS = 3_600_000;
+/** A larger fall than this between two readings is a reset, not noise. */
+const RESET_DROP_POINTS = 1;
+/** Readings whose reset times differ by more than this belong to different periods. */
+const RESET_SHIFT_MS = 10 * 60_000;
+const HORIZONS = [
+  { name: 'last5Minutes', hours: 5 / 60, minimumSpanMs: 2 * 60_000 },
+  { name: 'last15Minutes', hours: 15 / 60, minimumSpanMs: 5 * 60_000 },
+  { name: 'lastHour', hours: 1, minimumSpanMs: 15 * 60_000 },
+  { name: 'last6Hours', hours: 6, minimumSpanMs: HOUR_MS },
+  { name: 'last24Hours', hours: 24, minimumSpanMs: 4 * HOUR_MS },
+] as const;
+/** Below this pace (percentage points per hour) a window is treated as not rising. */
+const MIN_PACE = 0.05;
+/** How long the one-minute readings are kept in memory. */
+export const RECENT_READINGS_MS = 65 * 60_000;
+const MAX_RECENT_READINGS = 180;
+
+export interface BurnRate {
+  /** Percentage points used per hour over each span, measured within the current reset period. */
+  last5Minutes: number | null;
+  last15Minutes: number | null;
+  lastHour: number | null;
+  last6Hours: number | null;
+  last24Hours: number | null;
+  /** The pace the projection uses: the shortest span with enough readings, so bursts show at once. */
+  pace: number | null;
+  /** That span in minutes. */
+  paceMinutes: number | null;
+  /** When the window reaches 100% at that pace; null when it is not rising. */
+  projectedFullAt: string | null;
+  /** Whether that comes before the window resets; null when either time is unknown. */
+  runsOutBeforeReset: boolean | null;
+  /** When the current reset period's first recorded reading was taken. */
+  periodStartedAt: string | null;
+}
+
+/** One reading of one window: [time (ISO, minute), used percent, remaining amount]. */
+export type HistoryPoint = [string, number | null, number | null];
+
+export interface HistorySeries {
+  accountId: string;
+  provider: string;
+  label: string;
+  email: string | null;
+  profile: string | null;
+  window: string;
+  windowLabel: string;
+  kind: string;
+  unit: string | null;
+  points: HistoryPoint[];
+}
+
+export interface Reading {
+  at: number;
+  used: number | null;
+  remaining: number | null;
+  resetAt: number | null;
+}
+
+function minuteIso(epoch: number): string {
+  return new Date(Math.floor(epoch / 60_000) * 60_000).toISOString().replace(':00.000Z', 'Z');
+}
+
+function finite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** Each account's records, oldest first, keyed by the history's account identity. */
+export function recordsByIdentity(
+  history: AccountAnalyticsHistoryData | null
+): Map<string, AccountAnalyticsObservation[]> {
+  const result = new Map<string, AccountAnalyticsObservation[]>();
+  for (const record of history?.records ?? []) {
+    const list = result.get(record.identity) ?? [];
+    list.push(record);
+    result.set(record.identity, list);
+  }
+  for (const list of result.values())
+    list.sort((a, b) => Date.parse(a.sampledAt) - Date.parse(b.sampledAt));
+  return result;
+}
+
+/** The window's readings, oldest first, one per sample time. */
+export function windowReadings(
+  records: AccountAnalyticsObservation[],
+  window: DashboardAccountWindow,
+  since: number
+): Reading[] {
+  const identity = analyticsWindowIdentity(window);
+  const readings: Reading[] = [];
+  for (const record of records) {
+    const at = Date.parse(record.sampledAt);
+    if (!Number.isFinite(at) || at < since) continue;
+    if (readings.length > 0 && readings[readings.length - 1].at === at) continue;
+    const match = record.windows.find((entry) => analyticsWindowIdentity(entry) === identity);
+    if (!match) continue;
+    const used = finite(match.usedPercent);
+    const remaining = finite(match.remaining);
+    if (used === null && remaining === null) continue;
+    const reset = Date.parse(match.resetAt ?? '');
+    readings.push({ at, used, remaining, resetAt: Number.isFinite(reset) ? reset : null });
+  }
+  return readings;
+}
+
+/** Both lists merged, oldest first, one reading per time (the later list wins a tie). */
+export function mergeReadings(stored: Reading[], recent: Reading[]): Reading[] {
+  const byTime = new Map<number, Reading>();
+  for (const reading of [...stored, ...recent]) byTime.set(reading.at, reading);
+  return [...byTime.values()].sort((a, b) => a.at - b.at);
+}
+
+/** The reading a dashboard row carries for one window, at its own sample time. */
+export function rowReading(row: DashboardAccount, window: DashboardAccountWindow): Reading | null {
+  if (row.status !== 'ok' && row.status !== 'cached') return null;
+  const at = Date.parse(window.sampledAt ?? row.sampledAt ?? '');
+  const used = finite(window.usedPercent);
+  const remaining = finite(window.remaining);
+  if (!Number.isFinite(at) || (used === null && remaining === null)) return null;
+  const reset = Date.parse(window.resetAt ?? '');
+  return { at, used, remaining, resetAt: Number.isFinite(reset) ? reset : null };
+}
+
+function seriesKey(accountId: string, window: DashboardAccountWindow): string {
+  return JSON.stringify([accountId, analyticsWindowIdentity(window)]);
+}
+
+/**
+ * The one-minute readings of the last hour, kept in memory by the snapshot writer. The quota
+ * history stores an unchanged reading at most once per five minutes; these keep every sample, so
+ * a quiet window followed by a burst still measures its pace over the right span.
+ */
+export class RecentReadings {
+  private readonly series = new Map<string, Reading[]>();
+
+  add(rows: DashboardAccount[], now: number): void {
+    for (const row of rows)
+      for (const window of row.windows ?? []) {
+        const reading = rowReading(row, window);
+        if (!reading) continue;
+        const key = seriesKey(row.id, window);
+        const list = this.series.get(key) ?? [];
+        if (!list.some((entry) => entry.at === reading.at)) list.push(reading);
+        list.sort((a, b) => a.at - b.at);
+        this.series.set(key, list.slice(-MAX_RECENT_READINGS));
+      }
+    for (const [key, list] of this.series) {
+      const kept = list.filter((reading) => reading.at >= now - RECENT_READINGS_MS);
+      if (kept.length) this.series.set(key, kept);
+      else this.series.delete(key);
+    }
+  }
+
+  get(accountId: string, window: DashboardAccountWindow): Reading[] {
+    return this.series.get(seriesKey(accountId, window)) ?? [];
+  }
+}
+
+/** The readings since the last reset: a fall in use or a moved reset time starts a new period. */
+function currentPeriod(readings: Reading[]): Reading[] {
+  const usable = readings.filter((reading) => reading.used !== null);
+  let start = usable.length - 1;
+  while (start > 0) {
+    const earlier = usable[start - 1];
+    const later = usable[start];
+    if ((earlier.used as number) > (later.used as number) + RESET_DROP_POINTS) break;
+    if (
+      earlier.resetAt !== null &&
+      later.resetAt !== null &&
+      Math.abs(earlier.resetAt - later.resetAt) > RESET_SHIFT_MS
+    )
+      break;
+    start--;
+  }
+  return start < 0 ? [] : usable.slice(start);
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+export function burnRate(readings: Reading[], resetAt: string | null): BurnRate {
+  const period = currentPeriod(readings);
+  const rates: Record<(typeof HORIZONS)[number]['name'], number | null> = {
+    last5Minutes: null,
+    last15Minutes: null,
+    lastHour: null,
+    last6Hours: null,
+    last24Hours: null,
+  };
+  let pace: number | null = null;
+  let paceMinutes: number | null = null;
+  const latest = period[period.length - 1];
+  if (latest) {
+    for (const horizon of HORIZONS) {
+      const earliest = period.find((reading) => reading.at >= latest.at - horizon.hours * HOUR_MS);
+      if (!earliest || latest.at - earliest.at < horizon.minimumSpanMs) continue;
+      const rate = round(
+        ((latest.used as number) - (earliest.used as number)) /
+          ((latest.at - earliest.at) / HOUR_MS)
+      );
+      rates[horizon.name] = rate;
+      if (pace === null) {
+        pace = rate;
+        paceMinutes = Math.round(horizon.hours * 60);
+      }
+    }
+  }
+  let projectedFullAt: string | null = null;
+  if (latest && (latest.used as number) >= 100) projectedFullAt = new Date(latest.at).toISOString();
+  else if (latest && pace !== null && pace >= MIN_PACE)
+    projectedFullAt = new Date(
+      latest.at + ((100 - (latest.used as number)) / pace) * HOUR_MS
+    ).toISOString();
+  const reset = Date.parse(resetAt ?? '');
+  return {
+    ...rates,
+    pace,
+    paceMinutes,
+    projectedFullAt,
+    runsOutBeforeReset:
+      projectedFullAt === null || !Number.isFinite(reset)
+        ? null
+        : Date.parse(projectedFullAt) < reset,
+    periodStartedAt: period.length > 0 ? new Date(period[0].at).toISOString() : null,
+  };
+}
+
+/**
+ * Burn rates for every percent window of the projected accounts, keyed by account id, then window
+ * key, plus the rolling history series for every window (percent or amount).
+ */
+export function usageHistory(
+  rows: DashboardAccount[],
+  accounts: AgentUsageAccount[],
+  history: AccountAnalyticsHistoryData | null,
+  now: number,
+  recent: RecentReadings | null = null
+): { rates: Map<string, Map<string, BurnRate>>; series: HistorySeries[] } {
+  const byIdentity = recordsByIdentity(history);
+  const since = now - HISTORY_HOURS * HOUR_MS;
+  const rowById = new Map<string, DashboardAccount>();
+  for (const row of rows) if (!rowById.has(row.id)) rowById.set(row.id, row);
+  const rates = new Map<string, Map<string, BurnRate>>();
+  const series: HistorySeries[] = [];
+  for (const account of accounts) {
+    const row = rowById.get(account.id);
+    if (!row) continue;
+    const records = byIdentity.get(accountAnalyticsIdentity(row)) ?? [];
+    const perWindow = new Map<string, BurnRate>();
+    for (const window of row.windows ?? []) {
+      const current = rowReading(row, window);
+      const readings = mergeReadings(windowReadings(records, window, since), [
+        ...(recent?.get(row.id, window) ?? []),
+        ...(current ? [current] : []),
+      ]).filter((reading) => reading.at >= since && reading.at <= now);
+      if (finite(window.usedPercent) !== null && (window.kind ?? 'rate_limit') === 'rate_limit')
+        perWindow.set(window.key, burnRate(readings, window.resetAt));
+      if (readings.length === 0) continue;
+      series.push({
+        accountId: account.id,
+        provider: account.provider,
+        label: account.label,
+        email: account.email,
+        profile: account.profile,
+        window: window.key,
+        windowLabel: window.label,
+        kind: window.kind ?? 'rate_limit',
+        unit: window.unit ?? null,
+        points: readings.map((reading) => [minuteIso(reading.at), reading.used, reading.remaining]),
+      });
+    }
+    rates.set(account.id, perWindow);
+  }
+  return { rates, series };
+}

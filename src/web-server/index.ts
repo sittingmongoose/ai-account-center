@@ -62,6 +62,7 @@ import {
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
+import { startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
 import { createUsageHubRouter } from './usage-hub/usage-hub-router';
 
@@ -285,6 +286,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   server.on('upgrade', onUpgrade);
   let httpsServer: https.Server | null = null;
   let stopCgroupForeignCheck: (() => void) | null = null;
+  let stopAgentUsageSnapshot: (() => void) | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   const codexRenewal = getCodexProfileRenewalService();
@@ -306,6 +308,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     codexRenewal.stop();
     stopAntigravityRuntime();
     stopAccountAnalyticsSampling();
+    stopAgentUsageSnapshot?.();
+    stopAgentUsageSnapshot = null;
     stopCgroupForeignCheck?.();
     stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
@@ -368,6 +372,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
           'Saved Codex login renewal could not start safely'
         );
       }
+      // Agent usage snapshot (off until a folder is set): written after every analytics sample.
+      stopAgentUsageSnapshot = startAgentUsageSnapshot();
       startAccountAnalyticsSampling();
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();

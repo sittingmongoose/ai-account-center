@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""aac-usage: read AI Account Center's account usage snapshot (quota left, resets, burn rate).
+
+The AI Account Center dashboard on the Ubuntu VM writes usage.json, usage.md and history.json into
+the aac-usage folder of the network share after every refresh (every minute by default). This
+command reads them; it never contacts a provider or the dashboard and changes nothing.
+
+  aac-usage                          every account, with each window's use, reset and burn rate
+  aac-usage --provider codex         one provider (codex, claude, antigravity, muse, cursor,
+                                     kimi, qwen, zai, opencode)
+  aac-usage --account <text>         accounts whose label, email or profile contains <text>
+  aac-usage --json                   the snapshot itself (usage.json), after the same filters
+  aac-usage history [filters] [--hours N] [--json]
+                                     the measured readings behind the burn rates (7 days)
+  aac-usage rules [claude|other]     the short rules block for agent instruction files
+  aac-usage install-rules            write that block into this computer's agent rules files
+
+Python 3.9+ standard library only, so the same file runs on the VM, Nas1, the Mac and Windows.
+"""
+import argparse
+import datetime as dt
+import json
+import os
+import sys
+from pathlib import Path
+
+BEGIN = "<!-- aac-usage rules: start (managed by `aac-usage install-rules`; edits inside are overwritten) -->"
+END = "<!-- aac-usage rules: end -->"
+
+PROVIDERS = {
+    "codex": "codex", "openai": "codex", "chatgpt": "codex",
+    "claude": "claude", "anthropic": "claude",
+    "antigravity": "antigravity", "agy": "antigravity", "gemini": "antigravity",
+    "muse": "muse",
+    "cursor": "cursor", "grok": "cursor",
+    "kimi": "kimi-code", "kimi-code": "kimi-code",
+    "qwen": "qwen",
+    "zai": "zai", "z.ai": "zai", "glm": "zai", "zcode": "zai",
+    "opencode": "opencode-go", "opencode-go": "opencode-go",
+}
+HOSTS = {"ubuntu": "Ubuntu VM", "nas1": "Nas1", "mac": "Mac", "windows": "Windows"}
+STATUS = {"ok": "current", "cached": "cached earlier reading", "unavailable": "no current reading",
+          "error": "reading failed", "needs_sign_in": "needs sign-in"}
+
+
+def share_folder():
+    if os.name == "nt":
+        return Path("\\\\NAS\\share\\aac-usage")
+    if sys.platform == "darwin":
+        return Path("/Volumes/share/aac-usage")
+    return Path("/mnt/share/aac-usage")
+
+
+def snapshot_folder(explicit=None):
+    if explicit:
+        return Path(explicit)
+    if os.environ.get("AAC_USAGE_DIR"):
+        return Path(os.environ["AAC_USAGE_DIR"])
+    here = Path(os.path.realpath(__file__)).parent
+    return here if (here / "usage.json").exists() else share_folder()
+
+
+def now_utc():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def parse_time(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def span(seconds):
+    if seconds is None or seconds <= 0:
+        return "now"
+    seconds = int(seconds)
+    days, hours, minutes = seconds // 86400, seconds % 86400 // 3600, seconds % 3600 // 60
+    if days:
+        return "%dd %dh" % (days, hours)
+    if hours:
+        return "%dh %dm" % (hours, minutes)
+    if minutes:
+        return "%dm" % minutes
+    return "%ds" % seconds
+
+
+def clock(value, now):
+    moment = parse_time(value)
+    if moment is None:
+        return "?"
+    text = moment.strftime("%H:%M UTC") if moment.date() == now.date() else moment.strftime("%b %d %H:%M UTC")
+    delta = (moment - now).total_seconds()
+    return "%s (in %s)" % (text, span(delta)) if delta > 0 else "%s (%s ago)" % (text, span(-delta))
+
+
+def number(value):
+    if value is None:
+        return "?"
+    return str(int(value)) if float(value).is_integer() else "%.2f" % value
+
+
+def load(folder, name):
+    path = folder / name
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        sys.exit("aac-usage: %s not found. The AI Account Center dashboard writes it; "
+                 "check `ai-account-center dashboard usage-snapshot status` on the Ubuntu VM." % path)
+    except (OSError, ValueError) as error:
+        sys.exit("aac-usage: %s could not be read (%s)." % (path, error))
+
+
+def stale_note(snapshot, now):
+    generated = parse_time(snapshot.get("generatedAt"))
+    if generated is None:
+        return "WARNING: the snapshot has no time; treat it as stale."
+    age = (now - generated).total_seconds()
+    limit = snapshot.get("staleAfterSeconds") or 300
+    if age > limit:
+        return ("WARNING: this snapshot is %s old (stale after %s): the AI Account Center dashboard "
+                "stopped updating it, so these numbers may be out of date." % (span(age), span(limit)))
+    return None
+
+
+def matches(account, provider, needle, include_hidden):
+    if account.get("hidden") and not include_hidden:
+        return False
+    if provider and account.get("provider") != provider:
+        return False
+    if needle:
+        fields = [account.get(key) or "" for key in ("label", "email", "profile", "id")]
+        if not any(needle.lower() in field.lower() for field in fields):
+            return False
+    return True
+
+
+def burn_text(burn, now):
+    if not burn or burn.get("pace") is None:
+        return None
+    minutes = burn.get("paceMinutes") or 0
+    over = "%d min" % minutes if minutes < 60 else "%d h" % round(minutes / 60)
+    parts = ["pace %s%%/h over %s" % (number(burn["pace"]), over)]
+    if minutes < 60 and burn.get("lastHour") is not None:
+        parts.append("%s%%/h over 1 h" % number(burn["lastHour"]))
+    full = parse_time(burn.get("projectedFullAt"))
+    if full is not None:
+        when = "full in %s" % span((full - now).total_seconds())
+        if burn.get("runsOutBeforeReset") is True:
+            when += " BEFORE the reset"
+        elif burn.get("runsOutBeforeReset") is False:
+            when += " (after the reset)"
+        parts.append(when)
+    return ", ".join(parts)
+
+
+def window_line(window, now):
+    parts = []
+    if window.get("unlimited") is True:
+        parts.append("unlimited")
+    elif window.get("usedPercent") is not None:
+        left = window.get("remainingPercent")
+        parts.append("%s%% used%s" % (number(window["usedPercent"]),
+                                      " (%s%% left)" % number(left) if left is not None else ""))
+    unit = " " + window["unit"] if window.get("unit") else ""
+    if window.get("remaining") is not None:
+        limit = window.get("limit")
+        parts.append("%s%s%s left" % (number(window["remaining"]),
+                                      " of " + number(limit) if limit is not None else "", unit))
+    elif window.get("used") is not None:
+        limit = window.get("limit")
+        parts.append("%s%s%s used" % (number(window["used"]),
+                                      " of " + number(limit) if limit is not None else "", unit))
+    if window.get("resetAt"):
+        if window.get("resetPassed"):
+            parts.append("reset passed, new reading pending")
+        else:
+            parts.append("resets " + clock(window["resetAt"], now))
+    if window.get("expiresAt"):
+        parts.append("expires " + clock(window["expiresAt"], now))
+    if not window.get("resetPassed"):
+        burn = burn_text(window.get("burn"), now)
+        if burn:
+            parts.append(burn)
+    label = window.get("label") or window.get("key")
+    if window.get("pool"):
+        label += " [%s]" % window["pool"]
+    return "    %s: %s" % (label, "; ".join(parts) or "no number reported")
+
+
+def cmd_show(args):
+    folder = snapshot_folder(args.dir)
+    snapshot = load(folder, "usage.json")
+    now = now_utc()
+    provider = PROVIDERS.get(args.provider.lower()) if args.provider else None
+    if args.provider and not provider:
+        sys.exit("aac-usage: unknown provider %r; use one of %s." % (args.provider, ", ".join(sorted(set(PROVIDERS)))))
+    accounts = [a for a in snapshot.get("accounts", []) if matches(a, provider, args.account, args.all)]
+    if args.json:
+        print(json.dumps(dict(snapshot, accounts=accounts), indent=2))
+        return
+    note = stale_note(snapshot, now)
+    generated = parse_time(snapshot.get("generatedAt"))
+    age = span((now - generated).total_seconds()) if generated else "?"
+    print("AI Account Center usage, snapshot %s ago (%s)" % (age, folder / "usage.json"))
+    if note:
+        print(note)
+    if not accounts:
+        print("No matching accounts.")
+        return
+    current = None
+    for account in accounts:
+        if account.get("providerLabel") != current:
+            current = account.get("providerLabel")
+            print("\n" + current)
+        who = [account.get("label") or "?"]
+        if account.get("email") and account["email"] != account.get("label"):
+            who.append(account["email"])
+        if account.get("profile") and account["profile"] != account.get("label"):
+            who.append("profile " + account["profile"])
+        facts = [fact for fact in (account.get("plan"), HOSTS.get(account.get("host"), account.get("host")),
+                                   "ACTIVE" if account.get("active") else None) if fact]
+        sampled = account.get("ageSeconds")
+        status = STATUS.get(account.get("status"), account.get("status"))
+        print("  %s  [%s]  %s, sampled %s ago" % ("  ".join(who), ", ".join(facts), status,
+                                                  span(sampled) if sampled is not None else "?"))
+        if account.get("status") in ("ok", "cached"):
+            for window in account.get("windows", []):
+                print(window_line(window, now))
+
+
+def cmd_history(args):
+    folder = snapshot_folder(args.dir)
+    history = load(folder, "history.json")
+    provider = PROVIDERS.get(args.provider.lower()) if args.provider else None
+    since = now_utc() - dt.timedelta(hours=args.hours)
+    series = []
+    for entry in history.get("series", []):
+        if provider and entry.get("provider") != provider:
+            continue
+        if args.account and not any(args.account.lower() in (entry.get(k) or "").lower()
+                                    for k in ("label", "email", "profile", "accountId")):
+            continue
+        if args.window and args.window.lower() not in (entry.get("window") or "").lower():
+            continue
+        points = [p for p in entry.get("points", []) if (parse_time(p[0]) or since) >= since]
+        series.append(dict(entry, points=points))
+    if args.json:
+        print(json.dumps(dict(history, series=series), indent=2))
+        return
+    for entry in series:
+        print("%s %s (%s) %s:" % (entry.get("provider"), entry.get("label"), entry.get("email") or "-",
+                                  entry.get("windowLabel")))
+        for time, used, remaining in entry["points"]:
+            values = []
+            if used is not None:
+                values.append("%s%%" % number(used))
+            if remaining is not None:
+                values.append("%s left" % number(remaining))
+            print("  %s  %s" % (time, ", ".join(values)))
+
+
+def run_cmd():
+    """How an agent on this computer runs this command."""
+    if os.name == "nt":
+        return ("python \\\\NAS\\share\\aac-usage\\aac-usage` (from Git Bash: "
+                "`python //NAS/share/aac-usage/aac-usage`)")
+    return "python3 %s`" % (share_folder() / "aac-usage")
+
+
+def rules_text(kind="other"):
+    cmd = run_cmd()
+    lines = [
+        "# AI account usage",
+        "",
+        "AI Account Center publishes how much quota is left on every AI account the user uses (Claude, Codex, Antigravity, "
+        "Muse, Cursor, Kimi Code, Qwen, Z.ai/GLM, OpenCode), refreshed every minute, in the `aac-usage` folder of the "
+        "network share (`/mnt/share/aac-usage` on the VM and Nas1, `/Volumes/share/aac-usage` on the Mac, "
+        "`\\\\NAS\\share\\aac-usage` on Windows). Run it here as `" + cmd + "; below, `aac-usage` means that command.",
+        "",
+        "- `aac-usage` lists every account (provider, label, email, AAC profile, computer, plan, ACTIVE flag) with each "
+        "window's used %, reset time, burn rate (%/h over the last 5 and 15 minutes, 1, 6 and 24 hours) and when it will "
+        "run out at the current pace. `--provider codex` or `--account <email or label>` narrows it, `--json` prints "
+        "usage.json, `aac-usage history --provider claude` shows the 7-day readings. `usage.md` in that folder is the "
+        "same summary in words.",
+        "- Check it before a long or parallel run on a quota-limited account, when a provider starts refusing requests, "
+        "and when choosing between providers or accounts. Find your own login by its email (T3 names provider "
+        "instances after their account email).",
+        "- A window marked `full in ... BEFORE the reset` will run out at the current pace, sometimes within minutes: "
+        "slow down, finish the current step, or tell the user rather than running the account dry.",
+        "- A snapshot past its stale limit means the dashboard stopped updating it: say so instead of trusting old "
+        "numbers. It is read-only; switching accounts, sign-in and refresh stay in the AI Account Center dashboard.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def install_block(path, text):
+    """Rewrites the managed block in place, so hard-linked rules files stay linked."""
+    block = "%s\n%s%s\n" % (BEGIN, text, END)
+    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    if BEGIN in old and END in old:
+        pre, rest = old.split(BEGIN, 1)
+        post = rest.split(END, 1)[1].lstrip("\r\n")
+        new = pre + block + (("\n" + post) if post.strip() else "")
+    else:
+        new = (old.rstrip() + "\n\n" if old.strip() else "") + block
+    if new == old:
+        return "unchanged"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(new)
+    return "updated"
+
+
+def rules_targets(home):
+    """(root folder, rules file, kind, create) for every agent on this computer, as pm-mail and agent-rules."""
+    targets = [
+        (".claude", home / ".claude" / "CLAUDE.md", "claude", True),          # Claude Code (and Muse)
+        (".codex", home / ".codex" / "AGENTS.md", "other", True),             # Codex
+        (".omp", home / ".omp" / "agent" / "AGENTS.md", "other", True),       # OMP
+        (".gemini", home / ".gemini" / "config" / "GEMINI.md", "other", True),  # Antigravity
+        (".zcode", home / ".zcode" / "AGENTS.md", "other", True),             # zcode
+        (".claude-t3", home / ".claude-t3" / "CLAUDE.md", "claude", True),    # T3 Claude accounts
+        (".codex-t3", home / ".codex-t3" / "AGENTS.override.md", "other", False),  # T3 Codex accounts
+    ]
+    for base, name, kind in ((".claude-t3", "CLAUDE.md", "claude"), (".codex-t3", "AGENTS.override.md", "other")):
+        folder = home / base
+        if folder.is_dir():
+            for child in sorted(folder.iterdir()):
+                if child.is_dir() and (child / name).is_file():
+                    targets.append((base, child / name, kind, False))
+    return targets
+
+
+def cmd_install_rules(args):
+    home = Path.home()
+    for root, path, kind, create in rules_targets(home):
+        if not (home / root).is_dir():
+            print("skip      %s (no %s here)" % (path, root))
+            continue
+        if not create and not path.is_file():
+            continue
+        print("%-9s %s" % (install_block(path, rules_text(kind)), path))
+    print("Cursor keeps user rules in its settings: paste `aac-usage rules` into Settings > Rules > User Rules.")
+
+
+def main():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # a Windows console without UTF-8 never fails a print
+        except (AttributeError, ValueError):
+            pass
+    parser = argparse.ArgumentParser(prog="aac-usage", description=__doc__.splitlines()[0])
+    parser.add_argument("--dir", help="the snapshot folder (default: this file's folder, else the share)")
+    parser.add_argument("--provider", help="only this provider")
+    parser.add_argument("--account", help="only accounts whose label, email or profile contains this")
+    parser.add_argument("--all", action="store_true", help="include accounts hidden on the dashboard")
+    parser.add_argument("--json", action="store_true", help="print JSON")
+    sub = parser.add_subparsers(dest="cmd")
+    history = sub.add_parser("history", help="the measured readings behind the burn rates")
+    history.add_argument("--provider")
+    history.add_argument("--account")
+    history.add_argument("--window", help="only windows whose key contains this, e.g. five_hour")
+    history.add_argument("--hours", type=float, default=24)
+    history.add_argument("--json", action="store_true")
+    history.add_argument("--dir")
+    rules = sub.add_parser("rules", help="print the rules block")
+    rules.add_argument("kind", nargs="?", default="other", choices=["claude", "other"])
+    sub.add_parser("install-rules", help="write the rules block into this computer's agent rules files")
+    args = parser.parse_args()
+    if args.cmd == "history":
+        cmd_history(args)
+    elif args.cmd == "rules":
+        print(rules_text(args.kind), end="")
+    elif args.cmd == "install-rules":
+        cmd_install_rules(args)
+    else:
+        cmd_show(args)
+
+
+if __name__ == "__main__":
+    main()

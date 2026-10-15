@@ -57,6 +57,38 @@ export interface AccountAnalyticsDeps {
   cancelSchedule?: (timer: ReturnType<typeof setTimeout> | undefined) => void;
 }
 
+/**
+ * What one finished sample saw: the accounts it recorded (one row per account, the best of both
+ * dashboard views) and the quota history after recording them, or null while that history cannot
+ * be read. Listeners run after the sample, never inside it, and cannot delay or fail it.
+ */
+export interface AccountAnalyticsSampleEvent {
+  accounts: DashboardAccount[];
+  history: AccountAnalyticsHistoryData | null;
+  sampledAt: number;
+}
+export type AccountAnalyticsSampleListener = (event: AccountAnalyticsSampleEvent) => unknown;
+
+const sampleListeners = new Set<AccountAnalyticsSampleListener>();
+
+/** Called after every finished sample (each refresh interval). Returns the unsubscribe call. */
+export function onAccountAnalyticsSample(listener: AccountAnalyticsSampleListener): () => void {
+  sampleListeners.add(listener);
+  return () => {
+    sampleListeners.delete(listener);
+  };
+}
+
+function notifySample(event: AccountAnalyticsSampleEvent): void {
+  for (const listener of sampleListeners) {
+    try {
+      void Promise.resolve(listener(event)).catch(() => {});
+    } catch {
+      /* A listener never fails a sample. */
+    }
+  }
+}
+
 interface HistoryState {
   queue: Promise<void>;
   loaded: boolean;
@@ -419,7 +451,14 @@ export class AccountAnalyticsService {
             )
               unique.set(identity, account);
           }
-      await this.record([...unique.values()], scope);
+      const accounts = [...unique.values()];
+      const state = await this.record(accounts, scope);
+      if (sampleListeners.size > 0)
+        notifySample({
+          accounts,
+          history: state.available ? state.data : null,
+          sampledAt: (this.deps.now ?? Date.now)(),
+        });
     })().finally(() => {
       this.pendingSample = null;
     });

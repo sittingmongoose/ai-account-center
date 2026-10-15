@@ -2,3 +2,5 @@
 # pinned by SHA-256 and streamed to the Mac, Windows and Nas1: a package built from a CRLF
 # checkout changed their bytes and stopped every remote Analytics scan (2026-10-13).
 * text=auto eol=lf
+# Windows command wrappers keep CRLF.
+*.cmd text eol=crlf
