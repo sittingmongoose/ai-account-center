@@ -24,7 +24,8 @@ current; edits are overwritten.
 
 Each account lists its provider, `label` (its name on the dashboard), `email` (the signed-in
 provider account), `profile` (AI Account Center's saved profile name, such as `gmail`), `id` (stable
-across snapshots), `host` (the computer AAC reads it on), `plan` and `active` (the account that
+across snapshots), `host` (the computer the quota reading came from; for Claude it can differ from
+`platform`, the computer its desktop app opens on), `plan` and `active` (the account that
 provider currently uses there). Match your own login by email; T3 names provider instances after
 their account email. Tokens, credentials, file paths and raw provider answers are never written here.
 

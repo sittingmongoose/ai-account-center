@@ -198,6 +198,8 @@ function currentPeriod(readings: Reading[]): Reading[] {
   while (start > 0) {
     const earlier = usable[start - 1];
     const later = usable[start];
+    // The earlier reading's own reset came before the later one was taken: a new period.
+    if (earlier.resetAt !== null && earlier.resetAt <= later.at) break;
     const known = earlier.resetAt !== null && later.resetAt !== null;
     const fall = (earlier.used as number) - (later.used as number);
     if (fall > (known ? RESET_DROP_POINTS : 0)) break;
@@ -286,13 +288,30 @@ export function usageHistory(
     if (!row) continue;
     const records = byIdentity.get(accountAnalyticsIdentity(row)) ?? [];
     const perWindow = new Map<string, BurnRate>();
+    // Every window measured in the last 7 days, so an outage or a window the provider stopped
+    // reporting keeps its history; only windows in the current reading get a reading and a pace.
+    const windows = new Map<string, DashboardAccountWindow>();
+    for (const record of records)
+      if (Date.parse(record.sampledAt) >= since)
+        for (const window of record.windows) windows.set(analyticsWindowIdentity(window), window);
+    const currentIds = new Set<string>();
     for (const window of row.windows ?? []) {
-      const current = rowReading(row, window);
+      const id = analyticsWindowIdentity(window);
+      currentIds.add(id);
+      windows.set(id, window);
+    }
+    for (const [id, window] of windows) {
+      const live = currentIds.has(id);
+      const current = live ? rowReading(row, window) : null;
       const readings = mergeReadings(windowReadings(records, window, since), [
         ...(recent?.get(row, window) ?? []),
         ...(current ? [current] : []),
       ]).filter((reading) => reading.at >= since && reading.at <= now);
-      if (finite(window.usedPercent) !== null && (window.kind ?? 'rate_limit') === 'rate_limit')
+      if (
+        live &&
+        finite(window.usedPercent) !== null &&
+        (window.kind ?? 'rate_limit') === 'rate_limit'
+      )
         perWindow.set(window.key, burnRate(readings, window.resetAt));
       if (readings.length === 0) continue;
       series.push({

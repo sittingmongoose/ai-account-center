@@ -81,6 +81,20 @@ class ReaderTests(unittest.TestCase):
         data = json.loads(self.run_reader("--provider", "openai", "--json"))
         self.assertEqual([entry["id"] for entry in data["accounts"]], ["codex:gmail", "codex:party"])
 
+    def test_ages_and_resets_are_judged_when_read_not_when_written(self):
+        generated = aac.now_utc() - dt.timedelta(minutes=3)
+        data = snapshot(generated)
+        data["accounts"][0]["windows"][0]["resetAt"] = iso(generated + dt.timedelta(minutes=1))
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
+                contextlib.redirect_stdout(out):
+            aac.main()
+        text = out.getvalue()
+        self.assertIn("current, sampled 3m ago", text)
+        self.assertIn("passed, new reading pending", text)
+        self.assertNotIn("pace 120", text)
+
     def test_old_snapshot_is_called_stale(self):
         text = self.run_reader(generated=aac.now_utc() - dt.timedelta(minutes=20))
         self.assertIn("WARNING: this snapshot is 20m old", text)

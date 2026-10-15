@@ -143,6 +143,20 @@ describe('agent usage projection', () => {
     expect(answer.accounts[1]).toMatchObject({ profile: 'party', source: null });
   });
 
+  it('names the computer the quota came from, not the Claude launcher', () => {
+    const claude = account({
+      id: 'claude:party',
+      provider: 'claude',
+      providerLabel: 'Claude',
+      platform: 'windows',
+      source: 'Verified quota on Ubuntu (fallback)',
+    });
+    const answer = projectAgentUsage([claude], { now: NOW });
+    expect(answer.accounts[0]).toMatchObject({ platform: 'windows', host: 'ubuntu' });
+    const nas1 = account({ host: 'nas1', source: 'Kimi Code usage' });
+    expect(projectAgentUsage([nas1], { now: NOW }).accounts[0].host).toBe('nas1');
+  });
+
   it('lists an account seen in both dashboard views once, with its newest reading', () => {
     const older = account({
       sampledAt: '2026-10-15T11:00:00.000Z',
@@ -266,6 +280,27 @@ describe('agent usage burn rate', () => {
     expect(renderSnapshotMarkdown(snapshot)).toContain(
       'Prepaid balance: 12 USD left, earlier reading from 1h 0m ago'
     );
+  });
+
+  it("starts a new period when the earlier reading's reset passed before the next reading", () => {
+    // The later source omits its reset time; the earlier one said 11:55, between the two readings.
+    const burn = burnRate([reading(10, 50, NOW - 5 * MINUTE), reading(0, 60)], null);
+    expect(burn.periodStartedAt).toBe(new Date(NOW).toISOString());
+    expect(burn.pace).toBeNull();
+  });
+
+  it("keeps an account's history through an outage, without a reading or a pace", () => {
+    const live = account();
+    const down = account({ status: 'unavailable', windows: [] });
+    const { rates, series } = usageHistory(
+      [down],
+      projectAgentUsage([down], { now: NOW }).accounts,
+      history([record(live, 30, 20), record(live, 10, 30)]),
+      NOW
+    );
+    expect(series).toHaveLength(1);
+    expect(series[0].points.map((point) => point[1])).toEqual([20, 30]);
+    expect(rates.get('codex:gmail')?.size).toBe(0);
   });
 
   it('gives no rate without two readings far enough apart', () => {

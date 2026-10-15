@@ -183,14 +183,17 @@ def window_line(window, now):
         limit = window.get("limit")
         parts.append("%s%s%s used" % (number(window["used"]),
                                       " of " + number(limit) if limit is not None else "", unit))
+    reset = parse_time(window.get("resetAt"))
+    # The reset may have passed since the snapshot was written, not only before it.
+    passed = bool(window.get("resetPassed")) or (reset is not None and reset <= now)
     if window.get("resetAt"):
-        if window.get("resetPassed"):
-            parts.append("reset passed, new reading pending")
+        if passed:
+            parts.append("reset at %s passed, new reading pending" % clock(window["resetAt"], now))
         else:
             parts.append("resets " + clock(window["resetAt"], now))
     if window.get("expiresAt"):
         parts.append("expires " + clock(window["expiresAt"], now))
-    if not window.get("resetPassed"):
+    if not passed:
         burn = burn_text(window.get("burn"), now)
         if burn:
             parts.append(burn)
@@ -236,10 +239,12 @@ def cmd_show(args):
             who.append("profile " + account["profile"])
         facts = [fact for fact in (account.get("plan"), HOSTS.get(account.get("host"), account.get("host")),
                                    "ACTIVE" if account.get("active") else None) if fact]
-        sampled = account.get("ageSeconds")
+        sampled_at = parse_time(account.get("sampledAt"))
+        seconds = (now - sampled_at).total_seconds() if sampled_at else None
+        age = ("at an unknown time" if seconds is None else "just now" if seconds < 1
+               else "%s ago" % span(seconds))
         status = STATUS.get(account.get("status"), account.get("status"))
-        print("  %s  [%s]  %s, sampled %s ago" % ("  ".join(who), ", ".join(facts), status,
-                                                  span(sampled) if sampled is not None else "?"))
+        print("  %s  [%s]  %s, sampled %s" % ("  ".join(who), ", ".join(facts), status, age))
         if account.get("status") in ("ok", "cached"):
             for window in account.get("windows", []):
                 print(window_line(window, now))

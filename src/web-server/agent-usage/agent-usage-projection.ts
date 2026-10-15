@@ -57,8 +57,13 @@ export interface AgentUsageAccount {
   /** Where AAC reads it, for example "Codex usage on Ubuntu". */
   source: string | null;
   plan: string | null;
+  /** AAC's platform for the account (for Claude, the computer its desktop app opens on). */
   platform: DashboardPlatform;
-  /** 'nas1' for a source that runs on Nas1 (reported as platform ubuntu). */
+  /**
+   * The computer the quota reading came from: the host a fallback or desktop source names (Claude
+   * quota can come from another computer than its launcher), 'nas1' for a Nas1 source, else the
+   * platform.
+   */
   host: DashboardPlatform | 'nas1';
   /** The account this provider currently uses on its computer. */
   active: boolean;
@@ -133,6 +138,19 @@ function profileOf(account: DashboardAccount): string | null {
   return null;
 }
 
+const SOURCE_HOSTS: Record<string, DashboardPlatform | 'nas1'> = {
+  ubuntu: 'ubuntu',
+  mac: 'mac',
+  windows: 'windows',
+  nas1: 'nas1',
+};
+
+function quotaHost(account: DashboardAccount): DashboardPlatform | 'nas1' {
+  const named = /\bon (Ubuntu|Mac|Windows|Nas1)\b/i.exec(account.source ?? '');
+  if (named) return SOURCE_HOSTS[named[1].toLowerCase()];
+  return account.host === 'nas1' ? 'nas1' : account.platform;
+}
+
 function sourceOf(account: DashboardAccount): string | null {
   const value = text(account.source, 120);
   return value && !/[\\/]/.test(value) ? value : null;
@@ -204,7 +222,7 @@ function accountOf(account: DashboardAccount, now: number): AgentUsageAccount | 
     source: sourceOf(account),
     plan: text(account.plan, 80),
     platform: account.platform,
-    host: account.host === 'nas1' ? 'nas1' : account.platform,
+    host: quotaHost(account),
     active: account.isActive === true,
     status: STATUSES.includes(account.status) ? account.status : 'unavailable',
     sampledAt,
