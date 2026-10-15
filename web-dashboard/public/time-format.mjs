@@ -87,27 +87,21 @@ export function zonedHour(epoch) {
   return zonedParts(epoch).hour;
 }
 
-const sameZonedDay = (a, b) => a.year === b.year && a.month === b.month && a.day === b.day;
-
-/**
- * Midnight starting the display-zone day holding `epoch`. The elapsed subtraction overshoots by an
- * hour on a 25-hour day (and any zone's midnight transition), so the candidate is verified to read
- * 00:00:00 on the wanted day and nudged by whole hours until it does.
- */
+/** Midnight starting the display-zone day holding `epoch`, including midnight transitions. */
 export function zonedDayStart(epoch) {
   const want = zonedParts(epoch);
-  let start = epoch - (want.hour * 3600 + want.minute * 60 + want.second) * 1000 - (epoch % 1000);
-  const midnight = (p) =>
-    p.hour === 0 && p.minute === 0 && p.second === 0 && sameZonedDay(p, want);
-  for (let i = 0; i < 4; i++) {
-    if (midnight(zonedParts(start))) return start;
-    start -= 3_600_000;
-  }
-  for (let i = 0; i < 4; i++) {
-    start += 3_600_000;
-    if (midnight(zonedParts(start))) return start;
-  }
-  return start - 3_600_000;
+  const date = p => Date.UTC(p.year, p.month - 1, p.day);
+  const guess = date(want);
+  const offset = t => {
+    const p = zonedParts(t);
+    return date(p) + (p.hour * 3600 + p.minute * 60 + p.second) * 1000 - t;
+  };
+  let start = guess - offset(guess);
+  start = guess - offset(start);
+  const step = 15 * 60_000;
+  for (let i = 0; i < 8 && date(zonedParts(start - step)) === guess; i++) start -= step;
+  for (let i = 0; i < 8 && date(zonedParts(start)) < guess; i++) start += step;
+  return start;
 }
 
 /**

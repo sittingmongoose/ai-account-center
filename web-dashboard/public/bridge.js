@@ -15,7 +15,7 @@ import { premultiplySvgTextureUploads } from './renderer.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
-import { setDisplayTimeZone } from './time-format.mjs';
+import { setDisplayTimeZone, zonedMonthStart } from './time-format.mjs';
 import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen, viewportSize } from './device.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
@@ -537,7 +537,7 @@ function analyticsCovers(payload, now = Date.now()) {
   const { range } = analyticsPage;
   if (range === 'all') return payload.range?.preset === '30d';
   const start = range === '24h' ? now - D : range === '7d' ? now - 7 * D : range === '30d' ? now - 30 * D
-    : range === 'month' ? new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime()
+    : range === 'month' ? zonedMonthStart(now)
     : Number.isFinite(analyticsPage.from) ? analyticsPage.from : now - 30 * D;
   return from <= start + H;
 }
@@ -591,10 +591,18 @@ async function analyticsAction(action, value) {
   if (action === 'analytics-layout') {
     const [kind, w, h] = String(value).split(',');
     const width = Number(w), height = Number(h);
+    if (kind === 'heat-cell') {
+      const prior = analyticsPage.sizes.heat;
+      if (!Number.isFinite(width) || width <= 0 || Math.abs((prior.cellW || 0) - width) < 0.1) return;
+      analyticsPage.sizes.heat = { ...prior, cellW: width };
+      clearTimeout(layoutTimer);
+      layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
+      return;
+    }
     if (!(kind in analyticsPage.sizes) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0) return;
     const prior = analyticsPage.sizes[kind];
     if (prior && Math.abs(prior.w - width) < 1 && Math.abs(prior.h - height) < 1) return;
-    analyticsPage.sizes[kind] = { w: width, h: height };
+    analyticsPage.sizes[kind] = { ...prior, w: width, h: height };
     // a layout report arrives while Slint lays out: draw again once it has finished
     clearTimeout(layoutTimer);
     layoutTimer = setTimeout(() => renderAnalytics('static'), 30);

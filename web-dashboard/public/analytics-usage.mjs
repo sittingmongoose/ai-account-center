@@ -12,7 +12,7 @@
 // to one or added to quota numbers; a missing reading is unavailable, never zero; at most two decimals; local
 // time throughout.
 import { reconcile, modelRates } from './model-rates.mjs';
-import { displayFormat, zonedAddDays, zonedDayStart, zonedHour, zonedHourStart, zonedMonthStart, zonedWeekday } from './time-format.mjs';
+import { displayFormat, lazyFormat, zonedParts, zonedAddDays, zonedDayStart, zonedHour, zonedMonthStart, zonedWeekday } from './time-format.mjs';
 
 export const H = 3_600_000;
 export const D = 24 * H;
@@ -32,17 +32,17 @@ const usd0 = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'US
 export const tokC = value => finite(value) ? nfSig.format(value) : 'Unavailable';
 export const tokX = value => finite(value) ? `${nf0.format(value)} tokens` : 'Unavailable';
 export const money = value => finite(value) ? usd.format(value) : 'Unavailable';
-const moneyAxis = (value, step) => step < 1 ? usd.format(value) : usd0.format(value);
+const moneyAxis = (value, step) => !Number.isInteger(step) ? usd.format(value) : usd0.format(value);
 export const share1 = value => !finite(value) ? 'Unavailable' : value > 0 && value < 0.05 ? '<0.1' : value < 100 && value >= 99.95 ? '>99.9' : nf1.format(value);
 export const share2 = value => !finite(value) ? 'Unavailable' : value > 0 && value < 0.005 ? '<0.01' : value < 100 && value > 99.995 ? '>99.99' : nf2v.format(value);
 const intText = value => finite(value) ? nf0.format(Math.round(value)) : 'Unavailable';
 const dtf = options => displayFormat(options);
-const F_HOUR = dtf({ hour: 'numeric' });
-const F_CLOCK = dtf({ hour: 'numeric', minute: '2-digit' });
-const F_MD = dtf({ month: 'short', day: 'numeric' });
-const F_WMD = dtf({ weekday: 'short', month: 'short', day: 'numeric' });
-const F_WD = dtf({ weekday: 'short' });
-const F_TIME = dtf({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const F_HOUR = lazyFormat({ hour: 'numeric' });
+const F_CLOCK = lazyFormat({ hour: 'numeric', minute: '2-digit' });
+const F_MD = lazyFormat({ month: 'short', day: 'numeric' });
+const F_WMD = lazyFormat({ weekday: 'short', month: 'short', day: 'numeric' });
+const F_WD = lazyFormat({ weekday: 'short' });
+const F_TIME = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 export const hourTxt = t => F_HOUR.format(new Date(t));
 export const clockTxt = t => F_CLOCK.format(new Date(t));
 export const mdTxt = t => F_MD.format(new Date(t));
@@ -83,16 +83,21 @@ export function bucketStart(t, step) {
 }
 export function nextBucket(t, step) {
   if (step >= D) return zonedAddDays(t, 1);
-  return zonedHourStart(t) + Math.round(step / H) * H;
+  return Math.min(bucketStart(t, step) + Math.round(step / H) * H, zonedAddDays(t, 1));
 }
 const sameDay = (a, b) => dayStart(a) === dayStart(b);
 /** YYYY-MM-DD of a local day (the custom-range action carries whole local days). */
-export const isoDay = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+export const isoDay = t => { const d = zonedParts(t); return `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`; };
 export function parseIsoDay(value) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
   if (!m) return NaN;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return d.getFullYear() === Number(m[1]) && d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[3]) ? d.getTime() : NaN;
+  const guess = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12);
+  const d = new Date(guess);
+  if (d.getUTCFullYear() !== Number(m[1]) || d.getUTCMonth() !== Number(m[2]) - 1 || d.getUTCDate() !== Number(m[3])) return NaN;
+  const start = dayStart(guess);
+  const p = zonedParts(start);
+  const delta = Date.UTC(p.year, p.month - 1, p.day) - Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return addDays(start, -Math.round(delta / D));
 }
 
 // ---------------------------------------------------------------- scales and curves
@@ -101,6 +106,11 @@ export function niceStep(raw) {
   const p = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / p;
   return ([1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(k => n <= k + 1e-9) || 10) * p;
 }
+// Dollar scales have whole-cent steps; token scales keep their original precision.
+const costScale = (max, k) => {
+  const step = Math.max(0.01, Math.ceil((niceStep((max > 0 ? max : 1) / k) - 1e-9) * 100) / 100);
+  return { step, top: step * k, k };
+};
 /** k divisions with a round step; the trend chart's two axes share k so their gridlines line up. */
 export const niceScale = (max, k) => { const step = niceStep((max > 0 ? max : 1) / k); return { step, top: step * k, k }; };
 /** Monotone cubic (Fritsch-Carlson) sampling; it never overshoots between nodes. */
@@ -242,7 +252,7 @@ function modelSplit(row, tok, total, known) {
 export function apiRangeFor(state, now = Date.now()) {
   const range = state?.range;
   if (range === '24h' || range === '7d' || range === '30d') return range;
-  if (range === 'month') return new Date(now).getDate() <= 1 ? '24h' : dayStartMonth(now) >= now - 7 * D + H ? '7d' : '30d';
+  if (range === 'month') return zonedParts(now).day <= 1 ? '24h' : dayStartMonth(now) >= now - 7 * D + H ? '7d' : '30d';
   if (range === 'custom' && finite(state.from)) return state.from >= now - D ? '24h' : state.from >= now - 7 * D ? '7d' : '30d';
   return '30d';
 }
@@ -444,7 +454,7 @@ export function buckets(A, R, state) {
   }
   return list;
 }
-const shortClock = t => new Date(t).getMinutes() ? clockTxt(t) : hourTxt(t);
+const shortClock = t => zonedParts(t).minute ? clockTxt(t) : hourTxt(t);
 export function dateLabel(R) {
   const a = R.a2, b = Math.max(R.a2, R.b - 1);
   return sameDay(a, b) ? `${mdTxt(a)}, ${shortClock(a)} to ${shortClock(R.b)}` : `${mdTxt(a)} to ${mdTxt(b)}`;
@@ -487,15 +497,21 @@ export const APPORT_TIP = "Model detail is logged only for the whole log window.
 // ---------------------------------------------------------------- usage trends
 function xTicks(R, pw) {
   const span = R.b - R.a2;
-  const cands = [H, 2 * H, 3 * H, 6 * H, 12 * H, D, 2 * D, 7 * D].filter(s => s >= Math.min(R.step, D));
-  const step = cands.find(s => pw / (span / s) >= 74) || 7 * D;
-  const out = [];
-  let t = step >= D ? addDays(dayStart(R.a2), 1) : nextBucket(bucketStart(R.a2, step), step);
-  if (step >= D && dayStart(R.a2) === R.a2) t = R.a2;
-  for (let i = 0; t < R.b && i < 400; i++, t = step >= D ? addDays(t, Math.round(step / D)) : nextBucket(t, step)) {
-    const midnight = zonedHour(t) === 0;
-    out.push({ t, major: midnight, label: step >= D ? mdTxt(t) : midnight ? `${wdTxt(t)} ${new Date(t).getDate()}` : hourTxt(t) });
-  }
+  const cands = [H, 2 * H, 3 * H, 6 * H, 12 * H, D, 2 * D, 3 * D, 7 * D].filter(s => s >= Math.min(R.step, D));
+  const ticks = step => {
+    const out = [];
+    let t = step >= D ? addDays(dayStart(R.a2), 1) : nextBucket(bucketStart(R.a2, step), step);
+    if (step >= D && dayStart(R.a2) === R.a2) t = R.a2;
+    for (let i = 0; t < R.b && i < 400; i++, t = step >= D ? addDays(t, Math.round(step / D)) : nextBucket(t, step)) {
+      const midnight = zonedHour(t) === 0;
+      const x = (t - R.a2) / span * pw;
+      if (x >= 18 && x <= pw - 18) out.push({ t, major: midnight, label: step >= D ? mdTxt(t) : midnight ? `${wdTxt(t)} ${zonedParts(t).day}` : hourTxt(t) });
+    }
+    return out;
+  };
+  const choices = cands.map(step => ({ step, ticks: ticks(step) }));
+  const out = (choices.find(c => c.ticks.length >= 2 && pw / (span / c.step) >= 74)
+    || choices.findLast(c => c.ticks.length >= 2) || choices[0]).ticks;
   return out;
 }
 /** 45-degree hatch lines (6 px apart) inside a rectangle, for the logs not read yet. */
@@ -525,7 +541,7 @@ export function trendView(A, R, state, size) {
   const maxCost = costOk ? Math.max(0, ...B.map(b => b.cost)) : 0;
   let ts, cs, best = Infinity;
   for (const k of Hc < 300 ? [3, 4] : [4, 5, 6]) {
-    const a = niceScale(maxTok * 1.04, k), c = niceScale(maxCost * 1.04, k);
+    const a = niceScale(maxTok * 1.04, k), c = costScale(maxCost * 1.04, k);
     const waste = Math.max(maxTok > 0 ? a.top / maxTok : 1, maxCost > 0 ? c.top / maxCost : 1);
     if (waste < best - 1e-9) { best = waste; ts = a; cs = c; }
   }
@@ -541,7 +557,8 @@ export function trendView(A, R, state, size) {
     let acc = 0;
     lv[0].push(Y(0));
     TYPES.forEach((t, j) => { if (t.k !== 'cr' || state.cache) acc += fns[t.k](x); lv[j + 1].push(Y(acc)); });
-    cost.push(YC(fc(x)));
+    const unknown = Bn.some((b, j) => b.unk && !(b.cost > TINY) && x >= (j ? (xs[j - 1] + xs[j]) / 2 : x0) && x <= (j + 1 < xs.length ? (xs[j] + xs[j + 1]) / 2 : x1));
+    cost.push(unknown ? null : YC(fc(x)));
   }
   const empty = !B.length || (maxTok === 0 && maxCost === 0);
   // axes: horizontal gridlines and both tick columns share k divisions
@@ -601,13 +618,13 @@ export function trendView(A, R, state, size) {
 /** The trend's eleven path strings for a geometry (also every frame of the range-change morph). */
 export function trendPaths(geo) {
   const { x0, x1, lv, cost } = geo;
-  const out = { total: bandD(x0, x1, lv[4], lv[0]), totalLine: lineD(x0, x1, lv[4]), cost: lineD(x0, x1, cost) };
+  const out = { total: bandD(x0, x1, lv[4], lv[0]), totalLine: lineD(x0, x1, lv[4]), cost: cost.map((v, i) => v === null ? '' : `${i && cost[i - 1] !== null ? 'L' : 'M'}${pt(x0 + (x1 - x0) * i / Math.max(1, cost.length - 1))} ${pt(v)}`).join('') };
   for (let j = 0; j < 4; j++) { out[`band${j}`] = bandD(x0, x1, lv[j + 1], lv[j]); out[`line${j}`] = lineD(x0, x1, lv[j + 1]); }
   return out;
 }
 export function mixGeo(from, to, k) {
   const mix = (a, b) => a + (b - a) * k;
-  return { x0: mix(from.x0, to.x0), x1: mix(from.x1, to.x1), lv: to.lv.map((row, j) => row.map((v, i) => mix(from.lv[j][i], v))), cost: to.cost.map((v, i) => mix(from.cost[i], v)) };
+  return { x0: mix(from.x0, to.x0), x1: mix(from.x1, to.x1), lv: to.lv.map((row, j) => row.map((v, i) => mix(from.lv[j][i], v))), cost: to.cost.map((v, i) => v === null || from.cost[i] === null ? null : mix(from.cost[i], v)) };
 }
 
 // ---------------------------------------------------------------- models: cost by model + donut
@@ -793,7 +810,7 @@ function donutView(A, state, shades) {
     // task 9 A5: the centre label that fits a small donut hole on phones
     centreShort: cost ? 'cost' : 'tokens',
     unit: cost ? '' : ' tokens', empty: !rows.length && !allNone && !allFree,
-    emptyText: allNone ? 'No model in these logs has a logged cost.' : 'No model activity in the logs.',
+    emptyText: allNone ? 'No model in these logs has a logged cost.' : allFree ? 'All model usage in these logs is free.' : 'No model activity in the logs.',
   };
 }
 
@@ -893,7 +910,7 @@ function tokensView(K, C, costOk, available = true) {
     return { key: t.k, label: t.label, wt: ts > 0 ? Math.max(0.6, ts) : 0, wc: cs > 0 ? Math.max(0.6, cs) : 0, tok: tokC(K[t.k]), tokTip: tokX(K[t.k]), tokShare: share1(ts), cost: !costOk ? 'Unavailable' : none ? NOT_LOGGED : money(C.cost[t.k]), costShare: costOk && !none ? share1(cs) : '' };
   });
 }
-function cacheView(A, rows, K, C, costOk) {
+function cacheView(A, rows, K, C, costOk, available) {
   const hit = K.cr + K.cw > 0 ? K.cr / (K.cr + K.cw) * 100 : null;
   // savings = cache-read tokens x (input rate - cache-read rate), per provider at its listed models' blended rates
   let save = 0;
@@ -911,12 +928,12 @@ function cacheView(A, rows, K, C, costOk) {
   const none = costOk && K.partial && !(K.cost > TINY);
   const c = v => !costOk ? 'Unavailable' : none ? NOT_LOGGED : money(v);
   return {
-    hit: hit ?? 0, hasHit: finite(hit), hitText: finite(hit) ? share2(hit) : 'Unavailable',
+    hit: hit ?? 0, hasHit: available && finite(hit), hitText: available && finite(hit) ? share2(hit) : 'Unavailable',
     save: costOk && !none ? save : 0, hasSave: costOk && !none, saveText: c(save),
     ccost: costOk && !none ? ccost : 0, hasCcost: costOk && !none, ccostText: c(ccost),
     ccostShare: costOk && !none ? share1(K.cost ? ccost / K.cost * 100 : 0) : '',
-    reads: { tok: tokC(K.cr), tip: tokX(K.cr), share: sh(K.cr), cost: c(C.cost.cr), w: K.cr },
-    writes: { tok: tokC(K.cw), tip: tokX(K.cw), share: sh(K.cw), cost: c(C.cost.cw), w: K.cw, note: tot && K.cw === 0 ? 'none logged' : '' },
+    reads: { tok: available ? tokC(K.cr) : 'Unavailable', tip: available ? tokX(K.cr) : 'CLI usage logs unavailable', share: available ? sh(K.cr) : 'Unavailable', cost: c(C.cost.cr), w: K.cr },
+    writes: { tok: available ? tokC(K.cw) : 'Unavailable', tip: available ? tokX(K.cw) : 'CLI usage logs unavailable', share: available ? sh(K.cw) : 'Unavailable', cost: c(C.cost.cw), w: K.cw, note: tot && K.cw === 0 ? 'none logged' : '' },
     readFrac: tot > 0 ? K.cr / tot : 0,
     // task 9 A3: the card footnote (data-bound so the layout measures it after it arrives)
     note: 'Hit rate is cache reads divided by cache reads plus cache writes. Savings and costs are API-equivalent estimates, not a bill.',
@@ -948,7 +965,7 @@ function heatDash(width, height) {
   }
   return dashRectPath;
 }
-function heatView(A, R, state, width, height) {
+function heatView(A, R, state, width, height, cellWidth) {
   const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ v: null, n: 0, tok: 0, cost: 0, unk: false })));
   // hours inside the read window count (zero when nothing ran); hours outside it stay empty, never zero;
   // without readable activity every hour stays empty
@@ -959,18 +976,19 @@ function heatView(A, R, state, width, height) {
   for (const row of cells) for (const c of row) if (c.v !== null) c.v = byCost ? c.cost : c.tok;
   const max = Math.max(0, ...cells.flat().filter(c => c.v !== null).map(c => c.v));
   const valTxt = v => byCost ? money(v) : `${tokC(v)} tokens`;
-  const hourLab = h => hourTxt(new Date(2026, 0, 1, h).getTime());
+  const nominalHour = new Intl.DateTimeFormat(undefined, { hour: 'numeric', timeZone: 'UTC' });
+  const hourLab = h => nominalHour.format(Date.UTC(2026, 0, 1, h));
   const gridW = width || DEFAULT_SIZES.heat.w;
   const wide = gridW > 760;
   // below-D grids use a 32 px day column with 2 px gaps (ax-time.slint mirrors this switch);
   // desktop grids keep the 38 px column with 3 px gaps. The dash scales to its cell either way.
-  const cellW = (gridW - (wide ? 38 + 72 : 32 + 46)) / 24;
+  const cellW = cellWidth || (wide ? (gridW - 38 - 72) / 24 : Math.min(24, Math.floor((gridW - 32 - 46) / 24)));
   const out = [];
   cells.forEach((row, i) => row.forEach((c, h) => {
     const name = `${WD[i]} ${hourLab(h)}`;
     if (c.v === null) { out.push({ state: 0, k: 0, tip: `${name} · outside the logs in this range` }); return; }
     const what = c.v ? `${valTxt(c.v)}${byCost && c.unk ? ', partial' : ''}` : byCost && c.unk ? 'cost not logged' : 'nothing logged';
-    out.push({ state: c.v === 0 ? 1 : 2, k: max > 0 ? Math.sqrt(c.v / max) : 0, tip: `${name} · ${what}${c.n > 1 ? ` · ${c.n} hours in range` : ''}` });
+    out.push({ state: byCost && c.unk && !(c.cost > TINY) ? 3 : c.v === 0 ? 1 : 2, k: max > 0 ? Math.sqrt(c.v / max) : 0, tip: `${name} · ${what}${c.n > 1 ? ` · ${c.n} hours in range` : ''}` });
   }));
   return {
     mode: byCost ? 'cost' : 'tokens',
@@ -1001,7 +1019,7 @@ function dailyView(A, R, state, size) {
   const picked = allPicked(state) ? '' : state.prov;
   const rest = b => Object.entries(b.pc).reduce((s, [p, v]) => ownSeries(p) ? s : s + v, 0);
   const max = costOk ? Math.max(0, ...B.map(b => b.cost)) : 0;
-  const sc = [3, 4, 5].map(k => niceScale(max * 1.04, k)).sort((a, b) => a.top - b.top || a.k - b.k)[0];
+  const sc = [3, 4, 5].map(k => costScale(max * 1.04, k)).sort((a, b) => a.top - b.top || a.k - b.k)[0];
   const n = Math.max(1, B.length), slot = pw / n;
   const every = Math.max(1, Math.ceil(64 / slot));
   const yTicks = [];
@@ -1020,7 +1038,7 @@ function dailyView(A, R, state, size) {
       label: i % every ? '' : step === H ? (zonedHour(b.t) === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
       time: `${step === H ? `${wmdTxt(b.t)} · ${hourTxt(b.t)}` : wmdTxt(b.t)}${b.partial ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
       rows: costOk ? served.map(p => ({ p: ownSeries(p) ? p : '', label: A.label(p), value: (b.pc[p] || 0) > TINY || !b.punk[p] ? money(b.pc[p] || 0) : NOT_LOGGED })) : [],
-      total: picked ? '' : money(tot),
+      total: picked ? '' : !costOk ? 'Unavailable' : b.unk && !(tot > TINY) ? NOT_LOGGED : money(tot),
       foot: costOk && b.unk ? [range, 'Partial: some cost is not logged'].filter(Boolean).join(' · ') : range,
     };
   });
@@ -1047,12 +1065,12 @@ export function calendarView(A, R, now, apiAll) {
   const g0 = mon(first), g1 = addDays(mon(last), 6);
   const cells = [];
   for (let t = g0, i = 0; t <= g1 && i < 60; t = addDays(t, 1), i++) {
-    const d = new Date(t);
-    cells.push({ day: isoDay(t), n: i, label: String(d.getDate()), month: d.getDate() === 1 ? F_MD.format(d).replace(/\s*\d+$/, '') : '', off: t < first || t > last, today: t === last, long: wmdTxt(t) });
+    const d = zonedParts(t);
+    cells.push({ day: isoDay(t), n: i, label: String(d.day), month: d.day === 1 ? F_MD.format(new Date(t)).replace(/\s*\d+$/, '') : '', off: t < first || t > last, today: t === last, long: wmdTxt(t) });
   }
   const lo = cells.find(c => c.day === isoDay(R.a2))?.n ?? -1;
   const hi = cells.find(c => c.day === isoDay(Math.max(R.a2, R.b - 1)))?.n ?? lo;
-  return { cells, lo, hi, firstN: cells.find(c => !c.off)?.n ?? 0, lastN: cells.findLast(c => !c.off)?.n ?? 0, note: `Logs read ${clockTxt(A.win1)} today. Whole local days within the last 30 days.` };
+  return { cells, lo, hi, firstN: cells.find(c => !c.off)?.n ?? 0, lastN: cells.findLast(c => !c.off)?.n ?? 0, note: `${finite(A.fetched) ? `Logs read ${timeTxt(A.fetched)}.` : 'Logs not read yet.'} Whole local days within the last 30 days.` };
 }
 
 // ---------------------------------------------------------------- included usage (activity.sources)
@@ -1212,7 +1230,7 @@ export function providerChoices(A, R, state) {
   const list = Object.keys(tok).filter(p => tok[p] > 0);
   if (!allPicked(state) && !list.includes(state.prov)) list.push(state.prov);
   const items = [{ value: 'all', label: 'All providers', mark: '', tokens: A.available ? tokC(total) : '', off: false },
-    ...list.sort(byProviderOrder).map(p => ({ value: p, label: A.label(p), mark: markOf(p), tokens: tok[p] > 0 ? tokC(tok[p]) : '0', off: !(tok[p] > 0) }))];
+    ...list.sort(byProviderOrder).map(p => ({ value: p, label: A.label(p), mark: markOf(p), tokens: !A.available ? 'Unavailable' : tok[p] > 0 ? tokC(tok[p]) : '0', off: !(tok[p] > 0) }))];
   const cur = allPicked(state) ? items[0] : items.find(it => it.value === state.prov);
   return { items, label: cur.label, mark: cur.mark };
 }
@@ -1234,10 +1252,10 @@ function headOf(A, R, state, now, zone, progress) {
       : `Updating · ${counts} · continues shortly`;
   return {
     scope: `CLI usage logs · local time${zone ? ` (${zone})` : ''} · read `,
-    read: relTxt(A.win1, now),
+    read: finite(A.fetched) ? relTxt(A.fetched, now) : 'not read yet',
     updating,
     updateNote,
-    readTip: `Logs last read ${timeTxt(A.win1)}.${A.status === 'cached' ? ' Records read so far are shown; a bounded scan continues in the background.' : ''}`,
+    readTip: `${finite(A.fetched) ? `Logs last read ${timeTxt(A.fetched)}.` : 'Logs not read yet.'}${A.status === 'cached' ? ' Records read so far are shown; a bounded scan continues in the background.' : ''}`,
     date: dateLabel(R), custom: state.range === 'custom', range: state.range, prov: state.prov || 'all',
   };
 }
@@ -1296,7 +1314,7 @@ export function usageView(payload, state, opts = {}) {
         unrec.length ? `${unrec.length} model${unrec.length === 1 ? '' : 's'} do not reconcile with these rates; their split uses token shares.` : '',
         noRate ? `${noRate} model${noRate === 1 ? ' has' : 's have'} no listed rate; ${noRate === 1 ? 'its' : 'their'} split uses token shares of the logged cost.` : '',
       ].filter(Boolean).join(' ') : "Per-type costs use each model's rate as CCS prices it and match every model's logged estimate to the cent." },
-      { icon: 'clock', text: `Logs read ${timeTxt(A.win1)}. Hours are shown in local time${zone ? ` (${zone})` : ''}.${A.status === 'cached' ? ' Records read so far are shown; a bounded scan continues in the background.' : ''}` },
+      { icon: 'clock', text: `${finite(A.fetched) ? `Logs read ${timeTxt(A.fetched)}.` : 'Logs not read yet.'} Hours are shown in local time${zone ? ` (${zone})` : ''}.${A.status === 'cached' ? ' Records read so far are shown; a bounded scan continues in the background.' : ''}` },
     ],
     kpis: kpis(A, R, state, rows, K, C),
     providers: providersView(A, rows, state, opts.sizes?.trend?.w),
@@ -1307,9 +1325,9 @@ export function usageView(payload, state, opts = {}) {
     donut: { sub: `Share of the logs read for ${windowText}`, note: wholeNote('models'), ...donutView(A, state, shades) },
     sessions: { sub: `Logs read for ${windowText}`, note: [wholeNote('sessions'), sessions.note].filter(Boolean).join(' '), foot: sessions.recentFoot, moreSub: sessions.moreSub, stats: sessions.stats, rows: sessions.rows, recent: sessions.recent, recentMore: sessions.recentMore },
     tokens: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, rows: tokensView(K, C, costOk, A.available) },
-    cache: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, ...cacheView(A, rows, K, C, costOk && A.available) },
+    cache: { sub: `${dateLabel(R)} · ${provName(state, A)}${costOk && K.partial ? ' · cost partial' : ''}`, ...cacheView(A, rows, K, C, costOk && A.available, A.available) },
     included: includedView(payload, now),
-    heat: heatView(A, R, state, opts.sizes?.heat?.w, opts.sizes?.heat?.h),
+    heat: heatView(A, R, state, opts.sizes?.heat?.w, opts.sizes?.heat?.h, opts.sizes?.heat?.cellW),
     daily: dailyView(A, R, state, opts.sizes?.daily),
     calendar: calendarView(A, R, now),
     range: R,
