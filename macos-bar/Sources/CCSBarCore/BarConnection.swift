@@ -11,12 +11,17 @@ public struct SignedOutNote: Codable, Sendable, Equatable {
   public let revokedReason: String?
   /// The dashboard username that signed the tray out, when the dashboard says so.
   public let revokedBy: String?
+  public let disconnectTold: Bool?
+  public let credentialKind: String?
 
-  public init(reason: String, at: String, revokedReason: String? = nil, revokedBy: String? = nil) {
+  public init(reason: String, at: String, revokedReason: String? = nil, revokedBy: String? = nil,
+    disconnectTold: Bool? = nil, credentialKind: String? = nil) {
     self.reason = reason
     self.at = at
     self.revokedReason = revokedReason
     self.revokedBy = revokedBy
+    self.disconnectTold = disconnectTold
+    self.credentialKind = credentialKind
   }
 }
 

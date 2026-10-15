@@ -14,6 +14,8 @@ public enum ConnectionCheckError: LocalizedError, Equatable, Sendable {
   case cancelled
   case saveFailed
   case insecureAddress
+  case notLocal
+  case canonicalAddress
   case failed
 
   public var errorDescription: String? {
@@ -30,6 +32,8 @@ public enum ConnectionCheckError: LocalizedError, Equatable, Sendable {
     case .cancelled: return "Connection check cancelled."
     case .saveFailed: return "The connection could not be saved."
     case .insecureAddress: return SignInCopy.useNumericAddress
+    case .notLocal: return TransportSafetyError.notLocal.errorDescription
+    case .canonicalAddress: return TransportSafetyError.redirect.errorDescription
     case .failed: return "The dashboard could not check this sign-in. Try again."
     }
   }
@@ -50,6 +54,7 @@ public enum ConnectionCheckError: LocalizedError, Equatable, Sendable {
   public static func reason(_ error: Error, cancelled: Bool) -> ConnectionCheckError {
     if cancelled || error is CancellationError { return .cancelled }
     if let known = error as? ConnectionCheckError { return known }
+    if let safety = error as? TransportSafetyError { return safety == .notLocal ? .notLocal : .canonicalAddress }
     if let url = error as? URLError {
       switch url.code {
       case .cancelled: return .cancelled
@@ -385,7 +390,9 @@ public final class ConnectionSession {
     let name = deviceName, version = appVersion
     guard let answer = await bounded(pairTimeout, {
       do { return Optional(try await probe.pair(username: username, password: password, installId: installId,
-        deviceName: name, appVersion: version)) } catch { return nil }
+        deviceName: name, appVersion: version)) }
+      catch let safety as TransportSafetyError { return .failure(PairRefusal(status: 0, code: safety == .notLocal ? "local_http_refused" : "redirect_refused")) }
+      catch { return nil }
     }) ?? nil else { return generation == pairGeneration ? .refused(.unreachable(url)) : .cancelled }
     switch answer {
     case .success(let paired):
@@ -396,9 +403,17 @@ public final class ConnectionSession {
         await discard(verifying)
         return .cancelled
       }
-      guard let me = await bounded(pairTimeout, { try? await verifying.deviceSelf() }) ?? nil else {
+      let verification = await bounded(pairTimeout) {
+        do { return Result<DeviceSelf, Error>.success(try await verifying.deviceSelf()) }
+        catch { return .failure(error) }
+      }
+      guard case .success(let me) = verification else {
         await discard(verifying)
-        return generation == pairGeneration ? .failed(SignInCopy.notConfirmed, field: nil) : .cancelled
+        guard generation == pairGeneration else { return .cancelled }
+        if case .failure(let safety as TransportSafetyError) = verification {
+          return .failed(safety.localizedDescription, field: nil)
+        }
+        return .failed(SignInCopy.notConfirmed, field: nil)
       }
       guard generation == pairGeneration else {
         await discard(verifying)
@@ -448,7 +463,9 @@ public final class ConnectionSession {
     let probe = DashboardProbe(baseURL: url, transport: makeTransport())
     guard let answer = await bounded(pairTimeout, {
       do { return Result<PairRefusal?, Error>.success(try await probe.setup(username: username, password: password,
-        setupCode: setupCode)) } catch { return .failure(error) }
+        setupCode: setupCode)) }
+      catch let safety as TransportSafetyError { return .success(PairRefusal(status: 0, code: safety == .notLocal ? "local_http_refused" : "redirect_refused")) }
+      catch { return .failure(error) }
     }), case .success(let refusal) = answer else {
       return generation == pairGeneration ? .refused(.unreachable(url)) : .cancelled
     }
@@ -467,6 +484,8 @@ public final class ConnectionSession {
 
   private func outcome(_ refusal: PairRefusal, url: URL) async -> PairOutcome {
     switch (refusal.status, refusal.code) {
+    case (0, "local_http_refused"): return .refused(.notLocal(url, seenAs: nil))
+    case (0, "redirect_refused"): return .refused(.canonicalAddress(url))
     case (401, _): return .wrongPassword(triesLeft: refusal.triesLeft)
     case (429, _): return .rateLimited(until: now().addingTimeInterval(max(1, refusal.retryAfter ?? 900)))
     case (403, "secure_transport_required"):
@@ -496,7 +515,9 @@ public final class ConnectionSession {
     let retryLater = now().addingTimeInterval(migrationRetryInterval)
     guard let answer = await bounded(pairTimeout, {
       do { return Optional(try await probe.pair(username: old.username, password: password, installId: installId,
-        deviceName: name, appVersion: version)) } catch { return nil }
+        deviceName: name, appVersion: version)) }
+      catch let safety as TransportSafetyError { return .failure(PairRefusal(status: 0, code: safety == .notLocal ? "local_http_refused" : "redirect_refused")) }
+      catch { return nil }
     }) ?? nil else {
       migrationBlockedUntil = retryLater
       return .keptPassword
@@ -619,7 +640,8 @@ public final class ConnectionSession {
     }
     ConnectionStore.remove(rollbackURL)
     if let current = connection {
-      let out = current.signingOut(SignedOutNote(reason: "disconnected", at: iso(now())))
+      let out = current.signingOut(SignedOutNote(reason: "disconnected", at: iso(now()),
+        disconnectTold: told, credentialKind: current.isPaired ? "device" : "password"))
       try? ConnectionStore.write(out, to: fileURL)
       connection = out
     }

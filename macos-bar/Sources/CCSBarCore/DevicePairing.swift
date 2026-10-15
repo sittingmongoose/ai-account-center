@@ -130,6 +130,14 @@ public enum LocalNetwork {
     return !name.contains(".") || name.hasSuffix(".local")
   }
 
+  /// Rechecked before each HTTP request, including cookie polls and saved-password sign-in.
+  public static func requireLocalHTTP(_ url: URL, resolver: (String) -> [String] = resolve) throws {
+    guard url.scheme?.lowercased() == "http", let host = url.host else { return }
+    let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+    if ipv4(bare) != nil || ipv6(bare.split(separator: "%").first.map(String.init) ?? bare) != nil { return }
+    guard verdict(host: host, resolver: resolver) == .local else { throw TransportSafetyError.notLocal }
+  }
+
   /// The verdict for a host: a literal address is judged as it is; a name by every address it resolves to.
   public static func verdict(host: String, resolver: (String) -> [String] = resolve) -> Verdict {
     let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
@@ -160,6 +168,7 @@ public enum AddressCheck: Sendable, Equatable {
   /// A host name this Mac will not reach over plain HTTP (see `LocalNetwork.plainHTTPReaches`): use the numeric
   /// address or a `.local` name.
   case insecureName(URL)
+  case canonicalAddress(URL)
   /// State 2: a dashboard with no password yet. `codeRequired` is true away from the dashboard machine.
   case setup(URL, codeRequired: Bool)
   /// State 1, password step: pairing can go ahead.
@@ -169,7 +178,7 @@ public enum AddressCheck: Sendable, Equatable {
     switch self {
     case .invalid: return nil
     case .notLocal(let url, _), .pairingOff(let url), .unreachable(let url), .notDashboard(let url),
-      .signInOff(let url), .insecureName(let url), .setup(let url, _), .ready(let url): return url
+      .signInOff(let url), .insecureName(let url), .canonicalAddress(let url), .setup(let url, _), .ready(let url): return url
     }
   }
 }
@@ -267,12 +276,20 @@ public struct DashboardProbe: Sendable {
     let answer: AuthCheck?
     do { answer = try await check() }
     catch {
+      if let safety = error as? TransportSafetyError {
+        return safety == .notLocal ? .notLocal(baseURL, seenAs: nil) : .canonicalAddress(baseURL)
+      }
       if case BarClientError.nonHTTPResponse = error { return .notDashboard(baseURL) }
       if ConnectionCheckError.isInsecureAddressBlock(error) { return .insecureName(baseURL) }
       return .unreachable(baseURL)
     }
     guard let answer else { return .notDashboard(baseURL) }
-    return classify(answer, setup: answer.accessMode == "setup" ? (try? await setupInfo()) ?? nil : nil)
+    let setup: AuthCheck?
+    do { setup = answer.accessMode == "setup" ? try await setupInfo() : nil }
+    catch let safety as TransportSafetyError {
+      return safety == .notLocal ? .notLocal(baseURL, seenAs: nil) : .canonicalAddress(baseURL)
+    } catch { setup = nil }
+    return classify(answer, setup: setup)
   }
 
   /// The address check's answer from `/api/auth/check` (and, for a fresh dashboard, `/api/auth/setup`).

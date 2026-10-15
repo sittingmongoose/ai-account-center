@@ -172,8 +172,12 @@ public enum ClaudeOpenFlow {
       try await sleep(elapsed < polling.slowAfter ? polling.fastInterval : polling.slowInterval)
       // A read that fails never ends the Open: the server keeps the operation and the POST is never replayed, so the
       // poll simply tries again until the deadline.
-      guard let profiles = try? await client.claudeDesktopProfiles(),
-        let operation = profiles.lazy.compactMap({ $0.id == profile ? $0.openOperation : nil })
+      let profiles: [ClaudeDesktopProfile]
+      do { profiles = try await client.claudeDesktopProfiles() }
+      catch BarClientError.signedOut(let note) { throw BarClientError.signedOut(note) }
+      catch let safety as TransportSafetyError { throw safety }
+      catch { continue }
+      guard let operation = profiles.lazy.compactMap({ $0.id == profile ? $0.openOperation : nil })
           .first(where: { $0.platform == platform && (operationId.isEmpty || $0.id == operationId) })
       else { continue }
       if operation.isTerminal {

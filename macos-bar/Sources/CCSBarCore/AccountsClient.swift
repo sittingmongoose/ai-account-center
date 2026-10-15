@@ -6,18 +6,47 @@ public protocol BarHTTPTransport: Sendable {
 
 public final class BarSessionTransport: BarHTTPTransport, @unchecked Sendable {
   private let session: URLSession
+  private let resolver: @Sendable (String) -> [String]
 
-  public init() {
+  public init(resolver: @escaping @Sendable (String) -> [String] = { LocalNetwork.resolve($0) }) {
+    self.resolver = resolver
     let config = URLSessionConfiguration.ephemeral
     config.httpShouldSetCookies = true
     config.timeoutIntervalForRequest = 90
-    session = URLSession(configuration: config)
+    session = URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
+  }
+
+  public static func requireCanonicalResponse(_ response: HTTPURLResponse) throws {
+    if (300..<400).contains(response.statusCode) { throw TransportSafetyError.redirect }
   }
 
   public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    if let url = request.url {
+      let resolver = self.resolver
+      try await Task.detached { try LocalNetwork.requireLocalHTTP(url, resolver: resolver) }.value
+    }
+    try Task.checkCancellation()
     let (data, response) = try await session.data(for: request)
     guard let http = response as? HTTPURLResponse else { throw BarClientError.nonHTTPResponse }
+    try Self.requireCanonicalResponse(http)
     return (data, http)
+  }
+}
+
+private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+  func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+    completionHandler(nil)
+  }
+}
+
+public enum TransportSafetyError: LocalizedError, Equatable, Sendable {
+  case notLocal, redirect
+  public var errorDescription: String? {
+    switch self {
+    case .notLocal: return "This address isn't on your local network. Use the dashboard's local address."
+    case .redirect: return "Use the dashboard's canonical address. Redirects are not followed."
+    }
   }
 }
 
@@ -127,6 +156,7 @@ public actor AccountsClient {
   private func exchange(_ path: String, method: String = "GET", body: Data? = nil, confirmationProfile: String? = nil,
     antigravityProfile: String? = nil, retryUnauthorized: Bool = true,
     headers: [String: String] = [:]) async throws -> (data: Data, status: Int) {
+    let requestStarted = ProcessInfo.processInfo.systemUptime
     var data: Data
     var response: HTTPURLResponse
     if let token = deviceToken {
@@ -155,11 +185,15 @@ public actor AccountsClient {
     if response.statusCode == 409, let profile = confirmationProfile,
       let conflict = try? JSONDecoder().decode(CodexSwitchConflict.self, from: data),
       conflict.code == "busy", conflict.reason == "running_processes",
-      let confirmation = conflict.confirmation, confirmation.isValid(for: profile) {
-      throw BarClientError.codexConfirmation(confirmation)
+      var confirmation = conflict.confirmation {
+      // Older responses without Date retain the existing wall-clock check.
+      confirmation.deadline = ConfirmationDeadline(expiresAt: confirmation.expiresAt,
+        serverDate: ConfirmationDeadline.serverDate(response), requestStarted: requestStarted)
+      if confirmation.isValid(for: profile) { throw BarClientError.codexConfirmation(confirmation) }
     }
     if response.statusCode == 409, let profile = antigravityProfile,
-      let offer = AntigravitySwitchConfirmation.parse(data, profile: profile) {
+      let offer = AntigravitySwitchConfirmation.parse(data, profile: profile,
+        serverDate: ConfirmationDeadline.serverDate(response), requestStarted: requestStarted) {
       throw BarClientError.antigravityConfirmation(offer)
     }
     guard (200..<300).contains(response.statusCode) else {
@@ -385,12 +419,14 @@ public actor AccountsClient {
   }
 
   @discardableResult
-  public func setAutomaticSwitching(enabled: Bool, thresholdPercent: Int? = nil) async throws -> Data {
-    var body: [String: Any] = ["enabled": enabled]
+  public func setAutomaticSwitching(enabled: Bool? = nil, thresholdPercent: Int? = nil) async throws -> Data {
+    var body: [String: Any] = [:]
+    if let enabled { body["enabled"] = enabled }
     if let thresholdPercent {
       guard (1...99).contains(thresholdPercent) else { throw BarClientError.invalidConnection }
       body["thresholdPercent"] = thresholdPercent
     }
+    guard !body.isEmpty else { throw BarClientError.invalidConnection }
     return try await request("api/codex/profiles/auto-switch", method: "PUT", body: JSONSerialization.data(withJSONObject: body))
   }
 }

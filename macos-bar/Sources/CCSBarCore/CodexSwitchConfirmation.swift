@@ -7,11 +7,14 @@ public struct CodexSwitchConfirmation: Decodable, Sendable {
   public let targetProfile: String
   public let processes: [CodexSwitchProcess]
   public let warning: String
+  public var deadline: ConfirmationDeadline?
+
+  private enum CodingKeys: String, CodingKey { case token, expiresAt, targetProfile, processes, warning }
 
   public func isValid(for profile: String, now: Date = Date()) -> Bool {
     !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && token.count <= 512
       && targetProfile == profile
-      && AccountFormatting.date(expiresAt).map { $0 > now } == true
+      && (deadline.map { !$0.expired } ?? (AccountFormatting.date(expiresAt).map { $0 > now } == true))
       && !processes.isEmpty
       && processes.allSatisfy { $0.pid > 0 && !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && !$0.role.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }

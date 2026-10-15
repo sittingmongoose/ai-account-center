@@ -17,10 +17,11 @@ public struct AntigravitySwitchConfirmation: Sendable {
   public let profileId: String
   public let email: String
   public let processes: [CodexSwitchProcess]
+  public var deadline: ConfirmationDeadline? = nil
 
   public func isValid(for profile: String, now: Date = Date()) -> Bool {
     profileId == profile && Self.isToken(token)
-      && AccountFormatting.date(expiresAt).map { $0 > now } == true
+      && (deadline.map { !$0.expired } ?? (AccountFormatting.date(expiresAt).map { $0 > now } == true))
   }
 
   static func isToken(_ value: String) -> Bool {
@@ -34,7 +35,8 @@ public struct AntigravitySwitchConfirmation: Sendable {
 
   /// Rebuilds the offer from a 409 body, field by field. Anything unexpected yields nil, so the caller
   /// reports a fixed error instead of asking for consent it cannot describe exactly.
-  static func parse(_ data: Data, profile: String, now: Date = Date()) -> AntigravitySwitchConfirmation? {
+  static func parse(_ data: Data, profile: String, now: Date = Date(), serverDate: Date? = nil,
+    requestStarted: TimeInterval = ProcessInfo.processInfo.systemUptime) -> AntigravitySwitchConfirmation? {
     guard let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       body["status"] as? String == "confirmation-required",
       body["profileId"] as? String == profile, body["hostId"] as? String == "ubuntu",
@@ -44,7 +46,7 @@ public struct AntigravitySwitchConfirmation: Sendable {
       let email = offer["email"] as? String, isEmail(email),
       (body["email"] as? String).map({ $0 == email }) ?? true,
       let expiresAt = offer["expiresAt"] as? String,
-      let expiry = AccountFormatting.date(expiresAt), expiry > now,
+      let expiry = AccountFormatting.date(expiresAt), serverDate != nil || expiry > now,
       let rawProcesses = offer["processes"] as? [[String: Any]], rawProcesses.count <= 32
     else { return nil }
     var processes: [CodexSwitchProcess] = []
@@ -55,7 +57,8 @@ public struct AntigravitySwitchConfirmation: Sendable {
       processes.append(CodexSwitchProcess(label: label, pid: pid, role: role))
     }
     return AntigravitySwitchConfirmation(token: token, expiresAt: expiresAt, profileId: profile,
-      email: email, processes: processes)
+      email: email, processes: processes,
+      deadline: ConfirmationDeadline(expiresAt: expiresAt, serverDate: serverDate, requestStarted: requestStarted))
   }
 }
 
