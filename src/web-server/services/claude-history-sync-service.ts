@@ -357,12 +357,7 @@ export async function cleanupAllHistorySnapshots(
     skipped: 0,
     failed: 0,
   };
-  let profiles: ClaudeDesktopProfile[];
-  try {
-    profiles = await list();
-  } catch {
-    return total;
-  }
+  const profiles = await list();
   for (const profile of profiles) {
     if (!profile?.id) continue;
     total.profiles += 1;

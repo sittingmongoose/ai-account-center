@@ -7,6 +7,9 @@ import { getCcsDir } from '../../utils/config-manager';
 import { broadcastDashboardEvent } from '../dashboard-events';
 import {
   parseVisibilityBody,
+  parseVisibilityDelta,
+  patchAccountVisibility,
+  type AccountVisibilityDelta,
   readAccountVisibility,
   updateAccountVisibility,
   type AccountVisibility,
@@ -30,6 +33,7 @@ const logger = createLogger('account-visibility');
 export interface AccountVisibilityRouterDeps {
   read?: () => Promise<AccountVisibilityRead>;
   write?: (update: AccountVisibilityUpdate) => Promise<AccountVisibilityUpdateResult>;
+  patch?: (delta: AccountVisibilityDelta) => Promise<AccountVisibilityUpdateResult>;
   /** After a saved change: tell the /ws clients to re-read the dashboard. */
   onChanged?: () => void;
   audit?: (counts: {
@@ -81,7 +85,9 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
     res.json(current.visibility);
   });
 
-  router.put('/visibility', async (req, res): Promise<void> => {
+  router.route('/visibility').put(save).patch(save);
+
+  async function save(req: Request, res: Response): Promise<void> {
     if (
       typeof req.headers.origin !== 'string' ||
       !req.headers.origin ||
@@ -94,7 +100,12 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
       fail(res, 415, 'json_required', 'This change requires application/json.');
       return;
     }
-    const update = bodyTooLarge(req) ? null : parseVisibilityBody(req.body);
+    const patch = req.method === 'PATCH';
+    const update = bodyTooLarge(req)
+      ? null
+      : patch
+        ? parseVisibilityDelta(req.body)
+        : parseVisibilityBody(req.body);
     if (!update) {
       fail(
         res,
@@ -106,7 +117,11 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
     }
     let saved: AccountVisibility;
     try {
-      const result = await write(update);
+      const result = patch
+        ? await (deps.patch ?? ((delta) => patchAccountVisibility(getCcsDir(), delta)))(
+            update as AccountVisibilityDelta
+          )
+        : await write(update as AccountVisibilityUpdate);
       if (result.state !== 'saved') {
         // A partial update cannot merge into a file that cannot be read safely.
         fail(res, 500, 'visibility_unavailable', 'Account visibility could not be read safely.');
@@ -138,7 +153,7 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
       /* Clients also re-read on their own refresh. */
     }
     res.json(saved);
-  });
+  }
 
   return router;
 }

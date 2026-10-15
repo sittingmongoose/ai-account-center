@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { withPrivateFileLock } from './private-json-store';
 import path from 'path';
 import { randomBytes } from 'crypto';
 import { getCcsDir } from '../../utils/config-manager';
@@ -29,7 +30,7 @@ export const USAGE_LOG_HOSTS = ['ubuntu', 'mac', 'windows', 'nas1'] as const;
 export type UsageLogHost = (typeof USAGE_LOG_HOSTS)[number];
 
 /** A dot path into a generic JSONL record (`usage.input_tokens`). */
-const FIELD_PATH = /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/;
+const FIELD_PATH = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
 const MAPPING_KEYS = ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost'] as const;
 
 export interface UsageLogSource {
@@ -250,4 +251,60 @@ export function writeDashboardPreferences(
 /** The display time zone Settings saved (America/New_York until then). */
 export function getDashboardTimeZone(): string {
   return readDashboardPreferences().timeZone;
+}
+
+/** Only the named fields or source ids change, under the same mutex as the route's PUT. */
+export interface DashboardPreferencesPatch {
+  timeZone?: string;
+  snapshotCleanup?: { auto: boolean };
+  addUsageLogSource?: UsageLogSource;
+  removeUsageLogSource?: string;
+}
+
+export function isDashboardPreferencesPatch(value: unknown): value is DashboardPreferencesPatch {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const patch = value as Record<string, unknown>;
+  const keys = Object.keys(patch);
+  return (
+    keys.length > 0 &&
+    keys.every((key) => {
+      if (key === 'timeZone') return isAccountAnalyticsTimeZone(patch[key]);
+      if (key === 'snapshotCleanup')
+        return isDashboardPreferences({
+          ...defaultDashboardPreferences(),
+          snapshotCleanup: patch[key],
+        });
+      if (key === 'addUsageLogSource') return isUsageLogSource(patch[key]);
+      if (key === 'removeUsageLogSource')
+        return typeof patch[key] === 'string' && SOURCE_ID.test(patch[key] as string);
+      return false;
+    })
+  );
+}
+
+export function withDashboardPreferencesLock<T>(
+  task: () => Promise<T>,
+  ccsDir = getCcsDir()
+): Promise<T> {
+  return withPrivateFileLock(path.join(ccsDir, PREFERENCES_FILE), task);
+}
+
+export function patchDashboardPreferences(
+  patch: DashboardPreferencesPatch,
+  ccsDir = getCcsDir()
+): Promise<DashboardPreferences> {
+  if (!isDashboardPreferencesPatch(patch))
+    throw new ConfigError('Invalid dashboard preferences patch');
+  return withDashboardPreferencesLock(async () => {
+    const current = readDashboardPreferences(ccsDir);
+    if (patch.timeZone !== undefined) current.timeZone = patch.timeZone;
+    if (patch.snapshotCleanup !== undefined) current.snapshotCleanup = patch.snapshotCleanup;
+    if (patch.removeUsageLogSource !== undefined)
+      current.usageLogSources = current.usageLogSources.filter(
+        (source) => source.id !== patch.removeUsageLogSource
+      );
+    if (patch.addUsageLogSource !== undefined)
+      current.usageLogSources.push(patch.addUsageLogSource);
+    return writeDashboardPreferences(current, ccsDir);
+  }, ccsDir);
 }

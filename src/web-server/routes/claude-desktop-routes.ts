@@ -179,6 +179,14 @@ router.post('/desktop-profiles/:id/open', async (req, res): Promise<void> => {
 
 router.post('/history-snapshots/cleanup', async (req, res): Promise<void> => {
   if (!requireDashboardSession(req, res)) return;
+  if (!isDashboardWebSocketOriginAllowed(req)) {
+    res.status(403).json({ error: 'History snapshot cleanup requires the dashboard origin.' });
+    return;
+  }
+  if (!req.is('application/json')) {
+    res.status(415).json({ error: 'History snapshot cleanup requires application/json.' });
+    return;
+  }
   if (
     !req.body ||
     typeof req.body !== 'object' ||

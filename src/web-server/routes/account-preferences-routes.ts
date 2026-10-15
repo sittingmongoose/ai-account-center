@@ -1,15 +1,20 @@
-import type { Router } from 'express';
+import type { Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import {
   isDashboardPreferences,
+  isDashboardPreferencesPatch,
+  patchDashboardPreferences,
+  withDashboardPreferencesLock,
+  type DashboardPreferencesPatch,
   readDashboardPreferences,
   writeDashboardPreferences,
   type DashboardPreferences,
 } from '../services/dashboard-preferences';
 
 interface PreferencesRouterDeps {
+  patch?: (value: DashboardPreferencesPatch) => Promise<DashboardPreferences>;
   read?: () => DashboardPreferences;
   write?: (value: DashboardPreferences) => DashboardPreferences;
 }
@@ -17,7 +22,7 @@ interface PreferencesRouterDeps {
 /**
  * Dashboard preferences (Settings): the display time zone, the history
  * snapshot cleanup and the extra usage-log sources. A signed-in browser
- * session reads and saves the whole shape; the time zone also becomes the
+ * session reads the whole shape and saves fields or individual sources; the time zone becomes the
  * analytics day-bucket default and every displayed time follows it.
  */
 export function createAccountPreferencesRouter(deps: PreferencesRouterDeps = {}): Router {
@@ -37,7 +42,8 @@ export function createAccountPreferencesRouter(deps: PreferencesRouterDeps = {})
   router.get('/preferences', (_req, res) => {
     res.json((deps.read ?? readDashboardPreferences)());
   });
-  router.put('/preferences', (req, res) => {
+  router.route('/preferences').put(save).patch(save);
+  async function save(req: Request, res: Response): Promise<void> {
     if (
       typeof req.headers.origin !== 'string' ||
       !req.headers.origin ||
@@ -50,16 +56,23 @@ export function createAccountPreferencesRouter(deps: PreferencesRouterDeps = {})
       res.status(415).json({ error: 'Preferences require application/json.' });
       return;
     }
-    if (!isDashboardPreferences(req.body)) {
+    const patch = req.method === 'PATCH';
+    if (!(patch ? isDashboardPreferencesPatch(req.body) : isDashboardPreferences(req.body))) {
       res.status(400).json({ error: 'Preferences are not valid.' });
       return;
     }
     try {
-      res.json((deps.write ?? writeDashboardPreferences)(req.body));
+      res.json(
+        patch
+          ? await (deps.patch ?? patchDashboardPreferences)(req.body)
+          : await withDashboardPreferencesLock(async () =>
+              (deps.write ?? writeDashboardPreferences)(req.body)
+            )
+      );
     } catch {
       res.status(500).json({ error: 'Dashboard preferences could not be saved.' });
     }
-  });
+  }
   return router;
 }
 

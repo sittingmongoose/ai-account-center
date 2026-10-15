@@ -1,4 +1,5 @@
 import path from 'path';
+import { ConfigError } from '../../errors/error-types';
 import type { DashboardProvider } from './account-dashboard-types';
 import { isDashboardProviderId } from './dashboard-provider-table';
 import {
@@ -38,6 +39,53 @@ export interface AccountVisibility {
 
 /** The PUT body: any non-empty subset of the four stored lists. */
 export type AccountVisibilityUpdate = Partial<AccountVisibility>;
+export type AccountVisibilityDelta = Partial<
+  Record<keyof AccountVisibility, { hide: string[]; show: string[] }>
+>;
+
+export function parseVisibilityDelta(value: unknown): AccountVisibilityDelta | null {
+  if (!record(value) || Object.keys(value).length === 0) return null;
+  const delta: AccountVisibilityDelta = {};
+  for (const [key, operation] of Object.entries(value)) {
+    if (!(VISIBILITY_KEYS as readonly string[]).includes(key) || !record(operation)) return null;
+    if (
+      Object.keys(operation).length === 0 ||
+      !Object.keys(operation).every((name) => name === 'hide' || name === 'show')
+    )
+      return null;
+    const parse = key.endsWith('Providers') ? parseProviderList : parseIdList;
+    const hide = parse('hide' in operation ? operation.hide : []);
+    const show = parse('show' in operation ? operation.show : []);
+    if (!hide || !show || hide.some((id) => show.includes(id))) return null;
+    delta[key as keyof AccountVisibility] = { hide, show };
+  }
+  return delta;
+}
+
+export async function patchAccountVisibility(
+  ccsDir: string,
+  delta: AccountVisibilityDelta
+): Promise<AccountVisibilityUpdateResult> {
+  const file = accountVisibilityPath(ccsDir);
+  return withPrivateFileLock(file, async () => {
+    const current = await readAccountVisibility(ccsDir);
+    if (current.state !== 'ok') return { state: 'unavailable' };
+    const next = { ...current.visibility };
+    for (const key of VISIBILITY_KEYS) {
+      const operation = delta[key];
+      if (operation) {
+        const values = new Set<string>(next[key]);
+        operation.show.forEach((id) => values.delete(id));
+        operation.hide.forEach((id) => values.add(id));
+        Object.assign(next, { [key]: [...values] });
+      }
+    }
+    const saved = parseVisibilityBody(next);
+    if (!saved) throw new ConfigError('Visibility limits exceeded');
+    await writePrivateJsonFile(file, { version: 1, ...next });
+    return { state: 'saved', visibility: next };
+  });
+}
 
 export type AccountVisibilityRead =
   | { state: 'ok'; visibility: AccountVisibility }
