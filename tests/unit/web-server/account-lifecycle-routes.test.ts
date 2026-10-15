@@ -4,7 +4,7 @@
  * refusals, Codex jobs, guides, re-check, label, trash and jobs. Every store is
  * in a temporary CCS folder; the collector, CLI and hosts are fakes.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import express from 'express';
 import fs from 'fs';
 import http, { type Server } from 'http';
@@ -1358,7 +1358,11 @@ describe('registry, re-check, open, label and trash', () => {
 
   it('keeps Claude add, remove, restore and purge off until host steps are enabled', async () => {
     const off = await fixture();
-    const add = await off.request('POST', '/add', { provider: 'claude', profileId: 'work2', email: 'work2@example.com' });
+    const add = await off.request('POST', '/add', {
+      provider: 'claude',
+      profileId: 'work2',
+      email: 'work2@example.com',
+    });
     expect([add.status, add.body.code]).toEqual([409, 'not_implemented']);
     const restore = await off.request('POST', '/trash/tr_0123456789abcdef/restore', {});
     expect([restore.status, restore.body.code]).toEqual([409, 'not_implemented']);
@@ -1551,8 +1555,7 @@ describe('registry, re-check, open, label and trash', () => {
     });
     expect((await f.request('POST', '/claude:work2/recheck', {})).status).toBe(400);
     expect(
-      (await f.request('POST', '/claude:work2/recheck', { platform: 'mac', email: 'nope' }))
-        .status
+      (await f.request('POST', '/claude:work2/recheck', { platform: 'mac', email: 'nope' })).status
     ).toBe(400);
     expect((await f.request('POST', '/claude:nobody/recheck', { platform: 'mac' })).status).toBe(
       404
@@ -1812,7 +1815,10 @@ describe('Antigravity profiles', () => {
       state: 'starting',
     });
     // One Antigravity sign-in at a time.
-    const second = await f.request('POST', '/add', { provider: 'antigravity', profileName: 'work' });
+    const second = await f.request('POST', '/add', {
+      provider: 'antigravity',
+      profileName: 'work',
+    });
     expect([second.status, second.body.code]).toEqual([409, 'job_running']);
 
     // On plain HTTP the pasted code cannot cross: 403 with the terminal fallback.
@@ -1899,4 +1905,57 @@ describe('Antigravity profiles', () => {
     );
     expect([device.status, device.body.code]).toEqual([403, 'device_scope']);
   });
+});
+
+it('a failed Codex refusal read disables removal until the registry can be checked', async () => {
+  const f = await fixture();
+  codexProfile('work');
+  const failure = spyOn(CodexAccountLifecycle.prototype, 'removeRefusal').mockRejectedValue(
+    new Error('unavailable')
+  );
+  try {
+    const listed = await f.request('GET', '/registry');
+    expect(listed.status).toBe(200);
+    expect(
+      (listed.body.accounts as Array<{ id: string }>).find((a) => a.id === 'codex:work')
+    ).toMatchObject({
+      removeRefusal: 'unavailable',
+      actions: { remove: false, signInAgain: false },
+    });
+  } finally {
+    failure.mockRestore();
+  }
+});
+
+it('a failed Antigravity refusal read disables removal until it can be checked', async () => {
+  const f = await fixture();
+  const dashboard = await f.env.getDashboard({ secureTransport: true });
+  dashboard.accounts.push(
+    row('antigravity:profile:work', {
+      provider: 'antigravity',
+      capabilities: {
+        codexProfile: null,
+        claudeProfileId: null,
+        claudePlatforms: [],
+        antigravityProfileId: 'work',
+      },
+    })
+  );
+  f.env.getDashboard = async () => dashboard;
+  const failure = spyOn(AntigravityAccountLifecycle.prototype, 'removeRefusal').mockRejectedValue(
+    new Error('unavailable')
+  );
+  try {
+    const listed = await f.request('GET', '/registry');
+    expect(
+      (listed.body.accounts as Array<{ id: string }>).find(
+        (a) => a.id === 'antigravity:profile:work'
+      )
+    ).toMatchObject({
+      removeRefusal: 'unavailable',
+      actions: { remove: false, signInAgain: false },
+    });
+  } finally {
+    failure.mockRestore();
+  }
 });

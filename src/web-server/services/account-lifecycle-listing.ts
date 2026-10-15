@@ -37,16 +37,16 @@ export async function registryListing(
     const running = runner.runningForAccount(row.id) !== null;
     if (row.provider === 'codex' && row.capabilities.codexProfile) {
       const name = row.capabilities.codexProfile;
-      const refusal = await codex.removeRefusal(name, running).catch(() => null);
+      const refusal = await codex.removeRefusal(name, running).catch(() => 'unavailable' as const);
       const available = signInState(env, 'codex', context.secure).unavailableReason === null;
       accounts.push(
         accountView(
           row,
           null,
           {
-            signInAgain: available && refusal !== 'account_active',
+            signInAgain: available && refusal !== 'account_active' && refusal !== 'unavailable',
             replaceKey: false,
-            remove: true,
+            remove: refusal !== 'unavailable',
             open: [],
             recheck: false,
           },
@@ -81,7 +81,7 @@ export async function registryListing(
       // itself asks the live native login again at both calls.
       const refusal = await agy
         .removeRefusal(profileId, { signinRunning: running, fresh: false, liveHint: row.isActive })
-        .catch(() => null);
+        .catch(() => 'unavailable' as const);
       const reason = signInState(env, 'antigravity', context.secure).unavailableReason;
       accounts.push(
         accountView(
@@ -92,7 +92,7 @@ export async function registryListing(
             signInAgain:
               reason !== 'tool_missing' && reason !== 'not_implemented' && refusal === null,
             replaceKey: false,
-            remove: facts.remove?.antigravity !== false,
+            remove: facts.remove?.antigravity !== false && refusal !== 'unavailable',
             open: [],
             recheck: false,
           },
