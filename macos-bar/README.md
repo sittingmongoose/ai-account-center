@@ -46,7 +46,7 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
 - **Antigravity switching** uses the dashboard routes `POST /api/antigravity/profiles/:id/activate`,
   `POST /api/antigravity/profiles/:id/confirm` and `PUT /api/antigravity/auto-switch`. Activate is offered only when the
   dashboard reports `antigravityCanActivate` for the Ubuntu host. Running Antigravity programs produce an inline
-  confirmation listing them; only "Stop, switch, restart" sends the one-use token, once. With two accounts the section
+  confirmation listing them; only "Stop, switch, restart" sends the one-use token, once. With two reported accounts (including tray-hidden or unavailable ones) the section
   header carries Antigravity's own auto-switch and threshold (percent used); it can be turned on once the shared quota
   pool has been chosen in the dashboard.
 - **Hidden providers and accounts.** The tray follows the dashboard's "Show in tray" switch, which is independent of
@@ -101,7 +101,8 @@ not be confirmed. Claude was not opened.", which is also what a 409 `history_unc
 a terminal state says "Still working on the dashboard. Check again shortly." Those sentences go to the panel's warning
 banner, which is where every other error already shows. Both platform glyphs rest for the whole Open, so a second one
 never starts for the same account, and the POST is never repeated: not for a poll, not after an expired session, and
-never resumed after a restart. A read that fails while polling never ends the Open; the poll just tries again.
+never resumed after a restart. A transient read failure while polling retries until the deadline. A signed-out device key or a refused HTTP
+destination ends the poll immediately; the Open POST is still never repeated.
 `swift run ccs-bar-check` covers every one of these paths against mock transports, including the poll's exact cadence
 and deadline.
 
@@ -251,7 +252,8 @@ dashboard's tray routes. A password change on the dashboard does nothing to the 
   dashboard sends `revokedBy` and `revokedAt`. The menu bar shows the logo with no percentage and the help tag "Signed
   out". Nothing retries on its own; a network error is never a sign-out. A 503 `auth_store_unavailable` keeps the key.
 - **Disconnect** calls `DELETE /api/auth/devices/me`, forgets the key and shows the first-run screen with
-  "Disconnected at ..." and the last address filled in.
+  "Disconnected at ..." and the last address filled in. Its note preserves whether the dashboard revoked the key;
+  password-only connections say that the saved password was forgotten, including after relaunch.
 - **Older dashboards.** Without pairing, Connect falls back to today's version 1 login, verified before it is saved
   (`POST /api/auth/login`, then `GET /api/accounts/settings` with that session; cookies only in an ephemeral session;
   failed logins back off for 15 minutes).
@@ -266,7 +268,7 @@ When manual activation finds running Codex programs, an inline confirmation unde
 
 The Used-threshold menu shows the confirmed stored setting: 85/90/95/98 percent
 used map to 15/10/5/2 percent remaining. Selecting a threshold preserves the
-current enabled state. The private `~/.ccs/bar/native-status.json` contains only
+server's current enabled state by sending only the threshold, without resending the sampled toggle. The private `~/.ccs/bar/native-status.json` contains only
 connection status, timestamp, provider/account counts and automatic-switch
 settings, allowing read-only verification of the installed GUI process itself.
 
@@ -281,6 +283,26 @@ The launch-agent preference affects subsequent graphical sign-ins; quitting the
 current app remains available at any time. The app's bundle identifier is
 `party.sittingmongoose.ccs.accounts-bar`, separating its preferences from the
 upstream edition.
+
+## Sample and transport safety
+
+Plain-HTTP hostnames are resolved again before every request, including Re-pair, migration, saved-password login
+and authenticated polls. Every resolved address must be local; an unresolved name is refused. HTTPS and IP literals
+keep their existing behavior. Redirects are refused for every route: enter the dashboard's canonical origin instead.
+Legacy login cookies remain confined to the ephemeral session.
+
+After a failed refresh the menu-bar number keeps its last valid sample and its tooltip adds "last sample <time>".
+A final remote sign-out clears the dashboard facts in Settings. Retained amounts and compact tooltips say "Cached"
+with that window's original sample time, or "Sample time unavailable". Provenance uses the reported `host` (such as
+`nas1`) before falling back to `platform`. Known-expired Qwen packs remain listed but do not count as "with credit";
+positive credit without an expiry says "Expiry unavailable". Undated, unidentified all-zero Z.ai pack rows are hidden.
+
+Antigravity header controls and notches count every reported account, including hidden ones, while the rows stay
+filtered by tray visibility. A notch belongs only to the watched pool. Confirmation lifetimes use the response's
+HTTP Date and a monotonic deadline when available; responses without server time retain the older expiry check.
+
+`swift build` followed by `swift run ccs-bar-check` also launches the built `CCSBar --check-review-r2` for offline
+row, tooltip and view-model checks. These use sanitized data and temporary connection paths, without network access.
 
 ## Source provenance
 

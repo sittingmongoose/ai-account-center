@@ -76,11 +76,13 @@ private struct MockReply: Sendable {
   let status: Int
   let data: Data
   let delayNanoseconds: UInt64
+  let headers: [String: String]?
 
-  init(_ status: Int, _ data: Data = Data("{}".utf8), delayNanoseconds: UInt64 = 0) {
+  init(_ status: Int, _ data: Data = Data("{}".utf8), delayNanoseconds: UInt64 = 0, headers: [String: String]? = nil) {
     self.status = status
     self.data = data
     self.delayNanoseconds = delayNanoseconds
+    self.headers = headers
   }
 }
 
@@ -134,7 +136,7 @@ private actor MockTransport: BarHTTPTransport {
     }
     if reply.delayNanoseconds > 0 { try await Task.sleep(nanoseconds: reply.delayNanoseconds) }
     let response = HTTPURLResponse(url: record.url, statusCode: reply.status,
-      httpVersion: "HTTP/1.1", headerFields: nil)!
+      httpVersion: "HTTP/1.1", headerFields: reply.headers)!
     return (reply.data, response)
   }
 
@@ -3532,12 +3534,138 @@ private func checkClaudeOpenPartialCopy() throws {
     "An Open that ended with part of the history copied says how much")
 }
 
+private struct RefusedTransport: BarHTTPTransport {
+  let error: TransportSafetyError
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) { throw error }
+}
+
+private func checkReviewR2() async throws {
+  let outside = BarSessionTransport(resolver: { _ in ["192.168.1.5", "203.0.113.4"] })
+  for path in ["api/auth/devices/pair", "api/auth/setup", "api/auth/login", "api/accounts/dashboard", "api/auth/devices/me"] {
+    var request = URLRequest(url: URL(string: "http://dashboard.local/" + path)!)
+    request.setValue("Bearer fixture-only", forHTTPHeaderField: "Authorization")
+    do { _ = try await outside.send(request); throw CheckFailure(description: "HTTP DNS guard sent " + path) }
+    catch TransportSafetyError.notLocal { }
+  }
+  for addresses in [["192.168.1.5"], ["::1", "10.0.0.1"]] {
+    try LocalNetwork.requireLocalHTTP(URL(string: "http://dashboard.local")!, resolver: { _ in addresses })
+  }
+  do {
+    try LocalNetwork.requireLocalHTTP(URL(string: "http://dashboard.internal")!, resolver: { _ in [] })
+    throw CheckFailure(description: "Unresolved HTTP name accepted")
+  } catch TransportSafetyError.notLocal { }
+  for url in ["https://dashboard.example", "http://192.168.1.5", "http://[::1]"] {
+    try LocalNetwork.requireLocalHTTP(URL(string: url)!, resolver: { _ in fatalError("Unexpected DNS lookup") })
+  }
+  for status in [301, 302, 303, 307, 308] {
+    do {
+      try BarSessionTransport.requireCanonicalResponse(HTTPURLResponse(url: testConnection().baseURL, statusCode: status, httpVersion: nil, headerFields: nil)!)
+      throw CheckFailure(description: "Redirect accepted")
+    } catch TransportSafetyError.redirect { }
+  }
+  let refusedURL = URL(string: "http://dashboard.local")!
+  for safety in [TransportSafetyError.notLocal, .redirect] {
+    let expected: AddressCheck = safety == .notLocal ? .notLocal(refusedURL, seenAs: nil) : .canonicalAddress(refusedURL)
+    let probe = DashboardProbe(baseURL: refusedURL, transport: RefusedTransport(error: safety))
+    let address = await probe.checkAddress(resolver: { _ in ["192.168.1.1"] })
+    try expect(address == expected, "Address probe retains transport safety guidance")
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("aac-r2-unused-\(UUID().uuidString)/connection.json")
+    let session = await MainActor.run { ConnectionSession(fileURL: file, makeTransport: { RefusedTransport(error: safety) }) }
+    let paired = await session.pair(url: refusedURL, username: "fixture", password: "fixture-only")
+    let setup = await session.setupAndPair(url: refusedURL, username: "fixture", password: "fixture-only", setupCode: nil)
+    guard case .refused(let pairAddress) = paired, case .refused(let setupAddress) = setup else {
+      throw CheckFailure(description: "Pair/setup discarded transport safety guidance")
+    }
+    try expect(pairAddress == expected && setupAddress == expected && !FileManager.default.fileExists(atPath: file.path),
+      "Pair/setup safety refusals save nothing")
+  }
+  let transport = MockTransport()
+  let client = AccountsClient(connection: testConnection(), transport: transport)
+  _ = try await client.setAutomaticSwitching(thresholdPercent: 10)
+  let calls = await transport.recorded()
+  let threshold = try JSONSerialization.jsonObject(with: calls.last!.body!) as! [String: Any]
+  try expect(Set(threshold.keys) == ["thresholdPercent"] && threshold["thresholdPercent"] as? Int == 10,
+    "A threshold-only write must not resend enabled")
+
+  let paired = BarConnection(baseURL: testConnection().baseURL, username: "fixture", deviceId: "dev_0000000000000001",
+    deviceToken: "aacd_" + String(repeating: "A", count: 43), installId: UUID().uuidString, pairedAt: "2026-10-15T12:00:00Z")
+  let signedOut = MockTransport(replies: [
+    "POST /api/claude/desktop-profiles/fixture/open": [MockReply(202, Data("{\"operationId\":\"op\",\"state\":\"copying\"}".utf8))],
+    "GET /api/claude/desktop-profiles": [MockReply(401, Data("{\"code\":\"device_revoked\"}".utf8))],
+  ])
+  do {
+    _ = try await ClaudeOpenFlow.run(client: AccountsClient(connection: paired, transport: signedOut),
+      coordinator: ClaudeOpenCoordinator(), profile: "fixture", platform: "mac", sleep: { _ in }, progress: { _ in })
+    throw CheckFailure(description: "Claude poll swallowed signed-out error")
+  } catch BarClientError.signedOut { }
+  let openCalls = await signedOut.recorded()
+  try expect(openCalls.filter { $0.method == "POST" }.count == 1 && openCalls.count == 2, "Signed-out Open has one POST and stops polling")
+
+  let server = AccountFormatting.date("2020-01-01T00:00:00Z")!
+  let deadline = ConfirmationDeadline(expiresAt: "2020-01-01T00:01:00Z", serverDate: server, requestStarted: 90, now: 100)!
+  try expect(deadline.uptime == 149, "Server lifetime subtracts request time and Date precision")
+  let expired = ConfirmationDeadline(expiresAt: "2020-01-01T00:00:05Z", serverDate: server, requestStarted: 90, now: 100)!
+  try expect(expired.uptime == 100 && ConfirmationDeadline(expiresAt: "2020-01-01T00:01:00Z", serverDate: nil, requestStarted: 90, now: 100) == nil,
+    "Elapsed approvals are not renewed; missing server time preserves the fallback")
+  let codexOffer = Data("""
+    {"code":"busy","reason":"running_processes","confirmation":{"token":"fixture-token","expiresAt":"2020-01-01T00:01:00Z","targetProfile":"fixture","warning":"Fixture","processes":[{"label":"Codex CLI","pid":1,"role":"cli"}]}}
+    """.utf8)
+  let agOffer = Data("""
+    {"status":"confirmation-required","profileId":"fixture","hostId":"ubuntu","confirmation":{"token":"fixture_token_0001","expiresAt":"2020-01-01T00:01:00Z","profileId":"fixture","hostId":"ubuntu","email":"fixture@example.com","processes":[{"pid":1,"role":"cli"}]}}
+    """.utf8)
+  let skewed = MockTransport(replies: [
+    "POST /api/codex/profiles/fixture/activate": [MockReply(409, codexOffer, headers: ["Date": "Wed, 01 Jan 2020 00:00:00 GMT"])],
+    "POST /api/antigravity/profiles/fixture/activate": [MockReply(409, agOffer, headers: ["Date": "Wed, 01 Jan 2020 00:00:00 GMT"])],
+  ])
+  let skewedClient = AccountsClient(connection: testConnection(), transport: skewed)
+  do { try await skewedClient.activateCodex(profile: "fixture"); throw CheckFailure(description: "Missing Codex consent") }
+  catch BarClientError.codexConfirmation(let offer) {
+    try expect(offer.deadline != nil && offer.isValid(for: "fixture", now: Date.distantFuture), "Codex consent uses server Date despite wall-clock skew")
+  }
+  do { try await skewedClient.activateAntigravity(profile: "fixture"); throw CheckFailure(description: "Missing Antigravity consent") }
+  catch BarClientError.antigravityConfirmation(let offer) {
+    try expect(offer.deadline != nil && offer.isValid(for: "fixture", now: Date.distantFuture), "Antigravity consent uses server Date despite wall-clock skew")
+  }
+  let note = SignedOutNote(reason: "disconnected", at: "2026-10-15T12:00:00Z", disconnectTold: false, credentialKind: "password")
+  let decoded = try JSONDecoder().decode(SignedOutNote.self, from: JSONEncoder().encode(note))
+  try expect(decoded.disconnectTold == false && decoded.credentialKind == "password", "Disconnect outcome and credential kind persist")
+  var object = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
+  var accounts = object["accounts"] as! [[String: Any]]
+  accounts[0]["host"] = "nas1"
+  accounts[0]["provider"] = "zai"
+  accounts[0]["windows"] = [
+    ["key": "pack-empty", "label": "Pack", "used": 0, "limit": 0, "remaining": 0, "usedPercent": 0],
+    ["key": "pack-record", "label": "Pack", "remaining": 0],
+    ["key": "pack-dated", "label": "Pack", "remaining": 0, "resetAt": "2026-10-16T12:00:00Z"],
+    ["key": "weekly", "label": "Weekly", "usedPercent": 0],
+  ]
+  object["accounts"] = accounts
+  let sample = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
+  try expect(sample.accounts[0].provenance == "nas1" && sample.accounts[0].platform == "mac", "Host provenance leaves platform intact")
+  try expect(sample.accounts[0].visibleWindows.map(\.key) == ["pack-record", "pack-dated", "weekly"], "Only empty undated unidentified packs disappear; genuine zero meters remain")
+  for (expiry, usable) in [("2020-01-01T00:00:00Z", false), ("2099-01-01T00:00:00Z", true), ("unknown", true)] {
+    let data = try JSONSerialization.data(withJSONObject: ["key": "pack", "label": "Pack", "remaining": 4, "expiresAt": expiry])
+    let pack = try JSONDecoder().decode(AccountQuotaWindow.self, from: data)
+    try expect(pack.hasUsableCredit() == usable, "Expired Qwen packs cannot contribute usable credit")
+  }
+  let app = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("CCSBar")
+  guard FileManager.default.isExecutableFile(atPath: app.path) else { throw CheckFailure(description: "Run swift build before native view checks") }
+  let process = Process()
+  process.executableURL = app
+  process.arguments = ["--check-review-r2"]
+  try process.run()
+  process.waitUntilExit()
+  try expect(process.terminationStatus == 0, "Native view and view-model regression checks")
+}
+
 if CommandLine.arguments.contains("--check-live") {
   // Opt-in deployment check is read-only. It never refreshes usage, launches a
   // desktop, activates a profile, or changes automatic switching settings.
   await checkLive()
 } else {
 do {
+  try await checkReviewR2()
+  print("PASS review R2 transport, threshold, consent lifetime, sign-out and native views")
   try await checkSessionAndQueries()
   print("PASS session sharing and Mac dashboard queries")
   try await checkWrites()

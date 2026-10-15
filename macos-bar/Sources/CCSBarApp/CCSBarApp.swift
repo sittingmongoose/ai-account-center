@@ -7,6 +7,7 @@ import AppKit
 enum CCSBarMain {
   @MainActor static func main() {
     let arguments = CommandLine.arguments
+    if arguments.count == 2, arguments[1] == "--check-review-r2" { ReviewR2Check.run() }
     if arguments.count == 3, arguments[1] == "--check-native-tooltips" {
       PreviewRenderer.checkNativeTooltips(input: arguments[2])
     }
