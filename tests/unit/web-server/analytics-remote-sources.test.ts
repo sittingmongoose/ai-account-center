@@ -363,12 +363,160 @@ describe('analytics remote helper integrity', () => {
     // Nas1 streams the same packaged helper as the Mac and Windows; adding the host changed no byte
     // of it. Change this value only together with the helper itself.
     expect(ANALYTICS_HELPER_SHA256).toBe(
-      'eddd174e9ccad171280ac7c8cc11ca253e99d9a5fb8982d5b2889679a150df54'
+      '8441469245b3392a025c1f50d7d4914a43345aa3d3d0f14ab67aedc9427349d0'
     );
   });
 });
 
 describe('analytics remote sources', () => {
+  it.each([350, 150, 200])(
+    'keeps both Claude aggregates at %i when an incomplete group emits no replacement',
+    async (total) => {
+      const other = 'b2'.repeat(32);
+      const print = { size: 10, mtimeMs: 20, claudeGroup: FILE_1 };
+      let pass = 0;
+      const deps = {
+        cacheDir: cache,
+        hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
+        claudeLogNames: () => ({ originals: new Set<string>(), complete: true }),
+        runHelper: async () => {
+          const broken = pass === 1 || pass === 2;
+          const owner = pass === 3 ? other : FILE_1;
+          return parseAnalyticsRemoteResponse(
+            JSON.stringify(
+              response({
+                truncated: broken,
+                kinds: {
+                  claude: {
+                    state: 'ok',
+                    fingerprints: broken ? {} : { [FILE_1]: print, [other]: print },
+                    ...(broken
+                      ? { partial: true, readFailures: 1 }
+                      : { replacedFiles: [FILE_1, other] }),
+                  },
+                },
+                rows: broken ? [] : [row({ k: 'claude', f: owner, i: total })],
+                srows: broken ? [] : [srow({ k: 'claude', f: owner, i: total })],
+              })
+            )
+          );
+        },
+      };
+      for (pass = 0; pass < 4; pass++) {
+        const answer = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+        const data = answer.results.find((entry) => entry.tool === 'claude')?.data;
+        expect(data?.hourly.reduce((sum, row) => sum + row.inputTokens, 0)).toBe(total);
+        expect(data?.session.reduce((sum, row) => sum + row.inputTokens, 0)).toBe(total);
+        const saved = JSON.parse(
+          fs.readFileSync(path.join(cache, 'analytics-remote-v1/mac.json'), 'utf8')
+        );
+        expect(saved.rows).toHaveLength(1);
+        expect(saved.srows).toHaveLength(1);
+        expect(Object.keys(saved.fingerprints.claude)).toHaveLength(2);
+      }
+    }
+  );
+
+  it.each([3, 4, 5])(
+    'migrates v%i non-Claude history and dates while offline, then rebuilds Claude',
+    async (version) => {
+      const tools = ['codex', 'omp', 'muse', 'zcode', 'antigravity'] as const;
+      const rows = tools.map((k) => row({ k, i: 100 }));
+      const srows = tools.map((k) => srow({ k, i: 100 }));
+      const fingerprints = Object.fromEntries(
+        [...tools, 'claude'].map((k) => [
+          k,
+          {
+            [FILE_1]: { size: 10, mtimeMs: 20, ...(k === 'claude' ? { claudeGroup: FILE_1 } : {}) },
+          },
+        ])
+      );
+      const kinds = Object.fromEntries(
+        [...tools, 'claude'].map((k, index) => [
+          k,
+          { state: 'ok', lastScanAt: `2026-10-02T16:0${index}:00.000Z` },
+        ])
+      );
+      const file = path.join(cache, 'analytics-remote-v1/mac.json');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          version,
+          fingerprints,
+          rows: [...rows, row({ k: 'claude', i: 999 })],
+          srows: [...srows, srow({ k: 'claude', i: 999 })],
+          kinds,
+          lastScanAt: '2026-10-02T16:06:00.000Z',
+          settled: true,
+        })
+      );
+      const deps = {
+        cacheDir: cache,
+        hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
+        claudeLogNames: () => ({ originals: new Set<string>(), complete: true }),
+      };
+      const offline = await loadAnalyticsRemoteSources(MIN_DATE, {
+        ...deps,
+        runHelper: async () => {
+          throw new Error('fixture host offline');
+        },
+      });
+      for (const answer of [loadAnalyticsRemoteCachedSources(MIN_DATE, deps), offline]) {
+        expect(answer.results.map((entry) => entry.tool).sort()).toEqual([...tools].sort());
+        for (const tool of tools) {
+          const data = answer.results.find((entry) => entry.tool === tool)?.data;
+          expect(data?.hourly[0].inputTokens).toBe(100);
+          expect(data?.session[0].inputTokens).toBe(100);
+          expect(
+            answer.states.find((state) => state.host === 'mac' && state.tool === tool)
+          ).toMatchObject({ state: 'cached', lastScanAt: kinds[tool].lastScanAt });
+        }
+        expect(
+          answer.states.find((state) => state.host === 'mac' && state.tool === 'claude')?.lastScanAt
+        ).toBeNull();
+      }
+      const requested = new Set<string>();
+      const rebuilt = await loadAnalyticsRemoteSources(MIN_DATE, {
+        ...deps,
+        runHelper: async (_alias, _host, request) => {
+          expect(request.kinds).toHaveLength(1);
+          const kind = request.kinds[0];
+          requested.add(kind);
+          expect(request.fingerprints[kind] ?? {}).toEqual(
+            kind === 'claude' ? {} : fingerprints[kind]
+          );
+          return parseAnalyticsRemoteResponse(
+            JSON.stringify(
+              response({
+                kinds: {
+                  [kind]: {
+                    state: 'ok',
+                    fingerprints: fingerprints[kind],
+                    ...(kind === 'claude' ? { replacedFiles: [FILE_1] } : {}),
+                  },
+                },
+                rows: kind === 'claude' ? [row({ k: 'claude', i: 150 })] : [],
+                srows: kind === 'claude' ? [srow({ k: 'claude', i: 150 })] : [],
+              })
+            )
+          );
+        },
+      });
+      expect(requested.size).toBe(6);
+      expect(
+        rebuilt.results.find((entry) => entry.tool === 'claude')?.data.hourly[0].inputTokens
+      ).toBe(150);
+      expect(
+        rebuilt.results.find((entry) => entry.tool === 'claude')?.data.session[0].inputTokens
+      ).toBe(150);
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(saved.version).toBe(6);
+      expect(saved.rows.filter((row: { k: string }) => row.k !== 'claude')).toEqual(rows);
+      expect(saved.srows.filter((row: { k: string }) => row.k !== 'claude')).toEqual(srows);
+    }
+  );
+
   it('replaces every Claude copy owner atomically on repeated partial reads and recovery', async () => {
     const other = 'b2'.repeat(32);
     const print = { size: 10, mtimeMs: 20, claudeGroup: FILE_1 };
@@ -411,7 +559,7 @@ describe('analytics remote sources', () => {
       expect(saved.rows).toHaveLength(1);
       expect(saved.srows).toHaveLength(1);
     }
-    // Version 5 could contain accumulated owners; neither rows nor prints may survive migration.
+    // Version 5 could contain accumulated Claude owners; its rows/prints must rebuild.
     const file = path.join(cache, 'analytics-remote-v1/mac.json');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(saved.version).toBe(6);
@@ -425,7 +573,8 @@ describe('analytics remote sources', () => {
     await loadAnalyticsRemoteSources(MIN_DATE, {
       ...deps,
       runHelper: async (...args) => {
-        sawEmptyPrints = Object.keys(args[2].fingerprints).length === 0;
+        if (args[2].kinds.includes('claude'))
+          sawEmptyPrints = Object.keys(args[2].fingerprints.claude ?? {}).length === 0;
         return deps.runHelper();
       },
     });

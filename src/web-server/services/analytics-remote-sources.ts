@@ -122,9 +122,13 @@ function blankCache(): RemoteCache {
 function loadCache(file: string): RemoteCache {
   try {
     if (fs.statSync(file).size > 8 * 1024 * 1024) return blankCache();
-    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as RemoteCache;
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Omit<RemoteCache, 'version'> & {
+      version: number;
+    };
+    // Versions 1/2 predate hashed session aggregates and cannot safely retain
+    // their sessions or confirm their files. Unknown future formats also reset.
     if (
-      value.version !== CACHE_VERSION ||
+      ![3, 4, 5, CACHE_VERSION].includes(value.version) ||
       !value.fingerprints ||
       typeof value.fingerprints !== 'object' ||
       !Array.isArray(value.rows) ||
@@ -135,7 +139,25 @@ function loadCache(file: string): RemoteCache {
       (value.settled !== undefined && typeof value.settled !== 'boolean')
     )
       return blankCache();
-    return value;
+    if (value.version !== CACHE_VERSION) {
+      // Versions 3-5 share the non-Claude row/session/fingerprint formats.
+      // Claude's response semantics and copy ownership changed in 4-6: its
+      // aggregates and prints must rebuild together, without losing other tools.
+      const fingerprints = { ...value.fingerprints };
+      const kinds = { ...value.kinds };
+      delete fingerprints.claude;
+      delete kinds.claude;
+      return {
+        ...value,
+        version: CACHE_VERSION,
+        fingerprints,
+        kinds,
+        rows: value.rows.filter((row) => row.k !== 'claude'),
+        srows: value.srows.filter((row) => row.k !== 'claude'),
+        settled: false,
+      };
+    }
+    return { ...value, version: CACHE_VERSION };
   } catch {
     return blankCache();
   }
@@ -658,7 +680,7 @@ export async function loadAnalyticsRemoteSources(
         // Rows and prints are adopted together. A failed kind retries every changed database.
         for (const tool of kinds)
           freshPrints[tool] = discarded(tool) ? {} : (response.kinds[tool]?.fingerprints ?? {});
-        // Explicit group replacement includes unreadable and previous owners.
+        // Fully read groups explicitly replace all current and previous owners.
         // Emitted rows also replace their own file even if its print is unchanged.
         const replaced = new Map(kinds.map((tool) => [tool, new Set<string>()]));
         if (!discarded('claude'))

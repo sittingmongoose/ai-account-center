@@ -542,8 +542,6 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, claude('m1', 0) + '\n' + claude('m2', 0) + '\n');
       }
-      const key = (file: string) =>
-        createHash('sha256').update('claude\0').update(path.resolve(file)).digest('hex');
       let pass = 0;
       const started = Date.parse('2026-10-02T16:01:00Z');
       const deps = {
@@ -579,12 +577,10 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
           );
           if (request.kinds.includes('claude') && broken) {
             expect(answer.kinds.claude.readFailures).toBe(all ? 2 : 1);
-            if (all) {
-              expect(answer.kinds.claude.fingerprints).toEqual({});
-              expect(answer.kinds.claude.replacedFiles).toBeUndefined();
-            } else {
-              expect(answer.kinds.claude.replacedFiles).toEqual([key(a), key(b)].sort());
-            }
+            expect(answer.kinds.claude.fingerprints).toEqual({});
+            expect(answer.kinds.claude.replacedFiles).toBeUndefined();
+            expect(answer.rows).toEqual([]);
+            expect(answer.srows).toEqual([]);
           }
           return answer;
         },
@@ -605,7 +601,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
           (entry) => entry.tool === 'claude' && entry.host === 'mac'
         );
         expect(state?.lastScanAt).toBe(
-          new Date(started + Math.min(pass, 3) * 60_000).toISOString()
+          new Date(started + (pass < 3 ? 0 : 3) * 60_000).toISOString()
         );
         if (pass >= 4)
           expect(state?.detail).toBe(
@@ -648,6 +644,95 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     });
   };
 
+  it.each(['diverged-fingerprint', 'diverged-read', 'prefix-fingerprint', 'prefix-read'])(
+    'retains the coherent Claude aggregate through %s failures and recovery',
+    async (scenario) => {
+      const record = (id: string, tokens: number) => {
+        const value = JSON.parse(claude(id, 0));
+        value.message.usage.input_tokens = tokens;
+        return JSON.stringify(value) + '\n';
+      };
+      const a = path.join(home, '.claude', 'projects', 'a', 's1.jsonl');
+      const b = path.join(home, '.claude', 'projects', 'b', 's1.jsonl');
+      for (const file of [a, b]) fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(a, record('shared', 100) + record('unique-a', 50));
+      fs.writeFileSync(
+        b,
+        record('shared', 100) + (scenario.startsWith('diverged') ? record('unique-b', 200) : '')
+      );
+      const total = scenario.startsWith('diverged') ? 350 : 150;
+      const file = path.join(home, 'cache/analytics-remote-v1/mac.json');
+      const started = Date.parse('2026-10-02T16:01:00Z');
+      let pass = 0;
+      let coherent: { rows: unknown[]; srows: unknown[]; fingerprints: unknown };
+      for (pass = 0; pass < 4; pass++) {
+        const broken = pass === 1 || pass === 2;
+        const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
+          cacheDir: path.join(home, 'cache'),
+          hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
+          now: () => started + pass * 60_000,
+          claudeLogNames: () => ({ originals: new Set<string>(), complete: true }),
+          runHelper: async (_alias, _host, request) => {
+            const setup = !broken
+              ? []
+              : scenario.endsWith('fingerprint')
+                ? [
+                    'fingerprint = module._fingerprint',
+                    'def fail(path):',
+                    '    if module.os.path.basename(module.os.path.dirname(path)) == "a": return None',
+                    '    return fingerprint(path)',
+                    'module._fingerprint = fail',
+                  ]
+                : [
+                    'module._same_fingerprint = lambda *args: False',
+                    'read_file = module._read_file',
+                    'def fail(collector, kind, path, *args):',
+                    '    if module.os.path.basename(module.os.path.dirname(path)) == "a": return "unreadable"',
+                    '    return read_file(collector, kind, path, *args)',
+                    'module._read_file = fail',
+                  ];
+            const response = parseAnalyticsRemoteResponse(
+              JSON.stringify(runPatchedHelper({ ...request }, {}, setup))
+            );
+            if (request.kinds.includes('claude') && broken) {
+              expect(response.kinds.claude).toMatchObject({
+                partial: true,
+                readFailures: 1,
+                fingerprints: {},
+              });
+              expect(response.kinds.claude.replacedFiles).toBeUndefined();
+              expect(response.rows).toEqual([]);
+              expect(response.srows).toEqual([]);
+            }
+            return response;
+          },
+        });
+        const data = answer.results.find((entry) => entry.tool === 'claude')?.data;
+        expect(data?.hourly.reduce((sum, row) => sum + row.inputTokens, 0)).toBe(total);
+        expect(data?.session.reduce((sum, row) => sum + row.inputTokens, 0)).toBe(total);
+        const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (pass === 0) coherent = saved;
+        if (broken) {
+          expect(saved.rows).toEqual(coherent!.rows);
+          expect(saved.srows).toEqual(coherent!.srows);
+          expect(saved.fingerprints.claude).toEqual(
+            Reflect.get(coherent!.fingerprints as object, 'claude')
+          );
+          expect(
+            answer.states.find((state) => state.host === 'mac' && state.tool === 'claude')
+          ).toMatchObject({
+            state: 'cached',
+            lastScanAt: new Date(started).toISOString(),
+            detail: '1 logs could not be read on this computer; showing previously read usage',
+          });
+        }
+        expect(saved.rows).toHaveLength(1);
+        expect(saved.srows).toHaveLength(1);
+      }
+    },
+    30_000
+  );
+
   it.each(['single', 'exact', 'prefix'])(
     'preserves repeated unkeyed responses within a readable %s transcript',
     (copy) => {
@@ -669,7 +754,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
   );
 
   it.skipIf(process.platform === 'win32')(
-    'reads a T3 Claude copy when the default representative is unreadable, including warm scans',
+    'withholds a Claude group when its default representative is unreadable, including warm scans',
     () => {
       const a = path.join(home, '.claude', 'projects', 'p', 's1.jsonl');
       const b = path.join(home, '.claude-t3', 'alpha', 'projects', 'p', 's1.jsonl');
@@ -680,18 +765,17 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       const request = { kinds: ['claude'], minDateMs: MIN_DATE };
       const first = runHelper(request);
       const prints = (first.kinds as Record<string, { fingerprints: object }>).claude.fingerprints;
-      const key = (file: string) =>
-        createHash('sha256').update('claude\0').update(path.resolve(file)).digest('hex');
       fs.chmodSync(a, 0);
       try {
         for (const fingerprints of [{}, { claude: prints }]) {
           const answer = runHelper({ ...request, fingerprints });
-          expect(claudeTotals(answer)).toEqual({ n: 2, i: 200, o: 20 });
+          expect(claudeTotals(answer)).toEqual({ n: 0, i: 0, o: 0 });
           expect(answer.truncated).toBe(true);
           const kind = (answer.kinds as Record<string, { partial: boolean; fingerprints: object }>)
             .claude;
           expect(kind.partial).toBe(true);
-          expect(Object.keys(kind.fingerprints)).toEqual([key(b)]);
+          expect(kind.fingerprints).toEqual({});
+          expect(answer.srows).toEqual([]);
         }
         fs.chmodSync(b, 0);
         const unreadable = runHelper(request);
@@ -707,7 +791,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
   );
 
   it.each(['diverged', 'prefix'])(
-    'reads a %s sibling after a Claude copy becomes unreadable between fingerprinting and parsing',
+    'withholds %s sibling rows after a Claude copy becomes unreadable between fingerprinting and parsing',
     (copy) => {
       const directory = path.join(home, '.claude', 'projects', 'p');
       fs.mkdirSync(directory, { recursive: true });
@@ -725,12 +809,13 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
         '    return read_file(collector, kind, path, *args)',
         'module._read_file = fail_read',
       ]);
-      expect(claudeTotals(answer)).toEqual({ n: 1, i: 100, o: 10 });
+      expect(claudeTotals(answer)).toEqual({ n: 0, i: 0, o: 0 });
+      expect(answer.srows).toEqual([]);
       expect(answer.truncated).toBe(true);
       expect(answer.kinds).toMatchObject({ claude: { partial: true } });
       expect(
         Object.keys((answer.kinds as Record<string, { fingerprints: object }>).claude.fingerprints)
-      ).toHaveLength(1);
+      ).toHaveLength(0);
     }
   );
 

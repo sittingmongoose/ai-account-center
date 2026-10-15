@@ -1228,7 +1228,9 @@ def _scan_claude_groups(collector, paths, parse, flush):
             else:
                 collector.usage_partial.add("claude")
                 collector.truncated = True
-        if not usable:
+        # A subset cannot replace the coherent cached group, including unique
+        # responses in an unreadable copy. Leave every member unconfirmed.
+        if len(usable) != len(group):
             continue
         if not changed and len(usable) == len(group):
             for path in usable:
@@ -1242,6 +1244,11 @@ def _scan_claude_groups(collector, paths, parse, flush):
                 collector.read_failures.setdefault("claude", set()).add(_filekey("claude", path))
                 collector.usage_partial.add("claude")
                 collector.truncated = True
+        if len(stamped) != len(group):
+            continue
+        def discard_group():
+            collector.rows = {k: r for k, r in collector.rows.items() if r["f"] not in members}
+            collector.srows = {k: r for k, r in collector.srows.items() if r["f"] not in members}
         kept, covered = [], {}
         prefix_deadline = min(collector.deadline, time.monotonic() + 0.1)
         for _, path in sorted(stamped, key=lambda item: (-item[0], item[1])):
@@ -1270,6 +1277,7 @@ def _scan_claude_groups(collector, paths, parse, flush):
                 except OSError:
                     outcome = "unreadable"
                 if outcome == "cut":
+                    discard_group()
                     return True
                 if outcome == "unreadable":
                     collector.read_failures.setdefault("claude", set()).add(_filekey("claude", path))
@@ -1289,23 +1297,27 @@ def _scan_claude_groups(collector, paths, parse, flush):
         finally:
             collector.claude_chosen = None
         if collector.row_cap:
+            discard_group()
             return True
         if not parsed:
             continue
         # Only parsed files and byte-verified prefixes of parsed files are
         # fresh. In particular, never confirm an unreadable representative.
         confirmed = set(parsed) | {p for p, larger in covered.items() if larger in parsed}
+        if len(confirmed) != len(group):
+            discard_group()
+            continue
         owner = next((p for p in usable if p in confirmed), parsed[0])
         filekey = _filekey("claude", owner)
         for pending in chosen.values():
             _emit_claude_response(collector, "claude", filekey, pending)
         if collector.row_cap:
+            discard_group()
             return True
         for path in group:
             if path in confirmed:
                 collector.confirm_file("claude", _filekey("claude", path))
-        # Replacing a readable sibling also retires every previous group owner,
-        # including owners no longer present or readable in this scan.
+        # A fully read group also retires previous owners no longer present.
         collector.replaced_files.update(members)
         for old in previous:
             collector.replaced_files.update(prior_groups.get(old, ()))
