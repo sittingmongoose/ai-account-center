@@ -131,7 +131,7 @@ export function runHost(platform: UpdatePlatform, control?: HostRunControl): Pro
     command.binary,
     command.args,
     {
-      ...process.env,
+      ...updaterEnvironment(process.env),
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
       AAC_UPDATE_PROGRESS: '1',
@@ -141,6 +141,29 @@ export function runHost(platform: UpdatePlatform, control?: HostRunControl): Pro
     },
     control
   );
+}
+
+export function updaterEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => {
+      const name = key.toUpperCase();
+      return (
+        name !== 'CCS_SESSION_SECRET' &&
+        !name.startsWith('CCS_DASHBOARD_') &&
+        !name.endsWith('_PASSWORD_HASH')
+      );
+    })
+  );
+}
+
+export class HelperExecutionError extends Error {
+  constructor(readonly code: 'host_unknown' | 'helper_invalid') {
+    super(
+      code === 'host_unknown'
+        ? 'App update transport failed.'
+        : 'The helper returned no final result.'
+    );
+  }
 }
 
 /** Follows one helper process line by line (exported for the fake-helper tests). */
@@ -156,10 +179,10 @@ export function runHelperProcess(
       child = spawn(binary, args, {
         stdio: ['pipe', 'pipe', 'ignore'],
         windowsHide: true,
-        env,
+        env: updaterEnvironment(env),
       });
     } catch {
-      reject(new Error('App update host failed.'));
+      reject(new HelperExecutionError(binary === 'ssh' ? 'host_unknown' : 'helper_invalid'));
       return;
     }
     let pending = '';
@@ -185,12 +208,17 @@ export function runHelperProcess(
         }
       } else if (Array.isArray(value.results)) final = text;
     };
-    const settle = (): void => {
+    const settle = (transportFailed = false): void => {
       if (settled) return;
       settled = true;
       if (forceKill) clearTimeout(forceKill);
       if (final !== null) resolve(final);
-      else reject(new Error('App update host failed.'));
+      else
+        reject(
+          new HelperExecutionError(
+            transportFailed && binary === 'ssh' ? 'host_unknown' : 'helper_invalid'
+          )
+        );
     };
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', (chunk: string) => {
@@ -207,11 +235,11 @@ export function runHelperProcess(
       if (pending.length > MAX_OUTPUT) pending = '';
     });
     child.stdin?.on('error', () => {});
-    child.on('error', settle);
-    child.on('close', () => {
+    child.on('error', () => settle(true));
+    child.on('close', (code) => {
       consume(pending);
       pending = '';
-      settle();
+      settle(code === 255);
     });
     control?.setCancel(() => {
       if (child.stdin && !child.stdin.destroyed) child.stdin.write('cancel\n');
@@ -293,21 +321,47 @@ const SSH_SYNC_OPTIONS = [
   '-o',
   'ConnectionAttempts=1',
 ];
-// macOS ships mkdir and chmod in /bin and tar in /usr/bin. (/usr/bin/chmod
-// does not exist there: the chain stopped before tar and every Mac run used
-// the stale Oct-2 helpers.) Ubuntu's merged /usr has the same three paths, so
-// the Mac and Nas1 share this extract. Each path is asserted in the tests.
-export const POSIX_EXTRACT =
-  '/bin/mkdir -p "$HOME/.ccs/app-updates" && /bin/chmod 700 "$HOME/.ccs/app-updates" && /usr/bin/tar -x -f - -C "$HOME/.ccs/app-updates"';
-/** The extract's name before Nas1 shared it; kept for the Mac sync tests. */
+/** Stage a complete immutable generation, then atomically replace only its launcher. */
+export function helperPublishScript(checksums: Record<string, string>): string {
+  return `import hashlib, json, os, pathlib, re, runpy, shutil, sys, tarfile, tempfile, uuid
+root = pathlib.Path.home() / '.ccs/app-updates'
+root.mkdir(parents=True, exist_ok=True, mode=0o700)
+expected = json.loads(${JSON.stringify(JSON.stringify(checksums))})
+if set(expected) != set(${JSON.stringify(HELPER_FILES)}) or not all(re.fullmatch('[a-f0-9]{64}', value) for value in expected.values()):
+    raise ValueError('Incomplete helper manifest')
+stage = pathlib.Path(tempfile.mkdtemp(prefix='.helpers-stage-', dir=root))
+launcher = root / ('.launcher-' + uuid.uuid4().hex)
+try:
+    with tarfile.open(fileobj=sys.stdin.buffer, mode='r|') as archive:
+        seen = set()
+        for entry in archive:
+            if entry.name not in expected or entry.name in seen or not entry.isfile() or entry.size > 16 * 1024 * 1024:
+                raise ValueError('Invalid helper archive')
+            seen.add(entry.name)
+            with archive.extractfile(entry) as source:
+                (stage / entry.name).write_bytes(source.read())
+    if seen != set(expected) or any(hashlib.sha256((stage / name).read_bytes()).hexdigest() != digest for name, digest in expected.items()):
+        raise ValueError('Helper checksum mismatch')
+    generation = 'helpers-' + uuid.uuid4().hex
+    os.rename(stage, root / generation)
+    launcher.write_text('# aac-helpers: ' + generation + '\\nimport pathlib, runpy, sys\\nroot = pathlib.Path(__file__).resolve().parent / ' + repr(generation) + '\\nsys.path.insert(0, str(root))\\nrunpy.run_path(str(root / "app_updates.py"), run_name="__main__")\\n', encoding='utf-8')
+    launcher.chmod(0o600)
+    os.replace(launcher, root / 'app_updates.py')
+finally:
+    shutil.rmtree(stage, ignore_errors=True)
+    launcher.unlink(missing_ok=True)
+`;
+}
+
+function pythonCommand(platform: RemotePlatform, script: string): string {
+  const encoded = Buffer.from(script).toString('base64');
+  const code = `import base64;exec(base64.b64decode("${encoded}"))`;
+  if (HOST_OS[platform] !== 'windows') return `/usr/bin/python3 -c '${code}'`;
+  const ps = `& python.exe -c '${code}'; exit $LASTEXITCODE`;
+  return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(ps, 'utf16le').toString('base64')}`;
+}
+export const POSIX_EXTRACT = pythonCommand('mac', helperPublishScript({}));
 export const MAC_EXTRACT = POSIX_EXTRACT;
-// The Windows sshd runs cmd.exe, so the extract script must travel as an
-// encoded powershell command; tar.exe reads the archive from the ssh stdin.
-const WINDOWS_EXTRACT = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(
-  "$ErrorActionPreference='Stop'; $d=[IO.Path]::Combine($HOME,'.ccs','app-updates'); " +
-    'New-Item -ItemType Directory -Force -Path $d | Out-Null; tar.exe -x -f - -C $d; exit $LASTEXITCODE',
-  'utf16le'
-).toString('base64')}`;
 
 /** Parses "<sha256>  <name-or-path>" lines; keyed by basename, hex lowercased. */
 export function parseDeployedChecksums(output: string): Record<string, string> {
@@ -347,14 +401,6 @@ function sshText(host: string, command: string): Promise<string> {
   });
 }
 
-const WINDOWS_HASH_QUERY = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(
-  "$ErrorActionPreference='SilentlyContinue'; $d=[IO.Path]::Combine($HOME,'.ccs','app-updates'); " +
-    `foreach($n in @(${HELPER_FILES.map((name) => `'${name}'`).join(',')})){ ` +
-    '$p=[IO.Path]::Combine($d,$n); if(Test-Path -LiteralPath $p -PathType Leaf){ ' +
-    "$h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash; if($h){ Write-Output ($h.ToLowerInvariant()+'  '+$n) } } }; exit 0",
-  'utf16le'
-).toString('base64')}`;
-
 function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promise<void> {
   // lib is ES2020, so the executor form is the available API here (as in runHost).
   return new Promise((resolve, reject) => {
@@ -380,10 +426,14 @@ function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promis
     }, HELPER_PUSH_TIMEOUT_MS);
     const fail = (error: Error): void => {
       clearTimeout(timer);
+      archive.kill('SIGKILL');
+      remote.kill('SIGKILL');
       reject(error);
     };
     archive.on('error', fail);
     remote.on('error', fail);
+    remote.stdin.on('error', fail);
+    archive.stdout.on('error', fail);
     // Both ends must succeed: a tar that stopped early sent a partial set.
     let open = 2;
     let failed = false;
@@ -402,26 +452,43 @@ function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promis
 
 /**
  * The fixed command that prints "<sha256>  <path>" for each deployed helper (a
- * missing file prints nothing). macOS ships shasum, Ubuntu (Nas1) ships
- * coreutils' sha256sum, and Windows hashes through PowerShell.
+ * missing file prints nothing). Python follows the selected helper generation
+ * on every remote host, including Windows through encoded PowerShell.
  */
 export function helperHashQuery(platform: RemotePlatform): string {
-  if (HOST_OS[platform] === 'windows') return WINDOWS_HASH_QUERY;
-  const tool = HOST_OS[platform] === 'mac' ? '/usr/bin/shasum -a 256' : '/usr/bin/sha256sum';
-  return `${tool} ${HELPER_FILES.map((name) => `"$HOME/.ccs/app-updates/${name}"`).join(' ')} 2>/dev/null; exit 0`;
+  return pythonCommand(
+    platform,
+    `import hashlib, pathlib, re
+root = pathlib.Path.home() / '.ccs/app-updates'
+try:
+    first = (root / 'app_updates.py').open(encoding='utf-8').readline(128).strip()
+    if re.fullmatch(r'# aac-helpers: helpers-[a-f0-9]{32}', first):
+        root = root / first.split()[-1]
+except OSError:
+    pass
+for name in ${JSON.stringify(HELPER_FILES)}:
+    try:
+        print(hashlib.sha256((root / name).read_bytes()).hexdigest() + '  ' + name)
+    except OSError:
+        pass
+`
+  );
 }
 
-/** The fixed command that unpacks the pushed helper archive on a remote host. */
-export function helperExtract(platform: RemotePlatform): string {
-  return HOST_OS[platform] === 'windows' ? WINDOWS_EXTRACT : POSIX_EXTRACT;
+/** The fixed command that verifies and publishes the pushed helper archive. */
+export function helperExtract(
+  platform: RemotePlatform,
+  checksums: Record<string, string> = {}
+): string {
+  return pythonCommand(platform, helperPublishScript(checksums));
 }
 
 /**
  * Aligns a remote host's deployed helpers with this build before invoking it.
  * Hosts (Mac, Windows and Nas1) keep their own copies under ~/.ccs/app-updates;
  * a stale copy would silently run old updater logic no matter what the server
- * ships. Checksum-gated, so an up-to-date host pays one hash query. Best
- * effort: a sync failure leaves the deployed helpers untouched and the run proceeds.
+ * ships. An up-to-date host pays one hash query. A failed sync leaves the
+ * previous generation intact and prevents this host run.
  */
 export async function syncRemoteHelpers(platform: UpdatePlatform): Promise<void> {
   if (platform === 'ubuntu') return;
@@ -431,9 +498,9 @@ export async function syncRemoteHelpers(platform: UpdatePlatform): Promise<void>
   try {
     deployed = await sshText(host, helperHashQuery(platform));
   } catch {
-    /* An unreachable host is reported by the run itself; treat it as stale. */
+    /* Retry through a verified push; if it fails this host never runs. */
   }
   const remote = parseDeployedChecksums(deployed);
   if (HELPER_FILES.every((name) => remote[name] === local[name])) return;
-  await pushHelpers(host, helperExtract(platform));
+  await pushHelpers(host, helperExtract(platform, local));
 }

@@ -15,6 +15,7 @@ import {
   appUpdateInvocation,
   helperExtract,
   helperHashQuery,
+  HELPER_FILES,
   parseDeployedChecksums,
   runHost,
   syncRemoteHelpers,
@@ -113,22 +114,14 @@ describe('Nas1 as the fourth update computer', () => {
     expect(script).toContain('& python.exe $helper --apply --platform windows');
   });
 
-  it('asks Nas1 for checksums with sha256sum and the Mac with shasum', () => {
-    const nas1 = helperHashQuery('nas1');
-    expect(nas1.startsWith('/usr/bin/sha256sum "$HOME/.ccs/app-updates/app_updates.py" ')).toBe(
-      true
-    );
-    expect(nas1.endsWith(' 2>/dev/null; exit 0')).toBe(true);
-    expect(nas1).not.toContain('shasum');
-    const mac = helperHashQuery('mac');
-    expect(mac.startsWith('/usr/bin/shasum -a 256 "$HOME/.ccs/app-updates/app_updates.py" ')).toBe(
-      true
-    );
-    // Both POSIX hosts list the same helper files.
-    expect(nas1.replace('/usr/bin/sha256sum', '')).toBe(mac.replace('/usr/bin/shasum -a 256', ''));
-    expect(helperHashQuery('windows')).toMatch(
-      /^powershell\.exe -NoProfile -NonInteractive -EncodedCommand [A-Za-z0-9+/=]+$/
-    );
+  it('hashes the selected immutable generation with the existing Python prerequisite', () => {
+    expect(helperHashQuery('nas1')).toBe(helperHashQuery('mac'));
+    const encoded = helperHashQuery('nas1').match(/b64decode\("([^" ]+)"\)/)![1];
+    const script = Buffer.from(encoded, 'base64').toString();
+    expect(script).toContain('hashlib.sha256');
+    expect(script).toContain('# aac-helpers: helpers-');
+    for (const name of HELPER_FILES) expect(script).toContain(name);
+    expect(helperHashQuery('windows')).toMatch(/^powershell\.exe -NoProfile /);
   });
 
   // The real sha256sum is only present where the tests run on Linux.
@@ -248,8 +241,6 @@ describe('a job saved before Nas1 existed', () => {
 describe('no account switching reaches Nas1', () => {
   const UPDATE_COMMAND =
     /^AAC_UPDATE_PROGRESS=1 \/usr\/bin\/python3 "\$HOME\/\.ccs\/app-updates\/app_updates\.py" --apply --platform ubuntu( --agy-reviewed '[0-9A-Za-z_.,-]{1,4096}')?$/;
-  const HASH_QUERY =
-    /^\/usr\/bin\/sha256sum( "\$HOME\/\.ccs\/app-updates\/[a-z0-9_]+\.(?:py|cjs)")+ 2>\/dev\/null; exit 0$/;
 
   /**
    * Asks `ssh` to identify itself the way runHost starts it (async spawn with an
@@ -302,58 +293,62 @@ describe('no account switching reaches Nas1', () => {
     return fs.readFileSync(log, 'utf8').split('\n').slice(0, -1);
   }
 
-  it('builds only fixed commands for the fixed alias, none that touch accounts', async () => {
-    const spawned = await sshArgvOfRealRun();
-    // What the real run spawned is exactly the invocation the server builds.
-    expect(spawned).toEqual(appUpdateInvocation('nas1').args);
+  (process.platform === 'win32' ? it.skip : it)(
+    'builds only fixed commands for the fixed alias, none that touch accounts',
+    async () => {
+      const spawned = await sshArgvOfRealRun();
+      // What the real run spawned is exactly the invocation the server builds.
+      expect(spawned).toEqual(appUpdateInvocation('nas1').args);
 
-    // Every ssh argv the server can build for Nas1: the update run (as built,
-    // without a review list, and as spawned), the hash query, the extract and
-    // the analytics helper. analytics-remote-nas1.test.ts runs the real
-    // analytics transport against the same forbidden words.
-    const commands: Array<{ name: string; argv: string[]; fixed: (command: string) => boolean }> = [
-      {
-        name: 'update run',
-        argv: appUpdateInvocation('nas1', '1.3.0,1.3.1').args,
-        fixed: (command) => UPDATE_COMMAND.test(command),
-      },
-      {
-        name: 'update run without a review list',
-        argv: appUpdateInvocation('nas1', '').args,
-        fixed: (command) => UPDATE_COMMAND.test(command),
-      },
-      {
-        name: 'update run as spawned',
-        argv: spawned,
-        fixed: (command) => UPDATE_COMMAND.test(command),
-      },
-      {
-        name: 'hash query',
-        argv: ['--', APP_UPDATE_SSH_HOSTS.nas1, helperHashQuery('nas1')],
-        fixed: (command) => HASH_QUERY.test(command),
-      },
-      {
-        name: 'extract',
-        argv: ['--', APP_UPDATE_SSH_HOSTS.nas1, helperExtract('nas1')],
-        fixed: (command) => command === POSIX_EXTRACT,
-      },
-      {
-        name: 'analytics helper',
-        argv: ['--', fixedAnalyticsRemoteAliases().nas1!, analyticsHelperCommand('nas1')],
-        // The POSIX form, not the encoded PowerShell one.
-        fixed: (command) =>
-          command === analyticsHelperCommand('nas1') &&
-          command.startsWith("/usr/bin/python3 -c 'import sys,json,io;"),
-      },
-    ];
-    const problems: string[] = [];
-    for (const { name, argv, fixed } of commands) {
-      if (argv.at(-3) !== '--' || argv.at(-2) !== 'nas1-agent')
-        problems.push(`${name}: destination`);
-      if (!fixed(argv.at(-1)!)) problems.push(`${name}: not one of the fixed commands`);
-      for (const word of forbiddenWordsIn(argv)) problems.push(`${name}: ${word}`);
+      // Every ssh argv the server can build for Nas1: the update run (as built,
+      // without a review list, and as spawned), the hash query, the extract and
+      // the analytics helper. analytics-remote-nas1.test.ts runs the real
+      // analytics transport against the same forbidden words.
+      const commands: Array<{ name: string; argv: string[]; fixed: (command: string) => boolean }> =
+        [
+          {
+            name: 'update run',
+            argv: appUpdateInvocation('nas1', '1.3.0,1.3.1').args,
+            fixed: (command) => UPDATE_COMMAND.test(command),
+          },
+          {
+            name: 'update run without a review list',
+            argv: appUpdateInvocation('nas1', '').args,
+            fixed: (command) => UPDATE_COMMAND.test(command),
+          },
+          {
+            name: 'update run as spawned',
+            argv: spawned,
+            fixed: (command) => UPDATE_COMMAND.test(command),
+          },
+          {
+            name: 'hash query',
+            argv: ['--', APP_UPDATE_SSH_HOSTS.nas1, helperHashQuery('nas1')],
+            fixed: (command) => command === helperHashQuery('nas1'),
+          },
+          {
+            name: 'extract',
+            argv: ['--', APP_UPDATE_SSH_HOSTS.nas1, helperExtract('nas1')],
+            fixed: (command) => command === POSIX_EXTRACT,
+          },
+          {
+            name: 'analytics helper',
+            argv: ['--', fixedAnalyticsRemoteAliases().nas1!, analyticsHelperCommand('nas1')],
+            // The POSIX form, not the encoded PowerShell one.
+            fixed: (command) =>
+              command === analyticsHelperCommand('nas1') &&
+              command.startsWith("/usr/bin/python3 -c 'import sys,json,io;"),
+          },
+        ];
+      const problems: string[] = [];
+      for (const { name, argv, fixed } of commands) {
+        if (argv.at(-3) !== '--' || argv.at(-2) !== 'nas1-agent')
+          problems.push(`${name}: destination`);
+        if (!fixed(argv.at(-1)!)) problems.push(`${name}: not one of the fixed commands`);
+        for (const word of forbiddenWordsIn(argv)) problems.push(`${name}: ${word}`);
+      }
+      expect(problems).toEqual([]);
+      expect(commands).toHaveLength(6);
     }
-    expect(problems).toEqual([]);
-    expect(commands).toHaveLength(6);
-  });
+  );
 });

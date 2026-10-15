@@ -110,6 +110,8 @@ export const MESSAGES = {
   restart_failed: 'The update finished, but an original instance could not restart.',
   host_unavailable: 'This computer could not complete the update request.',
   helper_invalid: 'The update helper returned an unsupported result.',
+  helper_sync_failed:
+    'The update helpers could not be synchronized; no apps were updated on this computer.',
   busy: 'Another app update is already running on this computer.',
   timeout: 'The update did not finish within its time limit.',
   signature_failed: 'The downloaded app did not pass its publisher verification.',

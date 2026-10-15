@@ -462,7 +462,10 @@ describe('fixed app update service', () => {
     first.start();
     const second = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
     expect(() => second.start()).toThrow(AppUpdateBusyError);
-    expect(fs.statSync(path.join(root, 'app-updates/dashboard-update.lock')).mode & 0o077).toBe(0);
+    if (process.platform !== 'win32')
+      expect(fs.statSync(path.join(root, 'app-updates/dashboard-update.lock')).mode & 0o077).toBe(
+        0
+      );
     release(payload());
     await finish(first);
     expect(second.getStatus().job!.state).toBe('completed');
@@ -525,7 +528,7 @@ describe('fixed app update service', () => {
     expect(service.getStatus().job!.state).toBe('failed');
     expect(calls).toBe(0);
   });
-  it('syncs deployed helpers before each remote run and survives a sync failure', async () => {
+  it('stops a host after a sync failure while the other hosts finish', async () => {
     const events: string[] = [];
     const service = new AppUpdateService({
       persist: false,
@@ -541,8 +544,8 @@ describe('fixed app update service', () => {
     service.start();
     await finish(service);
     // Hosts run side by side; each remote host still syncs before it runs.
-    expect(events).toHaveLength(7);
-    expect(events.indexOf('sync:mac')).toBeLessThan(events.indexOf('run:mac'));
+    expect(events).toHaveLength(6);
+    expect(events).not.toContain('run:mac');
     expect(events.indexOf('sync:windows')).toBeLessThan(events.indexOf('run:windows'));
     expect(events.indexOf('sync:nas1')).toBeLessThan(events.indexOf('run:nas1'));
     expect(events.filter((event) => event.startsWith('sync:')).sort()).toEqual([
@@ -551,7 +554,13 @@ describe('fixed app update service', () => {
       'sync:windows',
     ]);
     expect(events).not.toContain('sync:ubuntu');
-    expect(service.getStatus().job!.state).toBe('completed');
+    expect(service.getStatus().job!.state).toBe('failed');
+    expect(
+      service
+        .getStatus()
+        .job!.results.filter((row) => row.platform === 'mac')
+        .every((row) => row.message === MESSAGES.helper_sync_failed && row.status === 'failed')
+    ).toBe(true);
     expect(JSON.stringify(service.getStatus().job)).not.toContain('PRIVATE_SENTINEL');
   });
   it('parses deployed helper checksum lines from every host shell', () => {

@@ -11,7 +11,7 @@ import os from 'os';
 import path from 'path';
 import {
   HELPER_FILES,
-  MAC_EXTRACT,
+  helperPublishScript,
   helperArchiveArgs,
   localHelperChecksums,
 } from '../../../src/web-server/services/app-update-hosts';
@@ -64,19 +64,59 @@ describe('remote helper sync', () => {
       encoding: 'utf8',
     });
     expect(listing.status).toBe(0);
-    const names = listing.stdout.split('\n').filter(Boolean);
+    const names = listing.stdout.split(/\r?\n/).filter(Boolean);
     expect([...names].sort()).toEqual([...HELPER_FILES].sort());
 
     const home = temporary('aac-helper-home-');
-    const extracted = spawnSync('/bin/sh', ['-c', MAC_EXTRACT], {
-      input: archive.stdout,
-      env: { ...process.env, HOME: home },
-    });
+    const script = helperPublishScript(localHelperChecksums(root)).replace(
+      'pathlib.Path.home()',
+      `pathlib.Path(${JSON.stringify(home)})`
+    );
+    const extracted = spawnSync(
+      process.platform === 'win32' ? 'python' : 'python3',
+      ['-c', script],
+      { input: archive.stdout }
+    );
     expect(extracted.status).toBe(0);
-    const target = path.join(home, '.ccs', 'app-updates');
+    const state = path.join(home, '.ccs', 'app-updates');
+    const generation = fs
+      .readFileSync(path.join(state, 'app_updates.py'), 'utf8')
+      .split(/\r?\n/)[0]
+      .split(' ')
+      .at(-1)!;
+    const target = path.join(state, generation);
     expect(fs.readdirSync(target).sort()).toEqual([...HELPER_FILES].sort());
     for (const name of HELPER_FILES)
       expect(fs.readFileSync(path.join(target, name), 'utf8')).toBe(`fixture ${name}\n`);
+  });
+
+  it('keeps the previous launcher and state on an incomplete or corrupt archive', () => {
+    const root = fixtureRoot();
+    const home = temporary('aac-helper-publish-');
+    const state = path.join(home, '.ccs', 'app-updates');
+    fs.mkdirSync(state, { recursive: true });
+    fs.writeFileSync(path.join(state, 'app_updates.py'), 'previous launcher');
+    fs.writeFileSync(path.join(state, 'dashboard-update.lock'), 'live lock');
+    fs.writeFileSync(path.join(state, 'pending.json'), 'restart marker');
+    const hashes = localHelperChecksums(root);
+    fs.writeFileSync(path.join(root, 'scripts/app-updates/app_update_common.py'), 'corrupt');
+    const archive = spawnSync('tar', helperArchiveArgs(root));
+    const script = helperPublishScript(hashes).replace(
+      'pathlib.Path.home()',
+      `pathlib.Path(${JSON.stringify(home)})`
+    );
+    const run = (input: Buffer) =>
+      spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], { input });
+    expect(run(archive.stdout).status).not.toBe(0);
+    expect(run(archive.stdout.subarray(0, 512)).status).not.toBe(0);
+    expect(fs.readFileSync(path.join(state, 'app_updates.py'), 'utf8')).toBe('previous launcher');
+    expect(fs.readFileSync(path.join(state, 'dashboard-update.lock'), 'utf8')).toBe('live lock');
+    expect(fs.readFileSync(path.join(state, 'pending.json'), 'utf8')).toBe('restart marker');
+    expect(fs.readdirSync(state).sort()).toEqual([
+      'app_updates.py',
+      'dashboard-update.lock',
+      'pending.json',
+    ]);
   });
 
   it('hashes the runtime from the build output beside the source helpers', () => {

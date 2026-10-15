@@ -453,98 +453,81 @@ describe('fake helper processes', () => {
     );
     const t0 = Date.now();
     setTimeout(() => abort(), 50);
-    await expect(pending).rejects.toThrow('App update host failed.');
+    await expect(pending).rejects.toThrow('The helper returned no final result.');
     expect(Date.now() - t0).toBeLessThan(3000);
   });
 });
 
 describe('the real Python helper with fake apps', () => {
-  it('streams live rows and stops starting apps after a cancel on stdin', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-helper-stream-'));
-    directories.push(home);
-    // Every app is a fixture: detection, readiness and updates are replaced, so
-    // nothing on this computer is probed, stopped or updated.
-    const driver = path.join(home, 'driver.py');
-    fs.writeFileSync(
-      driver,
-      [
-        'import pathlib, sys, time',
-        `sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, '../../../scripts/app-updates'))})`,
-        'import app_updates as u, app_update_common as c',
-        "u.detect = lambda platform: {k: c.Install(k, platform, pathlib.Path('/fixture/' + k), '1.0.0') for k in c.APP_LABELS}",
-        'u.check_readiness = lambda install: None',
-        // The Antigravity review hold reads an official manifest; keep it offline here.
-        'u.antigravity_hold = lambda install, reviewed: None',
-        'def fake(install, deadline):',
-        '    time.sleep(0.3)',
-        "    return c.result(install.app_id, install.platform, 'current', '1.0.0', '1.0.0', 'native', attempted=True)",
-        'u.update_cli = fake',
-        'u.update_desktop = fake',
-        'u.update_t3 = lambda install, deadline, phase=None: fake(install, deadline)',
-        'u.update_zcode = lambda install, deadline, phase=None: fake(install, deadline)',
-        'u.update_adapters = lambda install, deadline, phase=None: fake(install, deadline)',
-        'pathlib.Path.home = classmethod(lambda cls: pathlib.Path(__import__("os").environ["CCS_HOME"]))',
-        "sys.argv = ['app_updates.py', '--apply', '--platform', 'ubuntu']",
-        'u.main()',
-      ].join('\n')
-    );
-    const events: Array<Record<string, unknown>> = [];
-    let cancel: () => void = () => {};
-    const control: HostRunControl = {
-      onEvent: (event) => {
-        events.push(event);
-        if (event.event === 'result' && events.filter((e) => e.event === 'result').length === 1)
-          cancel();
-      },
-      setCancel: (handler) => {
-        cancel = handler;
-      },
-      setAbort: () => {},
-    };
-    const t0 = Date.now();
-    const output = await runHelperProcess(
-      'python3',
-      [driver],
-      { ...process.env, CCS_HOME: home, AAC_UPDATE_PROGRESS: '1' },
-      control
-    );
-    const rows = JSON.parse(output).results as Array<{ status: string; messageCode: string }>;
-    expect(rows).toHaveLength(APPS.length);
-    expect(rows[0].status).toBe('current');
-    const skippedRows = rows.filter((value) => value.status === 'skipped');
-    // The app already started when the cancel landed may finish; nothing after it starts.
-    expect(skippedRows.length).toBeGreaterThanOrEqual(5);
-    expect(skippedRows.every((value) => value.messageCode === 'skipped_cancelled')).toBe(true);
-    expect(rows.every((value) => ['current', 'skipped'].includes(value.status))).toBe(true);
-    expect(Date.now() - t0).toBeLessThan(2000);
-    expect(events[0]).toEqual({ event: 'app', appId: null, phase: 'checking' });
-    expect(events.filter((event) => event.event === 'result')).toHaveLength(APPS.length);
-  });
+  (process.platform === 'win32' ? it.skip : it)(
+    'streams live rows and stops starting apps after a cancel on stdin',
+    async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-helper-stream-'));
+      directories.push(home);
+      // Every app is a fixture: detection, readiness and updates are replaced, so
+      // nothing on this computer is probed, stopped or updated.
+      const driver = path.join(home, 'driver.py');
+      fs.writeFileSync(
+        driver,
+        [
+          'import pathlib, sys, time',
+          `sys.path.insert(0, ${JSON.stringify(path.resolve(__dirname, '../../../scripts/app-updates'))})`,
+          'import app_updates as u, app_update_common as c',
+          "u.detect = lambda platform: {k: c.Install(k, platform, pathlib.Path('/fixture/' + k), '1.0.0') for k in c.APP_LABELS}",
+          'u.check_readiness = lambda install: None',
+          // The Antigravity review hold reads an official manifest; keep it offline here.
+          'u.antigravity_hold = lambda install, reviewed: None',
+          'def fake(install, deadline):',
+          '    time.sleep(0.3)',
+          "    return c.result(install.app_id, install.platform, 'current', '1.0.0', '1.0.0', 'native', attempted=True)",
+          'u.update_cli = fake',
+          'u.update_desktop = fake',
+          'u.update_t3 = lambda install, deadline, phase=None: fake(install, deadline)',
+          'u.update_zcode = lambda install, deadline, phase=None: fake(install, deadline)',
+          'u.update_adapters = lambda install, deadline, phase=None: fake(install, deadline)',
+          'pathlib.Path.home = classmethod(lambda cls: pathlib.Path(__import__("os").environ["CCS_HOME"]))',
+          "sys.argv = ['app_updates.py', '--apply', '--platform', 'ubuntu']",
+          'u.main()',
+        ].join('\n')
+      );
+      const events: Array<Record<string, unknown>> = [];
+      let cancel: () => void = () => {};
+      const control: HostRunControl = {
+        onEvent: (event) => {
+          events.push(event);
+          if (event.event === 'result' && events.filter((e) => e.event === 'result').length === 1)
+            cancel();
+        },
+        setCancel: (handler) => {
+          cancel = handler;
+        },
+        setAbort: () => {},
+      };
+      const t0 = Date.now();
+      const output = await runHelperProcess(
+        'python3',
+        [driver],
+        { ...process.env, CCS_HOME: home, AAC_UPDATE_PROGRESS: '1' },
+        control
+      );
+      const rows = JSON.parse(output).results as Array<{ status: string; messageCode: string }>;
+      expect(rows).toHaveLength(APPS.length);
+      expect(rows[0].status).toBe('current');
+      const skippedRows = rows.filter((value) => value.status === 'skipped');
+      // The app already started when the cancel landed may finish; nothing after it starts.
+      expect(skippedRows.length).toBeGreaterThanOrEqual(5);
+      expect(skippedRows.every((value) => value.messageCode === 'skipped_cancelled')).toBe(true);
+      expect(rows.every((value) => ['current', 'skipped'].includes(value.status))).toBe(true);
+      expect(Date.now() - t0).toBeLessThan(2000);
+      expect(events[0]).toEqual({ event: 'app', appId: null, phase: 'checking' });
+      expect(events.filter((event) => event.event === 'result')).toHaveLength(APPS.length);
+    }
+  );
 });
 
 describe('POSIX helper sync (Mac and Nas1)', () => {
-  it('uses only tools that exist on macOS and on Ubuntu', () => {
-    expect(POSIX_EXTRACT).not.toContain('/usr/bin/chmod');
-    const tools = POSIX_EXTRACT.match(/\/(?:usr\/)?bin\/[a-z]+/g);
-    expect(tools).toEqual(['/bin/mkdir', '/bin/chmod', '/usr/bin/tar']);
-    // The extract's old name stays exported and is the same command.
+  it('uses the existing Python prerequisite and keeps its legacy command alias', () => {
+    expect(POSIX_EXTRACT).toStartWith('/usr/bin/python3 -c ');
     expect(MAC_EXTRACT).toBe(POSIX_EXTRACT);
-  });
-
-  it('really extracts a helper archive into a private directory', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mac-extract-'));
-    const source = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-mac-source-'));
-    directories.push(home, source);
-    fs.writeFileSync(path.join(source, 'app_updates.py'), 'print("fixture")\n');
-    const archive = spawnSync('tar', ['-c', '-f', '-', '-C', source, 'app_updates.py']);
-    expect(archive.status).toBe(0);
-    const extracted = spawnSync('/bin/sh', ['-c', POSIX_EXTRACT], {
-      input: archive.stdout,
-      env: { ...process.env, HOME: home },
-    });
-    expect(extracted.status).toBe(0);
-    const target = path.join(home, '.ccs', 'app-updates');
-    expect(fs.readFileSync(path.join(target, 'app_updates.py'), 'utf8')).toBe('print("fixture")\n');
-    expect(fs.statSync(target).mode & 0o777).toBe(0o700);
   });
 });

@@ -36,7 +36,12 @@ export type {
   AppUpdateJob,
   AppUpdateHostProgress,
 } from './app-update-contract';
-import { runHost, syncRemoteHelpers, type HostRunControl } from './app-update-hosts';
+import {
+  runHost,
+  syncRemoteHelpers,
+  HelperExecutionError,
+  type HostRunControl,
+} from './app-update-hosts';
 export {
   antigravityReviewedArgument,
   appUpdateInvocation,
@@ -67,6 +72,7 @@ export interface AppUpdateDependencies {
   sync(platform: UpdatePlatform): Promise<void>;
   now(): number;
   id(): string;
+  identity(pid: number): string | null;
   ccsDir?: string;
   persist?: boolean;
   /** Hard bound for one computer's run; tests shorten it. */
@@ -121,6 +127,21 @@ function restoreHosts(value: unknown): Record<UpdatePlatform, AppUpdateHostProgr
   return hosts;
 }
 
+/** Same Linux identity as app_update_common.process_identity; null when it cannot be read. */
+export function processIdentity(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const start = stat
+      .slice(stat.lastIndexOf(')') + 2)
+      .trim()
+      .split(/\s+/)[19];
+    const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    return start && boot ? `${boot}:${start}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Starts work only in response to the explicit authenticated POST action. */
 export class AppUpdateService {
   private job: AppUpdateJob | null = null;
@@ -136,6 +157,7 @@ export class AppUpdateService {
       sync: async () => {},
       now: Date.now,
       id: randomUUID,
+      identity: processIdentity,
       persist: true,
       ...overrides,
     };
@@ -284,7 +306,7 @@ export class AppUpdateService {
         try {
           await this.deps.sync(platform);
         } catch {
-          /* Best effort: the deployed helpers stay as they are. */
+          throw new ConfigError('helper_sync_failed');
         }
         if (timedOut) return null;
         if (job.cancelRequested) return null;
@@ -295,7 +317,7 @@ export class AppUpdateService {
       const output = await Promise.race([work(), deadline]);
       if (output === null) this.fillMissing(job, platform, (appId) => skipped(platform, appId));
       else this.mergeFinal(job, platform, output);
-    } catch {
+    } catch (error) {
       if (timedOut) {
         try {
           abort?.();
@@ -305,7 +327,11 @@ export class AppUpdateService {
       }
       // Apps that reported keep their real rows; the rest never answered.
       this.fillMissing(job, platform, (appId) =>
-        unknown(platform, appId, timedOut ? 'host_timeout' : 'host_unknown')
+        error instanceof Error && error.message === 'helper_sync_failed'
+          ? failure(platform, appId, 'helper_sync_failed')
+          : error instanceof HelperExecutionError && error.code === 'helper_invalid'
+            ? failure(platform, appId, 'helper_invalid')
+            : unknown(platform, appId, timedOut ? 'host_timeout' : 'host_unknown')
       );
     } finally {
       if (timer) clearTimeout(timer);
@@ -366,7 +392,11 @@ export class AppUpdateService {
           (value) => value.platform === platform && value.appId === row.appId
         );
         if (index < 0) job.results.push(row);
-        else if (row.message !== MESSAGES.helper_invalid) job.results[index] = row;
+        else if (
+          row.message !== MESSAGES.helper_invalid &&
+          !(row.status === 'unknown' && row.message === MESSAGES.host_timeout)
+        )
+          job.results[index] = row;
       }
     }
     this.fillMissing(job, platform, (appId) => failure(platform, appId, 'helper_invalid'));
@@ -400,7 +430,10 @@ export class AppUpdateService {
     const create = (): void => {
       const descriptor = fs.openSync(lock, 'wx', 0o600);
       try {
-        fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid }));
+        fs.writeFileSync(
+          descriptor,
+          JSON.stringify({ pid: process.pid, identity: this.deps.identity(process.pid) })
+        );
       } finally {
         fs.closeSync(descriptor);
       }
@@ -449,9 +482,21 @@ export class AppUpdateService {
   private lockOwnerAlive(): boolean {
     try {
       const file = path.join(this.directory, 'dashboard-update.lock');
-      if (fs.statSync(file).size > 128) return true;
-      const owner = record(JSON.parse(fs.readFileSync(file, 'utf8')))?.pid;
-      if (typeof owner !== 'number' || !Number.isSafeInteger(owner) || owner < 1) return true;
+      const stat = fs.statSync(file);
+      const malformedAlive = (): boolean => this.deps.now() - stat.mtimeMs < 5000;
+      if (stat.size > 512) return malformedAlive();
+      let lock: Record<string, unknown> | undefined;
+      try {
+        lock = record(JSON.parse(fs.readFileSync(file, 'utf8')));
+      } catch {
+        return malformedAlive();
+      }
+      const owner = lock?.pid;
+      if (typeof owner !== 'number' || !Number.isSafeInteger(owner) || owner < 1)
+        return malformedAlive();
+      const identity = this.deps.identity(owner);
+      if (typeof lock?.identity === 'string' && identity !== null && lock.identity !== identity)
+        return false;
       try {
         process.kill(owner, 0);
         return true;
