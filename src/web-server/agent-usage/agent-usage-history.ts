@@ -98,7 +98,17 @@ export function recordsByIdentity(
   return result;
 }
 
-/** The window's readings, oldest first, one per sample time. */
+/**
+ * When a window was observed: a retained (`cached`) optional window keeps its own original sample
+ * time inside a newer record, so an old balance never counts as a fresh reading.
+ */
+function observedAt(window: DashboardAccountWindow, recordTime: string | null): number {
+  return Date.parse(
+    (window.status === 'cached' && window.sampledAt ? window.sampledAt : recordTime) ?? ''
+  );
+}
+
+/** The window's readings, oldest first, one per observation time. */
 export function windowReadings(
   records: AccountAnalyticsObservation[],
   window: DashboardAccountWindow,
@@ -107,18 +117,20 @@ export function windowReadings(
   const identity = analyticsWindowIdentity(window);
   const readings: Reading[] = [];
   for (const record of records) {
-    const at = Date.parse(record.sampledAt);
-    if (!Number.isFinite(at) || at < since) continue;
-    if (readings.length > 0 && readings[readings.length - 1].at === at) continue;
     const match = record.windows.find((entry) => analyticsWindowIdentity(entry) === identity);
     if (!match) continue;
+    const at = observedAt(match, record.sampledAt);
+    if (!Number.isFinite(at) || at < since) continue;
     const used = finite(match.usedPercent);
     const remaining = finite(match.remaining);
     if (used === null && remaining === null) continue;
     const reset = Date.parse(match.resetAt ?? '');
     readings.push({ at, used, remaining, resetAt: Number.isFinite(reset) ? reset : null });
   }
-  return readings;
+  // One reading per observation: a retained window repeats its time in later records.
+  const byTime = new Map<number, Reading>();
+  for (const reading of readings) if (!byTime.has(reading.at)) byTime.set(reading.at, reading);
+  return [...byTime.values()].sort((a, b) => a.at - b.at);
 }
 
 /** Both lists merged, oldest first, one reading per time (the later list wins a tie). */
@@ -131,7 +143,7 @@ export function mergeReadings(stored: Reading[], recent: Reading[]): Reading[] {
 /** The reading a dashboard row carries for one window, at its own sample time. */
 export function rowReading(row: DashboardAccount, window: DashboardAccountWindow): Reading | null {
   if (row.status !== 'ok' && row.status !== 'cached') return null;
-  const at = Date.parse(window.sampledAt ?? row.sampledAt ?? '');
+  const at = observedAt(window, row.sampledAt);
   const used = finite(window.usedPercent);
   const remaining = finite(window.remaining);
   if (!Number.isFinite(at) || (used === null && remaining === null)) return null;
@@ -139,8 +151,9 @@ export function rowReading(row: DashboardAccount, window: DashboardAccountWindow
   return { at, used, remaining, resetAt: Number.isFinite(reset) ? reset : null };
 }
 
-function seriesKey(accountId: string, window: DashboardAccountWindow): string {
-  return JSON.stringify([accountId, analyticsWindowIdentity(window)]);
+/** The same account identity the quota history uses (provider, id and email), plus the window. */
+function seriesKey(row: DashboardAccount, window: DashboardAccountWindow): string {
+  return JSON.stringify([accountAnalyticsIdentity(row), analyticsWindowIdentity(window)]);
 }
 
 /**
@@ -156,7 +169,7 @@ export class RecentReadings {
       for (const window of row.windows ?? []) {
         const reading = rowReading(row, window);
         if (!reading) continue;
-        const key = seriesKey(row.id, window);
+        const key = seriesKey(row, window);
         const list = this.series.get(key) ?? [];
         if (!list.some((entry) => entry.at === reading.at)) list.push(reading);
         list.sort((a, b) => a.at - b.at);
@@ -169,24 +182,26 @@ export class RecentReadings {
     }
   }
 
-  get(accountId: string, window: DashboardAccountWindow): Reading[] {
-    return this.series.get(seriesKey(accountId, window)) ?? [];
+  get(row: DashboardAccount, window: DashboardAccountWindow): Reading[] {
+    return this.series.get(seriesKey(row, window)) ?? [];
   }
 }
 
-/** The readings since the last reset: a fall in use or a moved reset time starts a new period. */
+/**
+ * The readings since the last reset. With a reset time on both readings, a moved reset time or a
+ * fall of more than a point starts a new period (a small fall is a rolling window easing). Without
+ * one, any fall starts a new period: a reset cannot be told from noise, so the pace never spans it.
+ */
 function currentPeriod(readings: Reading[]): Reading[] {
   const usable = readings.filter((reading) => reading.used !== null);
   let start = usable.length - 1;
   while (start > 0) {
     const earlier = usable[start - 1];
     const later = usable[start];
-    if ((earlier.used as number) > (later.used as number) + RESET_DROP_POINTS) break;
-    if (
-      earlier.resetAt !== null &&
-      later.resetAt !== null &&
-      Math.abs(earlier.resetAt - later.resetAt) > RESET_SHIFT_MS
-    )
+    const known = earlier.resetAt !== null && later.resetAt !== null;
+    const fall = (earlier.used as number) - (later.used as number);
+    if (fall > (known ? RESET_DROP_POINTS : 0)) break;
+    if (known && Math.abs((earlier.resetAt as number) - (later.resetAt as number)) > RESET_SHIFT_MS)
       break;
     start--;
   }
@@ -269,7 +284,7 @@ export function usageHistory(
     for (const window of row.windows ?? []) {
       const current = rowReading(row, window);
       const readings = mergeReadings(windowReadings(records, window, since), [
-        ...(recent?.get(row.id, window) ?? []),
+        ...(recent?.get(row, window) ?? []),
         ...(current ? [current] : []),
       ]).filter((reading) => reading.at >= since && reading.at <= now);
       if (finite(window.usedPercent) !== null && (window.kind ?? 'rate_limit') === 'rate_limit')

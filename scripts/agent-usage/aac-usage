@@ -51,13 +51,18 @@ def share_folder():
     return Path("/mnt/share/aac-usage")
 
 
+def own_folder():
+    """This reader's folder when it lives beside a snapshot (the published copy), else None."""
+    here = Path(os.path.realpath(__file__)).parent
+    return here if (here / "usage.json").exists() else None
+
+
 def snapshot_folder(explicit=None):
     if explicit:
         return Path(explicit)
     if os.environ.get("AAC_USAGE_DIR"):
         return Path(os.environ["AAC_USAGE_DIR"])
-    here = Path(os.path.realpath(__file__)).parent
-    return here if (here / "usage.json").exists() else share_folder()
+    return own_folder() or share_folder()
 
 
 def now_utc():
@@ -185,6 +190,10 @@ def window_line(window, now):
         burn = burn_text(window.get("burn"), now)
         if burn:
             parts.append(burn)
+    if window.get("cached"):
+        sampled = parse_time(window.get("sampledAt"))
+        parts.append("earlier reading from %s ago" % span((now - sampled).total_seconds())
+                     if sampled else "earlier reading, time unknown")
     label = window.get("label") or window.get("key")
     if window.get("pool"):
         label += " [%s]" % window["pool"]
@@ -264,11 +273,14 @@ def cmd_history(args):
 
 
 def run_cmd():
-    """How an agent on this computer runs this command."""
+    """How an agent on this computer runs this command: the published reader beside its snapshot."""
+    reader = (own_folder() or share_folder()) / "aac-usage"
     if os.name == "nt":
-        return ("python \\\\NAS\\share\\aac-usage\\aac-usage` (from Git Bash: "
-                "`python //NAS/share/aac-usage/aac-usage`)")
-    return "python3 %s`" % (share_folder() / "aac-usage")
+        text = str(reader)
+        if text.startswith("\\\\"):
+            return 'python "%s"` (from Git Bash: `python "%s"`)' % (text, text.replace("\\", "/"))
+        return 'python "%s"`' % text
+    return "python3 '%s'`" % str(reader).replace("'", "'\\''")
 
 
 def rules_text(kind="other"):
@@ -361,12 +373,13 @@ def main():
     parser.add_argument("--json", action="store_true", help="print JSON")
     sub = parser.add_subparsers(dest="cmd")
     history = sub.add_parser("history", help="the measured readings behind the burn rates")
-    history.add_argument("--provider")
-    history.add_argument("--account")
+    # SUPPRESS keeps a value given before the subcommand (aac-usage --dir X history).
+    history.add_argument("--provider", default=argparse.SUPPRESS)
+    history.add_argument("--account", default=argparse.SUPPRESS)
     history.add_argument("--window", help="only windows whose key contains this, e.g. five_hour")
     history.add_argument("--hours", type=float, default=24)
-    history.add_argument("--json", action="store_true")
-    history.add_argument("--dir")
+    history.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    history.add_argument("--dir", default=argparse.SUPPRESS)
     rules = sub.add_parser("rules", help="print the rules block")
     rules.add_argument("kind", nargs="?", default="other", choices=["claude", "other"])
     sub.add_parser("install-rules", help="write the rules block into this computer's agent rules files")

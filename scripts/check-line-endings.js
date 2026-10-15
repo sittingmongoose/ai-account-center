@@ -54,7 +54,8 @@ if (require.main === module) {
           .map((file) => `    ${file}\n`)
           .join('') +
         (found.length > 20 ? `    ... and ${found.length - 20} more\n` : '') +
-        '    Re-check out with LF (.gitattributes): git rm -r -q --cached . && git reset -q --hard\n'
+        '    Build from a fresh checkout of the same commit, which .gitattributes keeps LF:\n' +
+        '    git worktree add <new folder> HEAD   (this working tree and its edits stay as they are)\n'
     );
     process.exit(1);
   }

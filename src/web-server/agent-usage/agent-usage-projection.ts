@@ -35,6 +35,12 @@ export interface AgentUsageWindow {
   /** The provider's shared model pool, when it names one (for example Cursor's Grok pool). */
   pool: string | null;
   modelIds: string[];
+  /**
+   * When this window was read. An optional window the provider did not report again (a retained
+   * balance) keeps its own older time and `cached: true`; every other window has the account's.
+   */
+  sampledAt: string | null;
+  cached: boolean;
 }
 
 export interface AgentUsageAccount {
@@ -162,6 +168,8 @@ function windowOf(
     unlimited: typeof window.unlimited === 'boolean' ? window.unlimited : null,
     pool: text(window.poolLabel, 80),
     modelIds: models,
+    sampledAt: window.status === 'cached' ? iso(window.sampledAt) : accountSampledAt,
+    cached: window.status === 'cached',
   };
 }
 

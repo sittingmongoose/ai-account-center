@@ -90,6 +90,26 @@ class ReaderTests(unittest.TestCase):
         self.assertIn("codex Gmail (one@example.com) 5-hour:", text)
         self.assertIn("70%", text)
 
+    def test_options_before_the_history_command_are_kept(self):
+        # run_reader passes --dir before the subcommand; the history parser must not reset it.
+        data = json.loads(self.run_reader("--provider", "codex", "--json", "history"))
+        self.assertEqual([entry["accountId"] for entry in data["series"]], ["codex:gmail"])
+
+    def test_a_retained_window_says_how_old_it_is(self):
+        generated = aac.now_utc()
+        data = snapshot(generated)
+        data["accounts"][0]["windows"].append({
+            "key": "prepaid", "label": "Prepaid balance", "kind": "balance", "usedPercent": None,
+            "remainingPercent": None, "resetAt": None, "resetPassed": False, "remaining": 12, "unit": "USD",
+            "used": None, "limit": None, "cached": True, "sampledAt": iso(generated - dt.timedelta(hours=2)),
+            "burn": None})
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
+                contextlib.redirect_stdout(out):
+            aac.main()
+        self.assertIn("Prepaid balance: 12 USD left; earlier reading from 2h 0m ago", out.getvalue())
+
 
 class RulesTests(unittest.TestCase):
     def setUp(self):
@@ -131,6 +151,13 @@ class RulesTests(unittest.TestCase):
         self.assertTrue(all(ord(character) < 128 for character in text))
         self.assertIn("aac-usage", text)
         self.assertIn("BEFORE the reset", text)
+
+    def test_rules_name_the_reader_beside_its_snapshot(self):
+        folder = self.home / "custom-share" / "aac-usage"
+        with mock.patch.object(aac, "own_folder", return_value=folder):
+            self.assertIn(str(folder / "aac-usage"), aac.rules_text())
+        with mock.patch.object(aac, "own_folder", return_value=None):
+            self.assertIn(str(aac.share_folder() / "aac-usage"), aac.rules_text())
 
 
 if __name__ == "__main__":

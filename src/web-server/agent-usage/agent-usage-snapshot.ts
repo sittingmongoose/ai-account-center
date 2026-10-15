@@ -19,6 +19,7 @@
  * file paths and raw provider answers never reach the folder. One write runs at a time: on a hard
  * network mount a stalled file server holds one write, never the dashboard.
  */
+import { randomBytes } from 'crypto';
 import fs from 'fs';
 import { ValidationError } from '../../errors/error-types';
 import path from 'path';
@@ -224,6 +225,12 @@ function windowText(window: SnapshotWindow, now: number): string {
     if (burn) parts.push(burn);
   }
   if (parts.length === 0) parts.push('no number reported');
+  if (window.cached)
+    parts.push(
+      window.sampledAt
+        ? `earlier reading from ${span((now - Date.parse(window.sampledAt)) / 1000)} ago`
+        : 'earlier reading, time unknown'
+    );
   const pool = window.pool ? ` [${window.pool}]` : '';
   return `${window.label}${pool}: ${parts.join(', ')}`;
 }
@@ -286,16 +293,32 @@ export function renderSnapshotMarkdown(snapshot: AgentUsageSnapshot): string {
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-async function writeAtomically(
+/**
+ * Writes `name` by renaming a new temporary file over it. The folder is shared, so the temporary
+ * name is unpredictable and created exclusively (`wx`): a link or file planted under that name makes
+ * the write fail instead of being followed and truncated. The rename replaces a planted link
+ * itself, never its target.
+ */
+export async function writeAtomically(
   directory: string,
   name: string,
   body: string,
   mode = 0o644
 ): Promise<void> {
   const target = path.join(directory, name);
-  const temporary = path.join(directory, `.${name}.${process.pid}.tmp`);
-  await fs.promises.writeFile(temporary, body, { mode });
-  await fs.promises.rename(temporary, target);
+  const temporary = path.join(directory, `.${name}.${randomBytes(12).toString('hex')}.tmp`);
+  const handle = await fs.promises.open(temporary, 'wx', mode);
+  try {
+    try {
+      await handle.writeFile(body);
+    } finally {
+      await handle.close();
+    }
+    await fs.promises.rename(temporary, target);
+  } catch (error) {
+    await fs.promises.rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 /**

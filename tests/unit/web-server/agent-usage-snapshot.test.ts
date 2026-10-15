@@ -32,7 +32,9 @@ import { handleUsageSnapshotCommand } from '../../../src/commands/usage-snapshot
 import {
   CLIENT_FILES,
   clientSourceFolder,
+  writeAtomically,
 } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import { windowReadings } from '../../../src/web-server/agent-usage/agent-usage-history';
 
 const SENTINEL = 'sentinel-secret-value-7d1e';
 const NOW = Date.parse('2026-10-15T12:00:00.000Z');
@@ -198,6 +200,74 @@ describe('agent usage burn rate', () => {
     expect(flat.runsOutBeforeReset).toBeNull();
   });
 
+  it('ends a period on any fall when no reset time is reported, so a 1-point reset is not crossed', () => {
+    // 1% before an unreported reset, 0% after it, then 2%: only the new period counts.
+    const burn = burnRate([reading(5, 1), reading(4, 0), reading(0, 2)], null);
+    expect(burn.periodStartedAt).toBe(new Date(NOW - 4 * MINUTE).toISOString());
+    expect(burn.last5Minutes).toBe(30);
+    // With the same reset time on both readings, a one-point ease of a rolling window is not a reset.
+    const reset = NOW + 120 * MINUTE;
+    const eased = burnRate(
+      [reading(5, 20, reset), reading(4, 19, reset), reading(0, 25, reset)],
+      null
+    );
+    expect(eased.periodStartedAt).toBe(new Date(NOW - 5 * MINUTE).toISOString());
+  });
+
+  it('keeps one-minute readings apart for two logins that reuse one dashboard id', () => {
+    const recent = new RecentReadings();
+    const first = account({
+      email: 'first@example.com',
+      sampledAt: new Date(NOW - 5 * MINUTE).toISOString(),
+      windows: [window({ usedPercent: 10 })],
+    });
+    const second = account({ email: 'second@example.com', windows: [window({ usedPercent: 90 })] });
+    recent.add([first], NOW - 5 * MINUTE);
+    recent.add([second], NOW);
+    expect(recent.get(second, second.windows[0]).map((entry) => entry.used)).toEqual([90]);
+    const { rates } = usageHistory(
+      [second],
+      projectAgentUsage([second], { now: NOW }).accounts,
+      null,
+      NOW,
+      recent
+    );
+    expect(rates.get('codex:gmail')?.get('five_hour')?.pace).toBeNull();
+  });
+
+  it('keeps a retained optional window at its own sample time, never as a fresh reading', () => {
+    const balance = window({
+      key: 'prepaid',
+      label: 'Prepaid balance',
+      kind: 'balance',
+      usedPercent: null,
+      remainingPercent: null,
+      resetAt: null,
+      remaining: 12,
+      unit: 'USD',
+      status: 'cached',
+      sampledAt: '2026-10-15T11:00:00.000Z',
+    });
+    const row = account({ windows: [window(), balance] });
+    const records = [10, 5, 0].map((minutesAgo) => ({
+      ...record(row, minutesAgo, 40),
+      windows: [window(), balance],
+    }));
+    expect(
+      windowReadings(records, balance, 0).map((entry) => new Date(entry.at).toISOString())
+    ).toEqual(['2026-10-15T11:00:00.000Z']);
+    const published = projectAgentUsage([row], { now: NOW }).accounts[0].windows[1];
+    expect(published).toMatchObject({ cached: true, sampledAt: '2026-10-15T11:00:00.000Z' });
+    expect(projectAgentUsage([row], { now: NOW }).accounts[0].windows[0]).toMatchObject({
+      cached: false,
+      sampledAt: '2026-10-15T12:00:00.000Z',
+    });
+    const { snapshot } = buildSnapshotFiles({ accounts: [row], history: null, sampledAt: NOW }, 60);
+    expect(renderSnapshotMarkdown(snapshot)).toContain(
+      'Prepaid balance: 12 USD left, earlier reading from 1h 0m ago'
+    );
+  });
+
   it('gives no rate without two readings far enough apart', () => {
     const burn = burnRate([reading(1, 30), reading(0, 31)], null);
     expect(burn.pace).toBeNull();
@@ -217,7 +287,7 @@ describe('agent usage burn rate', () => {
         ],
         NOW - minute * MINUTE
       );
-    const readings = recent.get(row.id, row.windows[0]);
+    const readings = recent.get(row, row.windows[0]);
     expect(readings[0].at).toBeGreaterThanOrEqual(NOW - 65 * MINUTE);
     expect(readings.at(-1)?.used).toBe(45);
     // Stored history has only the jump; the ring adds the flat minute before it.
@@ -380,6 +450,23 @@ describe('agent usage snapshot publisher', () => {
       },
     });
     expect(await failing(event)).toBe(false);
+  });
+
+  it('replaces a planted link at the target name without writing through it', async () => {
+    const folder = path.join(home, 'share');
+    fs.mkdirSync(folder);
+    const victim = path.join(home, 'victim.txt');
+    fs.writeFileSync(victim, 'keep me');
+    try {
+      fs.symlinkSync(victim, path.join(folder, SNAPSHOT_JSON));
+    } catch {
+      return; // This Windows session cannot create symbolic links.
+    }
+    await writeAtomically(folder, SNAPSHOT_JSON, '{}');
+    expect(fs.readFileSync(victim, 'utf8')).toBe('keep me');
+    expect(fs.lstatSync(path.join(folder, SNAPSHOT_JSON)).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(folder, SNAPSHOT_JSON), 'utf8')).toBe('{}');
+    expect(fs.readdirSync(folder).filter((name) => name.endsWith('.tmp'))).toEqual([]);
   });
 
   it('refuses a relative or climbing folder', async () => {
