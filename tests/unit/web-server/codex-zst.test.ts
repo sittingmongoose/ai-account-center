@@ -131,6 +131,72 @@ describe('Codex compressed rollouts', () => {
     expect((await collect()).scan?.readBytes).toBe(0);
   });
 
+  it('converges on a large single-frame decoded rollout over bounded byte-capped passes', async () => {
+    const padding = JSON.stringify({ type: 'response_item', payload: 'x'.repeat(8192) }) + '\n';
+    const body = rollout(1) + padding.repeat(4096) + JSON.stringify(record(3)) + '\n';
+    fs.writeFileSync(file, body);
+    const plain = await collect({ cacheDir: path.join(root, 'plain-large-cache') });
+    compress(body);
+    fs.unlinkSync(file);
+    expect(fs.statSync(`${file}.zst`).size).toBeLessThan(64 * 1024);
+    let data: Awaited<ReturnType<typeof collect>> | undefined;
+    let passes = 0;
+    for (; passes < 10; passes++) {
+      data = await collect({ maxBytesPerFile: 4 * 1024 * 1024 });
+      expect(data.scan?.detail).toBeUndefined();
+      expect(data.scan?.readBytes).toBeGreaterThan(0);
+      if (data.scan?.complete) break;
+    }
+    expect(passes).toBeLessThan(10);
+    expect(data?.scan?.complete).toBe(true);
+    expect(data?.hourly).toEqual(plain.hourly);
+    expect(data?.session).toEqual(plain.session);
+    expect(data?.eventCount).toBe(2);
+    expect((await collect()).scan?.readBytes).toBe(0);
+  });
+
+  it('reports a replay-only deadline cut, persists it, and retries that file first', async () => {
+    compress(rollout(12000));
+    const partial = await collect({ maxBytesPerFile: 2 * 1024 * 1024 });
+    expect(partial.scan?.complete).toBe(false);
+    expect(partial.scan?.readBytes).toBeGreaterThan(1024 * 1024);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let calls = 0;
+      const clock = spyOn(Date, 'now').mockImplementation(() => (++calls > 50 ? NOW + 2000 : NOW));
+      let stalled: Awaited<ReturnType<typeof collect>>;
+      try {
+        stalled = await collect({ budgetMs: 1000 });
+      } finally {
+        clock.mockRestore();
+      }
+      expect(stalled.scan).toMatchObject({ complete: false, readBytes: 0 });
+      expect(stalled.scan?.detail).toContain('1 compressed Codex log is too large to finish');
+      expect(stalled.scan?.detail).toContain('decoded prefix exhausted the read budget');
+      expect(stalled.hourly).toEqual(partial.hourly);
+      expect(stalled.eventCount).toBe(partial.eventCount);
+    }
+    const other = `${file.replace(UUID, 'abcdef01-1234-1234-1234-0123456789ab')}.zst`;
+    fs.writeFileSync(other, zstdCompressSync(Buffer.from(rollout().replaceAll(UUID, 'other'))));
+    fs.utimesSync(other, new Date(Date.now() + 1000), new Date(Date.now() + 1000));
+    const opened: string[] = [];
+    const createReadStream = fs.createReadStream;
+    const reads = spyOn(fs, 'createReadStream').mockImplementation((filename, options) => {
+      opened.push(String(filename));
+      return createReadStream(filename, options);
+    });
+    let finished: Awaited<ReturnType<typeof collect>>;
+    try {
+      finished = await collect();
+    } finally {
+      reads.mockRestore();
+    }
+    expect(opened[0]).toBe(`${file}.zst`);
+    expect(finished.scan?.complete).toBe(true);
+    expect(finished.scan?.detail).toBeUndefined();
+    expect(finished.eventCount).toBe(12003);
+    expect(finished.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(960240);
+  });
+
   it('applies the mtime margin before opening a decoder', async () => {
     fs.writeFileSync(`${file}.zst`, 'invalid zstd bytes');
     const cutoff = NOW - 31 * 86400000;
