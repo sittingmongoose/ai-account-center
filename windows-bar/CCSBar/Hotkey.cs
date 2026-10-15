@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Interop;
 
 namespace CCSBar;
@@ -65,9 +67,9 @@ public static class StartupTask
     public const string Name = "AI Account Center";
 
     /// <summary>True or false when the task exists; null when it does not or cannot be read.</summary>
-    public static bool? Enabled()
+    public static async Task<bool?> Enabled()
     {
-        var output = Run("/Query", "/TN", Name, "/XML");
+        var output = await Run("/Query", "/TN", Name, "/XML");
         if (output is null) return null;
         // Only <Settings><Enabled> is the task's state (triggers carry their own); it is omitted when true.
         var settings = output.IndexOf("<Settings>", StringComparison.Ordinal);
@@ -78,20 +80,27 @@ public static class StartupTask
         return !output.AsSpan(start + 9).TrimStart().StartsWith("false", StringComparison.OrdinalIgnoreCase);
     }
 
-    public static bool Set(bool enabled) => Run("/Change", "/TN", Name, enabled ? "/ENABLE" : "/DISABLE") is not null;
+    public static async Task<bool> Set(bool enabled) => await Run("/Change", "/TN", Name, enabled ? "/ENABLE" : "/DISABLE") is not null;
 
-    private static string? Run(params string[] arguments)
+    private static Task<string?> Run(params string[] arguments)
+    {
+        var info = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "schtasks.exe")) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var argument in arguments) info.ArgumentList.Add(argument);
+        return ReadProcess(info, TimeSpan.FromSeconds(10));
+    }
+
+    internal static Task<string?> ReadProcess(ProcessStartInfo info, TimeSpan timeout) => Task.Run(async () =>
     {
         try
         {
-            var info = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "schtasks.exe")) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (var argument in arguments) info.ArgumentList.Add(argument);
+            using var deadline = new CancellationTokenSource(timeout);
             using var process = Process.Start(info)!;
-            var output = process.StandardOutput.ReadToEnd();
-            process.StandardError.ReadToEnd();
-            if (!process.WaitForExit(10_000)) { try { process.Kill(); } catch { } return null; }
-            return process.ExitCode == 0 ? output : null;
+            var output = process.StandardOutput.ReadToEndAsync(deadline.Token);
+            var errors = process.StandardError.ReadToEndAsync(deadline.Token);
+            try { await Task.WhenAll(output, errors, process.WaitForExitAsync(deadline.Token)).WaitAsync(deadline.Token); }
+            catch (OperationCanceledException) { try { process.Kill(entireProcessTree: true); } catch { } return null; }
+            return process.ExitCode == 0 ? await output : null;
         }
         catch { return null; }
-    }
+    });
 }

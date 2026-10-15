@@ -161,13 +161,21 @@ public partial class MainWindow
         siCancel?.Cancel();
         siCancel = new CancellationTokenSource();
         var run = ++siRun;
-        siTask = Guard(flow(run, siCancel.Token));
+        siTask = Guard(flow(run, siCancel.Token), run);
     }
 
-    private static async Task Guard(Task flow)
+    private async Task Guard(Task flow, int run)
     {
         try { await flow; }
         catch (OperationCanceledException) { }
+        catch (NotLocalNetworkException)
+        {
+            if (!Alive(run)) return;
+            SignIn.SetBusy(false);
+            SignIn.Model.Tried = SignIn.Model.Verified;
+            SignIn.Model.Peer = null;
+            SignIn.Apply(SignInState.NotLocal);
+        }
     }
 
     private bool Alive(int run) => run == siRun && signInVisible;
@@ -275,6 +283,7 @@ public partial class MainWindow
         var view = SignIn;
         siLegacy = !check.SupportsPairing;
         siSupportsPairing = check.SupportsPairing;
+        view.Model.SetupCodeRequired = check.SetupCodeRequired != false;
         view.Model.Legacy = siLegacy;
         // Pairing turned off: a tray without a device key may sign in with its password instead (never a paired one).
         view.Model.PasswordFallback = !view.Model.Repair && client is not { Paired: true };
@@ -613,7 +622,7 @@ public partial class MainWindow
         var view = SignIn;
         var username = view.User.Value.Trim();
         var password = view.Pass.Value;
-        var problem = SetupProblem(username, password, view.Confirm.Value, view.Code.Value.Trim());
+        var problem = SetupProblem(username, password, view.Confirm.Value, view.Code.Value.Trim(), view.Model.SetupCodeRequired);
         if (problem is { } bad) { view.Fail(bad.Field, bad.Text); return; }
         var origin = new Uri(view.Model.Verified + "/");
         view.SetBusy(true);
@@ -661,12 +670,13 @@ public partial class MainWindow
     }
 
     /// <summary>The concept's setup validation, before anything is sent.</summary>
-    internal static (string Field, string Text)? SetupProblem(string username, string password, string confirm, string code)
+    internal static (string Field, string Text)? SetupProblem(string username, string password, string confirm, string code, bool codeRequired = true)
     {
         if (!System.Text.RegularExpressions.Regex.IsMatch(username, "^[A-Za-z][A-Za-z0-9_-]{2,63}$")) return ("user", "Start the username with a letter; use 3 or more letters, numbers, - or _.");
         if (new StringInfo(password).LengthInTextElements < 8) return ("pass", "Use at least 8 characters for the password.");
         if (System.Text.Encoding.UTF8.GetByteCount(password) > 72) return ("pass", "Keep the password within 72 bytes.");
         if (confirm != password) return ("confirm", "The confirmation doesn't match the password.");
+        if (!codeRequired) return null;
         if (code.Length == 0) return ("code", "Enter the setup code from the server's terminal.");
         if (code.Count(char.IsAsciiLetterOrDigit) != 8 || code.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-')) return ("code", "That setup code isn't right. It has 8 letters and digits.");
         return null;
@@ -746,6 +756,12 @@ public partial class MainWindow
         using (var api = new AuthApi(origin, TimeSpan.FromSeconds(20)))
         {
             try { answer = await api.Pair(legacy.Username, legacy.Password!, Environment.MachineName, lastInstallId = InstallIdFor(), AppVersion); }
+            catch (NotLocalNetworkException)
+            {
+                SecureStore.DeleteRollback(path);
+                if (run == siRun) { view.SetBusy(false); view.Model.Tried = origin.GetLeftPart(UriPartial.Authority); view.Apply(SignInState.NotLocal); }
+                return;
+            }
             catch (DashboardReachException) { SecureStore.DeleteRollback(path); if (run == siRun) CloseSignIn(); return; }
         }
         if (PairedDevice.From(answer) is not { } device)

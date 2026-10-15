@@ -41,6 +41,7 @@ public sealed class SignInModel
     /// <summary>Sign in with the password the old way and keep it with DPAPI (version 1): a dashboard without pairing,
     /// or the password option while pairing is turned off.</summary>
     public bool Legacy { get; set; }
+    public bool SetupCodeRequired { get; set; } = true;
     /// <summary>Pairing is turned off and this tray holds no device key: the password sign-in is offered instead.</summary>
     public bool PasswordFallback { get; set; }
     /// <summary>A Re-pair's pair request got no answer and the current key did not answer either, so the dashboard may
@@ -123,6 +124,8 @@ public sealed class SignInView : Grid
     private string? msgShown;
     private bool capsShown;
 
+    private readonly TextBlock codeHint;
+
     public SignInView()
     {
         Background = Theme.Brush("Panel");
@@ -180,7 +183,7 @@ public sealed class SignInView : Grid
         Code = new SiField("code", "Setup code", placeholderText: "XXXX-XXXX", mono: true);
         Code.Aside.Text = "printed in the server's terminal";
         setup.Children.Add(Code);
-        var codeHint = Hint();
+        codeHint = Hint();
         codeHint.Inlines.Add(new Run("Also saved on the server in ")); codeHint.Inlines.Add(Mono("~/.ccs/auth/setup-code"));
         setup.Children.Add(codeHint);
         setupRegion = new Collapsible(setup, ContentWidth);
@@ -426,7 +429,7 @@ public sealed class SignInView : Grid
                 sp.Title = "Set up sign-in";
                 sp.Lede = () => Lede(Bold(HostOf(Model.Verified)), new Run(" has no sign-in yet. Choose one here; your browser and both trays use it."));
                 sp.Creds = true; sp.Setup = true; sp.Primary = new PrimarySpec("Create sign-in and pair", "Creating sign-in", "Paired");
-                sp.Foot = ("terminal", "The setup code proves you can reach the dashboard machine. It works once and expires after 60 minutes.");
+                if (Model.SetupCodeRequired) sp.Foot = ("terminal", "The setup code proves you can reach the dashboard machine. It works once and expires after 60 minutes.");
                 break;
             case SignInState.Pairing:
                 sp.Title = "Pairing this PC";
@@ -560,6 +563,7 @@ public sealed class SignInView : Grid
         var repeat = state == Model.State && !instant;
         Model.State = state;
         var sp = SpecFor(state);
+        Code.Visibility = codeHint.Visibility = Model.SetupCodeRequired ? Visibility.Visible : Visibility.Collapsed;
         countdown.Stop();
         SwapText(title, sp.Title, instant);
         SwapContent(lede, sp.Lede?.Invoke(), instant);

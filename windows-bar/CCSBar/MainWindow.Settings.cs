@@ -68,6 +68,26 @@ public partial class MainWindow
         });
     }
 
+    private async Task ReadStartup(Border card)
+    {
+        var startup = await StartupTask.Enabled();
+        if (!SettingsPanel.Children.Contains(card)) return;
+        FrameworkElement control;
+        if (startup is bool on)
+        {
+            var toggle = new ToggleSwitch(on, "");
+            toggle.Toggled += async requested =>
+            {
+                toggle.SetEnabled(false);
+                try { if (await StartupTask.Set(requested)) toggle.SetOn(requested); }
+                finally { toggle.SetEnabled(true); }
+            };
+            control = toggle;
+        }
+        else control = Ui.Text("Install with Install.ps1", 12, "Ink3");
+        card.Child = Row("Start with Windows", startup is null ? "The logon task is created by the installer." : "Opens in the notification area when you sign in.", control);
+    }
+
     private void RenderSettings()
     {
         SettingsPanel.Children.Clear();
@@ -93,16 +113,9 @@ public partial class MainWindow
         SettingsPanel.Children.Add(SettingCard(ConnectionCard()));
 
         // Start with Windows: the installer's logon task.
-        var startup = StartupTask.Enabled();
-        FrameworkElement startupControl;
-        if (startup is bool startupOn)
-        {
-            var toggle = new ToggleSwitch(startupOn, "");
-            toggle.Toggled += requested => { if (StartupTask.Set(requested)) toggle.SetOn(requested); };
-            startupControl = toggle;
-        }
-        else startupControl = Ui.Text("Install with Install.ps1", 12, "Ink3");
-        SettingsPanel.Children.Add(SettingCard(Row("Start with Windows", startup is null ? "The logon task is created by the installer." : "Opens in the notification area when you sign in.", startupControl)));
+        var startupCard = SettingCard(Row("Start with Windows", "Checking the logon task.", Ui.Text("Checking", 12, "Ink3")));
+        SettingsPanel.Children.Add(startupCard);
+        _ = ReadStartup(startupCard);
 
         // Keyboard shortcut: optional global hotkey.
         var hotkeyToggle = new ToggleSwitch(preferences.Hotkey, "");
@@ -141,9 +154,8 @@ public partial class MainWindow
             kv.Children.Add(Fact("Usage refresh", "Every " + (refresh < 120 ? refresh + " s" : Math.Round(refresh / 60.0) + " min"), true).Row);
             var codex = dashboard.CodexAutoSwitch;
             kv.Children.Add(Fact("Codex auto-switch", $"{(codex.Enabled ? "On" : "Off")} · switches at {Formatting.Percent(100 - codex.ThresholdPercent)} used · checks every {codex.PollIntervalSeconds} s").Row);
-            var agAccounts = dashboard.Accounts.Where(account => account.Provider == "antigravity").ToArray();
             var ag = dashboard.AntigravityAutoSwitch;
-            kv.Children.Add(Fact("Antigravity auto-switch", ag is null ? "Not reported by this server" : !AntigravitySwitchable(agAccounts) ? "Starts with a second signed-in account" : $"{(ag.Enabled ? "On" : "Off")} · switches at {Formatting.Percent(ag.ThresholdUsedPercent)} used").Row);
+            kv.Children.Add(Fact("Antigravity auto-switch", ag is null ? "Not reported by this server" : $"{(ag.Enabled ? "On" : "Off")} · switches at {Formatting.Percent(ag.ThresholdUsedPercent)} used").Row);
             // The trays follow only "Show in tray"; "Show on dashboard" is the dashboard's own switch.
             var hidden = dashboard.Hidden.Select(provider => Formatting.ProviderName(provider)).ToList();
             var oneByOne = dashboard.TrayHiddenAccountCount;

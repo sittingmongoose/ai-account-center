@@ -62,7 +62,8 @@ public static class ClaudeOpenFlow
             ? $"Copying history {confirmed} of {total}"
             : "Copying history",
         "opening" => "Opening",
-        "opened" => "Opened",
+        "opened" => operation.ConfirmedCount is int copied && operation.TotalCount is int totalCount && copied >= 0 && copied < totalCount
+            ? $"Opened · copied {copied} of {totalCount}" : "Opened",
         "failed" or "blocked_uncertain" => PublicMessage(operation.Message),
         _ => null
     };
@@ -112,8 +113,9 @@ public static class ClaudeOpenFlow
                 // A read that fails never ends the Open: the server keeps the operation and the POST is never
                 // replayed, so the poll simply tries again until the deadline.
                 try { profiles = await client.ClaudeDesktopProfiles(); }
-                // A signed-out device key ends the poll (the tray shows its signed-out screen); anything else retries.
+                // A signed-out key or unsafe HTTP destination ends the poll; transient reads retry.
                 catch (DeviceSignedOutException) { throw; }
+                catch (NotLocalNetworkException) { throw; }
                 catch { continue; }
                 var operation = profiles.Where(candidate => candidate.Id == profile).Select(candidate => candidate.OpenOperation)
                     .FirstOrDefault(candidate => candidate is not null && candidate.Platform == platform

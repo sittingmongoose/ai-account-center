@@ -135,6 +135,7 @@ public static class Ui
     /// (Antigravity) the gap before the last column widens so the widest caption ("Claude/GPT 5-hour") fits above it.</summary>
     public static Grid SectionGrid(int meters, double acts, double identity = 162, double mark = 22)
     {
+        meters = Math.Max(1, meters);
         var grid = new Grid();
         void Add(GridLength length) => grid.ColumnDefinitions.Add(new ColumnDefinition { Width = length });
         var gap = meters >= 3 ? 12 : 14;
@@ -149,8 +150,8 @@ public static class Ui
         return grid;
     }
     public static int MeterColumn(int index) => 4 + 2 * index;
-    public static int ActsColumn(int meters) => 4 + 2 * meters;
-    public static int TailColumn(int meters) => 6 + 2 * meters;
+    public static int ActsColumn(int meters) => 4 + 2 * Math.Max(1, meters);
+    public static int TailColumn(int meters) => 6 + 2 * Math.Max(1, meters);
 }
 
 public enum MeterKind { Compact, Labeled, Detail }
@@ -296,7 +297,7 @@ public sealed class Meter : Grid
         longReset.Text = next.Reset ?? "";
         if (Kind == MeterKind.Detail) { reset.Visibility = Visibility.Collapsed; longReset.Visibility = string.IsNullOrEmpty(next.Reset) ? Visibility.Collapsed : Visibility.Visible; }
         caption.Text = next.Caption ?? ""; caption.Visibility = string.IsNullOrEmpty(next.Caption) ? Visibility.Collapsed : Visibility.Visible;
-        notch.Visibility = next.Notch is double ? Visibility.Visible : Visibility.Collapsed;
+        notch.Visibility = next.Notch is double && next.Value is double ? Visibility.Visible : Visibility.Collapsed;
         notch.Opacity = next.NotchOpacity;
         var nextSeverity = Theme.Severity(next.Value);
         if (next.Value is not double target)
@@ -380,6 +381,7 @@ public sealed class Meter : Grid
     /// <summary>Hover feedback from the row: the track brightens.</summary>
     public void SetHover(bool hover) { if (severity != "na") trackPlate.Background = Theme.Brush(hover ? "TrackHover" : "Track"); }
 
+    internal bool NotchVisibleForCheck => notch.Visibility == Visibility.Visible;
     public double TrackWidth => track.ActualWidth;
     public double FillWidth => fill.Width;
 

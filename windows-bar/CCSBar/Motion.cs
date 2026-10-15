@@ -12,7 +12,21 @@ namespace CCSBar;
 public static class Motion
 {
     /// <summary>False for fixture renders and when Windows turns client-area animations off.</summary>
-    public static bool Enabled { get; set; } = SystemParameters.ClientAreaAnimation;
+    private static bool? fixtureOverride;
+    private static bool systemEnabled = SystemParameters.ClientAreaAnimation;
+    public static bool Enabled { get => fixtureOverride ?? systemEnabled; set => fixtureOverride = value; }
+
+    static Motion()
+    {
+        SystemParameters.StaticPropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(SystemParameters.ClientAreaAnimation))
+                UpdateSystemPreference(SystemParameters.ClientAreaAnimation);
+        };
+    }
+
+    internal static void UpdateSystemPreference(bool enabled) => systemEnabled = enabled;
+    internal static void UseSystemPreference() => fixtureOverride = null;
 
     public static readonly IEasingFunction Out = Freeze(new CubicEase { EasingMode = EasingMode.EaseOut });
     public static readonly IEasingFunction In = Freeze(new CubicEase { EasingMode = EasingMode.EaseIn });

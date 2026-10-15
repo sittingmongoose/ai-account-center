@@ -56,6 +56,7 @@ public partial class MainWindow : Window
     /// <summary>A sample arrived while the panel was hidden (N6): the next open rebuilds once instead of every tick
     /// rebuilding a hidden tree.</summary>
     private bool renderDirty;
+    private bool renderFailed;
     /// <summary>True for the real tray (loaded its connection); checks, renders and the E2E driver pass false and
     /// always paint, even hidden, so their assertions see a tree.</summary>
     private readonly bool liveConnection;
@@ -468,6 +469,7 @@ public partial class MainWindow : Window
         StatusText.Inlines.Clear();
         if (statusFlash is not null) { StatusText.Inlines.Add(new Run(statusFlash)); StatusText.ToolTip = null; return; }
         if (SignInStatus is { } signIn) { StatusText.Inlines.Add(new Run(signIn)); StatusText.ToolTip = null; return; }
+        if (renderFailed) { StatusText.Inlines.Add(new Run("Usage could not be displayed. Try Refresh.")); StatusText.ToolTip = null; return; }
         if (client is null) { StatusText.Inlines.Add(new Run("Not paired")); return; }
         if (dashboard is null) { StatusText.Inlines.Add(new Run("Connecting")); return; }
         var hidden = dashboard.Hidden;
@@ -486,6 +488,20 @@ public partial class MainWindow : Window
     // ------------------------------------------------------------------ rendering
 
     private void RenderDashboard()
+    {
+        renderFailed = false;
+        try { RenderDashboardContent(); }
+        catch (Exception)
+        {
+            renderFailed = true;
+            staleSample = true;
+            AutoSwitchPanel.Content = null;
+            ContentPanel.Children.Clear();
+            ContentPanel.Children.Add(Ui.Text("Usage could not be displayed. Try Refresh.", 12, "WarnText", wrap: true));
+        }
+    }
+
+    private void RenderDashboardContent()
     {
         if (dashboard is null) return;
         renderPasses++;
@@ -642,7 +658,7 @@ public partial class MainWindow : Window
         return result;
     }
 
-    private bool AntigravitySwitchable(DashboardAccount[] accounts) => accounts.Count(account => account.Status is "ok" or "cached") >= 2;
+    private bool AntigravitySwitchable(DashboardAccount[] accounts) => accounts.Length >= 2;
 
     /// <summary>Every Antigravity account the dashboard reports, tray-hidden ones included: "Show in tray" only changes
     /// what this panel lists, never what the user can operate, and the server keeps hidden accounts as auto-switch
@@ -662,7 +678,7 @@ public partial class MainWindow : Window
         var stack = new StackPanel();
         // Two Antigravity accounts get the auto-switch tools line, counting one hidden in the tray too: hiding it
         // never takes away the switch the user can operate.
-        var multiAg = provider == "antigravity" && AllAntigravity(dashboard, accounts).Length > 1;
+        var multiAg = provider == "antigravity" && (AllAntigravity(dashboard, accounts).Length > 1 || dashboard?.AntigravityAutoSwitch?.Enabled == true);
         // Codex shows the same tools in its header whenever the dashboard reports them: the footer cluster
         // showed them for every connected user, so no account-count gate is added here.
         var multiCodex = provider == "codex" && dashboard?.CodexAutoSwitch is not null;
@@ -783,20 +799,20 @@ public partial class MainWindow : Window
         var email = Ui.Text(account.Email ?? account.Label, 13, "Ink", active ? FontWeights.SemiBold : FontWeights.Medium, trim: true);
         identity.Children.Add(email);
         identity.Children.Add(RowMeta(account, OpenText(account.Id)));
-        identity.ToolTip = Ui.Tip(string.Join(" · ", new[] { account.Email ?? account.Label, Formatting.PlanLabel(account.Plan, account.Provider), Formatting.PlatformName(account.Platform), account.SampledAt is null ? "" : "sampled " + Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part))));
+        identity.ToolTip = Ui.Tip(string.Join(" · ", new[] { account.Email ?? account.Label, Formatting.PlanLabel(account.Plan, account.Provider), Formatting.PlatformName(account.Provenance), account.SampledAt is null ? "" : "sampled " + Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part))));
         Grid.SetColumn(identity, 2); grid.Children.Add(identity);
         if (account.Status == "needs_sign_in" && !Meters(account).Any())
         {
             var quiet = Ui.Text(account.Message is { Length: > 0 } && account.Message.Length < 90 ? account.Message : "Sign-in required", 12, "Ink3", trim: true);
             quiet.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, columns.Count * 2 - 1); grid.Children.Add(quiet);
+            Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, Math.Max(1, columns.Count) * 2 - 1); grid.Children.Add(quiet);
         }
         else if (provider == "antigravity" && account.AntigravityPlan is { QuotaPolicy: "none" } && !Meters(account).Any())
         {
             // A plan without a bundled Antigravity quota: one honest line instead of meters (ANTIGRAVITY-SPEC).
             var quiet = Ui.Text("No Antigravity quota on this plan", 12, "Ink3", trim: true);
             quiet.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, columns.Count * 2 - 1); grid.Children.Add(quiet);
+            Grid.SetColumn(quiet, Ui.MeterColumn(0)); Grid.SetColumnSpan(quiet, Math.Max(1, columns.Count) * 2 - 1); grid.Children.Add(quiet);
         }
         else for (int i = 0; i < columns.Count; i++)
         {
@@ -819,7 +835,7 @@ public partial class MainWindow : Window
     private static TextBlock RowMeta(DashboardAccount account, string? openText)
     {
         if (openText is not null) return Ui.Text(openText, 11.5, "Ink3", trim: true);
-        var parts = new[] { Formatting.PlanLabel(account.Plan, account.Provider), Formatting.PlatformName(account.Platform), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part));
+        var parts = new[] { Formatting.PlanLabel(account.Plan, account.Provider), Formatting.PlatformName(account.Provenance), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part));
         var text = Ui.Text(string.Join(" · ", parts), 11.5, "Ink3", trim: true);
         if (account.SignInNeededText is { } needed)
         {
@@ -828,7 +844,8 @@ public partial class MainWindow : Window
             var rest = string.Join(" · ", new[] { Formatting.PlanLabel(account.Plan, account.Provider), Formatting.Relative(account.SampledAt ?? account.FetchedAt) }.Where(part => !string.IsNullOrEmpty(part)));
             if (rest.Length > 0) text.Inlines.Add(new Run(" · " + rest));
         }
-        else if (account.Status == "needs_sign_in") { text.Text = ""; text.Inlines.Add(new Run("Sign-in needed") { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold }); text.Inlines.Add(new Run(" · " + Formatting.PlatformName(account.Platform))); }
+        else if (account.Status == "needs_sign_in") { text.Text = ""; text.Inlines.Add(new Run("Sign-in needed") { Foreground = Theme.Brush("WarnText"), FontWeight = FontWeights.SemiBold }); text.Inlines.Add(new Run(" · " + Formatting.PlatformName(account.Provenance))); }
+        if (account.Status is not ("ok" or "cached" or "needs_sign_in")) text.Inlines.Add(new Run(" · " + StatusWord(account)));
         return text;
     }
 
@@ -866,7 +883,7 @@ public partial class MainWindow : Window
             notch = 100 - dashboard.CodexAutoSwitch.ThresholdPercent;
             notchOpacity = !dashboard.CodexAutoSwitch.Enabled ? 0.18 : account.IsActive ? 1 : 0.4;
         }
-        else if (provider == "antigravity" && dashboard?.AntigravityAutoSwitch is { } ag && column.Key.StartsWith("gemini", StringComparison.Ordinal) && AntigravitySwitchable(dashboard.Accounts.Where(a => a.Provider == "antigravity").ToArray()))
+        else if (provider == "antigravity" && dashboard?.AntigravityAutoSwitch is { } ag && ag.RequestedPoolId is not null && window.PoolId == ag.RequestedPoolId && AntigravitySwitchable(dashboard.Accounts.Where(a => a.Provider == "antigravity").ToArray()))
         {
             notch = ag.ThresholdUsedPercent;
             notchOpacity = !ag.Enabled ? 0.18 : account.IsActive ? 1 : 0.4;
@@ -1001,7 +1018,7 @@ public partial class MainWindow : Window
         var words = new StackPanel { Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         var title = Ui.Text("Active", 12.5, "Ink", FontWeights.SemiBold); title.Uid = "active-text"; title.LineHeight = 14; title.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
         words.Children.Add(title);
-        var where = Formatting.PlatformName(account.Platform);
+        var where = Formatting.PlatformName(account.Provenance);
         if (where.Length > 0) { var on = Ui.Text("on " + where, 11, "Ink3"); on.LineHeight = 14; on.LineStackingStrategy = LineStackingStrategy.BlockLineHeight; words.Children.Add(on); }
         row.Children.Add(words);
         row.ToolTip = Ui.Tip("Active " + Formatting.ProviderName(account.Provider) + " account" + (where.Length > 0 ? " on " + where : ""));
@@ -1217,7 +1234,7 @@ public partial class MainWindow : Window
 
     private Button QwenPacksButton(QuotaWindow[] packs)
     {
-        var withCredit = packs.Where(pack => pack.Remaining is double left && double.IsFinite(left) && left > 0).ToArray();
+        var withCredit = packs.Where(pack => Formatting.HasUsableCredit(pack)).ToArray();
         var next = withCredit.Select(pack => DateTimeOffset.TryParse(pack.ExpiresAt, out var at) ? at : (DateTimeOffset?)null).Where(at => at > Formatting.Now()).OrderBy(at => at).FirstOrDefault();
         var content = new Grid();
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -1226,7 +1243,7 @@ public partial class MainWindow : Window
         var pack = Icons.Icon("pack", 15, Theme.Brush("Ink3")); pack.Margin = new Thickness(0, 0, 8, 0); content.Children.Add(pack);
         var words = new StackPanel();
         words.Children.Add(Ui.Text($"{packs.Length} {(packs.Length == 1 ? "pack" : "packs")} · {withCredit.Length} with credit", 12, "Ink", FontWeights.SemiBold));
-        words.Children.Add(Ui.Text(next is DateTimeOffset expires ? "next expires " + expires.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture) : "none with credit", 11.5, "Ink3"));
+        words.Children.Add(Ui.Text(withCredit.Any(item => !DateTimeOffset.TryParse(item.ExpiresAt, out _)) ? "Expiry unavailable" : next is DateTimeOffset expires ? "next expires " + expires.ToLocalTime().ToString("MMM d", CultureInfo.CurrentCulture) : withCredit.Length == 0 ? "none with credit" : "Expiry unavailable", 11.5, "Ink3"));
         Grid.SetColumn(words, 1); content.Children.Add(words);
         var chevron = Icons.Icon("chevDown", 13, Theme.Brush("Ink3")); chevron.Margin = new Thickness(10, 0, 0, 0); chevron.RenderTransformOrigin = new Point(0.5, 0.5); chevron.RenderTransform = new RotateTransform();
         Grid.SetColumn(chevron, 2); content.Children.Add(chevron);
@@ -1501,7 +1518,7 @@ public partial class MainWindow : Window
         }
         var parts = new List<string> { Formatting.Sampled(account.SampledAt ?? account.FetchedAt) };
         if (account.Status == "cached") parts.Add("cached");
-        var platform = Formatting.PlatformName(account.Platform); if (platform.Length > 0) parts.Add(platform);
+        var platform = Formatting.PlatformName(account.Provenance); if (platform.Length > 0) parts.Add(platform);
         var meta = Ui.Text(string.Join(" · ", parts), 11.5, "Ink3"); meta.Margin = new Thickness(0, 8, 0, 0); panel.Children.Add(meta);
     }
 
@@ -1543,7 +1560,7 @@ public partial class MainWindow : Window
         toggle.Toggled += async requested => await Action(async () => { if (client is not null) await client.SetAutoSwitch(requested); }, requested ? "Codex auto-switch is on." : "Codex auto-switch is off.");
         row.Children.Add(toggle);
         var currentUsed = 100 - (int)Math.Round(status.ThresholdPercent);
-        var drop = ThresholdDrop(currentUsed, "Codex switch threshold", used => Action(async () => { if (client is not null) await client.SetAutoSwitch(status.Enabled, 100 - used); }, "Codex switch threshold updated."), () => !status.ActivationInProgress);
+        var drop = ThresholdDrop(currentUsed, "Codex switch threshold", used => Action(async () => { if (client is not null) await client.SetAutoSwitch(thresholdPercent: 100 - used); }, "Codex switch threshold updated."), () => !status.ActivationInProgress);
         drop.Margin = new Thickness(10, 0, 4, 0); drop.IsEnabled = !status.ActivationInProgress && !busy && !staleSample;
         row.Children.Add(drop);
         var info = Ui.IconButton("info", "How Codex auto-switch works", 28, "BareIconButton", 16);
@@ -1599,16 +1616,16 @@ public partial class MainWindow : Window
         var status = dashboard?.AntigravityAutoSwitch;
         if (!AntigravitySwitchable(AllAntigravity(dashboard, accounts)) || status is null)
         {
-            var off = new ToggleSwitch(false, "Auto-switch", "Switching moves between Antigravity accounts, so it starts once a second account is signed in.");
+            var off = new ToggleSwitch(status?.Enabled == true, "Auto-switch", "Switching moves between Antigravity accounts, so it starts once a second account is signed in.");
             off.SetEnabled(false); row.Children.Add(off);
             var note = Ui.Text(status is null ? "not reported by this server" : "starts with a second signed-in account", 12, "Ink3"); note.Margin = new Thickness(8, 0, 0, 0); note.VerticalAlignment = VerticalAlignment.Center;
             row.Children.Add(note);
             return row;
         }
         var toggle = new ToggleSwitch(status.Enabled, "Auto-switch", "Automatically switch Antigravity accounts at the threshold once Antigravity is idle.") { Uid = "mutation:toggle" };
-        toggle.SetEnabled(!status.ActivationInProgress && !busy && !staleSample);
-        toggle.Tag = (Func<bool>)(() => !status.ActivationInProgress);
-        toggle.Toggled += async requested => await Action(async () => { if (client is not null) await client.SetAntigravityAutoSwitch(enabled: requested); }, requested ? "Antigravity auto-switch is on." : "Antigravity auto-switch is off.");
+        toggle.SetEnabled(!status.ActivationInProgress && !busy && !staleSample && (status.Enabled || !string.IsNullOrWhiteSpace(status.RequestedPoolId)));
+        toggle.Tag = (Func<bool>)(() => !status.ActivationInProgress && (status.Enabled || !string.IsNullOrWhiteSpace(status.RequestedPoolId)));
+        toggle.Toggled += async requested => await Action(async () => { if (requested && string.IsNullOrWhiteSpace(status.RequestedPoolId)) return; if (client is not null) await client.SetAntigravityAutoSwitch(enabled: requested); }, requested ? "Antigravity auto-switch is on." : "Antigravity auto-switch is off.");
         row.Children.Add(toggle);
         var used = (int)Math.Round(status.ThresholdUsedPercent);
         var drop = ThresholdDrop(used, "Antigravity switch threshold", value => Action(async () => { if (client is not null) await client.SetAntigravityAutoSwitch(thresholdUsedPercent: value); }, "Antigravity switch threshold updated."), () => !status.ActivationInProgress);
@@ -1672,10 +1689,10 @@ public partial class MainWindow : Window
 
     /// <summary>One Open's progress on its row: the secondary line shows it and the Open buttons rest until it ends.
     /// The rows are rebuilt exactly as a new sample rebuilds them, so meters and the platter keep their places.</summary>
-    private void SetOpenProgress(string accountId, ClaudeOpenProgress? progress)
+    internal void SetOpenProgress(string accountId, ClaudeOpenProgress? progress)
     {
         if (progress is null) openProgress.Remove(accountId); else openProgress[accountId] = progress;
-        RenderDashboard();
+        PaintSample();
     }
 
     private void ClearOpenProgressLater(string accountId)
@@ -1707,17 +1724,38 @@ public partial class MainWindow : Window
     {
         if (busy || staleSample || client is null) return;
         var profile = account.Capabilities.AntigravityProfileId!;
+        string? approvedEmail = null;
         await Switch(account, "Checking running Antigravity programs", () => AntigravitySwitchFlow.Run(profile,
-            async token => { await client.ActivateAntigravity(profile, token); },
-            confirmation => Confirm("Antigravity", account, confirmation.Warning, confirmation.Processes, () => confirmation.Expired)));
+            async token =>
+            {
+                var result = await client.ActivateAntigravity(profile, token);
+                if (!ValidAntigravityResult(result, profile, approvedEmail))
+                    throw new InvalidOperationException("The Antigravity switch could not be verified. Refresh and try again.");
+            },
+            confirmation =>
+            {
+                approvedEmail = confirmation.Email;
+                return Confirm("Antigravity", account, confirmation.Warning, confirmation.Processes, () => confirmation.Expired, confirmation.Email);
+            }));
     }
 
-    private Task<bool> Confirm(string provider, DashboardAccount account, string warning, IReadOnlyList<CodexSwitchProcess> processes, Func<bool> expired)
+    internal static bool ValidAntigravityResult(System.Text.Json.JsonElement result, string profile, string? approvedEmail)
+    {
+        if (result.ValueKind != System.Text.Json.JsonValueKind.Object
+            || !result.TryGetProperty("status", out var status) || status.ValueKind != System.Text.Json.JsonValueKind.String || status.GetString() is not ("active" or "already-active")
+            || !result.TryGetProperty("profileId", out var id) || id.ValueKind != System.Text.Json.JsonValueKind.String || id.GetString() != profile
+            || !result.TryGetProperty("hostId", out var host) || host.ValueKind != System.Text.Json.JsonValueKind.String || host.GetString() != "ubuntu") return false;
+        if (!result.TryGetProperty("email", out var email) || email.ValueKind == System.Text.Json.JsonValueKind.Null) return true;
+        return email.ValueKind == System.Text.Json.JsonValueKind.String && AntigravityConfirmation.IsEmail(email.GetString())
+            && (approvedEmail is null || string.Equals(email.GetString(), approvedEmail, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private Task<bool> Confirm(string provider, DashboardAccount account, string warning, IReadOnlyList<CodexSwitchProcess> processes, Func<bool> expired, string? identity = null)
     {
         confirmationVisible = true;
         try
         {
-            var dialog = new SwitchConfirmDialog(provider, account.Email ?? account.Label, warning, processes, expired) { Owner = this };
+            var dialog = new SwitchConfirmDialog(provider, identity ?? account.Email ?? account.Label, warning, processes, expired) { Owner = this };
             return Task.FromResult(dialog.ShowDialog() == true);
         }
         finally { confirmationVisible = false; }
