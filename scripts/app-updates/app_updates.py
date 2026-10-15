@@ -507,7 +507,17 @@ def resolve_muse_shell(platform):
 
 
 def _pid_alive(pid):
-    """Windows only: True while `pid` is a running process."""
+    """True while `pid` is a running process."""
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)  # signal 0 only checks that the process exists
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # it exists, owned by another user
+        except OSError:
+            return False
+        return True
     from ctypes import wintypes
     kernel = ctypes.windll.kernel32
     kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]

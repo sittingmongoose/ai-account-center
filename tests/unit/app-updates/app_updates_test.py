@@ -620,16 +620,20 @@ class WindowsMuseUpdateTests(unittest.TestCase):
 
     def test_mac_and_linux_muse_same_version_while_its_launcher_updates_reports_busy(self):
         # The POSIX launcher keeps the same lock beside ~/.local/bin/muse; a held lock is busy, not current.
+        # Real process ids, no mocked liveness: this test process holds the lock, then an exited one.
         folder = self.root / 'Home/.local/bin'
-        _fixture_file(folder / '.muse-update-lock' / 'pid', '4242')
-        for platform in ('mac', 'ubuntu'):
-            with self.subTest(platform=platform):
-                install = common.Install('muse-code', platform, folder / 'muse', '1.4.8', 'native')
-                with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
-                        mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update'), \
-                        mock.patch.object(updater, 'detect_cli', return_value=install), mock.patch.object(updater, '_pid_alive', return_value=True):
-                    value = updater.update_cli(install, time.monotonic() + 60)
-                self.assertEqual((value['status'], value['messageCode']), ('failed', 'busy'))
+        exited = subprocess.Popen([sys.executable, '-c', 'pass'])
+        exited.wait()
+        for holder, expected in ((os.getpid(), ('failed', 'busy')), (exited.pid, ('current', 'current'))):
+            _fixture_file(folder / '.muse-update-lock' / 'pid', str(holder))
+            for platform in ('mac', 'ubuntu'):
+                with self.subTest(platform=platform, holder=holder):
+                    install = common.Install('muse-code', platform, folder / 'muse', '1.4.8', 'native')
+                    with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
+                            mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update'), \
+                            mock.patch.object(updater, 'detect_cli', return_value=install):
+                        value = updater.update_cli(install, time.monotonic() + 60)
+                    self.assertEqual((value['status'], value['messageCode']), expected)
         self.assertTrue((folder / '.muse-update-lock' / 'pid').is_file())
 
     def test_windows_muse_same_version_without_a_lock_stays_current(self):
