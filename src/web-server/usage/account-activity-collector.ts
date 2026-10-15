@@ -54,6 +54,8 @@ export interface CompactEntry {
 }
 interface Checkpoint {
   version: 2;
+  /** Source path lets an incomplete directory walk recover this file's contribution. */
+  file?: string;
   size: number;
   mtimeMs: number;
   identity: string;
@@ -62,7 +64,7 @@ interface Checkpoint {
   offset: number;
   /** Compressed files restart decoding, skipping this already-parsed byte prefix. */
   decodedOffset?: number;
-  /** The last deadline expired without advancing the decoded checkpoint. Retry first. */
+  /** The last deadline expired without advancing the decoded checkpoint. */
   compressedReplayStalled?: boolean;
   minDate: number;
   complete: boolean;
@@ -263,7 +265,7 @@ function holdsNoLogs(kind: string, name: string): boolean {
 export function filesUnder(
   root: string,
   kind: string,
-  issues: { failed: number },
+  issues: { failed: number; unresolved?: string[] },
   deadline: number,
   limits: AccountActivityScanOptions['traversalLimits'],
   /** Folders deeper than this are outside the root's scope: skipped without counting a failure. */
@@ -274,8 +276,9 @@ export function filesUnder(
   const { maxDepth, maxDirectories, maxEntries } = walkCeilings(limits);
   try {
     root = fs.realpathSync(root);
-  } catch {
+  } catch (error) {
     issues.failed++;
+    if (!confirmedMissing(error)) issues.unresolved?.push(path.resolve(root));
     return [];
   }
   const result: string[] = [];
@@ -285,6 +288,7 @@ export function filesUnder(
   while (pending.length) {
     if (Date.now() >= deadline || visitedDirectories >= maxDirectories) {
       issues.failed++;
+      issues.unresolved?.push(...pending.map((item) => item.directory));
       break;
     }
     const current = pending.pop();
@@ -310,6 +314,7 @@ export function filesUnder(
             (!newestBeforeCap && result.length >= MAX_FILES)
           ) {
             issues.failed++;
+            issues.unresolved?.push(current.directory, ...pending.map((item) => item.directory));
             return result;
           }
           visitedEntries++;
@@ -322,15 +327,78 @@ export function filesUnder(
               pending.length + visitedDirectories >= maxDirectories
             ) {
               issues.failed++;
+              issues.unresolved?.push(file);
             } else pending.push({ directory: file, depth: current.depth + 1 });
           } else if (item.isFile() && wantedFile(kind, item.name)) result.push(file);
         }
       } finally {
         directory.closeSync();
       }
-    } catch {
+    } catch (error) {
       issues.failed++;
+      if (!confirmedMissing(error)) issues.unresolved?.push(current.directory);
     }
+  }
+  return result;
+}
+
+function confirmedMissing(error: unknown): boolean {
+  return ['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException)?.code ?? '');
+}
+
+/** Only unresolved paths inherit cached files; a successfully listed removal stays removed. */
+function unresolvedCheckpointFiles(
+  directory: string,
+  unresolved: string[],
+  known: ReadonlyArray<{ file: string }>,
+  excludeRoots: string[] = []
+): Array<{ file: string; stats: fs.Stats; unresolved: true }> {
+  if (!unresolved.length) return [];
+  const under = (file: string, root: string): boolean =>
+    file === root || file.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+  const seen = new Set(known.map((item) => item.file));
+  const result: Array<{ file: string; stats: fs.Stats; unresolved: true }> = [];
+  const caches = fs.opendirSync(directory);
+  try {
+    let visited = 0;
+    for (
+      let item = caches.readSync();
+      item !== null && visited++ < MAX_FILES;
+      item = caches.readSync()
+    ) {
+      if (!item.isFile() || !item.name.endsWith('.json')) continue;
+      try {
+        const cache = path.join(directory, item.name);
+        if (fs.statSync(cache).size > MAX_CACHE_BYTES) continue;
+        const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
+        const file = value.file;
+        if (
+          typeof file !== 'string' ||
+          item.name !== `${hash(file)}.json` ||
+          seen.has(file) ||
+          !unresolved.some((root) => under(file, root)) ||
+          excludeRoots.some((root) => under(file, root))
+        )
+          continue;
+        let stats: fs.Stats;
+        try {
+          stats = fs.statSync(file);
+          if (!stats.isFile()) continue;
+        } catch (error) {
+          if (confirmedMissing(error)) continue;
+          // Content and metadata are both inaccessible. The stored metadata is
+          // only a fallback; loadCheckpoint still validates the checkpoint shape.
+          const [dev, ino] = value.identity.split(':');
+          stats = { size: value.size, mtimeMs: value.mtimeMs, dev, ino } as unknown as fs.Stats;
+        }
+        seen.add(file);
+        result.push({ file, stats, unresolved: true });
+      } catch {
+        // A malformed checkpoint cannot supply measured usage.
+      }
+    }
+  } finally {
+    caches.closeSync();
   }
   return result;
 }
@@ -393,19 +461,19 @@ function loadCheckpoint(
       value.identity !== `${stats.dev}:${stats.ino}` ||
       !Number.isSafeInteger(value.offset) ||
       value.offset < 0 ||
-      (!stale && value.offset > stats.size) ||
+      value.offset > stats.size ||
       (value.decodedOffset !== undefined &&
         (!Number.isSafeInteger(value.decodedOffset) || value.decodedOffset < 0)) ||
       (value.compressedReplayStalled !== undefined &&
         typeof value.compressedReplayStalled !== 'boolean') ||
-      (!stale && value.size > stats.size) ||
+      value.size > stats.size ||
       !Number.isFinite(value.minDate) ||
       value.minDate > minDate ||
       !Array.isArray(value.rows) ||
       value.rows.length > MAX_FILE_ROWS ||
       !value.state ||
       typeof value.state.sessionId !== 'string' ||
-      (!stale && value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
+      (value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
       (value.skippedLines > 0 && value.largeLineParserVersion !== 5) ||
       value.parser !== PARSER_VERSION[kind] ||
       (value.pendingClaude !== undefined &&
@@ -419,7 +487,12 @@ function loadCheckpoint(
       return fresh(stats, minDate, kind, mode);
     // A failed file contributes its last checkpoint, never partially mutated
     // rows from a failed read/save. Metadata still guards identity and parser.
-    const fd = stale ? undefined : fs.openSync(file, 'r');
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(file, 'r');
+    } catch (error) {
+      if (!stale || confirmedMissing(error)) throw error;
+    }
     try {
       // Check the consumed prefix and boundary before resuming an append. A
       // replaced/truncated/re-written log never inherits cumulative counters.
@@ -448,6 +521,7 @@ function loadCheckpoint(
   }
 }
 function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: fs.Stats): void {
+  value.file = file;
   const fd = fs.openSync(file, 'r');
   try {
     const boundary = file.endsWith('.zst') ? stats.size : value.offset;
@@ -1981,6 +2055,7 @@ export async function collectCodexPartition(
           checkpointProgress(value) !== before ||
           value.offset !== beforeOffset ||
           value.compressedReplayStalled !== beforeStalled ||
+          value.file !== file ||
           !fs.existsSync(cache)
         )
           saveCheckpoint(cache, file, value, stats);
@@ -2000,9 +2075,11 @@ export async function collectCodexPartition(
     } catch {
       outcomes.push({
         file,
-        rows: stats
-          ? loadCheckpoint(cache, file, stats, options.minDate, 'codex', undefined, true).rows
-          : [],
+        rows:
+          priorPlainCodexRows(spec.checkpointDir, file, options.minDate) ??
+          (stats
+            ? loadCheckpoint(cache, file, stats, options.minDate, 'codex', undefined, true).rows
+            : []),
         complete: false,
         skippedLines: 0,
         readBytes: 0,
@@ -2085,7 +2162,7 @@ async function readCodexFiles(
   options: AccountActivityScanOptions,
   directory: string,
   deadline: number,
-  scanned: ReadonlyArray<{ file: string; stats: fs.Stats }>,
+  scanned: ReadonlyArray<{ file: string; stats: fs.Stats; unresolved?: boolean }>,
   deps?: CollectAccountActivityDeps
 ): Promise<{ rows: CompactEntry[] } & CodexCounters> {
   const counters: CodexCounters = {
@@ -2097,13 +2174,14 @@ async function readCodexFiles(
     stalledCompressedFiles: 0,
   };
   const rows: CompactEntry[] = [];
-  const loaded = scanned.map(({ file, stats }) => {
+  const loaded = scanned.map(({ file, stats, unresolved }) => {
     const cache = path.join(directory, `${hash(file)}.json`);
     return {
       file,
       stats,
       cache,
-      value: loadCheckpoint(cache, file, stats, options.minDate, 'codex'),
+      unresolved,
+      value: loadCheckpoint(cache, file, stats, options.minDate, 'codex', undefined, unresolved),
     };
   });
   const unreadBytes = loaded.reduce(
@@ -2112,14 +2190,16 @@ async function readCodexFiles(
   );
   // N1: only files with unread bytes go to readers; the rest are tallied from
   // the just-loaded checkpoints, so no reader starts with nothing to read.
-  // A replay that exhausted a previous pass gets the next pass's full budget.
+  // Fresh siblings get a turn before a replay can exhaust the entire deadline.
   // Keep `loaded` in global order for row-cap/aggregation parity with the fan-out path.
   const readOrder = [...loaded].sort(
     (a, b) =>
-      Number(b.value.compressedReplayStalled === true) -
-      Number(a.value.compressedReplayStalled === true)
+      Number(a.value.compressedReplayStalled === true) -
+      Number(b.value.compressedReplayStalled === true)
   );
-  const needsRead = readOrder.filter((item) => item.stats.size - item.value.offset > 0);
+  const needsRead = readOrder.filter(
+    (item) => !item.unresolved && item.stats.size - item.value.offset > 0
+  );
   const readers = codexReaderCount(
     unreadBytes,
     needsRead.length,
@@ -2133,12 +2213,13 @@ async function readCodexFiles(
         const before = checkpointProgress(item.value);
         const beforeOffset = item.value.offset;
         const beforeStalled = item.value.compressedReplayStalled;
-        if (Date.now() < deadline) {
+        if (!item.unresolved && Date.now() < deadline) {
           await readBatch(item.file, item.value, item.stats, 'codex', options, deadline);
           if (
             checkpointProgress(item.value) !== before ||
             item.value.offset !== beforeOffset ||
             item.value.compressedReplayStalled !== beforeStalled ||
+            item.value.file !== item.file ||
             !fs.existsSync(item.cache)
           )
             saveCheckpoint(item.cache, item.file, item.value, item.stats);
@@ -2158,15 +2239,17 @@ async function readCodexFiles(
         tallyCodexFile(
           rows,
           {
-            rows: loadCheckpoint(
-              item.cache,
-              item.file,
-              item.stats,
-              options.minDate,
-              'codex',
-              undefined,
-              true
-            ).rows,
+            rows:
+              priorPlainCodexRows(directory, item.file, options.minDate) ??
+              loadCheckpoint(
+                item.cache,
+                item.file,
+                item.stats,
+                options.minDate,
+                'codex',
+                undefined,
+                true
+              ).rows,
             complete: false,
             skippedLines: 0,
             readBytes: 0,
@@ -2658,8 +2741,8 @@ export async function collectAccountActivity(
           deadline
         )
       : collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
-  const issues = { failed: 0 };
-  const files: Array<{ file: string; stats: fs.Stats }> = [];
+  const issues = { failed: 0, unresolved: [] as string[] };
+  const files: Array<{ file: string; stats: fs.Stats; unresolved?: boolean }> = [];
   // Whether traversal saw any candidate file at all, before the mtime pre-filter
   // drops out-of-window ones. "Found files but all are stale" means no usage in
   // the window (a complete, empty scan), never an unavailable source.
@@ -2678,6 +2761,7 @@ export async function collectAccountActivity(
       sawAnyFile = true;
       if (Date.now() >= deadline) {
         issues.failed++;
+        issues.unresolved.push(root);
         break;
       }
       try {
@@ -2687,8 +2771,9 @@ export async function collectAccountActivity(
         if (fileIdentities.has(identity)) continue;
         fileIdentities.add(identity);
         files.push({ file, stats });
-      } catch {
+      } catch (error) {
         issues.failed++;
+        if (!confirmedMissing(error)) issues.unresolved.push(file);
       }
       if (files.length >= MAX_FILES) {
         issues.failed++;
@@ -2697,6 +2782,10 @@ export async function collectAccountActivity(
     }
     if (files.length >= MAX_FILES || Date.now() >= deadline) break;
   }
+  files.push(
+    ...unresolvedCheckpointFiles(directory, issues.unresolved, files, options.excludeRoots)
+  );
+  if (files.length) sawAnyFile = true;
   if (!sawAnyFile && issues.failed) throw new CCSError('Native log sources are unavailable');
   // Resumed OMP runs copy a session into a new root; its records count once.
   const scanned =
@@ -2740,14 +2829,22 @@ export async function collectAccountActivity(
     unfinishedFiles = codex.unfinishedFiles;
     stalledCompressedFiles = codex.stalledCompressedFiles;
   } else {
-    for (const { file, stats } of scanned) {
+    for (const { file, stats, unresolved } of scanned) {
       const cache = path.join(directory, `${hash(file)}.json`);
       const mode = (claudeNames.get(path.basename(file)) ?? 0) > 1 ? 'keyed' : undefined;
       try {
-        let value = loadCheckpoint(cache, file, stats, options.minDate, request.kind, mode);
+        let value = loadCheckpoint(
+          cache,
+          file,
+          stats,
+          options.minDate,
+          request.kind,
+          mode,
+          unresolved
+        );
         const before = value.offset;
         try {
-          if (Date.now() < deadline) {
+          if (!unresolved && Date.now() < deadline) {
             await readBatch(
               file,
               value,
@@ -2758,7 +2855,7 @@ export async function collectAccountActivity(
               request.kind === 'jsonl' ? request.mapping : undefined,
               mode
             );
-            if (value.offset !== before || !fs.existsSync(cache))
+            if (value.offset !== before || value.file !== file || !fs.existsSync(cache))
               saveCheckpoint(cache, file, value, stats);
           }
           readBytes += Math.max(0, value.offset - before);

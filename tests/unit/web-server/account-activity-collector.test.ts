@@ -119,6 +119,108 @@ describe('bounded native account activity checkpoints', () => {
   });
 
   it.each(['inline', 'partition'] as const)(
+    'does not resurrect a copy-truncated unreadable rollout (%s)',
+    async (reader) => {
+      write([meta(), model(), tokens(300, 0, 10)]);
+      expect(sum(await collect(), 'inputTokens')).toBe(300);
+      const rotated = path.join(path.dirname(file), 'rollout-rotated.jsonl');
+      fs.copyFileSync(file, rotated);
+      fs.truncateSync(file, 10);
+      const open = fs.openSync;
+      const blocked = spyOn(fs, 'openSync').mockImplementation(((target, ...args) => {
+        if (target === file) throw new Error('fixture unreadable');
+        return open(target, ...args);
+      }) as typeof fs.openSync);
+      try {
+        if (reader === 'inline') {
+          const result = await collect();
+          expect(sum(result, 'inputTokens')).toBe(300);
+          expect(result.scan?.complete).toBe(false);
+        } else {
+          const directory = fs.readdirSync(path.join(root, 'cache', 'account-activity-v1'))[0];
+          const outcomes = await collectCodexPartition(
+            {
+              files: [file, rotated],
+              checkpointDir: path.join(root, 'cache', 'account-activity-v1', directory),
+              deadline: Date.now() + 12_000,
+            },
+            { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+          );
+          expect(outcomes[0]).toMatchObject({ failed: true, rows: [] });
+          expect(
+            outcomes
+              .flatMap((outcome) => outcome.rows)
+              .reduce((total, row) => total + row.entry.inputTokens, 0)
+          ).toBe(300);
+        }
+      } finally {
+        blocked.mockRestore();
+      }
+    }
+  );
+
+  it.each(['directory only', 'files too'] as const)(
+    'keeps cached Claude usage under an unlistable directory (%s) while siblings update and removed files disappear',
+    async (blockedAccess) => {
+      const projects = path.join(root, 'claude', 'projects');
+      const hidden = path.join(projects, 'hidden');
+      fs.mkdirSync(hidden, { recursive: true });
+      const hiddenFile = path.join(hidden, 'hidden.jsonl');
+      const sibling = path.join(projects, 'sibling.jsonl');
+      const removed = path.join(projects, 'removed.jsonl');
+      const usage = (input: number, id: string) =>
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: id,
+          timestamp: '2026-10-01T15:00:00Z',
+          message: { model: 'claude-sonnet-4-6', usage: { input_tokens: input, output_tokens: 1 } },
+        }) + '\n';
+      fs.writeFileSync(hiddenFile, usage(40, 'hidden'));
+      fs.writeFileSync(sibling, usage(100, 'sibling'));
+      fs.writeFileSync(removed, usage(10, 'removed'));
+      const collectClaude = () =>
+        collectAccountActivity(
+          { kind: 'claude', projectsDir: projects },
+          { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+        );
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(150);
+      fs.appendFileSync(sibling, usage(100, 'sibling'));
+      fs.unlinkSync(removed);
+      const opendir = fs.opendirSync;
+      const stat = fs.statSync;
+      const open = fs.openSync;
+      const denied = () =>
+        Object.assign(new Error('fixture permission denied'), { code: 'EACCES' });
+      const blockedDirectory = spyOn(fs, 'opendirSync').mockImplementation(((target, ...args) => {
+        if (target === hidden) throw denied();
+        return opendir(target, ...args);
+      }) as typeof fs.opendirSync);
+      const blockedStat = spyOn(fs, 'statSync').mockImplementation(((target, ...args) => {
+        if (blockedAccess === 'files too' && target === hiddenFile) throw denied();
+        return stat(target, ...args);
+      }) as typeof fs.statSync);
+      const blockedOpen = spyOn(fs, 'openSync').mockImplementation(((target, ...args) => {
+        if (blockedAccess === 'files too' && target === hiddenFile) throw denied();
+        return open(target, ...args);
+      }) as typeof fs.openSync);
+      try {
+        for (let pass = 0; pass < 2; pass++) {
+          const result = await collectClaude();
+          expect(sum(result, 'inputTokens')).toBe(240);
+          expect(result.scan).toMatchObject({ complete: false, totalFiles: 2 });
+        }
+      } finally {
+        blockedDirectory.mockRestore();
+        blockedStat.mockRestore();
+        blockedOpen.mockRestore();
+      }
+      expect((await collectClaude()).scan?.complete).toBe(true);
+      fs.unlinkSync(hiddenFile);
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(200);
+    }
+  );
+
+  it.each(['inline', 'partition'] as const)(
     'keeps failed Codex file rows alongside fresh sibling rows (%s)',
     async (reader) => {
       write([meta(), model(), tokens(100, 0, 10)]);

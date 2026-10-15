@@ -131,6 +131,61 @@ describe('Codex compressed rollouts', () => {
     expect((await collect()).scan?.readBytes).toBe(0);
   });
 
+  it.each(['inline', 'partition'] as const)(
+    'keeps plain checkpoint rows when the compressed replacement fails while a sibling grows (%s)',
+    async (reader) => {
+      fs.writeFileSync(file, rollout());
+      const sibling = file.replace(UUID, 'abcdef01-1234-1234-1234-0123456789ab');
+      fs.writeFileSync(sibling, rollout(1).replaceAll(UUID, 'sibling'));
+      expect((await collect()).hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(320);
+      compress();
+      fs.unlinkSync(file);
+      fs.appendFileSync(sibling, JSON.stringify(record(2)) + '\n');
+      const open = fs.openSync;
+      const blocked = spyOn(fs, 'openSync').mockImplementation(((target, ...args) => {
+        if (target === `${file}.zst`) throw new Error('fixture unreadable compressed replacement');
+        return open(target, ...args);
+      }) as typeof fs.openSync);
+      const stream = fs.createReadStream;
+      const blockedStream = spyOn(fs, 'createReadStream').mockImplementation((target, options) => {
+        if (String(target) === `${file}.zst`)
+          throw new Error('fixture unreadable compressed replacement');
+        return stream(target, options);
+      });
+      try {
+        for (let pass = 0; pass < 2; pass++) {
+          if (reader === 'inline') {
+            const result = await collect();
+            expect(result.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(400);
+            expect(result.scan).toMatchObject({ complete: false, failedFiles: 1 });
+          } else {
+            const directory = fs.readdirSync(path.join(root, 'cache', 'account-activity-v1'))[0];
+            const outcomes = await collectCodexPartition(
+              {
+                files: [`${file}.zst`, sibling],
+                checkpointDir: path.join(root, 'cache', 'account-activity-v1', directory),
+                deadline: Date.now() + 12_000,
+              },
+              { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+            );
+            expect(outcomes[0]).toMatchObject({ failed: true, complete: false });
+            expect(
+              outcomes
+                .flatMap((outcome) => outcome.rows)
+                .reduce((sum, row) => sum + row.entry.inputTokens, 0)
+            ).toBe(400);
+          }
+        }
+      } finally {
+        blocked.mockRestore();
+        blockedStream.mockRestore();
+      }
+      const recovered = await collect();
+      expect(recovered.scan?.complete).toBe(true);
+      expect(recovered.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(400);
+    }
+  );
+
   it('converges on a large single-frame decoded rollout over bounded byte-capped passes', async () => {
     const padding = JSON.stringify({ type: 'response_item', payload: 'x'.repeat(8192) }) + '\n';
     const body = rollout(1) + padding.repeat(4096) + JSON.stringify(record(3)) + '\n';
@@ -155,7 +210,7 @@ describe('Codex compressed rollouts', () => {
     expect((await collect()).scan?.readBytes).toBe(0);
   });
 
-  it('reports a replay-only deadline cut, persists it, and retries that file first', async () => {
+  it('reports a replay-only deadline cut and reads fresh siblings before retrying a stalled file', async () => {
     compress(rollout(12000));
     const partial = await collect({ maxBytesPerFile: 2 * 1024 * 1024 });
     expect(partial.scan?.complete).toBe(false);
@@ -184,13 +239,27 @@ describe('Codex compressed rollouts', () => {
       opened.push(String(filename));
       return createReadStream(filename, options);
     });
+    let calls = 0;
+    const clock = spyOn(Date, 'now').mockImplementation(() => (++calls > 50 ? NOW + 2000 : NOW));
+    try {
+      const withSibling = await collect({ budgetMs: 1000 });
+      expect(opened[0]).toBe(other);
+      expect(withSibling.scan?.complete).toBe(false);
+      expect(withSibling.scan?.detail).toContain('1 compressed Codex log is too large to finish');
+      expect(withSibling.eventCount).toBe(partial.eventCount! + 3);
+      expect(withSibling.scan?.readBytes).toBe(
+        Buffer.byteLength(rollout().replaceAll(UUID, 'other'))
+      );
+    } finally {
+      clock.mockRestore();
+    }
     let finished: Awaited<ReturnType<typeof collect>>;
     try {
       finished = await collect();
     } finally {
       reads.mockRestore();
     }
-    expect(opened[0]).toBe(`${file}.zst`);
+    expect(opened[0]).toBe(other);
     expect(finished.scan?.complete).toBe(true);
     expect(finished.scan?.detail).toBeUndefined();
     expect(finished.eventCount).toBe(12003);
