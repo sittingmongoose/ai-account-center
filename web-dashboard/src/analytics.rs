@@ -161,7 +161,7 @@ fn bucket(v: &Value) -> AxBucket {
         foot2: s(v, "foot2"),
     }
 }
-fn model_row(v: &Value) -> AxModelRow {
+fn model_row(v: &Value, types: ModelRc<AxModelType>) -> AxModelRow {
     AxModelRow {
         key: s(v, "key"),
         name: s(v, "name"),
@@ -184,15 +184,7 @@ fn model_row(v: &Value) -> AxModelRow {
         share: s(v, "share"),
         sub: s(v, "sub"),
         usage: s(v, "usage"),
-        types: list(v, "types", |t| AxModelType {
-            key: s(t, "key"),
-            label: s(t, "label"),
-            tok: s(t, "tok"),
-            tip: s(t, "tip"),
-            cost: s(t, "cost"),
-            w: f(t, "w"),
-            none: b(t, "none"),
-        }),
+        types,
         io: s(v, "io"),
         io_note: s(v, "ioNote"),
         io_quiet: s(v, "ioQuiet"),
@@ -416,6 +408,7 @@ fn agenda_row(v: &Value) -> AxAgendaRow {
 pub struct AnalyticsModels {
     kpis: Rc<VecModel<AxKpi>>,
     models: Rc<VecModel<AxModelRow>>,
+    model_types: Nested<AxModelType>,
     donut: Rc<VecModel<AxDonutSeg>>,
     stats: Rc<VecModel<AxStat>>,
     tokens: Rc<VecModel<AxTokRow>>,
@@ -456,6 +449,7 @@ impl Default for AnalyticsModels {
         Self {
             kpis: Rc::new(VecModel::default()),
             models: Rc::new(VecModel::default()),
+            model_types: Nested::default(),
             donut: Rc::new(VecModel::default()),
             stats: Rc::new(VecModel::default()),
             tokens: Rc::new(VecModel::default()),
@@ -744,9 +738,30 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
     // cost by model and the donut
     let cbm = g(usage, "cbm");
     ax.set_cbm(card_text(cbm));
+    let mut model_rows = Vec::new();
+    let mut live_models = Vec::new();
+    for v in arr(cbm, "rows") {
+        let key = s(v, "key").to_string();
+        let types = m.model_types.sync(
+            &key,
+            rows_of(v, "types", |t| AxModelType {
+                key: s(t, "key"),
+                label: s(t, "label"),
+                tok: s(t, "tok"),
+                tip: s(t, "tip"),
+                cost: s(t, "cost"),
+                w: f(t, "w"),
+                none: b(t, "none"),
+            }),
+            |t: &AxModelType| t.key.clone(),
+        );
+        model_rows.push(model_row(v, types));
+        live_models.push(key);
+    }
+    m.model_types.retain(&live_models);
     sync_rows(
         &m.models,
-        arr(cbm, "rows").iter().map(model_row).collect(),
+        model_rows,
         |r: &AxModelRow| r.key.clone(),
     );
     let donut = g(usage, "donut");

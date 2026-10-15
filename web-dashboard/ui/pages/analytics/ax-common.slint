@@ -189,11 +189,16 @@ export component AxNum inherits Rectangle {
 export component AxTip inherits TouchArea {
     in property <string> tip;
     in property <string> owner: root.tip;
+    property <string> issued-owner;
+    changed tip => { Hover.leave(root.issued-owner); root.issued-owner = ""; }
+    changed owner => { Hover.leave(root.issued-owner); root.issued-owner = ""; }
     changed has-hover => {
         if self.has-hover && root.tip != "" {
-            Hover.tip(root.owner, self.absolute-position, self.width, self.height, root.tip);
+            root.issued-owner = root.owner;
+            Hover.tip(root.issued-owner, self.absolute-position, self.width, self.height, root.tip);
         } else {
-            Hover.leave(root.owner);
+            Hover.leave(root.issued-owner);
+            root.issued-owner = "";
         }
     }
 }
@@ -549,6 +554,7 @@ export component AxSeg inherits Rectangle {
     property <length> ind-x: 0px;
     property <length> ind-w: 0px;
     property <bool> placed: false;
+    property <string> ind-value;
     height: Breakpoints.tier-d ? (root.small ? 32px : 36px) : 44px;
     min-width: row.min-width;
     preferred-width: row.preferred-width;
@@ -561,7 +567,7 @@ export component AxSeg inherits Rectangle {
         y: 4px;
         width: root.ind-w;
         height: root.height - 8px;
-        visible: root.ind-w > 0;
+        visible: root.ind-w > 0 && root.ind-value == root.value;
         border-radius: 7px;
         background: Theme.paper;
         border-width: 1px;
@@ -581,8 +587,8 @@ export component AxSeg inherits Rectangle {
             small: root.small;
             fill: root.fill;
             selected: item.value == root.value;
-            init => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; } }
-            changed selected => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } }
+            init => { if self.selected { root.ind-value = item.value; root.ind-x = self.x; root.ind-w = self.width; } }
+            changed selected => { if self.selected { root.ind-value = item.value; root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } }
             changed x => { if self.selected { root.ind-x = self.x; } }
             changed width => { if self.selected { root.ind-w = self.width; } }
             clicked => {

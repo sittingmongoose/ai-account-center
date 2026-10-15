@@ -262,6 +262,7 @@ component TrendChart inherits Rectangle {
                         viewbox-width: max(1, AxData.trend.pw);
                         viewbox-height: max(1, AxData.trend.ph);
                         fit: fill;
+                        visible: k != "cr" || AxData.cache-on;
                         commands: i == 0 ? AxData.trend-paths.line0 : i == 1 ? AxData.trend-paths.line1 : i == 2 ? AxData.trend-paths.line2 : AxData.trend-paths.line3;
                         stroke: AxColor.of(k);
                         stroke-width: 1.25px;

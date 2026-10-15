@@ -22,11 +22,11 @@ component HeatCell inherits Rectangle {
         width: root.width;
         height: root.height;
         border-radius: 4px;
-        background: root.state == 0 ? Theme.paper.with-alpha(0) : root.state == 1 ? AxColor.heat-zero : AxColor.heat(root.k);
+        background: root.state == 0 ? Theme.paper.with-alpha(0) : root.state == 1 ? AxColor.heat-zero : root.state == 3 ? Theme.paper-3 : AxColor.heat(root.k);
         animate background { duration: Motion.tint(Motion.slow); easing: cubic-bezier(0.65, 0, 0.35, 1); }
         transform-scale: ta.has-hover ? 1.12 : 1;
         animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-        if root.state == 0: Path {
+        if root.state == 0 || root.state == 3: Path {
             width: root.width;
             height: root.height;
             viewbox-width: root.width / 1px;
@@ -132,8 +132,10 @@ export component AxHeatCard inherits AxCard {
             property <length> cw: Breakpoints.tier-d ? max(4px, (self.width - 38px - 24 * 3px) / 24)
                 : min(24px, max(4px, floor((self.width - 32px - 46px) / 24 / 1px) * 1px));
             height: 16px + 3px + 7 * (root.ch + root.cgap);
+            changed cw => { AxData.layout("heat-cell", self.cw, root.ch); }
+            changed height => { AxData.layout("heat", self.width, root.ch); }
             changed width => { AxData.layout("heat", self.width, root.ch); }
-            init => { AxData.layout("heat", self.width, root.ch); }
+            init => { AxData.layout("heat", self.width, root.ch); AxData.layout("heat-cell", self.cw, root.ch); }
             for h[i] in AxData.heat-hours: Text {
                 // P thins the every-3 labels to every 6
                 visible: h != "" && (Breakpoints.tier-d || !Breakpoints.tier-p || mod(i, 6) == 0);
@@ -229,7 +231,7 @@ export component AxHeatCard inherits AxCard {
                     if !self.pressed {
                         return;
                     }
-                    if self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y - 8px || self.mouse-y < self.pressed-y - 8px {
+                    if self.mouse-x > self.pressed-x + 8px || self.mouse-x < self.pressed-x - 8px || self.mouse-y > self.pressed-y + 8px || self.mouse-y < self.pressed-y - 8px {
                         ov.lp-dead = true;
                         lp.running = false;
                         if ov.lp-fired {
@@ -530,20 +532,25 @@ export component AxDailyCard inherits AxCard {
                 HorizontalLayout {
                     spacing: 8px;
                     min-height: 17px;
-                    Text { text: root.sb.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; }
-                    AxRoVal { c: AxColor.of("cost"); shape: "line"; value: "Total " + root.sb.total; }
+                    Text { text: root.sb.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 0px; AxPress { tip: root.sb.time; long-tip: root.sb.time; } }
+                    if root.sb.total != "": AxRoVal { c: AxColor.of("cost"); shape: "line"; value: "Total " + root.sb.total; }
                 }
-                Rectangle {
+                ro-detail := Rectangle {
+                    height: 17px;
                     clip: true;
                     HorizontalLayout {
+                        width: ro-detail.width;
+                        height: ro-detail.height;
                         spacing: 10px;
-                        min-height: 17px;
                         for r in root.sb.rows: HorizontalLayout {
                             spacing: 5px;
-                            VerticalLayout { alignment: center; AxSwatch { c: r.p == "other" ? AxColor.of("other-hue") : AxColor.of(r.p); } }
-                            Text { text: r.label; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; }
-                            Text { text: r.value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            VerticalLayout { alignment: center; AxSwatch { c: r.p == "claude" ? AxColor.of("claude") : r.p == "codex" ? AxColor.of("codex") : AxData.daily.other-hue != "" ? Theme.provider-hue(AxData.daily.other-hue) : Theme.h-model; } }
+                            Text { text: r.label; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; overflow: elide; min-width: 0px; AxPress { tip: r.label + ": " + r.value; long-tip: r.label + ": " + r.value; } }
+                            Text { text: r.value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; overflow: elide; min-width: 0px; AxPress { tip: r.label + ": " + r.value; long-tip: r.label + ": " + r.value; } }
                         }
+                        if root.sb.foot != "": Text { width: root.sb.rows.length > 0 ? ro-detail.width * 0.4 : ro-detail.width; text: root.sb.foot; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; AxPress { tip: root.sb.foot; long-tip: root.sb.foot; } }
                     }
                 }
             }

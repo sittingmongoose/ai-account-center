@@ -58,8 +58,21 @@ component ScopeLines inherits VerticalLayout {
 
 // "Included usage": which tools' logs on which computers are in these numbers, and each source's state and
 // last scan (activity.sources). It names where the numbers come from; it never divides them.
+component IncludedTip inherits TouchArea {
+    in property <string> tip;
+    callback detail(string);
+    changed has-hover => { if self.has-hover { root.detail(root.tip); } }
+    changed pressed => { hold.running = self.pressed; }
+    clicked => { root.detail(root.tip); }
+    hold := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => { self.running = false; root.detail(root.tip); }
+    }
+}
 component SrcCell inherits Text {
     in property <AxSrcCell> c;
+    callback detail(string);
     text: root.c.text;
     font-family: Type.tab;
     font-size: 12px;
@@ -68,9 +81,10 @@ component SrcCell inherits Text {
     overflow: elide;
     horizontal-stretch: 1;
     min-width: 0px;
-    AxTip { tip: root.c.tip; }
+    IncludedTip { tip: root.c.tip; detail(t) => { root.detail(t); } }
 }
 component IncludedLines inherits VerticalLayout {
+    property <string> detail;
     in property <length> body-w;
     // On P the grid becomes a list grouped by tool (DESIGN-MOBILE 4.2.1).
     in property <bool> narrow: false;
@@ -102,7 +116,7 @@ component IncludedLines inherits VerticalLayout {
                 min-height: 28px;
                 alignment: start;
                 Text { text: r.tool; width: 96px; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; }
-                for c in r.cells: SrcCell { c: c; width: root.col-w; }
+                for c in r.cells: SrcCell { c: c; width: root.col-w; detail(t) => { root.detail = t; } }
             }
         }
     }
@@ -114,12 +128,14 @@ component IncludedLines inherits VerticalLayout {
                 spacing: 10px;
                 min-height: 44px;
                 Text { text: AxData.included-hosts.length > i ? AxData.included-hosts[i] : c.id; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                Text { text: c.text; font-family: Type.tab; font-size: Type.small; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; AxPress { tip: c.tip; long-tip: c.tip; } }
+                Text { text: c.text; font-family: Type.tab; font-size: Type.small; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; IncludedTip { tip: c.tip; detail(t) => { root.detail = t; } } }
             }
         }
     }
     Rectangle { height: 1px; background: Theme.rule-2; }
     Rectangle { height: 10px; }
+    Text { text: root.detail == "" ? "Point at or press a source to read its details." : root.detail; width: root.body-w; font-size: 12px; color: Theme.ink-2; wrap: word-wrap; }
+    Rectangle { height: 8px; }
     Text { text: AxData.included.foot; width: root.body-w; font-size: 12px; color: Theme.ink-3; wrap: word-wrap; }
 }
 
@@ -194,7 +210,7 @@ component DayCell inherits Rectangle {
         enabled: !root.day.off;
         mouse-cursor: root.day.off ? default : pointer;
         clicked => { root.picked(root.day.n); }
-        changed has-hover => { if self.has-hover { root.hovered(root.day.n); } }
+        changed has-hover => { root.hovered(self.has-hover ? root.day.n : -1); }
     }
 }
 

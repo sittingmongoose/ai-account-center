@@ -148,9 +148,9 @@ component CbmRow inherits Rectangle {
     property <bool> mounted: !Motion.on;
     mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
     property <bool> landed: !Motion.on;
-    land := Timer { interval: root.delay + root.m.idx * 70ms + 820ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
+    land := Timer { interval: root.delay + root.m.idx * min(70ms, 800ms / max(1, AxData.models.length)) + 820ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
     property <float> fill: root.played && root.mounted ? root.m.w : 0;
-    animate fill { duration: Motion.on ? 760ms : 0ms; delay: Motion.on && !root.landed ? root.delay + root.m.idx * 70ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    animate fill { duration: Motion.on ? 760ms : 0ms; delay: Motion.on && !root.landed ? root.delay + root.m.idx * min(70ms, 800ms / max(1, AxData.models.length)) : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     property <length> pop-w: Breakpoints.tier-d ? 440px : min(440px, Breakpoints.tier-width - 2 * Breakpoints.gutter);
     ta := TouchArea {
         mouse-cursor: pointer;
@@ -244,9 +244,9 @@ component CbmRowStacked inherits Rectangle {
     property <bool> mounted: !Motion.on;
     mount := Timer { interval: 16ms; running: !root.mounted; triggered => { self.running = false; root.mounted = true; } }
     property <bool> landed: !Motion.on;
-    land := Timer { interval: root.delay + root.m.idx * 70ms + 820ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
+    land := Timer { interval: root.delay + root.m.idx * min(70ms, 800ms / max(1, AxData.models.length)) + 820ms; running: root.played && root.mounted && !root.landed; triggered => { self.running = false; root.landed = true; } }
     property <float> fill: root.played && root.mounted ? root.m.w : 0;
-    animate fill { duration: Motion.on ? 760ms : 0ms; delay: Motion.on && !root.landed ? root.delay + root.m.idx * 70ms : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    animate fill { duration: Motion.on ? 760ms : 0ms; delay: Motion.on && !root.landed ? root.delay + root.m.idx * min(70ms, 800ms / max(1, AxData.models.length)) : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
     property <length> pop-w: Breakpoints.tier-d ? 440px : min(440px, Breakpoints.tier-width - 2 * Breakpoints.gutter);
     ta := TouchArea {
         mouse-cursor: pointer;
