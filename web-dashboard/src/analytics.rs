@@ -759,11 +759,7 @@ pub fn set_analytics(ui: &Dashboard, m: &mut AnalyticsModels, json: &str) -> Res
         live_models.push(key);
     }
     m.model_types.retain(&live_models);
-    sync_rows(
-        &m.models,
-        model_rows,
-        |r: &AxModelRow| r.key.clone(),
-    );
+    sync_rows(&m.models, model_rows, |r: &AxModelRow| r.key.clone());
     let donut = g(usage, "donut");
     ax.set_donut(AxDonut {
         sub: s(donut, "sub"),
