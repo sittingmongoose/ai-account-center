@@ -156,7 +156,9 @@ def burn_text(burn, now):
     if minutes < 60 and burn.get("lastHour") is not None:
         parts.append("%s%%/h over 1 h" % number(burn["lastHour"]))
     full = parse_time(burn.get("projectedFullAt"))
-    if full is not None:
+    if full is not None and full <= now:
+        parts.append("at its limit" + (" until the reset" if burn.get("runsOutBeforeReset") is True else ""))
+    elif full is not None:
         when = "full in %s" % span((full - now).total_seconds())
         if burn.get("runsOutBeforeReset") is True:
             when += " BEFORE the reset"
@@ -339,7 +341,8 @@ def rules_text(kind="other"):
         "and when choosing between providers or accounts. Find your own login by its email (T3 names provider "
         "instances after their account email).",
         "- A window marked `full in ... BEFORE the reset` will run out at the current pace, sometimes within minutes: "
-        "slow down, finish the current step, or tell the user rather than running the account dry.",
+        "slow down, finish the current step, or tell the user rather than running the account dry. One marked "
+        "`at its limit until the reset` is already used up: use another account or provider.",
         "- A snapshot past its stale limit means the dashboard stopped updating it: say so instead of trusting old "
         "numbers. It is read-only; switching accounts, sign-in and refresh stay in the AI Account Center dashboard.",
     ]

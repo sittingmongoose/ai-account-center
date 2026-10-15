@@ -595,6 +595,21 @@ describe('agent usage snapshot files', () => {
     expect(words).not.toContain('burning');
   });
 
+  it('says a window already used up is at its limit, not full in now', () => {
+    const row = account({ windows: [window({ usedPercent: 100, remainingPercent: 0 })] });
+    const { snapshot } = buildSnapshotFiles(
+      {
+        accounts: [row],
+        history: history([record(row, 70, 100), record(row, 30, 100)]),
+        sampledAt: NOW,
+      },
+      60
+    );
+    const words = renderSnapshotMarkdown(snapshot);
+    expect(words).toContain('at its limit until the reset (0%/h over the last 6 h)');
+    expect(words).not.toContain('full in now');
+  });
+
   it('says a missing number was not reported and skips windows of an account without a reading', () => {
     const { snapshot } = buildSnapshotFiles(
       {

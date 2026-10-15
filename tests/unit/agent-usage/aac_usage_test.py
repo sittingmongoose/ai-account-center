@@ -208,6 +208,12 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(broken.read_text(encoding="utf-8").count(aac.BEGIN), 1)
         self.assertIn(aac.BEGIN, (self.home / ".codex" / "AGENTS.md").read_text(encoding="utf-8"))
 
+    def test_a_used_up_window_is_at_its_limit(self):
+        now = aac.now_utc()
+        text = aac.burn_text({"pace": 0, "paceMinutes": 1440, "projectedFullAt": iso(now - dt.timedelta(minutes=1)),
+                              "runsOutBeforeReset": True}, now)
+        self.assertEqual(text, "pace 0%/h over 24 h, at its limit until the reset")
+
     def test_falling_usage_is_not_called_a_burn(self):
         text = aac.burn_text({"pace": -3.6, "paceMinutes": 5, "projectedFullAt": None}, aac.now_utc())
         self.assertEqual(text, "usage falling -3.60%/h over 5 min")

@@ -195,6 +195,8 @@ function burnText(burn: BurnRate | null, now: number): string | null {
   const pace = `${amount(burn.pace)}%/h over the last ${over}${hour}`;
   if (burn.pace < 0) return `usage falling ${pace}`;
   if (!burn.projectedFullAt) return `burning ${pace}`;
+  if (Date.parse(burn.projectedFullAt) <= now)
+    return `at its limit${burn.runsOutBeforeReset === true ? ' until the reset' : ''} (${pace})`;
   const full = `full in ${span((Date.parse(burn.projectedFullAt) - now) / 1000)}`;
   const reset =
     burn.runsOutBeforeReset === true
