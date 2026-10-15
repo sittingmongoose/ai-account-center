@@ -665,3 +665,29 @@ describe('activation target revalidation under the shared lifecycle lock', () =>
     expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('plum'));
   });
 });
+
+it('an automatic activation waiting behind a manual switch never stops runtime or undoes it', async () => {
+  fs.writeFileSync(path.join(codexHome, 'auth.json'), fixture('gmail'));
+  const { codexAuthHash } = await import('../../../src/codex-auth/codex-activation-confirmation');
+  const expectedLiveFingerprint = codexAuthHash(fixture('gmail'));
+  const release = await realLock(codexHome, {
+    realpath: false,
+    lockfilePath: path.join(codexHome, '.ccs-activation.lock'),
+  });
+  const asked = deferred();
+  const watcher = watchActivationLock({ asked: asked.resolve, acquired: () => {} });
+  const events: string[] = [];
+  const attempt = activateCodexProfile('plum', {
+    registry,
+    codexHome,
+    runtime: runtime(events),
+    expectedLiveFingerprint,
+  });
+  await asked.promise;
+  fs.writeFileSync(path.join(codexHome, 'auth.json'), fixture('plum'));
+  await release();
+  await expect(attempt).rejects.toMatchObject({ code: 'confirmation_stale' });
+  watcher.mockRestore();
+  expect(events).toEqual([]);
+  expect(fs.readFileSync(path.join(codexHome, 'auth.json'))).toEqual(fixture('plum'));
+});

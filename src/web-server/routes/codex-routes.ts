@@ -156,8 +156,6 @@ router.post('/profiles/:name/activate', async (req: Request, res: Response): Pro
       name: activated.name,
       email: activated.email,
       plan: activated.plan,
-      codexHome: activated.codexHome,
-      previousEmail: activated.previousEmail,
     });
   } catch (error) {
     // Never return raw filesystem, process, or auth.json errors to the browser.

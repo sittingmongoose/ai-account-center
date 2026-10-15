@@ -1,25 +1,17 @@
 /**
  * codex-auth login command.
- * Spawns `codex login` with CODEX_HOME pinned to the profile dir.
- * Auto-creates profile if it doesn't exist yet.
- * Updates registry with email/plan from JWT after successful login.
+ * Stages interactive OAuth privately, then uses the dashboard lifecycle guards to publish.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import * as childProcess from 'child_process';
-import { createLogger } from '../../services/logging';
+import { randomBytes } from 'crypto';
 import { initUI, info, ok } from '../../utils/ui';
 import { exitWithError } from '../../errors';
 import { ExitCode } from '../../errors/exit-codes';
-import { resolveCodexProfileDir, ensureSharedConfigSymlink } from '../index';
-import { decodeAccountIdentity } from '../codex-account-identity';
-import { detectCodexCli } from '../../targets/codex-detector';
+import { CodexAccountLifecycle } from '../../web-server/services/codex-account-lifecycle';
+import { SignInJobError } from '../../web-server/services/signin-jobs';
 import { parseArgs, rejectUnsupportedOptions, getProfileNameError } from './types';
-import type { CodexProfileMetadata } from '../types';
 import type { CodexCommandContext } from './types';
-
-const logger = createLogger('codex-auth:cmd:login');
 
 export async function handleLoginCodex(ctx: CodexCommandContext, args: string[]): Promise<void> {
   await initUI();
@@ -40,101 +32,37 @@ export async function handleLoginCodex(ctx: CodexCommandContext, args: string[])
     return;
   }
 
-  const { registry } = ctx;
-  const profileDir = resolveCodexProfileDir(profileName);
-
-  // Auto-create profile if missing
-  if (!registry.hasProfile(profileName)) {
-    console.log(info(`Auto-creating profile ${profileName}`));
-    ensureProfileDirReady(profileDir);
-    registry.createProfile(profileName, {
-      created: new Date().toISOString(),
-      last_used: null,
-    });
-  }
-
-  const codexCli = detectCodexCli();
-  if (!codexCli) {
-    console.log('');
-    console.log('Install:');
-    console.log('  npm i -g @openai/codex');
-    console.log('  # or follow https://github.com/openai/codex#install');
-    console.log('');
-    console.log(`After installing, re-run:`);
-    console.log(`  ai-account-center codex-auth login ${profileName}`);
-    exitWithError('codex CLI not found', ExitCode.BINARY_ERROR);
-    return;
-  }
-
-  // Ensure profile dir exists (may have been deleted)
-  if (!fs.existsSync(profileDir)) {
-    ensureProfileDirReady(profileDir);
-  }
-
-  const authJsonPath = path.join(profileDir, 'auth.json');
-  const authJsonExisted = fs.existsSync(authJsonPath);
-
-  console.log(info(`Launching codex login for profile: ${profileName}`));
-  console.log(`  CODEX_HOME=${profileDir}`);
-  console.log('');
-
-  const exitCode = await new Promise<number>((resolve) => {
-    const child = childProcess.spawn(codexCli, ['login'], {
-      stdio: 'inherit',
-      env: { ...process.env, CODEX_HOME: profileDir },
-      windowsHide: true,
-    });
-
-    child.on('error', (err) => {
-      process.stderr.write(`[X] Failed to execute codex: ${err.message}\n`);
-      logger.warn('codex-auth.login.spawn-error', 'Spawn failed', { error: err.message });
-      resolve(ExitCode.BINARY_ERROR);
-    });
-
-    child.on('exit', (code) => {
-      resolve(code ?? 1);
-    });
-  });
-
-  if (exitCode === 0 && fs.existsSync(authJsonPath)) {
-    const identity = decodeAccountIdentity(authJsonPath);
-    const now = new Date().toISOString();
-    const metadataUpdate: Partial<CodexProfileMetadata> = { last_used: now };
-    if (identity.email !== undefined) metadataUpdate.email = identity.email;
-    if (identity.plan_type !== undefined) metadataUpdate.plan_type = identity.plan_type;
-    if (identity.account_id !== undefined) metadataUpdate.account_id = identity.account_id;
-    registry.updateProfile(profileName, metadataUpdate);
-    const emailStr = identity.email ?? '<unknown>';
-    const planStr = identity.plan_type ? ` (plan: ${identity.plan_type})` : '';
-    console.log(ok(`Logged in as ${emailStr}${planStr}`));
-    console.log(`  Profile: ${profileName}`);
-    console.log(`  Updated: ${now}`);
-  } else if (exitCode === 0) {
-    process.stderr.write(
-      '[!] codex login exited cleanly but no auth.json. Skipping registry update.\n'
-    );
-  } else {
-    if (!authJsonExisted) {
-      process.stderr.write(
-        `[!] Login cancelled or failed. Profile ${profileName} remains unauthenticated.\n`
-      );
-    } else {
-      process.stderr.write('[!] Login failed. Previous credentials may still be valid.\n');
-    }
-    process.exit(ExitCode.AUTH_ERROR);
-  }
-}
-
-function ensureProfileDirReady(profileDir: string): void {
+  const lifecycle = new CodexAccountLifecycle({ registry: () => ctx.registry });
+  const exists = ctx.registry.hasProfile(profileName);
+  const flow = exists ? lifecycle.signInAgainFlow(profileName) : lifecycle.addFlow(profileName);
+  const jobId = `job_${randomBytes(8).toString('hex')}`;
+  let failed = false;
+  let failureCode: ExitCode = ExitCode.AUTH_ERROR;
   try {
-    fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
-    ensureSharedConfigSymlink(profileDir);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn('codex-auth.login.config-repair-failed', 'Config repair failed', {
-      profileDir,
-      error: msg,
+    const command = await flow.prepare(jobId);
+    console.log(info(`Launching codex login for profile: ${profileName}`));
+    const exitCode = await new Promise<number>((resolve) => {
+      const child = childProcess.spawn(command.file, ['login'], {
+        stdio: 'inherit',
+        env: { ...process.env, CODEX_HOME: command.env.CODEX_HOME },
+        windowsHide: true,
+      });
+      child.on('error', () => resolve(ExitCode.BINARY_ERROR));
+      child.on('exit', (code) => resolve(code ?? 1));
     });
-    exitWithError(`Failed to prepare profile config.toml: ${msg}`, ExitCode.CONFIG_ERROR);
+    if (exitCode !== 0) throw new SignInJobError('provider_denied');
+    const result = await flow.complete(jobId, { stopped: () => false });
+    console.log(ok(`Logged in as ${result.email}${result.plan ? ` (plan: ${result.plan})` : ''}`));
+    console.log(`  Profile: ${profileName}`);
+  } catch (error) {
+    failed = true;
+    if (error instanceof SignInJobError && error.code === 'tool_missing')
+      failureCode = ExitCode.BINARY_ERROR;
+    const message =
+      error instanceof SignInJobError ? error.message : 'The sign-in could not be saved safely.';
+    process.stderr.write(`[!] ${message} Previous credentials were preserved.\n`);
+  } finally {
+    await flow.cleanup(jobId);
   }
+  if (failed) exitWithError('Codex sign-in failed', failureCode);
 }

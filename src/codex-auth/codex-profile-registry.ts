@@ -273,7 +273,7 @@ export class CodexProfileRegistry {
     assertValidProfileName(name);
     this._withRegistryWriteLock(() => {
       const data = this._read();
-      if (data.profiles[name]) {
+      if (Object.prototype.hasOwnProperty.call(data.profiles, name)) {
         throw new Error(`Profile already exists: ${name}`);
       }
       data.profiles[name] = {
@@ -291,7 +291,7 @@ export class CodexProfileRegistry {
     assertValidProfileName(name);
     const data = this._read();
     const profile = data.profiles[name];
-    if (!profile) {
+    if (!Object.prototype.hasOwnProperty.call(data.profiles, name)) {
       throw new Error(`Profile not found: ${name}`);
     }
     return profile;
@@ -301,7 +301,7 @@ export class CodexProfileRegistry {
     assertValidProfileName(name);
     this._withRegistryWriteLock(() => {
       const data = this._read();
-      if (!data.profiles[name]) {
+      if (!Object.prototype.hasOwnProperty.call(data.profiles, name)) {
         throw new Error(`Profile not found: ${name}`);
       }
       data.profiles[name] = { ...data.profiles[name], ...partial } as CodexProfileMetadata;
@@ -313,7 +313,7 @@ export class CodexProfileRegistry {
     assertValidProfileName(name);
     this._withRegistryWriteLock(() => {
       const data = this._read();
-      if (!data.profiles[name]) {
+      if (!Object.prototype.hasOwnProperty.call(data.profiles, name)) {
         throw new Error(`Profile not found: ${name}`);
       }
       if (data.default === name && Object.keys(data.profiles).length > 1 && !options.forceDefault) {
@@ -347,7 +347,7 @@ export class CodexProfileRegistry {
     assertValidProfileName(name);
     this._withRegistryWriteLock(() => {
       const data = this._read();
-      if (!data.profiles[name]) {
+      if (!Object.prototype.hasOwnProperty.call(data.profiles, name)) {
         throw new Error(`Profile not found: ${name}`);
       }
       data.default = name;

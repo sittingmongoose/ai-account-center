@@ -1,302 +1,124 @@
-/**
- * Tests for codex-auth login command.
- */
-import { afterEach, beforeEach, describe, expect, it, spyOn, mock } from 'bun:test';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { afterEach, beforeEach, expect, it, mock, spyOn } from 'bun:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import * as childProcess from 'child_process';
+import * as detector from '../../../../src/targets/codex-detector';
+import * as activationLock from '../../../../src/codex-auth/codex-activation-lock';
+import { CodexProfileRegistry } from '../../../../src/codex-auth/codex-profile-registry';
+import { resolveCodexProfileDir } from '../../../../src/codex-auth/codex-profile-paths';
+import { handleLoginCodex } from '../../../../src/codex-auth/commands/login-command';
 
-let tempDir: string;
-let ccsHome: string;
-const ORIG_CCS_HOME = process.env.CCS_HOME;
+const oldCcsHome = process.env.CCS_HOME;
+let temporary: string;
+let registry: CodexProfileRegistry;
+let staged: string;
+let native: string;
+let exitCode: number | undefined;
+const fixture = fs.readFileSync(path.join(__dirname, '../fixtures/activation/plum.auth.json'));
+const other = fs.readFileSync(path.join(__dirname, '../fixtures/activation/gmail.auth.json'));
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-login-test-'));
-  ccsHome = path.join(tempDir, 'ccs');
-  fs.mkdirSync(path.join(ccsHome, '.ccs'), { recursive: true });
-  process.env.CCS_HOME = ccsHome;
+  temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-login-'));
+  process.env.CCS_HOME = temporary;
+  native = path.join(temporary, 'native');
+  registry = new CodexProfileRegistry();
+  exitCode = undefined;
+  spyOn(activationLock, 'getActivationCodexHome').mockReturnValue(native);
+  spyOn(detector, 'detectCodexCli').mockReturnValue('/fake/codex');
+  spyOn(console, 'log').mockImplementation(() => {});
+  spyOn(process.stderr, 'write').mockReturnValue(true);
+  spyOn(process, 'exit').mockImplementation((code) => {
+    exitCode = Number(code);
+    throw new Error('test exit');
+  });
 });
-
 afterEach(() => {
-  if (ORIG_CCS_HOME === undefined) delete process.env.CCS_HOME;
-  else process.env.CCS_HOME = ORIG_CCS_HOME;
-  fs.rmSync(tempDir, { recursive: true, force: true });
   mock.restore();
+  if (oldCcsHome === undefined) delete process.env.CCS_HOME;
+  else process.env.CCS_HOME = oldCcsHome;
+  fs.rmSync(temporary, { recursive: true, force: true });
 });
-
-async function makeCtx() {
-  const { CodexProfileRegistry } = await import(
-    '../../../../src/codex-auth/codex-profile-registry'
-  );
-  return { registry: new CodexProfileRegistry(), version: '0.0.0-test' };
+function saved(name: string, content: Buffer) {
+  registry.createProfile(name);
+  fs.mkdirSync(resolveCodexProfileDir(name), { recursive: true });
+  fs.writeFileSync(path.join(resolveCodexProfileDir(name), 'auth.json'), content);
 }
-
-function spawnReturnsCode(code: number, writeAuth = false) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  spyOn(childProcess, 'spawn').mockImplementation((_cmd: string, _args: string[], opts: any) => {
-    if (writeAuth && opts?.env?.CODEX_HOME) {
-      const dir = opts.env.CODEX_HOME as string;
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(
-        path.join(dir, 'auth.json'),
-        JSON.stringify({ tokens: { id_token: 'h.e30K.s' } })
-      );
-    }
-    const ee = {
-      on: (evt: string, cb: (code: number) => void) => {
-        if (evt === 'exit') setTimeout(() => cb(code), 0);
-        return ee;
+function spawn(content: Buffer | null, code = 0, during?: () => Promise<void>) {
+  spyOn(childProcess, 'spawn').mockImplementation((_file, _args, options) => {
+    staged = String(options?.env?.CODEX_HOME);
+    if (content) fs.writeFileSync(path.join(staged, 'auth.json'), content);
+    const child = {
+      on(event: string, callback: (code: number) => void) {
+        if (event === 'exit')
+          void Promise.resolve().then(async () => {
+            await during?.();
+            callback(code);
+          });
+        return child;
       },
     };
-    return ee as ReturnType<typeof childProcess.spawn>;
+    return child as ReturnType<typeof childProcess.spawn>;
   });
 }
-
-function buildToken(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return `${header}.${body}.fakesig`;
+async function run(name: string) {
+  try {
+    await handleLoginCodex({ registry, version: 'test' }, [name]);
+  } catch (error) {
+    if (exitCode === undefined) throw error;
+  }
 }
-
-describe('handleLoginCodex — binary missing', () => {
-  it('exits with BINARY_ERROR when codex not found', async () => {
-    const detectorMod = await import('../../../../src/targets/codex-detector');
-    spyOn(detectorMod, 'detectCodexCli').mockReturnValue(null);
-    const { handleLoginCodex } = await import('../../../../src/codex-auth/commands/login-command');
-    const ctx = await makeCtx();
-
-    let exitCode = -1;
-    const origExit = process.exit;
-    process.exit = (code?: number) => {
-      exitCode = code ?? 0;
-      throw new Error('process.exit');
-    };
-    try {
-      await handleLoginCodex(ctx, ['myprofile']);
-    } catch {
-      /* process.exit throws */
-    } finally {
-      process.exit = origExit;
-    }
-    expect(exitCode).toBe(5); // ExitCode.BINARY_ERROR
+it('stages OAuth outside the profile without holding the activation lock, then publishes', async () => {
+  spawn(fixture, 0, async () => {
+    expect(registry.hasProfile('work')).toBe(false);
+    const release = await activationLock.acquireCodexActivationLock(native);
+    await release();
   });
+  // The lock directory normally exists for a shared native login.
+  fs.mkdirSync(native);
+  await run('work');
+  expect(exitCode).toBeUndefined();
+  expect(staged).not.toBe(resolveCodexProfileDir('work'));
+  expect(fs.existsSync(staged)).toBe(false);
+  expect(fs.readFileSync(path.join(resolveCodexProfileDir('work'), 'auth.json'))).toEqual(fixture);
+  expect(registry.getProfile('work').email).toBe('plum@example.test');
 });
-
-describe('handleLoginCodex — missing profile auto-creates', () => {
-  it('auto-creates profile entry when not in registry', async () => {
-    const detectorMod = await import('../../../../src/targets/codex-detector');
-    spyOn(detectorMod, 'detectCodexCli').mockReturnValue('/usr/bin/codex');
-    spawnReturnsCode(0, true);
-
-    const { handleLoginCodex } = await import('../../../../src/codex-auth/commands/login-command');
-    const ctx = await makeCtx();
-
-    const out: string[] = [];
-    const origLog = console.log;
-    console.log = (...a: unknown[]) => out.push(a.join(' '));
-    try {
-      await handleLoginCodex(ctx, ['newprofile']);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(ctx.registry.hasProfile('newprofile')).toBe(true);
-    expect(out.some((l) => l.includes('Auto-creating'))).toBe(true);
-  });
-
-  it('does not create an orphan registry entry when profile dir setup fails', async () => {
-    const detectorMod = await import('../../../../src/targets/codex-detector');
-    spyOn(detectorMod, 'detectCodexCli').mockReturnValue('/usr/bin/codex');
-
-    const originalMkdirSync = fs.mkdirSync;
-    spyOn(fs, 'mkdirSync').mockImplementation(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (target: fs.PathLike, options?: any): string | undefined => {
-        if (String(target).includes('codex-instances')) {
-          throw Object.assign(new Error('simulated mkdir failure'), { code: 'EACCES' });
-        }
-        return originalMkdirSync(target, options);
-      }
+it.each(['different', 'duplicate', 'failed', 'incomplete', 'removed'] as const)(
+  'preserves credentials on %s login failure',
+  async (kind) => {
+    saved('work', fixture);
+    if (kind === 'duplicate') saved('second', fixture);
+    spawn(
+      kind === 'different' ? other : kind === 'incomplete' ? Buffer.from('{}') : fixture,
+      kind === 'failed' ? 1 : 0,
+      kind === 'removed' ? async () => registry.removeProfile('work') : undefined
     );
-
-    const { handleLoginCodex } = await import('../../../../src/codex-auth/commands/login-command');
-    const ctx = await makeCtx();
-
-    let exitCode = -1;
-    const origExit = process.exit;
-    process.exit = (code?: number) => {
-      exitCode = code ?? 0;
-      throw new Error('exit');
-    };
-    const origLog = console.log;
-    console.log = () => {};
-    try {
-      await handleLoginCodex(ctx, ['orphan']);
-    } catch {
-      /* expected */
-    } finally {
-      console.log = origLog;
-      process.exit = origExit;
-    }
-
-    expect(exitCode).toBe(2);
-    expect(ctx.registry.hasProfile('orphan')).toBe(false);
-  });
-
-  it('rejects command-specific flags that login does not support', async () => {
-    const { handleLoginCodex } = await import('../../../../src/codex-auth/commands/login-command');
-    const ctx = await makeCtx();
-
-    let exitCalled = false;
-    const origExit = process.exit;
-    process.exit = () => {
-      exitCalled = true;
-      throw new Error('exit');
-    };
-    try {
-      await handleLoginCodex(ctx, ['flagleak', '--json']);
-    } catch {
-      /* expected */
-    } finally {
-      process.exit = origExit;
-    }
-
-    expect(exitCalled).toBe(true);
-    expect(ctx.registry.hasProfile('flagleak')).toBe(false);
-  });
-});
-
-describe('handleLoginCodex — spawn called with CODEX_HOME pinned', () => {
-  it('passes CODEX_HOME env to spawn', async () => {
-    const detectorMod = await import('../../../../src/targets/codex-detector');
-    spyOn(detectorMod, 'detectCodexCli').mockReturnValue('/usr/bin/codex');
-    spawnReturnsCode(0, true);
-
-    const { handleLoginCodex } = await import('../../../../src/codex-auth/commands/login-command');
-    const ctx = await makeCtx();
-    ctx.registry.createProfile('pintest', { created: new Date().toISOString(), last_used: null });
-
-    const origLog = console.log;
-    console.log = () => {};
-    try {
-      await handleLoginCodex(ctx, ['pintest']);
-    } finally {
-      console.log = origLog;
-    }
-
-    expect(childProcess.spawn).toHaveBeenCalled();
-    const call = (childProcess.spawn as ReturnType<typeof spyOn>).mock.calls[0];
-    expect(call[2]?.env?.CODEX_HOME).toContain('pintest');
-  });
-});
-
-describe('handleLoginCodex — clean exit updates registry', () => {
-  it('updates email/plan in registry after successful login', async () => {
-    const detectorMod = await import('../../../../src/targets/codex-detector');
-    spyOn(detectorMod, 'detectCodexCli').mockReturnValue('/usr/bin/codex');
-    spawnReturnsCode(0, true); // writes auth.json with minimal JWT
-
-    const { handleLoginCodex } = await import('../../../../src/codex-auth/commands/login-command');
-    const ctx = await makeCtx();
-    ctx.registry.createProfile('updatetest', {
-      created: new Date().toISOString(),
-      last_used: null,
-    });
-
-    const origLog = console.log;
-    console.log = () => {};
-    try {
-      await handleLoginCodex(ctx, ['updatetest']);
-    } finally {
-      console.log = origLog;
-    }
-
-    const meta = ctx.registry.getProfile('updatetest');
-    // last_used should now be set
-    expect(meta.last_used).toBeTruthy();
-  });
-
-  it('preserves cached identity metadata when a re-login token is sparse', async () => {
-    const detectorMod = await import('../../../../src/targets/codex-detector');
-    spyOn(detectorMod, 'detectCodexCli').mockReturnValue('/usr/bin/codex');
-    spawnReturnsCode(0, true); // writes auth.json with a valid but sparse JWT payload
-
-    const { handleLoginCodex } = await import('../../../../src/codex-auth/commands/login-command');
-    const ctx = await makeCtx();
-    ctx.registry.createProfile('preservemeta', {
-      created: new Date().toISOString(),
-      last_used: null,
-      email: 'cached@example.com',
-      plan_type: 'pro',
-      account_id: 'acct-cached',
-    });
-
-    const origLog = console.log;
-    console.log = () => {};
-    try {
-      await handleLoginCodex(ctx, ['preservemeta']);
-    } finally {
-      console.log = origLog;
-    }
-
-    const meta = ctx.registry.getProfile('preservemeta');
-    expect(meta.last_used).toBeTruthy();
-    expect(meta.email).toBe('cached@example.com');
-    expect(meta.plan_type).toBe('pro');
-    expect(meta.account_id).toBe('acct-cached');
-  });
-
-  it('persists account_id when login token has account_id only', async () => {
-    const detectorMod = await import('../../../../src/targets/codex-detector');
-    spyOn(detectorMod, 'detectCodexCli').mockReturnValue('/usr/bin/codex');
-
-    spyOn(childProcess, 'spawn').mockImplementation(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (_cmd: string, _args: string[], opts: any) => {
-        const dir = (opts?.env?.CODEX_HOME as string) ?? '';
-        if (dir) {
-          fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(
-            path.join(dir, 'auth.json'),
-            JSON.stringify({
-              tokens: {
-                id_token: buildToken({
-                  'https://api.openai.com/auth': {
-                    chatgpt_account_id: 'acct-login-only',
-                  },
-                }),
-              },
-            })
-          );
-        }
-        const ee = {
-          on: (evt: string, cb: (code: number) => void) => {
-            if (evt === 'exit') setTimeout(() => cb(0), 0);
-            return ee;
-          },
-        };
-        return ee as ReturnType<typeof childProcess.spawn>;
-      }
+    await run('work');
+    expect(exitCode).toBeDefined();
+    expect(fs.readFileSync(path.join(resolveCodexProfileDir('work'), 'auth.json'))).toEqual(
+      fixture
     );
+    expect(fs.existsSync(staged)).toBe(false);
+  }
+);
+it('refuses a duplicate on Add without publishing a profile', async () => {
+  saved('other', fixture);
+  spawn(fixture);
+  await run('new');
+  expect(exitCode).toBeDefined();
+  expect(registry.hasProfile('new')).toBe(false);
+  expect(fs.existsSync(resolveCodexProfileDir('new'))).toBe(false);
+});
+it('rejects unsupported options before creating staging', async () => {
+  await expect(
+    handleLoginCodex({ registry, version: 'test' }, ['work', '--json'])
+  ).rejects.toThrow();
+  expect(registry.hasProfile('work')).toBe(false);
+});
 
-    const { handleLoginCodex } = await import('../../../../src/codex-auth/commands/login-command');
-    const ctx = await makeCtx();
-    ctx.registry.createProfile('accountonly', {
-      created: new Date().toISOString(),
-      last_used: null,
-    });
-
-    const origLog = console.log;
-    console.log = () => {};
-    try {
-      await handleLoginCodex(ctx, ['accountonly']);
-    } finally {
-      console.log = origLog;
-    }
-
-    const meta = ctx.registry.getProfile('accountonly');
-    expect(meta.last_used).toBeTruthy();
-    expect(meta.account_id).toBe('acct-login-only');
-  });
+it('reports a missing CLI without creating or changing a profile', async () => {
+  spyOn(detector, 'detectCodexCli').mockReturnValue(null);
+  await run('work');
+  expect(exitCode).toBe(5);
+  expect(registry.hasProfile('work')).toBe(false);
 });

@@ -317,10 +317,10 @@ export class CodexAccountLifecycle {
       const staging = this.stagingDir(jobId);
       const login = await readCodexLogin(path.join(staging, 'auth.json'));
       if (!login) throw new SignInJobError('write_failed');
-      if (await this.otherProfileWithEmail(login.email, null)) {
-        throw new SignInJobError('duplicate_identity');
-      }
       return this.commitUnderLock(control, async () => {
+        if (await this.otherProfileWithEmail(login.email, null)) {
+          throw new SignInJobError('duplicate_identity');
+        }
         if (await this.nameInUse(name)) throw new SignInJobError('write_failed');
         const target = this.profileDir(name);
         await fs.rename(staging, target);
@@ -346,17 +346,16 @@ export class CodexAccountLifecycle {
     return this.flow('signin-again', name, async (jobId, control) => {
       const login = await readCodexLogin(path.join(this.stagingDir(jobId), 'auth.json'));
       if (!login) throw new SignInJobError('write_failed');
-      const registry = this.registry();
-      if (!registry.hasProfile(name)) throw new SignInJobError('write_failed');
-      const authPath = path.join(this.profileDir(name), 'auth.json');
-      const saved = await readCodexLogin(authPath);
-      const meta = registry.getProfile(name);
-      if (!sameCodexIdentity(saved, meta, login)) throw new SignInJobError('identity_mismatch');
-      const knownEmail = saved?.email ?? meta.email ?? null;
-      if (knownEmail === null && (await this.otherProfileWithEmail(login.email, name))) {
-        throw new SignInJobError('duplicate_identity');
-      }
       return this.commitUnderLock(control, async () => {
+        const registry = this.registry();
+        if (!registry.hasProfile(name)) throw new SignInJobError('write_failed');
+        const authPath = path.join(this.profileDir(name), 'auth.json');
+        const saved = await readCodexLogin(authPath);
+        const meta = registry.getProfile(name);
+        if (!sameCodexIdentity(saved, meta, login)) throw new SignInJobError('identity_mismatch');
+        if (await this.otherProfileWithEmail(login.email, name)) {
+          throw new SignInJobError('duplicate_identity');
+        }
         // Activation copies the live login back into the active profile, which would undo
         // this. Another process may have activated it a moment ago: no cached answer counts.
         invalidateCodexAuthProfilesCache();
@@ -378,6 +377,7 @@ export class CodexAccountLifecycle {
         }
         try {
           registry.updateProfile(name, {
+            last_used: new Date(this.now()).toISOString(),
             email: login.email,
             plan_type: login.plan,
             ...(login.accountId ? { account_id: login.accountId } : {}),

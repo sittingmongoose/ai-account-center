@@ -90,8 +90,6 @@ describe('POST /api/codex/profiles/:name/activate', () => {
       name: 'work',
       email: 'work@example.test',
       plan: 'pro',
-      codexHome: '/fake/.codex',
-      previousEmail: 'personal@example.test',
     });
     expect(JSON.stringify(body)).not.toContain('MUST_NOT_APPEAR_IN_RESPONSE');
   });

@@ -376,3 +376,17 @@ async function waitForChildExit(child: ReturnType<typeof spawn>): Promise<void> 
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve) => child.once('exit', () => resolve()));
 }
+
+it('treats constructor as an own profile name throughout CRUD', () => {
+  const registry = new CodexProfileRegistry(path.join(tempDir, 'constructor.yaml'));
+  expect(registry.hasProfile('constructor')).toBe(false);
+  expect(() => registry.getProfile('constructor')).toThrow('Profile not found');
+  expect(() => registry.updateProfile('constructor', {})).toThrow('Profile not found');
+  expect(() => registry.setDefault('constructor')).toThrow('Profile not found');
+  registry.createProfile('constructor');
+  registry.setDefault('constructor');
+  registry.updateProfile('constructor', { email: 'fixture@example.test' });
+  expect(registry.getProfile('constructor').email).toBe('fixture@example.test');
+  registry.removeProfile('constructor');
+  expect(registry.hasProfile('constructor')).toBe(false);
+});

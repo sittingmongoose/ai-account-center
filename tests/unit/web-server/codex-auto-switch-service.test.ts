@@ -184,7 +184,9 @@ describe('native Codex automatic switching', () => {
     const status = h.service.updateSettings({ thresholdPercent: 15 });
     expect(status).toMatchObject({ enabled: true, thresholdPercent: 15, outcome: 'scheduled' });
     await h.service.runCycle();
-    expect(h.activate).toHaveBeenCalledWith('beta');
+    expect(h.activate).toHaveBeenCalledWith('beta', {
+      expectedLiveFingerprint: 'private-live-fingerprint',
+    });
   });
 
   it('requires a candidate above the configured threshold in every reported core window', async () => {
@@ -277,7 +279,9 @@ describe('native Codex automatic switching', () => {
     expect(h.activate).not.toHaveBeenCalled();
     expect(h.service.getStatus()).toMatchObject({ thresholdPercent: 15, outcome: 'scheduled' });
     await h.service.runCycle();
-    expect(h.activate).toHaveBeenCalledWith('beta');
+    expect(h.activate).toHaveBeenCalledWith('beta', {
+      expectedLiveFingerprint: 'private-live-fingerprint',
+    });
   });
 
   it('retains a private auth snapshot only when quota header and saved JWT workspace agree', () => {
@@ -334,7 +338,9 @@ describe('native Codex automatic switching', () => {
     const h = harness();
     await h.service.runCycle();
     expect(h.getRows).toHaveBeenCalledWith(['alpha', 'beta', 'gamma']);
-    expect(h.activate).toHaveBeenCalledWith('beta');
+    expect(h.activate).toHaveBeenCalledWith('beta', {
+      expectedLiveFingerprint: 'private-live-fingerprint',
+    });
     expect(h.getSummary).toHaveBeenCalledTimes(2);
     expect(h.service.getStatus()).toMatchObject({
       outcome: 'switched',
@@ -361,7 +367,9 @@ describe('native Codex automatic switching', () => {
     });
     const h = harness({ getRows: async () => [limited, row('beta', 20), row('alpha', 96)] });
     await h.service.runCycle();
-    expect(h.activate).toHaveBeenCalledWith('beta');
+    expect(h.activate).toHaveBeenCalledWith('beta', {
+      expectedLiveFingerprint: 'private-live-fingerprint',
+    });
   });
 
   it('waits when the actual shared login is unknown, even when CCS has a default', async () => {
@@ -964,7 +972,9 @@ describe('native Codex automatic switching', () => {
       ],
     });
     await h.service.runCycle();
-    expect(h.activate).toHaveBeenCalledWith('beta');
+    expect(h.activate).toHaveBeenCalledWith('beta', {
+      expectedLiveFingerprint: 'private-live-fingerprint',
+    });
     expect(h.service.getStatus().outcome).toBe('switched');
   });
 
@@ -993,7 +1003,9 @@ describe('native Codex switching skips saved logins OpenAI rejected', () => {
   it('skips a rejected candidate and switches to the next healthy one', async () => {
     const h = harness({ getRenewalStatus: async () => ({ profiles: [rejected('beta')] }) });
     await h.service.runCycle();
-    expect(h.activate).toHaveBeenCalledWith('gamma');
+    expect(h.activate).toHaveBeenCalledWith('gamma', {
+      expectedLiveFingerprint: 'private-live-fingerprint',
+    });
     expect(h.activate).not.toHaveBeenCalledWith('beta');
   });
 
@@ -1013,6 +1025,8 @@ describe('native Codex switching skips saved logins OpenAI rejected', () => {
       },
     });
     await h.service.runCycle();
-    expect(h.activate).toHaveBeenCalledWith('beta');
+    expect(h.activate).toHaveBeenCalledWith('beta', {
+      expectedLiveFingerprint: 'private-live-fingerprint',
+    });
   });
 });

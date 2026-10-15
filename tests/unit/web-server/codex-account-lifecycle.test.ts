@@ -3,7 +3,7 @@
  * 6.6, 6.7) against a temporary CCS_HOME, a temporary native Codex home and a
  * fake `codex login --device-auth` that writes auth.json into its CODEX_HOME.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -484,4 +484,60 @@ describe('Codex Remove', () => {
       '.staging-something',
     ]);
   });
+});
+
+describe('sign-in commit checks after waiting for activation', () => {
+  it.each(['duplicate', 'identity', 'membership'] as const)(
+    'rechecks %s inside the commit lock',
+    async (change) => {
+      if (change !== 'duplicate') addProfile('work', 'work@example.test', 'acct-work');
+      const life = lifecycle();
+      const flow = change === 'duplicate' ? life.addFlow('work') : life.signInAgainFlow('work');
+      const id = 'job_aabbccddeeff0011';
+      const command = await flow.prepare(id);
+      fs.writeFileSync(
+        path.join(command.env.CODEX_HOME, 'auth.json'),
+        login('work@example.test', 'acct-work', 'new')
+      );
+      const release = await holdActivationLock();
+      let asked!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        asked = resolve;
+      });
+      const realLock = lockfile.lock;
+      const watch = spyOn(lockfile, 'lock').mockImplementation(((file, options) => {
+        asked();
+        return realLock(file, options);
+      }) as typeof lockfile.lock);
+      const committing = flow.complete(id, { stopped: () => false });
+      try {
+        // The completion is waiting for our lock; publish a competing state first.
+        await waiting;
+        if (change === 'duplicate') addProfile('other', 'work@example.test', 'acct-work');
+        if (change === 'identity')
+          fs.writeFileSync(
+            path.join(ccsDir, 'codex-instances', 'work', 'auth.json'),
+            login('changed@example.test', 'acct-changed')
+          );
+        if (change === 'membership') new CodexProfileRegistry().removeProfile('work');
+      } finally {
+        await release();
+      }
+      await expect(committing).rejects.toMatchObject({
+        code:
+          change === 'duplicate'
+            ? 'duplicate_identity'
+            : change === 'identity'
+              ? 'identity_mismatch'
+              : 'write_failed',
+      });
+      if (change === 'duplicate') expect(new CodexProfileRegistry().hasProfile('work')).toBe(false);
+      if (change === 'identity')
+        expect(
+          fs.readFileSync(path.join(ccsDir, 'codex-instances', 'work', 'auth.json'), 'utf8')
+        ).toContain('access-a');
+      await flow.cleanup(id);
+      watch.mockRestore();
+    }
+  );
 });

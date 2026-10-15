@@ -6,6 +6,7 @@ import {
   activateCodexProfile,
   CodexActivationError,
   getActivationCodexHome,
+  type CodexActivationOptions,
 } from '../../codex-auth/activate-codex-profile';
 import { decodeIdToken } from '../../codex-auth/decode-id-token';
 import { resolveCodexProfileDir } from '../../codex-auth/codex-profile-paths';
@@ -100,7 +101,7 @@ export interface CodexAutoSwitchDeps {
    * switch target; a read that fails excludes nothing.
    */
   getRenewalStatus?: () => Promise<{ profiles: CodexProfileRenewalProfileStatus[] }>;
-  activate?: (name: string) => Promise<unknown>;
+  activate?: (name: string, options?: CodexActivationOptions) => Promise<unknown>;
   /** Private fingerprints are only compared in memory, never returned to the browser. */
   getAuthSnapshot?: (names: string[]) => CodexAutoSwitchAuthSnapshot;
   now?: () => number;
@@ -629,7 +630,9 @@ export class CodexAutoSwitchService {
       this.activationInProgress = true;
       this.setBlocked('switching');
       try {
-        await (this.deps.activate ?? activateCodexProfile)(target.name);
+        await (this.deps.activate ?? activateCodexProfile)(target.name, {
+          expectedLiveFingerprint: snapshot.live.fingerprint,
+        });
         this.lastSwitchedAt = new Date(now()).toISOString();
         this.setBlocked('switched');
         this.logConclusion({ active, candidate: target.name });
@@ -653,6 +656,9 @@ export class CodexAutoSwitchService {
           ...(burning ? { creditsBurning: true, creditsBalance: burning.balance } : {}),
           cause: 'activation_busy',
         });
+      } else if (error instanceof CodexActivationError && error.code === 'confirmation_stale') {
+        this.setBlocked('scheduled');
+        this.logConclusion({ cause: 'live_login_changed_under_lock' });
       } else {
         this.setBlocked('error');
         this.retryAfter = now() + ERROR_BACKOFF_MS;

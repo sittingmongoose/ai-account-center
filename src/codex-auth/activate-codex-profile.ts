@@ -67,6 +67,8 @@ export interface CodexActivationOptions {
   runtime?: CodexActivationRuntime;
   /** Opaque, one-shot server-owned permission; never client-supplied process IDs. */
   confirmationToken?: string;
+  /** Automatic decisions must still describe the live login when the lock is acquired. */
+  expectedLiveFingerprint?: string;
 }
 
 export interface CodexActivationResult {
@@ -248,6 +250,20 @@ export async function activateCodexProfile(
   let authReplaced = false;
   let lockedTarget = expectedTarget;
   try {
+    if (options.expectedLiveFingerprint !== undefined) {
+      let current: string | null = null;
+      try {
+        current = codexAuthHash(fs.readFileSync(authPath));
+      } catch {
+        // An unreadable live login cannot authorize an automatic switch.
+      }
+      if (current !== options.expectedLiveFingerprint) {
+        throw new CodexActivationError(
+          'confirmation_stale',
+          'The live Codex login changed before automatic activation.'
+        );
+      }
+    }
     // Removal shares this lock. Its completed deletion must not stop writers
     // merely because our preflight ran before we waited for the lock.
     let lockedProfileExists: boolean;
