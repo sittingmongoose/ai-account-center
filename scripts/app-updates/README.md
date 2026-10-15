@@ -222,7 +222,8 @@ restarts Windows Muse: T3's muse-acp adapter hosts `muse serve` from the same fo
 running session keeps its version until its host restarts it. The launcher's `.muse-update-lock`
 and `.muse-update.<pid>.exe` leftovers are left to the launcher, which reclaims a dead lock; while
 a live holder keeps the lock, Meta's installer skips the update, so the row fails with the `busy`
-code instead of reporting `current`.
+code instead of reporting `current`. The Mac and Linux launchers keep the same lock beside
+`~/.local/bin/muse`, and the same check applies there.
 
 ### Live verification after deployment
 

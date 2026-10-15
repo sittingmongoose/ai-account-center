@@ -692,9 +692,10 @@ def update_cli(install, deadline):
             pass
         needs_restart = marker_version == refreshed.version and marker_version != before
         if refreshed.version == before and not needs_restart:
-            if install.app_id == "muse-code" and install.platform == "windows" and muse_update_busy(install.path.parent):
+            if install.app_id == "muse-code" and muse_update_busy(install.path.parent):
                 # The launcher's own updater holds the lock, so Meta's installer
                 # skipped this run. Report busy, never a false "current"; the lock stays.
+                # The Mac and Linux launchers keep the same lock beside ~/.local/bin/muse.
                 raise UpdateFailure("busy")
             if pre_stopped:
                 # Stopped for the install; relaunch the same version. The
