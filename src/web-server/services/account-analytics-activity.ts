@@ -70,6 +70,7 @@ export { detectAccountAnalyticsAnomalies } from './account-analytics-anomalies';
 
 interface ActivityState {
   local: Map<string, SourceData>;
+  identities: Map<string, LocalRequestIdentity>;
   requests: AccountAnalyticsActivityRequest[];
   attempts: Map<string, number>;
   attemptSequence: number;
@@ -106,6 +107,42 @@ type RemoteAnswer = {
   states: AnalyticsRemoteSourceState[];
 };
 
+interface LocalRequestIdentity {
+  group: string;
+  roots: string[];
+}
+
+/** Hash root membership separately so expanded requests can replace retained predecessors. */
+function localRequestIdentity(source: AccountAnalyticsActivityRequest): LocalRequestIdentity {
+  const request = { ...source.request } as Record<string, unknown>;
+  delete request.activity;
+  delete request.cacheDir;
+  const roots: string[] = [];
+  for (const field of [
+    'roots',
+    'experimentRoots',
+    'homeRoots',
+    'experimentDbs',
+    'referenceRoots',
+  ]) {
+    const values = request[field];
+    if (Array.isArray(values))
+      for (const value of values)
+        roots.push(
+          createHash('sha256')
+            .update(JSON.stringify([field, value]))
+            .digest('hex')
+        );
+    delete request[field];
+  }
+  return {
+    group: createHash('sha256')
+      .update(JSON.stringify([source.provider, request]))
+      .digest('hex'),
+    roots,
+  };
+}
+
 /** Request identity excludes moving scan windows and cache locations. Paths never persist. */
 function localRequestKey(source: AccountAnalyticsActivityRequest): string {
   const {
@@ -127,7 +164,8 @@ function newerRemote(left: RemoteAnswer | null, right: RemoteAnswer | null): Rem
       Date.parse(answer?.fetchedAt ?? '') || 0,
       ...(answer?.states.map((entry) => Date.parse(entry.lastScanAt ?? '') || 0) ?? [])
     );
-  return time(right) > time(left) ? right : left;
+  // A cache-only read re-elects mirrors; JSON snapshots cannot retain that callback.
+  return right && time(right) >= time(left) ? right : left;
 }
 
 /**
@@ -221,8 +259,9 @@ export interface AccountAnalyticsActivityDeps {
   ) => Promise<RemoteAnswer>;
   /**
    * Saved remote aggregates, read without contacting a host, for a remote scan
-   * that has not answered in time and no earlier answer in memory. Defaults
-   * to the on-disk remote cache when `remote` is the default.
+   * that has not answered in time, and to restore mirror selection after a restart.
+   * Equal-time cache answers supersede serialized answers. Defaults to the on-disk
+   * remote cache when `remote` is the default.
    */
   remoteCached?: (minDateMs: number) => RemoteAnswer | null;
   now?: () => number;
@@ -288,6 +327,7 @@ function retainedSessions(
  * 2: readers key a session where its log was read, so a version 1 snapshot of raw ids is never
  * served again. 3: local request aggregates are retained separately from remote rows, keyed by
  * a digest of the request's source locations, so a sibling result never hides a failed request.
+ * Optional root-membership digests let v3 snapshots retain superseded requests until collected.
  */
 const SNAPSHOT_VERSION = 3;
 const SNAPSHOT_FILE = 'analytics-activity-snapshot-v1.json';
@@ -296,6 +336,7 @@ const MAX_SNAPSHOT_SESSIONS = 10_000;
 
 interface PersistedActivitySnapshot {
   local: Array<[string, SourceData]>;
+  identities?: Array<[string, LocalRequestIdentity]>;
   version: typeof SNAPSHOT_VERSION;
   fetchedAt: number;
   partial: boolean;
@@ -323,6 +364,23 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
   if (typeof snap.partial !== 'boolean') return false;
   if (!Array.isArray(snap.sources) || snap.sources.length > MAX_DIRECTORIES + 1) return false;
   if (!Array.isArray(snap.local) || snap.local.length > 1024) return false;
+  if (
+    snap.identities !== undefined &&
+    (!Array.isArray(snap.identities) ||
+      snap.identities.length > 1024 ||
+      snap.identities.some(
+        (entry) =>
+          !Array.isArray(entry) ||
+          !/^[a-f0-9]{64}$/.test(entry[0]) ||
+          !entry[1] ||
+          !/^[a-f0-9]{64}$/.test(entry[1].group) ||
+          !Array.isArray(entry[1].roots) ||
+          entry[1].roots.some(
+            (root: unknown) => typeof root !== 'string' || !/^[a-f0-9]{64}$/.test(root)
+          )
+      ))
+  )
+    return false;
   if (!Array.isArray(snap.sourceStates) || snap.sourceStates.length > 64) return false;
   const local = snap.local as Array<[string, Record<string, unknown>]>;
   if (local.some((entry) => !Array.isArray(entry) || !/^[a-f0-9]{64}$/.test(entry[0])))
@@ -390,6 +448,7 @@ function savePersistedSnapshot(scope: string, state: ActivityState): void {
           }
         : null,
       local: [...state.local],
+      identities: [...state.identities].filter(([key]) => state.local.has(key)),
     } satisfies PersistedActivitySnapshot);
     if (Buffer.byteLength(body, 'utf8') > MAX_SNAPSHOT_BYTES) return;
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -942,6 +1001,13 @@ export class AccountAnalyticsActivityService {
   private readonly states = new Map<string, ActivityState>();
   constructor(private readonly deps: AccountAnalyticsActivityDeps = {}) {}
 
+  private cachedRemote(cutoff: number, scope: string): RemoteAnswer | null {
+    if (this.deps.remoteCached) return this.deps.remoteCached(cutoff);
+    return this.deps.remote === undefined
+      ? loadAnalyticsRemoteCachedSources(cutoff, { cacheDir: path.join(scope, 'cache') })
+      : null;
+  }
+
   private refreshIntervalMs(): number {
     const seconds = (this.deps.refreshIntervalSeconds ?? getAccountRefreshIntervalSeconds)();
     return (Number.isFinite(seconds) ? Math.min(3600, Math.max(30, seconds)) : 60) * 1000;
@@ -1034,6 +1100,29 @@ export class AccountAnalyticsActivityService {
     // Roots the deadline left unread make the collection partial.
     if (generation !== state.generation) return;
     if (skipped > 0) failed = true;
+    for (const source of requests)
+      state.identities.set(localRequestKey(source), localRequestIdentity(source));
+    const replacements = new Map<string, string[]>();
+    const predecessors = new Map<string, SourceData>();
+    for (const [key, prior] of state.local) {
+      if (seenRequests.has(key)) continue;
+      const identity = state.identities.get(key);
+      for (const source of requests) {
+        const nextKey = localRequestKey(source);
+        const next = state.identities.get(nextKey);
+        if (!next || source.provider !== prior.provider || state.local.has(nextKey)) continue;
+        // Legacy v3 snapshots have no signatures. Only new identities can replace
+        // their unplanned share; successful unchanged siblings cannot retire it.
+        if (
+          identity &&
+          (identity.group !== next.group ||
+            !identity.roots.every((root) => next.roots.includes(root)))
+        )
+          continue;
+        replacements.set(key, [...(replacements.get(key) ?? []), nextKey]);
+        predecessors.set(nextKey, prior);
+      }
+    }
     state.requests = requests;
     // runBounded returns every enumerated request, including unstarted ones.
     // A worker cap does not make that inventory incomplete.
@@ -1062,7 +1151,7 @@ export class AccountAnalyticsActivityService {
         return;
       }
       const data = result.value;
-      const prior = state.local.get(key);
+      const prior = state.local.get(key) ?? predecessors.get(key);
       const authoritativeEmpty =
         data.scan?.complete === true &&
         data.scan.failedFiles === 0 &&
@@ -1078,7 +1167,7 @@ export class AccountAnalyticsActivityService {
       if (
         data.eventCount === 0 &&
         !authoritativeEmpty &&
-        state.local.get(key)?.data.some((entry) => entry.eventCount > 0)
+        prior?.data.some((entry) => entry.eventCount > 0)
       ) {
         failed = true;
         if (unfinished.get(provider) !== 'failed') unfinished.set(provider, 'partial');
@@ -1132,9 +1221,16 @@ export class AccountAnalyticsActivityService {
     });
     if (generation !== state.generation) return;
     for (const [key, source] of state.local) {
-      if (!seenRequests.has(key) && discoveryComplete) {
-        state.local.delete(key);
-        continue;
+      if (!seenRequests.has(key)) {
+        const next = replacements.get(key) ?? [];
+        if (
+          next.some((replacement) => state.local.has(replacement)) ||
+          (!next.length && discoveryComplete)
+        ) {
+          state.local.delete(key);
+          state.identities.delete(key);
+          continue;
+        }
       }
       const entries = collected.get(source.provider) ?? [];
       source.data = source.data.map((data) => {
@@ -1204,11 +1300,11 @@ export class AccountAnalyticsActivityService {
     } else {
       failed = true;
       const previousRemote = state.remote;
-      const cached =
-        this.deps.remoteCached ??
-        (this.deps.remote === undefined ? loadAnalyticsRemoteCachedSources : undefined);
       try {
-        remoteAnswer = newerRemote(state.remote, cached ? cached(cutoff) : null);
+        remoteAnswer = newerRemote(
+          state.remote,
+          this.cachedRemote(cutoff, (this.deps.scope ?? getCcsDir)())
+        );
       } catch {
         remoteAnswer = state.remote;
       }
@@ -1606,6 +1702,7 @@ export class AccountAnalyticsActivityService {
     if (!state) {
       state = {
         local: new Map(),
+        identities: new Map(),
         requests: [],
         attempts: new Map(),
         attemptSequence: 0,
@@ -1630,8 +1727,43 @@ export class AccountAnalyticsActivityService {
         state.sourceStates = persisted.sourceStates;
         state.remote = persisted.remote;
         state.local = new Map(persisted.local);
+        state.identities = new Map(persisted.identities ?? []);
         state.partial = persisted.partial;
         state.fetchedAt = persisted.fetchedAt;
+        // Selected mirror aggregates are not restart-safe: the original inventory may
+        // have changed, and JSON dropped the re-election closure. Rebuild from raw caches
+        // before serving even the first cached answer, while remote scans are still pending.
+        try {
+          const cutoff = (this.deps.now ?? Date.now)() - 31 * 86_400_000;
+          const cached = this.cachedRemote(cutoff, scope);
+          if (cached) {
+            state.remote = cached;
+            const merged = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
+            for (const source of state.local.values()) {
+              const rows = merged.get(source.provider) ?? [];
+              rows.push(...source.data);
+              merged.set(source.provider, rows);
+            }
+            for (const entry of cached.results) {
+              const rows = merged.get(entry.tool) ?? [];
+              rows.push(entry.data);
+              merged.set(entry.tool, rows);
+            }
+            state.sources = [...merged].map(([provider, data]) => ({
+              provider,
+              data,
+              fetchedAt: new Date(persisted.fetchedAt).toISOString(),
+            }));
+            state.sourceStates = sortSourceEntries([
+              ...persisted.sourceStates.filter(
+                (entry) => entry.host === 'ubuntu' || entry.tool === 'cursor'
+              ),
+              ...cached.states,
+            ]);
+          }
+        } catch {
+          state.partial = true;
+        }
       }
       this.states.set(scope, state);
       while (this.states.size > 8) {

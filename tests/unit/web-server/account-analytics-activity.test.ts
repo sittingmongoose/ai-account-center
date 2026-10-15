@@ -13,7 +13,10 @@ import type { AccountAnalyticsActivityRequest } from '../../../src/web-server/se
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 import { createHash } from 'crypto';
 import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
-import { loadAnalyticsRemoteSources } from '../../../src/web-server/services/analytics-remote-sources';
+import {
+  loadAnalyticsRemoteCachedSources,
+  loadAnalyticsRemoteSources,
+} from '../../../src/web-server/services/analytics-remote-sources';
 import { parseAnalyticsRemoteResponse } from '../../../src/web-server/services/analytics-remote-transport';
 import type { AccountAnalyticsQuery } from '../../../src/web-server/services/account-analytics-types';
 import type {
@@ -459,6 +462,234 @@ describe('native local analytics activity', () => {
     expect((await settled(service)).totals?.inputTokens).toBe(225);
     expect(started.map((entries) => entries.length)).toEqual([25, 25, 25]);
   });
+
+  it.each([false, true])(
+    're-elects persisted Claude mirrors while remote is pending and on equal-time fallback (original returns: %s)',
+    async (originalReturns) => {
+      const scope = path.join(fixtureConfig, 'mirror-snapshot');
+      fs.mkdirSync(scope);
+      const cacheDir = path.join(scope, 'cache');
+      const name = createHash('sha256').update('original.jsonl').digest('hex');
+      const file = '11'.repeat(32);
+      let original = !originalReturns;
+      const claudeLogNames = () => ({ originals: new Set(original ? [name] : []), complete: true });
+      const cached = () => loadAnalyticsRemoteCachedSources(FROM, { cacheDir, claudeLogNames });
+      const remote = () =>
+        loadAnalyticsRemoteSources(FROM, {
+          cacheDir,
+          claudeLogNames,
+          now: () => NOW,
+          hosts: async () => ({ mac: 'fixture-mac', windows: null, nas1: null }),
+          runHelper: async (_alias, _host, request) =>
+            parseAnalyticsRemoteResponse(
+              JSON.stringify({
+                version: 1,
+                truncated: false,
+                kinds: Object.fromEntries(
+                  request.kinds.map((kind) => [
+                    kind,
+                    {
+                      state: kind === 'claude' ? 'ok' : 'not_installed',
+                      fingerprints:
+                        kind === 'claude'
+                          ? {
+                              [file]: {
+                                size: 10,
+                                mtimeMs: 20,
+                                claudeName: name,
+                                claudeMirror: true,
+                              },
+                            }
+                          : {},
+                    },
+                  ])
+                ),
+                rows: request.kinds.includes('claude')
+                  ? [
+                      {
+                        k: 'claude',
+                        f: file,
+                        m: 'claude-sonnet-4-6',
+                        h: '2026-10-01 15:00',
+                        i: 100,
+                        o: 0,
+                        cr: 0,
+                        cw: 0,
+                        c: 0,
+                        n: 1,
+                      },
+                    ]
+                  : [],
+              })
+            ),
+        });
+      const deps = {
+        now: () => NOW,
+        scope: () => scope,
+        persistSnapshot: true,
+        requests: (): AccountAnalyticsActivityRequest[] => [
+          {
+            provider: 'claude',
+            request: { kind: 'claude', projectsDir: '/fixture/original' },
+          },
+        ],
+        loadWorker: async () => data('claude-sonnet-4-6', 100, 0),
+        remoteCached: cached,
+      };
+      // The saved local share stays stable; only ownership of the remote mirror changes.
+      const first = new AccountAnalyticsActivityService({ ...deps, remote });
+      expect((await settled(first)).totals?.inputTokens).toBe(original ? 100 : 200);
+      original = !original;
+      let finishRemote!: (answer: Awaited<ReturnType<typeof remote>>) => void;
+      const pendingRemote = new Promise<Awaited<ReturnType<typeof remote>>>((resolve) => {
+        finishRemote = resolve;
+      });
+      const restarted = new AccountAnalyticsActivityService({
+        ...deps,
+        remote: () => pendingRemote,
+      });
+      const expected = original ? 100 : 200;
+      // Rebuild before the first response, even if no collection has run yet.
+      expect((await restarted.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(expected);
+      await restarted.get({ ...QUERY, refresh: true }, FROM, NOW);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect((await restarted.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(expected);
+      finishRemote(cached());
+      expect((await settled(restarted)).totals?.inputTokens).toBe(expected);
+
+      // A serialized answer has no callback. The raw cache has an equal timestamp,
+      // and must still replace it when an offline refresh changes mirror ownership.
+      const serialized = JSON.parse(JSON.stringify(cached())) as Awaited<ReturnType<typeof remote>>;
+      let offline = false;
+      const fallback = new AccountAnalyticsActivityService({
+        ...deps,
+        persistSnapshot: false,
+        remote: async () => {
+          if (offline) throw new Error('fixture offline');
+          return serialized;
+        },
+      });
+      expect((await settled(fallback)).totals?.inputTokens).toBe(expected);
+      original = !original;
+      offline = true;
+      await fallback.get({ ...QUERY, refresh: true }, FROM, NOW);
+      expect((await settled(fallback)).totals?.inputTokens).toBe(original ? 100 : 200);
+    }
+  );
+
+  it.each([
+    'success',
+    'failure',
+    'partial-empty',
+    'failed-empty',
+    'partial-positive',
+    'complete-empty',
+    'legacy',
+  ] as const)(
+    'keeps a restored predecessor until its capped replacement publishes (%s)',
+    async (outcome) => {
+      const scope = path.join(fixtureConfig, 'replacement-snapshot');
+      fs.mkdirSync(scope);
+      let restarted = false;
+      let allowReplacement = false;
+      const started: string[] = [];
+      const omp = (): AccountAnalyticsActivityRequest => ({
+        provider: 'omp',
+        request: { kind: 'omp', roots: restarted ? ['/fixture/A', '/fixture/B'] : ['/fixture/A'] },
+      });
+      const claude = Array.from(
+        { length: 25 },
+        (_, index): AccountAnalyticsActivityRequest => ({
+          provider: 'claude',
+          request: { kind: 'claude', projectsDir: `/fixture/${index}` },
+        })
+      );
+      const deps = {
+        concurrency: 1,
+        now: () => NOW + (restarted ? 61_000 : 0),
+        scope: () => scope,
+        persistSnapshot: true,
+        remote: async () => ({ results: [], states: [] }),
+        requests: () => (restarted ? [...claude, omp()] : [omp(), ...claude]),
+        loadWorker: async (request: UsageWorkerRequest) => {
+          started.push(request.kind);
+          if (request.kind !== 'omp') return data('claude-sonnet-4-6', 1, 0);
+          if (restarted && !allowReplacement) throw new Error('replacement should be capped');
+          if (restarted && outcome === 'failure') throw new Error('fixture failure');
+          if (
+            restarted &&
+            (outcome === 'partial-empty' ||
+              outcome === 'failed-empty' ||
+              outcome === 'complete-empty')
+          )
+            return {
+              daily: [],
+              monthly: [],
+              hourly: [],
+              session: [],
+              eventCount: 0,
+              scan: {
+                complete: outcome === 'complete-empty',
+                totalFiles: 0,
+                completedFiles: 0,
+                failedFiles: outcome === 'failed-empty' ? 1 : 0,
+                skippedLines: 0,
+                readBytes: 0,
+              },
+            };
+          return {
+            ...data('k3', restarted ? 200 : 100, 0),
+            ...(restarted && outcome === 'partial-positive'
+              ? {
+                  scan: {
+                    complete: false,
+                    totalFiles: 2,
+                    completedFiles: 1,
+                    failedFiles: 0,
+                    skippedLines: 0,
+                    readBytes: 10,
+                  },
+                }
+              : {}),
+          };
+        },
+      };
+      expect((await settled(new AccountAnalyticsActivityService(deps))).totals?.inputTokens).toBe(
+        124
+      );
+      if (outcome === 'legacy') {
+        const file = path.join(
+          scope,
+          'cache',
+          'account-activity-v1',
+          'analytics-activity-snapshot-v1.json'
+        );
+        const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+        delete snapshot.identities;
+        fs.writeFileSync(file, JSON.stringify(snapshot));
+      }
+      restarted = true;
+      started.length = 0;
+      const service = new AccountAnalyticsActivityService(deps);
+      expect((await settled(service)).totals?.inputTokens).toBe(125);
+      expect(started).toHaveLength(25);
+      expect(started).not.toContain('omp');
+      allowReplacement = true;
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      expect((await settled(service)).totals?.inputTokens).toBe(
+        ['success', 'partial-positive', 'legacy'].includes(outcome)
+          ? 225
+          : outcome === 'complete-empty'
+            ? 25
+            : 125
+      );
+      const serialized = fs.readFileSync(
+        path.join(scope, 'cache', 'account-activity-v1', 'analytics-activity-snapshot-v1.json'),
+        'utf8'
+      );
+      expect(serialized).not.toContain('/fixture/');
+    }
+  );
 
   it('restores per-request local shares after a restart without doubling remote rows', async () => {
     const scope = path.join(fixtureConfig, 'persisted');
