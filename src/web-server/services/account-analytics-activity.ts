@@ -1368,6 +1368,15 @@ export class AccountAnalyticsActivityService {
       )
         source.detail =
           'usage-root discovery is incomplete or hit its depth or scan budget; records from roots found so far are shown';
+      // A collector's own reason why its scan stays partial (a compressed Codex log too large to
+      // finish in one pass) is named on the cell, so a lasting partial state says why.
+      if (source.host !== 'ubuntu') continue;
+      const notes = new Set<string>();
+      for (const data of collected.get(source.tool as AccountAnalyticsActivityProvider) ?? []) {
+        const note = (data.scan as { detail?: unknown } | undefined)?.detail;
+        if (typeof note === 'string' && note && data.scan?.complete === false) notes.add(note);
+      }
+      if (notes.size) source.detail = [source.detail, ...notes].filter(Boolean).join('; ');
     }
     // Convergence tracking: a grid that still holds a scanning cell re-collects
     // on the shorter converge cadence (bounded; see get()).

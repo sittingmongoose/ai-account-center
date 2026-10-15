@@ -147,6 +147,38 @@ describe('native local analytics activity', () => {
     expect(source?.state).toBe('cached');
     expect(source?.detail).toContain('usage-root discovery');
   });
+  it("names a collector's reason for a lasting partial scan on the cell", async () => {
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
+      now: () => NOW,
+      scope: () => '/fixture-compressed-stall',
+      requests: () => [
+        {
+          provider: 'codex',
+          request: { kind: 'codex', codexHome: '/fixture', cacheDir: '/fixture/cache' },
+        },
+      ],
+      loadWorker: async () => ({
+        ...data('gpt-5.4', 100, 0.01),
+        scan: {
+          complete: false,
+          completedFiles: 1,
+          totalFiles: 2,
+          skippedLines: 0,
+          failedFiles: 0,
+          readBytes: 100,
+          unfinishedFiles: 0,
+          detail: '1 compressed Codex log is too large to finish within one analytics pass',
+        } as NonNullable<ReturnType<typeof data>['scan']>,
+      }),
+    });
+    const result = await settled(service);
+    const source = result.sources.find(
+      (entry) => entry.tool === 'codex' && entry.host === 'ubuntu'
+    );
+    expect(source?.state).toBe('cached');
+    expect(source?.detail).toContain('too large to finish within one analytics pass');
+  });
 
   it('retains each local request independently of successful siblings and remote rows', async () => {
     for (const outcome of ['reject', 'empty', 'partial-empty', 'skip'] as const) {
