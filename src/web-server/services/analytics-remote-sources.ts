@@ -168,17 +168,16 @@ function samePrint(
 /**
  * The pricing provider of a remote row, exactly as the local reader of its tool sets it, so a row
  * prices the same on every host. The route the host logged wins. Without one, the local Claude Code
- * and Codex readers leave the provider unset, so the tool's own provider prices the row
- * (`anthropic`, `openai`); the other readers record an empty route, which prices by model name
- * alone. A Codex row priced by model name alone found no rate for a model several providers list
- * at different prices, and read as "not logged".
+ * reader prices by model name alone; Codex falls back to OpenAI. An empty route preserves
+ * that provider-less lookup while retaining the tool identity. A Codex model several providers
+ * list at different prices needs its OpenAI fallback to resolve a rate.
  */
 function remoteRowProvider(
   kind: AnalyticsRemoteKind,
   route: string | undefined
 ): { provider?: string } {
   if (route) return { provider: route };
-  return kind === 'claude' || kind === 'codex' ? {} : { provider: '' };
+  return kind === 'codex' ? {} : { provider: '' };
 }
 
 function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {

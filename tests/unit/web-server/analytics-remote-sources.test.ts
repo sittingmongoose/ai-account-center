@@ -1101,6 +1101,78 @@ describe('remote rows price like the local rows of their tool', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('prices route-less Claude hours and sessions like native Claude, keeping explicit routes', async () => {
+    setCachedModelsDevRegistry({
+      anthropic: {
+        id: 'anthropic',
+        name: 'Anthropic',
+        models: {
+          'claude-sonnet-4-6': {
+            id: 'claude-sonnet-4-6',
+            name: 'Sonnet',
+            cost: { input: 9, output: 45 },
+          },
+        },
+      },
+    } as unknown as Parameters<typeof setCachedModelsDevRegistry>[0]);
+    const { results } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async (_alias, _platform, request) =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify({
+            version: 1,
+            truncated: false,
+            kinds: Object.fromEntries(
+              request.kinds.map((k) => [k, { state: 'ok', fingerprints: {} }])
+            ),
+            rows: request.kinds.includes('claude')
+              ? [
+                  row({
+                    k: 'claude',
+                    m: 'claude-sonnet-4-6',
+                    i: 1_000_000,
+                    o: 0,
+                    cw: 0,
+                    cr: 0,
+                    c: 0,
+                  }),
+                  row({
+                    k: 'claude',
+                    p: 'anthropic',
+                    m: 'claude-sonnet-4-6',
+                    i: 1_000_000,
+                    o: 0,
+                    cw: 0,
+                    cr: 0,
+                    c: 0,
+                  }),
+                ]
+              : [],
+            srows: request.kinds.includes('claude')
+              ? [
+                  srow({
+                    k: 'claude',
+                    m: 'claude-sonnet-4-6',
+                    i: 1_000_000,
+                    o: 0,
+                    cw: 0,
+                    cr: 0,
+                    c: 0,
+                  }),
+                ]
+              : [],
+          })
+        ),
+    });
+    const claude = results.find((entry) => entry.tool === 'claude')?.data;
+    const models = claude?.hourly[0].modelBreakdowns ?? [];
+    expect(models.find((m) => m.provider === undefined)?.cost).toBeCloseTo(3, 9);
+    expect(models.find((m) => m.provider === 'anthropic')?.cost).toBeCloseTo(9, 9);
+    expect(claude?.session[0].cost).toBeCloseTo(3, 9);
+    expect(claude?.session[0].target).toBe('claude');
+  });
+
   it('prices a Codex row without a route at OpenAI list rates, and leaves a model with no rate not logged', async () => {
     const codexRow = (model: string) =>
       row({ k: 'codex', m: model, i: 1_000_000, o: 100_000, cr: 2_000_000, cw: 0, c: 0, n: 3 });
