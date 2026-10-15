@@ -377,7 +377,10 @@ struct SignInSpec {
       spec.ledeKind = .plain("Enter the address of your AI Account Center dashboard. You sign in once; this tray then keeps its own device key.")
       if let at = model.disconnectedAt {
         spec.banner = Banner(icon: "rectangle.portrait.and.arrow.right", tone: .info, title: "Disconnected at \(clock(at))",
-          body: AttributedString(model.disconnectTold
+          body: AttributedString(model.disconnectedCredential == "password"
+            ? "This tray forgot its saved password. Connect again to see usage."
+            : model.disconnectedCredential == nil ? "This tray forgot its connection. Connect again to see usage."
+            : model.disconnectTold
             ? "This tray forgot its device key and the dashboard revoked it. Pair again to see usage."
             : "This tray forgot its device key. The dashboard could not be reached, so revoke Mac tray there under Settings › Dashboard sign-in."))
       } else {

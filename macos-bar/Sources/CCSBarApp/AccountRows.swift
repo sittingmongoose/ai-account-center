@@ -30,7 +30,8 @@ struct SectionLayout {
   static func make(_ provider: String, accounts: [DashboardAccount]) -> SectionLayout {
     switch provider {
     case "claude":
-      return SectionLayout(provider: provider, columns: [("5h", "5-hour"), ("week", "Weekly"), ("fable", "Fable")])
+      return SectionLayout(provider: provider, columns: [("5h", "5-hour"), ("week", "Weekly")]
+        + (accounts.contains(where: \.isMaxPlan) ? [("fable", "Fable")] : []))
     case "codex":
       return SectionLayout(provider: provider, columns: [("5h", "5-hour"), ("week", "Weekly")])
     default:
@@ -127,9 +128,9 @@ struct AccountRow: View {
     }
     if account.status == "needs_sign_in" {
       let needed = Text(verbatim: "Sign-in needed").foregroundColor(palette.warnText).fontWeight(.semibold)
-      return Text("\(needed) · \(TrayFormat.platformName(account.platform))")
+      return Text("\(needed) · \(TrayFormat.platformName(account.provenance))")
     }
-    var parts = [TrayFormat.planLabel(account.plan, provider: account.provider), TrayFormat.platformName(account.platform)].filter { !$0.isEmpty }
+    var parts = [TrayFormat.planLabel(account.plan, provider: account.provider), TrayFormat.platformName(account.provenance)].filter { !$0.isEmpty }
     if let sampled = AccountFormatting.date(account.sampledAt ?? account.fetchedAt) { parts.append(TrayFormat.relative(sampled)) }
     if account.status == "cached" && AccountFormatting.date(account.sampledAt ?? account.fetchedAt) == nil { parts.append("Cached") }
     if account.status == "error" { parts.append("Refresh failed") }
@@ -164,7 +165,7 @@ struct AccountRow: View {
       }
     default:
       if let window = account.visibleWindows.first(where: { $0.key == column }) {
-        if let status = model.dashboard?.antigravityAutoSwitch, sectionAccounts.count >= 2,
+        if let status = model.dashboard?.antigravityAutoSwitch, (model.dashboard?.antigravityAccountCount ?? 0) >= 2,
           let pool = status.requestedPoolId, window.poolId == pool {
           meter(window, notch: Double(status.thresholdUsedPercent), notchOpacity: notchOpacity(enabled: status.enabled))
         } else {
@@ -203,7 +204,7 @@ struct AccountRow: View {
       ClaudeOpenPair(model: model, account: account)
     case "codex":
       if account.isActive {
-        ActiveLabel(platform: account.platform, draw: open.activeAtOpen["codex"] != nil && open.activeAtOpen["codex"] != account.id,
+        ActiveLabel(platform: account.provenance, draw: open.activeAtOpen["codex"] != nil && open.activeAtOpen["codex"] != account.id,
           probe: "slot|active-\(account.id)")
       } else if account.canActivate {
         let switching = model.dashboard?.codexAutoSwitch.activationInProgress == true
@@ -222,14 +223,14 @@ struct AccountRow: View {
   @ViewBuilder private func antigravityAction(_ palette: TrayPalette) -> some View {
     let anyActive = sectionAccounts.contains(where: \.isActive)
     if account.isActive {
-      ActiveLabel(platform: account.platform, draw: open.activeAtOpen["antigravity"] != nil && open.activeAtOpen["antigravity"] != account.id,
+      ActiveLabel(platform: account.provenance, draw: open.activeAtOpen["antigravity"] != nil && open.activeAtOpen["antigravity"] != account.id,
         probe: "slot|active-\(account.id)")
     } else if account.status == "needs_sign_in" {
       ActivateButton(title: "Finish setup", compact: true, help: "Finish the supervised login in the dashboard's Accounts and Settings",
         id: "finish-setup-\(account.id)") { model.openDashboard() }
-    } else if sectionAccounts.count < 2 {
+    } else if (model.dashboard?.antigravityAccountCount ?? 0) < 2 {
       if !anyActive { NotReportedLabel() }
-    } else if account.canActivateAntigravity {
+    } else if model.dashboard?.canActivateAntigravity(account) == true {
       let switching = model.dashboard?.antigravityAutoSwitch?.activationInProgress == true
       ActivateButton(title: "Activate", busy: model.busyAction == account.id,
         enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation
@@ -308,7 +309,7 @@ struct SectionHeader: View {
 
   var body: some View {
     withPalette { palette in
-      let multiAntigravity = layout.provider == "antigravity" && accounts.count > 1
+      let multiAntigravity = layout.provider == "antigravity" && (model.dashboard?.antigravityAccountCount ?? 0) > 1
       // Codex shows its auto-switch here, above its accounts, whenever the dashboard reports it —
       // the same condition the footer cluster used, so no connected user loses the toggle.
       let codexAuto = layout.provider == "codex" && model.dashboard?.codexAutoSwitch != nil

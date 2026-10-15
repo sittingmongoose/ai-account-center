@@ -324,7 +324,9 @@ struct SettingsPanelView: View {
     HStack(alignment: .center, spacing: 12) {
       VStack(alignment: .leading, spacing: 2) {
         Text("Disconnect this tray?").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(palette.label)
-        Text("The dashboard revokes its device key, and usage stops here until you pair again.")
+        Text(model.connection?.hasPassword == true
+          ? "This tray forgets its saved password, and usage stops here until you connect again."
+          : "The dashboard revokes its device key, and usage stops here until you pair again.")
           .font(.system(size: 12)).foregroundStyle(palette.label2).fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: 8)

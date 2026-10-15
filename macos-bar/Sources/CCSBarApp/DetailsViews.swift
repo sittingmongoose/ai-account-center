@@ -139,7 +139,7 @@ struct AccountDetailsBody: View {
   }
 
   private var details: String {
-    var parts = [TrayFormat.planLabel(account.plan, provider: account.provider), TrayFormat.platformName(account.platform), account.source].filter { !$0.isEmpty }
+    var parts = [TrayFormat.planLabel(account.plan, provider: account.provider), TrayFormat.platformName(account.provenance), account.source].filter { !$0.isEmpty }
     if let sampled = AccountFormatting.date(account.sampledAt ?? account.fetchedAt) {
       parts.append("sampled \(TrayFormat.relative(sampled))")
     }
@@ -193,8 +193,9 @@ struct AmountRow: View {
     return "Not reported"
   }
 
-  private var sub: String? {
+  var sub: String? {
     var parts: [String] = []
+    if let cached = AccountFormatting.cachedSample(status: window.status, sampledAt: window.sampledAt) { parts.append(cached) }
     if rolledUpPacks {
       // "2 used · Next expires Nov 1": the packs used, and the soonest expiry among those left.
       if let used = window.used, used > 0 { parts.append("\(TrayFormat.number(used)) used") }
@@ -304,7 +305,7 @@ struct QwenPacksButton: View {
 
   var body: some View {
     withPalette { palette in
-      let withCredit = packs.filter { ($0.1.remaining ?? 0) > 0 }
+      let withCredit = packs.filter { $0.1.hasUsableCredit() }
       let next = withCredit.compactMap { AccountFormatting.date($0.1.expiresAt) }.filter { $0 > Date() }.min()
       let action = { showPacks = true }
       Button(action: action) {
@@ -313,7 +314,8 @@ struct QwenPacksButton: View {
           VStack(alignment: .leading, spacing: 0) {
             Text("\(packs.count) packs · \(withCredit.count) with credit").font(.system(size: 12, weight: .semibold))
               .foregroundStyle(palette.label)
-            Text(next.map { "next expires \($0.formatted(.dateTime.month(.abbreviated).day()))" } ?? "none with credit")
+            Text(withCredit.contains { AccountFormatting.date($0.1.expiresAt) == nil } ? "Expiry unavailable"
+              : next.map { "next expires \($0.formatted(.dateTime.month(.abbreviated).day()))" } ?? "none with credit")
               .font(.system(size: 11)).foregroundStyle(palette.label2)
           }
           Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(palette.label2)

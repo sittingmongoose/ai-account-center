@@ -167,7 +167,7 @@ final class AccountsViewModel: ObservableObject {
   /// The menu-bar label's copy of what it shows. Every delivery path calls this: refresh, a reset flip,
   /// disconnect, pairing hand-offs (through `signInChanged`), and the preview inits below.
   func syncMenuBar() {
-    menuBar.snapshot = MenuBarSnapshot(dashboard: _dashboard, signInActive: signIn.active,
+    menuBar.snapshot = MenuBarSnapshot(dashboard: _dashboard, refreshFailed: !connected && _dashboard != nil, signInActive: signIn.active,
       signInRepair: signIn.repair, signInHelp: signIn.menuBarHelp)
   }
 
@@ -215,7 +215,7 @@ final class AccountsViewModel: ObservableObject {
         signIn.startSecuring()
       } else if let note = saved.signedOut {
         if note.reason == "disconnected" {
-          signIn.showDisconnected(at: AccountFormatting.date(note.at) ?? Date(), told: true, address: saved.baseURL.absoluteString)
+          signIn.showDisconnected(at: AccountFormatting.date(note.at) ?? Date(), told: note.disconnectTold == true, address: saved.baseURL.absoluteString, credentialKind: note.credentialKind)
         } else {
           signIn.showSignedOut(note, connection: saved)
         }
@@ -308,7 +308,7 @@ final class AccountsViewModel: ObservableObject {
       message = nil
       recordStatus(connected: false)
       syncMenuBar()
-      signIn.showDisconnected(at: Date(), told: told, address: address)
+      signIn.showDisconnected(at: Date(), told: told, address: address, credentialKind: session.connection?.signedOut?.credentialKind)
     }
   }
 
@@ -326,8 +326,10 @@ final class AccountsViewModel: ObservableObject {
       Task { await refresh() }
       return
     }
+    dashboard = nil
     connected = false
     recordStatus(connected: false)
+    syncMenuBar()
     signIn.lastSyncedAt = lastSyncedAt
     if let saved = session.connection { signIn.showSignedOut(note, connection: saved) } else { signIn.showFirstRun() }
   }
@@ -655,9 +657,9 @@ final class AccountsViewModel: ObservableObject {
 
   /// The trays always show % used; Codex stores the threshold as % remaining.
   func setAutomaticThreshold(usedPercent: Int) {
-    guard let status = dashboard?.codexAutoSwitch, (1...99).contains(usedPercent) else { return }
+    guard dashboard?.codexAutoSwitch != nil, (1...99).contains(usedPercent) else { return }
     perform(id: "automatic") { client in
-      try await client.setAutomaticSwitching(enabled: status.enabled, thresholdPercent: 100 - usedPercent)
+      try await client.setAutomaticSwitching(thresholdPercent: 100 - usedPercent)
     }
   }
 

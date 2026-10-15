@@ -22,6 +22,7 @@ enum MenuBarIcon {
 /// label instead of re-laying the whole invisible panel.
 struct MenuBarSnapshot {
   var dashboard: AccountDashboard?
+  var refreshFailed = false
   var signInActive = false
   var signInRepair = false
   var signInHelp = ""
@@ -36,6 +37,16 @@ final class MenuBarState: ObservableObject {
     guard !snapshot.signInActive || snapshot.signInRepair else { return nil }
     return MenuBarReading.make(dashboard: snapshot.dashboard, provider: prefs.menuBarProvider, mode: prefs.menuBarMode,
       claudeAccountID: prefs.menuBarClaudeAccountID)
+  }
+
+  func toolTip(_ prefs: TrayPreferences) -> String {
+    if signedOut { return "AI Account Center · \(snapshot.signInHelp)" }
+    var text = reading(prefs).map { "AI Account Center · \($0.detail)" } ?? "AI Account Center"
+    if snapshot.refreshFailed, let dashboard = snapshot.dashboard {
+      let sample = AccountFormatting.date(dashboard.updatedAt).map { $0.formatted(date: .omitted, time: .shortened) } ?? "time unavailable"
+      text += " · last sample \(sample)"
+    }
+    return text
   }
 
   /// Signed out or not paired: the logo alone, and the help tag says so (section 9).

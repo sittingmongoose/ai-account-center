@@ -205,14 +205,16 @@ struct MeterView: View {
     }.frame(height: pendingReset != nil && detail ? nil : 14)
   }
 
-  private var helpText: String {
+  var helpText: String {
     guard let window else { return unavailableHelp }
+    let cached = AccountFormatting.cachedSample(status: window.status, sampledAt: window.sampledAt)
     if let reset = pendingReset {
-      let sampled = AccountFormatting.date(window.sampledAt ?? sampledAt).map { "Sampled \(TrayFormat.relative($0))" }
+      let sampled = cached ?? AccountFormatting.date(window.sampledAt ?? sampledAt).map { "Sampled \(TrayFormat.relative($0))" }
       return [window.label, TrayReset.long(reset), "The last reading was taken before this reset, so it is not shown",
         sampled ?? "Sample time unavailable"].joined(separator: " · ")
     }
     var parts = [window.label]
+    if let cached { parts.append(cached) }
     if let target {
       var used = "\(TrayFormat.number(target))% used"
       if let amount = window.used, let limit = window.limit { used += " (\(TrayFormat.number(amount)) of \(TrayFormat.number(limit))\(window.unit.map { " \($0)" } ?? ""))" }

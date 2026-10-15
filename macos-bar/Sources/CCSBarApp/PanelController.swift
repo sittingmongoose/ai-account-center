@@ -87,8 +87,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     let menuBar = model.menuBar
     let reading = menuBar.reading(prefs)
     // Signed out or not paired: the logo alone, and the help tag says so (section 9).
-    let toolTip = reading.map { "AI Account Center · \($0.detail)" }
-      ?? (menuBar.signedOut ? "AI Account Center · \(menuBar.snapshot.signInHelp)" : "AI Account Center")
+    let toolTip = menuBar.toolTip(prefs)
     if appliedStatusToolTip != nil, reading == appliedStatusReading, toolTip == appliedStatusToolTip,
       button.bounds.height == appliedStatusButtonHeight { return }
     appliedStatusReading = reading

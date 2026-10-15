@@ -77,6 +77,12 @@ public struct AccountDashboard: Decodable, Sendable {
   }
 }
 
+extension AccountQuotaWindow {
+  public func hasUsableCredit(now: Date = Date()) -> Bool {
+    (remaining ?? 0) > 0 && (AccountFormatting.date(expiresAt).map { $0 > now } ?? true)
+  }
+}
+
 public struct AccountRefreshSettings: Decodable, Sendable {
   public let refreshIntervalSeconds: Int
   public let hiddenProviders: [String]?
@@ -188,6 +194,8 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   public let email: String?
   public let plan: String?
   public let platform: String
+  public let host: String?
+  public var provenance: String { host ?? platform }
   public let source: String
   public let status: String
   public let message: String?
@@ -207,7 +215,7 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   public let antigravityPlan: AntigravityPlan?
 
   private enum CodingKeys: String, CodingKey {
-    case id, provider, providerLabel, label, email, plan, platform, source, status, message
+    case id, provider, providerLabel, label, email, plan, platform, host, source, status, message
     case fetchedAt, sampledAt, isActive, windows, capabilities, trayHidden, signInNeeded, antigravityPlan
   }
 
@@ -222,6 +230,7 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
     email = try container.decodeIfPresent(String.self, forKey: .email)
     plan = try container.decodeIfPresent(String.self, forKey: .plan)
     platform = try container.decode(String.self, forKey: .platform)
+    host = try container.decodeIfPresent(String.self, forKey: .host)
     source = try container.decode(String.self, forKey: .source)
     status = try container.decode(String.self, forKey: .status)
     message = try container.decodeIfPresent(String.self, forKey: .message)

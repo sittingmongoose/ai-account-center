@@ -45,7 +45,8 @@ extension DashboardAccount {
             return [window.remaining, window.used, window.limit].contains { $0.map { $0.isFinite && $0 > 0 } == true }
               || hasTiming
           }
-          return Self.hasUsageValue(window) || hasTiming
+          return hasTiming || [window.remaining, window.used, window.limit].contains { $0.map { $0.isFinite && $0 > 0 } == true }
+            || (["grant", "record"].contains { Self.normalized(window.key).contains($0) } && Self.hasUsageValue(window))
         }
       default: break
       }

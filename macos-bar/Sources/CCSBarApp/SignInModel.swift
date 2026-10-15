@@ -44,6 +44,7 @@ final class SignInModel: ObservableObject {
   @Published private(set) var limitUntil: Date?
   @Published private(set) var repair = false
   @Published private(set) var disconnectedAt: Date?
+  @Published private(set) var disconnectedCredential: String?
   @Published private(set) var disconnectTold = true
   @Published private(set) var note: SignedOutNote?
   /// The dashboard that answered (the password step's "at" line).
@@ -157,10 +158,11 @@ final class SignInModel: ObservableObject {
   }
 
   /// Disconnect landed: the first-run screen with "Disconnected at ..." and the last address filled in.
-  func showDisconnected(at date: Date, told: Bool, address prefill: String) {
+  func showDisconnected(at date: Date, told: Bool, address prefill: String, credentialKind: String? = nil) {
     showFirstRun(address: prefill)
     disconnectedAt = date
     disconnectTold = told
+    disconnectedCredential = credentialKind
   }
 
   /// Section 9: a 401 device code. The username stays; the password field waits.
@@ -352,6 +354,10 @@ final class SignInModel: ObservableObject {
       tried = url
       if state != .firstRun { go(.firstRun) }
       fail(.addr, SignInCopy.signInOff)
+    case .canonicalAddress(let url):
+      tried = url
+      go(.firstRun)
+      fail(.addr, TransportSafetyError.redirect.localizedDescription)
     case .insecureName(let url):
       tried = url
       if state != .firstRun { go(.firstRun) }
