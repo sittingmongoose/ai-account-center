@@ -14,15 +14,14 @@ public sealed class AuthCheck
 {
     public string AccessMode { get; set; } = "";
     public bool AuthConfigured { get; set; }
-    public bool SetupCodeRequired { get; set; }
-    public bool SecureTransport { get; set; }
-    /// <summary>Null on a dashboard that predates device pairing (no trusted-local-network rule): the tray then keeps
-    /// today's password sign-in.</summary>
+    public bool? SetupCodeRequired { get; set; }
+    public bool? SecureTransport { get; set; }
+    /// <summary>Optional; anonymous HTTPS-proxy callers may not receive the trusted-network setting.</summary>
     public bool? TrustedLocalNetwork { get; set; }
     public AuthConnection? Connection { get; set; }
     /// <summary>The dashboard can pair this computer right now: a secure transport, or the trusted local network.</summary>
-    public bool CanPair => SecureTransport || Connection?.Trusted == true;
-    public bool SupportsPairing => TrustedLocalNetwork is not null;
+    public bool CanPair => SecureTransport == true || Connection?.Trusted == true;
+    public bool SupportsPairing => SecureTransport is not null || TrustedLocalNetwork is not null || Connection is not null;
 }
 
 public sealed class AuthConnection
@@ -124,6 +123,7 @@ public sealed class AuthApi : IDisposable
                 request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
             }
             if (token is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            await LocalNetwork.RequireLocalHTTP(Origin);
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancel);
             return await Read(response, cancel);
         }

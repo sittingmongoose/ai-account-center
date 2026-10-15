@@ -89,6 +89,11 @@ public static class DeviceTokenFormat
     public static bool IsToken(string? token) => token is not null && Shape.IsMatch(token);
 }
 
+public sealed class NotLocalNetworkException : InvalidOperationException
+{
+    public NotLocalNetworkException() : base("This address isn't on your local network. Use the dashboard's local address.") { }
+}
+
 /// <summary>
 /// What counts as this tray's local network: 10/8, 172.16/12, 192.168/16, 127/8, fc00::/7 and ::1, with IPv4-mapped
 /// IPv6 normalized first. Public, CGNAT (100.64/10), link-local and unknown addresses are not local, matching the
@@ -119,6 +124,14 @@ public static class LocalNetwork
             || lower.EndsWith(".home.arpa", StringComparison.Ordinal) || lower.EndsWith(".internal", StringComparison.Ordinal);
     }
 
+    internal static async System.Threading.Tasks.Task RequireLocalHTTP(Uri origin,
+        Func<string, TimeSpan, System.Threading.Tasks.Task<bool?>>? resolve = null)
+    {
+        if (origin.Scheme != "http" || IPAddress.TryParse(origin.Host.TrimStart('[').TrimEnd(']'), out _)) return;
+        if (await (resolve ?? ResolvesLocally)(origin.Host, TimeSpan.FromSeconds(8)) != true)
+            throw new NotLocalNetworkException();
+    }
+
     /// <summary>Every address the host resolves to is local. An address literal is not looked up. Null when the name
     /// could not be resolved (treated as unreachable), so nothing is ever sent to a public address over plain HTTP.</summary>
     public static async System.Threading.Tasks.Task<bool?> ResolvesLocally(string host, TimeSpan timeout)
@@ -142,7 +155,8 @@ public sealed class AccountDashboard
     public int SchemaVersion { get; set; }
     public string UpdatedAt { get; set; } = "";
     public List<DashboardAccount> Accounts { get; set; } = new();
-    public AutoSwitchStatus CodexAutoSwitch { get; set; } = new();
+    // Kept absent until DashboardClient validates the required policy.
+    public AutoSwitchStatus CodexAutoSwitch { get; set; } = null!;
     public AntigravityAutoStatus? AntigravityAutoSwitch { get; set; }
     public AccountRefreshSettings? Settings { get; set; }
     /// <summary>The dashboard's provider list (B3a): label, order, and the "Show on dashboard" and "Show in tray" switches.</summary>
@@ -205,6 +219,8 @@ public sealed class DashboardAccount
     public string? Email { get; set; }
     public string? Plan { get; set; }
     public string Platform { get; set; } = "";
+    public string? Host { get; set; }
+    [JsonIgnore] public string Provenance => Host ?? Platform;
     public string Source { get; set; } = "";
     public string Status { get; set; } = "unavailable";
     public string? Message { get; set; }
@@ -240,6 +256,7 @@ public sealed class DashboardAccount
 
 public sealed class QuotaWindow
 {
+    public string? PoolId { get; set; }
     public string Key { get; set; } = "";
     public string Label { get; set; } = "";
     public double? UsedPercent { get; set; }
@@ -337,6 +354,7 @@ public sealed class AntigravityPlan
 /// <summary>Antigravity's own automatic switching (thresholdUsedPercent is % USED, unlike Codex).</summary>
 public sealed class AntigravityAutoStatus
 {
+    public string? RequestedPoolId { get; set; }
     public bool Enabled { get; set; }
     public double ThresholdUsedPercent { get; set; } = 95;
     public int PollIntervalSeconds { get; set; } = 60;
@@ -458,6 +476,7 @@ public static class Formatting
 
     public static string WindowLabel(DashboardAccount account, QuotaWindow window)
     {
+        if (account.Provider == "codex") return window.Key switch { "seven_day" => "Weekly", "five_hour" => "5-hour", _ => window.Label };
         if (account.Provider != "qwen") return window.Label;
         return Normalize(window.Key) switch
         {
@@ -469,6 +488,10 @@ public static class Formatting
     public static QuotaWindow[] QwenPacks(DashboardAccount account) => account.Provider == "qwen"
         ? VisibleWindows(account).Where(window => window.Key.StartsWith("addon-pack-", StringComparison.Ordinal)).ToArray()
         : Array.Empty<QuotaWindow>();
+
+    public static bool HasUsableCredit(QuotaWindow pack, DateTimeOffset? now = null) =>
+        pack.Remaining is double left && double.IsFinite(left) && left > 0
+        && (!DateTimeOffset.TryParse(pack.ExpiresAt, out var expiry) || expiry > (now ?? Now()));
 
     public static string PackStatus(QuotaWindow pack, DateTimeOffset? now = null)
     {

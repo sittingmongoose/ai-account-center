@@ -131,7 +131,7 @@ public static class SecureStore
     {
         var ciphertext = Transform(plaintext, true);
         var decoded = Transform(ciphertext, false);
-        try { return !Convert.ToBase64String(ciphertext).Contains(Encoding.UTF8.GetString(plaintext), StringComparison.Ordinal) && CryptographicOperations.FixedTimeEquals(plaintext, decoded); }
+        try { return ciphertext.AsSpan().IndexOf(plaintext.AsSpan()) < 0 && CryptographicOperations.FixedTimeEquals(plaintext, decoded); }
         finally { CryptographicOperations.ZeroMemory(decoded); }
     }
 

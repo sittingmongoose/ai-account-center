@@ -45,15 +45,21 @@ public sealed class DashboardClient : IDisposable
     {
         var dashboard = await Request<AccountDashboard>(HttpMethod.Get,
             "api/accounts/dashboard?platform=windows&refresh=" + (refresh ? "true" : "false"), requestKind: DashboardRequestKind.Usage);
-        if (dashboard.SchemaVersion != 1 || dashboard.Accounts is null || dashboard.CodexAutoSwitch is null)
+        if (!SupportedDashboard(dashboard))
             throw new InvalidOperationException("The dashboard API version is not supported by this AI Account Center.");
         return dashboard;
     }
 
-    public Task<AutoSwitchStatus> SetAutoSwitch(bool enabled, int? thresholdPercent = null)
+    internal static bool SupportedDashboard(AccountDashboard dashboard) =>
+        dashboard.SchemaVersion == 1 && dashboard.Accounts is not null && dashboard.CodexAutoSwitch is not null;
+
+    public Task<AutoSwitchStatus> SetAutoSwitch(bool? enabled = null, int? thresholdPercent = null)
     {
         if (thresholdPercent is < 1 or > 99) throw new ArgumentException("Select a threshold between 1% and 99% remaining.");
-        object body = thresholdPercent.HasValue ? new { enabled, thresholdPercent = thresholdPercent.Value } : new { enabled };
+        var body = new Dictionary<string, object>();
+        if (enabled is bool on) body["enabled"] = on;
+        if (thresholdPercent is int remaining) body["thresholdPercent"] = remaining;
+        if (body.Count == 0) throw new ArgumentException("Choose a setting to change.");
         return Request<AutoSwitchStatus>(HttpMethod.Put, "api/codex/profiles/auto-switch", body, requestKind: DashboardRequestKind.AutoSwitch);
     }
 
@@ -237,7 +243,12 @@ public sealed class DashboardClient : IDisposable
     private async Task<HttpResponseMessage> SendAndDispose(HttpRequestMessage request, CancellationToken cancel)
     {
         // These small JSON responses are buffered so HttpClient's timeout covers the body.
-        using (request) return await http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancel);
+        using (request)
+        {
+            await LocalNetwork.RequireLocalHTTP(origin);
+            request.Options.Set(ConfirmationLifetime.RequestStarted, System.Diagnostics.Stopwatch.GetTimestamp());
+            return await http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancel);
+        }
     }
 
     private async Task Login()
@@ -274,7 +285,10 @@ public sealed class DashboardClient : IDisposable
                 {
                     var confirmation = proposed.Deserialize<CodexSwitchConfirmation>(Formatting.Json);
                     if (confirmation is not null && confirmation.IsValidFor(confirmationProfile))
+                    {
+                        confirmation.Deadline = ConfirmationLifetime.Deadline(confirmation.ExpiresAt, response);
                         throw new CodexConfirmationRequiredException(confirmation);
+                    }
                 }
             }
             catch (JsonException) { }
@@ -294,7 +308,10 @@ public sealed class DashboardClient : IDisposable
                     {
                         var confirmation = proposed.Deserialize<AntigravityConfirmation>(Formatting.Json);
                         if (confirmation is not null && confirmation.IsValidFor(confirmationProfile))
+                        {
+                            confirmation.Deadline = ConfirmationLifetime.Deadline(confirmation.ExpiresAt, response);
                             throw new AntigravityConfirmationRequiredException(confirmation);
+                        }
                         throw new InvalidOperationException("The switch confirmation is invalid. Refresh and try again.");
                     }
                 }

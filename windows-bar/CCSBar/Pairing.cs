@@ -46,6 +46,7 @@ public static class Pairing
                     }
                 }
             }
+            catch (NotLocalNetworkException) { throw; }
             catch (Exception) { /* Pairing is unavailable: keep the password sign-in below. */ }
         }
         SecureStore.Save(settings, path);

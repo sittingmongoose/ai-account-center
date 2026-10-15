@@ -275,7 +275,7 @@ public partial class MainWindow
         var peer = seen.Peer.Length is > 0 and <= 64 && seen.Peer.All(c => char.IsAsciiHexDigit(c) || c is ':' or '.') ? seen.Peer : "unknown";
         if (peer is "127.0.0.1" or "::1") return "This connection: this computer";
         if (seen.Trusted) return $"This connection: {peer}, trusted local network";
-        return check.SecureTransport ? $"This connection: {peer}, secure connection" : $"This connection: {peer}, not trusted";
+        return check.SecureTransport == true ? $"This connection: {peer}, secure connection" : $"This connection: {peer}, not trusted";
     }
 
     /// <summary>Disconnect asks inline first (the concept's confirm line), then revokes and forgets the key.</summary>
