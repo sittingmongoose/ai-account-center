@@ -3,15 +3,16 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { RawUsageEntry } from '../jsonl-parser';
+import { discoverOmpSessionRoots, type OmpDiscoveryBounds } from './omp-session-root-discovery';
 
 export const OMP_TARGET = 'omp';
 /** Bounded marker scan under ~/PM-Experiments for custom --session-dir roots. */
-export const OMP_SCAN_MAX_DEPTH = 12;
+export const OMP_SCAN_MAX_DEPTH = 64;
 /** Bump when discovery/skip rules change, independently of the cache file schema. */
-export const OMP_ROOTS_RULE_VERSION = 3;
-export const OMP_SCAN_MAX_DIRS = 5000;
+export const OMP_ROOTS_RULE_VERSION = 4;
+export const OMP_SCAN_MAX_DIRS = 100_000;
 export const OMP_SCAN_MAX_ROOTS = 512;
-export const OMP_SCAN_CACHE_TTL_MS = 6 * 3_600_000;
+export const OMP_SCAN_CACHE_TTL_MS = 24 * 3_600_000;
 /**
  * Sandbox marker: synthetic-log generators (gen-data.mjs, sandbox.sh) write
  * this file at their data-tree root, and the session-root scan skips any
@@ -158,13 +159,7 @@ export interface OmpRootOptions {
   discovery?: { truncated: boolean };
 }
 
-export interface OmpScanBounds {
-  maxDepth?: number;
-  maxDirs?: number;
-  /** Total directory entries examined across the walk. */
-  maxEntries?: number;
-  deadlineMs?: number;
-}
+export type OmpScanBounds = OmpDiscoveryBounds;
 
 /**
  * True when the scanned directory is a synthetic sandbox tree: it holds the
@@ -233,198 +228,12 @@ async function sessionsDirHasMarker(directory: string): Promise<boolean> {
 }
 
 /**
- * Breadth-first marker walk. Every directory read is awaited, so a large tree
- * never blocks the server's event loop; the walk is bounded by depth,
- * directory count, entries examined and a deadline.
- */
-async function scanSessionRoots(
-  base: string,
-  bounds: OmpScanBounds = {}
-): Promise<{ roots: string[]; truncated: boolean }> {
-  const maxDepth = bounds.maxDepth ?? OMP_SCAN_MAX_DEPTH;
-  const maxDirs = bounds.maxDirs ?? OMP_SCAN_MAX_DIRS;
-  const maxEntries = bounds.maxEntries ?? 2_000_000;
-  const deadline = Date.now() + Math.max(1, bounds.deadlineMs ?? 15_000);
-  const found: string[] = [];
-  try {
-    if (!(await fs.promises.stat(base)).isDirectory()) return { roots: found, truncated: false };
-  } catch {
-    return { roots: found, truncated: false };
-  }
-  // Breadth-first so shallow roots are found even when the caps bite.
-  const pending: Array<{ directory: string; depth: number }> = [{ directory: base, depth: 0 }];
-  let head = 0;
-  let visited = 0;
-  let examined = 0;
-  let depthLimited = false;
-  while (head < pending.length && found.length < OMP_SCAN_MAX_ROOTS) {
-    if (visited >= maxDirs || Date.now() >= deadline) break;
-    const current = pending[head++];
-    if (current.depth > maxDepth) continue;
-    visited++;
-    let entries: fs.Dirent[];
-    try {
-      entries = await fs.promises.readdir(current.directory, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    examined += entries.length;
-    if (examined > maxEntries) break;
-    // Synthetic sandbox trees are never roots and never descended: their
-    // fixture records would otherwise count as real usage.
-    if (await isSandboxTree(current.directory, entries)) continue;
-    if (current.directory !== base) {
-      if (path.basename(current.directory) === 'sessions') {
-        if (await sessionsDirHasMarker(current.directory)) found.push(current.directory);
-        continue;
-      }
-      // Custom `--session-dir` roots are named freely (`<branch>-sessions`,
-      // `rev-<id>-sessions`, `<task>-run-sessions`, ...), so a literal
-      // `sessions` name check missed them: the wave-4 workers wrote 25 such
-      // dirs (75 files, 125 MB) that never became roots. Accept any non-base
-      // directory that directly holds an OMP session file, by the same filename
-      // rule the collector uses to read it. Accepted roots are not descended
-      // here; the collector's own recursive scan then reads their nested
-      // `<ts>_<uuid>/__advisor.jsonl` subagent files.
-      if (entries.some((entry) => entry.isFile() && isOmpSessionFilename(entry.name))) {
-        found.push(current.directory);
-        continue;
-      }
-    }
-    if (current.depth >= maxDepth) {
-      if (entries.some((entry) => entry.isDirectory() && !SCAN_SKIP_DIRS.has(entry.name)))
-        depthLimited = true;
-      // One level past the depth cap, still examine session-container
-      // children: experiment runners nest per-job session dirs one level
-      // deeper than the cap (`runs/<run>/jobs/<job>/sessions`), and the usage
-      // inside is real. Only `*sessions*`-named children are examined, inline
-      // and never descended, so the extra work stays bounded by that small
-      // set. Anything deeper (or not session-named) stays out of reach; those
-      // locations need explicit extra usage-log sources.
-      if (current.depth === maxDepth) {
-        for (const entry of entries) {
-          if (visited >= maxDirs || Date.now() >= deadline || found.length >= OMP_SCAN_MAX_ROOTS)
-            break;
-          if (!entry.isDirectory() || !entry.name.includes('sessions')) continue;
-          visited++;
-          const child = path.join(current.directory, entry.name);
-          let childEntries: fs.Dirent[];
-          try {
-            childEntries = await fs.promises.readdir(child, { withFileTypes: true });
-          } catch {
-            continue;
-          }
-          examined += childEntries.length + 1;
-          if (examined > maxEntries) break;
-          if (await isSandboxTree(child, childEntries)) continue;
-          if (entry.name === 'sessions') {
-            if (await sessionsDirHasMarker(child)) found.push(child);
-          } else if (
-            childEntries.some(
-              (childEntry) => childEntry.isFile() && isOmpSessionFilename(childEntry.name)
-            )
-          ) {
-            found.push(child);
-          }
-        }
-        if (examined > maxEntries) break;
-      }
-      continue;
-    }
-    for (const entry of entries) {
-      if (SCAN_SKIP_DIRS.has(entry.name)) continue;
-      if (entry.isDirectory())
-        pending.push({
-          directory: path.join(current.directory, entry.name),
-          depth: current.depth + 1,
-        });
-    }
-  }
-  // Truncated when the walk stopped with directories still pending or hit the
-  // root cap: the tree is larger than one bounded scan, so the caller unions
-  // this result with the cache and rescans soon to converge over collections.
-  const truncated =
-    depthLimited ||
-    examined > maxEntries ||
-    head < pending.length ||
-    found.length >= OMP_SCAN_MAX_ROOTS;
-  return { roots: found, truncated };
-}
-
-const ROOTS_CACHE_FILE = 'omp-session-roots-v1.json';
-const ROOTS_CACHE_TTL_MS = 6 * 3_600_000;
-/**
- * A truncated scan (the tree outgrew one bounded walk) rescans on this shorter
- * TTL and unions into the cache, so successive collections accumulate roots and
- * converge toward full coverage instead of freezing one partial scan for 6 h.
- */
-const ROOTS_CACHE_TRUNCATED_TTL_MS = 30 * 60_000;
-
-interface OmpRootsCache {
-  version: 2;
-  ruleVersion: number;
-  scannedAt: number;
-  roots: string[];
-  truncated: boolean;
-}
-
-function readRootsCacheRaw(cacheDir: string): OmpRootsCache | null {
-  try {
-    const raw = fs.readFileSync(path.join(cacheDir, ROOTS_CACHE_FILE), 'utf8');
-    const value = JSON.parse(raw) as OmpRootsCache;
-    if (
-      value.version !== 2 ||
-      value.ruleVersion !== OMP_ROOTS_RULE_VERSION ||
-      !Number.isFinite(value.scannedAt) ||
-      !Array.isArray(value.roots) ||
-      value.roots.length > OMP_SCAN_MAX_ROOTS ||
-      value.roots.some((root) => typeof root !== 'string' || !path.isAbsolute(root)) ||
-      typeof value.truncated !== 'boolean'
-    )
-      return null;
-    return value;
-  } catch {
-    return null;
-  }
-}
-
-function writeRootsCache(
-  cacheDir: string,
-  roots: string[],
-  truncated: boolean,
-  scannedAt: number
-): void {
-  try {
-    fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
-    const file = path.join(cacheDir, ROOTS_CACHE_FILE);
-    const temporary = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(
-      temporary,
-      JSON.stringify({
-        version: 2,
-        ruleVersion: OMP_ROOTS_RULE_VERSION,
-        scannedAt,
-        truncated,
-        roots: roots.slice(0, OMP_SCAN_MAX_ROOTS),
-      }),
-      { mode: 0o600 }
-    );
-    fs.renameSync(temporary, file);
-    fs.chmodSync(file, 0o600);
-  } catch {
-    /* The next collection scans again. */
-  }
-}
-
-/**
- * OMP session roots: the default `~/.omp/agent/sessions`, per-profile
- * `~/.omp/profiles/<name>/agent/sessions`, `$PI_CODING_AGENT_DIR` sessions when
- * set, `$OMP_SESSION_DIRS` extras, and custom `--session-dir` roots found by a
- * bounded marker scan under `~/PM-Experiments`. The tree outgrows one bounded
- * walk, so a completed scan is cached six hours while a truncated one is
- * rescanned on a short TTL and unioned into the cache: roots accumulate across
- * collections and never regress. Explicit roots never wait on the scan, which
- * awaits each directory read so it never blocks the event loop.
+ * Default, profile and explicitly configured OMP roots, plus custom roots discovered
+ * under ~/PM-Experiments. Each collection advances saved per-experiment DFS cursors
+ * within one shared budget; completed experiments are reused for 24 hours or until
+ * their directory identity/mtime changes. New experiments run first, and unfinished
+ * experiments rotate across collections. Only an unfinished or structurally limited
+ * cycle reports discovery truncated; a large, fully visited tree reports complete.
  */
 export async function resolveOmpSessionRoots(options: OmpRootOptions = {}): Promise<string[]> {
   const env = options.env ?? process.env;
@@ -462,71 +271,27 @@ export async function resolveOmpSessionRoots(options: OmpRootOptions = {}): Prom
   } catch {
     /* No profiles directory: only the default agent applies. */
   }
-  const base = path.join(homeDir, 'PM-Experiments');
-  const cached = options.cacheDir ? readRootsCacheRaw(options.cacheDir) : null;
-  // Cached discoveries are never explicit overrides of today's sandbox/skip rules.
-  if (cached) {
-    const valid: string[] = [];
-    const allowedDirectories = new Map<string, boolean>();
-    for (const root of cached.roots) {
-      const relative = path.relative(base, root);
-      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue;
-      const parts = relative.split(path.sep);
-      if (parts.some((part) => SCAN_SKIP_DIRS.has(part))) continue;
-      let allowed = true;
-      for (let index = 0; index <= parts.length; index++) {
-        const directory = path.join(base, ...parts.slice(0, index));
-        try {
-          if (!allowedDirectories.has(directory)) {
-            const stats = await fs.promises.lstat(directory);
-            if (stats.isSymbolicLink()) {
-              allowedDirectories.set(directory, false);
-              allowed = false;
-              break;
-            }
-            const entries = await fs.promises.readdir(directory, { withFileTypes: true });
-            allowedDirectories.set(
-              directory,
-              !stats.isSymbolicLink() && !(await isSandboxTree(directory, entries))
-            );
-          }
-          allowed = allowedDirectories.get(directory) === true;
-        } catch {
-          allowed = false;
-        }
-        if (!allowed) break;
-      }
-      if (allowed) valid.push(root);
+  const discovered = await discoverOmpSessionRoots(
+    path.join(homeDir, 'PM-Experiments'),
+    {
+      cacheDir: options.cacheDir,
+      now,
+      bounds: { maxDirs: OMP_SCAN_MAX_DIRS, ...options.scanBounds },
+    },
+    {
+      version: OMP_ROOTS_RULE_VERSION,
+      maxDepth: OMP_SCAN_MAX_DEPTH,
+      maxRoots: OMP_SCAN_MAX_ROOTS,
+      ttlMs: OMP_SCAN_CACHE_TTL_MS,
+      skipDirs: SCAN_SKIP_DIRS,
+      isSessionFilename: isOmpSessionFilename,
+      isSandbox: isSandboxTree,
+      hasSessionMarker: sessionsDirHasMarker,
     }
-    cached.roots = valid;
-  }
-  if (cached) {
-    const ttl = cached.truncated ? ROOTS_CACHE_TRUNCATED_TTL_MS : ROOTS_CACHE_TTL_MS;
-    if (now - cached.scannedAt <= ttl) {
-      for (const found of cached.roots) add(found);
-      if (options.discovery)
-        options.discovery.truncated = cached.truncated || roots.length > OMP_SCAN_MAX_ROOTS;
-      return roots.slice(0, OMP_SCAN_MAX_ROOTS);
-    }
-  }
-  // A bounded walk of a large tree usually cannot finish in one pass, so the
-  // result is unioned with the cached roots (never regressing) and, while
-  // truncated, rescanned on a short TTL: successive collections accumulate
-  // roots and converge toward full coverage. Defaults/explicit roots always
-  // apply, so a walk that finds nothing keeps no stale roots of its own.
-  const { roots: scanned, truncated } = await scanSessionRoots(base, {
-    maxDirs: 100_000,
-    deadlineMs: 30_000,
-    ...options.scanBounds,
-  });
-  const union = new Set<string>(scanned);
-  for (const prior of cached?.roots ?? []) union.add(prior);
-  const merged = [...union].slice(0, OMP_SCAN_MAX_ROOTS);
-  const limited = truncated || union.size > OMP_SCAN_MAX_ROOTS;
-  if (options.discovery) options.discovery.truncated = limited;
-  if (options.cacheDir) writeRootsCache(options.cacheDir, merged, limited, now);
-  for (const found of merged) add(found);
-  if (options.discovery) options.discovery.truncated ||= roots.length > OMP_SCAN_MAX_ROOTS;
+  );
+  for (const found of discovered.roots) add(found);
+  if (options.discovery)
+    options.discovery.truncated = discovered.truncated || roots.length > OMP_SCAN_MAX_ROOTS;
   return roots.slice(0, OMP_SCAN_MAX_ROOTS);
 }
 

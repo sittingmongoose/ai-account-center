@@ -9,6 +9,7 @@ import {
   resolveOmpSessionRoots,
   OMP_ROOTS_RULE_VERSION,
   OMP_SCAN_MAX_ROOTS,
+  OMP_SCAN_CACHE_TTL_MS,
 } from '../../../../src/web-server/usage/omp-native-usage-collector';
 import { collectAccountActivity } from '../../../../src/web-server/usage/account-activity-collector';
 
@@ -250,40 +251,46 @@ describe('omp session roots', () => {
     );
     expect(await resolveOmpSessionRoots({ env: {}, homeDir: home, cacheDir })).toContain(deep);
     expect(JSON.parse(fs.readFileSync(cache, 'utf8')).ruleVersion).toBe(OMP_ROOTS_RULE_VERSION);
+    const obsolete = JSON.parse(fs.readFileSync(cache, 'utf8'));
+    obsolete.ruleVersion--;
+    obsolete.roots = [];
+    for (const child of obsolete.children) child.roots = [];
+    fs.writeFileSync(cache, JSON.stringify(obsolete));
+    expect(await resolveOmpSessionRoots({ env: {}, homeDir: home, cacheDir })).toContain(deep);
     fs.writeFileSync(path.join(path.dirname(deep), '.aac-synthetic'), 'fixture\n');
     expect(await resolveOmpSessionRoots({ env: {}, homeDir: home, cacheDir })).not.toContain(deep);
   });
 
-  it('caches the marker scan for six hours', async () => {
+  it('reuses completed children until their TTL or directory change signal', async () => {
     const cacheDir = path.join(home, 'cache');
-    const first = path.join(home, 'PM-Experiments', 'a', 'sessions');
-    fs.mkdirSync(first, { recursive: true });
-    fs.writeFileSync(path.join(first, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
+    const child = path.join(home, 'PM-Experiments', 'a');
+    const makeRoot = (name: string) => {
+      const root = path.join(child, 'container', name);
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, '2026-10-01T15-00_cache.jsonl'), '{}\n');
+      return root;
+    };
+    const first = makeRoot('one-sessions');
     const now = Date.now();
-    const scanned = await resolveOmpSessionRoots({
-      env: {},
-      homeDir: home,
-      cacheDir,
-      now: () => now,
-    });
-    expect(scanned).toContain(first);
-    const second = path.join(home, 'PM-Experiments', 'b', 'sessions');
-    fs.mkdirSync(second, { recursive: true });
-    fs.writeFileSync(path.join(second, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
-    const cached = await resolveOmpSessionRoots({
-      env: {},
-      homeDir: home,
-      cacheDir,
-      now: () => now + 1000,
-    });
-    expect(cached).not.toContain(second);
-    const rescanned = await resolveOmpSessionRoots({
-      env: {},
-      homeDir: home,
-      cacheDir,
-      now: () => now + 6 * 3_600_000 + 1,
-    });
-    expect(rescanned).toContain(second);
+    const stamp = fs.statSync(child).mtimeMs;
+    const discovery = { truncated: false };
+    const scan = (time: number) =>
+      resolveOmpSessionRoots({ env: {}, homeDir: home, cacheDir, now: () => time, discovery });
+    expect(await scan(now)).toContain(first);
+    const second = makeRoot('two-sessions');
+    // Nested writes do not change the top-level child's cheap change signal.
+    expect(fs.statSync(child).mtimeMs).toBe(stamp);
+    expect(await scan(now + 1000)).not.toContain(second);
+    expect(await scan(now + OMP_SCAN_CACHE_TTL_MS + 1)).toContain(second);
+    expect(discovery.truncated).toBe(false);
+    const third = makeRoot('three-sessions');
+    fs.utimesSync(child, new Date(now + 60_000), new Date(now + 60_000));
+    expect(await scan(now + OMP_SCAN_CACHE_TTL_MS + 1000)).toContain(third);
+    expect(discovery.truncated).toBe(false);
+    // A completed replacement drops roots that are gone, rather than unioning forever.
+    fs.rmSync(second, { recursive: true, force: true });
+    fs.utimesSync(child, new Date(now + 120_000), new Date(now + 120_000));
+    expect(await scan(now + OMP_SCAN_CACHE_TTL_MS + 2000)).not.toContain(second);
   });
 
   it('dedupes roots that resolve to the same directory', async () => {
@@ -441,34 +448,161 @@ describe('omp session roots', () => {
     expect(roots).not.toContain(deep);
   });
 
-  it('rescans a truncated marker scan on a short TTL and unions roots', async () => {
+  it('resumes large children across collections and becomes complete without advancing a retry TTL', async () => {
     const cacheDir = path.join(home, 'cache');
-    const dirA = path.join(home, 'PM-Experiments', 'a-sessions');
-    fs.mkdirSync(dirA, { recursive: true });
-    fs.writeFileSync(path.join(dirA, '2026-10-01T15-00_uuid.jsonl'), '{}\n');
-    const cacheFile = path.join(cacheDir, 'omp-session-roots-v1.json');
+    const expected: string[] = [];
+    for (const child of ['a', 'b']) {
+      const base = path.join(home, 'PM-Experiments', child);
+      for (let index = 0; index < 5; index++)
+        fs.mkdirSync(path.join(base, `padding-${index}`), { recursive: true });
+      const root = path.join(base, 'sessions');
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, `2026-10-01T15-00_${child}.jsonl`), '{}\n');
+      expected.push(root);
+    }
+    const discovery = { truncated: false };
+    let roots: string[] = [];
+    let passes = 0;
     const now = Date.now();
-    // Starve the first walk so it truncates before reaching dirA.
-    await resolveOmpSessionRoots({
-      env: {},
-      homeDir: home,
-      cacheDir,
-      now: () => now,
-      scanBounds: { maxDirs: 1 },
-    });
-    const first = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    expect(first.truncated).toBe(true);
-    // A truncated cache is not frozen for six hours: past its short TTL the walk
-    // reruns, converges on the small tree, and unions dirA into the cache.
-    const later = await resolveOmpSessionRoots({
-      env: {},
-      homeDir: home,
-      cacheDir,
-      now: () => now + 31 * 60_000,
-    });
-    expect(later).toContain(dirA);
-    const second = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    expect(second.truncated).toBe(false);
-    expect(second.roots).toContain(dirA);
+    do {
+      roots = await resolveOmpSessionRoots({
+        env: {},
+        homeDir: home,
+        cacheDir,
+        now: () => now,
+        discovery,
+        scanBounds: { maxDirs: 2 },
+      });
+      passes++;
+      expect(passes).toBeLessThan(20);
+    } while (discovery.truncated && passes < 20);
+    expect(passes).toBeGreaterThan(2);
+    expect(discovery.truncated).toBe(false);
+    expect(roots.filter((root) => root.includes('PM-Experiments')).sort()).toEqual(expected.sort());
+    const cache = JSON.parse(
+      fs.readFileSync(path.join(cacheDir, 'omp-session-roots-v1.json'), 'utf8')
+    );
+    expect(
+      cache.children.every((child: { pending: unknown[] }) => child.pending.length === 0)
+    ).toBe(true);
+    expect(cache.truncated).toBe(false);
+  });
+
+  it('walks new children before resuming a large existing child, then rotates unfinished children', async () => {
+    const cacheDir = path.join(home, 'cache');
+    for (const name of ['a', 'b']) {
+      const experiment = path.join(home, 'PM-Experiments', name);
+      for (let index = 0; index < 6; index++)
+        fs.mkdirSync(path.join(experiment, `padding-${index}`), { recursive: true });
+    }
+    const discovery = { truncated: false };
+    const scan = () =>
+      resolveOmpSessionRoots({
+        env: {},
+        homeDir: home,
+        cacheDir,
+        discovery,
+        scanBounds: { maxDirs: 1 },
+      });
+    await scan();
+    expect(discovery.truncated).toBe(true);
+    const newRoot = path.join(home, 'PM-Experiments', 'z-new-sessions');
+    fs.mkdirSync(newRoot);
+    fs.writeFileSync(path.join(newRoot, '2026-10-01T15-00_new.jsonl'), '{}\n');
+    expect(await scan()).toContain(newRoot);
+    expect(discovery.truncated).toBe(true);
+    const before = JSON.parse(
+      fs.readFileSync(path.join(cacheDir, 'omp-session-roots-v1.json'), 'utf8')
+    );
+    const aBefore = before.children.find((child: { name: string }) => child.name === 'a');
+    await scan();
+    const rotated = JSON.parse(
+      fs.readFileSync(path.join(cacheDir, 'omp-session-roots-v1.json'), 'utf8')
+    );
+    expect(rotated.children.find((child: { name: string }) => child.name === 'b').lastPass).toBe(
+      rotated.pass
+    );
+    expect(rotated.children.find((child: { name: string }) => child.name === 'a').lastPass).toBe(
+      aBefore.lastPass
+    );
+    await scan();
+    const after = JSON.parse(
+      fs.readFileSync(path.join(cacheDir, 'omp-session-roots-v1.json'), 'utf8')
+    );
+    expect(
+      after.children.find((child: { name: string }) => child.name === 'a').pending.length
+    ).toBe(aBefore.pending.length - 1);
+  });
+
+  it('resumes an entry-budget cut without restarting the child', async () => {
+    const cacheDir = path.join(home, 'cache');
+    const experiment = path.join(home, 'PM-Experiments', 'a');
+    const root = path.join(experiment, 'b', 'sessions');
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(path.join(experiment, 'z'));
+    fs.mkdirSync(path.join(experiment, 'b', 'z'));
+    fs.writeFileSync(path.join(root, '2026-10-01T15-00_entries.jsonl'), '{}\n');
+    const discovery = { truncated: false };
+    const scan = () =>
+      resolveOmpSessionRoots({
+        env: {},
+        homeDir: home,
+        cacheDir,
+        discovery,
+        scanBounds: { maxEntries: 3 },
+      });
+    expect(await scan()).not.toContain(root);
+    expect(discovery.truncated).toBe(true);
+    let roots: string[] = [];
+    for (let pass = 0; pass < 5 && discovery.truncated; pass++) roots = await scan();
+    expect(roots).toContain(root);
+    expect(discovery.truncated).toBe(false);
+  });
+
+  it('retains the discovery root cap and reports overflow after the walk finishes', async () => {
+    const base = path.join(home, 'PM-Experiments');
+    for (let index = 0; index <= OMP_SCAN_MAX_ROOTS; index++) {
+      const root = path.join(base, `root-${index}-sessions`);
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, '2026-10-01T15-00_cap.jsonl'), '{}\n');
+    }
+    const cacheDir = path.join(home, 'cache');
+    const discovery = { truncated: false };
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home, cacheDir, discovery });
+    expect(roots).toHaveLength(OMP_SCAN_MAX_ROOTS);
+    expect(discovery.truncated).toBe(true);
+    const cache = JSON.parse(
+      fs.readFileSync(path.join(cacheDir, 'omp-session-roots-v1.json'), 'utf8')
+    );
+    expect(cache.roots).toHaveLength(OMP_SCAN_MAX_ROOTS);
+    expect(
+      cache.children.every((child: { pending: unknown[] }) => child.pending.length === 0)
+    ).toBe(true);
+  });
+
+  it('revalidates resumed ancestors when a sandbox marker appears between passes', async () => {
+    const cacheDir = path.join(home, 'cache');
+    const experiment = path.join(home, 'PM-Experiments', 'a');
+    const roots = ['one-sessions', 'two-sessions'].map((name) => path.join(experiment, name));
+    for (const root of roots) {
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, '2026-10-01T15-00_sandbox.jsonl'), '{}\n');
+    }
+    const discovery = { truncated: false };
+    const scan = () =>
+      resolveOmpSessionRoots({
+        env: {},
+        homeDir: home,
+        cacheDir,
+        discovery,
+        scanBounds: { maxDirs: 2 },
+      });
+    expect(await scan()).toContain(roots[0]);
+    expect(discovery.truncated).toBe(true);
+    fs.writeFileSync(path.join(experiment, '.aac-synthetic'), 'fixture\n');
+    const next = await scan();
+    expect(next).not.toContain(roots[0]);
+    expect(next).not.toContain(roots[1]);
+    expect(discovery.truncated).toBe(false);
   });
 });
