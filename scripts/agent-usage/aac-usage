@@ -288,8 +288,9 @@ def cmd_history(args):
     if note:
         print(note)
     for entry in series:
-        print("%s %s (%s) %s:" % (entry.get("provider"), entry.get("label"), entry.get("email") or "-",
-                                  entry.get("windowLabel")))
+        pool = " [%s]" % entry["pool"] if entry.get("pool") else ""
+        print("%s %s (%s) %s%s:" % (entry.get("provider"), entry.get("label"), entry.get("email") or "-",
+                                    entry.get("windowLabel"), pool))
         for time, used, remaining in entry["points"]:
             values = []
             if used is not None:

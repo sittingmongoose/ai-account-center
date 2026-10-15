@@ -372,6 +372,69 @@ describe('agent usage burn rate', () => {
     ).toBeNull();
   });
 
+  it('takes a fractional two-point move as a burst', () => {
+    // Cursor reports fractions: 32.3 - 30.3 is 1.9999999999999964 in floating point.
+    const burst = burnRate([reading(60, 20.3), reading(5, 30.3), reading(0, 32.3)], null);
+    expect(burst.pace).toBe(24);
+    expect(burst.paceMinutes).toBe(5);
+    const below = burnRate([reading(60, 20.3), reading(5, 30.3), reading(0, 31.8)], null);
+    expect(below.paceMinutes).toBe(60);
+  });
+
+  it('keeps a reset reported without the window unit as a boundary', () => {
+    // Qwen drops the unit when its quota-config request fails; the reset still bounds the window.
+    const unit = { unit: 'credits', resetAt: null };
+    const row = account({ windows: [window({ usedPercent: 60, ...unit })] });
+    const stored = [
+      { ...record(row, 15, 40), windows: [window({ usedPercent: 40, ...unit })] },
+      {
+        ...record(row, 10, 0),
+        windows: [
+          window({
+            usedPercent: null,
+            remainingPercent: null,
+            unit: null,
+            resetAt: '2026-10-15T11:55:00.000Z',
+          }),
+        ],
+      },
+    ];
+    const projected = projectAgentUsage([row], { now: NOW }).accounts;
+    const key = burnKey('five_hour', 'credits', null);
+    expect(
+      usageHistory([row], projected, history(stored), NOW).rates.get('codex:gmail')?.get(key)?.pace
+    ).toBeNull();
+    const recent = new RecentReadings();
+    recent.add(
+      [
+        account({
+          sampledAt: new Date(NOW - 15 * MINUTE).toISOString(),
+          windows: [window({ usedPercent: 40, ...unit })],
+        }),
+      ],
+      NOW - 15 * MINUTE
+    );
+    recent.add(
+      [
+        account({
+          sampledAt: new Date(NOW - 10 * MINUTE).toISOString(),
+          windows: [
+            window({
+              usedPercent: null,
+              remainingPercent: null,
+              unit: null,
+              resetAt: '2026-10-15T11:55:00.000Z',
+            }),
+          ],
+        }),
+      ],
+      NOW - 10 * MINUTE
+    );
+    expect(
+      usageHistory([row], projected, null, NOW, recent).rates.get('codex:gmail')?.get(key)?.pace
+    ).toBeNull();
+  });
+
   it("keeps an account's history through an outage, without a reading or a pace", () => {
     const live = account();
     const down = account({ status: 'unavailable', windows: [] });

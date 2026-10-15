@@ -35,6 +35,8 @@ const MIN_PACE = 0.05;
  * 24%/h, still shows a burst at once).
  */
 const PACE_MIN_POINTS = 2;
+/** Fractional percentages (Cursor reports 30.3) subtract inexactly: 32.3 - 30.3 is 1.9999999999999964. */
+const POINT_TOLERANCE = 1e-9;
 /** How long the one-minute readings are kept in memory. */
 export const RECENT_READINGS_MS = 65 * 60_000;
 const MAX_RECENT_READINGS = 180;
@@ -171,18 +173,56 @@ function seriesKey(row: DashboardAccount, window: DashboardAccountWindow): strin
 }
 
 /**
+ * The window without its optional unit: a provider can drop the unit from one reading (Qwen does
+ * when its quota-config request fails), which puts that reading in another series, but its reset
+ * time still bounds this window's periods.
+ */
+function boundaryIdentity(window: DashboardAccountWindow): string {
+  return JSON.stringify([window.key, window.kind ?? null, window.poolId ?? null]);
+}
+
+function boundaryKey(row: DashboardAccount, window: DashboardAccountWindow): string {
+  return JSON.stringify([accountAnalyticsIdentity(row), boundaryIdentity(window)]);
+}
+
+/** Every reset time the stored history reports for this window, whatever unit each reading had. */
+export function storedBoundaries(
+  records: AccountAnalyticsObservation[],
+  window: DashboardAccountWindow,
+  since: number
+): number[] {
+  const identity = boundaryIdentity(window);
+  const found = new Set<number>();
+  for (const record of records)
+    for (const entry of record.windows) {
+      if (boundaryIdentity(entry) !== identity) continue;
+      const at = observedAt(entry, record.sampledAt);
+      const reset = Date.parse(entry.resetAt ?? '');
+      if (Number.isFinite(at) && at >= since && Number.isFinite(reset)) found.add(reset);
+    }
+  return [...found];
+}
+
+/**
  * The one-minute readings of the last hour, kept in memory by the snapshot writer. The quota
  * history stores an unchanged reading at most once per five minutes; these keep every sample, so
  * a quiet window followed by a burst still measures its pace over the right span.
  */
 export class RecentReadings {
   private readonly series = new Map<string, Reading[]>();
+  /** Reset times seen in the last hour, by account and window without its unit, with when seen. */
+  private readonly resets = new Map<string, Map<number, number>>();
 
   add(rows: DashboardAccount[], now: number): void {
     for (const row of rows)
       for (const window of row.windows ?? []) {
         const reading = rowReading(row, window);
         if (!reading) continue;
+        if (reading.resetAt !== null) {
+          const seen = this.resets.get(boundaryKey(row, window)) ?? new Map<number, number>();
+          seen.set(reading.resetAt, reading.at);
+          this.resets.set(boundaryKey(row, window), seen);
+        }
         const key = seriesKey(row, window);
         const list = this.series.get(key) ?? [];
         if (!list.some((entry) => entry.at === reading.at)) list.push(reading);
@@ -194,6 +234,15 @@ export class RecentReadings {
       if (kept.length) this.series.set(key, kept);
       else this.series.delete(key);
     }
+    for (const [key, seen] of this.resets) {
+      for (const [reset, at] of seen) if (at < now - RECENT_READINGS_MS) seen.delete(reset);
+      if (seen.size === 0) this.resets.delete(key);
+    }
+  }
+
+  /** Reset times seen for this window in the last hour, whatever unit each reading had. */
+  boundaries(row: DashboardAccount, window: DashboardAccountWindow): number[] {
+    return [...(this.resets.get(boundaryKey(row, window))?.keys() ?? [])];
   }
 
   get(row: DashboardAccount, window: DashboardAccountWindow): Reading[] {
@@ -216,9 +265,12 @@ function upcoming(reading: Reading): reading is Reading & { resetAt: number } {
  * - use falls: by more than a point when both name the same upcoming reset (a rolling window
  *   easing), by any amount otherwise, since a reset cannot then be told from noise.
  */
-function currentPeriod(readings: Reading[]): Reading[] {
+function currentPeriod(readings: Reading[], extraBoundaries: number[] = []): Reading[] {
   const boundaries = [
-    ...new Set(readings.flatMap((reading) => (reading.resetAt === null ? [] : [reading.resetAt]))),
+    ...new Set([
+      ...readings.flatMap((reading) => (reading.resetAt === null ? [] : [reading.resetAt])),
+      ...extraBoundaries,
+    ]),
   ];
   const usable = readings.filter((reading) => reading.used !== null);
   let start = usable.length - 1;
@@ -248,8 +300,12 @@ export function burnKey(key: string, unit: string | null, poolId: string | null)
   return JSON.stringify([key, unit, poolId]);
 }
 
-export function burnRate(readings: Reading[], resetAt: string | null): BurnRate {
-  const period = currentPeriod(readings);
+export function burnRate(
+  readings: Reading[],
+  resetAt: string | null,
+  extraBoundaries: number[] = []
+): BurnRate {
+  const period = currentPeriod(readings, extraBoundaries);
   const rates: Record<(typeof HORIZONS)[number]['name'], number | null> = {
     last5Minutes: null,
     last15Minutes: null,
@@ -270,7 +326,10 @@ export function burnRate(readings: Reading[], resetAt: string | null): BurnRate 
       );
       rates[horizon.name] = rate;
       const moved = Math.abs((latest.used as number) - (earliest.used as number));
-      if (pace === null && (moved >= PACE_MIN_POINTS || latest.at - earliest.at >= HOUR_MS)) {
+      if (
+        pace === null &&
+        (moved >= PACE_MIN_POINTS - POINT_TOLERANCE || latest.at - earliest.at >= HOUR_MS)
+      ) {
         pace = rate;
         paceMinutes = Math.round(horizon.hours * 60);
       }
@@ -349,7 +408,10 @@ export function usageHistory(
       )
         perWindow.set(
           burnKey(window.key, window.unit ?? null, window.poolId ?? null),
-          burnRate(readings, window.resetAt)
+          burnRate(readings, window.resetAt, [
+            ...storedBoundaries(records, window, since),
+            ...(recent?.boundaries(row, window) ?? []),
+          ])
         );
       // The published series holds measured numbers; reset-only readings only split periods.
       const measured = readings.filter(
