@@ -111,7 +111,7 @@
     "ui:build": "node scripts/build-ui.js",
     "ui:preview": "node dist/ccs.js dashboard",
     "ui:validate": "node scripts/validate-ui.js",
-    "prepack": "bun run build:all",
+    "prepack": "node scripts/check-line-endings.js && bun run build:all",
     "prepare": "husky",
     "postinstall": "node scripts/postinstall.js"
   },
