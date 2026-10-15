@@ -266,18 +266,10 @@ export struct AcSignin {
     network: AcNetwork,
 }
 
-// The page's local UI state that is not view-model data (mobile, DESIGN-MOBILE.md sections 3-5). No
-// readings or decisions live here; it only carries taps the shell or the page's own groups need.
-// (The one-open inline tip per page lives in the shared Tips global, components/info-tip.slint.)
-export global AcUi {
-    // The P/F "Settings" jump button (4.3.1): bumped on every tap. The page scroller that owns the
-    // scroll (ui/dashboard.slint, phase 1) watches this and scrolls the page to the top of the
-    // Settings area (ease-out 300 ms). Until that hook lands the button taps are inert.
-    in-out property <int> settings-jump: 0;
-}
-
 export global AcData {
     in-out property <bool> ready: false;
+    in-out property <string> access-message;
+    in-out property <int> log-sources-nonce: 0;
     in-out property <[AcProvider]> col-a;
     in-out property <[AcProvider]> col-b;
     in-out property <AcAgPolicy> ag;

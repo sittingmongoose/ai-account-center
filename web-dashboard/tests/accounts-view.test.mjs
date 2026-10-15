@@ -159,7 +159,7 @@ const registry = (accounts, trash = []) => ({ providers: [], accounts, jobs: [],
 test('the page is versioned and lists every provider from the registry, sign-in flows first', () => {
   const vm = accountsViewModel(data([account()], { providers: providers() }), { now });
   assert.equal(vm.version, ACCOUNTS_VIEW_VERSION);
-  assert.equal(vm.version, 2);
+  assert.equal(vm.version, 3);
   assert.deepEqual(
     vm.colA.map((p) => p.id),
     ['claude', 'codex', 'antigravity']
@@ -2471,4 +2471,28 @@ test('server hidden flags preserve Accounts activation state and independent das
   assert.equal(row(vm, other.id).actions[0].act, 'activate');
   assert.equal(row(vm, other.id).actions[0].enabled, true);
   assert.deepEqual(dto, before);
+});
+
+
+test('starting jobs prepare on HTTPS without claiming that their codes were withheld', () => {
+  const view = flowView('codex', { type: 'job-add', step: 'job', name: 'work', job: { state: 'starting', kind: 'device-code' } }, now, '');
+  assert.match(view.waiting, /Starting/);
+  assert.doesNotMatch(view.body, /trusted connection/);
+});
+
+test('connection uses the current rolling session lifetime and reports restricted open access', () => {
+  const view = accountsViewModel(null, { sessionHours: 24, signin: { session: { sessionLifetimeDays: 30 }, devices: [] }, check: { accessMode: 'open' }, serverVersion: '8.10.fixture' });
+  assert.equal(view.connection.find(f => f.label === 'Sessions').value, 'end after 30 days without use');
+  assert.match(view.accessMessage, /ai-account-center dashboard auth setup/);
+  assert.equal(view.about.version, 'Version 8.10.fixture');
+});
+
+
+test('unavailable removal checks show a disabled action with an honest retry reason', () => {
+  const data = { accounts: [{ id: 'codex:work', provider: 'codex', email: 'work@example.test', status: 'ok', capabilities: { codexProfile: 'work' }, windows: [] }], providers: [{ id: 'codex', capabilities: { remove: true } }] };
+  const view = accountsViewModel(data, { registry: { accounts: [{ id: 'codex:work', actions: { remove: false }, removeRefusal: 'unavailable' }] } });
+  const remove = view.colA.find(p => p.id === 'codex').rows[0].actions.find(a => a.act === 'remove');
+  assert.equal(remove.enabled, false);
+  assert.equal(remove.coming, false);
+  assert.match(remove.tip, /Could not check/);
 });

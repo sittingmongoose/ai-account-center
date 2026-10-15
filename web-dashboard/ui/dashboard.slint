@@ -674,7 +674,10 @@ export component Dashboard inherits Window {
                         view-bottom: root.height;
                         win-h: root.height;
                     }
-                    if root.authenticated && root.shown-page == "accounts": AccountsPage {
+                    if root.authenticated && root.shown-page == "accounts": account-page := AccountsPage {
+                        settings-jump(anchor) => {
+                            scroller.content-y = clamp(-(account-page.y + anchor), -max(0px, scroller.content-height - scroller.height), 0px);
+                        }
                         busy: root.busy;
                         selected-id: root.selected-id;
                         first: !root.home-seen;

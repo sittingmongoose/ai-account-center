@@ -14,7 +14,7 @@ import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-action
 import { strength as passwordStrength } from './auth-view.mjs';
 import { lazyFormat } from './time-format.mjs';
 
-export const ACCOUNTS_VIEW_VERSION = 2;
+export const ACCOUNTS_VIEW_VERSION = 3;
 
 /** Server routes the page binds; `true` once the route exists on the round-2 base (kept for the docs and tests). */
 export const LIVE = Object.freeze({
@@ -176,6 +176,7 @@ function removeControl(provider, account, reg, entry, extra = {}) {
   const g = gate(entry, 'remove', provider);
   if (!g.live) return action({ ...fields, enabled: false, coming: g.coming, tip: g.reason });
   if (!reg) return action({ ...fields, enabled: false, tip: 'Checking whether it can be removed' });
+  if (reg.removeRefusal === 'unavailable') return action({ ...fields, enabled: false, tip: 'Could not check whether this account can be removed. Try again after the next refresh.' });
   if (reg.actions?.remove !== true) {
     return coming(fields, `Removing this ${providerLabel(provider)} account from the dashboard is not on this server yet.`);
   }
@@ -376,7 +377,7 @@ export function flowView(provider, f, ctx = {}) {
         err();
         return v;
       }
-      if (f.step === 'starting' || !job) {
+      if (f.step === 'starting' || !job || job.state === 'starting') {
         v.cur = again ? 0 : 1;
         v.title = again ? `Sign in again as ${who}` : `Signing in ${who}`;
         v.waiting = `Starting the ${label} sign-in on ${provider === 'muse' ? 'the Mac' : 'Ubuntu'}`;
@@ -961,7 +962,7 @@ function signinFacts(ctx, now) {
   const pw = s.pw || {};
   const network = networkView(s.network, ctx.check, transport, s.busy);
   const devices = devicesView(s.devices, now);
-  const pairedCount = devices.length;
+  const pairedCount = Array.isArray(s.devices) ? devices.length : null;
   const pwBlocked = env ? 'The password comes from environment variables on the dashboard computer, so it is changed there.'
     : !secure ? (network.on
       ? 'This connection is not on your trusted local network, so the password cannot be changed from here.'
@@ -972,7 +973,7 @@ function signinFacts(ctx, now) {
     connection: TRANSPORT_TEXT[transport](host),
     session: ends && ends > now ? `ends in ${duration(ends - now)}` : `lasts ${lasts}`,
     sessionSub: ends && ends > now ? `sessions last ${lasts}` : '',
-    sessionTip: ends && ends > now ? `This session ends ${dateTime.format(new Date(ends))}` : `Sessions on this dashboard last ${lasts} from sign-in`,
+    sessionTip: ends && ends > now ? `This session ends ${dateTime.format(new Date(ends))}` : `Sessions on this dashboard end after ${lasts} without use`,
     lifetime: {
       value: String(days),
       enabled: !!session && s.busy !== 'lifetime',
@@ -995,11 +996,11 @@ function signinFacts(ctx, now) {
     passwordOthers: others && others > 0 ? `(${others} signed in)` : '(none signed in)',
     strength: { ...passwordStrength(''), matches: false, ...(pw.strength || {}) },
     devices,
-    devicesNote: s.devicesError ? 'The paired-device list could not be read safely.'
+    devicesNote: !Array.isArray(s.devices) ? 'The paired-device list could not be read safely.'
       : 'No tray apps are paired. A tray pairs itself the first time you sign in on it.',
     devicesKnown: Array.isArray(s.devices),
     revokeBusy: text(s.busy).startsWith('revoke:') ? text(s.busy).slice(7) : '',
-    revokeAllEnabled: (pairedCount > 0 || (others ?? 0) > 0) && s.busy !== 'all',
+    revokeAllEnabled: (pairedCount === null || pairedCount > 0 || (others ?? 0) > 0) && s.busy !== 'all',
     revokeAllBusy: s.busy === 'all',
     signOutBusy: s.busy === 'logout',
     network,
@@ -1008,13 +1009,15 @@ function signinFacts(ctx, now) {
 }
 function connectionFacts(ctx) {
   const transport = ctx.transport || 'http';
-  const hours = Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 168;
+  const session = ctx.signin?.session;
+  const days = session?.sessionLifetimeDays;
+  const hours = session?.sessionTimeoutHours ?? ctx.sessionHours ?? 168;
   const trusted = networkKnown(ctx.signin?.network) ? ctx.signin.network.trustLocalNetwork === true : ctx.check?.trustedLocalNetwork === true;
   return [
     { label: 'Dashboard', value: text(ctx.origin) || 'Unknown', mono: true },
     { label: 'Transport', value: transport === 'https' ? 'HTTPS' : transport === 'loopback' ? 'This computer only' : trusted ? 'Plain HTTP on your trusted local network' : 'Plain HTTP on your network' },
     { label: 'Tray sign-in', value: 'Device tokens; each paired tray is listed below', mono: false },
-    { label: 'Sessions', value: `${lifetimeWord(0, hours)} from sign-in`, mono: false },
+    { label: 'Sessions', value: `end after ${lifetimeWord(days || 0, hours)} without use`, mono: false },
   ];
 }
 
@@ -1144,6 +1147,7 @@ export function accountsViewModel(data, ctx = {}) {
   });
   return {
     version: ACCOUNTS_VIEW_VERSION,
+    accessMessage: c.check?.accessMode === 'open' ? 'Accounts & Settings needs dashboard sign-in: run `ai-account-center dashboard auth setup` on the dashboard computer.' : '',
     colA: providers.filter(p => p.column === 'a'),
     colB: providers.filter(p => p.column === 'b'),
     ag,
@@ -1238,6 +1242,7 @@ export function logSourcesView(prefs) {
   const data = prefs?.data && typeof prefs.data === 'object' ? prefs.data : null;
   const saved = Array.isArray(data?.usageLogSources) ? data.usageLogSources : [];
   return {
+    nonce: prefs?.logSourcesNonce || 0,
     sources: saved.map(entry => ({
       id: typeof entry?.id === 'string' ? entry.id : '',
       tool: typeof entry?.tool === 'string' ? entry.tool : '',

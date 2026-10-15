@@ -747,12 +747,16 @@ component AgPool inherits AgParam {
     live: root.ag.live;
     if root.ag.pools.length > 0 && !root.list: Segmented {
         items: root.ag.pools;
+        controlled: true;
+        model-value: root.ag.pool;
         value: root.ag.pool;
         enabled: root.ag.pool-enabled && !root.busy;
         changed-value(v) => { root.act("antigravity-pool", v); }
     }
     if root.ag.pools.length > 0 && root.list: StretchSegmented {
         items: root.ag.pools;
+        controlled: true;
+        model-value: root.ag.pool;
         value: root.ag.pool;
         enabled: root.ag.pool-enabled && !root.busy;
         changed-value(v) => { root.act("antigravity-pool", v); }
@@ -768,12 +772,16 @@ component AgCool inherits AgParam {
     live: root.ag.live;
     if root.list: StretchSegmented {
         items: root.ag.cooldowns;
+        controlled: true;
+        model-value: root.ag.cooldown;
         value: root.ag.cooldown;
         enabled: root.ag.cooldown-enabled && !root.busy;
         changed-value(v) => { root.act("antigravity-cooldown", v); }
     }
     if !root.list: Segmented {
         items: root.ag.cooldowns;
+        controlled: true;
+        model-value: root.ag.cooldown;
         value: root.ag.cooldown;
         enabled: root.ag.cooldown-enabled && !root.busy;
         changed-value(v) => { root.act("antigravity-cooldown", v); }

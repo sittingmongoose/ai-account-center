@@ -1,4 +1,4 @@
-//! Accounts & Settings view model (version 2, public/accounts-view.mjs `accountsViewModel`): the provider
+//! Accounts & Settings view model (version 3, public/accounts-view.mjs `accountsViewModel`): the provider
 //! sections with their account rows, fixed action slots, the line under a row (remove, restore, refusals), the
 //! inline flows (add, sign in again, keys, guided sign-ins) and the Claude trash; the Antigravity policy box;
 //! the settings column (Sign-in & connection with the trusted local network, password change and paired trays,
@@ -19,7 +19,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 /// The view-model version this build understands (public/accounts-view.mjs ACCOUNTS_VIEW_VERSION).
-pub const ACCOUNTS_VIEW_VERSION: u64 = 2;
+pub const ACCOUNTS_VIEW_VERSION: u64 = 3;
 
 static NULL: Value = Value::Null;
 fn g<'a>(v: &'a Value, k: &str) -> &'a Value {
@@ -445,6 +445,7 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     );
     ac.set_log_sources_enabled(b(log_sources, "enabled"));
     ac.set_log_sources_busy(b(log_sources, "busy"));
+    ac.set_log_sources_nonce(i(log_sources, "nonce", 0));
     ac.set_log_sources_error(s(log_sources, "error"));
     ac.set_log_sources_tip(s(log_sources, "tip"));
     // The host select's options per tool, as labels (accounts-view.mjs LOG_SOURCE_HOSTS).
@@ -570,6 +571,7 @@ pub fn set_accounts(ui: &Dashboard, m: &mut AccountsModels, json: &str) -> Resul
     // The Settings "Home screen app" row (DESIGN-MOBILE.md 6.6): bridge.js feeds vm.install from
     // device.mjs installRow(); anything but "chromium"/"ios" draws no row.
     ac.set_install(s(&v, "install"));
+    ac.set_access_message(s(&v, "accessMessage"));
     ac.set_ready(true);
     Ok(())
 }

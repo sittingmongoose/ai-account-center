@@ -88,7 +88,10 @@ component WrapSegmented inherits VerticalLayout {
     in property <[SegItem]> items;
     in property <[SegItem]> row-1;
     in property <[SegItem]> row-2;
-    in-out property <string> value;
+    in property <string> model-value;
+    in-out property <string> value: root.model-value;
+    changed model-value => { root.value = root.model-value; }
+    changed enabled => { root.value = root.model-value; }
     in property <bool> enabled: true;
     // the width the control may use (its column's inner width); the segment test needs it ahead of
     // layout, because the wrapped branch changes the control's own height
@@ -99,21 +102,27 @@ component WrapSegmented inherits VerticalLayout {
     spacing: 8px;
     if root.one-row: StretchSegmented {
         items: root.items;
+        controlled: true;
+        model-value: root.value;
         value: root.value;
         enabled: root.enabled;
-        changed-value(v) => { root.changed-value(v); }
+        changed-value(v) => { root.value = v; root.changed-value(v); }
     }
     if !root.one-row: StretchSegmented {
         items: root.row-1;
+        controlled: true;
+        model-value: root.value;
         value: root.value;
         enabled: root.enabled;
-        changed-value(v) => { root.changed-value(v); }
+        changed-value(v) => { root.value = v; root.changed-value(v); }
     }
     if !root.one-row: StretchSegmented {
         items: root.row-2;
+        controlled: true;
+        model-value: root.value;
         value: root.value;
         enabled: root.enabled;
-        changed-value(v) => { root.changed-value(v); }
+        changed-value(v) => { root.value = v; root.changed-value(v); }
     }
 }
 
@@ -231,6 +240,10 @@ export component RefreshSlider inherits Rectangle {
             if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
                 root.dragging = true;
                 root.pending = root.from(self.mouse-x / max(1px, root.width));
+            }
+            if e.kind == PointerEventKind.cancel {
+                root.dragging = false;
+                root.pending = 0;
             }
             if e.kind == PointerEventKind.up && root.dragging {
                 root.dragging = false;
@@ -492,6 +505,11 @@ component UpdLine inherits VerticalLayout {
 // A check box with its label (the concept's `.aa-check`): a 16 px box that fills with the accent and a check.
 component CheckLine inherits Rectangle {
     in-out property <bool> checked: true;
+    in property <bool> controlled: false;
+    in property <bool> model-checked;
+    changed model-checked => { if root.controlled { root.checked = root.model-checked; } }
+    changed enabled => { if root.controlled { root.checked = root.model-checked; } }
+    init => { if root.controlled { root.checked = root.model-checked; } }
     in property <string> text;
     in property <string> sub;
     in property <bool> enabled: true;
@@ -788,6 +806,7 @@ component SigninGroup inherits SetGroup {
             tip: AcData.signin.lifetime-tip;
             min-height: lifetime-seg-w.preferred-height;
             lifetime-seg-w := WrapSegmented {
+                model-value: AcData.signin.lifetime-value;
                 avail: root.col-w - 36px;
                 items: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }, { value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
                 row-1: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }];
@@ -802,6 +821,8 @@ component SigninGroup inherits SetGroup {
             tip: AcData.signin.lifetime-tip;
             min-height: lifetime-seg-d.preferred-height;
             lifetime-seg-d := Segmented {
+                controlled: true;
+                model-value: AcData.signin.lifetime-value;
                 pad: 7px;
                 items: [{ value: "1", label: "1 day" }, { value: "7", label: "7 days" }, { value: "30", label: "30 days" }, { value: "90", label: "90 days" }, { value: "365", label: "1 year" }];
                 value: AcData.signin.lifetime-value;
@@ -1103,6 +1124,8 @@ component SettingsGroup inherits SetGroup {
         // the segmented fills the item's width on P/F/T (4.3.7)
         if Breakpoints.below-d: StretchSegmented {
             items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
+            controlled: true;
+            model-value: root.theme-value;
             value: root.theme-value;
             changed-value(v) => { root.theme-picked(v); }
         }
@@ -1110,6 +1133,8 @@ component SettingsGroup inherits SetGroup {
             alignment: start;
             Segmented {
                 items: [{ value: "light", label: "Light", icon: "sun" }, { value: "dark", label: "Dark", icon: "moon" }, { value: "auto", label: "Auto", icon: "monitor" }];
+                controlled: true;
+                model-value: root.theme-value;
                 value: root.theme-value;
                 changed-value(v) => { root.theme-picked(v); }
             }
@@ -1173,6 +1198,8 @@ component SettingsGroup inherits SetGroup {
             min-height: timezone-sel.preferred-height;
             timezone-sel := Select {
                 options: ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu", "Europe/London", "Europe/Paris", "Asia/Tokyo", "Australia/Sydney", "UTC"];
+                controlled: true;
+                model-value: AcData.timezone-value;
                 value: AcData.timezone-value;
                 enabled: AcData.timezone-enabled && !root.busy;
                 selected(v) => { root.act("time-zone", v); }
@@ -1261,7 +1288,15 @@ component LogSourcesGroup inherits SetGroup {
     property <string> map-in-text;
     property <string> map-out-text;
     property <string> map-cost-text;
-    property <string> mapping-json: "{\"timestamp\":\"" + map-ts-text + "\",\"model\":\"" + map-model-text + "\"" + (map-in-text != "" ? ",\"inputTokens\":\"" + map-in-text + "\"" : "") + (map-out-text != "" ? ",\"outputTokens\":\"" + map-out-text + "\"" : "") + (map-cost-text != "" ? ",\"cost\":\"" + map-cost-text + "\"" : "") + "}";
+    property <int> draft-nonce: AcData.log-sources-nonce;
+    changed draft-nonce => {
+        path-field.text = "";
+        root.map-ts-text = "";
+        root.map-model-text = "";
+        root.map-in-text = "";
+        root.map-out-text = "";
+        root.map-cost-text = "";
+    }
     property <bool> form-enabled: AcData.log-sources-enabled && !root.busy && !AcData.log-sources-busy;
     SetItem {
         first: true;
@@ -1332,31 +1367,31 @@ component LogSourcesGroup inherits SetGroup {
                     label: "Timestamp";
                     placeholder: "ts";
                     enabled: form-enabled;
-                    edited(t) => { map-ts-text = t; }
+                    text <=> root.map-ts-text;
                 }
                 map-model := Field {
                     label: "Model";
                     placeholder: "model";
                     enabled: form-enabled;
-                    edited(t) => { map-model-text = t; }
+                    text <=> root.map-model-text;
                 }
                 map-in := Field {
                     label: "Input tokens (optional)";
                     placeholder: "usage.input_tokens";
                     enabled: form-enabled;
-                    edited(t) => { map-in-text = t; }
+                    text <=> root.map-in-text;
                 }
                 map-out := Field {
                     label: "Output tokens (optional)";
                     placeholder: "usage.output_tokens";
                     enabled: form-enabled;
-                    edited(t) => { map-out-text = t; }
+                    text <=> root.map-out-text;
                 }
                 map-cost := Field {
                     label: "Cost in USD (optional)";
                     placeholder: "cost";
                     enabled: form-enabled;
-                    edited(t) => { map-cost-text = t; }
+                    text <=> root.map-cost-text;
                 }
             }
             if AcData.log-sources-error != "": Text {
@@ -1373,7 +1408,7 @@ component LogSourcesGroup inherits SetGroup {
                     enabled: form-enabled;
                     busy: AcData.log-sources-busy;
                     probe: "logsource-add";
-                    clicked => { root.act("logsource-add", root.tool-id + "\n" + root.host-choice + "\n" + path-field.text + "\n" + (root.tool-id == "jsonl" ? mapping-json : "")); }
+                    clicked => { root.act("logsource-add", root.tool-id + "\n" + root.host-choice + "\n" + path-field.text + "\n" + (root.tool-id == "jsonl" ? root.map-ts-text + "\n" + root.map-model-text + "\n" + root.map-in-text + "\n" + root.map-out-text + "\n" + root.map-cost-text : "")); }
                 }
             }
         }
@@ -1394,9 +1429,11 @@ component CleanupGroup inherits SetGroup {
             CheckLine {
                 text: "Clean up after each copy";
                 sub: "keeps the newest 3 snapshot folders per profile";
+                controlled: true;
+                model-checked: AcData.cleanup-auto;
                 checked: AcData.cleanup-auto;
                 enabled: AcData.cleanup-enabled && !root.busy;
-                toggled(checked) => { root.act("cleanup-auto", ""); }
+                toggled(checked) => { root.act("cleanup-auto", checked ? "true" : "false"); }
             }
         }
     }

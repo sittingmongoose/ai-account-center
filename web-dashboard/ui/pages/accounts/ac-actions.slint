@@ -228,12 +228,18 @@ export component SwitchPair inherits Rectangle {
 export component StretchSegmented inherits Rectangle {
     in property <[SegItem]> items;
     in-out property <string> value;
+    in property <bool> controlled: false;
+    in property <string> model-value;
+    changed model-value => { if root.controlled { root.value = root.model-value; } }
+    changed enabled => { if root.controlled { root.value = root.model-value; } }
+    init => { if root.controlled { root.value = root.model-value; } }
     in property <bool> enabled: true;
     callback changed-value(string);
 
     property <length> ind-x: 0px;
     property <length> ind-w: 0px;
     property <bool> placed: false;
+    property <int> selected-index: -1;
 
     height: Breakpoints.tier-d ? 36px : 44px;
     border-radius: 10px;
@@ -247,7 +253,7 @@ export component StretchSegmented inherits Rectangle {
         y: 4px;
         width: root.ind-w;
         height: root.height - 8px;
-        visible: root.ind-w > 0;
+        visible: root.selected-index >= 0 && root.ind-w > 0;
         border-radius: 7px;
         background: Theme.paper;
         border-width: 1px;
@@ -267,8 +273,8 @@ export component StretchSegmented inherits Rectangle {
             property <color> fg: self.selected || ta.has-hover ? Theme.ink : Theme.ink-3;
             transform-scale: ta.pressed ? 0.97 : 1;
             animate transform-scale { duration: Motion.fast; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-            init => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; } }
-            changed selected => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } }
+            init => { if self.selected { root.selected-index = i; root.ind-x = self.x; root.ind-w = self.width; } }
+            changed selected => { if self.selected { root.selected-index = i; root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } else if root.selected-index == i { root.selected-index = -1; } }
             changed x => { if self.selected { root.ind-x = self.x; } }
             changed width => { if self.selected { root.ind-w = self.width; } }
             seg-row := HorizontalLayout {

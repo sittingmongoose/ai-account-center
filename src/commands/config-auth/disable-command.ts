@@ -25,7 +25,7 @@ export async function handleDisable(): Promise<void> {
   if (!config.enabled) {
     console.log(info('Dashboard authentication is already disabled.'));
     console.log('');
-    console.log(dim('    To enable: ccs config auth setup'));
+    console.log(dim('    To enable: ai-account-center dashboard auth setup'));
     console.log('');
     return;
   }
@@ -39,7 +39,8 @@ export async function handleDisable(): Promise<void> {
 
   // Confirm before disabling
   console.log(warn('This will disable login protection for the dashboard.'));
-  console.log(info('Anyone with network access will be able to view the dashboard.'));
+  console.log(info('Anyone with network access will be able to view Home.'));
+  console.log(info('Accounts & Settings still needs dashboard sign-in.'));
   console.log('');
 
   const confirmed = await InteractivePrompt.confirm('Disable authentication?', {
@@ -68,6 +69,8 @@ export async function handleDisable(): Promise<void> {
   console.log('');
   console.log(ok('Dashboard authentication disabled'));
   console.log('');
-  console.log(info('Credentials preserved - re-enable with: ccs config auth setup'));
+  console.log(
+    info('Credentials preserved - re-enable with: ai-account-center dashboard auth setup')
+  );
   console.log('');
 }

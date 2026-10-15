@@ -57,6 +57,11 @@ component SegButton inherits Rectangle {
 export component Segmented inherits Rectangle {
     in property <[SegItem]> items;
     in-out property <string> value;
+    in property <bool> controlled: false;
+    in property <string> model-value;
+    changed model-value => { if root.controlled { root.value = root.model-value; } }
+    changed enabled => { if root.controlled { root.value = root.model-value; } }
+    init => { if root.controlled { root.value = root.model-value; } }
     in property <bool> mono: false;
     in property <bool> enabled: true;
     // tighter segments for five-item rows that must fit the settings column (the session lifetime)
@@ -66,6 +71,7 @@ export component Segmented inherits Rectangle {
     property <length> ind-x: 0px;
     property <length> ind-w: 0px;
     property <bool> placed: false;
+    property <int> selected-index: -1;
 
     height: Breakpoints.tier-d ? 36px : 44px;
     min-width: row.min-width;
@@ -81,7 +87,7 @@ export component Segmented inherits Rectangle {
         y: 4px;
         width: root.ind-w;
         height: root.height - 8px;
-        visible: root.ind-w > 0;
+        visible: root.selected-index >= 0 && root.ind-w > 0;
         border-radius: 7px;
         background: Theme.paper;
         border-width: 1px;
@@ -95,14 +101,14 @@ export component Segmented inherits Rectangle {
     row := HorizontalLayout {
         padding: 4px;
         spacing: 0px;
-        for item in root.items: SegButton {
+        for item[i] in root.items: SegButton {
             item: item;
             mono: root.mono;
             enabled: root.enabled;
             pad: root.pad;
             selected: item.value == root.value;
-            init => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; } }
-            changed selected => { if self.selected { root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } }
+            init => { if self.selected { root.selected-index = i; root.ind-x = self.x; root.ind-w = self.width; } }
+            changed selected => { if self.selected { root.selected-index = i; root.ind-x = self.x; root.ind-w = self.width; root.placed = true; } else if root.selected-index == i { root.selected-index = -1; } }
             changed x => { if self.selected { root.ind-x = self.x; } }
             changed width => { if self.selected { root.ind-w = self.width; } }
             clicked => {

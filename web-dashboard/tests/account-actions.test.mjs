@@ -107,7 +107,7 @@ test('job failures, unavailable reasons and the local checks', () => {
   }
   assert.equal(profileNameProblem(''), 'Name the profile first.');
   assert.match(profileNameProblem('bad name'), /letters, digits/);
-  assert.match(profileNameProblem('Codex-1', ['codex-1']), /already a profile name/);
+  assert.match(profileNameProblem('codex-1', ['codex-1']), /already a profile name/);
   assert.equal(profileNameProblem('codex-2', ['codex-1']), '');
   assert.match(claudeIdProblem('Party'), /lowercase/);
   assert.equal(claudeIdProblem('party'), '');
@@ -156,4 +156,15 @@ test('a refused sign-out is said in the page\'s own words, never the server\'s s
     const t = signOutFailureText(value);
     assert.doesNotMatch(`${t.title} ${t.body}`, /Failed to logout|server sentence/);
   }
+});
+
+
+test('profile name checks match each provider including reserved names and boundaries', () => {
+  assert.equal(profileNameProblem('9lives'), '');
+  assert.notEqual(profileNameProblem('9lives', [], 'antigravity'), '');
+  for (const name of ['Work-2', 'default', 'current', 'a'.repeat(65)]) assert.notEqual(profileNameProblem(name), '');
+  assert.equal(profileNameProblem('a'.repeat(64)), '');
+  assert.equal(profileNameProblem('a'.repeat(48), [], 'antigravity'), '');
+  assert.notEqual(profileNameProblem('a'.repeat(49), [], 'antigravity'), '');
+  assert.equal(profileNameProblem('default', [], 'antigravity'), '');
 });

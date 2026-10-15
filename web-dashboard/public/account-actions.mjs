@@ -29,6 +29,7 @@ export const requests = Object.freeze({
   // one account's own switches: each sends only its own list, so the dashboard and tray choices never touch
   accountVisibility: hiddenAccountIds => ({ method: 'PUT', path: '/api/accounts/visibility', body: { hiddenAccountIds: [...hiddenAccountIds] } }),
   trayAccountVisibility: trayHiddenAccountIds => ({ method: 'PUT', path: '/api/accounts/visibility', body: { trayHiddenAccountIds: [...trayHiddenAccountIds] } }),
+  visibilityDelta: (key, hide = [], show = []) => ({ method: 'PATCH', path: '/api/accounts/visibility', body: { [key]: { hide, show } } }),
   addCodex: profileName => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'codex', profileName } }),
   addClaude: (profileId, name, email) => ({ method: 'POST', path: '/api/accounts/add', body: { provider: 'claude', profileId, ...(name ? { label: name } : {}), ...(email ? { email } : {}) } }),
   openClaude: (profileId, platform) => ({ method: 'POST', path: `/api/claude/desktop-profiles/${enc(profileId)}/open`, body: { platform } }),
@@ -56,6 +57,7 @@ export const requests = Object.freeze({
   sessionLifetime: days => ({ method: 'PUT', path: '/api/auth/session-lifetime', body: { days } }),
   preferences: () => ({ method: 'GET', path: '/api/accounts/preferences' }),
   savePreferences: prefs => ({ method: 'PUT', path: '/api/accounts/preferences', body: prefs }),
+  patchPreferences: prefs => ({ method: 'PATCH', path: '/api/accounts/preferences', body: prefs }),
   cleanupSnapshots: () => ({ method: 'POST', path: '/api/claude/history-snapshots/cleanup', body: {} }),
   password: (currentPassword, newPassword, signOutOtherBrowsers) => ({ method: 'POST', path: '/api/auth/password', body: { currentPassword, newPassword, signOutOtherBrowsers: signOutOtherBrowsers !== false } }),
   revokeOthers: () => ({ method: 'POST', path: '/api/auth/sessions/revoke-others', body: {} }),
@@ -66,10 +68,15 @@ export const requests = Object.freeze({
 
 // ---------------------------------------------------------------- local checks (before anything is sent)
 /** Codex profile names: the CLI's own rule (letters, digits, - and _, starting with a letter or digit). */
-export function profileNameProblem(name, taken = []) {
+export function profileNameProblem(name, taken = [], provider = 'codex') {
   const value = String(name ?? '').trim();
   if (!value) return 'Name the profile first.';
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/.test(value)) return 'Use letters, digits, - or _, starting with a letter or digit (at most 32).';
+  if (provider === 'antigravity') {
+    if (!/^[a-z][a-z0-9_-]{0,47}$/.test(value)) return 'Use up to 48 lowercase letters, digits, - or _, starting with a letter.';
+  } else {
+    if (['default', 'current'].includes(value)) return `${value} is a reserved profile name.`;
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value)) return 'Use up to 64 lowercase letters, digits, - or _, starting with a letter or digit.';
+  }
   if (taken.some(other => String(other).toLowerCase() === value.toLowerCase())) return `${value} is already a profile name.`;
   return '';
 }

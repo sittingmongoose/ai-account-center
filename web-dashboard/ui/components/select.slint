@@ -48,6 +48,11 @@ component SheetRow inherits Rectangle {
 export component Select inherits Rectangle {
     in property <[string]> options;
     in-out property <string> value;
+    in property <bool> controlled: false;
+    in property <string> model-value;
+    changed model-value => { if root.controlled { root.value = root.model-value; } }
+    changed enabled => { if root.controlled { root.value = root.model-value; } }
+    init => { if root.controlled { root.value = root.model-value; } }
     in property <string> icon;
     in property <bool> enabled: true;
     in property <bool> small: false;

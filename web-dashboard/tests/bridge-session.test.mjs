@@ -23,6 +23,7 @@ async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accoun
     .replace(/from '(\.\/[^']+)'/g, (_match, relative) => `from '${new URL(relative, base).href}'`)
     .concat(`\n// ${key}\n`);
   const auths = [], toasts = [], calls = [], dashboards = [], fills = [];
+  const accountViews = [];
   const details = [], confirmations = [], historyCalls = [], timers = [], listeners = new Map();
   let detailsClosed = 0, dialogsClosed = 0, pops = 0;
   // Slint's data-ready flag as lib.rs keeps it: set_auth(false, ...) clears it and only set_dashboard sets it
@@ -38,6 +39,7 @@ async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accoun
   assign(key, Object.fromEntries(declarations.split(', ').map(name => [name,
     name === 'set_auth' ? (signedIn, json) => { if (!signedIn) slint.ready = false; auths.push({ signedIn, ...JSON.parse(json) }); }
       : name === 'push_toast' ? (kind, title, body) => toasts.push({ kind, title, body })
+        : name === 'set_accounts' ? json => accountViews.push(JSON.parse(json))
         : name === 'set_dashboard' ? json => { slint.ready = true; dashboards.push(json); }
           : name === 'set_login_fields' ? (username, password, remember) => fills.push({ username, password, remember })
             : name === 'show_details' ? json => details.push(JSON.parse(json))
@@ -67,7 +69,7 @@ async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accoun
   try {
     await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   } catch (error) { restore(); throw error; }
-  return { action: globalThis.window.ccsDashboardAction, auths, toasts, calls, dashboards, fills, slint, restore, lastAuth: () => auths.at(-1),
+  return { action: globalThis.window.ccsDashboardAction, accountViews, auths, toasts, calls, dashboards, fills, slint, restore, lastAuth: () => auths.at(-1),
     details, confirmations, historyCalls, timers, detailsClosed: () => detailsClosed, dialogsClosed: () => dialogsClosed, pops: () => pops,
     event: name => { for (const fn of listeners.get(name) || []) fn(); } };
 }
@@ -425,4 +427,34 @@ test('activation dialogs replace Details, stay closed on timed renders, and own 
       } finally { b.restore(); }
     }
   }
+});
+
+
+test('open access keeps Home usable and Accounts explicitly restricted without expiring a session', async () => {
+  const b = await loadBridge(async (method, path) => {
+    if (path === '/api/auth/setup') return { payload: {} };
+    if (path === '/api/auth/check') return { payload: { authenticated: false, authRequired: false, accessMode: 'open' } };
+    return { status: 401, payload: { error: 'Authentication required', code: 'auth_required' } };
+  });
+  try {
+    assert.equal(b.lastAuth().signedIn, true);
+    assert.equal(b.slint.ready, true);
+    assert.match(b.accountViews.at(-1).accessMessage, /Accounts & Settings needs dashboard sign-in/);
+    assert.equal(b.auths.some(a => a.state === 'expired'), false);
+    assert.equal(b.calls.some(c => c.path?.includes('/api/accounts/preferences')), false);
+    await b.action('navigate', 'home');
+    assert.equal(b.lastAuth().signedIn, true);
+  } finally { b.restore(); }
+});
+
+
+test('the Accounts About row receives the current server version from the dashboard DTO', async () => {
+  const fixture = fixtureServer();
+  const b = await loadBridge(async (...args) => {
+    const answer = await fixture.server(...args);
+    if (args[1].startsWith('/api/accounts/dashboard?')) answer.payload.server = { version: '8.10.test' };
+    return answer;
+  });
+  try { assert.equal(b.accountViews.at(-1).about.version, 'Version 8.10.test'); }
+  finally { b.restore(); }
 });

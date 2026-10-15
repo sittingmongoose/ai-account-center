@@ -7,6 +7,18 @@ import { flowView, lineView } from '../public/accounts-view.mjs';
 
 const refusal = (status, code, extra = {}) => Object.assign(new Error(code), { status, payload: { error: 'fixed sentence', code, ...extra }, headers: { get: () => null } });
 
+function visibilityDelta(saved, body) {
+  for (const [key, { hide, show }] of Object.entries(body)) saved[key] = [...new Set([...(saved[key] || []).filter(id => !show.includes(id)), ...hide])];
+  return { ...saved };
+}
+function preferencesDelta(saved, body) {
+  if (body.timeZone) saved.timeZone = body.timeZone;
+  if (body.snapshotCleanup) saved.snapshotCleanup = body.snapshotCleanup;
+  if (body.addUsageLogSource) saved.usageLogSources = [...saved.usageLogSources, body.addUsageLogSource];
+  if (body.removeUsageLogSource) saved.usageLogSources = saved.usageLogSources.filter(s => s.id !== body.removeUsageLogSource);
+  return { ...saved };
+}
+
 /** A fake server: `routes` maps "METHOD path" to an answer, a function of the body, or a list used in order. */
 function harness({ routes = {}, data = null, storage = null, networkChanged } = {}) {
   const sent = [], toasts = [], timers = [];
@@ -57,24 +69,24 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 test('Show on dashboard and Show in tray save on the server and update the page without a reload', async () => {
   // the server answers with every saved list; a body may update one list and leave the others (tray route)
   const saved = { hiddenProviders: ['zai'], hiddenAccountIds: ['codex:x'], trayHiddenProviders: [] };
-  const h = harness({ routes: { 'PUT /api/accounts/visibility': body => Object.assign(saved, body) && { ...saved } },
+  const h = harness({ routes: { 'PATCH /api/accounts/visibility': body => visibilityDelta(saved, body) },
     data: { schemaVersion: 1, accounts: [{ id: 'kimi-code:usage', provider: 'kimi-code' }], providers: [{ id: 'kimi-code', visible: true }], settings: { hiddenProviders: ['zai'], hiddenAccountIds: ['codex:x'], trayHiddenProviders: [] } } });
   assert.equal(await h.ctl.handle('accounts-show', 'kimi-code:hide'), true);
   // only hiddenProviders is sent: hidden account ids another browser saved are never overwritten
-  assert.deepEqual(h.sent[0], { method: 'PUT', path: '/api/accounts/visibility', body: { hiddenProviders: ['zai', 'kimi-code'] } });
+  assert.deepEqual(h.sent[0], { method: 'PATCH', path: '/api/accounts/visibility', body: { hiddenProviders: { hide: ['kimi-code'], show: [] } } });
   assert.deepEqual(h.dashboard.settings.hiddenAccountIds, ['codex:x']);
   assert.deepEqual(h.dashboard.settings.hiddenProviders, ['zai', 'kimi-code']);
   assert.equal(h.dashboard.providers[0].visible, false);
   assert.equal(h.dashboard.accounts[0].hidden, true);
   assert.equal(last(h.toasts).title, 'Kimi Code hidden from the dashboard');
   await h.ctl.handle('accounts-tray', 'kimi-code:hide');
-  assert.deepEqual(h.sent[1].body, { trayHiddenProviders: ['kimi-code'] });
+  assert.deepEqual(h.sent[1].body, { trayHiddenProviders: { hide: ['kimi-code'], show: [] } });
   assert.deepEqual(h.dashboard.settings.trayHiddenProviders, ['kimi-code']);
   assert.equal(h.dashboard.providers[0].trayVisible, false);
   await h.ctl.handle('accounts-show', 'kimi-code:show');
-  assert.deepEqual(h.sent[2].body.hiddenProviders, ['zai']);
+  assert.deepEqual(h.sent[2].body.hiddenProviders, { hide: [], show: ['kimi-code'] });
   // refused: the page keeps the server's lists and says why
-  const bad = harness({ routes: { 'PUT /api/accounts/visibility': refusal(500, 'visibility_write_failed') } });
+  const bad = harness({ routes: { 'PATCH /api/accounts/visibility': refusal(500, 'visibility_write_failed') } });
   await bad.ctl.handle('accounts-show', 'zai:hide');
   assert.equal(last(bad.toasts).title, 'Not saved');
   assert.deepEqual(bad.dashboard.settings.hiddenProviders, []);
@@ -88,7 +100,7 @@ test("one account's Show on dashboard and Show in tray are independent and reach
   const saved = { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [], trayHiddenAccountIds: [] };
   const id = 'codex:party';
   const h = harness({
-    routes: { 'PUT /api/accounts/visibility': body => ({ ...Object.assign(saved, body) }) },
+    routes: { 'PATCH /api/accounts/visibility': body => visibilityDelta(saved, body) },
     data: {
       schemaVersion: 1,
       accounts: [{ id, provider: 'codex', email: 'party@example.test', hidden: false, trayHidden: false }, { id: 'codex:other', provider: 'codex', hidden: false, trayHidden: false }],
@@ -99,18 +111,18 @@ test("one account's Show on dashboard and Show in tray are independent and reach
   const flags = () => { const a = h.dashboard.accounts.find(row => row.id === id); return [a.hidden, a.trayHidden]; };
   // each switch sends only its own list, so the other choice is never part of the request
   assert.equal(await h.ctl.handle('account-show', `${id}|hide`), true);
-  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/accounts/visibility', body: { hiddenAccountIds: [id] } });
+  assert.deepEqual(last(h.sent), { method: 'PATCH', path: '/api/accounts/visibility', body: { hiddenAccountIds: { hide: [id], show: [] } } });
   assert.deepEqual(flags(), [true, false]);
   assert.equal(last(h.toasts).title, 'party@example.test hidden from the dashboard');
   await h.ctl.handle('account-tray', `${id}|hide`);
-  assert.deepEqual(last(h.sent).body, { trayHiddenAccountIds: [id] });
+  assert.deepEqual(last(h.sent).body, { trayHiddenAccountIds: { hide: [id], show: [] } });
   assert.deepEqual(flags(), [true, true]);
   assert.equal(last(h.toasts).title, 'party@example.test hidden from the trays');
   await h.ctl.handle('account-show', `${id}|show`);
-  assert.deepEqual(last(h.sent).body, { hiddenAccountIds: [] });
+  assert.deepEqual(last(h.sent).body, { hiddenAccountIds: { hide: [], show: [id] } });
   assert.deepEqual(flags(), [false, true]);
   await h.ctl.handle('account-tray', `${id}|show`);
-  assert.deepEqual(last(h.sent).body, { trayHiddenAccountIds: [] });
+  assert.deepEqual(last(h.sent).body, { trayHiddenAccountIds: { hide: [], show: [id] } });
   assert.deepEqual(flags(), [false, false]);
   // the other account and both provider switches were never touched
   const other = h.dashboard.accounts.find(row => row.id === 'codex:other');
@@ -134,7 +146,7 @@ test('visibility saves run one at a time, each from the lists the save before it
   const gates = [];
   const h = harness({
     routes: {
-      'PUT /api/accounts/visibility': body => new Promise(resolve => gates.push(() => resolve({ ...Object.assign(saved, body) }))),
+      'PATCH /api/accounts/visibility': body => new Promise(resolve => gates.push(() => resolve(visibilityDelta(saved, body)))),
       'POST /api/accounts/zai%3Ausage/recheck': { account: { id: 'zai:usage', status: 'ok' } },
     },
     data: { schemaVersion: 1, accounts: [{ id: 'zai:usage', provider: 'zai' }], providers: [{ id: 'zai', visible: true }, { id: 'kimi-code', visible: true }], settings: { ...saved } },
@@ -144,7 +156,7 @@ test('visibility saves run one at a time, each from the lists the save before it
   const second = h.ctl.handle('accounts-show', 'kimi-code:hide');
   await flush();
   assert.equal(h.sent.length, 1);
-  assert.deepEqual(h.sent[0].body, { hiddenProviders: ['zai'] });
+  assert.deepEqual(h.sent[0].body, { hiddenProviders: { hide: ['zai'], show: [] } });
   assert.deepEqual(h.ctl.state.visPending, ['show:zai', 'show:kimi-code']);
   // another action ending meanwhile clears its own busy slot, not the visibility saves
   await h.ctl.handle('recheck', 'zai:usage');
@@ -154,8 +166,8 @@ test('visibility saves run one at a time, each from the lists the save before it
   await first;
   await flush();
   // the second save starts from what the first one saved, so neither choice is lost
-  assert.equal(h.sent.filter(r => r.method === 'PUT').length, 2);
-  assert.deepEqual(last(h.sent.filter(r => r.method === 'PUT')).body, { hiddenProviders: ['zai', 'kimi-code'] });
+  assert.equal(h.sent.filter(r => r.method === 'PATCH').length, 2);
+  assert.deepEqual(last(h.sent.filter(r => r.method === 'PATCH')).body, { hiddenProviders: { hide: ['kimi-code'], show: [] } });
   assert.deepEqual(h.ctl.state.visPending, ['show:kimi-code']);
   gates.shift()();
   await second;
@@ -163,17 +175,17 @@ test('visibility saves run one at a time, each from the lists the save before it
   assert.deepEqual(h.dashboard.settings.hiddenProviders, ['zai', 'kimi-code']);
   assert.deepEqual(h.dashboard.settings.hiddenAccountIds, ['codex:x']);
   // a failed save releases its toggle too, and the next one still runs
-  const bad = harness({ routes: { 'PUT /api/accounts/visibility': [refusal(500, 'visibility_write_failed'), body => ({ ...body, hiddenAccountIds: [], trayHiddenProviders: [] })] } });
+  const bad = harness({ routes: { 'PATCH /api/accounts/visibility': [refusal(500, 'visibility_write_failed'), body => ({ ...body, hiddenAccountIds: [], trayHiddenProviders: [] })] } });
   await Promise.all([bad.ctl.handle('accounts-show', 'zai:hide'), bad.ctl.handle('accounts-show', 'qwen:hide')]);
   assert.deepEqual(bad.ctl.state.visPending, []);
-  assert.deepEqual(bad.sent.map(r => r.body), [{ hiddenProviders: ['zai'] }, { hiddenProviders: ['qwen'] }]);
+  assert.deepEqual(bad.sent.map(r => r.body), [{ hiddenProviders: { hide: ['zai'], show: [] } }, { hiddenProviders: { hide: ['qwen'], show: [] } }]);
 });
 
 test('a browser-only "Show on dashboard" choice moves to the server once, then the browser copy is cleared', async () => {
   const storage = memoryStorage({ [LEGACY_HIDDEN_KEY]: JSON.stringify(['kimi-code', 'nope']) });
-  const h = harness({ storage, routes: { 'PUT /api/accounts/visibility': body => body } });
+  const h = harness({ storage, routes: { 'PATCH /api/accounts/visibility': body => body } });
   assert.equal(await h.ctl.migrateLocalHidden(), true);
-  assert.deepEqual(h.sent[0].body, { hiddenProviders: ['kimi-code'] });
+  assert.deepEqual(h.sent[0].body, { hiddenProviders: { hide: ['kimi-code'], show: [] } });
   assert.equal(storage.map.has(LEGACY_HIDDEN_KEY), false);
   assert.equal(await h.ctl.migrateLocalHidden(), false);
   assert.equal(h.sent.length, 1);
@@ -185,7 +197,7 @@ test('a browser-only "Show on dashboard" choice moves to the server once, then t
   assert.equal(await unreadable.ctl.migrateLocalHidden(), false);
   assert.equal(unreadable.sent.length, 0);
   // a failed save keeps the browser copy for the next load
-  const fails = harness({ storage: memoryStorage({ [LEGACY_HIDDEN_KEY]: '["zai"]' }), routes: { 'PUT /api/accounts/visibility': refusal(500, 'visibility_write_failed') } });
+  const fails = harness({ storage: memoryStorage({ [LEGACY_HIDDEN_KEY]: '["zai"]' }), routes: { 'PATCH /api/accounts/visibility': refusal(500, 'visibility_write_failed') } });
   assert.equal(await fails.ctl.migrateLocalHidden(), false);
 });
 
@@ -836,13 +848,13 @@ test('the time zone saves the whole preferences shape and the page follows it', 
   const h = harness({
     routes: {
       'GET /api/accounts/preferences': { ...prefs },
-      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+      'PATCH /api/accounts/preferences': (body) => preferencesDelta(prefs, body),
     },
   });
   await h.ctl.loadPrefs();
   assert.equal(h.ctl.state.prefs.data.timeZone, 'America/New_York');
   await h.ctl.handle('time-zone', 'Asia/Tokyo');
-  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/accounts/preferences', body: { ...prefs, timeZone: 'Asia/Tokyo' } });
+  assert.deepEqual(last(h.sent), { method: 'PATCH', path: '/api/accounts/preferences', body: { timeZone: 'Asia/Tokyo' } });
   assert.equal(h.ctl.state.prefs.data.timeZone, 'Asia/Tokyo');
   const count = h.sent.length;
   await h.ctl.handle('time-zone', 'Asia/Tokyo');
@@ -881,13 +893,13 @@ test('snapshot cleanup toggles automatic retention and cleans up now with a note
   const h = harness({
     routes: {
       'GET /api/accounts/preferences': { ...prefs },
-      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+      'PATCH /api/accounts/preferences': (body) => preferencesDelta(prefs, body),
       'POST /api/claude/history-snapshots/cleanup': { profiles: 2, targets: 3, kept: 9, deleted: 4, skipped: 1, failed: 0 },
     },
   });
   await h.ctl.loadPrefs();
-  await h.ctl.handle('cleanup-auto', '');
-  assert.deepEqual(last(h.sent), { method: 'PUT', path: '/api/accounts/preferences', body: { ...prefs, snapshotCleanup: { auto: false } } });
+  await h.ctl.handle('cleanup-auto', 'false');
+  assert.deepEqual(last(h.sent), { method: 'PATCH', path: '/api/accounts/preferences', body: { snapshotCleanup: { auto: false } } });
   await h.ctl.handle('cleanup-now', '');
   assert.deepEqual(last(h.sent), { method: 'POST', path: '/api/claude/history-snapshots/cleanup', body: {} });
   assert.equal(h.ctl.state.prefs.cleanupNote, 'Deleted 4 older snapshots, skipped 1 folder that was not AAC snapshots.');
@@ -907,16 +919,16 @@ test('extra usage-log locations add, validate and remove through one preferences
   const h = harness({
     routes: {
       'GET /api/accounts/preferences': { ...prefs },
-      'PUT /api/accounts/preferences': (body) => ({ ...body }),
+      'PATCH /api/accounts/preferences': (body) => preferencesDelta(prefs, body),
     },
   });
   await h.ctl.loadPrefs();
   await h.ctl.handle('logsource-add', 'omp\nubuntu\n/home/u/extra-omp\n');
   assert.equal(h.ctl.state.prefs.logSourcesError ?? '', '');
   let body = last(h.sent).body;
-  assert.equal(body.usageLogSources.length, 1);
-  assert.match(body.usageLogSources[0].id, /^log-[a-z0-9]{8}$/);
-  assert.deepEqual({ ...body.usageLogSources[0], id: 'x' }, { id: 'x', tool: 'omp', host: 'ubuntu', path: '/home/u/extra-omp' });
+  assert.equal(h.ctl.state.prefs.data.usageLogSources.length, 1);
+  assert.match(body.addUsageLogSource.id, /^log-[a-z0-9]{8}$/);
+  assert.deepEqual({ ...body.addUsageLogSource, id: 'x' }, { id: 'x', tool: 'omp', host: 'ubuntu', path: '/home/u/extra-omp' });
   const count = h.sent.length;
   // a relative path, a wrong host and a missing mapping refuse without saving
   await h.ctl.handle('logsource-add', 'omp\nubuntu\nrelative/path\n');
@@ -934,8 +946,8 @@ test('extra usage-log locations add, validate and remove through one preferences
   // a mapped generic source saves with its mapping
   await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n{"timestamp":"ts","model":"m","inputTokens":"usage.in"}');
   body = last(h.sent).body;
-  assert.equal(body.usageLogSources.length, 2);
-  assert.deepEqual(body.usageLogSources[1].fieldMapping, { timestamp: 'ts', model: 'm', inputTokens: 'usage.in' });
+  assert.equal(h.ctl.state.prefs.data.usageLogSources.length, 2);
+  assert.deepEqual(body.addUsageLogSource.fieldMapping, { timestamp: 'ts', model: 'm', inputTokens: 'usage.in' });
   // adding the same location again refuses as a duplicate
   const beforeDupe = h.sent.length;
   await h.ctl.handle('logsource-add', 'omp\nubuntu\n/home/u/extra-omp\n');
@@ -945,15 +957,15 @@ test('extra usage-log locations add, validate and remove through one preferences
   const [first, second] = h.ctl.state.prefs.data.usageLogSources;
   await h.ctl.handle('logsource-remove', first.id);
   body = last(h.sent).body;
-  assert.deepEqual(body.usageLogSources.map((entry) => entry.id), [second.id]);
+  assert.deepEqual(h.ctl.state.prefs.data.usageLogSources.map((entry) => entry.id), [second.id]);
   const afterRemove = h.sent.length;
   await h.ctl.handle('logsource-remove', 'log-unknown');
-  assert.equal(h.sent.length, afterRemove);
+  assert.equal(h.sent.length, afterRemove + 1);
   // the Settings host select sends a label: "Nas1" saves as the host id nas1
   await h.ctl.handle('logsource-add', 'codex\nNas1\n/home/u/.codex-extra\n');
   assert.equal(h.ctl.state.prefs.logSourcesError ?? '', '');
   body = last(h.sent).body;
-  assert.deepEqual({ ...body.usageLogSources.at(-1), id: 'x' }, { id: 'x', tool: 'codex', host: 'nas1', path: '/home/u/.codex-extra' });
+  assert.deepEqual({ ...body.addUsageLogSource, id: 'x' }, { id: 'x', tool: 'codex', host: 'nas1', path: '/home/u/.codex-extra' });
   // a label a tool is not scanned on still refuses
   const beforeLabel = h.sent.length;
   await h.ctl.handle('logsource-add', 'jsonl\nNas1\n/var/log/h\n{"timestamp":"ts","model":"m"}');
@@ -980,4 +992,78 @@ test('the log source check mirrors the server path and mapping rules', async () 
   assert.equal(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: 'm' }), '');
   assert.ok(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: '0bad' }));
   assert.ok(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: 'm', bogus: 'x' }));
+});
+
+
+test('cancel during job creation cancels the returned job, or keeps its verification visible', async () => {
+  for (const state of ['cancelled', 'verifying']) {
+    let finish;
+    const job = { id: `job-${state}`, provider: 'codex', state: 'starting' };
+    const h = harness({ routes: {
+      'POST /api/accounts/add': () => new Promise(resolve => { finish = resolve; }),
+      [`POST /api/accounts/signin-jobs/${job.id}/cancel`]: { ...job, state },
+    } });
+    await h.ctl.handle('add', 'codex');
+    const creation = h.ctl.handle('flow-submit', 'codex\nwork\n');
+    await flush();
+    await h.ctl.handle('flow-cancel', 'codex');
+    // A newer flow must not inherit the older flow's cancellation intent.
+    if (state === 'cancelled') await h.ctl.handle('add', 'codex');
+    finish({ status: 202, payload: { job } });
+    await creation;
+    assert.ok(h.sent.some(r => r.path.endsWith(`/${job.id}/cancel`)));
+    assert.equal(h.ctl.state.flows.codex?.job?.state, state === 'verifying' ? 'verifying' : undefined);
+    if (state === 'cancelled') assert.equal(h.ctl.state.flows.codex.step, 'name');
+  }
+});
+
+test('every failed paired-device read stays unknown and leaves sign out all available', async () => {
+  for (const status of [401, 403, 404, 500, 503]) {
+    const h = harness({ routes: {
+      'GET /api/auth/session': { otherBrowsers: 0 },
+      'GET /api/auth/devices': refusal(status, 'unavailable'),
+      'GET /api/auth/network': {},
+    } });
+    await h.ctl.loadSignin();
+    assert.equal(h.ctl.state.signin.devices, null);
+    const { accountsViewModel } = await import('../public/accounts-view.mjs');
+    const view = accountsViewModel(h.dashboard, { signin: h.ctl.state.signin });
+    assert.match(view.signin.devicesNote, /could not be read/);
+    assert.equal(view.signin.revokeAllEnabled, true);
+  }
+});
+
+test('cleanup uses an explicit boolean and preferences failures restore the saved model', async () => {
+  const prefs = { timeZone: 'UTC', snapshotCleanup: { auto: true }, usageLogSources: [] };
+  const h = harness({ routes: {
+    'GET /api/accounts/preferences': prefs,
+    'PATCH /api/accounts/preferences': refusal(500, 'write_failed'),
+  } });
+  await h.ctl.loadPrefs();
+  await h.ctl.handle('cleanup-auto', 'true');
+  assert.deepEqual(last(h.sent).body, { snapshotCleanup: { auto: true } });
+  await h.ctl.handle('time-zone', 'Asia/Tokyo');
+  assert.equal(h.ctl.state.prefs.data.timeZone, 'UTC');
+  assert.equal(h.ctl.state.prefs.busy, '');
+});
+
+test('raw JSONL field drafts validate underscores and reset only after a successful add', async () => {
+  const prefs = { timeZone: 'UTC', snapshotCleanup: { auto: true }, usageLogSources: [] };
+  let fail = true;
+  const h = harness({ routes: {
+    'GET /api/accounts/preferences': prefs,
+    'PATCH /api/accounts/preferences': body => fail ? refusal(500, 'write_failed') : preferencesDelta(prefs, body),
+  } });
+  await h.ctl.loadPrefs();
+  const draft = 'jsonl\nUbuntu\n/logs\nts\nmodel\nusage.input_tokens\nusage.output_tokens\ncost_usd';
+  await h.ctl.handle('logsource-add', draft);
+  assert.equal(h.ctl.state.prefs.logSourcesNonce || 0, 0);
+  fail = false;
+  await h.ctl.handle('logsource-add', draft);
+  assert.equal(h.ctl.state.prefs.logSourcesNonce, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(last(h.sent).body)).addUsageLogSource.fieldMapping, { timestamp: 'ts', model: 'model', inputTokens: 'usage.input_tokens', outputTokens: 'usage.output_tokens', cost: 'cost_usd' });
+  const before = h.sent.length;
+  await h.ctl.handle('logsource-add', 'jsonl\nUbuntu\n/logs2\nts"\nmodel\n\n\n');
+  assert.equal(h.sent.length, before);
+  assert.match(h.ctl.state.prefs.logSourcesError, /dot path/);
 });

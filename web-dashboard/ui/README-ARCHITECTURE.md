@@ -63,7 +63,7 @@ reading in Slint, never add or average across accounts, never turn a missing val
   change-password strength, per keystroke), `set_signin_strength(json)`, `probe_tick()` (?e2e only).
 - **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs) must equal `VIEW_MODEL_VERSION` in lib.rs,
   and `ANALYTICS_VIEW_VERSION = 7` (analytics-data.mjs) must equal `ANALYTICS_VIEW_VERSION` in analytics.rs;
-  and `ACCOUNTS_VIEW_VERSION = 2` (accounts-view.mjs) must equal `ACCOUNTS_VIEW_VERSION` in accounts.rs;
+  and `ACCOUNTS_VIEW_VERSION = 3` (accounts-view.mjs) must equal `ACCOUNTS_VIEW_VERSION` in accounts.rs;
   a mismatch is refused, not half-rendered. Bump the pair together when its structs change shape.
 - **In-place updates**: lib.rs owns one `Rc<VecModel<T>>` per list (sections, cards, registry, toasts, Details
   meters/amounts/facts, processes, KPIs, quota groups) and a `Nested<T>` per nested list (a section's rows, a
@@ -213,11 +213,11 @@ computer's scan progress ("Mac: 0 of 5 tools · scanning now", `hostProgress`); 
 show one calm Updating pill in the header (`head.updating`), poll answers render as morphs and the sources-grid
 cells are keyed by host, so a state flip updates in place instead of re-creating the cell.
 
-### Accounts & Settings v2
+### Accounts & Settings v3
 
 The page (W4, bound to the server in B5W) is built like the concept's `app-accounts.js` and the Dashboard sign-in
 block of `app-auth.js`.
-`accountsViewModel(serverData, ctx)` (public/accounts-view.mjs) returns `{ version, colA, colB, ag, policies,
+`accountsViewModel(serverData, ctx)` (public/accounts-view.mjs) returns `{ version, accessMessage, colA, colB, ag, policies,
 refresh, update, signin, connection, about }`; src/accounts.rs writes it into the `AcData` global
 (ui/pages/accounts/ac-data.slint) with persistent models (sections, rows by id, each row's actions, footers,
 policies, Update apps hosts and their lines).
@@ -252,9 +252,8 @@ policies, Update apps hosts and their lines).
 - **Lines under rows** (`lineView`, `RowLine`): a remove or restore confirmation with the server's effect
   sentences and the one-use token, a refusal with its reason, or a request in flight; a removed row fades while
   it keeps its place. The Claude trash lists each profile with Restore and when it is deleted for good.
-- **Show on dashboard / Show in tray**: saved on the server (`PUT /api/accounts/visibility`); every browser
-  follows. Each save sends only its own list (the server merges partial bodies), the saves run one at a time
-  from the lists the one before saved, and the toggles wait on `visPending`, not on the shared busy slot. A choice an older build saved in this browser (`localStorage['aac-hidden-providers']`) moves to the
+- **Show on dashboard / Show in tray**: saved on the server (`PATCH /api/accounts/visibility`; PUT remains for full lists); every browser
+  follows. Each save sends hide/show operations for only the changed items, applied under the server file mutex. The saves run one at a time, and the toggles wait on `visPending`, not on the shared busy slot. A choice an older build saved in this browser (`localStorage['aac-hidden-providers']`) moves to the
   server once and is then cleared. Home honours `settings.hiddenProviders` and `settings.hiddenAccountIds`. Show in
   tray is live once the dashboard response carries `settings.trayHiddenProviders`.
 - **One account's Dashboard / Tray switches** (`accountSwitches`, the small toggle pair beside each row's actions):
@@ -266,6 +265,7 @@ policies, Update apps hosts and their lines).
 - **E2E probes** (components/probe.slint): with `?e2e` in the address, bridge.js answers `probe_tick()` with
   every probed control's window rectangle (`globalThis.__aacProbe`) and keeps the last views and toasts it handed
   Slint, so a CDP harness can click real controls and check them by pixels. Without `?e2e` nothing is reported.
+- **Settings controls**: model-backed segments, selects and cleanup use a pending display shadow that re-syncs on model changes and save settlement. Usage-log fields retain their draft across tool changes; a successful add increments `logSources.nonce` to clear the draft. `accessMessage` replaces the Accounts content when dashboard sign-in is off; protected APIs keep their guards.
 - **Settings column**: Sign-in & connection (signed in as, connection, this session and other browsers from
   `GET /api/auth/session` with Sign out other browsers; the trusted local network line and note from
   `GET /api/auth/network` with Turn off, and Turn on only on the dashboard computer (the saved

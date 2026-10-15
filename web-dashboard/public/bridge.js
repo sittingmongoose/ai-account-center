@@ -178,7 +178,7 @@ async function sendNow(path, options) {
     // signed out from another browser (sign out other browsers, a password change, sign out all devices)
     // A 401 that is about the session ends it here; a refused password (wrong_password) is only an answer.
     const code = payload?.code;
-    if (response.status === 401 && path !== '/api/auth/login' && authenticated && (!code || code === 'auth_required' || code === 'session_revoked')) sessionEnded(code === 'session_revoked' ? 'revoked' : undefined);
+    if (response.status === 401 && path !== '/api/auth/login' && authenticated && authCheck?.accessMode !== 'open' && (!code || code === 'auth_required' || code === 'session_revoked')) sessionEnded(code === 'session_revoked' ? 'revoked' : undefined);
     const error = new Error(payload?.error || `Request failed (${response.status}).`);
     error.status = response.status;
     error.payload = payload;
@@ -267,14 +267,15 @@ function render() {
   // the quota history and the agenda read the current readings too
   if (currentPage === 'analytics' && analyticsPayload) renderAnalytics();
 }
-/** Accounts & Settings (version 1, accounts-view.mjs): drawn while the page is open. */
+/** Accounts & Settings (version 3, accounts-view.mjs): drawn while the page is open. */
 function renderAccounts() {
-  if (!serverData || currentPage !== 'accounts') return;
+  if ((!serverData && authCheck?.accessMode !== 'open') || currentPage !== 'accounts') return;
   const st = accounts.state;
   try {
-    const vm = accountsViewModel(serverData, context({
+    const vm = accountsViewModel(serverData || { accounts: [], providers: [] }, context({
       refreshing: false,
       refreshSeconds: refreshIntervalSeconds, refreshKnown: refreshSettingsKnown, updateJob,
+      serverVersion: serverData?.server?.version,
       origin, transport, sessionHours, signedInAt: signedInAt(globalThis.localStorage),
       registry: st.registry, flows: st.flows, lines: st.lines, busyAct: st.busyAct, visPending: st.visPending, check: authCheck, signin: st.signin, prefs: st.prefs,
     }));
@@ -410,6 +411,15 @@ const antigravityConfirmation = createAntigravityConfirmation({
 
 async function refresh(force = false, restart = false) {
   if (!authenticated) return;
+  if (authCheck?.accessMode === 'open') {
+    renderAccounts();
+    const view = dashboardViewModel(null, context());
+    view.chrome.statusLead = 'Dashboard sign-in is off';
+    view.chrome.statusMore = 'Sign in to read account usage';
+    view.sections = []; view.cards = [];
+    set_dashboard(JSON.stringify(view));
+    return;
+  }
   if (refreshing && !force && !restart) return refreshing;
   const generation = ++refreshGeneration;
   renderChrome(true);
@@ -670,6 +680,7 @@ function applyRefreshInterval(seconds, confirmed = true) {
   usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(false, 'morph'); } }, seconds * 1000);
 }
 async function loadSettings() {
+  if (authCheck?.accessMode === 'open') return;
   // The two independent reads fly together; each still applies (or fails) on its own, in order.
   const [settings, prefs] = await Promise.all([
     request('/api/accounts/settings').catch(() => null),
@@ -713,7 +724,7 @@ function navigate(page, { replace = false } = {}) {
   const method = replace || !wasHome || page === 'home' ? 'replaceState' : 'pushState';
   try { globalThis.history?.[method]?.(null, '', url); } catch {}
   if (page === 'analytics' && authenticated) enterAnalytics();
-  if (page === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
+  if (page === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') void accounts.loadAll(); }
 }
 async function loadAuthSetup() {
   try {
@@ -787,10 +798,10 @@ async function enterDashboard() {
 }
 /** Once signed in: move a browser-only "Show on dashboard" choice to the server, and read the settings block. */
 async function afterSignIn({ recheck = true } = {}) {
-  try { await accounts.migrateLocalHidden(); } catch {}
+  if (authCheck?.accessMode !== 'open') { try { await accounts.migrateLocalHidden(); } catch {} }
   // A sign-in needs the session's own answer; a page load has just read the same endpoint.
   if (recheck) { try { authCheck = await request('/api/auth/check'); } catch {} }
-  if (currentPage === 'accounts') await accounts.loadAll();
+  if (currentPage === 'accounts' && authCheck?.accessMode !== 'open') await accounts.loadAll();
 }
 async function checkSession(early = null) {
   if (sessionChecking) return;
@@ -806,7 +817,7 @@ async function checkSession(early = null) {
       if (status.authenticated === true) void loadAuthSetup();
       await loadSettings();
       // The dashboard and the update status render different state; their reads overlap.
-      await Promise.all([refresh(), updateStatus()]);
+      await Promise.all([refresh(), ...(status.accessMode === 'open' ? [] : [updateStatus()])]);
       await afterSignIn({ recheck: false });
       if (currentPage === 'analytics') await refreshAnalytics();
     } else if (status.accessMode === 'setup') showSetup();
@@ -1328,7 +1339,7 @@ try {
     }
     currentPage = pageFromLocation(); set_current_page(currentPage);
     if (currentPage === 'analytics' && authenticated) enterAnalytics();
-    if (currentPage === 'accounts' && authenticated) { renderAccounts(); void accounts.loadAll(); }
+    if (currentPage === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') void accounts.loadAll(); }
   });
   themeModeName = storedTheme();
   set_theme_mode(THEMES[themeModeName]);

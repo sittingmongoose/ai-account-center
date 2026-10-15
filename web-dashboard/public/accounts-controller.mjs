@@ -18,7 +18,7 @@
 //   networkChanged(view) -> Promise              local network trust was saved: the bridge's copy of
 //                                               GET /api/auth/check follows it (the sign-in page's note)
 import { requests, errorText, jobFinished, profileNameProblem, claudeIdProblem, claudeEmailProblem, keyProblem, suggestName, passwordProblem, passwordChangedToast, revokeAllToast, terminalCommand, PROVIDER_LABELS } from './account-actions.mjs';
-import { setDisplayTimeZone, DEFAULT_DISPLAY_TIME_ZONE } from './time-format.mjs';
+import { setDisplayTimeZone } from './time-format.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { statusWord, platformLabel } from './view-model.mjs';
 import { lazyFormat } from './time-format.mjs';
@@ -47,7 +47,7 @@ export const MUTATING_ACTIONS = Object.freeze(new Set([
   'cleanup-auto', 'cleanup-now', 'logsource-add', 'logsource-remove',
 ]));
 
-const LOG_SOURCE_FIELD_PATH = /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/;
+const LOG_SOURCE_FIELD_PATH = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
 const LOG_SOURCE_MAPPING_KEYS = ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost'];
 
 /**
@@ -115,6 +115,7 @@ export function createAccountsController(deps) {
   const timers = {};
   // sign-in jobs this page closed (Cancel, Done, Close): a registry read never opens them again
   const dismissedJobs = new Set();
+  const cancelledFlows = new Set();
   // visibility saves run one at a time, each from the lists the one before it saved
   let visibilityChain = Promise.resolve();
   let serial = 0;
@@ -176,8 +177,8 @@ export function createAccountsController(deps) {
     const s = state.signin;
     const [session, devices, network] = await Promise.allSettled([call(requests.session()), call(requests.devices()), call(requests.network())]);
     s.session = session.status === 'fulfilled' ? session.value.payload : null;
-    if (devices.status === 'fulfilled') { s.devices = Array.isArray(devices.value.payload?.devices) ? devices.value.payload.devices : []; s.devicesError = false; }
-    else { s.devices = null; s.devicesError = devices.reason?.status === 503; }
+    if (devices.status === 'fulfilled' && Array.isArray(devices.value.payload?.devices)) { s.devices = devices.value.payload.devices; s.devicesError = false; }
+    else { s.devices = null; s.devicesError = true; }
     s.network = network.status === 'fulfilled' ? network.value.payload : null;
     changed();
   }
@@ -244,10 +245,8 @@ export function createAccountsController(deps) {
   function setShown(provider, show) {
     if (!PROVIDERS.includes(provider)) return;
     return queueVisibility(`show:${provider}`, async () => {
-      const next = new Set(lists().hiddenProviders);
-      if (show) next.delete(provider); else next.add(provider);
       try {
-        const { payload } = await call(requests.visibility([...next]));
+        const { payload } = await call(requests.visibilityDelta('hiddenProviders', show ? [] : [provider], show ? [provider] : []));
         applyVisibility(payload);
         toast('info', show ? `${label(provider)} shown on the dashboard` : `${label(provider)} hidden from the dashboard`, 'Saved on the dashboard: every browser follows this choice.');
       } catch (error) { fail(error, { provider }); }
@@ -258,10 +257,8 @@ export function createAccountsController(deps) {
     return queueVisibility(`tray:${provider}`, async () => {
       const current = data()?.settings?.trayHiddenProviders;
       if (!Array.isArray(current)) return;
-      const next = new Set(current);
-      if (show) next.delete(provider); else next.add(provider);
       try {
-        const { payload } = await call(requests.trayVisibility([...next]));
+        const { payload } = await call(requests.visibilityDelta('trayHiddenProviders', show ? [] : [provider], show ? [provider] : []));
         applyVisibility(payload);
         toast('info', show ? `${label(provider)} shown in the trays` : `${label(provider)} hidden from the trays`, 'Saved on the dashboard: the Mac and Windows trays follow on their next refresh.');
       } catch (error) { fail(error, { provider }); }
@@ -276,10 +273,8 @@ export function createAccountsController(deps) {
     return queueVisibility(`acct-show:${id}`, async () => {
       const current = data()?.settings?.hiddenAccountIds;
       if (!Array.isArray(current)) return;
-      const next = new Set(current);
-      if (show) next.delete(id); else next.add(id);
       try {
-        const { payload } = await call(requests.accountVisibility([...next]));
+        const { payload } = await call(requests.visibilityDelta('hiddenAccountIds', show ? [] : [id], show ? [id] : []));
         applyVisibility(payload);
         toast('info', show ? `${nameOf(id)} shown on the dashboard` : `${nameOf(id)} hidden from the dashboard`, 'Saved on the dashboard: every browser follows this choice. The trays keep their own switch.');
       } catch (error) { fail(error, { provider: providerOf(id) }); }
@@ -291,10 +286,8 @@ export function createAccountsController(deps) {
     return queueVisibility(`acct-tray:${id}`, async () => {
       const current = data()?.settings?.trayHiddenAccountIds;
       if (!Array.isArray(current)) return;
-      const next = new Set(current);
-      if (show) next.delete(id); else next.add(id);
       try {
-        const { payload } = await call(requests.trayAccountVisibility([...next]));
+        const { payload } = await call(requests.visibilityDelta('trayHiddenAccountIds', show ? [] : [id], show ? [id] : []));
         applyVisibility(payload);
         toast('info', show ? `${nameOf(id)} shown in the trays` : `${nameOf(id)} hidden from the trays`, 'Saved on the dashboard: the Mac and Windows trays follow on their next refresh. The dashboard keeps its own switch.');
       } catch (error) { fail(error, { provider: providerOf(id) }); }
@@ -317,7 +310,7 @@ export function createAccountsController(deps) {
       await serialVisibility(async () => {
         const { hiddenProviders } = lists();
         const union = [...new Set([...hiddenProviders, ...local])];
-        if (union.length !== hiddenProviders.length) applyVisibility((await call(requests.visibility(union))).payload);
+        if (union.length !== hiddenProviders.length) applyVisibility((await call(requests.visibilityDelta('hiddenProviders', local, []))).payload);
       });
       try { storage.removeItem(LEGACY_HIDDEN_KEY); } catch {}
       changed();
@@ -376,6 +369,19 @@ export function createAccountsController(deps) {
     if (state.flows[provider]?.job?.id === flow.job.id) timers[provider] = schedule(() => pollJob(provider), JOB_POLL_MS);
   }
   /** A 202 { job } or a 200 { guide } from Add or Sign in again opens the matching flow. */
+  async function followCreatedJob(provider, answer, base) {
+    if (!cancelledFlows.delete(base.serial)) return followAnswer(provider, answer, base);
+    const job = answer?.payload?.job;
+    if (!job?.id) return true;
+    try {
+      const { payload } = await call(requests.cancelJob(job.id));
+      if (payload?.state === 'verifying') startJob(provider, base, payload);
+      else dismissedJobs.add(job.id);
+    } catch (error) {
+      if (error?.status !== 404) { startJob(provider, base, job); fail(error, { provider }); }
+    }
+    return true;
+  }
   function followAnswer(provider, answer, base) {
     if (answer?.payload?.job) { startJob(provider, base, answer.payload.job); return true; }
     if (answer?.payload?.guide) { setFlow(provider, { type: 'guide', accountId: base.accountId, guide: answer.payload.guide }); return true; }
@@ -502,13 +508,14 @@ export function createAccountsController(deps) {
     }
     if (flow.type === 'job-add' && flow.step === 'name') {
       const name = String(input || '').trim();
-      const problem = profileNameProblem(name, takenProfiles(provider));
+      const problem = profileNameProblem(name, takenProfiles(provider), provider);
       if (problem) { put({ name, error: { title: problem, body: '' } }); return; }
       put({ name, busy: true, error: null });
       try {
         const answer = await call(provider === 'codex' ? requests.addCodex(name) : requests.addSupervised(provider, name));
-        if (!followAnswer(provider, answer, { ...state.flows[provider], name })) put({ busy: false });
+        if (!(await followCreatedJob(provider, answer, { ...flow, name }))) put({ busy: false });
       } catch (error) {
+        if (cancelledFlows.delete(flow.serial)) return;
         if (await adoptRunning(provider, error)) return;
         put({ busy: false, error: errorText(error, { provider, name }) });
       }
@@ -553,13 +560,14 @@ export function createAccountsController(deps) {
     const flow = state.flows[provider];
     if (!flow) return;
     const job = flow.job;
+    if (flow.busy && !job && flow.type === 'job-add') cancelledFlows.add(flow.serial);
     if (job?.id && !jobFinished(job)) {
       try {
         const { payload } = await call(requests.cancelJob(job.id));
         // a login being installed cannot be stopped half-way: keep following it
         if (payload?.state === 'verifying') { state.flows[provider] = { ...flow, job: payload }; changed(); toast('info', 'Finishing the sign-in', 'It was already approved, so it finishes saving first.'); return; }
         toast('info', 'Sign-in cancelled', 'Nothing was saved.');
-      } catch (error) { if (error?.status !== 404) fail(error, { provider }); }
+      } catch (error) { if (error?.status !== 404) { fail(error, { provider }); return; } }
     }
     closeFlow(provider);
   }
@@ -818,15 +826,16 @@ export function createAccountsController(deps) {
     } catch (error) { fail(error); }
     finally { s.busy = ''; changed(); }
   }
-  /** Save the whole preferences shape with one field changed; the page follows it without a reload. */
+  /** Save only the changed preference fields; the page follows it without a reload. */
   async function savePrefs(next, note) {
     const p = state.prefs;
     p.busy = note; changed();
     try {
-      const { payload } = await call(requests.savePreferences(next));
-      p.data = payload && typeof payload === 'object' ? payload : next;
+      const { payload } = await call(requests.patchPreferences(next));
+      p.data = payload && typeof payload === 'object' ? payload : p.data;
       if (typeof p.data.timeZone === 'string') setDisplayTimeZone(p.data.timeZone);
-    } catch (error) { fail(error); }
+      return true;
+    } catch (error) { fail(error); return false; }
     finally { p.busy = ''; changed(); }
   }
   async function setTimeZone(zone) {
@@ -834,20 +843,11 @@ export function createAccountsController(deps) {
     if (!value || value.length > 64) return;
     const current = state.prefs.data;
     if (current?.timeZone === value) return;
-    await savePrefs({
-      timeZone: value,
-      snapshotCleanup: current?.snapshotCleanup || { auto: true },
-      usageLogSources: Array.isArray(current?.usageLogSources) ? current.usageLogSources : [],
-    }, 'timezone');
+    await savePrefs({ timeZone: value }, 'timezone');
   }
-  async function toggleCleanupAuto() {
-    const current = state.prefs.data;
-    if (!current || state.prefs.busy) return;
-    await savePrefs({
-      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
-      snapshotCleanup: { auto: current.snapshotCleanup?.auto === false },
-      usageLogSources: Array.isArray(current.usageLogSources) ? current.usageLogSources : [],
-    }, 'cleanup-auto');
+  async function toggleCleanupAuto(value) {
+    if (!state.prefs.data || state.prefs.busy || !['true', 'false'].includes(value)) return;
+    await savePrefs({ snapshotCleanup: { auto: value === 'true' } }, 'cleanup-auto');
   }
   async function cleanupNow() {
     const p = state.prefs;
@@ -875,7 +875,9 @@ export function createAccountsController(deps) {
     const host = logSourceHostId(tool, hostChoice) || hostChoice;
     const json = rest.join('\n');
     let mapping;
-    if (json) {
+    if (rest.length === 5 && tool === 'jsonl') {
+      mapping = Object.fromEntries(LOG_SOURCE_MAPPING_KEYS.flatMap((key, i) => rest[i] || i < 2 ? [[key, rest[i]]] : []));
+    } else if (json) {
       try { mapping = JSON.parse(json); } catch { mapping = null; }
       if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
         state.prefs.logSourcesError = 'The field mapping is not valid JSON.';
@@ -900,28 +902,16 @@ export function createAccountsController(deps) {
     let id = '';
     do { id = `log-${Math.random().toString(36).slice(2, 10)}`; } while (saved.some(entry => entry?.id === id));
     state.prefs.logSourcesError = '';
-    await savePrefs({
-      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
-      snapshotCleanup: current.snapshotCleanup || { auto: true },
-      usageLogSources: [
-        ...saved,
-        mapping === undefined
-          ? { id, tool, host, path: location }
-          : { id, tool, host, path: location, fieldMapping: mapping },
-      ],
-    }, 'logsources');
+    const source = mapping === undefined ? { id, tool, host, path: location } : { id, tool, host, path: location, fieldMapping: mapping };
+    if (await savePrefs({ addUsageLogSource: source }, 'logsources')) {
+      state.prefs.logSourcesNonce = (state.prefs.logSourcesNonce || 0) + 1;
+      changed();
+    }
   }
   async function removeLogSource(id) {
-    const current = state.prefs.data;
-    if (!current || state.prefs.busy) return;
-    const saved = Array.isArray(current.usageLogSources) ? current.usageLogSources : [];
-    if (!saved.some(entry => entry?.id === id)) return;
+    if (!state.prefs.data || state.prefs.busy) return;
     state.prefs.logSourcesError = '';
-    await savePrefs({
-      timeZone: current.timeZone || DEFAULT_DISPLAY_TIME_ZONE,
-      snapshotCleanup: current.snapshotCleanup || { auto: true },
-      usageLogSources: saved.filter(entry => entry?.id !== id),
-    }, 'logsources');
+    await savePrefs({ removeUsageLogSource: id }, 'logsources');
   }
   function togglePassword() {
     const pw = state.signin.pw;
@@ -1018,7 +1008,7 @@ export function createAccountsController(deps) {
       case 'network-on': await setNetwork(true); return true;
       case 'session-lifetime': await setLifetime(v); return true;
       case 'time-zone': await setTimeZone(v); return true;
-      case 'cleanup-auto': await toggleCleanupAuto(); return true;
+      case 'cleanup-auto': await toggleCleanupAuto(v); return true;
       case 'cleanup-now': await cleanupNow(); return true;
       case 'logsource-add': await addLogSource(v); return true;
       case 'logsource-remove': await removeLogSource(v); return true;
