@@ -1166,65 +1166,120 @@ def _claude_prefix(small, large, deadline):
 
 
 def _scan_claude_groups(collector, paths, parse, flush):
-    # One cache identity per (mirror, filename) group. The print depends on EVERY
-    # copy, so growth, divergence, addition and pruning all invalidate the group.
-    # Mirror groups stay separate/raw for the server's order-independent host merge.
-    groups = {}
-    exact_names = {}
-    for path in dict.fromkeys(paths):
-        mirror, name = _claude_mirror(path), os.path.basename(path)
+    # Filename and exact-copy edges are transitive: a renamed default copy
+    # can connect to a growing T3 copy. Mirrors never join local groups.
+    paths = list(dict.fromkeys(paths))
+    parents = list(range(len(paths)))
+
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    aliases = {}
+    for index, path in enumerate(paths):
+        mirror = _claude_mirror(path)
+        keys = [(mirror, os.path.basename(path))]
         stamp = _fingerprint(path)
         if stamp is not None:
-            exact = (mirror, stamp["size"], stamp["head"], stamp["tail"])
-            # Join renamed exact copies to the same group, but retain every
-            # physical file's name tag for cross-host mirror matching.
-            name = exact_names.setdefault(exact, name)
-        groups.setdefault((mirror, name), []).append(path)
+            keys.append((mirror, stamp["size"], stamp["head"], stamp["tail"]))
+        for key in keys:
+            parents[root(index)] = root(aliases.setdefault(key, index))
+    groups = {}
+    for index, path in enumerate(paths):
+        groups.setdefault(root(index), []).append(path)
     order = {path: index for index, path in enumerate(_newest_first(paths))}
     for group in sorted(groups.values(), key=lambda group: min(order.get(p, MAX_FILES) for p in group)):
         if collector.expired():
             collector.truncated = True
             return True
-        representative = group[0]
-        deps = _deps_print("claude", group) + ":" + _filekey("claude", representative)
-        filekey = collector.note_file("claude", representative, deps)
-        for path in group[1:]:
-            collector.note_file("claude", path, deps)
-        if filekey is None:
-            for path in group:
+        # Every dependency, including an unreadable/missing copy, invalidates
+        # the whole group's aggregate. Keep the identity stable across reads.
+        deps = _deps_print("claude", group) + ":" + _filekey("claude", group[0])
+        changed = False
+        usable = []
+        for path in group:
+            changed = collector.note_file("claude", path, deps) is not None or changed
+            if _filekey("claude", path) in collector.pending.get("claude", {}):
+                usable.append(path)
+            else:
+                collector.usage_partial.add("claude")
+                collector.truncated = True
+        if not usable:
+            continue
+        if not changed and len(usable) == len(group):
+            for path in usable:
                 collector.confirm_file("claude", _filekey("claude", path))
             continue
         stamped = []
-        for path in group:
+        for path in usable:
             try:
                 stamped.append((os.path.getsize(path), path))
             except OSError:
+                collector.usage_partial.add("claude")
                 collector.truncated = True
-                return True
-        kept = []
+        kept, covered = [], {}
         prefix_deadline = min(collector.deadline, time.monotonic() + 0.1)
         for _, path in sorted(stamped, key=lambda item: (-item[0], item[1])):
-            if not any(_claude_prefix(path, larger, prefix_deadline) for larger in kept):
+            larger = next((p for p in kept if _claude_prefix(path, p, prefix_deadline)), None)
+            if larger is None:
                 kept.append(path)
-        chosen = {} if len(kept) > 1 else None
-        collector.claude_chosen = chosen
+            else:
+                covered[path] = larger
+        chosen, parsed = {}, []
+        # A single verified transcript retains its own response semantics;
+        # keyed selection is only needed when reconciling diverged copies.
+        dedupe = len(kept) > 1
+        filekey = _filekey("claude", usable[0])
         try:
-            for path in kept:
-                outcome = _read_file(collector, "claude", path, filekey, parse, flush)
-                if outcome != "ok":
-                    # No partial group can replace its cached aggregates.
-                    if outcome == "unreadable":
-                        collector.truncated = True
+            for path in kept + list(covered):
+                if covered.get(path) in parsed:
+                    continue
+                # A read failure must not commit any prefix of that file, or
+                # prevent a readable sibling from supplying the usage.
+                if not dedupe:
+                    owner = next(p for p in usable if p == path or covered.get(p) == path)
+                    filekey = _filekey("claude", owner)
+                collector.claude_chosen = {} if dedupe else None
+                try:
+                    outcome = _read_file(collector, "claude", path, filekey, parse, flush)
+                except OSError:
+                    outcome = "unreadable"
+                if outcome == "cut":
                     return True
+                if outcome == "unreadable":
+                    collector.rows = {k: r for k, r in collector.rows.items() if r["f"] != filekey}
+                    collector.srows = {k: r for k, r in collector.srows.items() if r["f"] != filekey}
+                    collector.usage_partial.add("claude")
+                    collector.truncated = True
+                    continue
+                if dedupe:
+                    records = collector.claude_chosen
+                    collector.claude_chosen = chosen
+                    for pending in records.values():
+                        _emit_claude_response(collector, "claude", filekey, pending)
+                parsed.append(path)
+                if not dedupe:
+                    break
         finally:
             collector.claude_chosen = None
-        if chosen is not None:
-            for pending in chosen.values():
-                _emit_claude_response(collector, "claude", filekey, pending)
+        if collector.row_cap:
+            return True
+        if not parsed:
+            continue
+        # Only parsed files and byte-verified prefixes of parsed files are
+        # fresh. In particular, never confirm an unreadable representative.
+        confirmed = set(parsed) | {p for p, larger in covered.items() if larger in parsed}
+        owner = next((p for p in usable if p in confirmed), parsed[0])
+        filekey = _filekey("claude", owner)
+        for pending in chosen.values():
+            _emit_claude_response(collector, "claude", filekey, pending)
         if collector.row_cap:
             return True
         for path in group:
-            collector.confirm_file("claude", _filekey("claude", path))
+            if path in confirmed:
+                collector.confirm_file("claude", _filekey("claude", path))
     return False
 
 

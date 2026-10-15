@@ -166,7 +166,8 @@ function writeFixtures(options: { muse?: boolean; zcode?: boolean } = {}) {
 /** Runs the helper with some of its module constants replaced (caps too large to reach in a fixture). */
 function runPatchedHelper(
   request: Record<string, unknown>,
-  patch: Record<string, number | string | null>
+  patch: Record<string, number | string | null>,
+  setup: string[] = []
 ): Record<string, unknown> {
   const code = [
     'import importlib.util,json,sys',
@@ -174,6 +175,7 @@ function runPatchedHelper(
     'module=importlib.util.module_from_spec(spec)',
     'spec.loader.exec_module(module)',
     'for key,value in json.loads(sys.argv[2]).items(): setattr(module,key,value)',
+    ...setup,
     'module.main()',
   ].join('\n');
   const output = execFileSync('python3', ['-c', code, HELPER, JSON.stringify(patch)], {
@@ -545,6 +547,131 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       o: 0,
     });
   };
+
+  it.each(['single', 'exact', 'prefix'])(
+    'preserves repeated unkeyed responses within a readable %s transcript',
+    (copy) => {
+      const record = JSON.parse(claude('unkeyed'));
+      delete record.message.id;
+      const line = JSON.stringify(record) + '\n';
+      const a = path.join(home, '.claude', 'projects', 'a', 's1.jsonl');
+      fs.mkdirSync(path.dirname(a), { recursive: true });
+      fs.writeFileSync(a, line + line);
+      if (copy !== 'single') {
+        const b = path.join(home, '.claude', 'projects', 'b', 's1.jsonl');
+        fs.mkdirSync(path.dirname(b), { recursive: true });
+        fs.writeFileSync(b, copy === 'exact' ? line + line : line);
+      }
+      const answer = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+      expect(claudeTotals(answer)).toEqual({ n: 2, i: 200, o: 20 });
+      expect(answer.truncated).toBe(false);
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'reads a T3 Claude copy when the default representative is unreadable, including warm scans',
+    () => {
+      const a = path.join(home, '.claude', 'projects', 'p', 's1.jsonl');
+      const b = path.join(home, '.claude-t3', 'alpha', 'projects', 'p', 's1.jsonl');
+      for (const file of [a, b]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, claude('m1') + '\n' + claude('m2') + '\n');
+      }
+      const request = { kinds: ['claude'], minDateMs: MIN_DATE };
+      const first = runHelper(request);
+      const prints = (first.kinds as Record<string, { fingerprints: object }>).claude.fingerprints;
+      const key = (file: string) =>
+        createHash('sha256').update('claude\0').update(path.resolve(file)).digest('hex');
+      fs.chmodSync(a, 0);
+      try {
+        for (const fingerprints of [{}, { claude: prints }]) {
+          const answer = runHelper({ ...request, fingerprints });
+          expect(claudeTotals(answer)).toEqual({ n: 2, i: 200, o: 20 });
+          expect(answer.truncated).toBe(true);
+          const kind = (answer.kinds as Record<string, { partial: boolean; fingerprints: object }>)
+            .claude;
+          expect(kind.partial).toBe(true);
+          expect(Object.keys(kind.fingerprints)).toEqual([key(b)]);
+        }
+        fs.chmodSync(b, 0);
+        const unreadable = runHelper(request);
+        expect(unreadable.truncated).toBe(true);
+        expect(unreadable.kinds).toMatchObject({ claude: { partial: true, fingerprints: {} } });
+        expect(unreadable.rows).toEqual([]);
+      } finally {
+        fs.chmodSync(a, 0o600);
+        fs.chmodSync(b, 0o600);
+      }
+      expect(claudeTotals(runHelper(request))).toEqual({ n: 2, i: 200, o: 20 });
+    }
+  );
+
+  it.each(['diverged', 'prefix'])(
+    'reads a %s sibling after a Claude copy becomes unreadable between fingerprinting and parsing',
+    (copy) => {
+      const directory = path.join(home, '.claude', 'projects', 'p');
+      fs.mkdirSync(directory, { recursive: true });
+      for (const [name, records] of [
+        ['a', claude('m1') + (copy === 'prefix' ? '\n' + claude('m2') : '')],
+        ['b', claude(copy === 'prefix' ? 'm1' : 'm2')],
+      ]) {
+        fs.mkdirSync(path.join(directory, name));
+        fs.writeFileSync(path.join(directory, name, 's1.jsonl'), records + '\n');
+      }
+      const answer = runPatchedHelper({ kinds: ['claude'], minDateMs: MIN_DATE }, {}, [
+        'read_file = module._read_file',
+        'def fail_read(collector, kind, path, *args):',
+        '    if module.os.path.basename(module.os.path.dirname(path)) == "a": return "unreadable"',
+        '    return read_file(collector, kind, path, *args)',
+        'module._read_file = fail_read',
+      ]);
+      expect(claudeTotals(answer)).toEqual({ n: 1, i: 100, o: 10 });
+      expect(answer.truncated).toBe(true);
+      expect(answer.kinds).toMatchObject({ claude: { partial: true } });
+      expect(
+        Object.keys((answer.kinds as Record<string, { fingerprints: object }>).claude.fingerprints)
+      ).toHaveLength(1);
+    }
+  );
+
+  it.each([false, true])(
+    'joins renamed exact copies and growing filename copies transitively (reverse=%s)',
+    (reverse) => {
+      const directory = path.join(home, '.claude', 'projects', 'p');
+      const t3 = path.join(home, '.claude-t3', 'alpha', 'projects', 'p', 'b.jsonl');
+      fs.mkdirSync(directory, { recursive: true });
+      fs.mkdirSync(path.dirname(t3), { recursive: true });
+      for (const name of ['a', 'b'])
+        fs.writeFileSync(path.join(directory, `${name}.jsonl`), claude('m1') + '\n');
+      fs.writeFileSync(t3, claude('m1') + '\n' + claude('m2') + '\n');
+      const collect = (request: Record<string, unknown>) =>
+        reverse
+          ? runPatchedHelper(request, {}, [
+              'walk = module._iter_jsonl_files',
+              'module._iter_jsonl_files = lambda *args, **kwargs: iter(reversed(list(walk(*args, **kwargs))))',
+            ])
+          : runHelper(request);
+      const request = { kinds: ['claude'], minDateMs: MIN_DATE };
+      const first = collect(request);
+      expect(claudeTotals(first)).toEqual({ n: 2, i: 200, o: 20 });
+      const prints = (first.kinds as Record<string, { fingerprints: object }>).claude.fingerprints;
+      expect(Object.keys(prints)).toHaveLength(3);
+      expect(collect({ ...request, fingerprints: { claude: prints } }).rows).toEqual([]);
+      fs.appendFileSync(t3, claude('m3') + '\n');
+      const changed = collect({ ...request, fingerprints: { claude: prints } });
+      expect(claudeTotals(changed)).toEqual({ n: 3, i: 300, o: 30 });
+      const after = (changed.kinds as Record<string, { fingerprints: Record<string, unknown> }>)
+        .claude.fingerprints;
+      for (const key of Object.keys(prints))
+        expect(after[key]).not.toEqual(Reflect.get(prints, key));
+      fs.unlinkSync(t3);
+      expect(claudeTotals(collect({ ...request, fingerprints: { claude: after } }))).toEqual({
+        n: 1,
+        i: 100,
+        o: 10,
+      });
+    }
+  );
 
   it.each(['s.jsonl', 'agent-a63f20d72ecaef0dc.jsonl'])(
     'collapses exact, prefix and diverged Claude %s copies and invalidates group caches',

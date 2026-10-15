@@ -197,23 +197,28 @@ async function isSandboxTree(directory: string, entries: fs.Dirent[]): Promise<b
  * within two levels, by the same filename rule the collector uses to read
  * it. Presence alone (any `.jsonl`) accepted synthetic Muse trees
  * (`<uuid>/session.jsonl`); the OMP line parser still rejects every non-OMP
- * record inside an accepted root.
+ * record inside an accepted root. A read failure or search bound returns null,
+ * so cached roots survive until absence can actually be confirmed.
  */
-async function sessionsDirHasMarker(directory: string): Promise<boolean> {
+async function sessionsDirHasMarker(directory: string): Promise<boolean | null> {
   const pending: Array<{ directory: string; depth: number }> = [{ directory, depth: 0 }];
   let checked = 0;
+  let uncertain = false;
   while (pending.length) {
     const current = pending.pop();
     if (!current) break;
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(current.directory, { withFileTypes: true });
-    } catch {
-      return false;
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? ''))
+        uncertain = true;
+      continue;
     }
+    if (entries.length > 200) uncertain = true;
     for (const entry of entries.slice(0, 200)) {
       checked++;
-      if (checked > 400) return false;
+      if (checked > 400) return null;
       if (entry.isFile()) {
         if (isOmpSessionFilename(entry.name)) return true;
       } else if (current.depth < 1 && entry.isDirectory()) {
@@ -224,7 +229,7 @@ async function sessionsDirHasMarker(directory: string): Promise<boolean> {
       }
     }
   }
-  return false;
+  return uncertain ? null : false;
 }
 
 /**

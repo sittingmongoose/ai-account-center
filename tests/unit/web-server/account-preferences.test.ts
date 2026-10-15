@@ -8,6 +8,8 @@ import {
   USAGE_LOG_HOSTS,
   defaultDashboardPreferences,
   isDashboardPreferences,
+  isDashboardPreferencesPatch,
+  patchDashboardPreferences,
   readDashboardPreferences,
   writeDashboardPreferences,
 } from '../../../src/web-server/services/dashboard-preferences';
@@ -35,6 +37,42 @@ function directory(): string {
 }
 
 describe('dashboard preferences', () => {
+  it.each(['mac', 'windows', 'nas1'] as const)(
+    'migrates saved %s JSONL sources without resetting other preferences',
+    async (host) => {
+      const dir = directory();
+      const file = path.join(dir, 'dashboard-preferences.json');
+      const valid = { id: 'muse', tool: 'muse', host: 'mac', path: '/logs/muse' } as const;
+      const unsupported = {
+        id: 'old-jsonl',
+        tool: 'jsonl',
+        host,
+        path: '/logs/jsonl',
+        fieldMapping: { timestamp: 'ts', model: 'model' },
+      } as const;
+      const saved = {
+        timeZone: 'Europe/Paris',
+        snapshotCleanup: { auto: false },
+        usageLogSources: [valid, unsupported],
+      };
+      const original = JSON.stringify(saved);
+      fs.writeFileSync(file, original);
+      const migrated = { ...saved, usageLogSources: [valid] };
+      expect(readDashboardPreferences(dir)).toEqual(migrated);
+      expect(fs.readFileSync(file, 'utf8')).toBe(original);
+      expect(() => writeDashboardPreferences(saved, dir)).toThrow('supported only on ubuntu');
+      expect(isDashboardPreferencesPatch({ addUsageLogSource: unsupported })).toBe(false);
+      expect(() => patchDashboardPreferences({ addUsageLogSource: unsupported }, dir)).toThrow(
+        'Invalid dashboard preferences patch'
+      );
+      expect(await patchDashboardPreferences({ timeZone: 'UTC' }, dir)).toEqual({
+        ...migrated,
+        timeZone: 'UTC',
+      });
+      expect(readDashboardPreferences(dir).snapshotCleanup.auto).toBe(false);
+    }
+  );
+
   it('rejects remote generic JSONL sources with a clear error', () => {
     for (const host of ['mac', 'windows', 'nas1'] as const) {
       const prefs = {
@@ -105,7 +143,8 @@ describe('dashboard preferences', () => {
     );
     expect(saved.timeZone).toBe('Europe/Paris');
     expect(readDashboardPreferences(dir)).toEqual(saved);
-    expect(fs.statSync(path.join(dir, 'dashboard-preferences.json')).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32')
+      expect(fs.statSync(path.join(dir, 'dashboard-preferences.json')).mode & 0o777).toBe(0o600);
     expect(fs.readdirSync(dir)).toEqual(['dashboard-preferences.json']);
   });
 

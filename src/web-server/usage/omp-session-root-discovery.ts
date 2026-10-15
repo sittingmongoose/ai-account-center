@@ -17,7 +17,8 @@ interface DiscoveryRules {
   skipDirs: ReadonlySet<string>;
   isSessionFilename: (name: string) => boolean;
   isSandbox: (directory: string, entries: fs.Dirent[]) => Promise<boolean>;
-  hasSessionMarker: (directory: string) => Promise<boolean>;
+  /** null means absence could not be confirmed (read failure or search bound). */
+  hasSessionMarker: (directory: string) => Promise<boolean | null>;
 }
 
 type PendingDirectory = [relative: string, depth: number];
@@ -234,8 +235,12 @@ export async function discoverOmpSessionRoots(
         child = { ...child, stamp, found: [], pending: [[name, 1]], limited: false };
       }
       children.push(child);
-    } catch {
+    } catch (error) {
       limited = true;
+      if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        const child = previous.get(name);
+        if (child) children.push(child);
+      }
     }
   }
   cache.children = children;
@@ -256,17 +261,18 @@ export async function discoverOmpSessionRoots(
     });
   }
   // Revalidate published roots and resumed ancestors against today's sandbox/skip/link rules.
-  // Only booleans are memoized: keeping directory listings for 100k visits would be unbounded.
-  const allowed = new Map<string, boolean>([['.', true]]);
-  const directoryAllowed = async (relative: string): Promise<boolean> => {
+  // Only verdicts are memoized: keeping directory listings for 100k visits would be unbounded.
+  const allowed = new Map<string, boolean | null>([['.', true]]);
+  const directoryAllowed = async (relative: string): Promise<boolean | null> => {
     const known = allowed.get(relative);
     if (known !== undefined) return known;
     if (
       !validRelative(relative) ||
-      relative.split(path.sep).some((part) => rules.skipDirs.has(part)) ||
-      !(await directoryAllowed(path.dirname(relative)))
+      relative.split(path.sep).some((part) => rules.skipDirs.has(part))
     )
       return false;
+    const parent = await directoryAllowed(path.dirname(relative));
+    if (parent !== true) return parent;
     let valid = false;
     try {
       const directory = path.join(base, relative);
@@ -274,17 +280,43 @@ export async function discoverOmpSessionRoots(
         const listed = await fs.promises.readdir(directory, { withFileTypes: true });
         valid = !(await rules.isSandbox(directory, listed));
       }
-    } catch {
-      valid = false;
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        allowed.set(relative, null);
+        limited = true;
+        return null;
+      }
     }
     allowed.set(relative, valid);
     return valid;
   };
+  const present = new Map<string, boolean | null>();
+  const rootPresent = async (root: string): Promise<boolean | null> => {
+    const known = present.get(root);
+    if (known !== undefined) return known;
+    let result = await directoryAllowed(path.relative(base, root));
+    if (result === true) {
+      try {
+        result =
+          path.basename(root) === 'sessions'
+            ? await rules.hasSessionMarker(root)
+            : (await fs.promises.readdir(root, { withFileTypes: true })).some(
+                (entry) => entry.isFile() && rules.isSessionFilename(entry.name)
+              );
+      } catch (error) {
+        result = ['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')
+          ? false
+          : null;
+      }
+    }
+    if (result === null) limited = true;
+    present.set(root, result);
+    return result;
+  };
   for (const child of children) {
     for (const key of ['roots', 'found'] as const) {
       const valid: string[] = [];
-      for (const root of child[key])
-        if (await directoryAllowed(path.relative(base, root))) valid.push(root);
+      for (const root of child[key]) if ((await rootPresent(root)) !== false) valid.push(root);
       child[key] = valid;
     }
   }
@@ -321,7 +353,9 @@ export async function discoverOmpSessionRoots(
         pop(child);
         continue;
       }
-      if (!(await directoryAllowed(path.dirname(relative)))) {
+      const parentAllowed = await directoryAllowed(path.dirname(relative));
+      if (parentAllowed !== true) {
+        if (parentAllowed === null) child.limited = true;
         pop(child);
         continue;
       }
@@ -352,8 +386,10 @@ export async function discoverOmpSessionRoots(
       allowed.set(relative, !sandbox);
       if (sandbox) continue;
       const sessions = path.basename(directory) === 'sessions';
+      const marker = sessions ? await rules.hasSessionMarker(directory) : false;
+      if (marker === null) child.limited = true;
       if (
-        (sessions && (await rules.hasSessionMarker(directory))) ||
+        marker === true ||
         (!sessions && listed.some((entry) => entry.isFile() && rules.isSessionFilename(entry.name)))
       ) {
         if (

@@ -49,10 +49,10 @@ export interface DashboardPreferences {
 
 const SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
-function isUsageLogSource(value: unknown): value is UsageLogSource {
+function isUsageLogSource(value: unknown, allowRemoteJsonl = false): value is UsageLogSource {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const source = value as Record<string, unknown>;
-  if (source.tool === 'jsonl' && source.host !== 'ubuntu') return false;
+  if (!allowRemoteJsonl && source.tool === 'jsonl' && source.host !== 'ubuntu') return false;
   const keys = Object.keys(source);
   if (
     !keys.every((key) => ['id', 'tool', 'host', 'path', 'fieldMapping'].includes(key)) ||
@@ -161,7 +161,36 @@ export function readDashboardPreferences(ccsDir = getCcsDir()): DashboardPrefere
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) return defaultDashboardPreferences();
     if (stat.size <= MAX_PREFERENCES_BYTES) {
-      const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+      let value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+      // Older releases accepted remote JSONL roots. Migrate only those entries;
+      // strict write validation must never reset unrelated saved preferences.
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const prefs = value as Record<string, unknown>;
+        if (Array.isArray(prefs.usageLogSources)) {
+          const sources = prefs.usageLogSources.filter(
+            (source) =>
+              !(
+                isUsageLogSource(source, true) &&
+                source.tool === 'jsonl' &&
+                source.host !== 'ubuntu'
+              )
+          );
+          if (sources.length !== prefs.usageLogSources.length) {
+            const migrated = { ...prefs, usageLogSources: sources };
+            if (isDashboardPreferences(migrated)) {
+              value = migrated;
+              try {
+                logger.warn(
+                  'dashboard-preferences.unsupported-sources',
+                  'Ignoring saved remote JSONL usage log sources; only ubuntu supports generic JSONL.'
+                );
+              } catch {
+                /* Logging is best effort. */
+              }
+            }
+          }
+        }
+      }
       if (isDashboardPreferences(value)) {
         return {
           timeZone: value.timeZone,
