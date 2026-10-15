@@ -13,6 +13,7 @@ import {
 } from '../../../src/web-server/services/account-analytics-history';
 import { projectAgentUsage } from '../../../src/web-server/agent-usage/agent-usage-projection';
 import {
+  burnKey,
   burnRate,
   RecentReadings,
   usageHistory,
@@ -209,7 +210,8 @@ describe('agent usage burn rate', () => {
     ];
     expect(burnRate(moved, null).periodStartedAt).toBe(new Date(NOW - 5 * MINUTE).toISOString());
     const flat = burnRate([reading(10, 30), reading(0, 30)], null);
-    expect(flat.pace).toBe(0);
+    // Flat for ten minutes: too little movement and time for a pace.
+    expect(flat.pace).toBeNull();
     expect(flat.projectedFullAt).toBeNull();
     expect(flat.runsOutBeforeReset).toBeNull();
   });
@@ -246,7 +248,7 @@ describe('agent usage burn rate', () => {
       NOW,
       recent
     );
-    expect(rates.get('codex:gmail')?.get('five_hour')?.pace).toBeNull();
+    expect(rates.get('codex:gmail')?.get(burnKey('five_hour', null, null))?.pace).toBeNull();
   });
 
   it('keeps a retained optional window at its own sample time, never as a fresh reading', () => {
@@ -342,6 +344,65 @@ describe('agent usage burn rate', () => {
     expect(rates.get('codex:gmail')?.size).toBe(0);
   });
 
+  it('does not take a single rounding step within minutes as the pace', () => {
+    // Weekly window: 20% for two hours, then 21%.
+    const readings = [
+      ...Array.from({ length: 25 }, (_, step) => reading(125 - step * 5, 20)),
+      reading(0, 21),
+    ];
+    // 79 points at 1%/h last 79 hours: past a reset two days away.
+    const burn = burnRate(readings, new Date(NOW + 2 * 24 * 60 * MINUTE).toISOString());
+    expect(burn.last5Minutes).toBe(12);
+    expect(burn.pace).toBe(1);
+    expect(burn.paceMinutes).toBe(60);
+    expect(burn.runsOutBeforeReset).toBe(false);
+    // Two points in five minutes is a burst and sets the pace at once.
+    const burst = burnRate([reading(60, 20), reading(5, 20), reading(0, 22)], null);
+    expect(burst.pace).toBe(24);
+    expect(burst.paceMinutes).toBe(5);
+  });
+
+  it('publishes no burn for a window whose reset passed, and keeps burns of same-key pools apart', () => {
+    const passed = account({
+      sampledAt: '2026-10-15T09:00:00.000Z',
+      windows: [window({ resetAt: '2026-10-15T10:00:00.000Z' })],
+    });
+    const stale = buildSnapshotFiles(
+      {
+        accounts: [passed],
+        history: history([record(passed, 200, 10), record(passed, 180, 40)]),
+        sampledAt: NOW,
+      },
+      60
+    );
+    expect(stale.snapshot.accounts[0].windows[0]).toMatchObject({ resetPassed: true, burn: null });
+    const pools = account({
+      windows: [
+        window({ key: 'weekly', usedPercent: 50, poolId: 'pool-a', poolLabel: 'Pool A' }),
+        window({ key: 'weekly', usedPercent: 10, poolId: 'pool-b', poolLabel: 'Pool B' }),
+      ],
+    });
+    const recent = new RecentReadings();
+    recent.add(
+      [
+        account({
+          sampledAt: new Date(NOW - 5 * MINUTE).toISOString(),
+          windows: [
+            window({ key: 'weekly', usedPercent: 40, poolId: 'pool-a', poolLabel: 'Pool A' }),
+            window({ key: 'weekly', usedPercent: 10, poolId: 'pool-b', poolLabel: 'Pool B' }),
+          ],
+        }),
+      ],
+      NOW - 5 * MINUTE
+    );
+    const { snapshot } = buildSnapshotFiles(
+      { accounts: [pools], history: null, sampledAt: NOW },
+      60,
+      recent
+    );
+    expect(snapshot.accounts[0].windows.map((entry) => entry.burn?.pace)).toEqual([120, null]);
+  });
+
   it('gives no rate without two readings far enough apart', () => {
     const burn = burnRate([reading(1, 30), reading(0, 31)], null);
     expect(burn.pace).toBeNull();
@@ -373,7 +434,7 @@ describe('agent usage burn rate', () => {
       NOW,
       recent
     );
-    expect(rates.get('codex:gmail')?.get('five_hour')?.last5Minutes).toBe(60);
+    expect(rates.get('codex:gmail')?.get(burnKey('five_hour', null, null))?.last5Minutes).toBe(60);
   });
 });
 
@@ -410,18 +471,18 @@ describe('agent usage snapshot files', () => {
   });
 
   it('calls a falling window falling, never a negative burn', () => {
-    const row = account({ windows: [window({ usedPercent: 29.2, remainingPercent: 70.8 })] });
+    const row = account({ windows: [window({ usedPercent: 27.6, remainingPercent: 72.4 })] });
     const { snapshot } = buildSnapshotFiles(
       {
         accounts: [row],
-        history: history([record(row, 10, 30), record(row, 5, 29.5)]),
+        history: history([record(row, 15, 30), record(row, 10, 29.2), record(row, 5, 28.4)]),
         sampledAt: NOW,
       },
       60
     );
-    expect(snapshot.accounts[0].windows[0].burn?.pace).toBe(-3.6);
+    expect(snapshot.accounts[0].windows[0].burn?.pace).toBe(-9.6);
     const words = renderSnapshotMarkdown(snapshot);
-    expect(words).toContain('usage falling -3.60%/h over the last 5 min');
+    expect(words).toContain('usage falling -9.60%/h over the last 15 min');
     expect(words).not.toContain('burning');
   });
 

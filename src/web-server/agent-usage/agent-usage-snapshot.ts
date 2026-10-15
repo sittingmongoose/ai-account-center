@@ -35,6 +35,7 @@ import { readPackagedSource } from '../../utils/packaged-source';
 import {
   HISTORY_HOURS,
   RecentReadings,
+  burnKey,
   usageHistory,
   type BurnRate,
   type HistorySeries,
@@ -144,7 +145,10 @@ export function buildSnapshotFiles(
     ...account,
     windows: account.windows.map((window) => ({
       ...window,
-      burn: rates.get(account.id)?.get(window.key) ?? null,
+      // After a passed reset the reading is history: no pace or projection is published for it.
+      burn: window.resetPassed
+        ? null
+        : (rates.get(account.id)?.get(burnKey(window.key, window.unit, window.poolId)) ?? null),
     })),
   }));
   const generatedAt = new Date(now).toISOString();

@@ -125,7 +125,7 @@ cleanup: check that nothing listens on `control.sock` or `status.sock`, remove t
 two files, and start `ai-account-center-antigravity.service` once. The fix reaches
 the VM only when the package is deployed and the bundle is rebuilt from the packaged
 sources (`rebuild_bundle.py --apply`, which the planned rebuild after Update all
-installs agy 1.3.2 does).
+installs agy 1.3.5 does).
 
 ## Manual and automatic control
 

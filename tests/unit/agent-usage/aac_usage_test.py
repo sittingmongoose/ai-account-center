@@ -115,6 +115,30 @@ class ReaderTests(unittest.TestCase):
         self.assertIn("codex Gmail (one@example.com) 5-hour:", text)
         self.assertIn("70%", text)
 
+    def test_history_covers_seven_days_warns_when_stale_and_skips_hidden_series(self):
+        generated = aac.now_utc() - dt.timedelta(minutes=20)
+        (self.folder / "usage.json").write_text(json.dumps(snapshot(generated)), encoding="utf-8")
+        old = iso(generated - dt.timedelta(days=3))[:16] + "Z"
+        series = [
+            {"accountId": "codex:gmail", "provider": "codex", "label": "Gmail", "email": "one@example.com",
+             "profile": "gmail", "hidden": False, "window": "seven_day", "windowLabel": "Weekly", "pool": None,
+             "kind": "rate_limit", "unit": None, "points": [[old, 10, None]]},
+            {"accountId": "claude:hidden", "provider": "claude", "label": "Hidden", "email": "three@example.com",
+             "profile": None, "hidden": True, "window": "five_hour", "windowLabel": "5-hour", "pool": None,
+             "kind": "rate_limit", "unit": None, "points": [[old, 5, None]]},
+        ]
+        (self.folder / "history.json").write_text(json.dumps(
+            {"version": 1, "generatedAt": iso(generated), "hours": 168, "series": series}), encoding="utf-8")
+        for argv, hidden in ((["history"], False), (["history", "--all"], True)):
+            out = io.StringIO()
+            with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder), *argv]), \
+                    contextlib.redirect_stdout(out):
+                aac.main()
+            text = out.getvalue()
+            self.assertIn("WARNING: this snapshot is 20m old", text)
+            self.assertIn("10%", text)
+            self.assertEqual("Hidden" in text, hidden)
+
     def test_options_before_the_history_command_are_kept(self):
         # run_reader passes --dir before the subcommand; the history parser must not reset it.
         data = json.loads(self.run_reader("--provider", "codex", "--json", "history"))

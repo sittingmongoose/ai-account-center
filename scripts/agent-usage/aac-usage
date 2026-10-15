@@ -265,10 +265,14 @@ def cmd_history(args):
     folder = snapshot_folder(args.dir)
     history = load(folder, "history.json")
     provider = PROVIDERS.get(args.provider.lower()) if args.provider else None
+    if args.provider and not provider:
+        sys.exit("aac-usage: unknown provider %r; use one of %s." % (args.provider, ", ".join(sorted(set(PROVIDERS)))))
     since = now_utc() - dt.timedelta(hours=args.hours)
     series = []
     for entry in history.get("series", []):
         if provider and entry.get("provider") != provider:
+            continue
+        if entry.get("hidden") and not args.all:
             continue
         if args.account and not any(args.account.lower() in (entry.get(k) or "").lower()
                                     for k in ("label", "email", "profile", "accountId")):
@@ -280,6 +284,9 @@ def cmd_history(args):
     if args.json:
         print(json.dumps(dict(history, series=series), indent=2))
         return
+    note = stale_note(dict(history, staleAfterSeconds=load(folder, "usage.json").get("staleAfterSeconds")), now_utc())
+    if note:
+        print(note)
     for entry in series:
         print("%s %s (%s) %s:" % (entry.get("provider"), entry.get("label"), entry.get("email") or "-",
                                   entry.get("windowLabel")))
@@ -316,8 +323,9 @@ def rules_text(kind="other"):
         "",
         "- `aac-usage` lists every account (provider, label, email, AAC profile, computer, plan, ACTIVE flag) with each "
         "window's used %, reset time, burn rate (%/h over the last 5 and 15 minutes, 1, 6 and 24 hours) and when it will "
-        "run out at the current pace. `--provider codex` or `--account <email or label>` narrows it, `--json` prints "
-        "usage.json, `aac-usage history --provider claude` shows the 7-day readings. `usage.md` in that folder is the "
+        "run out at the current pace. `--provider codex` or `--account <email or label>` narrows it; `--json` prints "
+        "usage.json with every rate (`burn.last5Minutes` ... `last24Hours`, `pace`, `projectedFullAt`); "
+        "`aac-usage history --provider claude` shows the 7-day readings. `usage.md` in that folder is the "
         "same summary in words.",
         "- Check it before a long or parallel run on a quota-limited account, when a provider starts refusing requests, "
         "and when choosing between providers or accounts. Find your own login by its email (T3 names provider "
@@ -403,9 +411,10 @@ def main():
     history.add_argument("--provider", default=argparse.SUPPRESS)
     history.add_argument("--account", default=argparse.SUPPRESS)
     history.add_argument("--window", help="only windows whose key contains this, e.g. five_hour")
-    history.add_argument("--hours", type=float, default=24)
+    history.add_argument("--hours", type=float, default=168, help="how far back (default: all 7 days)")
     history.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     history.add_argument("--dir", default=argparse.SUPPRESS)
+    history.add_argument("--all", action="store_true", default=argparse.SUPPRESS)
     rules = sub.add_parser("rules", help="print the rules block")
     rules.add_argument("kind", nargs="?", default="other", choices=["claude", "other"])
     sub.add_parser("install-rules", help="write the rules block into this computer's agent rules files")

@@ -29,6 +29,12 @@ const HORIZONS = [
 ] as const;
 /** Below this pace (percentage points per hour) a window is treated as not rising. */
 const MIN_PACE = 0.05;
+/**
+ * A span under an hour sets the pace only when use moved at least this much: providers report
+ * whole percentages, so one step within minutes is rounding, not a burst (2 points in 5 minutes,
+ * 24%/h, still shows a burst at once).
+ */
+const PACE_MIN_POINTS = 2;
 /** How long the one-minute readings are kept in memory. */
 export const RECENT_READINGS_MS = 65 * 60_000;
 const MAX_RECENT_READINGS = 180;
@@ -40,7 +46,10 @@ export interface BurnRate {
   lastHour: number | null;
   last6Hours: number | null;
   last24Hours: number | null;
-  /** The pace the projection uses: the shortest span with enough readings, so bursts show at once. */
+  /**
+   * The pace the projection uses: the shortest span with enough readings and, under an hour, a move
+   * of at least 2 points, so bursts show at once and a single rounding step does not.
+   */
   pace: number | null;
   /** That span in minutes. */
   paceMinutes: number | null;
@@ -61,8 +70,11 @@ export interface HistorySeries {
   label: string;
   email: string | null;
   profile: string | null;
+  /** Hidden on the dashboard by its owner; the reader skips it unless asked. */
+  hidden: boolean;
   window: string;
   windowLabel: string;
+  pool: string | null;
   kind: string;
   unit: string | null;
   points: HistoryPoint[];
@@ -229,6 +241,11 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/** One window of an account: its key, unit and pool, as the history tells windows apart. */
+export function burnKey(key: string, unit: string | null, poolId: string | null): string {
+  return JSON.stringify([key, unit, poolId]);
+}
+
 export function burnRate(readings: Reading[], resetAt: string | null): BurnRate {
   const period = currentPeriod(readings);
   const rates: Record<(typeof HORIZONS)[number]['name'], number | null> = {
@@ -250,7 +267,8 @@ export function burnRate(readings: Reading[], resetAt: string | null): BurnRate 
           ((latest.at - earliest.at) / HOUR_MS)
       );
       rates[horizon.name] = rate;
-      if (pace === null) {
+      const moved = Math.abs((latest.used as number) - (earliest.used as number));
+      if (pace === null && (moved >= PACE_MIN_POINTS || latest.at - earliest.at >= HOUR_MS)) {
         pace = rate;
         paceMinutes = Math.round(horizon.hours * 60);
       }
@@ -327,7 +345,10 @@ export function usageHistory(
         finite(window.usedPercent) !== null &&
         (window.kind ?? 'rate_limit') === 'rate_limit'
       )
-        perWindow.set(window.key, burnRate(readings, window.resetAt));
+        perWindow.set(
+          burnKey(window.key, window.unit ?? null, window.poolId ?? null),
+          burnRate(readings, window.resetAt)
+        );
       if (readings.length === 0) continue;
       series.push({
         accountId: account.id,
@@ -335,8 +356,10 @@ export function usageHistory(
         label: account.label,
         email: account.email,
         profile: account.profile,
+        hidden: account.hidden,
         window: window.key,
         windowLabel: window.label,
+        pool: window.poolLabel ?? null,
         kind: window.kind ?? 'rate_limit',
         unit: window.unit ?? null,
         points: readings.map((reading) => [minuteIso(reading.at), reading.used, reading.remaining]),
