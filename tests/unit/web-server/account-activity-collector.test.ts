@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import {
   aggregateSessionAggregates,
   codexReaderCount,
@@ -604,10 +605,12 @@ describe('bounded native account activity checkpoints', () => {
       }
     };
     walk(path.join(root, 'cache', 'account-activity-v1'));
-    expect(cacheFiles.length).toBe(1);
-    expect(fs.statSync(cacheFiles[0]).size).toBeLessThan(2048);
-    if (process.platform !== 'win32') expect(fs.statSync(cacheFiles[0]).mode & 0o777).toBe(0o600);
-    expect(fs.readFileSync(cacheFiles[0], 'utf8')).not.toContain('xxxx');
+    expect(cacheFiles.length).toBe(2); // Per-file checkpoint and bounded coherent fallback.
+    for (const cache of cacheFiles) {
+      expect(fs.statSync(cache).size).toBeLessThan(2048);
+      if (process.platform !== 'win32') expect(fs.statSync(cache).mode & 0o777).toBe(0o600);
+      expect(fs.readFileSync(cache, 'utf8')).not.toContain('xxxx');
+    }
   });
 });
 
@@ -685,6 +688,222 @@ describe('claude response collapsing', () => {
       expect(warm.hourly).toEqual(diverged.hourly);
       fs.unlinkSync(b);
       expect((await collectClaude()).eventCount).toBe(11);
+    }
+  );
+
+  it.each([
+    { diverged: false, unresolvedParent: false },
+    { diverged: true, unresolvedParent: false },
+    { diverged: false, unresolvedParent: true },
+    { diverged: true, unresolvedParent: true },
+  ])(
+    'reconciles unlocated legacy Claude copies during incomplete discovery (diverged=$diverged, parent=$unresolvedParent)',
+    async ({ diverged, unresolvedParent }) => {
+      const projects = path.join(root, 'claude', 'projects');
+      const a = path.join(projects, 'a', 's.jsonl');
+      const hidden = path.join(projects, 'b');
+      const b = path.join(hidden, 'nested', 's.jsonl');
+      fs.mkdirSync(path.dirname(a), { recursive: true });
+      fs.mkdirSync(path.dirname(b), { recursive: true });
+      const record = (id: string, input: number) => {
+        const value = line(id, id, 1);
+        value.message.usage.input_tokens = input;
+        return JSON.stringify(value) + '\n';
+      };
+      const shared = record('shared', 100);
+      const sibling = path.join(projects, 'sibling.jsonl');
+      const removed = path.join(projects, 'removed.jsonl');
+      fs.writeFileSync(a, shared);
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(100);
+      fs.writeFileSync(b, shared + record('extension', 50));
+      if (diverged) fs.appendFileSync(a, record('unique', 20));
+      const expected = diverged ? 170 : 150;
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(expected);
+      if (unresolvedParent) {
+        fs.writeFileSync(sibling, record('sibling', 40));
+        fs.writeFileSync(removed, record('removed', 10));
+        expect(sum(await collectClaude(), 'inputTokens')).toBe(expected + 50);
+      }
+      const cacheRoot = path.join(root, 'cache', 'account-activity-v1');
+      const directory = path.join(cacheRoot, fs.readdirSync(cacheRoot)[0]);
+      for (const name of fs.readdirSync(directory)) {
+        const cache = path.join(directory, name);
+        if (name.endsWith('.group')) fs.unlinkSync(cache);
+        // Direct-path cases must also work with genuinely pre-upgrade caches.
+        if (!unresolvedParent && name === 'claude.coherent') fs.unlinkSync(cache);
+        if (name.endsWith('.json')) {
+          const value = JSON.parse(fs.readFileSync(cache, 'utf8'));
+          delete value.file;
+          fs.writeFileSync(cache, JSON.stringify(value));
+        }
+      }
+      if (unresolvedParent) {
+        fs.appendFileSync(sibling, record('sibling-new', 40));
+        fs.unlinkSync(removed);
+      }
+      const opendir = fs.opendirSync;
+      const blocked = spyOn(fs, 'opendirSync').mockImplementation(((target, ...args) => {
+        if (target === (unresolvedParent ? hidden : path.dirname(b)))
+          throw Object.assign(new Error('fixture directory denied'), { code: 'EACCES' });
+        return opendir(target, ...args);
+      }) as typeof fs.opendirSync);
+      try {
+        for (let pass = 0; pass < 3; pass++) {
+          const result = await collectClaude();
+          expect(sum(result, 'inputTokens')).toBe(expected + (unresolvedParent ? 80 : 0));
+          expect(result.scan?.complete).toBe(false);
+        }
+      } finally {
+        blocked.mockRestore();
+      }
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(
+        expected + (unresolvedParent ? 80 : 0)
+      );
+      fs.unlinkSync(b);
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(
+        (diverged ? 120 : 100) + (unresolvedParent ? 80 : 0)
+      );
+    }
+  );
+
+  it('retains the previous coherent contribution when a legacy copy has no recoverable owner', async () => {
+    const projects = path.join(root, 'claude', 'projects');
+    const a = path.join(projects, 'a', 's.jsonl');
+    const b = path.join(projects, 'b', 's.jsonl');
+    const hidden = path.join(projects, 'hidden');
+    const unknown = path.join(hidden, 'nested', 's.jsonl');
+    for (const file of [a, b, unknown]) fs.mkdirSync(path.dirname(file), { recursive: true });
+    const record = (id: string, input: number) => {
+      const value = line(id, id, 1);
+      value.message.usage.input_tokens = input;
+      return JSON.stringify(value) + '\n';
+    };
+    const shared = record('shared', 100);
+    fs.writeFileSync(a, shared);
+    expect(sum(await collectClaude(), 'inputTokens')).toBe(100);
+    fs.writeFileSync(b, shared + record('extension', 50));
+    expect(sum(await collectClaude(), 'inputTokens')).toBe(150);
+    const cacheRoot = path.join(root, 'cache', 'account-activity-v1');
+    const directory = path.join(cacheRoot, fs.readdirSync(cacheRoot)[0]);
+    const cacheName = (file: string) => `${createHash('sha256').update(file).digest('hex')}.json`;
+    // A pre-upgrade cache not covered by this request's last coherent discovery.
+    // Its buried source cannot be named from the directory that fails listing.
+    fs.copyFileSync(b, unknown);
+    const value = JSON.parse(fs.readFileSync(path.join(directory, cacheName(b)), 'utf8'));
+    const stats = fs.statSync(unknown);
+    delete value.file;
+    value.identity = `${stats.dev}:${stats.ino}`;
+    value.mtimeMs = stats.mtimeMs;
+    fs.writeFileSync(path.join(directory, cacheName(unknown)), JSON.stringify(value));
+    fs.appendFileSync(a, record('unique', 10));
+    const opendir = fs.opendirSync;
+    const blocked = spyOn(fs, 'opendirSync').mockImplementation(((target, ...args) => {
+      if (target === hidden)
+        throw Object.assign(new Error('fixture directory denied'), { code: 'EACCES' });
+      return opendir(target, ...args);
+    }) as typeof fs.opendirSync);
+    try {
+      for (let pass = 0; pass < 3; pass++) {
+        const result = await collectClaude();
+        expect(sum(result, 'inputTokens')).toBe(150);
+        expect(result.scan?.complete).toBe(false);
+      }
+    } finally {
+      blocked.mockRestore();
+    }
+    const recovered = await collectClaude();
+    expect(sum(recovered, 'inputTokens')).toBe(160);
+    expect(recovered.scan?.complete).toBe(true);
+  });
+
+  it.each(['parser', 'save', 'publish'] as const)(
+    'retains every Claude checkpoint and the prior selection after a group %s failure',
+    async (failure) => {
+      const projects = path.join(root, 'claude', 'projects');
+      const a = path.join(projects, 'a', 's.jsonl');
+      const b = path.join(projects, 'b', 's.jsonl');
+      fs.mkdirSync(path.dirname(a), { recursive: true });
+      fs.mkdirSync(path.dirname(b), { recursive: true });
+      const record = (id: string, input: number) => {
+        const value = line(id, id, 1);
+        value.message.usage.input_tokens = input;
+        return JSON.stringify(value) + '\n';
+      };
+      const shared = record('shared', 100);
+      fs.writeFileSync(a, shared);
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(100);
+      fs.writeFileSync(b, shared + record('extension', 50));
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(150);
+      const cacheRoot = path.join(root, 'cache', 'account-activity-v1');
+      const directory = path.join(cacheRoot, fs.readdirSync(cacheRoot)[0]);
+      const before = new Map(
+        fs
+          .readdirSync(directory)
+          .map((name) => [name, fs.readFileSync(path.join(directory, name), 'utf8')])
+      );
+      const longerCheckpoint = [...before].find(
+        ([name, body]) => name.endsWith('.json') && JSON.parse(body).file === b
+      )![0];
+      const shorterCheckpoint = [...before].find(
+        ([name, body]) => name.endsWith('.json') && JSON.parse(body).file === a
+      )![0];
+      const staged = new Set<string>();
+      fs.appendFileSync(a, record('unique', 10));
+      // Ensure a has already been parsed/staged when b fails.
+      fs.utimesSync(a, new Date(), new Date(Date.now() + 2000));
+      const open = fs.openSync;
+      const read = fs.readSync;
+      const rename = fs.renameSync;
+      const fds = new Set<number>();
+      const blockedOpen = spyOn(fs, 'openSync').mockImplementation(((target, ...args) => {
+        const fd = open(target, ...args);
+        if (target === b) fds.add(fd);
+        else fds.delete(fd);
+        return fd;
+      }) as typeof fs.openSync);
+      const blockedRead = spyOn(fs, 'readSync').mockImplementation(((fd, buffer, ...args) => {
+        // The full longer-file parser read exceeds fingerprint and shorter-prefix probes.
+        if (failure === 'parser' && fds.has(fd) && buffer.byteLength === fs.statSync(b).size)
+          throw new Error('fixture parser read failed');
+        return read(fd, buffer, ...args);
+      }) as typeof fs.readSync);
+      const blockedSave = spyOn(fs, 'renameSync').mockImplementation(((source, target) => {
+        const basename = path.basename(String(target));
+        if (String(source).endsWith('.tmp')) staged.add(basename);
+        if (
+          (failure === 'save' &&
+            String(source).endsWith('.tmp') &&
+            basename === longerCheckpoint) ||
+          (failure === 'publish' &&
+            basename.endsWith('.group') &&
+            !String(source).endsWith('.backup'))
+        )
+          throw new Error('fixture checkpoint publish failed');
+        return rename(source, target);
+      }) as typeof fs.renameSync);
+      try {
+        for (let pass = 0; pass < 3; pass++) {
+          const result = await collectClaude();
+          expect(sum(result, 'inputTokens')).toBe(150);
+          expect(result.scan?.complete).toBe(false);
+          expect(staged.has(shorterCheckpoint)).toBe(true);
+          expect(
+            new Map(
+              fs
+                .readdirSync(directory)
+                .map((name) => [name, fs.readFileSync(path.join(directory, name), 'utf8')])
+            )
+          ).toEqual(before);
+        }
+      } finally {
+        blockedOpen.mockRestore();
+        blockedRead.mockRestore();
+        blockedSave.mockRestore();
+      }
+      const recovered = await collectClaude();
+      expect(sum(recovered, 'inputTokens')).toBe(160);
+      expect(recovered.scan?.complete).toBe(true);
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(160);
     }
   );
 
@@ -825,6 +1044,27 @@ describe('claude response collapsing', () => {
       fs.writeFileSync(path.join(directory, 's.jsonl'), copy.join('\n') + '\n');
     }
     expect((await collectClaude()).eventCount).toBe(16);
+  });
+
+  it('publishes an empty prior group selection after renamed copies replace every member', async () => {
+    const projects = path.join(root, 'claude', 'projects');
+    const a = path.join(projects, 'a', 's.jsonl');
+    const b = path.join(projects, 'b', 's.jsonl');
+    fs.mkdirSync(path.dirname(a), { recursive: true });
+    fs.mkdirSync(path.dirname(b), { recursive: true });
+    const shared = JSON.stringify(line('shared', 'shared', 1)) + '\n';
+    fs.writeFileSync(a, shared + JSON.stringify(line('a', 'a', 1)) + '\n');
+    fs.writeFileSync(b, shared + JSON.stringify(line('b', 'b', 1)) + '\n');
+    expect(sum(await collectClaude(), 'inputTokens')).toBe(300);
+    const renamed = path.join(projects, 'renamed.jsonl');
+    fs.writeFileSync(renamed, shared);
+    fs.copyFileSync(renamed, a);
+    fs.copyFileSync(renamed, b);
+    expect(sum(await collectClaude(), 'inputTokens')).toBe(100);
+    const cacheRoot = path.join(root, 'cache', 'account-activity-v1');
+    const directory = path.join(cacheRoot, fs.readdirSync(cacheRoot)[0]);
+    const selection = fs.readdirSync(directory).find((name) => name.endsWith('.group'))!;
+    expect(JSON.parse(fs.readFileSync(path.join(directory, selection), 'utf8'))).toEqual([]);
   });
 
   it('preserves exact-copy deduplication when the copy was renamed', async () => {
