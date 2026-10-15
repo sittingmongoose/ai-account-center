@@ -1,5 +1,5 @@
 /**
- * The session lifetime setting (Settings): 1, 7, 30 (default), 90 or 365
+ * The session lifetime setting (Settings): 1, 7 (default), 30, 90 or 365
  * days. The session cookie and the idle expiry follow it; "Remember me" off
  * gives a browser-session cookie. Every test runs in a temporary CCS_HOME
  * with bcrypt at cost 4.
@@ -9,7 +9,11 @@ import * as fs from 'fs';
 import yaml from 'js-yaml';
 
 import { loadOrCreateUnifiedConfig } from '../../../src/config/config-loader-facade';
-import { effectiveSessionLifetimeDays } from '../../../src/config/schemas/auth';
+import {
+  DEFAULT_DASHBOARD_AUTH_CONFIG,
+  effectiveSessionLifetimeDays,
+} from '../../../src/config/schemas/auth';
+import { createEmptyUnifiedConfig } from '../../../src/config/schemas/unified-config';
 import {
   Client,
   configYaml,
@@ -63,6 +67,12 @@ describe('session lifetime', () => {
     expect(effectiveSessionLifetimeDays({ session_timeout_hours: 2000 })).toBe(90);
     expect(effectiveSessionLifetimeDays({ session_lifetime_days: 7 })).toBe(7);
     expect(effectiveSessionLifetimeDays({})).toBe(7);
+  });
+
+  it('writes 7 days into a new config, not an older 30-day default', () => {
+    expect(DEFAULT_DASHBOARD_AUTH_CONFIG.session_lifetime_days).toBe(7);
+    expect(createEmptyUnifiedConfig().dashboard_auth?.session_lifetime_days).toBe(7);
+    expect(effectiveSessionLifetimeDays(createEmptyUnifiedConfig().dashboard_auth ?? {})).toBe(7);
   });
 
   it('saves the lifetime from any signed-in browser and persists both fields', async () => {

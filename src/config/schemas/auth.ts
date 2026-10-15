@@ -98,7 +98,7 @@ export interface DashboardAuthConfig {
   /** Session timeout in hours (default: 24; legacy mirror of session_lifetime_days) */
   session_timeout_hours?: number;
   /**
-   * Dashboard session lifetime in days: 1, 7, 30, 90 or 365 (default: 30).
+   * Dashboard session lifetime in days: 1, 7, 30, 90 or 365 (default: 7).
    * The session cookie and the idle expiry follow it. Saved from Settings.
    */
   session_lifetime_days?: number;
@@ -201,5 +201,5 @@ export const DEFAULT_DASHBOARD_AUTH_CONFIG: DashboardAuthConfig = {
   username: '',
   password_hash: '',
   session_timeout_hours: 24,
-  session_lifetime_days: 30,
+  session_lifetime_days: DEFAULT_SESSION_LIFETIME_DAYS,
 };

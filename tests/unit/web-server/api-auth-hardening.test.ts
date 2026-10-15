@@ -444,8 +444,9 @@ describe('F2: malformed login requests stay inside the request', () => {
     expect(cookie).toContain('SameSite=Strict');
     const expires = Date.parse(/Expires=([^;]+)/.exec(cookie)?.[1] ?? '');
     const lifetimeHours = (expires - Date.now()) / 3_600_000;
-    expect(lifetimeHours).toBeGreaterThan(719);
-    expect(lifetimeHours).toBeLessThanOrEqual(720);
+    // A new config's default lifetime: 7 days.
+    expect(lifetimeHours).toBeGreaterThan(167);
+    expect(lifetimeHours).toBeLessThanOrEqual(168);
   });
 
   it('rate limits the sixth failed login attempt within the window', async () => {

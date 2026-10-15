@@ -326,7 +326,7 @@ export function mergeWithDefaults(partial: Partial<UnifiedConfig>): UnifiedConfi
         DEFAULT_DASHBOARD_AUTH_CONFIG.session_timeout_hours,
       // A legacy `session_timeout_hours` other than the old 24-hour default maps to
       // the nearest offered lifetime; a bare 24 is the value our own setup code
-      // wrote when nothing was chosen, so it takes the new 30-day default.
+      // wrote when nothing was chosen, so it takes the 7-day default.
       session_lifetime_days: effectiveSessionLifetimeDays({
         session_lifetime_days: partial.dashboard_auth?.session_lifetime_days,
         session_timeout_hours: partial.dashboard_auth?.session_timeout_hours,
