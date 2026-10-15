@@ -134,6 +134,22 @@ class RulesTests(unittest.TestCase):
         self.assertNotIn("first", text)
         self.assertEqual(os.stat(shared).st_nlink, 2)
 
+    def test_a_block_without_its_end_marker_is_reported_and_the_other_files_still_install(self):
+        broken = self.home / ".claude" / "CLAUDE.md"
+        broken.parent.mkdir()
+        broken.write_text("rules\n" + aac.BEGIN + "\nhalf a block\n", encoding="utf-8")
+        (self.home / ".codex").mkdir()
+        out = io.StringIO()
+        with mock.patch.object(aac.Path, "home", return_value=self.home), contextlib.redirect_stdout(out):
+            aac.cmd_install_rules(None)
+        self.assertIn("error", out.getvalue())
+        self.assertEqual(broken.read_text(encoding="utf-8").count(aac.BEGIN), 1)
+        self.assertIn(aac.BEGIN, (self.home / ".codex" / "AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_falling_usage_is_not_called_a_burn(self):
+        text = aac.burn_text({"pace": -3.6, "paceMinutes": 5, "projectedFullAt": None}, aac.now_utc())
+        self.assertEqual(text, "usage falling -3.60%/h over 5 min")
+
     def test_targets_cover_every_agent_and_only_existing_t3_account_files(self):
         for folder in (".claude", ".codex", ".claude-t3/party", ".codex-t3/lexx", ".codex-t3/empty"):
             (self.home / folder).mkdir(parents=True)

@@ -146,6 +146,10 @@ def matches(account, provider, needle, include_hidden):
 def burn_text(burn, now):
     if not burn or burn.get("pace") is None:
         return None
+    if burn["pace"] < 0:
+        minutes = burn.get("paceMinutes") or 0
+        return "usage falling %s%%/h over %s" % (
+            number(burn["pace"]), "%d min" % minutes if minutes < 60 else "%d h" % round(minutes / 60))
     minutes = burn.get("paceMinutes") or 0
     over = "%d min" % minutes if minutes < 60 else "%d h" % round(minutes / 60)
     parts = ["pace %s%%/h over %s" % (number(burn["pace"]), over)]
@@ -313,10 +317,12 @@ def install_block(path, text):
     """Rewrites the managed block in place, so hard-linked rules files stay linked."""
     block = "%s\n%s%s\n" % (BEGIN, text, END)
     old = path.read_text(encoding="utf-8") if path.exists() else ""
-    if BEGIN in old and END in old:
+    if BEGIN in old and END in old.split(BEGIN, 1)[1]:
         pre, rest = old.split(BEGIN, 1)
         post = rest.split(END, 1)[1].lstrip("\r\n")
         new = pre + block + (("\n" + post) if post.strip() else "")
+    elif BEGIN in old:
+        raise ValueError("an aac-usage rules block has no end marker; fix it by hand")
     else:
         new = (old.rstrip() + "\n\n" if old.strip() else "") + block
     if new == old:
@@ -355,7 +361,10 @@ def cmd_install_rules(args):
             continue
         if not create and not path.is_file():
             continue
-        print("%-9s %s" % (install_block(path, rules_text(kind)), path))
+        try:
+            print("%-9s %s" % (install_block(path, rules_text(kind)), path))
+        except (OSError, ValueError) as error:
+            print("error     %s (%s)" % (path, error))
     print("Cursor keeps user rules in its settings: paste `aac-usage rules` into Settings > Rules > User Rules.")
 
 

@@ -52,6 +52,8 @@ export const SNAPSHOT_JSON = 'usage.json';
 export const SNAPSHOT_MARKDOWN = 'usage.md';
 export const SNAPSHOT_HISTORY = 'history.json';
 const MAX_DIRECTORY_LENGTH = 1024;
+/** A write still running after this long is reported once in the dashboard log. */
+const STALL_LOG_MS = 5 * 60_000;
 
 export interface SnapshotSettings {
   version: 1;
@@ -187,6 +189,7 @@ function burnText(burn: BurnRate | null, now: number): string | null {
   const hour =
     burn.paceMinutes < 60 && burn.lastHour !== null ? `; ${amount(burn.lastHour)}%/h over 1 h` : '';
   const pace = `${amount(burn.pace)}%/h over the last ${over}${hour}`;
+  if (burn.pace < 0) return `usage falling ${pace}`;
   if (!burn.projectedFullAt) return `burning ${pace}`;
   const full = `full in ${span((Date.parse(burn.projectedFullAt) - now) / 1000)}`;
   const reset =
@@ -371,13 +374,32 @@ export function createSnapshotPublisher(
   const syncClient = deps.syncClient ?? ((directory: string) => syncSnapshotClient(directory));
   const recent = new RecentReadings();
   let busy = false;
+  let busySince = 0;
+  let stallLogged = false;
   let warned: string | null = null;
   let clientSynced: string | null = null;
   return async (event) => {
     // Every sample's readings count toward short-span pace, even one whose write is skipped.
     recent.add(event.accounts, event.sampledAt);
-    if (busy) return false;
+    if (busy) {
+      // A write that never returns (a dead hard mount) holds the publisher; say so once. Starting
+      // more writes would only tie up more of the server's file threads.
+      if (!stallLogged && Date.now() - busySince > STALL_LOG_MS) {
+        stallLogged = true;
+        try {
+          logger.warn(
+            'agent_usage_snapshot.write_stalled',
+            'An agent usage snapshot write has not finished; later samples wait for it'
+          );
+        } catch {
+          /* Logging never stops the dashboard. */
+        }
+      }
+      return false;
+    }
     busy = true;
+    busySince = Date.now();
+    stallLogged = false;
     let directory = '';
     try {
       const chosen = await settings();

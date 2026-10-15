@@ -335,6 +335,22 @@ describe('agent usage snapshot files', () => {
     expect(words).toContain('full in 2h 20m (after the reset)');
   });
 
+  it('calls a falling window falling, never a negative burn', () => {
+    const row = account({ windows: [window({ usedPercent: 29.2, remainingPercent: 70.8 })] });
+    const { snapshot } = buildSnapshotFiles(
+      {
+        accounts: [row],
+        history: history([record(row, 10, 30), record(row, 5, 29.5)]),
+        sampledAt: NOW,
+      },
+      60
+    );
+    expect(snapshot.accounts[0].windows[0].burn?.pace).toBe(-3.6);
+    const words = renderSnapshotMarkdown(snapshot);
+    expect(words).toContain('usage falling -3.60%/h over the last 5 min');
+    expect(words).not.toContain('burning');
+  });
+
   it('says a missing number was not reported and skips windows of an account without a reading', () => {
     const { snapshot } = buildSnapshotFiles(
       {

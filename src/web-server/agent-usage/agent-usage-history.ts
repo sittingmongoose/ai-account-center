@@ -272,8 +272,13 @@ export function usageHistory(
 ): { rates: Map<string, Map<string, BurnRate>>; series: HistorySeries[] } {
   const byIdentity = recordsByIdentity(history);
   const since = now - HISTORY_HOURS * HOUR_MS;
+  // The newest row per id, as the projection publishes it.
   const rowById = new Map<string, DashboardAccount>();
-  for (const row of rows) if (!rowById.has(row.id)) rowById.set(row.id, row);
+  for (const row of rows) {
+    const existing = rowById.get(row.id);
+    if (!existing || Date.parse(row.sampledAt ?? '') > Date.parse(existing.sampledAt ?? ''))
+      rowById.set(row.id, row);
+  }
   const rates = new Map<string, Map<string, BurnRate>>();
   const series: HistorySeries[] = [];
   for (const account of accounts) {
