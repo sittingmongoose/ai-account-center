@@ -649,6 +649,74 @@ describe('muse oversized-line completion', () => {
     expect(data.eventCount).toBe(2);
     expect(data.hourly.reduce((t, h) => t + h.inputTokens, 0)).toBe(80 + 50);
   });
+
+  it('reaches subagent logs past thousands of tool-output folders, which hold no log', async () => {
+    // Muse keeps every tool call's output in a folder of its own; on the VM 10,006 of them used up
+    // the 10,000-directory walk, so subagent logs went unread and the scan never completed.
+    const sessionsDir = path.join(root, 'muse', 'sessions');
+    const session = path.join(sessionsDir, '2026', '10', '01', 'sess-uuid');
+    for (let index = 0; index < 12; index++)
+      fs.mkdirSync(path.join(session, 'tool-outputs', `call-${index}`), { recursive: true });
+    fs.mkdirSync(path.join(sessionsDir, '.msp-view-v1', 'view'), { recursive: true });
+    const subagent = path.join(session, 'subagent', 'sub-uuid');
+    fs.mkdirSync(subagent, { recursive: true });
+    const at = Date.parse('2026-10-01T15:00:00Z');
+    fs.writeFileSync(
+      path.join(session, 'session.jsonl'),
+      JSON.stringify(museUsage('muse-spark-1.3', 100, 20, 10, at)) + '\n'
+    );
+    fs.writeFileSync(
+      path.join(subagent, 'session.jsonl'),
+      JSON.stringify(museUsage('muse-spark-1.3', 60, 10, 5, at + 60000)) + '\n'
+    );
+    const data = await collectAccountActivity(
+      { kind: 'muse', sessionsDir },
+      {
+        minDate: NOW - 31 * 86400000,
+        cacheDir: path.join(root, 'cache'),
+        // Room for the date and session folders, not for the tool-output ones.
+        traversalLimits: { maxDirectories: 8 },
+      }
+    );
+    expect(data.scan?.failedFiles).toBe(0);
+    expect(data.scan?.complete).toBe(true);
+    expect(data.scan?.totalFiles).toBe(2);
+    expect(data.eventCount).toBe(2);
+  });
+
+  it('re-reads a finished log whose skipped line was judged under older oversized-line rules', async () => {
+    const sessionsDir = path.join(root, 'muse', 'sessions');
+    const session = path.join(sessionsDir, '2026-10-01', 'sess-uuid');
+    fs.mkdirSync(session, { recursive: true });
+    const at = Date.parse('2026-10-01T15:00:00Z');
+    fs.writeFileSync(
+      path.join(session, 'session.jsonl'),
+      JSON.stringify(museUsage('muse-spark-1.3', 100, 20, 10, at)) + '\n'
+    );
+    const scan = () =>
+      collectAccountActivity(
+        { kind: 'muse', sessionsDir },
+        { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+      );
+    expect((await scan()).scan?.complete).toBe(true);
+    // A checkpoint saved before the Oct 6 Muse rule: finished, but with one line it then skipped.
+    const checkpoints = fs
+      .readdirSync(path.join(root, 'cache', 'account-activity-v1'), { recursive: true })
+      .map(String)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => path.join(root, 'cache', 'account-activity-v1', name))
+      .filter((file) => 'skippedLines' in JSON.parse(fs.readFileSync(file, 'utf8')));
+    expect(checkpoints).toHaveLength(1);
+    const stale = JSON.parse(fs.readFileSync(checkpoints[0], 'utf8'));
+    fs.writeFileSync(
+      checkpoints[0],
+      JSON.stringify({ ...stale, skippedLines: 1, largeLineParserVersion: 3 })
+    );
+    const again = await scan();
+    expect(again.scan?.skippedLines).toBe(0);
+    expect(again.scan?.complete).toBe(true);
+    expect(again.eventCount).toBe(1);
+  });
 });
 
 describe('mtime pre-filter skips files that cannot hold in-window events', () => {
@@ -1177,7 +1245,10 @@ describe('codex partitioned reading (N14)', () => {
       }
     );
     expect(seen.length).toBe(2);
-    const names = seen.flat().map((f) => path.basename(f)).sort();
+    const names = seen
+      .flat()
+      .map((f) => path.basename(f))
+      .sort();
     expect(names).toEqual(['rollout-c.jsonl', 'rollout-d.jsonl']);
     expect(data.scan?.complete).toBe(true);
     expect(data.eventCount).toBe(4);

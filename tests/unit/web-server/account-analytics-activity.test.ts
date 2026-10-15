@@ -134,9 +134,11 @@ describe('native local analytics activity', () => {
     });
     const partial = await service.get(QUERY, FROM, NOW);
     expect(partial.status).toBe('cached');
+    // A partial scan still read this pass: it is dated now, as a remote host's partial scan is,
+    // so a tool that never finishes cannot read "Cached, 3h ago" while its records keep arriving.
     expect(partial.sources?.find((s) => s.tool === 'codex' && s.host === 'ubuntu')).toMatchObject({
       state: 'cached',
-      lastScanAt: null,
+      lastScanAt: new Date(NOW).toISOString(),
       detail: expect.stringContaining('partial local scan'),
     });
     expect(partial.totals?.inputTokens).toBe(100);

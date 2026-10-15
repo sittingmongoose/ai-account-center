@@ -1192,7 +1192,9 @@ export class AccountAnalyticsActivityService {
                 : pending === 'failed'
                   ? 'unavailable'
                   : 'scanning',
-          lastScanAt: old?.lastScanAt ?? null,
+          // A partial scan still read this pass, as a remote host's partial scan does; only a tool
+          // that was never reached or failed keeps its earlier scan time.
+          lastScanAt: pending === 'partial' ? fetchedAt : (old?.lastScanAt ?? null),
           rowCount: events,
           detail:
             pending === 'failed'

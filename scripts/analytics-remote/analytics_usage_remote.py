@@ -426,7 +426,12 @@ class Collector(object):
         srow["n"] += 1
 
 
-def _iter_jsonl_files(root, accept, collector):
+def _muse_holds_no_logs(name):
+    """Muse folders that never hold a session log: one per tool call's output, and its own state."""
+    return name == "tool-outputs" or name.startswith(".")
+
+
+def _iter_jsonl_files(root, accept, collector, skip_dir=None):
     """Yield files under root; caps flag truncation, unreadable is skipped."""
     pending = [(root, 0)]
     visited_dirs = 0
@@ -451,6 +456,8 @@ def _iter_jsonl_files(root, accept, collector):
             path = os.path.join(directory, name)
             try:
                 if os.path.isdir(path) and not os.path.islink(path):
+                    if skip_dir is not None and skip_dir(name):
+                        continue
                     if depth < 64:
                         pending.append((path, depth + 1))
                 elif os.path.isfile(path) and accept(name):
@@ -975,7 +982,7 @@ def _parse_muse_line(line, collector, kind, filekey, session=None):
 def _scan_muse_dir(collector, directory):
     """Scan one Muse sessions directory; True when the scan stopped early."""
     for path in _iter_jsonl_files(
-        directory, lambda name: name == "session.jsonl", collector
+        directory, lambda name: name == "session.jsonl", collector, _muse_holds_no_logs
     ):
         if collector.expired():
             collector.truncated = True

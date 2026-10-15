@@ -168,6 +168,31 @@ function runHelper(request: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
+  it('reaches Muse subagent logs past thousands of tool-output folders, which hold no log', () => {
+    writeFixtures({ zcode: false });
+    const session = path.join(home, '.local', 'share', 'muse', 'sessions', '2026', '10', '01');
+    for (let index = 0; index < 12; index++)
+      fs.mkdirSync(path.join(session, 'uuid-9', 'tool-outputs', `call-${index}`), {
+        recursive: true,
+      });
+    fs.mkdirSync(path.join(home, '.local', 'share', 'muse', 'sessions', '.msp-view-v1', 'view'), {
+      recursive: true,
+    });
+    const subagent = path.join(session, 'uuid-9', 'subagent', 'sub-1');
+    fs.mkdirSync(subagent, { recursive: true });
+    fs.writeFileSync(path.join(subagent, 'session.jsonl'), `${museRecord()}\n`);
+    // Room for the date, session and subagent folders, not for the tool-output ones.
+    const response = runPatchedHelper(
+      { kinds: ['muse'], minDateMs: MIN_DATE },
+      { WALK_MAX_DIRS: 8 }
+    );
+    const kinds = response.kinds as Record<string, { state: string }>;
+    expect(kinds.muse.state).toBe('ok');
+    expect(response.truncated).not.toBe(true);
+    const rows = response.rows as Array<Record<string, unknown>>;
+    expect(rows.filter((row) => row.k === 'muse').reduce((n, row) => n + Number(row.n), 0)).toBe(2);
+  });
+
   it('aggregates omp, muse and zcode per model and hour without leaking paths', () => {
     writeFixtures();
     const response = runHelper({ kinds: ['omp', 'muse', 'zcode'], minDateMs: MIN_DATE });

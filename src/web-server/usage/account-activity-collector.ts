@@ -63,7 +63,12 @@ interface Checkpoint {
   complete: boolean;
   discardingLine: boolean;
   skippedLines: number;
-  largeLineParserVersion?: 3;
+  /**
+   * The oversized-line rules a stored skippedLines count was made under. Bump it whenever
+   * oversizedLineCarriesUsage changes: a finished file is never read again, so an old verdict would
+   * otherwise keep its activity partial for good (the Oct 6 Muse checkpoint rule did not bump it).
+   */
+  largeLineParserVersion?: 4;
   unfinishedTail?: boolean;
   /** Row-shape version for kinds whose parser changed (PARSER_VERSION). */
   parser?: number;
@@ -222,6 +227,16 @@ export function parseJsonlMappedUsageLine(
  * runs on the collector's own worker thread, so several collectors walking at once never queue
  * on the process's shared libuv pool, which the server's own file work also needs.
  */
+/**
+ * Folders a tool keeps beside its logs that never hold one. Muse stores each tool call's output in
+ * a folder of its own (`<session>/tool-outputs/<call>/`, thousands a month) and its own state in
+ * dot folders (`.msp-view-v1`); walking them used up the directory budget before subagent logs
+ * (`<session>/subagent/<id>/session.jsonl`) were reached, so those were never read.
+ */
+function holdsNoLogs(kind: string, name: string): boolean {
+  return kind === 'muse' && (name === 'tool-outputs' || name.startsWith('.'));
+}
+
 function filesUnder(
   root: string,
   kind: string,
@@ -262,6 +277,7 @@ function filesUnder(
           const file = path.join(current.directory, item.name);
           if (item.isDirectory()) {
             if (scopeDepth !== undefined && current.depth >= scopeDepth) continue;
+            if (holdsNoLogs(kind, item.name)) continue;
             if (
               current.depth >= maxDepth ||
               pending.length + visitedDirectories >= maxDirectories
@@ -313,7 +329,7 @@ function fresh(stats: fs.Stats, minDate: number, kind: ActivityKind, mode?: Read
     complete: false,
     discardingLine: false,
     skippedLines: 0,
-    largeLineParserVersion: 3,
+    largeLineParserVersion: 4,
     unfinishedTail: false,
     ...(PARSER_VERSION[kind] === undefined ? {} : { parser: PARSER_VERSION[kind] }),
     state: createCodexNativeParserState(),
@@ -346,7 +362,7 @@ function loadCheckpoint(
       !value.state ||
       typeof value.state.sessionId !== 'string' ||
       (value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
-      (value.skippedLines > 0 && value.largeLineParserVersion !== 3) ||
+      (value.skippedLines > 0 && value.largeLineParserVersion !== 4) ||
       value.parser !== PARSER_VERSION[kind] ||
       (value.pendingClaude !== undefined &&
         (typeof value.pendingClaude.key !== 'string' ||
