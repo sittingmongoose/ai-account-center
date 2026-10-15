@@ -347,16 +347,30 @@ function closeDetailsOnOutsideClicks(canvas) {
   }, true);
 }
 
+let activationDialogOpen = false;
+function showActivationDialog(confirmation) {
+  if (!activationDialogOpen) {
+    // Details hands its history entry to the dialog; no asynchronous Back followed by a push.
+    const replacesDetails = !!openDetailsId;
+    openDetailsId = '';
+    if (replacesDetails) close_details();
+    if (!replacesDetails || overlayDepth === 0) pushOverlayEntry();
+    activationDialogOpen = true;
+  }
+  show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
+}
+function closeActivationDialog() {
+  if (activationDialogOpen) {
+    activationDialogOpen = false;
+    consumeOverlayEntry();
+  }
+  close_activation_confirmation();
+}
+
 const activationConfirmation = createActivationConfirmation({
   activate: (target, body) => mutation(`/api/codex/profiles/${encodeURIComponent(target)}/activate`, body),
-  prompt: confirmation => {
-    pushOverlayEntry();
-    show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
-  },
-  close: () => {
-    consumeOverlayEntry();
-    close_activation_confirmation();
-  },
+  prompt: showActivationDialog,
+  close: closeActivationDialog,
   busy: inProgress => setBusy(inProgress),
   success: async result => {
     if (data && typeof result?.name === 'string') {
@@ -373,14 +387,8 @@ const antigravityConfirmation = createAntigravityConfirmation({
   activate: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/activate`, body),
   confirm: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/confirm`, body),
   recover: () => mutation('/api/antigravity/recover', { hostId: 'ubuntu' }),
-  prompt: confirmation => {
-    pushOverlayEntry();
-    show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
-  },
-  close: () => {
-    consumeOverlayEntry();
-    close_activation_confirmation();
-  },
+  prompt: showActivationDialog,
+  close: closeActivationDialog,
   busy: inProgress => setBusy(inProgress),
   success: async result => {
     // Selection/running proof comes from the next inventory, never an optimistic UI guess.
@@ -884,7 +892,7 @@ window.ccsDashboardAction = async (action, value) => {
     if (action === 'install-app') { await promptInstall(); return; }
     // One entry per Details session: a second row tapped while it is open swaps in place (D) or
     // re-targets the sheet (below D) without stacking history entries.
-    if (action === 'details') { detailsOpens++; if (openDetailsId !== value) pushOverlayEntry(); renderDetails(value); return; }
+    if (action === 'details') { detailsOpens++; if (!openDetailsId) pushOverlayEntry(); renderDetails(value); return; }
     if (action === 'details-closed') { openDetailsId = ''; consumeOverlayEntry(); return; }
     // Sheets and popovers the Slint shell opened or closed (header menus, selects): the same
     // history contract as Details (3.9). Closing after a Back pop consumes nothing (depth 0).

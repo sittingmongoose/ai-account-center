@@ -12,7 +12,7 @@ let loads = 0;
  * Loads a fresh copy of bridge.js. `server(method, path, body)` answers each request with { status, payload }
  * (or a Promise of it). Returns the dispatcher, every sign-in view handed to Slint, every toast and every request.
  */
-async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accounts', login = null } = {}) {
+async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accounts', login = null, width = 1920 } = {}) {
   const base = new URL('../public/', import.meta.url);
   let source = await readFile(new URL('bridge.js', base), 'utf8');
   const first = source.split('\n')[0];
@@ -23,6 +23,8 @@ async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accoun
     .replace(/from '(\.\/[^']+)'/g, (_match, relative) => `from '${new URL(relative, base).href}'`)
     .concat(`\n// ${key}\n`);
   const auths = [], toasts = [], calls = [], dashboards = [], fills = [];
+  const details = [], confirmations = [], historyCalls = [], timers = [], listeners = new Map();
+  let detailsClosed = 0, dialogsClosed = 0, pops = 0;
   // Slint's data-ready flag as lib.rs keeps it: set_auth(false, ...) clears it and only set_dashboard sets it
   // again, so the Home sections reveal only after a dashboard push that follows the sign-in.
   const slint = { ready: false };
@@ -38,15 +40,21 @@ async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accoun
       : name === 'push_toast' ? (kind, title, body) => toasts.push({ kind, title, body })
         : name === 'set_dashboard' ? json => { slint.ready = true; dashboards.push(json); }
           : name === 'set_login_fields' ? (username, password, remember) => fills.push({ username, password, remember })
-            : () => {}])));
+            : name === 'show_details' ? json => details.push(JSON.parse(json))
+              : name === 'close_details' ? () => { detailsClosed++; }
+                : name === 'show_activation_confirmation' ? json => confirmations.push(JSON.parse(json))
+                  : name === 'close_activation_confirmation' ? () => { dialogsClosed++; }
+                    : name === 'pop_overlay' ? () => { pops++; void globalThis.window.ccsDashboardAction('activation-cancel', ''); }
+                      : () => {}])));
   assign('window', {});
   assign('navigator', { userAgent: 'Mac fixture' });
   assign('location', { pathname, search: '', protocol: 'http:', hostname, host: `${hostname}:3000`, origin: `http://${hostname}:3000`, href: '' });
   assign('document', { querySelector: () => ({ hidden: false, textContent: '' }), getElementById: id => login?.byId[id] ?? null });
-  assign('innerWidth', 1920); assign('innerHeight', 1080); assign('devicePixelRatio', 1);
-  assign('addEventListener', () => {}); assign('matchMedia', () => ({ matches: true }));
+  assign('innerWidth', width); assign('innerHeight', 1080); assign('devicePixelRatio', 1);
+  assign('addEventListener', (name, fn) => listeners.set(name, [...(listeners.get(name) || []), fn])); assign('matchMedia', () => ({ matches: true }));
+  assign('history', { pushState: (...args) => historyCalls.push(['push', ...args]), replaceState: (...args) => historyCalls.push(['replace', ...args]), back: () => historyCalls.push(['back']) });
   assign('localStorage', { getItem: k => stored.has(k) ? stored.get(k) : null, setItem: (k, v) => stored.set(k, String(v)), removeItem: k => stored.delete(k) });
-  assign('setInterval', () => 1); assign('clearInterval', () => {});
+  assign('setInterval', (fn, ms) => { timers.push({ fn, ms }); return timers.length; }); assign('clearInterval', () => {});
   assign('fetch', async (path, options = {}) => {
     const method = options.method || 'GET';
     const body = options.body ? JSON.parse(options.body) : null;
@@ -59,7 +67,9 @@ async function loadBridge(server, { hostname = '192.0.2.10', pathname = '/accoun
   try {
     await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   } catch (error) { restore(); throw error; }
-  return { action: globalThis.window.ccsDashboardAction, auths, toasts, calls, dashboards, fills, slint, restore, lastAuth: () => auths.at(-1) };
+  return { action: globalThis.window.ccsDashboardAction, auths, toasts, calls, dashboards, fills, slint, restore, lastAuth: () => auths.at(-1),
+    details, confirmations, historyCalls, timers, detailsClosed: () => detailsClosed, dialogsClosed: () => dialogsClosed, pops: () => pops,
+    event: name => { for (const fn of listeners.get(name) || []) fn(); } };
 }
 
 /**
@@ -360,4 +370,59 @@ test('Sign out other browsers waits for requests in flight and holds new ones un
     assert.equal(s.signedIn, true);
     assert.notEqual(b.lastAuth().state, 'expired');
   } finally { b.restore(); }
+});
+
+test('activation dialogs replace Details, stay closed on timed renders, and own exactly one history entry', async () => {
+  for (const width of [1920, 900]) {
+    for (const end of ['cancel', 'back', 'success']) {
+      let attempts = 0;
+      const token = 'A'.repeat(43);
+      const { server } = fixtureServer({ routes: {
+        'POST /api/codex/profiles/other/activate': body => {
+          attempts++;
+          if (body.confirmationToken) return { payload: { name: 'other', email: 'other@example.test' } };
+          return { status: 409, payload: { code: 'confirmation_required', confirmation: {
+            token, targetProfile: 'other', expiresAt: new Date(Date.now() + 60000).toISOString(), processes: [] } } };
+        },
+      } });
+      const b = await loadBridge(server, { width, pathname: '/' });
+      try {
+        await b.action('details', 'codex:other');
+        await b.action('details', 'codex:one');
+        await b.action('details', 'codex:other');
+        const pushes = () => b.historyCalls.filter(c => c[0] === 'push').length;
+        const backs = () => b.historyCalls.filter(c => c[0] === 'back').length;
+        assert.equal(pushes(), width < 1280 ? 1 : 0, 'retargeting Details does not stack entries');
+        await b.action('activate', 'other');
+        assert.equal(b.detailsClosed(), 1);
+        assert.ok(b.confirmations.length > 0);
+        assert.equal(pushes(), width < 1280 ? 1 : 0, 'dialog inherits the Details entry, including repeated prompts');
+        const shown = b.details.length;
+        b.timers.find(t => t.ms === 60000).fn();
+        await flush();
+        assert.equal(b.details.length, shown, 'timed render cannot reopen Details under the dialog');
+        if (end === 'back' && width < 1280) {
+          b.event('popstate');
+          await flush();
+          assert.equal(b.pops(), 1, 'the first Back closes the dialog');
+          assert.equal(backs(), 0, 'Back already consumed the entry');
+        } else if (end === 'success') {
+          await b.action('activation-confirm', '');
+          assert.equal(attempts, 2);
+          assert.equal(backs(), width < 1280 ? 1 : 0);
+          if (width < 1280) b.event('popstate');
+        } else {
+          await b.action('activation-cancel', '');
+          assert.equal(backs(), width < 1280 ? 1 : 0);
+          if (width < 1280) b.event('popstate');
+        }
+        b.timers.find(t => t.ms === 60000).fn();
+        await flush();
+        assert.equal(b.details.length, shown, 'Details stays closed after confirmation ends');
+        assert.ok(b.dialogsClosed() > 0);
+        await b.action('details', 'codex:other');
+        assert.equal(pushes(), width < 1280 ? 2 : 0, 'opening Details again gets a new entry');
+      } finally { b.restore(); }
+    }
+  }
 });
