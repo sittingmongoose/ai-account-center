@@ -358,6 +358,30 @@ class ProtocolTests(unittest.TestCase):
             result, _ = self.run_helper(self.request(), FakeAdapter(result={"sample": sample(**changes), "failureCode": None}))
             self.assertEqual(result["failureCode"], "invalid_response")
 
+    def test_qwen_reading_with_date_only_subscription_row_survives_sanitization(self):
+        import plan_usage
+        plan, windows = plan_usage.parse_qwen(
+            {"data": {"per1MonthPercentage": .25, "per1MonthResetTime": 1790899200}},
+            {"data": {"specCode": "pro", "planName": "Pro", "endTime": 1790985600000}},
+            {"data": {"pro": {"monthly": 2000}}},
+            {"data": {"remainingCredits": 0, "totalCredits": 500, "activeCount": 2}})
+        self.assertIn("subscription", [window["key"] for window in windows])
+        row = candidate("qwen")
+        adapter = FakeAdapter(before=[row], result={"sample": sample("qwen", plan=plan, windows=windows),
+                                                    "failureCode": None})
+        result, _ = self.run_helper(self.request(provider="qwen", row=row), adapter)
+        self.assertIsNone(result["failureCode"])
+        rebuilt = {window["key"]: window for window in result["sample"]["windows"]}
+        self.assertEqual(list(rebuilt), [window["key"] for window in windows])
+        self.assertEqual(rebuilt["subscription"]["expiresAt"], "2026-10-03T00:00:00.000Z")
+        self.assertIsNone(rebuilt["subscription"]["usedPercent"])
+
+    def test_window_with_no_quota_or_date_still_fails_closed(self):
+        raw = sample()
+        raw["windows"][0] = {"key": "empty", "label": "Empty", "usedPercent": None, "resetAt": None}
+        result, _ = self.run_helper(self.request(), FakeAdapter(result={"sample": raw, "failureCode": None}))
+        self.assertEqual(result["failureCode"], "invalid_response")
+
     def test_antigravity_plan_is_rebuilt_without_private_fields(self):
         row = candidate("antigravity")
         plan = {"planType": "pro", "paidTier": {"id": "pro-tier", "name": "Google AI Pro", "private": TOKEN},

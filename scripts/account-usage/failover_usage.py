@@ -159,8 +159,11 @@ def _window(value):
     if isinstance(models, list) and len(models) <= 64:
         result["modelIds"] = [item for item in models if _text(item, 160) and
                               re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,159}", item)]
+    # The same fields plan_usage._valid_windows accepts: Qwen's plan subscription row carries only
+    # its expiry, and rejecting that one row discarded the whole verified reading.
     if not any(result.get(field) is not None for field in (
-            "usedPercent", "remainingPercent", "used", "limit", "remaining", "unlimited", "enabled")):
+            "usedPercent", "remainingPercent", "used", "limit", "remaining", "resetAt", "expiresAt",
+            "unlimited", "enabled")):
         return None
     return result
 
