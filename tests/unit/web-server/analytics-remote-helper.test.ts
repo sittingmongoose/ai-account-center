@@ -183,7 +183,16 @@ function sqlite(dbPath: string, statements: string[]): void {
       ),
       dbPath,
     ],
-    { stdio: 'pipe' }
+    {
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        HOMEDRIVE: undefined,
+        HOMEPATH: undefined,
+      },
+    }
   );
 }
 
@@ -288,7 +297,16 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
           '-c',
           'import os,json; print(json.dumps([os.path.expanduser("~"), os.environ.get("USERPROFILE"), os.environ.get("HOMEDRIVE"), os.environ.get("HOMEPATH")]))',
         ],
-        { encoding: 'utf8' }
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            HOME: home,
+            USERPROFILE: home,
+            HOMEDRIVE: undefined,
+            HOMEPATH: undefined,
+          },
+        }
       )
     );
     expect(result).toEqual([home, home, null, null]);
