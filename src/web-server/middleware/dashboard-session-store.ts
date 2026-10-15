@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import session from 'express-session';
+import { AuthError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import {
   authDirectory,
@@ -341,7 +342,7 @@ export class DashboardSessionStore extends session.Store {
       if (!this.writer || this.closed || !this.homeExists()) return;
       if (!(await this.stillWriter())) {
         this.displaced();
-        throw new Error('Another dashboard holds the saved sign-ins.');
+        throw new AuthError('Another dashboard holds the saved sign-ins.');
       }
       this.prune();
       const sessions = [...this.sessions.entries()].map(([key, entry]) => ({ key, ...entry }));
