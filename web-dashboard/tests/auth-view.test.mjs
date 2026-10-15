@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   strength, validateSetup, limitWindowMinutes, triesLeft, triesLine, retrySeconds, limitedView,
-  rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner,
+  rememberSignIn, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason, expiredBanner,
 } from '../public/auth-view.mjs';
 
 const headers = values => ({ get: name => values[name] ?? null });
@@ -65,8 +65,18 @@ test('a session that ended is told apart from one that ran out', () => {
   assert.equal(endedReason(signedInAt(storage), 24, now), 'expired');
   assert.equal(endedReason(now - 3_600_000, 24, now), 'ended');
   assert.equal(endedReason(null, 24, now), null);
+  // Sessions end after their length without use: a browser used an hour ago ended early, even when it
+  // signed in eight days ago.
+  rememberSignIn(storage, now - 8 * 24 * 3_600_000);
+  rememberSeen(storage, now - 3_600_000);
+  assert.equal(lastSeenAt(storage), now - 3_600_000);
+  assert.equal(endedReason(lastSeenAt(storage), 168, now), 'ended');
+  assert.equal(signedInAt(storage), now - 8 * 24 * 3_600_000);
   forgetSignIn(storage);
   assert.equal(signedInAt(storage), null);
+  assert.equal(lastSeenAt(storage), null);
+  assert.match(expiredBanner('expired', 168).body, /end after 7 days without use/);
+  assert.doesNotMatch(expiredBanner('ended', 168).body, /restarted/);
   assert.equal(expiredBanner('expired', 24).title, 'Signed out after 1 day');
   assert.equal(expiredBanner('expired', 720).title, 'Signed out after 30 days');
   assert.equal(expiredBanner('expired', 8760).title, 'Signed out after 1 year');

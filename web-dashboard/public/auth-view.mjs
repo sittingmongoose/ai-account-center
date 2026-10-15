@@ -90,15 +90,26 @@ export function limitedView(seconds, now = Date.now()) {
 }
 
 const SESSION_KEY = 'aac-signed-in-at';
+const SEEN_KEY = 'aac-session-seen-at';
 /** Remember when this browser signed in (a per-viewer convenience), so the page can say a session ended. */
-export function rememberSignIn(storage, now = Date.now()) { try { storage?.setItem(SESSION_KEY, String(now)); } catch {} }
-export function forgetSignIn(storage) { try { storage?.removeItem(SESSION_KEY); } catch {} }
+export function rememberSignIn(storage, now = Date.now()) {
+  try { storage?.setItem(SESSION_KEY, String(now)); storage?.setItem(SEEN_KEY, String(now)); } catch {}
+}
+export function forgetSignIn(storage) { try { storage?.removeItem(SESSION_KEY); storage?.removeItem(SEEN_KEY); } catch {} }
 export function signedInAt(storage) {
   try { const n = Number(storage?.getItem(SESSION_KEY)); return Number.isFinite(n) && n > 0 ? n : null; } catch { return null; }
 }
+/** Remember the last time the server accepted this session: a session ends after its lifetime without use. */
+export function rememberSeen(storage, now = Date.now()) { try { storage?.setItem(SEEN_KEY, String(now)); } catch {} }
+/** The last time the server accepted this session, else when it signed in. */
+export function lastSeenAt(storage) {
+  try { const n = Number(storage?.getItem(SEEN_KEY)); if (Number.isFinite(n) && n > 0) return n; } catch {}
+  return signedInAt(storage);
+}
 /**
- * When the server reports no session but this browser had one: why it ended. 'expired' after the session
- * length, 'ended' before it (the server restarted or signed it out), null when this browser never signed in.
+ * When the server reports no session but this browser had one: why it ended. `at` is the last time the server
+ * accepted the session. 'expired' once the session length has passed since then (sessions end after that long
+ * without use), 'ended' before it, null when this browser never signed in.
  */
 export function endedReason(at, hours = 168, now = Date.now()) {
   if (!Number.isFinite(at)) return null;
@@ -110,8 +121,8 @@ export function expiredBanner(reason, hours = 168) {
   }
   const lasts = hours >= 24 && hours % 24 === 0 ? (hours === 24 ? '1 day' : hours === 168 ? '7 days' : hours === 720 ? '30 days' : hours === 2160 ? '90 days' : hours === 8760 ? '1 year' : `${hours / 24} days`) : `${hours} hours`;
   return reason === 'expired'
-    ? { title: `Signed out after ${lasts}`, body: `Sessions on this dashboard last ${lasts}. Your trays stayed connected.` }
-    : { title: 'Your session ended', body: 'The dashboard signed this browser out, for example after it restarted. Your trays stayed connected.' };
+    ? { title: `Signed out after ${lasts}`, body: `Sessions on this dashboard end after ${lasts} without use. Your trays stayed connected.` }
+    : { title: 'Your session ended', body: 'The dashboard signed this browser out before its session ran out, for example after a password change or with Remember me off. Your trays stayed connected.' };
 }
 
 /**

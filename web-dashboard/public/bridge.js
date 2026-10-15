@@ -1,7 +1,7 @@
 import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
-import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView } from './auth-view.mjs';
+import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView } from './auth-view.mjs';
 import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
 import { copyText, signOutFailureText } from './account-actions.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
@@ -393,6 +393,8 @@ async function refresh(force = false, restart = false) {
       if (next?.schemaVersion !== 1 || !Array.isArray(next.accounts)) throw new Error('Unsupported account dashboard response.');
       serverData = next;
       data = next;
+      // The server accepted the session just now: a later sign-out within the lifetime ended early.
+      rememberSeen(globalThis.localStorage);
       if (Number.isInteger(next.settings?.refreshIntervalSeconds)) applyRefreshInterval(next.settings.refreshIntervalSeconds);
       profiles = Array.isArray(inventory?.profiles) ? inventory.profiles : profiles;
       antigravityInventory = antigravityProfiles;
@@ -707,7 +709,7 @@ function showSignedOut(state, extra) {
   });
 }
 /** The server no longer knows this browser's session: say whether it ran out, ended early or was revoked. */
-function sessionEnded(reason = endedReason(signedInAt(globalThis.localStorage), sessionHours) || 'ended') {
+function sessionEnded(reason = endedReason(lastSeenAt(globalThis.localStorage), sessionHours) || 'ended') {
   forgetSignIn(globalThis.localStorage);
   claudeOpen.reset();
   accounts.reset();
@@ -760,6 +762,8 @@ async function checkSession(early = null) {
     username = typeof status?.username === 'string' ? status.username : '';
     if (status.authenticated === true || status.authRequired === false) {
       auth(true, 'default');
+      // Behind the LAN proxy the session length is only told to a signed-in browser.
+      if (status.authenticated === true) void loadAuthSetup();
       await loadSettings();
       // The dashboard and the update status render different state; their reads overlap.
       await Promise.all([refresh(), updateStatus()]);
@@ -768,7 +772,7 @@ async function checkSession(early = null) {
     } else if (status.accessMode === 'setup') showSetup();
     else if (status.signedOutReason === 'revoked') sessionEnded('revoked');
     else {
-      const reason = endedReason(signedInAt(globalThis.localStorage), sessionHours);
+      const reason = endedReason(lastSeenAt(globalThis.localStorage), sessionHours);
       if (reason) sessionEnded(reason); else auth(false, 'default');
     }
   } catch (error) {
