@@ -100,11 +100,12 @@ const mainOf = acc => {
 const histStart = (payload, now) => Date.parse(payload?.history?.oldestSampleAt || payload?.history?.collectedSince) || now - D;
 
 /** Where the recent pace takes a window by its reset (only from readings of the same reset period). */
-export function project(acc, w, now) {
+export function project(acc, w, now, history = null) {
   if (!w || !finite(w.used)) return { kind: 'na', rank: 0, text: 'No current reading' };
   if (w.used >= 100) return { kind: 'limit', rank: 5, text: w.resetAt ? `At the limit until ${timeTxt(w.resetAt)}` : 'At the limit, no reset reported' };
+  if (w.resetAt && w.resetAt <= now) return { kind: 'due', rank: 1, text: 'Reset due; awaiting a current reading' };
   if (!w.resetAt) return { kind: 'noreset', rank: 1, text: 'No reset reported' };
-  const h = historyOf(acc.analytics, w.key).filter(p => p.v !== null && p.reset && Math.abs(p.reset - w.resetAt) < 10 * 60e3);
+  const h = (history ?? historyOf(acc.analytics, w.key)).filter(p => p.v !== null && p.reset && Math.abs(p.reset - w.resetAt) < 10 * 60e3);
   const span = h.length ? h.at(-1).t - h[0].t : 0;
   if (h.length < 3 || span < 2 * H) return { kind: 'thin', rank: 2, text: 'Too little data to project' };
   const rate = (h.at(-1).v - h[0].v) / (span / H);
@@ -131,17 +132,17 @@ export function sparkRuns(acc, w, t0, now) {
   let prev = null;
   const close = x1 => { const r = runs.at(-1); if (r && r.x1 === undefined) r.x1 = x1; };
   for (const p of pts) {
-    if (p.v === null) { if (prev) close(x(p.t)); prev = null; continue; }
+    if (p.v === null) { if (prev) close(x(prev.reset ? Math.max(prev.t, Math.min(p.t, prev.reset)) : p.t)); prev = null; continue; }
     const brk = prev && prev.reset && p.reset && Math.abs(prev.reset - p.reset) > 10 * 60e3 && prev.reset <= p.t;
     if (brk) { close(x(prev.reset)); runs.push({ x0: x(prev.reset), v: p.v, from: null }); }
     else if (!prev) runs.push({ x0: x(p.t), v: p.v, from: null });
     else { close(x(p.t)); runs.push({ x0: x(p.t), v: p.v, from: prev.v }); }
     prev = p;
   }
-  const cur = finite(w.used) ? w.used : prev ? prev.v : null;
+  const cur = finite(w.used) ? w.used : null;
   // the live reading closes the line at "now" (a refreshed value steps there; history itself is never altered)
   if (prev && finite(cur) && Math.abs(cur - prev.v) > 0.005) { close(Wv - 8); runs.push({ x0: Wv - 8, v: cur, from: prev.v, x1: Wv }); }
-  else if (prev) close(Wv);
+  else if (prev) close(x(finite(cur) ? now : prev.reset && prev.reset <= now ? Math.max(prev.t, prev.reset) : prev.t));
   const out = { ...empty };
   for (const r of runs) {
     if (r.x1 === undefined) r.x1 = r.x0;
@@ -211,11 +212,21 @@ export function focusChart(acc, payload, ctx) {
   }
   const base = { id: acc.id, provider: acc.provider, w: W, h: Hc, comparable, compare: cmp, cmpLabel: comparable && prim ? `Compare ${prim.short.toLowerCase()} across ${QUOTA_PROVIDERS.find(p => p[0] === acc.provider)?.[1] || acc.provider} accounts` : '' };
   if (!series.length) return { ...base, empty: 'No usage windows to chart.', shapes: [], labels: [], dots: [], legend: [], stops: [], lut: [], foot: '' };
+  const historyCache = new Map();
+  const historyFor = (account, key) => {
+    const snapshot = account.analytics;
+    let windows = historyCache.get(snapshot);
+    if (!windows) { windows = new Map(); historyCache.set(snapshot, windows); }
+    if (!windows.has(key)) windows.set(key, historyOf(snapshot, key));
+    return windows.get(key);
+  };
+  const histories = new Map(series.map(s => [s, historyFor(s.acc, s.w.key)]));
+  const projections = new Map(series.map(s => [s, project(s.acc, s.w, now, histories.get(s))]));
   const resetMax = Math.max(now + 6 * H, ...series.map(s => s.w.resetAt || 0));
   const tf0 = now, tf1 = Math.min(resetMax, now + 32 * D);
   const xo = t => pad.l + ((t - t0) / (t1 - t0)) * obsW;
   const xf = t => fStart + ((t - tf0) / (tf1 - tf0)) * (plotW - obsW - gap);
-  const obsV = series.flatMap(s => historyOf(s.acc.analytics, s.w.key).filter(p => p.t >= t0).map(p => p.v || 0)).concat(series.map(s => s.w.used || 0));
+  const obsV = series.flatMap(s => histories.get(s).filter(p => p.t >= t0).map(p => p.v || 0)).concat(series.map(s => s.w.used || 0));
   const ymax = Math.max(100, ...obsV);
   const thr = SWITCHABLE.includes(acc.provider) && finite(ctx.thresholds?.[acc.provider]) ? ctx.thresholds[acc.provider] : null;
   const Y = v => pad.t + plotH - (v / ymax) * plotH;
@@ -259,7 +270,7 @@ export function focusChart(acc, payload, ctx) {
   }
   shape(`M${pad.l} ${pt(Y(80))}H${pt(pad.l + plotW)}`, 'warn', { op: 0.45 });
   shape(`M${pad.l} ${pt(Y(95))}H${pt(pad.l + plotW)}`, 'crit', { op: 0.45 });
-  const hA = historyOf(acc.analytics, (prim || series[0].w).key);
+  const hA = historyFor(acc, (prim || series[0].w).key);
   let start = null;
   const bands = [];
   hA.forEach((p, i) => {
@@ -308,14 +319,14 @@ export function focusChart(acc, payload, ctx) {
   const marks = new Set(), ends = [], resetsAt = [], runouts = [];
   const lines = [], legend = [];
   for (const s of series) {
-    const h = historyOf(s.acc.analytics, s.w.key).filter(p => p.t >= t0);
+    const h = histories.get(s).filter(p => p.t >= t0);
     const polys = [];
     let poly = null, prev = null, cx = null, cy = null;
     const hTo = x => { if (cx !== null) seg(cx, cy, x, cy); poly.push([x, cy]); cx = x; };
     const vTo = y => { if (cx !== null) seg(cx, cy, cx, y); poly.push([cx, y]); cy = y; };
     const mTo = (x, y) => { poly = [[x, y]]; polys.push(poly); cx = x; cy = y; };
     for (const p of h) {
-      if (p.v === null) { if (prev) hTo(xo(p.t)); prev = null; continue; }
+      if (p.v === null) { if (prev) hTo(xo(prev.reset ? Math.max(prev.t, Math.min(p.t, prev.reset)) : p.t)); prev = null; continue; }
       const brk = prev && prev.reset && p.reset && Math.abs(prev.reset - p.reset) > 10 * 60e3 && prev.reset <= p.t;
       if (brk) {
         const rx = xo(prev.reset);
@@ -327,12 +338,12 @@ export function focusChart(acc, payload, ctx) {
       else { hTo(xo(p.t)); vTo(Y(p.v)); }
       prev = p;
     }
-    const cur = finite(s.w.used) ? s.w.used : prev ? prev.v : null;
-    if (prev && finite(cur)) { hTo(xo(now)); if (cur !== prev.v) vTo(Y(cur)); }
+    const cur = finite(s.w.used) ? s.w.used : null;
+    if (prev) { hTo(xo(finite(cur) ? now : prev.reset && prev.reset <= now ? Math.max(prev.t, prev.reset) : prev.t)); if (finite(cur) && cur !== prev.v) vTo(Y(cur)); }
     lines.push({ d: polys.map(pl => dashPolyline(pl, DASHES[s.dash])).join(''), stroke: 'series', shade: s.shade, sw: s.width });
     if (finite(cur)) { dots.push({ x: pt(xo(now)), y: pt(Y(cur)), shade: s.shade, r: 3.5, fill: 'paper' }); obst.push({ x0: xo(now) - 5, x1: xo(now) + 5, y0: Y(cur) - 5, y1: Y(cur) + 5 }); ends.push({ y: Y(cur), s, cur }); }
-    const pr = project(s.acc, s.w, now);
-    if (s.w.resetAt && finite(cur) && s.w.resetAt <= tf1 + 1) {
+    const pr = projections.get(s);
+    if (s.w.resetAt && s.w.resetAt > now && finite(cur) && s.w.resetAt <= tf1 + 1) {
       const rxF = xf(s.w.resetAt);
       const key = `f${Math.round(rxF)}`;
       if (!marks.has(key)) { marks.add(key); marksD += dashLine(rxF, pad.t, rxF, pad.t + plotH, 3, 3); seg(rxF, pad.t, rxF, pad.t + plotH); }
@@ -405,17 +416,20 @@ export function focusChart(acc, payload, ctx) {
   const valueAt = (s, t, inF) => {
     if (!inF) {
       if (t >= now - 60e3) return finite(s.w.used) ? s.w.used : null;
-      const h = historyOf(s.acc.analytics, s.w.key).filter(p => p.t <= t);
-      return h.length ? h.at(-1).v : null;
+      const h = histories.get(s);
+      let lo = 0, hi = h.length;
+      while (lo < hi) { const mid = (lo + hi) >>> 1; if (h[mid].t <= t) lo = mid + 1; else hi = mid; }
+      const p = h[lo - 1];
+      return p && (!p.reset || t < p.reset) ? p.v : null;
     }
-    const pr = project(s.acc, s.w, now), cur = s.w.used;
+    const pr = projections.get(s), cur = s.w.used;
     if (!finite(cur)) return null;
     if (s.w.resetAt && t >= s.w.resetAt) return 'reset';
     if (pr.kind === 'limit') return cur;
     if (finite(pr.rate)) return Math.min(100, cur + pr.rate * ((t - now) / H));
     return 'nodata';
   };
-  const times = [...new Set(series.flatMap(s => historyOf(s.acc.analytics, s.w.key).filter(p => p.t >= t0).map(p => p.t)).concat([now]))].sort((a, b) => a - b);
+  const times = [...new Set(series.flatMap(s => histories.get(s).filter(p => p.t >= t0).map(p => p.t)).concat([now]))].sort((a, b) => a - b);
   const stops = [];
   const stopFor = (t, x, inF) => {
     const rows = series.map(s => {
