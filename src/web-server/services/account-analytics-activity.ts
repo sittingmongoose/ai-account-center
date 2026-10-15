@@ -75,6 +75,8 @@ interface ActivityState {
   attempts: Map<string, number>;
   attemptSequence: number;
   fetchedAt: number;
+  /** A restored snapshot keeps its saved mirror election until the first local publish. */
+  needsLocalRefresh: boolean;
   pending: Promise<void> | null;
   generation: number;
   manualRefreshPending: boolean;
@@ -259,7 +261,8 @@ export interface AccountAnalyticsActivityDeps {
   ) => Promise<RemoteAnswer>;
   /**
    * Saved remote aggregates, read without contacting a host, for a remote scan
-   * that has not answered in time, and to restore mirror selection after a restart.
+   * that has not answered in time, and to rebuild mirror selection when the first
+   * local pass after a restart publishes.
    * Equal-time cache answers supersede serialized answers. Defaults to the on-disk
    * remote cache when `remote` is the default.
    */
@@ -1255,6 +1258,18 @@ export class AccountAnalyticsActivityService {
           source.data.reduce((sum, data) => sum + data.eventCount, 0)
       );
     }
+    // JSON drops the mirror reconciler. Rebuild it only after the first local pass,
+    // so current mirror ownership never mixes with the saved local contributions.
+    if (state.needsLocalRefresh) {
+      try {
+        state.remote = newerRemote(
+          state.remote,
+          this.cachedRemote(cutoff, (this.deps.scope ?? getCcsDir)())
+        );
+      } catch {
+        failed = true;
+      }
+    }
     // Phase 1: publish the fresh local rows now, merged with the previous remote answer, so a
     // slow or timing-out remote scan (Windows) never holds fresh local data hostage. The remote
     // merge below publishes a second time when it answers.
@@ -1481,6 +1496,7 @@ export class AccountAnalyticsActivityService {
     state.pricing = this.snapshotPricing();
     state.partial = failed;
     state.fetchedAt = now;
+    state.needsLocalRefresh = false;
     if (this.deps.persistSnapshot === true) savePersistedSnapshot(scope, state);
   }
 
@@ -1707,6 +1723,7 @@ export class AccountAnalyticsActivityService {
         attempts: new Map(),
         attemptSequence: 0,
         fetchedAt: -Infinity,
+        needsLocalRefresh: false,
         pending: null,
         generation: 0,
         manualRefreshPending: false,
@@ -1730,40 +1747,9 @@ export class AccountAnalyticsActivityService {
         state.identities = new Map(persisted.identities ?? []);
         state.partial = persisted.partial;
         state.fetchedAt = persisted.fetchedAt;
-        // Selected mirror aggregates are not restart-safe: the original inventory may
-        // have changed, and JSON dropped the re-election closure. Rebuild from raw caches
-        // before serving even the first cached answer, while remote scans are still pending.
-        try {
-          const cutoff = (this.deps.now ?? Date.now)() - 31 * 86_400_000;
-          const cached = this.cachedRemote(cutoff, scope);
-          if (cached) {
-            state.remote = cached;
-            const merged = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
-            for (const source of state.local.values()) {
-              const rows = merged.get(source.provider) ?? [];
-              rows.push(...source.data);
-              merged.set(source.provider, rows);
-            }
-            for (const entry of cached.results) {
-              const rows = merged.get(entry.tool) ?? [];
-              rows.push(entry.data);
-              merged.set(entry.tool, rows);
-            }
-            state.sources = [...merged].map(([provider, data]) => ({
-              provider,
-              data,
-              fetchedAt: new Date(persisted.fetchedAt).toISOString(),
-            }));
-            state.sourceStates = sortSourceEntries([
-              ...persisted.sourceStates.filter(
-                (entry) => entry.host === 'ubuntu' || entry.tool === 'cursor'
-              ),
-              ...cached.states,
-            ]);
-          }
-        } catch {
-          state.partial = true;
-        }
+        // Serve the saved local rows and mirror election together, even when recent.
+        // The first local publish can then replace both against current coverage.
+        state.needsLocalRefresh = true;
       }
       this.states.set(scope, state);
       while (this.states.size > 8) {
@@ -1809,7 +1795,7 @@ export class AccountAnalyticsActivityService {
       const interval = converging
         ? Math.min(this.refreshIntervalMs(), CONVERGE_INTERVAL_MS)
         : this.refreshIntervalMs();
-      if (now - state.fetchedAt >= interval) {
+      if (state.needsLocalRefresh || now - state.fetchedAt >= interval) {
         state.generation++;
         this.startCollection(state);
       }

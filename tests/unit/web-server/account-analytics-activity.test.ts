@@ -463,15 +463,15 @@ describe('native local analytics activity', () => {
     expect(started.map((entries) => entries.length)).toEqual([25, 25, 25]);
   });
 
-  it.each([false, true])(
-    're-elects persisted Claude mirrors while remote is pending and on equal-time fallback (original returns: %s)',
-    async (originalReturns) => {
+  it.each(['pruned', 'returned', 'unchanged'] as const)(
+    'keeps a coherent saved Claude mirror election until the first local publish (%s original)',
+    async (change) => {
       const scope = path.join(fixtureConfig, 'mirror-snapshot');
       fs.mkdirSync(scope);
       const cacheDir = path.join(scope, 'cache');
       const name = createHash('sha256').update('original.jsonl').digest('hex');
       const file = '11'.repeat(32);
-      let original = !originalReturns;
+      let original = change !== 'returned';
       const claudeLogNames = () => ({ originals: new Set(original ? [name] : []), complete: true });
       const cached = () => loadAnalyticsRemoteCachedSources(FROM, { cacheDir, claudeLogNames });
       const remote = () =>
@@ -533,13 +533,34 @@ describe('native local analytics activity', () => {
             request: { kind: 'claude', projectsDir: '/fixture/original' },
           },
         ],
-        loadWorker: async () => data('claude-sonnet-4-6', 100, 0),
+        loadWorker: async (): Promise<UsageWorkerResult> =>
+          original
+            ? data('claude-sonnet-4-6', 100, 0)
+            : {
+                daily: [],
+                monthly: [],
+                hourly: [],
+                session: [],
+                eventCount: 0,
+                scan: {
+                  complete: true,
+                  totalFiles: 0,
+                  completedFiles: 0,
+                  failedFiles: 0,
+                  skippedLines: 0,
+                  readBytes: 0,
+                },
+              },
         remoteCached: cached,
       };
-      // The saved local share stays stable; only ownership of the remote mirror changes.
       const first = new AccountAnalyticsActivityService({ ...deps, remote });
-      expect((await settled(first)).totals?.inputTokens).toBe(original ? 100 : 200);
-      original = !original;
+      expect((await settled(first)).totals?.inputTokens).toBe(100);
+      const savedMirrorRows = original ? 0 : 1;
+      if (change !== 'unchanged') original = !original;
+      let finishLocal!: () => void;
+      const pendingLocal = new Promise<void>((resolve) => {
+        finishLocal = resolve;
+      });
       let finishRemote!: (answer: Awaited<ReturnType<typeof remote>>) => void;
       const pendingRemote = new Promise<Awaited<ReturnType<typeof remote>>>((resolve) => {
         finishRemote = resolve;
@@ -547,15 +568,36 @@ describe('native local analytics activity', () => {
       const restarted = new AccountAnalyticsActivityService({
         ...deps,
         remote: () => pendingRemote,
+        loadWorker: async () => {
+          await pendingLocal;
+          return deps.loadWorker();
+        },
       });
-      const expected = original ? 100 : 200;
-      // Rebuild before the first response, even if no collection has run yet.
-      expect((await restarted.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(expected);
-      await restarted.get({ ...QUERY, refresh: true }, FROM, NOW);
+      // Even a recent snapshot must refresh, but its saved local rows and mirror
+      // election stay together until that local pass is ready to publish.
+      const instant = await restarted.get(QUERY, FROM, NOW);
+      expect(instant.totals?.inputTokens).toBe(100);
+      expect(instant.status).toBe('cached');
+      expect(instant.refreshing).toBe(true);
+      expect(instant.sources?.find((s) => s.tool === 'claude' && s.host === 'mac')?.rowCount).toBe(
+        savedMirrorRows
+      );
+      expect((await restarted.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(100);
+      finishLocal();
       await new Promise((resolve) => setTimeout(resolve, 10));
-      expect((await restarted.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(expected);
+      const localPublished = await restarted.get(QUERY, FROM, NOW);
+      expect(localPublished.totals?.inputTokens).toBe(100);
+      expect(localPublished.refreshing).toBe(true);
+      expect(
+        localPublished.sources?.find((s) => s.tool === 'claude' && s.host === 'mac')?.rowCount
+      ).toBe(original ? 0 : 1);
+      expect(
+        localPublished.sources?.find((s) => s.tool === 'claude' && s.host === 'ubuntu')?.rowCount
+      ).toBe(original ? 99 : 0);
       finishRemote(cached());
-      expect((await settled(restarted)).totals?.inputTokens).toBe(expected);
+      const fresh = await settled(restarted);
+      expect(fresh.totals?.inputTokens).toBe(100);
+      expect(fresh.refreshing).toBe(false);
 
       // A serialized answer has no callback. The raw cache has an equal timestamp,
       // and must still replace it when an offline refresh changes mirror ownership.
@@ -569,11 +611,11 @@ describe('native local analytics activity', () => {
           return serialized;
         },
       });
-      expect((await settled(fallback)).totals?.inputTokens).toBe(expected);
+      expect((await settled(fallback)).totals?.inputTokens).toBe(100);
       original = !original;
       offline = true;
       await fallback.get({ ...QUERY, refresh: true }, FROM, NOW);
-      expect((await settled(fallback)).totals?.inputTokens).toBe(original ? 100 : 200);
+      expect((await settled(fallback)).totals?.inputTokens).toBe(100);
     }
   );
 
