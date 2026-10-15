@@ -176,6 +176,7 @@ describe('dashboard session store', () => {
   it('a second dashboard on the same home reads the sign-ins but leaves the file to the first', async () => {
     const first = store();
     await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
+    await first.whenSaved();
     // Another live process on this computer holds the writer claim.
     fs.writeFileSync(
       path.join(path.dirname(sessionsFile()), 'sessions.owner'),
