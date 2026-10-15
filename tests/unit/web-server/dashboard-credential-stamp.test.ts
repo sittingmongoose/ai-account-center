@@ -78,7 +78,19 @@ describe('credential changes made outside the dashboard', () => {
     expect(currentSessionEpoch()).toBe(0);
   });
 
-  it('does nothing while sign-in is off', async () => {
+  it('signs earlier sessions out when sign-in was turned off and on again meanwhile', async () => {
+    await settleCredentialStamp();
+    process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+    await settleCredentialStamp();
+    const off = currentSessionEpoch();
+    process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+    await settleCredentialStamp();
+    expect(currentSessionEpoch()).not.toBe(off);
+  });
+
+  it('does nothing before sign-in is set up', async () => {
+    delete process.env.CCS_DASHBOARD_USERNAME;
+    delete process.env.CCS_DASHBOARD_PASSWORD_HASH;
     process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
     await settleCredentialStamp();
     expect(fs.existsSync(path.join(home, '.ccs', 'auth', 'credential.json'))).toBe(false);

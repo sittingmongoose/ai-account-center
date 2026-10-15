@@ -27,6 +27,11 @@ declare module 'express-session' {
     /** Set when "sign out other browsers" ended this session; cleared by the next sign-in. */
     revoked: boolean;
     /**
+     * A Remember-me-off session (no cookie expiry): how long the server keeps it without use, the
+     * session lifetime at its sign-in. A later change in Settings applies to the next sign-in.
+     */
+    idleLifetimeMs: number;
+    /**
      * How the sign-in that started this session reached the dashboard
      * (secure-transport.ts `CredentialTransport`). Through the LAN HTTPS proxy
      * only `encrypted` and `loopback` sessions are accepted; a missing value

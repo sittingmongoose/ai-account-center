@@ -125,6 +125,17 @@ describe('dashboard session store', () => {
     ).not.toBeNull();
   });
 
+  it('keeps a Remember-me-off session for the lifetime at its sign-in', async () => {
+    let idle = 30 * DAY;
+    const first = store({ idleMs: () => idle });
+    const own = { ...signedIn(null), idleLifetimeMs: DAY } as unknown as session.SessionData;
+    await call((done) => first.set(SID, own, done));
+    idle = 365 * DAY;
+    await first.close();
+    const later = store({ now: () => NOW + 2 * DAY });
+    expect(await call<session.SessionData | null>((done) => later.get(SID, done))).toBeNull();
+  });
+
   it('ignores an unsafe or malformed file instead of failing sign-in', async () => {
     fs.mkdirSync(path.dirname(sessionsFile()), { recursive: true, mode: 0o700 });
     fs.writeFileSync(

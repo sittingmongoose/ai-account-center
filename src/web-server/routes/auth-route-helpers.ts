@@ -348,8 +348,10 @@ async function beginSignedInSession(
   req.session.signedInOver = credentialTransport(req);
   if (req.session.cookie) {
     if (!remember) {
-      // No expiry serializes with no Expires attribute: a browser-session cookie.
+      // No expiry serializes with no Expires attribute: a browser-session cookie. The server keeps
+      // it for the lifetime set now (the session store reads this).
       req.session.cookie.expires = null;
+      req.session.idleLifetimeMs = effectiveSessionTimeoutHours() * 60 * 60 * 1000;
     } else {
       req.session.cookie.maxAge = effectiveSessionTimeoutHours() * 60 * 60 * 1000;
     }

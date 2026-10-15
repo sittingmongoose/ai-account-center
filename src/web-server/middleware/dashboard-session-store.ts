@@ -68,7 +68,10 @@ export function sessionsFile(): string {
 export interface DashboardSessionStoreOptions {
   file?: string;
   now?: () => number;
-  /** How long a session whose cookie has no expiry (Remember me off) is kept without use. */
+  /**
+   * How long a session whose cookie has no expiry (Remember me off) is kept without use, when the
+   * session does not carry its own `idleLifetimeMs` from its sign-in.
+   */
   idleMs: number | (() => number);
   /** Settles first (the startup credential check), so no request reads a session before it. */
   after?: Promise<unknown>;
@@ -206,7 +209,9 @@ export class DashboardSessionStore extends session.Store {
   }
 
   private expiryOf(value: session.SessionData): number {
-    return expiryOfCookie(value) ?? this.now() + this.idleMs();
+    const own = (value as { idleLifetimeMs?: unknown }).idleLifetimeMs;
+    const idle = typeof own === 'number' && Number.isFinite(own) && own > 0 ? own : this.idleMs();
+    return expiryOfCookie(value) ?? this.now() + idle;
   }
 
   private warn(action: 'load' | 'save', error: unknown): void {

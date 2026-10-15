@@ -154,8 +154,13 @@ function credentialStampFile(): string {
 
 function credentialStamp(): string {
   const config = getDashboardAuthConfig();
+  // Whether sign-in is on is part of it: turning sign-in off and on again from the CLI also signs
+  // earlier sessions out.
   return createHash('sha256')
-    .update(`aac-dashboard-credential\0${config.username}\0${config.password_hash}`, 'utf8')
+    .update(
+      `aac-dashboard-credential\0${config.enabled}\0${config.username}\0${config.password_hash}`,
+      'utf8'
+    )
     .digest('hex');
 }
 
@@ -167,7 +172,7 @@ export async function saveCredentialStamp(): Promise<void> {
 /** At startup: a credential that changed outside the dashboard signs every earlier session out. */
 export async function settleCredentialStamp(): Promise<void> {
   const config = getDashboardAuthConfig();
-  if (!config.enabled || !config.username || !config.password_hash) return;
+  if (!config.username || !config.password_hash) return;
   const read = readAuthJsonSync(credentialStampFile());
   if (read.state === 'absent') {
     // The first start with this record: nothing older to compare with.
