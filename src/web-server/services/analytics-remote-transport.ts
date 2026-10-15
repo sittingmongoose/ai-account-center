@@ -1,8 +1,8 @@
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
-import * as fs from 'fs';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
+import { readPackagedSource } from '../../utils/packaged-source';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 import { HOST_OS, NAS1_SSH_ALIAS } from './dashboard-hosts';
@@ -21,6 +21,14 @@ export type AnalyticsRemoteKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' 
 const REMOTE_KIND_LIST = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
 const REMOTE_KINDS: ReadonlySet<string> = new Set(REMOTE_KIND_LIST);
 
+/** The packaged helper is missing, oversized or fails its pin: no host can be scanned. */
+export class AnalyticsHelperIntegrityError extends ValidationError {
+  constructor() {
+    super('Analytics remote helper is unavailable.');
+    this.name = 'AnalyticsHelperIntegrityError';
+  }
+}
+
 export class AnalyticsRemoteTransportError extends NetworkError {
   readonly timedOut: boolean;
 
@@ -37,7 +45,8 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ROWS = 100_000;
 /**
  * The packaged helper's SHA-256, pinned like the Claude history writer: only these exact bytes are ever run on the
- * Mac, Windows and Nas1. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`.
+ * Mac, Windows and Nas1. Update it together with `scripts/analytics-remote/analytics_usage_remote.py`. The pin
+ * covers the helper's LF text (`readPackagedSource`), so a package built from a CRLF checkout still passes.
  */
 export const ANALYTICS_HELPER_SHA256 =
   'da65d7d1a771d7cd63f82d090a797dce3bc6aa41c2acbdc5ab7317493125e9a6';
@@ -370,7 +379,7 @@ export async function runAnalyticsRemoteHelper(
   sshHost: string,
   platform: AnalyticsRemoteHost,
   request: AnalyticsRemoteRequest,
-  deps: { timeoutMs?: number } = {}
+  deps: { timeoutMs?: number; helperPath?: string } = {}
 ): Promise<AnalyticsRemoteResponse> {
   if (!isSafeUsageSshAlias(sshHost)) {
     throw new ValidationError('Analytics remote SSH alias is not configured safely.');
@@ -385,12 +394,17 @@ export async function runAnalyticsRemoteHelper(
   ) {
     throw new ValidationError('Analytics remote request is invalid.');
   }
-  const helperBytes = await fs.promises.readFile(analyticsHelperPath());
+  let helperBytes: Buffer;
+  try {
+    helperBytes = await readPackagedSource(deps.helperPath ?? analyticsHelperPath());
+  } catch {
+    throw new AnalyticsHelperIntegrityError();
+  }
   if (
     helperBytes.length > MAX_HELPER_BYTES ||
     createHash('sha256').update(helperBytes).digest('hex') !== ANALYTICS_HELPER_SHA256
   )
-    throw new ValidationError('Analytics remote helper is unavailable.');
+    throw new AnalyticsHelperIntegrityError();
   const helper = helperBytes.toString('utf8');
   const input = Buffer.from(
     JSON.stringify({

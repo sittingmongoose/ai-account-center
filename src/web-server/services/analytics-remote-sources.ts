@@ -9,6 +9,7 @@ import {
 } from '../usage/account-activity-collector';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import {
+  AnalyticsHelperIntegrityError,
   REMOTE_ANALYTICS_HOSTS,
   fixedAnalyticsRemoteAliases,
   runAnalyticsRemoteHelper,
@@ -380,6 +381,13 @@ const REMOTE_KIND_CONCURRENCY = 6;
 type RemoteHelper = NonNullable<AnalyticsRemoteSourceDeps['runHelper']>;
 
 /**
+ * Why a host's helper calls failed, when every one did. A damaged packaged helper fails before any
+ * ssh session, on every host alike, so it is named instead of reading as a host that did not answer.
+ */
+const HELPER_DAMAGED =
+  'the packaged analytics helper failed its integrity check, so no computer was scanned; reinstall AI Account Center';
+
+/**
  * One host's scan. A host still catching up (a cold cache, or a last scan that a kind's size cut
  * short) is scanned with one helper call per kind, all at once: each kind gets the helper's whole
  * time budget, so a big Claude Code history no longer leaves the kinds after it unread until a
@@ -398,7 +406,8 @@ async function scanHost(
   kinds: AnalyticsRemoteKind[],
   cached: RemoteCache,
   extraRoots: Partial<Record<AnalyticsRemoteKind, string[]>>,
-  minDateMs: number
+  minDateMs: number,
+  failure: { damaged: boolean }
 ): Promise<{
   response: AnalyticsRemoteResponse;
   cutKinds: Set<AnalyticsRemoteKind>;
@@ -415,7 +424,8 @@ async function scanHost(
         group,
         await runHelper(alias, host, { kinds: group, minDateMs, fingerprints, extraRoots })
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof AnalyticsHelperIntegrityError) failure.damaged = true;
       answers.set(group, null);
     }
   });
@@ -488,6 +498,7 @@ export async function loadAnalyticsRemoteSources(
         }
         const onHostScan = deps.onHostScan;
         onHostScan?.(host, 'start');
+        const failure = { damaged: false };
         const scan = await scanHost(
           runHelper,
           alias,
@@ -495,12 +506,18 @@ export async function loadAnalyticsRemoteSources(
           kinds,
           cached,
           remoteExtraRoots(host, kinds),
-          minDateMs
+          minDateMs,
+          failure
         );
         if (!scan) {
           onHostScan?.(host, 'done');
           // Previous aggregates stay available; nothing remote fails the page.
-          const part = cachedHostSources(host, cached, minDateMs, 'remote scan failed');
+          const part = cachedHostSources(
+            host,
+            cached,
+            minDateMs,
+            failure.damaged ? HELPER_DAMAGED : 'remote scan failed'
+          );
           results.push(...part.results);
           states.push(...part.states);
           return;

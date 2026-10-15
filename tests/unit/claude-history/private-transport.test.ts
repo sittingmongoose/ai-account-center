@@ -4,6 +4,7 @@ import path from 'path';
 import {PassThrough} from 'stream';
 import * as childProcess from 'child_process';
 import {runClaudeHistoryHelper} from '../../../src/web-server/services/claude-desktop-transport';
+import {withLfLineEndings} from '../../../src/utils/packaged-source';
 const { MAC_PROFILE } = require('./synthetic-history-fixtures.cjs');
 const scripts = path.resolve(import.meta.dir, '../../../scripts/claude-history');
 const mac = {launcherName:'Synthetic.app',sshHost:'synthetic-mac'};
@@ -26,7 +27,7 @@ test('collect uses fixed SSH and private RAM packet, never code/data in the comm
   const [program,args,options]=f.captured(); expect(program).toBe('ssh'); expect(args).toContain('synthetic-mac');
   expect(args.at(-1)).toContain('/usr/bin/python3 -c'); expect(args.at(-1)).not.toContain('synthetic@example.com');
   expect(args.at(-1).length).toBeLessThan(1000); expect(options).toMatchObject({encoding:'buffer',timeout:30000,maxBuffer:24*1024*1024});
-  expect(f.packet().request).toEqual(request()); expect(f.packet().helperSource).toBe(fs.readFileSync(path.join(scripts,'history_index_remote_v2.py'),'utf8'));
+  expect(f.packet().request).toEqual(request()); expect(f.packet().helperSource).toBe(withLfLineEndings(fs.readFileSync(path.join(scripts,'history_index_remote_v2.py'))).toString('utf8'));
   expect(f.packet()).not.toHaveProperty('nodeBridgeSource'); expect(f.spy).toHaveBeenCalledTimes(1);
 });
 test('Windows bootstrap stays short and interpreter path is fixed independent of request fields',async()=>{
@@ -37,8 +38,8 @@ test('Windows bootstrap stays short and interpreter path is fixed independent of
 });
 test('append carries only the exact packaged writer and bridge in the private packet',async()=>{
   const f=fakeSsh(); await runClaudeHistoryHelper(mac,'mac',MAC_PROFILE,request('mac','append'));
-  expect(f.packet().request.transactionSource).toBe(fs.readFileSync(path.join(scripts,'history_index_transaction_v1.cjs'),'utf8'));
-  expect(f.packet().nodeBridgeSource).toBe(fs.readFileSync(path.join(scripts,'history_index_node_bridge_v2.cjs'),'utf8'));
+  expect(f.packet().request.transactionSource).toBe(withLfLineEndings(fs.readFileSync(path.join(scripts,'history_index_transaction_v1.cjs'))).toString('utf8'));
+  expect(f.packet().nodeBridgeSource).toBe(withLfLineEndings(fs.readFileSync(path.join(scripts,'history_index_node_bridge_v2.cjs'))).toString('utf8'));
   expect(f.captured()[1].at(-1)).not.toContain('transactionSource');
 });
 test('writer pin mismatch aborts before SSH and does not repair the package',async()=>{

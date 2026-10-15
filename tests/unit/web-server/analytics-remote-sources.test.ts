@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import * as childProcess from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
   ANALYTICS_HELPER_SHA256,
+  AnalyticsHelperIntegrityError,
   REMOTE_ANALYTICS_HOSTS,
   analyticsHelperCommand,
   analyticsHelperPath,
@@ -26,6 +28,7 @@ import {
   defaultDashboardPreferences,
   writeDashboardPreferences,
 } from '../../../src/web-server/services/dashboard-preferences';
+import { withLfLineEndings } from '../../../src/utils/packaged-source';
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 let cache: string;
@@ -256,8 +259,88 @@ describe('analytics remote transport', () => {
 
 describe('analytics remote helper integrity', () => {
   it('pins the packaged helper by SHA-256', () => {
-    const bytes = fs.readFileSync(analyticsHelperPath());
+    const bytes = withLfLineEndings(fs.readFileSync(analyticsHelperPath()));
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(ANALYTICS_HELPER_SHA256);
+  });
+
+  /** Records ssh starts; the helper's answer is an empty scan. */
+  function captureSsh(): Array<{ args: string[]; input: string }> {
+    const calls: Array<{ args: string[]; input: string }> = [];
+    spyOn(childProcess, 'execFile').mockImplementation(((
+      _file: string,
+      args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void
+    ) => {
+      const call = { args: [...args], input: '' };
+      calls.push(call);
+      return {
+        stdin: {
+          on: () => undefined,
+          end: (data?: Buffer) => {
+            call.input = data ? data.toString('utf8') : '';
+            setImmediate(() =>
+              callback(null, JSON.stringify({ version: 1, truncated: false, kinds: {}, rows: [] }), '')
+            );
+          },
+        },
+      };
+    }) as never);
+    return calls;
+  }
+
+  it('runs a helper packaged with CRLF line endings as its pinned LF text', async () => {
+    // A package built from a Windows checkout carried CRLF helpers, failed this pin and stopped
+    // every remote scan (2026-10-13).
+    const lf = withLfLineEndings(fs.readFileSync(analyticsHelperPath())).toString('latin1');
+    const copy = path.join(cache, 'analytics_usage_remote.py');
+    fs.writeFileSync(copy, Buffer.from(lf.replace(/\n/g, '\r\n'), 'latin1'));
+    const calls = captureSsh();
+    try {
+      await runAnalyticsRemoteHelper(
+        'mac-alias',
+        'mac',
+        { kinds: ['omp'], minDateMs: MIN_DATE, fingerprints: {} },
+        { helperPath: copy }
+      );
+      expect(calls).toHaveLength(1);
+      const sent = (JSON.parse(calls[0].input) as { helperSource: string }).helperSource;
+      expect(sent).not.toContain('\r');
+      expect(createHash('sha256').update(Buffer.from(sent, 'utf8')).digest('hex')).toBe(
+        ANALYTICS_HELPER_SHA256
+      );
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it('refuses a changed or missing helper before any ssh session', async () => {
+    const calls = captureSsh();
+    const changed = path.join(cache, 'changed.py');
+    fs.writeFileSync(
+      changed,
+      Buffer.concat([fs.readFileSync(analyticsHelperPath()), Buffer.from('\n# changed\n')])
+    );
+    // A lone carriage return is a change, not a line ending.
+    const strayCr = path.join(cache, 'stray-cr.py');
+    fs.writeFileSync(
+      strayCr,
+      Buffer.concat([fs.readFileSync(analyticsHelperPath()), Buffer.from('\r')])
+    );
+    try {
+      for (const helperPath of [changed, strayCr, path.join(cache, 'missing.py')])
+        await expect(
+          runAnalyticsRemoteHelper(
+            'mac-alias',
+            'mac',
+            { kinds: ['omp'], minDateMs: MIN_DATE, fingerprints: {} },
+            { helperPath }
+          )
+        ).rejects.toBeInstanceOf(AnalyticsHelperIntegrityError);
+      expect(calls).toHaveLength(0);
+    } finally {
+      mock.restore();
+    }
   });
 
   it('keeps the helper bytes unchanged by the Nas1 host', () => {
@@ -868,6 +951,21 @@ describe('analytics remote scans per kind', () => {
     expect(seen).toHaveLength(6);
     // Each call carries only its own kind's fingerprints.
     seen.forEach((kinds, index) => expect(prints[index]).toEqual(kinds));
+  });
+
+  it('names a damaged packaged helper instead of a host that did not answer', async () => {
+    const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => {
+        throw new AnalyticsHelperIntegrityError();
+      },
+    });
+    expect(states.length).toBeGreaterThan(0);
+    for (const entry of states) {
+      expect(entry.state).toBe('unavailable');
+      expect(entry.detail).toContain('failed its integrity check');
+    }
   });
 
   it('keeps a failed kind on its earlier rows while the other kinds update', async () => {

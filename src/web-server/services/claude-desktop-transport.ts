@@ -1,8 +1,8 @@
 import { execFile } from 'child_process';
 import path from 'path';
-import fs from 'fs';
 import { createHash } from 'crypto';
 import { NetworkError, ValidationError } from '../../errors/error-types';
+import { readPackagedSource } from '../../utils/packaged-source';
 import {
   CLAUDE_PROFILE_ID_PATTERN,
   type ClaudeDesktopLauncher,
@@ -307,14 +307,13 @@ export async function runClaudeHistoryHelper(
     throw new ValidationError('Claude history helper is unavailable.');
   }
   const scripts = path.resolve(__dirname, '../../../scripts/claude-history');
-  const helper = await fs.promises.readFile(path.join(scripts, 'history_index_remote_v2.py'));
+  // LF text, like the pinned writer below: a package built from a CRLF checkout runs the same code.
+  const helper = await readPackagedSource(path.join(scripts, 'history_index_remote_v2.py'));
   if (helper.length > 128 * 1024)
     throw new ValidationError('Claude history helper is unavailable.');
   let privateRequest = request;
   if (request.mode === 'append') {
-    const writer = await fs.promises.readFile(
-      path.join(scripts, 'history_index_transaction_v1.cjs')
-    );
+    const writer = await readPackagedSource(path.join(scripts, 'history_index_transaction_v1.cjs'));
     if (createHash('sha256').update(writer).digest('hex') !== WRITER_SHA256) {
       throw new ValidationError('Claude history helper is unavailable.');
     }
@@ -322,7 +321,9 @@ export async function runClaudeHistoryHelper(
   }
   const bridge =
     request.mode === 'append'
-      ? await fs.promises.readFile(path.join(scripts, 'history_index_node_bridge_v2.cjs'), 'utf8')
+      ? (await readPackagedSource(path.join(scripts, 'history_index_node_bridge_v2.cjs'))).toString(
+          'utf8'
+        )
       : undefined;
   if (bridge && Buffer.byteLength(bridge) > 128 * 1024)
     throw new ValidationError('Claude history helper is unavailable.');
