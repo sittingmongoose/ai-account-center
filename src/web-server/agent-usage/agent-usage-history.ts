@@ -194,16 +194,25 @@ export class RecentReadings {
  */
 function currentPeriod(readings: Reading[]): Reading[] {
   const usable = readings.filter((reading) => reading.used !== null);
+  // The reset each reading knows of: its own, else the last one an earlier reading reported, so a
+  // source that omits the time cannot hide a reset that falls between two readings.
+  const known: Array<number | null> = [];
+  usable.forEach((reading, index) =>
+    known.push(reading.resetAt ?? (index > 0 ? known[index - 1] : null))
+  );
   let start = usable.length - 1;
   while (start > 0) {
     const earlier = usable[start - 1];
     const later = usable[start];
-    // The earlier reading's own reset came before the later one was taken: a new period.
-    if (earlier.resetAt !== null && earlier.resetAt <= later.at) break;
-    const known = earlier.resetAt !== null && later.resetAt !== null;
+    const earlierReset = known[start - 1];
+    const laterReset = known[start];
+    // A reset fell between the two readings. One already past at both (a provider that keeps the
+    // last reset time after it) is not between them.
+    if (earlierReset !== null && earlier.at < earlierReset && earlierReset <= later.at) break;
+    const bothKnown = earlierReset !== null && laterReset !== null;
     const fall = (earlier.used as number) - (later.used as number);
-    if (fall > (known ? RESET_DROP_POINTS : 0)) break;
-    if (known && Math.abs((earlier.resetAt as number) - (later.resetAt as number)) > RESET_SHIFT_MS)
+    if (fall > (bothKnown ? RESET_DROP_POINTS : 0)) break;
+    if (bothKnown && Math.abs((earlierReset as number) - (laterReset as number)) > RESET_SHIFT_MS)
       break;
     start--;
   }

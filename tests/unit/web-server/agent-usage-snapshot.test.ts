@@ -289,6 +289,23 @@ describe('agent usage burn rate', () => {
     expect(burn.pace).toBeNull();
   });
 
+  it('remembers a known reset across readings that omit it, and keeps pace after a past reset', () => {
+    // 11:45 40% (reset 11:55), 11:50 45% (no reset time), 12:00 60% (no reset time).
+    const crossed = burnRate(
+      [reading(15, 40, NOW - 5 * MINUTE), reading(10, 45), reading(0, 60)],
+      null
+    );
+    expect(crossed.periodStartedAt).toBe(new Date(NOW).toISOString());
+    expect(crossed.pace).toBeNull();
+    // 11:56 10% and 12:00 20%, both still reporting the 11:55 reset they came after.
+    const after = burnRate(
+      [reading(4, 10, NOW - 5 * MINUTE), reading(0, 20, NOW - 5 * MINUTE)],
+      null
+    );
+    expect(after.pace).toBe(150);
+    expect(after.paceMinutes).toBe(5);
+  });
+
   it("keeps an account's history through an outage, without a reading or a pace", () => {
     const live = account();
     const down = account({ status: 'unavailable', windows: [] });
