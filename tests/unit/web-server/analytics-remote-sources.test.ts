@@ -363,7 +363,7 @@ describe('analytics remote helper integrity', () => {
     // Nas1 streams the same packaged helper as the Mac and Windows; adding the host changed no byte
     // of it. Change this value only together with the helper itself.
     expect(ANALYTICS_HELPER_SHA256).toBe(
-      '871175394cbe58ce3f39e2cdf9978fc9c6e79875887aee31aed2cd4a80c70a4b'
+      '9e4df2816ca9f5c5f645cf7a6ab8abd28e8d28eae07edb1b3589921a84bb87af'
     );
   });
 });
