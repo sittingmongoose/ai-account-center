@@ -55,13 +55,13 @@ Claude "Open on Mac" and "Open on Windows" both POST `/api/claude/desktop-profil
 bypassed; when the dashboard cannot be reached the Open says "Can't reach the dashboard. Try again." and launches
 nothing. A 200 is today's finished Open. A 202 turns into a read-poll of `GET /api/claude/desktop-profiles` once a
 second (every five seconds after two minutes, giving up after three), and the account row's secondary line shows the
-reported `openOperation` in its own style: "Copying history 3 of 18", then "Opening", then "Opened". `failed` and
+reported `openOperation` in its own style: "Copying history 3 of 18", then "Opening", then "Opened" ("Opened · copied N of M" when only part of the history was copied). `failed` and
 `blocked_uncertain` show the server's fixed sentence, or "History copy could not be confirmed. Claude was not
 opened.", which is also what a 409 `history_unconfirmed` says; three minutes without a terminal state says "Still
 working on the dashboard. Check again shortly." Those sentences go to the footer status, which is where every other
 error already shows. Both platform buttons rest for the whole Open, so a second one never starts for the same account,
-and the POST is never repeated: not for a poll, not after an expired session, and never resumed after a restart. A read
-that fails while polling never ends the Open; the poll just tries again.
+and the POST is never repeated: not for a poll, not after an expired session, and never resumed after a restart. A transient read
+failure retries until the deadline; a signed-out key or refused HTTP destination ends the poll.
 
 ## Look and motion
 
@@ -94,7 +94,8 @@ type, focus halo, three-layer primary button, error shake and success hand-off. 
 1. **First run:** the dashboard address (empty, placeholder `http://`; a missing scheme gets `http://`), then the
    username and password, "Pairs as Windows tray on <this PC>".
 2. **Setup code:** a dashboard with no sign-in yet: username, password with a strength meter, confirm, and the one-time
-   `XXXX-XXXX` code from the server's terminal; "Create sign-in and pair".
+   `XXXX-XXXX` code from the server's terminal; "Create sign-in and pair". The code is hidden and skipped only when
+   the server explicitly reports `setupCodeRequired: false`; password confirmation and strength checks stay visible.
 3. **Pairing:** four steps tick through (password checked, device key issued, saving the key, forgetting the password).
 4. **Not on your local network:** plain HTTP carries the password only to a local address, so a public, CGNAT,
    link-local or unknown address (the tray resolves the name and checks every address) is refused before anything is
@@ -179,9 +180,26 @@ Activate switches the shared VM's saved Codex account (`/api/codex/profiles/{pro
 native confirmation lists them; only "Stop, switch, restart" sends the server's short-lived token (Antigravity:
 `/confirm`). Cancel changes nothing, and an expired or changed confirmation needs a fresh Activate. Antigravity's own
 auto-switch (`/api/antigravity/auto-switch`, `thresholdUsedPercent` as % used) appears in its section header once two
-Antigravity accounts are signed in; Codex's auto-switch (`thresholdPercent`, % remaining, shown as % used) sits in
+Antigravity accounts are reported (including hidden or unavailable accounts); Codex's auto-switch (`thresholdPercent`, % remaining, shown as % used) sits in
 its section header, above its accounts.
-Failed refreshes keep the last sample, label it stale and disable account controls until a fresh read.
+Failed refreshes keep the last sample, label it stale and disable account controls until a fresh read. Windowless
+setup and no-quota rows reserve a message column; an unexpected render failure shows an inline refresh error.
+Row metadata names failed and unavailable readings. Provenance uses `host` (for example `nas1`) before `platform`.
+Codex Details titles its canonical windows "Weekly" and "5-hour". Qwen's usable-credit count excludes known-expired
+packs while keeping every pack listed; a positive balance without an expiry says "Expiry unavailable".
+
+Antigravity's toggle always displays the reported enabled state, even when switching is unavailable. Enabling needs
+a chosen pool; disabling remains possible without one. Its notch appears only on the watched pool's actual readings,
+never on an unavailable meter. Codex threshold changes send only the threshold, preserving the server's current toggle.
+Antigravity consent displays the offered email and verifies the completed profile, Ubuntu host, status and email.
+Confirmation lifetimes use HTTP Date with a monotonic deadline when available; older responses retain the prior check.
+
+Plain-HTTP hostnames are resolved before every credential-bearing request, including saved-password login, Re-pair,
+migration and polls. Every address must remain local; unresolved names are refused. HTTPS and literal IP handling
+are unchanged. An HTTPS proxy can advertise pairing without publishing its trusted-network field.
+Windows animation preference changes are observed during the session. Reading and changing the startup task runs
+off the UI thread, draining both output streams under one deadline. Claude progress defers painting while hidden.
+A missing Codex policy is rejected instead of showing an invented Off state.
 
 ## Build and install
 

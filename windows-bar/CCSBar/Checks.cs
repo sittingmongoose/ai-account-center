@@ -30,6 +30,7 @@ public static partial class Checks
     public static async Task<CheckReport> Run()
     {
         var report = new CheckReport();
+        await ReviewR2Checks(report);
         report.Checks["cursor_plan_names_are_provider_scoped"] = Formatting.PlanLabel("plus", "cursor") == "X Plus" && Formatting.PlanLabel("plus", "codex") == "Plus";
         report.Checks["new_and_legacy_cursor_ultra_remain_distinct"] = Formatting.PlanLabel("unified_ultra", "cursor") == "X Ultra" && Formatting.PlanLabel("ultra", "cursor") == "Cursor Ultra" && Formatting.PlanLabel("ultra", "antigravity") == "Ultra";
         report.Checks["cursor_legacy_and_unknown_plans_are_preserved"] = Formatting.PlanLabel("pro_plus", "cursor") == "Pro+" && Formatting.PlanLabel("future-plan", "cursor") == "future-plan" && Formatting.PlanLabel(null, "cursor") == "";
@@ -154,6 +155,147 @@ public static partial class Checks
         catch (ArgumentException) { return true; }
     }
 
+    private static async Task ReviewR2Checks(CheckReport report)
+    {
+        var proxy = JsonSerializer.Deserialize<AuthCheck>("{\"secureTransport\":true,\"accessMode\":\"login\"}", Formatting.Json)!;
+        report.Checks["r2_https_proxy_supports_pairing_without_trust_field"] = proxy.SupportsPairing && proxy.CanPair;
+        report.Checks["r2_pairing_capability_is_presence_of_any_supported_field"] = new AuthCheck { SecureTransport = false }.SupportsPairing
+            && new AuthCheck { Connection = new AuthConnection() }.SupportsPairing && !new AuthCheck().SupportsPairing;
+        report.Checks["r2_missing_codex_policy_stays_absent_and_is_rejected"] = !DashboardClient.SupportedDashboard(
+            JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[]}", Formatting.Json)!);
+        var now = DateTimeOffset.Parse("2026-10-15T12:00:00Z");
+        report.Checks["r2_qwen_expired_credit_is_not_usable_unknown_expiry_is_retained"] =
+            !Formatting.HasUsableCredit(new QuotaWindow { Remaining = 4, ExpiresAt = now.AddSeconds(-1).ToString("O") }, now)
+            && Formatting.HasUsableCredit(new QuotaWindow { Remaining = 4 }, now);
+        var host = JsonSerializer.Deserialize<DashboardAccount>("{\"platform\":\"ubuntu\",\"host\":\"nas1\"}", Formatting.Json)!;
+        report.Checks["r2_host_provenance_preserves_activation_platform"] = host.Provenance == "nas1" && host.Platform == "ubuntu";
+        var codex = new DashboardAccount { Provider = "codex" };
+        report.Checks["r2_codex_details_use_core_cadence_titles_only"] = Formatting.WindowLabel(codex, new QuotaWindow { Key = "seven_day", Label = "week" }) == "Weekly"
+            && Formatting.WindowLabel(codex, new QuotaWindow { Key = "five_hour", Label = "5h" }) == "5-hour"
+            && Formatting.WindowLabel(codex, new QuotaWindow { Key = "extra", Label = "Other" }) == "Other";
+        report.Checks["r2_partial_claude_copy_is_reported"] = ClaudeOpenFlow.TextFor(new ClaudeOpenOperation { State = "opened", ConfirmedCount = 3, TotalCount = 18 }) == "Opened · copied 3 of 18"
+            && ClaudeOpenFlow.TextFor(new ClaudeOpenOperation { State = "opened", ConfirmedCount = 18, TotalCount = 18 }) == "Opened";
+
+        var lookups = 0;
+        Task<bool?> Resolve(string _, TimeSpan __) { lookups++; return Task.FromResult<bool?>(false); }
+        foreach (var address in new[] { "https://dashboard.local", "http://127.0.0.1", "http://[::1]" })
+            await LocalNetwork.RequireLocalHTTP(new Uri(address), Resolve);
+        report.Checks["r2_https_and_literal_hosts_do_not_resolve_again"] = lookups == 0;
+        var refused = 0;
+        foreach (var name in new[] { "dashboard.local", "dashboard", "dashboard.lan", "dashboard.internal" })
+        {
+            try { await LocalNetwork.RequireLocalHTTP(new Uri("http://" + name), Resolve); }
+            catch (InvalidOperationException error) when (error.Message.Contains("isn't on your local network", StringComparison.Ordinal)) { refused++; }
+        }
+        report.Checks["r2_saved_http_hostnames_are_checked_each_request"] = refused == 4 && lookups == 4;
+        var unresolved = false;
+        try { await LocalNetwork.RequireLocalHTTP(new Uri("http://dashboard.local"), (_, _) => Task.FromResult<bool?>(null)); }
+        catch (InvalidOperationException) { unresolved = true; }
+        await LocalNetwork.RequireLocalHTTP(new Uri("http://dashboard.local"), (_, _) => Task.FromResult<bool?>(true));
+        report.Checks["r2_unresolved_http_names_are_refused_local_names_pass"] = unresolved;
+
+        report.Checks["r2_setup_skips_code_only_for_explicit_false"] = MainWindow.SetupProblem("fixture", "summit-ledger-4242", "summit-ledger-4242", "", false) is null
+            && MainWindow.SetupProblem("fixture", "summit-ledger-4242", "summit-ledger-4242", "")?.Field == "code";
+        var signIn = new SignInView();
+        signIn.Model.SetupCodeRequired = false; signIn.Apply(SignInState.SetupCode, instant: true);
+        report.Checks["r2_optional_setup_hides_only_code"] = signIn.Code.Visibility == System.Windows.Visibility.Collapsed
+            && signIn.Confirm.Visibility == System.Windows.Visibility.Visible;
+        signIn.Model.SetupCodeRequired = true; signIn.Apply(SignInState.SetupCode, instant: true);
+        report.Checks["r2_required_setup_keeps_code_visible"] = signIn.Code.Visibility == System.Windows.Visibility.Visible;
+
+        using (var response = new System.Net.Http.HttpResponseMessage(HttpStatusCode.Conflict))
+        {
+            response.Headers.Date = now;
+            var lifetime = ConfirmationLifetime.Deadline(now.AddSeconds(30).ToString("O"), response);
+            var expired = ConfirmationLifetime.Deadline(now.AddSeconds(-1).ToString("O"), response);
+            report.Checks["r2_server_time_confirmation_ignores_local_clock_skew"] = lifetime is not null
+                && !ConfirmationLifetime.Expired(lifetime, "2000-01-01T00:00:00Z")
+                && ConfirmationLifetime.Expired(expired, "2099-01-01T00:00:00Z");
+            response.Headers.Date = null;
+            report.Checks["r2_missing_server_time_uses_existing_expiry_fallback"] = ConfirmationLifetime.Deadline(now.ToString("O"), response) is null;
+        }
+        System.Text.Json.JsonElement Result(string json) => JsonSerializer.Deserialize<JsonElement>(json);
+        report.Checks["r2_antigravity_result_is_bound_to_reviewed_email_profile_host"] =
+            MainWindow.ValidAntigravityResult(Result("{\"status\":\"active\",\"profileId\":\"fixture\",\"hostId\":\"ubuntu\",\"email\":\"approved@example.com\"}"), "fixture", "approved@example.com")
+            && !MainWindow.ValidAntigravityResult(Result("{\"status\":\"active\",\"profileId\":\"fixture\",\"hostId\":\"ubuntu\",\"email\":\"other@example.com\"}"), "fixture", "approved@example.com")
+            && !MainWindow.ValidAntigravityResult(Result("{\"status\":\"active\",\"profileId\":\"other\",\"hostId\":\"ubuntu\"}"), "fixture", null)
+            && !MainWindow.ValidAntigravityResult(Result("{\"status\":\"failed\",\"profileId\":\"fixture\",\"hostId\":\"ubuntu\"}"), "fixture", null);
+        var meter = new Meter("r2", MeterKind.Compact);
+        meter.Update(new MeterSpec(null, "Unavailable", Notch: 95), animate: false);
+        report.Checks["r2_unavailable_meter_hides_notch"] = !meter.NotchVisibleForCheck;
+        meter.Update(new MeterSpec(0, "Real zero", Notch: 95, NotchOpacity: 0.18), animate: false);
+        report.Checks["r2_real_zero_keeps_faint_policy_notch"] = meter.NotchVisibleForCheck;
+
+        var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
+        try
+        {
+            window.UseFixtureConnection();
+            var fixture = FixtureRender.LoadFixture(out _);
+            foreach (var setup in new[] { true, false })
+            {
+                fixture.Accounts = new List<DashboardAccount> { new() { Id = "r2", Provider = "antigravity", Label = "Fixture", Status = setup ? "needs_sign_in" : "ok", AntigravityPlan = setup ? null : new AntigravityPlan { QuotaPolicy = "none" } } };
+                window.ApplyDashboardSample(fixture);
+                report.Checks[setup ? "r2_lone_setup_row_renders" : "r2_lone_no_quota_row_renders"] = !window.IsStale
+                    && FixtureRender.FindUid(window.ContentPanel, "row:r2") is not null;
+            }
+            var shown = fixture.Accounts[0]; shown.Status = "error"; shown.Host = "nas1";
+            shown.Capabilities.AntigravityCanActivate = true; shown.Capabilities.AntigravityProfileId = "fixture";
+            shown.Windows.Add(new QuotaWindow { Key = "gemini-5h", PoolId = "other", UsedPercent = 20 });
+            shown.Windows.Add(new QuotaWindow { Key = "3p-5h", PoolId = "watched", UsedPercent = 30 });
+            fixture.Accounts.Add(new DashboardAccount { Id = "hidden", Provider = "antigravity", TrayHidden = true, Status = "unavailable" });
+            fixture.AntigravityAutoSwitch = new AntigravityAutoStatus { Enabled = true, RequestedPoolId = "watched" };
+            window.ApplyDashboardSample(fixture);
+            var meters = Walk(window.ContentPanel).OfType<Meter>().ToArray();
+            report.Checks["r2_notch_follows_watched_pool_only"] = meters.Any(item => item.Key.EndsWith("3p-5h", StringComparison.Ordinal) && item.NotchVisibleForCheck)
+                && meters.Any(item => item.Key.EndsWith("gemini-5h", StringComparison.Ordinal) && !item.NotchVisibleForCheck);
+            report.Checks["r2_hidden_unavailable_account_counts_for_switching"] = Walk(window.ContentPanel).OfType<System.Windows.Controls.Button>().Any(button => button.Uid == "mutation:activate")
+                && Walk(window.ContentPanel).OfType<ToggleSwitch>().Any(toggle => toggle.IsOn);
+            var rowText = Walk(window.ContentPanel).OfType<System.Windows.Controls.TextBlock>().Select(block => new System.Windows.Documents.TextRange(block.ContentStart, block.ContentEnd).Text).ToArray();
+            report.Checks["r2_error_row_meta_and_host_are_visible"] = rowText.Any(text => text.Contains("nas1", StringComparison.OrdinalIgnoreCase) && text.Contains("Refresh failed", StringComparison.OrdinalIgnoreCase));
+            fixture.AntigravityAutoSwitch.RequestedPoolId = null;
+            window.ApplyDashboardSample(fixture);
+            report.Checks["r2_enabled_policy_can_be_disabled_without_pool"] = Walk(window.ContentPanel).OfType<ToggleSwitch>().Any(toggle => toggle.IsOn && toggle.EnabledForCheck);
+            fixture.AntigravityAutoSwitch.Enabled = false;
+            window.ApplyDashboardSample(fixture);
+            report.Checks["r2_policy_cannot_enable_without_pool"] = Walk(window.ContentPanel).OfType<ToggleSwitch>().All(toggle => !toggle.EnabledForCheck);
+            fixture.AntigravityAutoSwitch.Enabled = true; fixture.Accounts.RemoveAt(1);
+            window.ApplyDashboardSample(fixture);
+            report.Checks["r2_single_account_keeps_reported_enabled_state"] = Walk(window.ContentPanel).OfType<ToggleSwitch>().Any(toggle => toggle.IsOn && !toggle.EnabledForCheck);
+            fixture.Accounts[0].Windows = null!;
+            window.ApplyDashboardSample(fixture);
+            report.Checks["r2_render_failure_is_inline_without_recursive_render"] = window.IsStale
+                && Walk(window.ContentPanel).OfType<System.Windows.Controls.TextBlock>().Any(block => block.Text.Contains("Usage could not be displayed", StringComparison.Ordinal));
+            fixture.Accounts[0].Windows = new List<QuotaWindow>();
+            window.ApplyDashboardSample(fixture);
+            window.SimulateHideForCheck(); window.ResetRenderPassesForCheck();
+            window.SetOpenProgress("r2", new ClaudeOpenProgress("windows", "Copying history", false, false));
+            report.Checks["r2_hidden_open_progress_defers_render"] = window.RenderDirtyForCheck && window.RenderPassesForCheck == 0;
+        }
+        finally { window.AllowClose = true; window.Close(); }
+
+        var oldMotion = Motion.Enabled;
+        Motion.UseSystemPreference(); Motion.UpdateSystemPreference(false);
+        var reduced = !Motion.Enabled;
+        Motion.UpdateSystemPreference(true);
+        report.Checks["r2_motion_tracks_system_changes_and_keeps_fixture_override"] = reduced && Motion.Enabled;
+        Motion.Enabled = false; Motion.UpdateSystemPreference(true);
+        report.Checks["r2_motion_fixture_override_survives_system_change"] = !Motion.Enabled;
+        Motion.UpdateSystemPreference(System.Windows.SystemParameters.ClientAreaAnimation); Motion.Enabled = oldMotion;
+
+        System.Diagnostics.ProcessStartInfo Child(string command)
+        {
+            var info = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", command }) info.ArgumentList.Add(argument);
+            return info;
+        }
+        var bothPipes = await StartupTask.ReadProcess(Child("[Console]::Out.Write('x' * 131072); [Console]::Error.Write('y' * 131072)"), TimeSpan.FromSeconds(10));
+        report.Checks["r2_startup_drains_both_pipes_concurrently"] = bothPipes?.Length == 131072;
+        var began = System.Diagnostics.Stopwatch.StartNew();
+        var timeout = await StartupTask.ReadProcess(Child("Start-Sleep -Seconds 30"), TimeSpan.FromMilliseconds(200));
+        report.Checks["r2_startup_deadline_covers_reads_and_exit"] = timeout is null && began.Elapsed < TimeSpan.FromSeconds(5);
+    }
+
     private static async Task<bool> MockServer()
     {
         // A local transport fixture verifies login, HttpOnly session cookies, JSON bodies,
@@ -193,9 +335,9 @@ public static partial class Checks
                 {
                     using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
                     var fields = json.RootElement.EnumerateObject().Count();
-                    valid &= request.HttpMethod == "PUT" && !json.RootElement.GetProperty("enabled").GetBoolean() && fields is 1 or 2;
+                    valid &= request.HttpMethod == "PUT" && fields == 1;
                     var configured = json.RootElement.TryGetProperty("thresholdPercent", out var threshold);
-                    valid &= configured ? fields == 2 && threshold.GetInt32() == 10 : fields == 1;
+                    valid &= configured ? threshold.GetInt32() == 10 && !json.RootElement.TryGetProperty("enabled", out _) : !json.RootElement.GetProperty("enabled").GetBoolean();
                     payload = new AutoSwitchStatus { Enabled = false, ThresholdPercent = configured ? 10 : 5 };
                 }
                 else if (path == "/api/codex/profiles/party/activate")
@@ -251,7 +393,7 @@ public static partial class Checks
         {
             var summary = await client.Dashboard(true); valid &= summary.SchemaVersion == 1;
             valid &= !(await client.SetAutoSwitch(false)).Enabled;
-            var configured = await client.SetAutoSwitch(false, 10);
+            var configured = await client.SetAutoSwitch(thresholdPercent: 10);
             valid &= !configured.Enabled && configured.ThresholdPercent == 10;
             await client.Activate("gmail"); await client.OpenClaude("fixture-a", "mac");
             valid &= await CodexSwitchFlow.Run("party", async token => { await client.Activate("party", token); }, confirmation => Task.FromResult(confirmation.Processes[0].Label == "Fixture Codex desktop"));
