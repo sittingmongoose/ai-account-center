@@ -95,6 +95,17 @@ class ReaderTests(unittest.TestCase):
         self.assertIn("passed, new reading pending", text)
         self.assertNotIn("pace 120", text)
 
+    def test_a_reading_taken_after_its_reset_is_current_not_pending(self):
+        now = aac.now_utc()
+        reset = iso(now - dt.timedelta(minutes=5))
+        before, after = iso(now - dt.timedelta(minutes=6)), iso(now - dt.timedelta(minutes=1))
+        self.assertFalse(aac.reset_passed({"resetAt": reset, "sampledAt": after}, now))
+        self.assertFalse(aac.reset_passed({"resetAt": reset}, now, account_sampled_at=after))
+        self.assertTrue(aac.reset_passed({"resetAt": reset, "sampledAt": before}, now))
+        self.assertTrue(aac.reset_passed({"resetAt": reset}, now))
+        self.assertTrue(aac.reset_passed({"resetAt": iso(now + dt.timedelta(hours=1)), "resetPassed": True}, now))
+        self.assertFalse(aac.reset_passed({"resetAt": iso(now + dt.timedelta(hours=1))}, now))
+
     def test_old_snapshot_is_called_stale(self):
         text = self.run_reader(generated=aac.now_utc() - dt.timedelta(minutes=20))
         self.assertIn("WARNING: this snapshot is 20m old", text)
@@ -181,6 +192,19 @@ class RulesTests(unittest.TestCase):
         self.assertTrue(all(ord(character) < 128 for character in text))
         self.assertIn("aac-usage", text)
         self.assertIn("BEFORE the reset", text)
+
+    def test_rules_quote_a_custom_folder_literally_for_each_shell(self):
+        folder = Path("/shares/custom-$aac/it's")
+        with mock.patch.object(aac, "own_folder", return_value=folder):
+            with mock.patch.object(aac.os, "name", "nt"):
+                windows = aac.run_cmd()
+            with mock.patch.object(aac.os, "name", "posix"):
+                posix = aac.run_cmd()
+        text = str(folder / "aac-usage")
+        self.assertIn("python '%s'` in PowerShell" % text.replace("'", "''"), windows)
+        self.assertIn("python '%s'" % text.replace(chr(92), "/").replace("'", "'" + chr(92) + "''"), windows)
+        self.assertNotIn('"', windows)
+        self.assertEqual(posix, "python3 '%s'`" % text.replace("'", "'" + chr(92) + "''"))
 
     def test_rules_name_the_reader_beside_its_snapshot(self):
         folder = self.home / "custom-share" / "aac-usage"

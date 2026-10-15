@@ -166,7 +166,19 @@ def burn_text(burn, now):
     return ", ".join(parts)
 
 
-def window_line(window, now):
+def reset_passed(window, now, account_sampled_at=None):
+    """The dashboard's rule, judged when read: the reset is due and the reading predates it (or its
+    time is unknown). A reading taken at or after the reset is current."""
+    if window.get("resetPassed"):
+        return True
+    reset = parse_time(window.get("resetAt"))
+    if reset is None or reset > now:
+        return False
+    sampled = parse_time(window.get("sampledAt")) or parse_time(account_sampled_at)
+    return sampled is None or sampled < reset
+
+
+def window_line(window, now, account_sampled_at=None):
     parts = []
     if window.get("unlimited") is True:
         parts.append("unlimited")
@@ -183,9 +195,8 @@ def window_line(window, now):
         limit = window.get("limit")
         parts.append("%s%s%s used" % (number(window["used"]),
                                       " of " + number(limit) if limit is not None else "", unit))
-    reset = parse_time(window.get("resetAt"))
     # The reset may have passed since the snapshot was written, not only before it.
-    passed = bool(window.get("resetPassed")) or (reset is not None and reset <= now)
+    passed = reset_passed(window, now, account_sampled_at)
     if window.get("resetAt"):
         if passed:
             parts.append("reset at %s passed, new reading pending" % clock(window["resetAt"], now))
@@ -247,7 +258,7 @@ def cmd_show(args):
         print("  %s  [%s]  %s, sampled %s" % ("  ".join(who), ", ".join(facts), status, age))
         if account.get("status") in ("ok", "cached"):
             for window in account.get("windows", []):
-                print(window_line(window, now))
+                print(window_line(window, now, account.get("sampledAt")))
 
 
 def cmd_history(args):
@@ -285,10 +296,11 @@ def run_cmd():
     """How an agent on this computer runs this command: the published reader beside its snapshot."""
     reader = (own_folder() or share_folder()) / "aac-usage"
     if os.name == "nt":
+        # Single quotes are literal in PowerShell ('' escapes one) and in Git Bash ('\'' does).
         text = str(reader)
-        if text.startswith("\\\\"):
-            return 'python "%s"` (from Git Bash: `python "%s"`)' % (text, text.replace("\\", "/"))
-        return 'python "%s"`' % text
+        powershell = "python '%s'" % text.replace("'", "''")
+        bash = "python '%s'" % text.replace("\\", "/").replace("'", "'\\''")
+        return "%s` in PowerShell (from Git Bash: `%s`)" % (powershell, bash)
     return "python3 '%s'`" % str(reader).replace("'", "'\\''")
 
 
