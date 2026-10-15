@@ -869,8 +869,10 @@ export class AccountAnalyticsActivityService {
     // The roots a few stats find start reading at once; the OMP marker scan's roots join the queue
     // when that scan finishes, without holding the others back.
     const plan = this.deps.requests ? injectedRequestPlan(this.deps.requests) : localRequestPlan();
+    let discoveryFailed = false;
     const later = plan.later.catch((): AccountAnalyticsActivityRequest[] => {
       failed = true;
+      discoveryFailed = true;
       return [];
     });
     // Every collector runs at once up to a bound sized to the machine; each starts the moment a
@@ -902,22 +904,34 @@ export class AccountAnalyticsActivityService {
     );
     // Roots the deadline left unread make the collection partial.
     if (skipped > 0) failed = true;
+    const discoveryComplete = !discoveryFailed && requests.length < MAX_DIRECTORIES + 1;
     const presence = this.deps.requests === undefined ? localSourcePresence(requests) : null;
     const succeeded = new Set<AccountAnalyticsActivityProvider>();
+    const unfinished = new Map<
+      AccountAnalyticsActivityProvider,
+      'partial' | 'skipped' | 'failed'
+    >();
     const attempted = new Set<AccountAnalyticsActivityProvider>();
     const localEvents = new Map<AccountAnalyticsActivityProvider, number>();
     requests.forEach((source, index) => {
       const result = settled[index];
-      if (!result) return;
       const provider = source.provider;
+      if (!result) {
+        if (!unfinished.has(provider)) unfinished.set(provider, 'skipped');
+        return;
+      }
       attempted.add(provider);
       if (result.status === 'rejected') {
+        unfinished.set(provider, 'failed');
         failed = true;
         return;
       }
       const existing = collected.get(provider) ?? [];
       const data = result.value;
-      if (data.scan && !data.scan.complete) failed = true;
+      if (data.scan && !data.scan.complete) {
+        failed = true;
+        if (unfinished.get(provider) !== 'failed') unfinished.set(provider, 'partial');
+      }
       // An unfinished cold scan with no events is not a measured zero.
       if (data.scan && !data.scan.complete && data.eventCount === 0) return;
       // The analytics response only covers 30 days. Keep bounded recent
@@ -928,7 +942,10 @@ export class AccountAnalyticsActivityService {
       const recentSessions = data.session.filter(
         (session) => Date.parse(session.lastActivity) >= cutoff
       );
-      if (recentSessions.length > MAX_RETAINED_SESSIONS) failed = true;
+      if (recentSessions.length > MAX_RETAINED_SESSIONS) {
+        failed = true;
+        if (unfinished.get(provider) !== 'failed') unfinished.set(provider, 'partial');
+      }
       existing.push({
         ...data,
         daily: [],
@@ -949,6 +966,8 @@ export class AccountAnalyticsActivityService {
       collected,
       requests,
       succeeded,
+      unfinished,
+      discoveryComplete,
       attempted,
       remoteStates: state.remote ? state.remote.states : null,
       remotePending: true,
@@ -1002,6 +1021,8 @@ export class AccountAnalyticsActivityService {
       collected,
       requests,
       succeeded,
+      unfinished,
+      discoveryComplete,
       attempted,
       remoteStates,
       remoteAnswer,
@@ -1027,6 +1048,8 @@ export class AccountAnalyticsActivityService {
       collected: Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>;
       requests: AccountAnalyticsActivityRequest[];
       succeeded: Set<AccountAnalyticsActivityProvider>;
+      unfinished: Map<AccountAnalyticsActivityProvider, 'partial' | 'skipped' | 'failed'>;
+      discoveryComplete: boolean;
       attempted: Set<AccountAnalyticsActivityProvider>;
       remoteStates: AnalyticsRemoteSourceState[] | null;
       remoteAnswer?: RemoteAnswer | null;
@@ -1043,6 +1066,8 @@ export class AccountAnalyticsActivityService {
       collected,
       requests,
       succeeded,
+      unfinished,
+      discoveryComplete,
       attempted,
       remoteStates,
       remoteAnswer,
@@ -1096,6 +1121,8 @@ export class AccountAnalyticsActivityService {
     state.sourceStates = this.buildSourceStates(
       state,
       succeeded,
+      unfinished,
+      discoveryComplete,
       attempted,
       remoteStates,
       localEvents,
@@ -1117,6 +1144,8 @@ export class AccountAnalyticsActivityService {
   private buildSourceStates(
     state: ActivityState,
     succeeded: Set<AccountAnalyticsActivityProvider>,
+    unfinished: Map<AccountAnalyticsActivityProvider, 'partial' | 'skipped' | 'failed'>,
+    discoveryComplete: boolean,
     attempted: Set<AccountAnalyticsActivityProvider>,
     remote: AnalyticsRemoteSourceState[] | null,
     localEvents: Map<AccountAnalyticsActivityProvider, number>,
@@ -1140,7 +1169,41 @@ export class AccountAnalyticsActivityService {
     ] as const) {
       const key = `${tool}\0ubuntu`;
       const old = previous.get(key);
-      if (succeeded.has(tool)) {
+      const pending = unfinished.get(tool);
+      if (!discoveryComplete && !attempted.has(tool) && !pending) {
+        entries.push({
+          tool,
+          host: 'ubuntu',
+          state: 'scanning',
+          lastScanAt: old?.lastScanAt ?? null,
+          rowCount: old?.rowCount ?? 0,
+          detail: 'local discovery is incomplete; the next check continues looking for this tool',
+        });
+      } else if (pending) {
+        const events = localEvents.get(tool) ?? old?.rowCount ?? 0;
+        entries.push({
+          tool,
+          host: 'ubuntu',
+          state:
+            pending === 'skipped'
+              ? 'scanning'
+              : events > 0
+                ? 'cached'
+                : pending === 'failed'
+                  ? 'unavailable'
+                  : 'scanning',
+          lastScanAt: old?.lastScanAt ?? null,
+          rowCount: events,
+          detail:
+            pending === 'failed'
+              ? events > 0
+                ? 'local scan failed; showing records read so far'
+                : 'local scan failed'
+              : pending === 'skipped'
+                ? 'the local scan ran out of time before it reached this tool; it continues on the next check'
+                : 'partial local scan; records read so far are shown and remaining logs continue on the next check',
+        });
+      } else if (succeeded.has(tool)) {
         const events = localEvents.get(tool) ?? 0;
         entries.push({
           tool,
@@ -1153,7 +1216,14 @@ export class AccountAnalyticsActivityService {
           detail: events > 0 ? null : 'no usage recorded in the last 31 days',
         });
       } else if (old && attempted.has(tool)) {
-        entries.push({ ...old, state: old.rowCount > 0 ? 'cached' : 'unavailable' });
+        entries.push({
+          ...old,
+          state: old.rowCount > 0 ? 'cached' : 'unavailable',
+          detail:
+            old.rowCount > 0
+              ? 'local scan failed; showing previously read records'
+              : 'local scan failed',
+        });
       } else if (presence && !presence[tool]) {
         entries.push({
           tool,

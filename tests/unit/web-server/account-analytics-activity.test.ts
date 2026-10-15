@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -134,6 +134,11 @@ describe('native local analytics activity', () => {
     });
     const partial = await service.get(QUERY, FROM, NOW);
     expect(partial.status).toBe('cached');
+    expect(partial.sources?.find((s) => s.tool === 'codex' && s.host === 'ubuntu')).toMatchObject({
+      state: 'cached',
+      lastScanAt: null,
+      detail: expect.stringContaining('partial local scan'),
+    });
     expect(partial.totals?.inputTokens).toBe(100);
     expect(partial.message).toContain('1 of 2 local log files');
     expect(partial.accountAttribution).toBe('unavailable');
@@ -141,6 +146,10 @@ describe('native local analytics activity', () => {
     now += 60000;
     const warm = await settled(service);
     expect(warm.status).toBe('ok');
+    expect(warm.sources?.find((s) => s.tool === 'codex' && s.host === 'ubuntu')).toMatchObject({
+      state: 'ok',
+      lastScanAt: new Date(now).toISOString(),
+    });
     expect(warm.totals).toEqual(partial.totals);
     expect(warm.message).not.toContain('remaining files');
   });
@@ -189,6 +198,10 @@ describe('native local analytics activity', () => {
     });
     const empty = await service.get(QUERY, FROM, NOW);
     expect(empty.status).toBe('unavailable');
+    expect(empty.sources?.find((s) => s.tool === 'codex' && s.host === 'ubuntu')).toMatchObject({
+      state: 'scanning',
+      detail: expect.stringContaining('partial local scan'),
+    });
     expect(empty.totals).toBeNull();
     expect(empty.providers).toEqual([]);
     events = true;
@@ -197,6 +210,44 @@ describe('native local analytics activity', () => {
     expect(tail.totals?.inputTokens).toBe(100);
     expect(tail.message).toContain('1 local log files end with unfinished records');
     expect(tail.message).not.toContain('remaining files resume');
+  });
+  it('keeps a tool skipped by the deadline scanning while real failures stay unavailable', async () => {
+    let wall = Date.now();
+    const clock = spyOn(Date, 'now').mockImplementation(() => wall);
+    const loaded: string[] = [];
+    try {
+      const service = new AccountAnalyticsActivityService({
+        remote: async () => ({ results: [], states: [] }),
+        now: () => NOW,
+        scope: () => 'deadline-fixture',
+        responseBudgetMs: 100,
+        concurrency: 1,
+        requests: () => [
+          { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture' } },
+          {
+            provider: 'codex',
+            request: { kind: 'codex', codexHome: '/fixture', cacheDir: '/fixture/cache' },
+          },
+        ],
+        loadWorker: async (request) => {
+          loaded.push(request.kind);
+          wall += 60_001;
+          throw new Error('fixture read failed');
+        },
+      });
+      const result = await service.get(QUERY, FROM, NOW);
+      expect(loaded).toEqual(['claude']);
+      expect(result.status).toBe('unavailable');
+      expect(result.sources?.find((s) => s.tool === 'codex' && s.host === 'ubuntu')).toMatchObject({
+        state: 'scanning',
+        detail: expect.stringContaining('ran out of time before it reached this tool'),
+      });
+      expect(result.sources?.find((s) => s.tool === 'claude' && s.host === 'ubuntu')).toMatchObject(
+        { state: 'unavailable', detail: 'local scan failed' }
+      );
+    } finally {
+      clock.mockRestore();
+    }
   });
   it('reads a real bounded native worker and excludes proxy-backed Codex rollout records', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-analytics-worker-'));
