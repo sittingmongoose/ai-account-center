@@ -537,6 +537,35 @@ describe('analytics remote sources', () => {
 
   const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias' });
 
+  it('names skipped oversized usage lines in the partial cell state', async () => {
+    const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              kinds: {
+                claude: {
+                  state: 'ok',
+                  partial: true,
+                  fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20, usageSkipped: true } },
+                },
+              },
+              rows: [row({ k: 'claude' })],
+            })
+          )
+        ),
+    });
+    const cells = answer.states.filter((state) => state.tool === 'claude');
+    expect(cells).toHaveLength(3);
+    expect(
+      cells.every(
+        (state) => state.state === 'cached' && state.detail?.includes('oversized log lines')
+      )
+    ).toBe(true);
+  });
+
   it('inventories current VM filenames without transcript contents and notices pruning', () => {
     runWithScopedCcsHome(cache, () => {
       const name = 'a0b63bac-f4aa-4346-b817-096dc2c15c7f.jsonl';

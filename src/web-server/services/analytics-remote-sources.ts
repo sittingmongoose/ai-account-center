@@ -779,6 +779,9 @@ export async function loadAnalyticsRemoteSources(
             // A cap or the deadline cut this tool's own scan short: partial
             // numbers are shown until a later scan finishes it, and with
             // nothing read yet it is still scanning, not failed.
+            const oversized = Object.values(freshPrints[tool] ?? {}).some(
+              (print) => print.usageSkipped === true
+            );
             states.push({
               tool,
               host,
@@ -793,9 +796,11 @@ export async function loadAnalyticsRemoteSources(
                   ? 'some Antigravity conversation databases could not be read (busy or damaged); showing previously read aggregates'
                   : tool === 'codex' && kind?.compressedUnread
                     ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
-                    : kept
-                      ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                      : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+                    : oversized
+                      ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
+                      : kept
+                        ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                        : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }
