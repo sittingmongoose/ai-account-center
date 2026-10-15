@@ -8,6 +8,7 @@
 import { Server as HTTPServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { ok } from '../utils/ui';
+import { closeDashboardSessions } from './middleware/auth-middleware';
 
 /**
  * Setup shutdown handlers for SIGINT and SIGTERM
@@ -25,9 +26,9 @@ export function setupGracefulShutdown(
       cleanup();
     }
 
-    // Close server and exit immediately
+    // Close the server, save the sign-ins (at most 2 s), then exit.
     server.close();
-    process.exit(0);
+    void closeDashboardSessions().finally(() => process.exit(0));
   };
 
   process.on('SIGINT', shutdown);

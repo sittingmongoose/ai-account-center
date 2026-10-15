@@ -15,6 +15,7 @@ import path from 'path';
 import { WebSocketServer } from 'ws';
 import {
   authMiddleware,
+  closeDashboardSessions,
   createSessionMiddleware,
   getDashboardWebSocketRejectionStatus,
   isApiRequestPath,
@@ -314,6 +315,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
     shutdownUsageAggregator();
+    // Saves the sign-ins and stops the session store's timers (the shutdown handlers await it).
+    void closeDashboardSessions();
   };
   server.once('close', cleanup);
 

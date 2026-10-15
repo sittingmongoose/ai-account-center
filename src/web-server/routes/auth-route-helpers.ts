@@ -296,7 +296,9 @@ export interface SignedInSession {
 export interface SignedInSessionOptions {
   /**
    * False gives a browser-session cookie (no expiry; it dies with the
-   * browser) instead of the configured lifetime. Default true.
+   * browser) instead of the configured lifetime. When not given, a rotation
+   * (password change, signing other browsers out) keeps the choice of the
+   * signed-in session it replaces; anything else remembers.
    */
   remember?: boolean;
 }
@@ -320,6 +322,10 @@ async function beginSignedInSession(
 ): Promise<SignedInSession | null> {
   const epoch = await ensureSessionEpoch();
   if (credentialHash !== null && !passwordHashUnchanged(credentialHash)) return null;
+  // Read before the regeneration replaces the cookie with a default one.
+  const remember =
+    options.remember ??
+    !(req.session?.authenticated === true && req.session.cookie && !req.session.cookie.expires);
   if (req.session) {
     const previous = req.sessionID;
     await sessionCall((done) => req.session.regenerate(done));
@@ -341,7 +347,7 @@ async function beginSignedInSession(
   // transport (or on the dashboard computer) is accepted later.
   req.session.signedInOver = credentialTransport(req);
   if (req.session.cookie) {
-    if (options.remember === false) {
+    if (!remember) {
       // No expiry serializes with no Expires attribute: a browser-session cookie.
       req.session.cookie.expires = null;
     } else {
@@ -349,6 +355,9 @@ async function beginSignedInSession(
     }
   }
   await sessionCall((done) => req.session.save(done));
+  // The session store writes the sign-in at once; answer only once it is on disk, so a restart
+  // right after the sign-in keeps it.
+  await (req.sessionStore as { whenSaved?: () => Promise<void> } | undefined)?.whenSaved?.();
   const expires = req.session.cookie?.expires ?? null;
   if (req.sessionID) noteSession(req.sessionID, epoch, expires instanceof Date ? expires : null);
   // Open /ws connections of browsers this epoch no longer includes close now.

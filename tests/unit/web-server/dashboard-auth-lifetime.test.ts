@@ -149,6 +149,23 @@ describe('session lifetime', () => {
     const check = await browser.send('GET', '/api/auth/check');
     expect(check.status).toBe(200);
     expect(check.body).toMatchObject({ authenticated: true });
+    // Signing other browsers out rotates this session and keeps its choice: still no expiry.
+    const rotated = await browser.send('POST', '/api/auth/sessions/revoke-others', {});
+    expect(rotated.status).toBe(200);
+    expect(browser.cookie).toContain('connect.sid=');
+    expect(setCookieExpires(rotated.headers)).toBeNull();
+    expect((await browser.send('GET', '/api/auth/check')).body).toMatchObject({
+      authenticated: true,
+    });
+  });
+
+  it('keeps a remembered session remembered when other browsers are signed out', async () => {
+    harness = await startAuthHarness();
+    const browser = await signedIn(harness);
+    const rotated = await browser.send('POST', '/api/auth/sessions/revoke-others', {});
+    expect(rotated.status).toBe(200);
+    const expires = Date.parse(setCookieExpires(rotated.headers) ?? '');
+    expect(expires - Date.now()).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
   });
 
   it('restarts the expiry countdown on use (idle expiry)', async () => {

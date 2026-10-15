@@ -22,7 +22,7 @@ import { bearerToken, guardApiRequest } from './api-request-guard';
 import { rateLimitClientKey } from './rate-limit-keys';
 import { authKind } from './request-auth';
 import { credentialAllowedOnRequest, isLanProxyPeer, isSecureTransport } from './secure-transport';
-import { isSessionEpochCurrent } from '../services/dashboard-auth-state';
+import { isSessionEpochCurrent, settleCredentialStamp } from '../services/dashboard-auth-state';
 import { DashboardSessionStore } from './dashboard-session-store';
 
 // Extend Express Request with session
@@ -239,6 +239,31 @@ function setAsidePlainSessionBehindProxy(req: Request): void {
   unset.sessionID = undefined;
 }
 
+let activeSessionStore: DashboardSessionStore | null = null;
+let closingSessions: Promise<void> = Promise.resolve();
+
+/**
+ * Saves the sign-ins and stops the session store's timers: the last step before the server
+ * exits. Waits at most `timeoutMs`, so a stuck disk never holds up a shutdown. A second call
+ * while the first is saving waits for the same save.
+ */
+export function closeDashboardSessions(timeoutMs = 2_000): Promise<void> {
+  const store = activeSessionStore;
+  activeSessionStore = null;
+  if (!store) return closingSessions;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  closingSessions = Promise.race([
+    store.close().catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+      timer.unref?.();
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+  return closingSessions;
+}
+
 /**
  * Create session middleware configured for CCS dashboard.
  */
@@ -249,11 +274,18 @@ export function createSessionMiddleware(): (
 ) => void {
   const authConfig = getDashboardAuthConfig();
   const maxAge = effectiveSessionLifetimeDays(authConfig) * 24 * 60 * 60 * 1000;
+  // Sign-ins survive a dashboard restart (the default in-memory store lost them all). A
+  // Remember-me-off session is kept for the lifetime set now, not the one set at startup.
+  activeSessionStore = new DashboardSessionStore({
+    idleMs: () => effectiveSessionLifetimeDays(getDashboardAuthConfig()) * 24 * 60 * 60 * 1000,
+    // A password changed from the CLI or the environment while the dashboard was down signs
+    // every kept session out before the first request is answered.
+    after: settleCredentialStamp(),
+  });
 
   const middleware = session({
     secret: getSessionSecret(),
-    // Sign-ins survive a dashboard restart (the default in-memory store lost them all).
-    store: new DashboardSessionStore({ idleMs: maxAge }),
+    store: activeSessionStore,
     resave: false,
     saveUninitialized: false,
     // Idle expiry: every response restarts the lifetime countdown, so the

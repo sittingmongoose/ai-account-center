@@ -232,7 +232,11 @@ export async function handleBarServe(args: string[], deps: Partial<ServeDeps> = 
     // the Swift app self-heal poll can detect the server is gone via
     // the liveness check, not a stale discovery file.
     console.log('\n[OK] AI Account Center server stopped.');
-    exit(0);
+    // Save the dashboard sign-ins first (at most 2 s), as the dashboard command does.
+    void import('../../web-server/middleware/auth-middleware')
+      .then(({ closeDashboardSessions }) => closeDashboardSessions())
+      .catch(() => undefined)
+      .finally(() => exit(0));
   };
 
   onSignal('SIGINT', shutdown);

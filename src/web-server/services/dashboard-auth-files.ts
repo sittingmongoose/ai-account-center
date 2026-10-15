@@ -47,8 +47,7 @@ export function settleAuthWrites(): Promise<void> {
 }
 
 /** The folder at 0700, created if missing and tightened if looser (this process owns it). */
-export async function ensureAuthDirectory(): Promise<string> {
-  const directory = authDirectory();
+export async function ensureAuthDirectory(directory = authDirectory()): Promise<string> {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   if (process.platform !== 'win32') {
     const stat = await fs.lstat(directory);
@@ -58,9 +57,13 @@ export async function ensureAuthDirectory(): Promise<string> {
   return directory;
 }
 
-/** Atomic 0600 JSON write inside the auth folder; call inside `withAuthWriteGate`. */
+/**
+ * Atomic 0600 JSON write inside the auth folder; call inside `withAuthWriteGate`.
+ * The folder is the file's own, not the one the current CCS_HOME names, so a
+ * write that finishes after the home changed never touches another home.
+ */
 export async function writeAuthJson(file: string, value: unknown): Promise<void> {
-  await ensureAuthDirectory();
+  await ensureAuthDirectory(path.dirname(file));
   await writePrivateJsonFile(file, value);
 }
 

@@ -15,7 +15,11 @@ import {
   passwordHashCost,
   withAuthWriteGate,
 } from '../services/dashboard-auth-files';
-import { bumpSessionEpoch, countOtherSessions } from '../services/dashboard-auth-state';
+import {
+  bumpSessionEpoch,
+  countOtherSessions,
+  saveCredentialStamp,
+} from '../services/dashboard-auth-state';
 import { activeDevices } from '../services/dashboard-device-store';
 import {
   consumeSetupCode,
@@ -150,6 +154,7 @@ async function changePassword(req: Request, res: Response): Promise<void> {
         password_changed_at: changedAt,
       };
     });
+    await saveCredentialStamp().catch(() => undefined);
     return changedAt;
   });
   if (outcome === null) {
@@ -318,6 +323,7 @@ async function completeSetup(req: Request, res: Response): Promise<void> {
         password_changed_at: changedAt,
       };
     });
+    await saveCredentialStamp().catch(() => undefined);
     await consumeSetupCode();
     return true;
   });
