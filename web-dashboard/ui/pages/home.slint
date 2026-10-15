@@ -1667,6 +1667,11 @@ export component AccountSection inherits Plate {
                 for row[i] in root.section.rows: AccountRow {
                     account: row;
                     section: root.section;
+                    // The last row draws no hairline: in a section without a footer it would run
+                    // square past the box's rounded bottom corners.
+                    index: i;
+                    last: i == root.section.rows.length - 1;
+                    round-bottom: i == root.section.rows.length - 1 && !root.section.foot.shown;
                     table: root.table;
                     grid-2x2: root.grid-2x2;
                     ident-w: root.ident-w;
