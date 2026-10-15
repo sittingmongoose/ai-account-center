@@ -168,9 +168,15 @@ function mergeRoots(left: ExperimentRootSet, right: ExperimentRootSet): Experime
   const merged = emptyRootSet();
   for (const kind of KINDS)
     merged[kind] = [...new Set([...left[kind], ...right[kind]])]
-      .sort()
-      .slice(0, EXPERIMENT_MAX_ROOTS);
+      .slice(0, EXPERIMENT_MAX_ROOTS)
+      .sort();
   return merged;
+}
+
+function mergeCapped(left: ExperimentRootSet, right: ExperimentRootSet): ExperimentKind[] {
+  return KINDS.filter(
+    (kind) => new Set([...left[kind], ...right[kind]]).size > EXPERIMENT_MAX_ROOTS
+  );
 }
 
 export interface ExperimentRootsView {
@@ -415,7 +421,15 @@ export function runExperimentRootsSlice(options: ExperimentScanOptions): boolean
       completedAt: now(),
       scanning: false,
       truncated: round.truncated,
-      capped: round.capped,
+      capped: incomplete
+        ? [
+            ...new Set([
+              ...published.capped,
+              ...round.capped,
+              ...mergeCapped(published.roots, round.found),
+            ]),
+          ]
+        : round.capped,
     } satisfies RootsFile);
     try {
       fs.rmSync(path.join(options.cacheDir, WALK_FILE), { force: true });
@@ -435,7 +449,13 @@ export function runExperimentRootsSlice(options: ExperimentScanOptions): boolean
     completedAt: published.completedAt,
     scanning: true,
     truncated: published.truncated || round.truncated,
-    capped: [...new Set([...published.capped, ...round.capped])],
+    capped: [
+      ...new Set([
+        ...published.capped,
+        ...round.capped,
+        ...mergeCapped(published.roots, round.found),
+      ]),
+    ],
   } satisfies RootsFile);
   return true;
 }

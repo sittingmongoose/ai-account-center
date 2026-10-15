@@ -7,6 +7,7 @@ import {
   readExperimentRoots,
   runExperimentRootsSlice,
   EXPERIMENT_ROOTS_TTL_MS,
+  EXPERIMENT_MAX_ROOTS,
 } from '../../../../src/web-server/usage/experiment-usage-roots';
 import {
   classifyUsageLogText,
@@ -165,6 +166,39 @@ describe('experiment usage root discovery', () => {
     const after = readExperimentRoots(cacheDir, { homeDir: home });
     expect(after.truncated).toBe(true);
     expect(after.roots.claude).toEqual(before.roots.claude);
+  });
+
+  it('keeps prior roots at the publication cap instead of replacing unseen roots with new finds', () => {
+    const now = Date.now();
+    const prior = Array.from({ length: EXPERIMENT_MAX_ROOTS }, (_, index) =>
+      path.join(base, `z${index}`)
+    ).sort();
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, 'experiment-usage-roots-v1.json'),
+      JSON.stringify({
+        version: 1,
+        base,
+        roots: { claude: prior, codex: [], muse: [], zcode: [] },
+        digests: {},
+        completedAt: now,
+        scanning: false,
+        truncated: false,
+        capped: [],
+      })
+    );
+    write('a/one.jsonl', lines(transcript));
+    write('b/two.jsonl', lines(transcript));
+    runExperimentRootsSlice({
+      homeDir: home,
+      cacheDir,
+      now: () => now + EXPERIMENT_ROOTS_TTL_MS + 1,
+      maxDirs: 2,
+    });
+    const after = readExperimentRoots(cacheDir, { homeDir: home });
+    expect(after.roots.claude).toEqual(prior);
+    expect(after.capped).toContain('claude');
+    expect(after.truncated).toBe(true);
   });
 
   it('finds every tool by content in private tool homes, at any folder name', async () => {
