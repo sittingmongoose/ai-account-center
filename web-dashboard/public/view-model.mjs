@@ -425,8 +425,9 @@ const emptyCell = (account, key) => ({
 const rolledUpPacks = (account, w) =>
   account?.provider === 'zai' && /^reset-packs-(?:5h|weekly)$/.test(text(w.key));
 
+// Only an amount kept from an earlier reading says so: a whole cached account already says it on its row.
 const cacheProvenance = (account, w, now) => {
-  if (w.status !== 'cached' && account?.status !== 'cached') return '';
+  if (w.status !== 'cached') return '';
   const at = validDate(w.sampledAt) ? w.sampledAt : account?.sampledAt;
   return validDate(at) ? `cached, sampled ${relative(at, now)}` : 'cached';
 };
