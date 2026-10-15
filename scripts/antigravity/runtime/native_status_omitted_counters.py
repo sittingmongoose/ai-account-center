@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 
-NATIVE_SHA256 = '32f9478e47d1d456e090f7ed0a297fcde2fa45ec10839904f03ea1ba00645e49'
+NATIVE_SHA256 = 'b5385638174a5e720e904f3a2678752534fb8414d10c2c302fa16daf56cbcfc9'
 PRODUCER_CONTRACT_SHA256 = '094c93a1f861168b1436648a49920d04eb903c48ad8453b279676c1d65b420fe'
 MAX_FRAME_BYTES = 64 * 1024
 MAX_SAMPLE_AGE_SECONDS = 1.0
@@ -112,7 +112,7 @@ def normalize_idle_fields(
     expected = (binding.expected_email, binding.expected_conversation_id, binding.expected_cwd)
     if any(type(value) is not str or not value for value in expected):
         raise NormalizationRefusal('publisher-unbound')
-    if (frame['email'], frame['conversation_id'], frame['cwd']) != expected or frame['version'] != '1.3.2':
+    if (frame['email'], frame['conversation_id'], frame['cwd']) != expected or frame['version'] != '1.3.5':
         raise NormalizationRefusal('identity-session-or-version-mismatch')
     if frame['agent_state'] != 'idle':
         raise NormalizationRefusal('status-busy-or-unknown')

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "nativeActivationReleased": true,
-  "nativeVersion": "1.3.2",
-  "nativeSha256": "32f9478e47d1d456e090f7ed0a297fcde2fa45ec10839904f03ea1ba00645e49",
-  "nativeProofReceiptSha256": "1dffcebdb955baebc4e63cb1c3991da0655bbd395311e5b54746848ddf17e6d2",
+  "nativeVersion": "1.3.5",
+  "nativeSha256": "b5385638174a5e720e904f3a2678752534fb8414d10c2c302fa16daf56cbcfc9",
+  "nativeProofReceiptSha256": "e9fe00496d058b84e990a071f3f94a84f2fc9c5b29bf40b985343f38cc3baf12",
   "reviewedNatives": [
     {
       "nativeVersion": "1.2.14",
@@ -24,6 +24,10 @@
     {
       "nativeVersion": "1.3.2",
       "nativeSha256": "32f9478e47d1d456e090f7ed0a297fcde2fa45ec10839904f03ea1ba00645e49"
+    },
+    {
+      "nativeVersion": "1.3.5",
+      "nativeSha256": "b5385638174a5e720e904f3a2678752534fb8414d10c2c302fa16daf56cbcfc9"
     }
   ],
   "parser": { "pyte": "0.8.2", "wcwidth": "0.9.1" }

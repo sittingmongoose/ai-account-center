@@ -318,9 +318,9 @@ after each step.
 
 1. Read-only preflight. Stop if any check fails.
    - `sha256sum ~/.local/bin/agy` prints
-     `32f9478e47d1d456e090f7ed0a297fcde2fa45ec10839904f03ea1ba00645e49` (agy
-     1.3.2, the current pin; 1.2.14, 1.2.16, 1.3.0 and 1.3.1 stay in the reviewed
-     set).
+     `b5385638174a5e720e904f3a2678752534fb8414d10c2c302fa16daf56cbcfc9` (agy
+     1.3.5, the current pin; 1.2.14, 1.2.16, 1.3.0, 1.3.1 and 1.3.2 stay in the
+     reviewed set).
    - `pgrep -u "$USER" -x agy` prints nothing.
    - `python3 -I "$PKG/scripts/antigravity/install_runtime.py" --plan` prints
      `"nativeActivationReleased": false` and `"installed": false`.
@@ -376,10 +376,10 @@ after each step.
 An official update invalidates the pin on purpose: activation answers
 `unsupported-runtime-probe`, and status and the dashboard say
 `Antigravity updated to X; switching paused until reviewed` instead of failing.
-Releases follow the same review the 1.2.16, 1.3.0, 1.3.1 and 1.3.2 receipts
-record (`status/AGY-RELEASE-RECEIPT-1.2.16.md`, `status/AGY-RELEASE-RECEIPT-1.3.0.md`,
-`status/AGY-RELEASE-RECEIPT-1.3.1.md`, `status/AGY-RELEASE-RECEIPT-1.3.2.md`): binary
-identity and ownership,
+Releases follow the same review the 1.2.16, 1.3.0, 1.3.1, 1.3.2 and 1.3.5
+receipts record (`status/AGY-RELEASE-RECEIPT-1.2.16.md`, `status/AGY-RELEASE-RECEIPT-1.3.0.md`,
+`status/AGY-RELEASE-RECEIPT-1.3.1.md`, `status/AGY-RELEASE-RECEIPT-1.3.2.md`,
+`status/AGY-RELEASE-RECEIPT-1.3.5.md`): binary identity and ownership,
 changelog, storage layout and permissions, token format and lifecycle, process
 names, status vocabulary and credential backend, all with read-only probes and
 no secrets printed. If the new build is compatible, the release commit appends
