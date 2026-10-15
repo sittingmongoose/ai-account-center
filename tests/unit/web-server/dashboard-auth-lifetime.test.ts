@@ -44,25 +44,25 @@ function setCookieExpires(headers: Headers): string | null {
 }
 
 describe('session lifetime', () => {
-  it('defaults to 30 days in the session and setup answers', async () => {
+  it('defaults to 7 days in the session and setup answers', async () => {
     harness = await startAuthHarness();
     const browser = await signedIn(harness);
     const session = await browser.send('GET', '/api/auth/session');
     expect(session.status).toBe(200);
-    expect(session.body).toMatchObject({ sessionLifetimeDays: 30, sessionTimeoutHours: 720 });
+    expect(session.body).toMatchObject({ sessionLifetimeDays: 7, sessionTimeoutHours: 168 });
     const setup = await browser.send('GET', '/api/auth/setup');
     expect(setup.status).toBe(200);
-    expect(setup.body).toMatchObject({ sessionLifetimeDays: 30, sessionTimeoutHours: 720 });
+    expect(setup.body).toMatchObject({ sessionLifetimeDays: 7, sessionTimeoutHours: 168 });
   });
 
   it('maps a legacy session_timeout_hours to the nearest offered lifetime', () => {
-    expect(effectiveSessionLifetimeDays({ session_timeout_hours: 24 })).toBe(30);
+    expect(effectiveSessionLifetimeDays({ session_timeout_hours: 24 })).toBe(7);
     expect(effectiveSessionLifetimeDays({ session_timeout_hours: 48 })).toBe(1);
     expect(effectiveSessionLifetimeDays({ session_timeout_hours: 168 })).toBe(7);
     expect(effectiveSessionLifetimeDays({ session_timeout_hours: 720 })).toBe(30);
     expect(effectiveSessionLifetimeDays({ session_timeout_hours: 2000 })).toBe(90);
     expect(effectiveSessionLifetimeDays({ session_lifetime_days: 7 })).toBe(7);
-    expect(effectiveSessionLifetimeDays({})).toBe(30);
+    expect(effectiveSessionLifetimeDays({})).toBe(7);
   });
 
   it('saves the lifetime from any signed-in browser and persists both fields', async () => {
@@ -109,7 +109,7 @@ describe('session lifetime', () => {
     );
   });
 
-  it('sets the login cookie from the lifetime, about 30 days out by default', async () => {
+  it('sets the login cookie from the lifetime, about 7 days out by default', async () => {
     harness = await startAuthHarness();
     const browser = new Client(harness);
     const response = await browser.send('POST', '/api/auth/login', {
@@ -120,8 +120,8 @@ describe('session lifetime', () => {
     const expires = setCookieExpires(response.headers);
     expect(expires).toBeTruthy();
     const ms = Date.parse(expires ?? '') - Date.now();
-    expect(ms).toBeGreaterThan(29 * 24 * 3600 * 1000);
-    expect(ms).toBeLessThanOrEqual(30 * 24 * 3600 * 1000);
+    expect(ms).toBeGreaterThan(6 * 24 * 3600 * 1000);
+    expect(ms).toBeLessThanOrEqual(7 * 24 * 3600 * 1000);
   });
 
   it('gives a browser-session cookie when "Remember me" is off', async () => {
@@ -144,7 +144,9 @@ describe('session lifetime', () => {
   it('restarts the expiry countdown on use (idle expiry)', async () => {
     harness = await startAuthHarness();
     const browser = await signedIn(harness);
-    const first = Date.parse(setCookieExpires((await browser.send('GET', '/api/auth/check')).headers) ?? '');
+    const first = Date.parse(
+      setCookieExpires((await browser.send('GET', '/api/auth/check')).headers) ?? ''
+    );
     expect(Number.isFinite(first)).toBe(true);
     const second = await browser.send('GET', '/api/auth/check');
     expect(setCookieExpires(second.headers)).toBeTruthy();

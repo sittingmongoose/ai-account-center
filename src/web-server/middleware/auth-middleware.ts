@@ -23,6 +23,7 @@ import { rateLimitClientKey } from './rate-limit-keys';
 import { authKind } from './request-auth';
 import { credentialAllowedOnRequest, isLanProxyPeer, isSecureTransport } from './secure-transport';
 import { isSessionEpochCurrent } from '../services/dashboard-auth-state';
+import { DashboardSessionStore } from './dashboard-session-store';
 
 // Extend Express Request with session
 declare module 'express-session' {
@@ -251,6 +252,8 @@ export function createSessionMiddleware(): (
 
   const middleware = session({
     secret: getSessionSecret(),
+    // Sign-ins survive a dashboard restart (the default in-memory store lost them all).
+    store: new DashboardSessionStore({ idleMs: maxAge }),
     resave: false,
     saveUninitialized: false,
     // Idle expiry: every response restarts the lifetime countdown, so the

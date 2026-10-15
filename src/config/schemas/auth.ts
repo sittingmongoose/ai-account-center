@@ -158,7 +158,7 @@ export interface DashboardNetworkConfig {
 /** The dashboard session lifetimes Settings offers, in days. */
 export const SESSION_LIFETIME_DAYS = [1, 7, 30, 90, 365] as const;
 export type SessionLifetimeDays = (typeof SESSION_LIFETIME_DAYS)[number];
-export const DEFAULT_SESSION_LIFETIME_DAYS: SessionLifetimeDays = 30;
+export const DEFAULT_SESSION_LIFETIME_DAYS: SessionLifetimeDays = 7;
 
 export function isSessionLifetimeDays(value: unknown): value is SessionLifetimeDays {
   return typeof value === 'number' && (SESSION_LIFETIME_DAYS as readonly number[]).includes(value);
@@ -168,7 +168,7 @@ export function isSessionLifetimeDays(value: unknown): value is SessionLifetimeD
  * The effective session lifetime in days for a dashboard auth config. A saved
  * `session_lifetime_days` wins; otherwise a legacy `session_timeout_hours`
  * maps to the nearest offered lifetime (a bare 24 is the old default, so it
- * takes the new 30-day default); anything else is the 30-day default.
+ * takes the default); anything else is the default, 7 days.
  */
 export function effectiveSessionLifetimeDays(auth: {
   session_lifetime_days?: number;

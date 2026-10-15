@@ -246,8 +246,8 @@ describe('sessions after a password change', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       username: USERNAME,
-      sessionTimeoutHours: 720,
-      sessionLifetimeDays: 30,
+      sessionTimeoutHours: 168,
+      sessionLifetimeDays: 7,
       expiresAt: expect.any(String),
       otherBrowsers: 0,
       passwordChangedAt: null,

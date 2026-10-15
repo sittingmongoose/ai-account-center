@@ -29,6 +29,17 @@ import { Field } from "../components/field.slint";
 import { Reveal } from "../components/reveal.slint";
 import { ProbeMark } from "../components/probe.slint";
 
+// How long a remembered sign-in lasts, from the server's lifetime in hours: "7 days", "1 day", "1 year".
+global SessionLength {
+    public pure function text(hours: int) -> string {
+        if hours <= 0 { return "7 days"; }
+        if hours == 8760 { return "1 year"; }
+        if hours == 24 { return "1 day"; }
+        if mod(hours, 24) == 0 { return (hours / 24) + " days"; }
+        return hours + " hours";
+    }
+}
+
 // The first-run form's confirmation and setup code (public/login-bridge.mjs place): the HTML inputs hold
 // them while they are on screen, lib.rs set_login_setup copies them here, and the Slint fields mirror them
 // whenever the inputs are hidden.
@@ -660,7 +671,10 @@ component TouchCard inherits Rectangle {
         if root.form: Rectangle { height: 10px; }
         if root.form: msg := Rectangle {
             property <bool> on: root.auth.message != "" || root.connecting;
-            property <bool> info: root.connecting || root.auth.notice;
+            // Once signed in, the row fading out keeps the "checking" look it had: dropping to the
+            // error styling for that fade flashed a red alert under the password on a good sign-in.
+            property <bool> checking: root.connecting || (root.signed-in && root.auth.message == "");
+            property <bool> info: msg.checking || root.auth.notice;
             min-height: max(38px, msg-row.preferred-height);
             ProbeMark { x: 0px; y: 0px; width: parent.width; height: msg.height; id: msg.on ? "signin-message" : ""; }
             msg-row := HorizontalLayout {
@@ -676,7 +690,7 @@ component TouchCard inherits Rectangle {
                     padding-top: 1px;
                     horizontal-stretch: 0;
                     Icon {
-                        name: root.connecting ? "server" : msg.info ? "info" : "alert-circle";
+                        name: msg.checking ? "server" : msg.info ? "info" : "alert-circle";
                         tint: msg.info ? Theme.accent-text : Theme.crit-text;
                         width: 15px;
                         height: 15px;
@@ -686,13 +700,13 @@ component TouchCard inherits Rectangle {
                     horizontal-stretch: 1;
                     spacing: 0px;
                     Text {
-                        text: root.connecting ? (root.setup ? "Creating the sign-in on the server." : "Checking with the server.") : root.auth.message;
+                        text: msg.checking ? (root.setup ? "Creating the sign-in on the server." : "Checking with the server.") : root.auth.message;
                         font-size: Type.small;
                         font-weight: msg.info ? 400 : 640;
                         color: msg.info ? Theme.ink-2 : Theme.crit-text;
                         wrap: word-wrap;
                     }
-                    if root.auth.message-sub != "" && !root.connecting: Text {
+                    if root.auth.message-sub != "" && !msg.checking: Text {
                         text: root.auth.message-sub;
                         font-size: Type.small;
                         color: Theme.ink-3;
@@ -986,7 +1000,7 @@ component ScrolledHost inherits Rectangle {
                 if root.footer: Rectangle { height: 20px; }
                 if root.footer: VerticalLayout {
                     spacing: 8px;
-                    FootLine { icon: "clock"; text: "Sessions last " + (root.auth.session-hours > 0 ? root.auth.session-hours : 24) + " hours"; }
+                    FootLine { icon: "clock"; text: "Sessions last " + SessionLength.text(root.auth.session-hours); }
                     FootLine { icon: "link"; text: "The Mac and Windows trays stay signed in with their own device tokens"; }
                 }
                 Rectangle { height: 16px + Device.safe-bottom; }
@@ -1052,7 +1066,7 @@ component ShortHost inherits Rectangle {
                     if root.footer: Rectangle { height: 16px; }
                     if root.footer: VerticalLayout {
                         spacing: 8px;
-                        FootLine { icon: "clock"; text: "Sessions last " + (root.auth.session-hours > 0 ? root.auth.session-hours : 24) + " hours"; }
+                        FootLine { icon: "clock"; text: "Sessions last " + SessionLength.text(root.auth.session-hours); }
                         FootLine { icon: "link"; text: "The Mac and Windows trays stay signed in with their own device tokens"; }
                     }
                 }
@@ -1686,7 +1700,9 @@ export component SignInLayer inherits Rectangle {
                         if root.form: Rectangle { height: root.dshort ? 8px : 12px; }
                         if root.form: msg := Rectangle {
                             property <bool> on: root.auth.message != "" || root.connecting;
-                            property <bool> info: root.connecting || root.auth.notice;
+                            // As in the touch card: a good sign-in fades out with the "checking" look.
+                            property <bool> checking: root.connecting || (root.signed-in && root.auth.message == "");
+                            property <bool> info: msg.checking || root.auth.notice;
                             min-height: max(root.dshort ? 34px : 38px, msg-row.preferred-height);
                             ProbeMark { x: 0px; y: 0px; width: parent.width; height: msg.height; id: !root.scrollable && msg.on ? "signin-message" : ""; }
                             msg-row := HorizontalLayout {
@@ -1702,7 +1718,7 @@ export component SignInLayer inherits Rectangle {
                                     padding-top: 1px;
                                     horizontal-stretch: 0;
                                     Icon {
-                                        name: root.connecting ? "server" : msg.info ? "info" : "alert-circle";
+                                        name: msg.checking ? "server" : msg.info ? "info" : "alert-circle";
                                         tint: msg.info ? Theme.accent-text : Theme.crit-text;
                                         width: 15px;
                                         height: 15px;
@@ -1712,13 +1728,13 @@ export component SignInLayer inherits Rectangle {
                                     horizontal-stretch: 1;
                                     spacing: 0px;
                                     Text {
-                                        text: root.connecting ? (root.setup ? "Creating the sign-in on the server." : "Checking with the server.") : root.auth.message;
+                                        text: msg.checking ? (root.setup ? "Creating the sign-in on the server." : "Checking with the server.") : root.auth.message;
                                         font-size: 12.5px;
                                         font-weight: msg.info ? 400 : 640;
                                         color: msg.info ? Theme.ink-2 : Theme.crit-text;
                                         wrap: word-wrap;
                                     }
-                                    if root.auth.message-sub != "" && !root.connecting: Text {
+                                    if root.auth.message-sub != "" && !msg.checking: Text {
                                         text: root.auth.message-sub;
                                         font-size: 12.5px;
                                         color: Theme.ink-3;
@@ -1889,7 +1905,7 @@ export component SignInLayer inherits Rectangle {
             spacing: 8px;
             VerticalLayout { alignment: center; Icon { name: "clock"; tint: Theme.ink-4; width: 15px; height: 15px; } }
             Text {
-                text: "Sessions last " + (root.auth.session-hours > 0 ? root.auth.session-hours : 24) + " hours";
+                text: "Sessions last " + SessionLength.text(root.auth.session-hours);
                 font-size: 12.5px;
                 color: Theme.ink-3;
                 vertical-alignment: center;

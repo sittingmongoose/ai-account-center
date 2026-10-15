@@ -15,7 +15,8 @@ import { requireBrowserSession } from './auth-session-routes';
 
 /**
  * The session lifetime setting (Settings): 1, 7, 30, 90 or 365 days,
- * default 30. The session cookie and the idle expiry follow it.
+ * default 7. The session cookie and the idle expiry follow it, and sign-ins survive a dashboard
+ * restart (DashboardSessionStore).
  *
  * - `GET /api/auth/session-lifetime` reads it (any signed-in browser).
  * - `PUT /api/auth/session-lifetime` `{days}` saves it to config.yaml from

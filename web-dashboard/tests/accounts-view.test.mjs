@@ -1736,7 +1736,7 @@ test('connection facts and the sign-in block say only what the browser and serve
   const none = accountsViewModel(data([account()]), { now });
   assert.equal(none.signin.othersText, 'Not reported');
   assert.equal(none.signin.passwordCan, false);
-  assert.equal(none.signin.session, 'lasts 1 day');
+  assert.equal(none.signin.session, 'lasts 7 days');
 });
 
 test('the trusted local network line: this computer, trusted, not trusted, and Turn on only where it is allowed', () => {

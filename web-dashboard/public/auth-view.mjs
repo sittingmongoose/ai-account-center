@@ -100,11 +100,11 @@ export function signedInAt(storage) {
  * When the server reports no session but this browser had one: why it ended. 'expired' after the session
  * length, 'ended' before it (the server restarted or signed it out), null when this browser never signed in.
  */
-export function endedReason(at, hours = 24, now = Date.now()) {
+export function endedReason(at, hours = 168, now = Date.now()) {
   if (!Number.isFinite(at)) return null;
   return now - at >= hours * 3_600_000 - 60_000 ? 'expired' : 'ended';
 }
-export function expiredBanner(reason, hours = 24) {
+export function expiredBanner(reason, hours = 168) {
   if (reason === 'revoked') {
     return { title: 'Signed out from another browser', body: 'This browser was signed out from another one, with Sign out other browsers, a password change or Sign out all devices. Sign in again to continue.' };
   }

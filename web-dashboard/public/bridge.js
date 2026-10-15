@@ -55,7 +55,7 @@ let openDetailsId = '';
 // Counts Details opens, so a click outside the panel can tell a row click (which opens that row) from any other.
 let detailsOpens = 0;
 // Sign-in: the session length from GET /api/auth/setup, and what the first-run form may do.
-let sessionHours = 24;
+let sessionHours = 168;
 let setupInfo = { form: false, codeRequired: false };
 let authNonce = 0;
 // GET /api/auth/check as last read: the trusted local network state and this connection, for the sign-in page's

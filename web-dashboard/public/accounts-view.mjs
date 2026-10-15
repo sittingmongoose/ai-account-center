@@ -939,7 +939,7 @@ export function lifetimeWord(days, hours = 0) {
   if (days === 365) return '1 year';
   if (Number.isInteger(hours) && hours > 0 && hours % 24 === 0) return lifetimeWord(hours / 24);
   if (Number.isInteger(hours) && hours > 0) return `${hours} hours`;
-  return '30 days';
+  return '7 days';
 }
 const LIFETIME_OPTIONS = [1, 7, 30, 90, 365];
 
@@ -947,9 +947,9 @@ function signinFacts(ctx, now) {
   const s = ctx.signin || {};
   const session = s.session || null;
   const hours = Number.isInteger(session?.sessionTimeoutHours) && session.sessionTimeoutHours > 0 ? session.sessionTimeoutHours
-    : Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 24;
+    : Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 168;
   const days = LIFETIME_OPTIONS.includes(session?.sessionLifetimeDays) ? session.sessionLifetimeDays
-    : hours % 24 === 0 && LIFETIME_OPTIONS.includes(hours / 24) ? hours / 24 : 30;
+    : hours % 24 === 0 && LIFETIME_OPTIONS.includes(hours / 24) ? hours / 24 : 7;
   const lasts = lifetimeWord(days, hours);
   const host = text(ctx.host) || 'this dashboard';
   const transport = ctx.transport || 'http';
@@ -1008,7 +1008,7 @@ function signinFacts(ctx, now) {
 }
 function connectionFacts(ctx) {
   const transport = ctx.transport || 'http';
-  const hours = Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 24;
+  const hours = Number.isInteger(ctx.sessionHours) && ctx.sessionHours > 0 ? ctx.sessionHours : 168;
   const trusted = networkKnown(ctx.signin?.network) ? ctx.signin.network.trustLocalNetwork === true : ctx.check?.trustedLocalNetwork === true;
   return [
     { label: 'Dashboard', value: text(ctx.origin) || 'Unknown', mono: true },
