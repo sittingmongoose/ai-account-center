@@ -77,6 +77,9 @@ component IncludedLines inherits VerticalLayout {
     // So does any body too narrow for every computer's column at 120 px ("Cached, 2h 59m ago"
     // never elides): with four computers that is a body under 616 px.
     property <bool> list: root.narrow || root.body-w < 96px + AxData.included-hosts.length * 130px;
+    // Every computer's column has the same width in the header and in each row. Stretching cells
+    // shared the spare width by text length, so "OK, 1m ago" and "Cached, 2h 59m ago" drifted apart.
+    property <length> col-w: max(0px, (root.body-w - 96px - AxData.included-hosts.length * 10px) / max(1, AxData.included-hosts.length));
     spacing: 0px;
     Text { text: "Included usage"; font-size: 14px; font-weight: 640; color: Theme.ink; min-height: 20px; }
     Rectangle { height: 6px; }
@@ -85,8 +88,9 @@ component IncludedLines inherits VerticalLayout {
     if !root.list: HorizontalLayout {
         spacing: 10px;
         min-height: 22px;
+        alignment: start;
         Rectangle { width: 96px; }
-        for h in AxData.included-hosts: Caps { text: h; horizontal-stretch: 1; min-width: 0px; }
+        for h in AxData.included-hosts: Caps { text: h; width: root.col-w; }
     }
     // Only one of the grid and the list exists: a hidden (visible: false) one would still take its
     // height in the layout and leave a blank band in the popover.
@@ -96,8 +100,9 @@ component IncludedLines inherits VerticalLayout {
             HorizontalLayout {
                 spacing: 10px;
                 min-height: 28px;
+                alignment: start;
                 Text { text: r.tool; width: 96px; font-size: 12.5px; font-weight: 560; color: Theme.ink; vertical-alignment: center; overflow: elide; }
-                for c in r.cells: SrcCell { c: c; }
+                for c in r.cells: SrcCell { c: c; width: root.col-w; }
             }
         }
     }
