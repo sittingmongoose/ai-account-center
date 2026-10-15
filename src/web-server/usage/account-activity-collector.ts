@@ -1297,8 +1297,8 @@ async function collectAntigravityAccountActivity(
       });
       if (fresh.state === 'error') failed++;
       else if (fresh.truncated) truncated = true;
+      else if (fresh.unreadable) failed++;
       else {
-        if (fresh.unreadable) failed++;
         const keys = Object.keys(fresh.fingerprints);
         const unchanged =
           keys.length > 0 &&
@@ -2065,14 +2065,17 @@ function loadLastResult(directory: string, minDate: number): UsageWorkerResult |
     const value = JSON.parse(fs.readFileSync(file, 'utf8')) as UsageWorkerResult;
     if (!Array.isArray(value.hourly) || !Array.isArray(value.session)) return null;
     const cutoff = new Date(minDate).toISOString();
+    const hourly = value.hourly.filter(
+      (hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= minDate - 3_600_000
+    );
     return {
       daily: [],
       monthly: [],
-      hourly: value.hourly.filter(
-        (hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= minDate - 3_600_000
-      ),
+      hourly,
       session: value.session.filter((session) => session.lastActivity >= cutoff),
-      eventCount: Number.isSafeInteger(value.eventCount) ? value.eventCount : 0,
+      eventCount: hourly.reduce((sum, hour) => sum + (hour.requestCount ?? 0), 0),
+      readAt:
+        typeof value.readAt === 'string' ? value.readAt : fs.statSync(file).mtime.toISOString(),
     };
   } catch {
     return null;
@@ -2085,6 +2088,7 @@ function saveLastResult(directory: string, result: UsageWorkerResult): void {
       hourly: result.hourly,
       session: result.session,
       eventCount: result.eventCount,
+      readAt: new Date().toISOString(),
     });
     if (Buffer.byteLength(body) > MAX_CACHE_BYTES) return;
     const file = path.join(directory, LAST_RESULT_FILE);
@@ -2219,8 +2223,10 @@ async function collectExperimentActivity(
       [],
       true
     );
-    if (referenceIssues.failed) referenceComplete = false;
-    issues.failed += referenceIssues.failed;
+    if (referenceIssues.failed) {
+      referenceComplete = false;
+      issues.failed += referenceIssues.failed;
+    }
     // Codex/Muse: only default logs of a session an experiment log names can hold its records.
     const before = issues.failed;
     statFiles(

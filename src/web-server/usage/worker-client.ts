@@ -94,6 +94,8 @@ export type UsageWorkerRequest =
   | { kind: 'experiment-roots'; cacheDir: string };
 
 export interface UsageWorkerResult {
+  /** Saved result's original read time when an experiment replays its last safe aggregate. */
+  readAt?: string;
   daily: DailyUsage[];
   hourly: HourlyUsage[];
   monthly: MonthlyUsage[];

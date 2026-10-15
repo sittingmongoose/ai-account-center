@@ -23,10 +23,37 @@ try {
 }
 
 let home: string;
+const homeEnvKeys = [
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'CCS_HOME',
+  'CCS_DIR',
+  'ANTIGRAVITY_DATA_DIR',
+  'ZCODE_DB_PATH',
+  'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR',
+  'MUSE_SESSIONS_DIR',
+  'PI_CODING_AGENT_DIR',
+  'OMP_SESSION_DIRS',
+];
+let savedHomeEnv: Record<string, string | undefined>;
 beforeEach(() => {
+  savedHomeEnv = Object.fromEntries(homeEnvKeys.map((key) => [key, process.env[key]]));
+  for (const key of homeEnvKeys) delete process.env[key];
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-analytics-remote-'));
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.CCS_HOME = path.join(home, 'ccs');
 });
-afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
+afterEach(() => {
+  for (const [key, value] of Object.entries(savedHomeEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  fs.rmSync(home, { recursive: true, force: true });
+});
 
 function ompRecord(model = 'deepseek-v4.1-flash', cost = 0.25) {
   return JSON.stringify({
@@ -137,6 +164,8 @@ function runPatchedHelper(
       ...process.env,
       HOME: home,
       USERPROFILE: home,
+      HOMEDRIVE: undefined,
+      HOMEPATH: undefined,
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
     },
@@ -172,6 +201,8 @@ function runHelper(request: Record<string, unknown>): Record<string, unknown> {
       ...process.env,
       HOME: home,
       USERPROFILE: home,
+      HOMEDRIVE: undefined,
+      HOMEPATH: undefined,
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
     },
@@ -247,6 +278,21 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     const result = runPatchedHelper({ kinds: ['omp'], minDateMs: MIN_DATE }, { WALK_MAX_DIRS: 4 });
     expect((result.rows as Array<{ n: number }>).reduce((sum, row) => sum + row.n, 0)).toBe(1);
     expect(result.truncated).toBe(false);
+  });
+
+  it('binds Python and native collector subprocesses to the temporary profile on Windows too', () => {
+    const result = JSON.parse(
+      execFileSync(
+        'python3',
+        [
+          '-c',
+          'import os,json; print(json.dumps([os.path.expanduser("~"), os.environ.get("USERPROFILE"), os.environ.get("HOMEDRIVE"), os.environ.get("HOMEPATH")]))',
+        ],
+        { encoding: 'utf8' }
+      )
+    );
+    expect(result).toEqual([home, home, null, null]);
+    expect(process.env.CCS_HOME).toBe(path.join(home, 'ccs'));
   });
 
   it('reaches Muse subagent logs past thousands of tool-output folders, which hold no log', () => {
@@ -408,7 +454,8 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       runHelper({ kinds: ['omp'], minDateMs: MIN_DATE, extraRoots: { omp: ['/x/../y'] } })
     ).toThrow();
     // Saved extra roots stay capped at 16 per kind; zcode also takes the experiment databases.
-    const many = (count: number) => Array.from({ length: count }, (_, i) => `/nope/${i}.sqlite`);
+    const many = (count: number) =>
+      Array.from({ length: count }, (_, i) => path.join(home, 'nope', `${i}.sqlite`));
     expect(() =>
       runHelper({ kinds: ['claude'], minDateMs: MIN_DATE, extraRoots: { claude: many(17) } })
     ).toThrow();
@@ -684,7 +731,16 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
         ].join('\n'),
         dbPath,
       ],
-      { stdio: ['pipe', 'pipe', 'pipe'] }
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          HOMEDRIVE: undefined,
+          HOMEPATH: undefined,
+        },
+      }
     );
     try {
       await new Promise<void>((resolve, reject) => {
@@ -1161,6 +1217,8 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
         ...process.env,
         HOME: home,
         USERPROFILE: home,
+        HOMEDRIVE: undefined,
+        HOMEPATH: undefined,
         PYTHONIOENCODING: 'utf-8',
         PYTHONUTF8: '1',
       },

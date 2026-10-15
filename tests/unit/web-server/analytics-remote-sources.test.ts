@@ -32,10 +32,20 @@ import { withLfLineEndings } from '../../../src/utils/packaged-source';
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 let cache: string;
+let previousConfig: Record<string, string | undefined>;
 beforeEach(() => {
+  previousConfig = { CCS_HOME: process.env.CCS_HOME, CCS_DIR: process.env.CCS_DIR };
   cache = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-remote-sources-'));
+  process.env.CCS_HOME = cache;
+  delete process.env.CCS_DIR;
 });
-afterEach(() => fs.rmSync(cache, { recursive: true, force: true }));
+afterEach(() => {
+  for (const [key, value] of Object.entries(previousConfig)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  fs.rmSync(cache, { recursive: true, force: true });
+});
 
 // The helper's file keys are SHA-256 hex digests; the server refuses anything else.
 const FILE_1 = 'a1'.repeat(32);
@@ -357,6 +367,172 @@ describe('analytics remote helper integrity', () => {
 });
 
 describe('analytics remote sources', () => {
+  it('keeps per-kind dates and measured empty states through pending, errors and cache fallback', async () => {
+    let now = Date.parse('2026-10-02T00:00:00Z');
+    let pass = 0;
+    const deps = {
+      cacheDir: cache,
+      now: () => now,
+      hosts: async () => ({ mac: 'fixture', windows: '', nas1: '' }),
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              kinds: {
+                omp: {
+                  state: pass ? 'pending' : 'ok',
+                  fingerprints: pass ? {} : { [FILE_1]: { size: 10, mtimeMs: 20 } },
+                },
+                muse: { state: pass ? 'error' : 'ok', fingerprints: {} },
+                zcode: { state: 'ok', fingerprints: {} },
+              },
+              rows: pass ? [] : [row()],
+            })
+          )
+        ),
+    };
+    await loadAnalyticsRemoteSources(MIN_DATE, deps);
+    const first = new Date(now).toISOString();
+    pass++;
+    now += 3 * 3_600_000;
+    const next = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+    expect(next.states.find((entry) => entry.host === 'mac' && entry.tool === 'omp')).toMatchObject(
+      { state: 'scanning', lastScanAt: first, rowCount: 2 }
+    );
+    expect(
+      next.states.find((entry) => entry.host === 'mac' && entry.tool === 'muse')
+    ).toMatchObject({ state: 'unavailable', lastScanAt: first });
+    const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
+    expect(
+      cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'omp')
+    ).toMatchObject({ state: 'cached', lastScanAt: first });
+    expect(
+      cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'muse')
+    ).toMatchObject({ state: 'no_usage', lastScanAt: first });
+    expect(
+      cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'zcode')
+    ).toMatchObject({ state: 'no_usage', lastScanAt: new Date(now).toISOString() });
+    expect(
+      cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'claude')
+    ).toMatchObject({ state: 'unavailable', lastScanAt: null });
+  });
+
+  it('treats an omitted requested kind as a failed read and retains its earlier rows and time', async () => {
+    let pass = 0;
+    const at = Date.parse('2026-10-02T00:00:00Z');
+    const deps = {
+      cacheDir: cache,
+      now: () => at + pass * 3_600_000,
+      hosts: async () => ({ mac: 'fixture', windows: '', nas1: '' }),
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(JSON.stringify(response(pass ? { kinds: {}, rows: [] } : {}))),
+    };
+    await loadAnalyticsRemoteSources(MIN_DATE, deps);
+    pass++;
+    const next = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+    expect(next.results.find((entry) => entry.tool === 'omp')?.data.eventCount).toBe(2);
+    expect(next.states.find((entry) => entry.host === 'mac' && entry.tool === 'omp')).toMatchObject(
+      { state: 'cached', lastScanAt: new Date(at).toISOString() }
+    );
+  });
+
+  it('never saves fresh fingerprints for zcode rows discarded after a database error', async () => {
+    let pass = 0;
+    let retried = false;
+    const deps = {
+      cacheDir: cache,
+      hosts: async () => ({ mac: 'fixture', windows: '', nas1: '' }),
+      runHelper: async (
+        _alias: string,
+        _host: AnalyticsRemoteHost,
+        request: import('../../../src/web-server/services/analytics-remote-transport').AnalyticsRemoteRequest
+      ) => {
+        if (pass === 2 && request.kinds.includes('zcode')) {
+          expect(request.fingerprints.zcode?.[FILE_1]).toBeUndefined();
+          expect(request.fingerprints.zcode?.[DB_1]).toEqual({ size: 10, mtimeMs: 20 });
+          retried = true;
+        }
+        return parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              kinds: {
+                zcode: {
+                  state: pass === 1 ? 'error' : 'ok',
+                  fingerprints: pass
+                    ? { [DB_1]: { size: 10, mtimeMs: 20 }, [FILE_1]: { size: 30, mtimeMs: 40 } }
+                    : { [DB_1]: { size: 10, mtimeMs: 20 } },
+                },
+              },
+              rows: pass ? [row({ k: 'zcode', n: 12 })] : [row({ k: 'zcode', f: DB_1, n: 3 })],
+            })
+          )
+        );
+      },
+    };
+    expect(
+      (await loadAnalyticsRemoteSources(MIN_DATE, deps)).results.find(
+        (entry) => entry.tool === 'zcode'
+      )?.data.eventCount
+    ).toBe(3);
+    pass++;
+    expect(
+      (await loadAnalyticsRemoteSources(MIN_DATE, deps)).results.find(
+        (entry) => entry.tool === 'zcode'
+      )?.data.eventCount
+    ).toBe(3);
+    pass++;
+    expect(
+      (await loadAnalyticsRemoteSources(MIN_DATE, deps)).results.find(
+        (entry) => entry.tool === 'zcode'
+      )?.data.eventCount
+    ).toBe(15);
+    expect(retried).toBe(true);
+  });
+
+  it('retains Antigravity store rows, sessions and prints while a conversation is unreadable', async () => {
+    let pass = 0;
+    const at = Date.parse('2026-10-02T00:00:00Z');
+    const deps = {
+      cacheDir: cache,
+      now: () => at + pass * 3_600_000,
+      hosts: async () => ({ mac: 'fixture', windows: '', nas1: '' }),
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              kinds: {
+                antigravity: {
+                  state: 'ok',
+                  unreadable: pass > 0,
+                  fingerprints: pass ? {} : { [FILE_1]: { size: 10, mtimeMs: 20 } },
+                },
+              },
+              rows: pass ? [] : [row({ k: 'antigravity' })],
+              srows: pass ? [] : [srow({ k: 'antigravity' })],
+            })
+          )
+        ),
+    };
+    await loadAnalyticsRemoteSources(MIN_DATE, deps);
+    pass++;
+    const next = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+    expect(next.results.find((entry) => entry.tool === 'antigravity')?.data.eventCount).toBe(2);
+    expect(next.results.find((entry) => entry.tool === 'antigravity')?.data.session).toHaveLength(
+      1
+    );
+    expect(
+      next.states.find((entry) => entry.host === 'mac' && entry.tool === 'antigravity')
+    ).toMatchObject({
+      state: 'cached',
+      lastScanAt: new Date(at).toISOString(),
+      detail: expect.stringContaining('could not be read'),
+    });
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(cache, 'analytics-remote-v1', 'mac.json'), 'utf8')
+    );
+    expect(saved.fingerprints.antigravity).toEqual({ [FILE_1]: { size: 10, mtimeMs: 20 } });
+  });
+
   const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias' });
 
   it('merges per-host aggregates and converts them to worker results', async () => {

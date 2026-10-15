@@ -23,11 +23,15 @@ describe('ccs/no-new-throw-error rule logic', () => {
     };
   }
 
-  function runRule(throwNode: unknown, allowlist: string[]): Array<{ messageId: string }> {
+  function runRule(
+    throwNode: unknown,
+    allowlist: string[],
+    filename = FILENAME
+  ): Array<{ messageId: string }> {
     const reports: Array<{ messageId: string }> = [];
     const context = {
       options: [{ allowlist }],
-      getFilename: () => FILENAME,
+      getFilename: () => filename,
       report: (r: { messageId: string }) => reports.push(r),
     };
     const visitors = rule.create(context);
@@ -36,7 +40,10 @@ describe('ccs/no-new-throw-error rule logic', () => {
   }
 
   const newErrorArg = { type: 'NewExpression', callee: { type: 'Identifier', name: 'Error' } };
-  const newTypedArg = { type: 'NewExpression', callee: { type: 'Identifier', name: 'ConfigError' } };
+  const newTypedArg = {
+    type: 'NewExpression',
+    callee: { type: 'Identifier', name: 'ConfigError' },
+  };
   const rethrowArg = { type: 'Identifier', name: 'err' };
 
   test('flags a throw new Error off the allowlist', () => {
@@ -44,15 +51,21 @@ describe('ccs/no-new-throw-error rule logic', () => {
   });
 
   test('passes a throw new Error that is on the allowlist (file:line match)', () => {
-    expect(runRule(node(newErrorArg, 1), [`${FILENAME}:1`]).some((r) => r.messageId === 'unexpected')).toBe(
-      false
+    expect(
+      runRule(node(newErrorArg, 1), [`${FILENAME}:1`]).some((r) => r.messageId === 'unexpected')
+    ).toBe(false);
+  });
+
+  test('matches Windows path separators against the portable baseline', () => {
+    expect(runRule(node(newErrorArg, 1), [`${FILENAME}:1`], FILENAME.replace(/\//g, '\\'))).toEqual(
+      []
     );
   });
 
   test('flags when the throw line differs from the allowlisted line', () => {
-    expect(runRule(node(newErrorArg, 2), [`${FILENAME}:1`]).some((r) => r.messageId === 'unexpected')).toBe(
-      true
-    );
+    expect(
+      runRule(node(newErrorArg, 2), [`${FILENAME}:1`]).some((r) => r.messageId === 'unexpected')
+    ).toBe(true);
   });
 
   test('passes typed throws (ConfigError / AuthError)', () => {

@@ -134,14 +134,14 @@ describe('extra usage-log sources', () => {
     expect(requests.map((entry) => entry.provider)).toEqual(['jsonl', 'jsonl']);
   });
 
-  it('bounds the extra requests like the built-ins', () => {
+  it('keeps all extra requests for the bounded scheduler to rotate across passes', () => {
     const sources: UsageLogSource[] = [];
     for (let index = 0; index < 40; index++) {
       const dir = path.join(root, `omp-${index}`);
       fs.mkdirSync(dir, { recursive: true });
       sources.push(source({ id: `x-${index}`, tool: 'omp', path: dir }));
     }
-    expect(extras(sources).length).toBe(24);
+    expect(extras(sources).length).toBe(40);
   });
 
   it('counts overlapping built-in OMP, Claude and JSONL sources once, retaining parent-only files', async () => {

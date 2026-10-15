@@ -39,9 +39,10 @@ export function collectorConcurrency(
  * slot frees, so no item ever waits for a slow sibling to finish (there are no fixed batches).
  * Items come in batches: an array's items start at once, before this returns; a batch that is
  * still resolving (a slow discovery step) adds its items when it resolves, and a rejected one adds
- * none. At most `maxItems` items are taken,
- * in arrival order; `index` is an item's arrival position, so callers can keep results in a fixed
- * order however the tasks finish. `stop()` is asked before each start: once it says true, queued
+ * none. At most `maxItems` tasks start. Every discovered item is returned, including those the
+ * cap skipped. Queued items start by optional priority, otherwise arrival order; `index` is an
+ * item's arrival position, so callers can keep results in a fixed order however the tasks finish.
+ * `stop()` is asked before each start: once it says true, queued
  * items are left unstarted and counted as `skipped`. A task that throws or rejects only ends its
  * own slot. Resolves when every batch is in and every started task has settled.
  */
@@ -49,7 +50,7 @@ export function runBounded<T>(
   batches: ReadonlyArray<readonly T[] | Promise<readonly T[]>>,
   limit: number,
   task: (item: T, index: number) => Promise<unknown>,
-  options: { stop?: () => boolean; maxItems?: number } = {}
+  options: { stop?: () => boolean; maxItems?: number; priority?: (item: T) => number } = {}
 ): Promise<{ items: T[]; skipped: number }> {
   const slots = Math.max(1, Math.floor(limit));
   const maxItems = options.maxItems ?? Infinity;
@@ -61,14 +62,18 @@ export function runBounded<T>(
     let waiting = batches.length;
     let skipped = 0;
     let done = false;
+    let started = 0;
     const pump = (): void => {
+      const priority = options.priority;
+      if (priority) queue.sort((a, b) => priority(items[a]) - priority(items[b]));
       while (active < slots && queue.length > 0) {
         const index = queue.shift() as number;
-        if (stop()) {
+        if (stop() || started >= maxItems) {
           skipped++;
           continue;
         }
         active++;
+        started++;
         let running: Promise<unknown>;
         try {
           running = Promise.resolve(task(items[index], index));
@@ -89,7 +94,6 @@ export function runBounded<T>(
     };
     const take = (list: readonly T[]): void => {
       for (const item of list) {
-        if (items.length >= maxItems) break;
         queue.push(items.length);
         items.push(item);
       }

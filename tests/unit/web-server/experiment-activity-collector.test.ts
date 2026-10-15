@@ -180,6 +180,52 @@ describe('Claude experiment roots', () => {
     expect(total(data, 'outputTokens')).toBe(3);
   });
 
+  it('dates a replay with its saved read time and recounts only retained hourly events', async () => {
+    const reference = put('claude/projects/p/s.jsonl', [transcriptLine('default', 10)]);
+    put('exp/a/sessions/s.jsonl', [
+      transcriptLine('old', 3, '2026-09-01T15:00:00Z'),
+      transcriptLine('recent', 7),
+    ]);
+    const roots = [path.join(root, 'exp/a/sessions')];
+    expect((await experiment(roots)).eventCount).toBe(2);
+    const cacheRoot = path.join(root, 'cache', 'account-activity-v1');
+    const savedFile = fs
+      .readdirSync(cacheRoot)
+      .map((dir) => path.join(cacheRoot, dir, 'last-result.json'))
+      .find((candidate) => fs.existsSync(candidate));
+    expect(savedFile).toBeDefined();
+    const saved = JSON.parse(fs.readFileSync(savedFile!, 'utf8'));
+    fs.appendFileSync(
+      reference,
+      jsonl(Array.from({ length: 40 }, (_, index) => transcriptLine(`default-${index}`, 1)))
+    );
+    const replay = await collectAccountActivity(
+      { kind: 'claude', projectsDir: projects(), experimentRoots: roots },
+      {
+        minDate: Date.parse('2026-09-20T00:00:00Z'),
+        cacheDir: path.join(root, 'cache'),
+        maxBytesPerFile: 1,
+      }
+    );
+    expect(replay.scan?.complete).toBe(false);
+    expect(replay.readAt).toBe(saved.readAt);
+    expect(replay.eventCount).toBe(1);
+    expect(replay.hourly).toHaveLength(1);
+    expect(total(replay, 'outputTokens')).toBe(7);
+  });
+
+  it('counts failed reference walks in the experiment scan failure count', async () => {
+    put('claude/projects/p/s.jsonl', [transcriptLine('default', 10)]);
+    put('exp/s.jsonl', [transcriptLine('new', 7)]);
+    const result = await collectAccountActivity(
+      { kind: 'claude', projectsDir: projects(), experimentRoots: [path.join(root, 'exp')] },
+      { minDate, cacheDir: path.join(root, 'cache'), traversalLimits: { maxDirectories: 1 } }
+    );
+    expect(result.scan?.complete).toBe(false);
+    expect(result.scan?.failedFiles).toBeGreaterThan(0);
+    expect(result.eventCount).toBe(0);
+  });
+
   it('checks copies against every default Claude root, account instances included (S1)', async () => {
     put('claude/projects/p/s.jsonl', [transcriptLine('m1', 10)]);
     // A response stored under an account instance, and its experiment copy.
@@ -396,10 +442,23 @@ describe('Codex and Muse experiment roots', () => {
 });
 
 describe('zcode experiment databases', () => {
+  const envKeys = ['HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'CCS_HOME', 'CCS_DIR'];
+  let savedEnv: Record<string, string | undefined>;
   beforeEach(() => {
+    savedEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    for (const key of envKeys) delete process.env[key];
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-exp-zcode-'));
+    process.env.HOME = root;
+    process.env.USERPROFILE = root;
+    process.env.CCS_HOME = path.join(root, 'ccs');
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  afterEach(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   function database(relative: string, inputs: number[]): string {
     const file = path.join(root, relative);
     fs.mkdirSync(path.dirname(file), { recursive: true });

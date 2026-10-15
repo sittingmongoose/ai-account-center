@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../utils/config-manager';
 import { getClaudeProjectsDirForAnalytics } from '../../utils/claude-config-path';
@@ -68,6 +69,10 @@ export {
 export { detectAccountAnalyticsAnomalies } from './account-analytics-anomalies';
 
 interface ActivityState {
+  local: Map<string, SourceData>;
+  requests: AccountAnalyticsActivityRequest[];
+  attempts: Map<string, number>;
+  attemptSequence: number;
   fetchedAt: number;
   pending: Promise<void> | null;
   generation: number;
@@ -94,9 +99,34 @@ export type AccountAnalyticsActivityRequest = {
 };
 
 type RemoteAnswer = {
+  fetchedAt?: string;
   results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 };
+
+/** Request identity excludes moving scan windows and cache locations. Paths never persist. */
+function localRequestKey(source: AccountAnalyticsActivityRequest): string {
+  const {
+    activity: _activity,
+    cacheDir: _cacheDir,
+    ...request
+  } = source.request as UsageWorkerRequest & {
+    activity?: unknown;
+    cacheDir?: string;
+  };
+  return createHash('sha256')
+    .update(JSON.stringify([source.provider, request]))
+    .digest('hex');
+}
+
+function newerRemote(left: RemoteAnswer | null, right: RemoteAnswer | null): RemoteAnswer | null {
+  const time = (answer: RemoteAnswer | null) =>
+    Math.max(
+      Date.parse(answer?.fetchedAt ?? '') || 0,
+      ...(answer?.states.map((entry) => Date.parse(entry.lastScanAt ?? '') || 0) ?? [])
+    );
+  return time(right) > time(left) ? right : left;
+}
 
 /**
  * Fixed entries for tools with no local usage log, on every host. Cursor usage
@@ -254,14 +284,16 @@ function retainedSessions(
  * load); a session row carries only its published key, never a raw id, a path or content.
  * Best-effort: a missing or invalid file behaves like a first run.
  * 2: readers key a session where its log was read, so a version 1 snapshot of raw ids is never
- * served again.
+ * served again. 3: local request aggregates are retained separately from remote rows, keyed by
+ * a digest of the request's source locations, so a sibling result never hides a failed request.
  */
-const SNAPSHOT_VERSION = 2;
+const SNAPSHOT_VERSION = 3;
 const SNAPSHOT_FILE = 'analytics-activity-snapshot-v1.json';
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
 const MAX_SNAPSHOT_SESSIONS = 10_000;
 
 interface PersistedActivitySnapshot {
+  local: Array<[string, SourceData]>;
   version: typeof SNAPSHOT_VERSION;
   fetchedAt: number;
   partial: boolean;
@@ -288,8 +320,14 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
   if (typeof snap.fetchedAt !== 'number' || !Number.isFinite(snap.fetchedAt)) return false;
   if (typeof snap.partial !== 'boolean') return false;
   if (!Array.isArray(snap.sources) || snap.sources.length > MAX_DIRECTORIES + 1) return false;
+  if (!Array.isArray(snap.local) || snap.local.length > 1024) return false;
   if (!Array.isArray(snap.sourceStates) || snap.sourceStates.length > 64) return false;
-  for (const source of snap.sources as Array<Record<string, unknown>>) {
+  const local = snap.local as Array<[string, Record<string, unknown>]>;
+  if (local.some((entry) => !Array.isArray(entry) || !/^[a-f0-9]{64}$/.test(entry[0])))
+    return false;
+  for (const source of [...snap.sources, ...local.map((entry) => entry[1])] as Array<
+    Record<string, unknown>
+  >) {
     if (!source || typeof source !== 'object') return false;
     if (
       !['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity'].includes(
@@ -335,7 +373,21 @@ function savePersistedSnapshot(scope: string, state: ActivityState): void {
       partial: state.partial,
       sources: state.sources,
       sourceStates: state.sourceStates,
-      remote: state.remote,
+      remote: state.remote
+        ? {
+            ...state.remote,
+            results: state.remote.results.map((entry) => ({
+              ...entry,
+              data: {
+                ...entry.data,
+                daily: [],
+                monthly: [],
+                session: retainedSessions(entry.data.session, state.fetchedAt - 31 * 86_400_000),
+              },
+            })),
+          }
+        : null,
+      local: [...state.local],
     } satisfies PersistedActivitySnapshot);
     if (Buffer.byteLength(body, 'utf8') > MAX_SNAPSHOT_BYTES) return;
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -384,7 +436,11 @@ export function loadAccountAnalyticsWorker(
             reject(new CCSError('Local analytics worker could not return bounded usage history'));
         });
     };
-    const timer = setTimeout(() => finish(), Math.min(MAX_WORKER_TIME_MS, Math.max(1, budgetMs)));
+    // The collector stops reading at 12 s; leave time to aggregate and return its checkpoints.
+    const timer = setTimeout(
+      () => finish(),
+      Math.min(MAX_WORKER_TIME_MS, Math.max(15_000, budgetMs))
+    );
     worker.once('message', (response: UsageWorkerResponse) =>
       finish(response?.ok === true ? response.data : undefined)
     );
@@ -442,7 +498,6 @@ function localRequestPlan(): {
     } catch {
       /* Absent history is not an error or measured zero. */
     }
-    if (requests.length >= MAX_DIRECTORIES) break;
   }
   const codexHome = resolveCodexConfigPaths().baseDir;
   if (fs.existsSync(path.join(codexHome, 'sessions'))) {
@@ -780,7 +835,6 @@ export function extraActivityRequests(
     return true;
   };
   for (const source of sources) {
-    if (requests.length >= MAX_DIRECTORIES) break;
     if (!source || source.host !== 'ubuntu') continue;
     try {
       if (source.tool === 'claude-code') {
@@ -918,6 +972,10 @@ export class AccountAnalyticsActivityService {
       ((ms: number, opts?: { onHostScan?: typeof onHostScan }) =>
         loadAnalyticsRemoteSources(ms, opts ?? {}));
     const remotePromise = loadRemote(cutoff, { onHostScan }).catch(() => null);
+    let settledRemote: RemoteAnswer | null = null;
+    void remotePromise.then((answer) => {
+      settledRemote = answer;
+    });
     const collected = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
     let failed = false;
     // The roots a few stats find start reading at once; the OMP marker scan's roots join the queue
@@ -933,11 +991,25 @@ export class AccountAnalyticsActivityService {
     // slot frees, so a slow one never holds back the next. Each keeps its own scan budget, and
     // results are read back in request order, however the workers finish.
     const settled: Array<PromiseSettledResult<UsageWorkerResult> | undefined> = [];
+    const seenRequests = new Set<string>();
+    const uniqueRequests = (entries: readonly AccountAnalyticsActivityRequest[]) =>
+      entries.filter((entry) => {
+        const key = localRequestKey(entry);
+        if (seenRequests.has(key)) return false;
+        seenRequests.add(key);
+        return true;
+      });
     const { items: requests, skipped } = await runBounded(
-      [plan.ready, later],
+      state.requests.some(
+        (previous) =>
+          !plan.ready.some((entry) => localRequestKey(entry) === localRequestKey(previous))
+      )
+        ? [later.then((entries) => uniqueRequests([...plan.ready, ...entries]))]
+        : [uniqueRequests(plan.ready), later.then(uniqueRequests)],
       this.deps.concurrency ?? collectorConcurrency(),
       async (source, index) => {
-        const budget = Math.max(1, deadline - Date.now());
+        const budget = Math.max(15_000, Math.min(MAX_WORKER_TIME_MS, deadline - Date.now()));
+        state.attempts.set(localRequestKey(source), ++state.attemptSequence);
         try {
           settled[index] = {
             status: 'fulfilled',
@@ -954,11 +1026,14 @@ export class AccountAnalyticsActivityService {
         // running workers finish, queued ones never start, then the new generation scans afresh.
         stop: () => generation !== state.generation || Date.now() >= deadline,
         maxItems: MAX_DIRECTORIES + 1,
+        priority: (source) => state.attempts.get(localRequestKey(source)) ?? 0,
       }
     );
     // Roots the deadline left unread make the collection partial.
+    if (generation !== state.generation) return;
     if (skipped > 0) failed = true;
-    const discoveryComplete = !discoveryFailed && requests.length < MAX_DIRECTORIES + 1;
+    state.requests = requests;
+    const discoveryComplete = !discoveryFailed && skipped === 0;
     const presence = this.deps.requests === undefined ? localSourcePresence(requests) : null;
     const succeeded = new Set<AccountAnalyticsActivityProvider>();
     const unfinished = new Map<
@@ -967,7 +1042,9 @@ export class AccountAnalyticsActivityService {
     >();
     const attempted = new Set<AccountAnalyticsActivityProvider>();
     const localEvents = new Map<AccountAnalyticsActivityProvider, number>();
+    const localReadAt = new Map<AccountAnalyticsActivityProvider, string>();
     requests.forEach((source, index) => {
+      const key = localRequestKey(source);
       const result = settled[index];
       const provider = source.provider;
       if (!result) {
@@ -980,14 +1057,23 @@ export class AccountAnalyticsActivityService {
         failed = true;
         return;
       }
-      const existing = collected.get(provider) ?? [];
       const data = result.value;
+      const prior = state.local.get(key);
       if (
         (data.scan && !data.scan.complete) ||
         ('activity' in source.request && source.request.activity?.discoveryTruncated)
       ) {
         failed = true;
+        if ((data.scan?.failedFiles ?? 0) > 0) unfinished.set(provider, 'failed');
+        else if (unfinished.get(provider) !== 'failed') unfinished.set(provider, 'partial');
+      }
+      if (
+        data.eventCount === 0 &&
+        state.local.get(key)?.data.some((entry) => entry.eventCount > 0)
+      ) {
+        failed = true;
         if (unfinished.get(provider) !== 'failed') unfinished.set(provider, 'partial');
+        return;
       }
       // An unfinished cold scan with no events is not a measured zero.
       if (data.scan && !data.scan.complete && data.eventCount === 0) return;
@@ -1003,18 +1089,69 @@ export class AccountAnalyticsActivityService {
         failed = true;
         if (unfinished.get(provider) !== 'failed') unfinished.set(provider, 'partial');
       }
-      existing.push({
+      const retained = {
         ...data,
         daily: [],
         monthly: [],
         hourly,
         session: retainedSessions(recentSessions, cutoff),
-      });
-      collected.set(provider, existing);
+      };
+      const newRows = !prior || JSON.stringify(prior.data[0]?.hourly) !== JSON.stringify(hourly);
+      // Empty answers never erase an earlier share of a multi-request tool.
+      if (
+        (data.eventCount > 0 || !state.local.has(key)) &&
+        !(data.scan?.failedFiles && state.local.has(key))
+      ) {
+        state.local.set(key, {
+          provider,
+          data: [retained],
+          fetchedAt: data.readAt ?? new Date((this.deps.now ?? Date.now)()).toISOString(),
+        });
+      }
+      if (
+        data.eventCount > 0 &&
+        (data.readAt || !data.scan || data.scan.failedFiles === 0) &&
+        (data.readAt ||
+          !data.scan ||
+          data.scan.completedFiles > 0 ||
+          data.scan.readBytes > 0 ||
+          newRows)
+      ) {
+        const readAt = data.readAt ?? new Date((this.deps.now ?? Date.now)()).toISOString();
+        if (!localReadAt.has(provider) || readAt > (localReadAt.get(provider) ?? ''))
+          localReadAt.set(provider, readAt);
+      }
       succeeded.add(provider);
-      localEvents.set(provider, (localEvents.get(provider) ?? 0) + data.eventCount);
     });
     if (generation !== state.generation) return;
+    for (const [key, source] of state.local) {
+      if (!seenRequests.has(key) && discoveryComplete) {
+        state.local.delete(key);
+        continue;
+      }
+      const entries = collected.get(source.provider) ?? [];
+      source.data = source.data.map((data) => {
+        const hourly = data.hourly.filter(
+          (hour) => Date.parse(`${hour.hour.replace(' ', 'T')}:00Z`) >= cutoff
+        );
+        return {
+          ...data,
+          hourly,
+          session: retainedSessions(data.session, cutoff),
+          eventCount:
+            hourly.length === data.hourly.length
+              ? data.eventCount
+              : hourly.reduce((sum, hour) => sum + (hour.requestCount ?? 0), 0),
+        };
+      });
+      entries.push(...source.data);
+      collected.set(source.provider, entries);
+      localEvents.set(
+        source.provider,
+        (localEvents.get(source.provider) ?? 0) +
+          source.data.reduce((sum, data) => sum + data.eventCount, 0)
+      );
+    }
     // Phase 1: publish the fresh local rows now, merged with the previous remote answer, so a
     // slow or timing-out remote scan (Windows) never holds fresh local data hostage. The remote
     // merge below publishes a second time when it answers.
@@ -1030,11 +1167,12 @@ export class AccountAnalyticsActivityService {
       remotePending: true,
       pendingHosts: [...state.remotePending],
       localEvents,
+      localReadAt,
       presence,
       failed,
     });
     const remaining = deadline - Date.now();
-    let remote: Awaited<typeof remotePromise> = null;
+    let remote: Awaited<typeof remotePromise> = settledRemote;
     if (remaining > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -1058,18 +1196,17 @@ export class AccountAnalyticsActivityService {
       remoteStates = remote.states;
     } else {
       failed = true;
-      if (state.remote) remoteAnswer = state.remote;
-      else {
-        const cached =
-          this.deps.remoteCached ??
-          (this.deps.remote === undefined ? loadAnalyticsRemoteCachedSources : undefined);
-        try {
-          remoteAnswer = cached ? cached(cutoff) : null;
-        } catch {
-          remoteAnswer = null;
-        }
-        if (remoteAnswer) remoteStates = remoteAnswer.states;
+      const previousRemote = state.remote;
+      const cached =
+        this.deps.remoteCached ??
+        (this.deps.remote === undefined ? loadAnalyticsRemoteCachedSources : undefined);
+      try {
+        remoteAnswer = newerRemote(state.remote, cached ? cached(cutoff) : null);
+      } catch {
+        remoteAnswer = state.remote;
       }
+      if (remoteAnswer && remoteAnswer !== previousRemote) remoteStates = remoteAnswer.states;
+      state.remote = remoteAnswer;
     }
     if (generation !== state.generation) return;
     // Phase 2: merge the remote answer (fresh, carried, or cached) and publish again.
@@ -1086,10 +1223,34 @@ export class AccountAnalyticsActivityService {
       remotePending: false,
       pendingHosts: [...state.remotePending],
       localEvents,
+      localReadAt,
       presence,
       failed,
       cutoff,
     });
+    if (!remote)
+      void remotePromise.then((answer) => {
+        if (!answer || generation !== state.generation) return;
+        state.remote = answer;
+        this.publish(state, {
+          scope: (this.deps.scope ?? getCcsDir)(),
+          collected,
+          requests,
+          succeeded,
+          unfinished,
+          discoveryComplete,
+          attempted,
+          remoteStates: answer.states,
+          remoteAnswer: answer,
+          remotePending: false,
+          pendingHosts: [],
+          localEvents,
+          localReadAt,
+          presence,
+          failed: unfinished.size > 0 || !discoveryComplete,
+          cutoff,
+        });
+      });
   }
 
   /**
@@ -1103,6 +1264,7 @@ export class AccountAnalyticsActivityService {
     args: {
       scope: string;
       collected: Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>;
+      /** This collection's local requests; a root-discovery bound on one is named on its tool. */
       requests: AccountAnalyticsActivityRequest[];
       succeeded: Set<AccountAnalyticsActivityProvider>;
       unfinished: Map<AccountAnalyticsActivityProvider, 'partial' | 'skipped' | 'failed'>;
@@ -1113,6 +1275,7 @@ export class AccountAnalyticsActivityService {
       remotePending: boolean;
       pendingHosts: readonly AnalyticsRemoteHost[];
       localEvents: Map<AccountAnalyticsActivityProvider, number>;
+      localReadAt: Map<AccountAnalyticsActivityProvider, string>;
       presence: Record<AccountAnalyticsActivityProvider, boolean> | null;
       failed: boolean;
       cutoff?: number;
@@ -1131,6 +1294,7 @@ export class AccountAnalyticsActivityService {
       remotePending,
       pendingHosts,
       localEvents,
+      localReadAt,
       presence,
       failed,
     } = args;
@@ -1168,11 +1332,6 @@ export class AccountAnalyticsActivityService {
     ] as const) {
       const data = merged.get(provider);
       if (data) updated.push({ provider, data, fetchedAt });
-      else {
-        const previous = state.sources.find((source) => source.provider === provider);
-        if (previous && requests.some((source) => source.provider === provider))
-          updated.push(previous);
-      }
     }
     state.sources = updated;
     state.sourceStates = this.buildSourceStates(
@@ -1186,7 +1345,8 @@ export class AccountAnalyticsActivityService {
       fetchedAt,
       presence,
       remotePending,
-      pendingHosts
+      pendingHosts,
+      localReadAt
     );
     for (const source of state.sourceStates) {
       if (
@@ -1206,7 +1366,7 @@ export class AccountAnalyticsActivityService {
     if (state.sourceStates.some((entry) => entry.state === 'scanning')) state.scanningSince ??= now;
     else state.scanningSince = null;
     state.pricing = this.snapshotPricing();
-    state.partial = failed || requests.length >= MAX_DIRECTORIES + 1;
+    state.partial = failed;
     state.fetchedAt = now;
     if (this.deps.persistSnapshot === true) savePersistedSnapshot(scope, state);
   }
@@ -1222,7 +1382,8 @@ export class AccountAnalyticsActivityService {
     fetchedAt: string,
     presence: Record<AccountAnalyticsActivityProvider, boolean> | null,
     remotePending = false,
-    pendingHosts: readonly AnalyticsRemoteHost[] = []
+    pendingHosts: readonly AnalyticsRemoteHost[] = [],
+    localReadAt = new Map<AccountAnalyticsActivityProvider, string>()
   ): AccountAnalyticsSource[] {
     const entries: AccountAnalyticsSource[] = [];
     const previous = new Map(
@@ -1262,9 +1423,12 @@ export class AccountAnalyticsActivityService {
                 : pending === 'failed'
                   ? 'unavailable'
                   : 'scanning',
-          // A partial scan still read this pass, as a remote host's partial scan does; only a tool
-          // that was never reached or failed keeps its earlier scan time.
-          lastScanAt: pending === 'partial' ? fetchedAt : (old?.lastScanAt ?? null),
+          // Only productive partial reads advance the date; replayed aggregates carry their
+          // saved time. Failed or unreached reads keep the previously published date.
+          lastScanAt:
+            events > 0 && pending !== 'failed'
+              ? (localReadAt.get(tool) ?? old?.lastScanAt ?? null)
+              : (old?.lastScanAt ?? localReadAt.get(tool) ?? null),
           rowCount: events,
           detail:
             pending === 'failed'
@@ -1283,7 +1447,7 @@ export class AccountAnalyticsActivityService {
           // A tool whose logs were read and hold nothing in the window says so,
           // exactly like a remote host in the same situation.
           state: events > 0 ? 'ok' : 'no_usage',
-          lastScanAt: fetchedAt,
+          lastScanAt: localReadAt.get(tool) ?? fetchedAt,
           rowCount: events,
           detail: events > 0 ? null : 'no usage recorded in the last 31 days',
         });
@@ -1426,6 +1590,10 @@ export class AccountAnalyticsActivityService {
     let state = this.states.get(scope);
     if (!state) {
       state = {
+        local: new Map(),
+        requests: [],
+        attempts: new Map(),
+        attemptSequence: 0,
         fetchedAt: -Infinity,
         pending: null,
         generation: 0,
@@ -1446,6 +1614,7 @@ export class AccountAnalyticsActivityService {
         state.sources = persisted.sources;
         state.sourceStates = persisted.sourceStates;
         state.remote = persisted.remote;
+        state.local = new Map(persisted.local);
         state.partial = persisted.partial;
         state.fetchedAt = persisted.fetchedAt;
       }
@@ -1539,10 +1708,13 @@ export class AccountAnalyticsActivityService {
     const totalFiles = scans.reduce((sum, scan) => sum + scan.totalFiles, 0);
     const completedFiles = scans.reduce((sum, scan) => sum + scan.completedFiles, 0);
     const unfinishedFiles = scans.reduce((sum, scan) => sum + (scan.unfinishedFiles ?? 0), 0);
+    const failedFiles = scans.reduce((sum, scan) => sum + scan.failedFiles, 0);
     const scanProgress = scans.some((scan) => !scan.complete)
       ? completedFiles + unfinishedFiles === totalFiles && unfinishedFiles > 0
         ? ` All available records have been read; ${unfinishedFiles} local log files end with unfinished records and will be checked for changes.`
-        : ` ${completedFiles} of ${totalFiles} local log files have been read; remaining files resume from saved positions on the next check.`
+        : completedFiles < totalFiles
+          ? ` ${completedFiles} of ${totalFiles} local log files have been read; remaining files resume from saved positions on the next check.`
+          : ` All ${totalFiles} local log files have been read; ${failedFiles > 0 ? `${failedFiles} local scan failures will be retried` : 'the scan could not confirm complete discovery'}.`
       : '';
     const projectionStart = elapsed();
     const activity = projectAccountAnalyticsActivity(

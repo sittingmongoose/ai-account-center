@@ -71,7 +71,7 @@ module.exports = {
           ? path.relative(process.cwd(), filename)
           : filename;
         const line = node.loc && node.loc.start ? node.loc.start.line : -1;
-        const key = `${normalized}:${line}`;
+        const key = `${normalized.replace(/\\/g, '/')}:${line}`;
         if (allowlist.has(key)) {
           return;
         }

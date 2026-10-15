@@ -108,8 +108,8 @@ describe('collector concurrency', () => {
       { stop: () => stop, maxItems: 3 }
     );
     expect(seen).toEqual(['a', 'b']);
-    expect(result.items).toEqual(['a', 'b', 'c']);
-    expect(result.skipped).toBe(1);
+    expect(result.items).toEqual(['a', 'b', 'c', 'd']);
+    expect(result.skipped).toBe(2);
     expect(await runBounded([], 2, async () => {})).toEqual({ items: [], skipped: 0 });
   });
 

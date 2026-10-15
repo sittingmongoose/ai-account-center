@@ -65,8 +65,11 @@ describe('private bounded quota history', () => {
     const history = appendAccountAnalyticsSnapshot(null, [current], NOW);
     await store.write(history);
     const file = path.join(root, 'account-analytics', 'quota-history-v1.json');
-    expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    // Windows exposes DOS attributes through mode, not POSIX permission bits.
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
     expect(fs.readFileSync(file, 'utf8')).not.toContain('secret-token-sentinel');
     const reread = await store.read();
     expect(reread?.records[0].windows[0].usedPercent).toBe(120.5);

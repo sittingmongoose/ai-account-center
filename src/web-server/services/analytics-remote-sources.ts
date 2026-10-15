@@ -89,6 +89,10 @@ const MAX_CACHED_ROWS = 100_000;
 const CACHE_VERSION = 4;
 
 interface RemoteCache {
+  /** Per-tool last complete read, including measured empty/absent answers. */
+  kinds?: Partial<
+    Record<AnalyticsRemoteKind, { lastScanAt: string | null; state: AnalyticsSourceState }>
+  >;
   version: typeof CACHE_VERSION;
   fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>;
   rows: AnalyticsRemoteRow[];
@@ -280,7 +284,7 @@ function cachedHostSources(
         tool,
         host,
         state: 'cached',
-        lastScanAt: cached.lastScanAt,
+        lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
         detail: `${detail}; showing previously read aggregates`,
       });
@@ -288,8 +292,13 @@ function cachedHostSources(
       states.push({
         tool,
         host,
-        state: 'unavailable',
-        lastScanAt: cached.lastScanAt,
+        state:
+          cached.kinds?.[tool]?.state === 'no_usage'
+            ? 'no_usage'
+            : cached.kinds?.[tool]?.state === 'not_installed'
+              ? 'not_installed'
+              : 'unavailable',
+        lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
         rowCount: 0,
         detail,
       });
@@ -306,24 +315,24 @@ export function loadAnalyticsRemoteCachedSources(
   minDateMs: number,
   deps: Pick<AnalyticsRemoteSourceDeps, 'cacheDir'> = {}
 ): {
+  fetchedAt: string | undefined;
   results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 } {
   const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
   const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
+  let fetchedAt: string | undefined;
   for (const host of REMOTE_ANALYTICS_HOSTS) {
-    const part = cachedHostSources(
-      host,
-      loadCache(cacheFile(cacheDir, host)),
-      minDateMs,
-      'remote scan timed out'
-    );
+    const cached = loadCache(cacheFile(cacheDir, host));
+    if (cached.lastScanAt && (!fetchedAt || cached.lastScanAt > fetchedAt))
+      fetchedAt = cached.lastScanAt;
+    const part = cachedHostSources(host, cached, minDateMs, 'remote scan timed out');
     results.push(...part.results);
     states.push(...part.states);
   }
   states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
-  return { results, states };
+  return { results, states, fetchedAt };
 }
 
 /**
@@ -445,9 +454,9 @@ async function scanHost(
         merged.kinds[kind] = { state: 'error', fingerprints: {} };
         continue;
       }
-      // A host's answer may leave a kind out; it then reads as scanned with nothing to report.
+      // An omitted requested kind never confirms that its earlier rows disappeared.
       const entry: AnalyticsRemoteKindResult | undefined = answer.kinds[kind];
-      if (entry) merged.kinds[kind] = entry;
+      merged.kinds[kind] = entry ?? { state: 'error', fingerprints: {} };
       if (answer.truncated) {
         cutKinds.add(kind);
         merged.truncated = true;
@@ -464,6 +473,7 @@ export async function loadAnalyticsRemoteSources(
   minDateMs: number,
   deps: AnalyticsRemoteSourceDeps = {}
 ): Promise<{
+  fetchedAt: string;
   results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 }> {
@@ -530,9 +540,18 @@ export async function loadAnalyticsRemoteSources(
         const keepsUnvisited = (tool: AnalyticsRemoteKind): boolean =>
           cutKinds.has(tool) ||
           errored.has(tool) ||
+          response.kinds[tool]?.state === 'pending' ||
+          response.kinds[tool]?.partial === true ||
+          (tool === 'antigravity' && response.kinds[tool]?.unreadable === true) ||
           (tool === 'omp' && response.discoveryTruncated === true);
         const freshPrints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
-        for (const tool of kinds) freshPrints[tool] = response.kinds[tool]?.fingerprints ?? {};
+        const discarded = (tool: AnalyticsRemoteKind) =>
+          errored.has(tool) ||
+          response.kinds[tool]?.state === 'pending' ||
+          (tool === 'antigravity' && response.kinds[tool]?.unreadable === true);
+        // Rows and prints are adopted together. A failed kind retries every changed database.
+        for (const tool of kinds)
+          freshPrints[tool] = discarded(tool) ? {} : (response.kinds[tool]?.fingerprints ?? {});
         const kept = cached.rows.filter((row) => {
           if (!kinds.includes(row.k) || !inWindow(row, minDateMs)) return false;
           const print = freshPrints[row.k]?.[row.f];
@@ -540,7 +559,7 @@ export async function loadAnalyticsRemoteSources(
           return samePrint(print, cached.fingerprints[row.k]?.[row.f]);
         });
         const fresh = response.rows.filter(
-          (row) => kinds.includes(row.k) && !errored.has(row.k) && inWindow(row, minDateMs)
+          (row) => kinds.includes(row.k) && !discarded(row.k) && inWindow(row, minDateMs)
         );
         const merged = [...kept, ...fresh].slice(0, MAX_CACHED_ROWS);
         // Session aggregates merge under the same file fingerprints as the
@@ -552,10 +571,31 @@ export async function loadAnalyticsRemoteSources(
           return samePrint(print, cached.fingerprints[row.k]?.[row.f]);
         });
         const freshSessions = (response.srows ?? []).filter(
-          (row) => kinds.includes(row.k) && !errored.has(row.k) && sessionInWindow(row, minDateMs)
+          (row) => kinds.includes(row.k) && !discarded(row.k) && sessionInWindow(row, minDateMs)
         );
         const mergedSessions = [...keptSessions, ...freshSessions].slice(0, MAX_CACHED_ROWS);
         const scannedAt = new Date(now()).toISOString();
+        const kindReads = { ...cached.kinds };
+        for (const tool of kinds) {
+          const kind = response.kinds[tool];
+          if (
+            !kind ||
+            discarded(tool) ||
+            cutKinds.has(tool) ||
+            kind.partial ||
+            (tool === 'omp' && response.discoveryTruncated)
+          )
+            continue;
+          kindReads[tool] = {
+            lastScanAt: scannedAt,
+            state:
+              kind.state === 'not_installed'
+                ? 'not_installed'
+                : merged.some((row) => row.k === tool)
+                  ? 'ok'
+                  : 'no_usage',
+          };
+        }
         const prints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {
           ...freshPrints,
         };
@@ -575,6 +615,7 @@ export async function loadAnalyticsRemoteSources(
             rows: merged,
             srows: mergedSessions,
             lastScanAt: scannedAt,
+            kinds: kindReads,
             settled:
               cutKinds.size === 0 &&
               failedKinds.size === 0 &&
@@ -582,7 +623,8 @@ export async function loadAnalyticsRemoteSources(
                 (tool) =>
                   response.kinds[tool]?.state !== 'pending' &&
                   response.kinds[tool]?.state !== 'error' &&
-                  response.kinds[tool]?.partial !== true
+                  response.kinds[tool]?.partial !== true &&
+                  !(tool === 'antigravity' && response.kinds[tool]?.unreadable)
               ),
           });
         } catch {
@@ -593,7 +635,7 @@ export async function loadAnalyticsRemoteSources(
           const rows = merged.filter((row) => row.k === tool);
           const srows = mergedSessions.filter((row) => row.k === tool);
           const kind = response.kinds[tool];
-          const kindState = kind?.state ?? 'ok';
+          const kindState = kind?.state ?? 'error';
           if (kindState === 'not_installed') {
             states.push({
               tool,
@@ -617,7 +659,7 @@ export async function loadAnalyticsRemoteSources(
               tool,
               host,
               state: 'scanning',
-              lastScanAt: scannedAt,
+              lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
               rowCount: events,
               detail: kept
                 ? 'the scan ran out of time before it reached this tool again; records from earlier scans stay included'
@@ -632,7 +674,7 @@ export async function loadAnalyticsRemoteSources(
               // A read that failed with earlier records in hand is a cached
               // result; with nothing to show it is a real failure.
               state: kept ? 'cached' : 'unavailable',
-              lastScanAt: scannedAt,
+              lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
               rowCount: events,
               detail: failedKinds.has(tool)
                 ? kept
@@ -644,7 +686,7 @@ export async function loadAnalyticsRemoteSources(
             });
             continue;
           }
-          if (kind?.partial === true) {
+          if (kind?.partial === true || (tool === 'antigravity' && kind?.unreadable)) {
             // A cap or the deadline cut this tool's own scan short: partial
             // numbers are shown until a later scan finishes it, and with
             // nothing read yet it is still scanning, not failed.
@@ -652,11 +694,17 @@ export async function loadAnalyticsRemoteSources(
               tool,
               host,
               state: kept ? 'cached' : 'scanning',
-              lastScanAt: scannedAt,
+              lastScanAt:
+                tool === 'antigravity' && kind?.unreadable
+                  ? (cached.kinds?.[tool]?.lastScanAt ?? null)
+                  : scannedAt,
               rowCount: events,
-              detail: kept
-                ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+              detail:
+                tool === 'antigravity' && kind?.unreadable
+                  ? 'some Antigravity conversation databases could not be read (busy or damaged); showing previously read aggregates'
+                  : kept
+                    ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                    : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }
@@ -686,5 +734,5 @@ export async function loadAnalyticsRemoteSources(
   }
   await Promise.all(jobs);
   states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
-  return { results, states };
+  return { results, states, fetchedAt: new Date(now()).toISOString() };
 }

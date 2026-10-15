@@ -54,10 +54,37 @@ function protoText(field: number, value: string): number[] {
 }
 
 let home: string;
+const homeEnvKeys = [
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'CCS_HOME',
+  'CCS_DIR',
+  'ANTIGRAVITY_DATA_DIR',
+  'ZCODE_DB_PATH',
+  'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR',
+  'MUSE_SESSIONS_DIR',
+  'PI_CODING_AGENT_DIR',
+  'OMP_SESSION_DIRS',
+];
+let savedHomeEnv: Record<string, string | undefined>;
 beforeEach(() => {
+  savedHomeEnv = Object.fromEntries(homeEnvKeys.map((key) => [key, process.env[key]]));
+  for (const key of homeEnvKeys) delete process.env[key];
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-agy-usage-'));
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.CCS_HOME = path.join(home, 'ccs');
 });
-afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
+afterEach(() => {
+  for (const [key, value] of Object.entries(savedHomeEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  fs.rmSync(home, { recursive: true, force: true });
+});
 
 const CONVERSATIONS = path.join('.gemini', 'antigravity-cli', 'conversations');
 
@@ -115,7 +142,16 @@ function runHelper(
     input: JSON.stringify({ kinds: ['antigravity'], minDateMs: 0, ...request }),
     encoding: 'utf8',
     timeout: 30_000,
-    env: { ...base, HOME: home, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', ...env },
+    env: {
+      ...base,
+      HOME: home,
+      USERPROFILE: home,
+      HOMEDRIVE: undefined,
+      HOMEPATH: undefined,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
+      ...env,
+    },
   });
   return JSON.parse(output) as HelperResponse;
 }
@@ -153,7 +189,16 @@ function runWithHelper(
     input: JSON.stringify({ kinds: ['antigravity'], minDateMs: 0 }),
     encoding: 'utf8',
     timeout: 30_000,
-    env: { ...base, HOME: home, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', ...env },
+    env: {
+      ...base,
+      HOME: home,
+      USERPROFILE: home,
+      HOMEDRIVE: undefined,
+      HOMEPATH: undefined,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
+      ...env,
+    },
   });
 }
 
@@ -636,8 +681,14 @@ describe.skipIf(!HAVE_PYTHON)('Antigravity usage in the analytics helper', () =>
       ['steps']
     );
     const cacheDir = path.join(home, 'cache');
-    const saved = { HOME: process.env.HOME, DIR: process.env.ANTIGRAVITY_DATA_DIR };
+    const savedHomeEnv = Object.fromEntries(
+      ['HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH'].map((key) => [key, process.env[key]])
+    );
+    const saved = { DIR: process.env.ANTIGRAVITY_DATA_DIR };
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    delete process.env.HOMEDRIVE;
+    delete process.env.HOMEPATH;
     delete process.env.ANTIGRAVITY_DATA_DIR;
     try {
       expect(antigravityUsagePresent({ homeDir: home, env: {} })).toBe(true);
@@ -654,14 +705,52 @@ describe.skipIf(!HAVE_PYTHON)('Antigravity usage in the analytics helper', () =>
         expect(result.session[0].target).toBe('antigravity');
       }
     } finally {
-      if (saved.HOME === undefined) delete process.env.HOME;
-      else process.env.HOME = saved.HOME;
+      for (const [key, value] of Object.entries(savedHomeEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       if (saved.DIR !== undefined) process.env.ANTIGRAVITY_DATA_DIR = saved.DIR;
     }
   });
 });
 
 describe('Antigravity roots', () => {
+  it('resolves Python tilde inside the temporary Windows profile', () => {
+    expect(runWithHelper('print(os.path.expanduser("~"))').trim()).toBe(home);
+  });
+
+  it('keeps local cached store rows and prints when a database becomes unreadable', async () => {
+    const database = conversation(
+      path.join(CONVERSATIONS, 'cached.db'),
+      {
+        steps: [
+          [
+            ...protoBytes(9, [
+              ...protoNumber(1, 246),
+              ...protoNumber(2, 40),
+              ...protoText(11, 'cached'),
+            ]),
+            ...protoBytes(8, protoNumber(1, Math.floor(Date.now() / 1000) - 3600)),
+          ],
+        ],
+      },
+      ['steps']
+    );
+    const options = { minDate: Date.now() - 31 * 86_400_000, cacheDir: path.join(home, 'cache') };
+    const first = await collectAccountActivity({ kind: 'antigravity' }, options);
+    expect(first.eventCount).toBe(1);
+    const cacheRoot = path.join(options.cacheDir, 'account-activity-v1');
+    const cacheFile = path.join(cacheRoot, fs.readdirSync(cacheRoot)[0], 'antigravity-store.json');
+    const saved = fs.readFileSync(cacheFile, 'utf8');
+    fs.writeFileSync(database, 'synthetic damaged database');
+    const next = await collectAccountActivity({ kind: 'antigravity' }, options);
+    expect(next.eventCount).toBe(1);
+    expect(next.hourly).toEqual(first.hourly);
+    expect(next.session).toEqual(first.session);
+    expect(next.scan).toMatchObject({ complete: false, failedFiles: 1 });
+    expect(fs.readFileSync(cacheFile, 'utf8')).toBe(saved);
+  });
+
   it("lists T3's roots: the env override, else the default stores, then every T3 instance", () => {
     const instances = path.join(home, '.t3', 'userdata', 'providers', 'antigravity');
     fs.mkdirSync(path.join(instances, 'b'), { recursive: true });
@@ -678,10 +767,10 @@ describe('Antigravity roots', () => {
     expect(
       resolveAntigravityRoots({
         homeDir: home,
-        env: { ANTIGRAVITY_DATA_DIR: ' /x , ~/y ,relative' },
+        env: { ANTIGRAVITY_DATA_DIR: ` ${path.join(home, 'x')} , ~/y ,relative` },
       })
     ).toEqual([
-      '/x',
+      path.join(home, 'x'),
       path.join(home, 'y'),
       ...['a', 'b'].map((id) => path.join(instances, id, 'antigravity-acp')),
     ]);

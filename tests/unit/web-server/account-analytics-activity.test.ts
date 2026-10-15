@@ -1,4 +1,4 @@
-import { describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -18,6 +18,21 @@ import type {
 } from '../../../src/web-server/usage/worker-client';
 
 const NOW = Date.parse('2026-10-01T16:30:00Z');
+let fixtureConfig: string;
+let previousConfig: Record<string, string | undefined>;
+beforeEach(() => {
+  previousConfig = { CCS_HOME: process.env.CCS_HOME, CCS_DIR: process.env.CCS_DIR };
+  fixtureConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-reporting-config-'));
+  process.env.CCS_HOME = fixtureConfig;
+  delete process.env.CCS_DIR;
+});
+afterEach(() => {
+  for (const [key, value] of Object.entries(previousConfig)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  fs.rmSync(fixtureConfig, { recursive: true, force: true });
+});
 const FROM = NOW - 86_400_000;
 const QUERY: AccountAnalyticsQuery = {
   platform: 'mac',
@@ -128,6 +143,334 @@ describe('native local analytics activity', () => {
     expect(source?.state).toBe('cached');
     expect(source?.detail).toContain('usage-root discovery');
   });
+
+  it('retains each local request independently of successful siblings and remote rows', async () => {
+    for (const outcome of ['reject', 'empty', 'partial-empty', 'skip'] as const) {
+      let pass = 0;
+      let wall = Date.now();
+      const clock = spyOn(Date, 'now').mockImplementation(() => wall);
+      try {
+        const service = new AccountAnalyticsActivityService({
+          now: () => NOW + pass * 1000,
+          scope: () => `request-retention-${outcome}`,
+          concurrency: 1,
+          requests: () => [
+            { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/a' } },
+            { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/b' } },
+          ],
+          remote: async () => ({
+            results: [{ tool: 'claude', data: data('claude-sonnet-4-6', 777, 0) }],
+            states: [],
+          }),
+          loadWorker: async (request) => {
+            const first = request.kind === 'claude' && request.projectsDir.endsWith('/a');
+            if (pass && first && outcome === 'skip') wall += 60_001;
+            if (pass && !first) {
+              if (outcome === 'reject') throw new Error('fixture');
+              return {
+                daily: [],
+                monthly: [],
+                hourly: [],
+                session: [],
+                eventCount: 0,
+                ...(outcome === 'partial-empty'
+                  ? {
+                      scan: {
+                        complete: false,
+                        completedFiles: 0,
+                        totalFiles: 1,
+                        failedFiles: 0,
+                        skippedLines: 0,
+                        readBytes: 0,
+                      },
+                    }
+                  : {}),
+              };
+            }
+            return data('claude-sonnet-4-6', first ? 50_000 : 30_000, 0);
+          },
+        });
+        expect((await settled(service)).totals?.inputTokens).toBe(80_777);
+        pass++;
+        await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+        const answer = await settled(service);
+        expect(answer.totals?.inputTokens).toBe(80_777);
+        expect(
+          answer.sources.find((entry) => entry.tool === 'claude' && entry.host === 'ubuntu')
+            ?.rowCount
+        ).toBe(198);
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
+  it('keeps a single failed local request when a remote of the same tool succeeds', async () => {
+    let fail = false;
+    const service = new AccountAnalyticsActivityService({
+      now: () => NOW,
+      requests: () => [
+        { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture' } },
+      ],
+      loadWorker: async () => {
+        if (fail) throw new Error('fixture');
+        return data('claude-sonnet-4-6', 100_000, 0);
+      },
+      remote: async () => ({
+        results: [{ tool: 'claude', data: data('claude-sonnet-4-6', 777, 0) }],
+        states: [],
+      }),
+    });
+    expect((await settled(service)).totals?.inputTokens).toBe(100_777);
+    fail = true;
+    await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    expect((await settled(service)).totals?.inputTokens).toBe(100_777);
+  });
+
+  it('restores per-request local shares after a restart without doubling remote rows', async () => {
+    const scope = path.join(fixtureConfig, 'persisted');
+    fs.mkdirSync(scope);
+    let restarted = false;
+    const deps = {
+      now: () => NOW + (restarted ? 61_000 : 0),
+      scope: () => scope,
+      persistSnapshot: true,
+      requests: (): AccountAnalyticsActivityRequest[] =>
+        ['a', 'b'].map((key) => ({
+          provider: 'claude',
+          request: { kind: 'claude', projectsDir: `/fixture/${key}` },
+        })),
+      remote: async () => ({
+        results: [{ tool: 'claude' as const, data: data('claude-sonnet-4-6', 777, 0) }],
+        states: [],
+      }),
+      loadWorker: async (request: UsageWorkerRequest) => {
+        if (restarted && request.kind === 'claude' && request.projectsDir.endsWith('/b'))
+          throw new Error('fixture');
+        return data(
+          'claude-sonnet-4-6',
+          request.kind === 'claude' && request.projectsDir.endsWith('/a') ? 50_000 : 30_000,
+          0
+        );
+      },
+    };
+    expect((await settled(new AccountAnalyticsActivityService(deps))).totals?.inputTokens).toBe(
+      80_777
+    );
+    restarted = true;
+    const restored = await settled(new AccountAnalyticsActivityService(deps));
+    expect(restored.totals?.inputTokens).toBe(80_777);
+    const serialized = fs.readFileSync(
+      path.join(scope, 'cache', 'account-activity-v1', 'analytics-activity-snapshot-v1.json'),
+      'utf8'
+    );
+    expect(serialized).not.toContain('/fixture/');
+    expect(serialized).not.toContain('/private/project');
+  });
+
+  it('dates only productive partial reads and keeps failed reads at their previous time', async () => {
+    for (const mode of ['empty', 'failure', 'fresh', 'replayed', 'cached'] as const) {
+      let pass = 0;
+      const service = new AccountAnalyticsActivityService({
+        now: () => NOW + pass * 1000,
+        requests: () => [{ provider: 'zcode', request: { kind: 'zcode', dbPath: '/fixture/db' } }],
+        remote: async () => ({ results: [], states: [] }),
+        loadWorker: async () => ({
+          ...(pass && mode === 'empty'
+            ? { daily: [], monthly: [], hourly: [], session: [], eventCount: 0 }
+            : data('glm-5', 100, 0)),
+          ...(pass && mode === 'replayed' ? { readAt: new Date(NOW - 1000).toISOString() } : {}),
+          scan: {
+            complete: pass === 0,
+            completedFiles: mode === 'empty' || mode === 'cached' ? 0 : 1,
+            totalFiles: 2,
+            failedFiles: pass && mode === 'failure' ? 1 : 0,
+            skippedLines: 0,
+            readBytes: 0,
+          },
+        }),
+      });
+      await settled(service);
+      pass++;
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      const answer = await settled(service);
+      const cell = answer.sources.find(
+        (entry) => entry.tool === 'zcode' && entry.host === 'ubuntu'
+      );
+      expect(cell?.lastScanAt).toBe(
+        new Date(
+          mode === 'fresh' ? NOW + 1000 : mode === 'replayed' ? NOW - 1000 : NOW
+        ).toISOString()
+      );
+      if (mode === 'failure') expect(cell?.detail).toContain('local scan failed');
+    }
+    const cold = new AccountAnalyticsActivityService({
+      now: () => NOW,
+      requests: () => [{ provider: 'muse', request: { kind: 'muse', sessionsDir: '/fixture' } }],
+      remote: async () => ({ results: [], states: [] }),
+      loadWorker: async () => ({
+        daily: [],
+        monthly: [],
+        hourly: [],
+        session: [],
+        eventCount: 0,
+        scan: {
+          complete: false,
+          completedFiles: 0,
+          totalFiles: 1,
+          failedFiles: 0,
+          skippedLines: 0,
+          readBytes: 0,
+        },
+      }),
+    });
+    expect(
+      (await settled(cold)).sources.find(
+        (entry) => entry.tool === 'muse' && entry.host === 'ubuntu'
+      )?.lastScanAt
+    ).toBeNull();
+  });
+
+  it('adopts remote answers that finish before or after an exhausted local deadline', async () => {
+    for (const late of [false, true]) {
+      let wall = Date.now();
+      const clock = spyOn(Date, 'now').mockImplementation(() => wall);
+      let release: (answer: {
+        results: Array<{ tool: 'claude'; data: UsageWorkerResult }>;
+        states: [];
+      }) => void = () => {};
+      try {
+        const remoteAnswer = {
+          results: [{ tool: 'claude' as const, data: data('claude-sonnet-4-6', 777, 0) }],
+          states: [] as [],
+        };
+        const service = new AccountAnalyticsActivityService({
+          now: () => NOW,
+          requests: () => [
+            { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture' } },
+          ],
+          loadWorker: async () => {
+            wall += 60_001;
+            return data('claude-sonnet-4-6', 100, 0);
+          },
+          remote: () =>
+            late
+              ? new Promise((resolve) => {
+                  release = resolve;
+                })
+              : Promise.resolve(remoteAnswer),
+        });
+        await settled(service);
+        if (late) {
+          release(remoteAnswer);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        expect((await settled(service)).totals?.inputTokens).toBe(877);
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
+  it('uses a newer disk remote cache even with an older answer in memory', async () => {
+    let pass = 0;
+    let wall = Date.now();
+    const clock = spyOn(Date, 'now').mockImplementation(() => wall);
+    const answer = (input: number, at: number) => ({
+      results: [{ tool: 'claude' as const, data: data('claude-sonnet-4-6', input, 0) }],
+      states: [
+        {
+          tool: 'claude' as const,
+          host: 'mac' as const,
+          state: 'ok' as const,
+          rowCount: 99,
+          lastScanAt: new Date(at).toISOString(),
+          detail: null,
+        },
+      ],
+    });
+    try {
+      const service = new AccountAnalyticsActivityService({
+        now: () => NOW,
+        requests: () => [
+          { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture' } },
+        ],
+        loadWorker: async () => {
+          if (pass) wall += 60_001;
+          return data('claude-sonnet-4-6', 100, 0);
+        },
+        remote: () => (pass ? new Promise(() => {}) : Promise.resolve(answer(10, NOW))),
+        remoteCached: () => answer(777, NOW + 1000),
+      });
+      expect((await settled(service)).totals?.inputTokens).toBe(110);
+      pass++;
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      expect((await settled(service)).totals?.inputTokens).toBe(877);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('reports failures without promising remaining files when all files were read', async () => {
+    const service = new AccountAnalyticsActivityService({
+      now: () => NOW,
+      requests: () => [
+        { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture' } },
+      ],
+      remote: async () => ({ results: [], states: [] }),
+      loadWorker: async () => ({
+        ...data('claude-sonnet-4-6', 100, 0),
+        scan: {
+          complete: false,
+          completedFiles: 1008,
+          totalFiles: 1008,
+          failedFiles: 2,
+          skippedLines: 0,
+          readBytes: 0,
+        },
+      }),
+    });
+    const result = await settled(service);
+    expect(result.message).toContain('2 local scan failures');
+    expect(result.message).not.toContain('remaining files resume');
+  });
+
+  it('rotates capped requests ahead of previously attempted roots and preserves a safe worker budget', async () => {
+    let wall = Date.now();
+    const clock = spyOn(Date, 'now').mockImplementation(() => wall);
+    let pass = 0;
+    const started: string[][] = [[], []];
+    const budgets: number[] = [];
+    try {
+      const service = new AccountAnalyticsActivityService({
+        now: () => NOW,
+        concurrency: 1,
+        requests: () =>
+          Array.from({ length: 27 }, (_, index) => ({
+            provider: 'claude',
+            request: { kind: 'claude', projectsDir: `/fixture/${index}` },
+          })),
+        remote: async () => ({ results: [], states: [] }),
+        loadWorker: async (request, budget) => {
+          started[pass].push(request.kind === 'claude' ? request.projectsDir : '');
+          budgets.push(budget ?? 0);
+          if (started[pass].length === 1) wall += 48_500;
+          return data('claude-sonnet-4-6', 1, 0);
+        },
+      });
+      await settled(service);
+      expect(started[0]).toHaveLength(25);
+      pass++;
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      const result = await settled(service);
+      expect(started[1].slice(0, 2)).toEqual(['/fixture/25', '/fixture/26']);
+      expect(budgets.every((budget) => budget >= 15_000)).toBe(true);
+      expect(result.totals?.inputTokens).toBe(27);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('publishes real bounded progress, then warm completion, while keeping shared logs unattributed', async () => {
     let now = NOW;
     let complete = false;
@@ -314,11 +657,15 @@ describe('native local analytics activity', () => {
         );
       }
       const result = await runWithScopedCcsHome(root, () =>
-        loadAccountAnalyticsWorker({
-          kind: 'codex',
-          codexHome: path.join(root, 'codex'),
-          cacheDir: path.join(root, 'cache'),
-        })
+        // A nearly exhausted outer budget must not kill the collector before its own deadline.
+        loadAccountAnalyticsWorker(
+          {
+            kind: 'codex',
+            codexHome: path.join(root, 'codex'),
+            cacheDir: path.join(root, 'cache'),
+          },
+          1
+        )
       );
       expect(result.eventCount).toBe(1);
       expect(result.hourly[0].inputTokens).toBe(80);
