@@ -539,8 +539,6 @@ export component AxDailyCard inherits AxCard {
                     height: 17px;
                     clip: true;
                     HorizontalLayout {
-                        width: ro-detail.width;
-                        height: ro-detail.height;
                         spacing: 10px;
                         for r in root.sb.rows: HorizontalLayout {
                             spacing: 5px;
@@ -550,7 +548,8 @@ export component AxDailyCard inherits AxCard {
                             Text { text: r.label; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; overflow: elide; min-width: 0px; AxPress { tip: r.label + ": " + r.value; long-tip: r.label + ": " + r.value; } }
                             Text { text: r.value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; overflow: elide; min-width: 0px; AxPress { tip: r.label + ": " + r.value; long-tip: r.label + ": " + r.value; } }
                         }
-                        if root.sb.foot != "": Text { width: root.sb.rows.length > 0 ? ro-detail.width * 0.4 : ro-detail.width; text: root.sb.foot; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; AxPress { tip: root.sb.foot; long-tip: root.sb.foot; } }
+                        // The note shares the line and elides; a width taken from the box would loop through its layout.
+                        if root.sb.foot != "": Text { horizontal-stretch: 1; min-width: 0px; text: root.sb.foot; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; AxPress { tip: root.sb.foot; long-tip: root.sb.foot; } }
                     }
                 }
             }
