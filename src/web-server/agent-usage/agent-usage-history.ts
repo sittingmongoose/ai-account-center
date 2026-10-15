@@ -187,33 +187,39 @@ export class RecentReadings {
   }
 }
 
+/** The reading names a reset still ahead of it (not one it keeps reporting after it passed). */
+function upcoming(reading: Reading): reading is Reading & { resetAt: number } {
+  return reading.resetAt !== null && reading.resetAt > reading.at;
+}
+
 /**
- * The readings since the last reset. With a reset time on both readings, a moved reset time or a
- * fall of more than a point starts a new period (a small fall is a rolling window easing). Without
- * one, any fall starts a new period: a reset cannot be told from noise, so the pace never spans it.
+ * The readings since the last reset. Two neighbouring readings with a percentage are in different
+ * periods when:
+ * - any reported reset time falls between them (`earlier.at < reset <= later.at`), whichever
+ *   reading reported it, one without a percentage included, so a source that omits the time cannot
+ *   hide a reset;
+ * - both name an upcoming reset and those differ by more than 10 minutes;
+ * - use falls: by more than a point when both name the same upcoming reset (a rolling window
+ *   easing), by any amount otherwise, since a reset cannot then be told from noise.
  */
 function currentPeriod(readings: Reading[]): Reading[] {
+  const boundaries = [
+    ...new Set(readings.flatMap((reading) => (reading.resetAt === null ? [] : [reading.resetAt]))),
+  ];
   const usable = readings.filter((reading) => reading.used !== null);
-  // The reset each reading knows of: its own, else the last one an earlier reading reported, so a
-  // source that omits the time cannot hide a reset that falls between two readings.
-  const known: Array<number | null> = [];
-  usable.forEach((reading, index) =>
-    known.push(reading.resetAt ?? (index > 0 ? known[index - 1] : null))
-  );
   let start = usable.length - 1;
   while (start > 0) {
     const earlier = usable[start - 1];
     const later = usable[start];
-    const earlierReset = known[start - 1];
-    const laterReset = known[start];
-    // A reset fell between the two readings. One already past at both (a provider that keeps the
-    // last reset time after it) is not between them.
-    if (earlierReset !== null && earlier.at < earlierReset && earlierReset <= later.at) break;
-    const bothKnown = earlierReset !== null && laterReset !== null;
-    const fall = (earlier.used as number) - (later.used as number);
-    if (fall > (bothKnown ? RESET_DROP_POINTS : 0)) break;
-    if (bothKnown && Math.abs((earlierReset as number) - (laterReset as number)) > RESET_SHIFT_MS)
+    if (boundaries.some((reset) => earlier.at < reset && reset <= later.at)) break;
+    const sameUpcoming = upcoming(earlier) && upcoming(later);
+    if (
+      sameUpcoming &&
+      Math.abs((earlier.resetAt as number) - (later.resetAt as number)) > RESET_SHIFT_MS
+    )
       break;
+    const fall = (earlier.used as number) - (later.used as number);
+    if (fall > (sameUpcoming ? RESET_DROP_POINTS : 0)) break;
     start--;
   }
   return start < 0 ? [] : usable.slice(start);

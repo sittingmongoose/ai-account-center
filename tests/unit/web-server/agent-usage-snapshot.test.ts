@@ -306,6 +306,28 @@ describe('agent usage burn rate', () => {
     expect(after.paceMinutes).toBe(5);
   });
 
+  it('splits only at reported resets, from any reading, and keeps post-reset pace', () => {
+    const at = (minutesAgo: number) => NOW - minutesAgo * MINUTE;
+    // 11:45 40% (reset 11:55), 11:56 10%, 12:00 20% (next reset 16:55): pace from 11:56.
+    const late = burnRate(
+      [reading(15, 40, at(5)), reading(4, 10), reading(0, 20, NOW + 295 * MINUTE)],
+      null
+    );
+    expect(late.periodStartedAt).toBe(new Date(at(4)).toISOString());
+    expect(late.pace).toBe(150);
+    // An expired reset (06:56) does not make a one-point fall noise: 11:55 1%, 11:56 0%, 12:00 2%.
+    const expired = burnRate([reading(5, 1, at(304)), reading(4, 0), reading(0, 2)], null);
+    expect(expired.periodStartedAt).toBe(new Date(at(4)).toISOString());
+    expect(expired.last5Minutes).toBe(30);
+    // A boundary only the later reading reports: 11:50 45%, 12:00 60% (reset 11:55).
+    const reportedLater = burnRate([reading(10, 45), reading(0, 60, at(5))], null);
+    expect(reportedLater.pace).toBeNull();
+    // A reading without a percentage still carries its reset: 11:45 40%, 11:50 (reset 11:55), 12:00 60%.
+    const silent: Reading = { at: at(10), used: null, remaining: 55, resetAt: at(5) };
+    const withSilent = burnRate([reading(15, 40), silent, reading(0, 60)], null);
+    expect(withSilent.pace).toBeNull();
+  });
+
   it("keeps an account's history through an outage, without a reading or a pace", () => {
     const live = account();
     const down = account({ status: 'unavailable', windows: [] });
