@@ -20,7 +20,7 @@ import { ProviderMark } from "../components/mark.slint";
 import { Caps, ValueUnit } from "../components/text.slint";
 import { Button } from "../components/button.slint";
 import { IconButton } from "../components/icon-button.slint";
-import { Toggle } from "../components/toggle.slint";
+import { BoundToggle, TipArea, IconNote } from "accounts/ac-actions.slint";
 import { Meter, DashedTrack } from "../components/meter.slint";
 import { Plate, Card } from "../components/card.slint";
 import { Reveal } from "../components/reveal.slint";
@@ -175,6 +175,30 @@ export component ActiveMark inherits Rectangle {
     }
 }
 
+// Disabled Open controls keep a hit area for their reason without opening the row's Details.
+component OpenControl inherits TipArea {
+    in property <string> platform;
+    in property <bool> can-open;
+    in property <bool> busy;
+    callback launch();
+    callback reason(string);
+    preferred-width: Breakpoints.tier-d ? 28px : 40px;
+    preferred-height: Breakpoints.tier-d ? 28px : 44px;
+    tip: root.can-open ? "Open on " + (root.platform == "apple" ? "Mac" : "Windows")
+        : "Open on " + (root.platform == "apple" ? "Mac" : "Windows") + " is unavailable for this profile";
+    clicked => { if !root.can-open && !root.busy { root.reason(root.tip); } }
+    IconButton {
+        x: 0px;
+        y: (parent.height - self.preferred-height) / 2;
+        platform: root.platform;
+        small: true;
+        enabled: root.can-open && !root.busy;
+        hint: root.tip;
+        long-tip: root.tip;
+        clicked => { root.launch(); }
+    }
+}
+
 // The fixed action slot of a switchable row: the Activate button and the Active mark stacked in one
 // cell on its start edge. They cross-fade (the button fades back in after the mark leaves), so the slot
 // never changes width on a switch. `full` spans the given width (Details on P, 4.4): a full-width button
@@ -187,6 +211,7 @@ export component SwitchSlot inherits Rectangle {
     in property <bool> full: false;
     callback activate();
     callback finish-setup();
+    callback reason(string);
     property <bool> show-button: root.can-switch && !root.account.active && !root.account.setup;
     property <bool> show-mark: root.account.active && !root.account.setup;
     out property <length> natural: max(root.can-switch ? btn.preferred-width : 0px, mark.preferred-width, root.account.setup ? setup-btn.preferred-width : 0px);
@@ -205,19 +230,34 @@ export component SwitchSlot inherits Rectangle {
         transform-scale: root.show-button ? 1 : 0.94;
         animate opacity { duration: Motion.on ? 220ms : 0ms; delay: Motion.on && root.show-button ? 160ms : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
         animate transform-scale { duration: Motion.on ? Motion.fast : 0ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
-        btn := Button {
+        TipArea {
             x: 0px;
             y: 0px;
-            width: root.full && root.show-button ? parent.width : self.preferred-width;
-            // the desktop slot keeps the small button; below D the slot button is the full 44 px control
-            small: !root.touch;
-            tall: root.full;
-            kind: "accent-line";
-            icon: "swap";
-            text: "Activate";
-            enabled: root.show-button && root.account.can-activate && !root.busy;
-            hint: root.account.activate-hint;
-            clicked => { root.activate(); }
+            width: parent.width;
+            height: parent.height;
+            owner: "activate:" + root.account.id;
+            tip: root.account.activate-hint;
+            enabled: root.show-button;
+            clicked => {
+                if root.show-button && !root.account.can-activate && !root.busy {
+                    root.reason(root.account.activate-hint);
+                }
+            }
+            btn := Button {
+                x: 0px;
+                y: 0px;
+                width: root.full && root.show-button ? parent.width : self.preferred-width;
+                // the desktop slot keeps the small button; below D the slot button is the full 44 px control
+                small: !root.touch;
+                tall: root.full;
+                kind: "accent-line";
+                icon: "swap";
+                text: "Activate";
+                enabled: root.show-button && root.account.can-activate && !root.busy;
+                hint: root.account.activate-hint;
+                long-tip: root.account.activate-hint;
+                clicked => { root.activate(); }
+            }
         }
     }
     mark := ActiveMark {
@@ -521,6 +561,7 @@ export component AccountRow inherits Rectangle {
     callback ask-confirm(string);
     callback cancel-confirm();
     callback go-accounts();
+    property <string> tap-reason;
     out property <bool> hovered: ta.has-hover;
     out property <length> line-height: line.height;
     // The widths this row needs: the account column (mark, gap, widest text in the active weight, slack)
@@ -622,7 +663,7 @@ export component AccountRow inherits Rectangle {
 
             ta := TouchArea {
                 mouse-cursor: pointer;
-                clicked => { root.open-details(root.account.id); }
+                clicked => { root.tap-reason = ""; root.open-details(root.account.id); }
                 innercol := VerticalLayout {
                     spacing: 0px;
                 // ---- the desktop table row (D, and inner >= 680/600 below D) ----
@@ -696,7 +737,7 @@ export component AccountRow inherits Rectangle {
                             hot: root.hovered && Device.hover;
                             notch-override: root.notch-at;
                             owner-label: root.section.label + " · " + root.account.email;
-                            clicked => { root.open-details(root.account.id); }
+                            clicked => { root.tap-reason = ""; root.open-details(root.account.id); }
                             value-changed => { root.flash(); }
                         }
                     }
@@ -708,22 +749,24 @@ export component AccountRow inherits Rectangle {
                             spacing: Breakpoints.below-d ? 4px : 6px;
                             VerticalLayout {
                                 alignment: center;
-                                IconButton {
+                                OpenControl {
                                     platform: "apple";
-                                    small: true;
-                                    enabled: root.account.can-mac && !root.busy;
-                                    hint: root.account.can-mac ? "Open on Mac" : "Open on Mac is unavailable for this profile";
-                                    clicked => { root.launch(root.account.profile, "mac"); }
+                                    owner: "open:mac:" + root.account.id;
+                                    can-open: root.account.can-mac;
+                                    busy: root.busy;
+                                    reason(r) => { root.tap-reason = r; }
+                                    launch => { root.tap-reason = ""; root.launch(root.account.profile, "mac"); }
                                 }
                             }
                             VerticalLayout {
                                 alignment: center;
-                                IconButton {
+                                OpenControl {
                                     platform: "windows";
-                                    small: true;
-                                    enabled: root.account.can-windows && !root.busy;
-                                    hint: root.account.can-windows ? "Open on Windows" : "Open on Windows is unavailable for this profile";
-                                    clicked => { root.launch(root.account.profile, "windows"); }
+                                    owner: "open:windows:" + root.account.id;
+                                    can-open: root.account.can-windows;
+                                    busy: root.busy;
+                                    reason(r) => { root.tap-reason = r; }
+                                    launch => { root.tap-reason = ""; root.launch(root.account.profile, "windows"); }
                                 }
                             }
                         }
@@ -738,6 +781,7 @@ export component AccountRow inherits Rectangle {
                             can-switch: root.section.can-switch;
                             busy: root.busy;
                             activate => {
+                                root.tap-reason = "";
                                 if root.account.confirm {
                                     root.ask-confirm(root.account.id);
                                 } else {
@@ -745,6 +789,7 @@ export component AccountRow inherits Rectangle {
                                 }
                             }
                             finish-setup => { root.go-accounts(); }
+                            reason(r) => { root.tap-reason = r; }
                         }
                     }
                 }
@@ -801,19 +846,21 @@ export component AccountRow inherits Rectangle {
                             if !root.section.switchable: HorizontalLayout {
                                 alignment: end;
                                 spacing: 4px;
-                                IconButton {
+                                OpenControl {
                                     platform: "apple";
-                                    small: true;
-                                    enabled: root.account.can-mac && !root.busy;
-                                    hint: root.account.can-mac ? "Open on Mac" : "Open on Mac is unavailable for this profile";
-                                    clicked => { root.launch(root.account.profile, "mac"); }
+                                    owner: "open:mac:" + root.account.id;
+                                    can-open: root.account.can-mac;
+                                    busy: root.busy;
+                                    reason(r) => { root.tap-reason = r; }
+                                    launch => { root.tap-reason = ""; root.launch(root.account.profile, "mac"); }
                                 }
-                                IconButton {
+                                OpenControl {
                                     platform: "windows";
-                                    small: true;
-                                    enabled: root.account.can-windows && !root.busy;
-                                    hint: root.account.can-windows ? "Open on Windows" : "Open on Windows is unavailable for this profile";
-                                    clicked => { root.launch(root.account.profile, "windows"); }
+                                    owner: "open:windows:" + root.account.id;
+                                    can-open: root.account.can-windows;
+                                    busy: root.busy;
+                                    reason(r) => { root.tap-reason = r; }
+                                    launch => { root.tap-reason = ""; root.launch(root.account.profile, "windows"); }
                                 }
                             }
                             // Mode-conditioned, not `visible:`: an invisible slot still stacks its
@@ -824,6 +871,7 @@ export component AccountRow inherits Rectangle {
                                 can-switch: root.section.can-switch;
                                 busy: root.busy;
                                 activate => {
+                                    root.tap-reason = "";
                                     if root.account.confirm {
                                         root.ask-confirm(root.account.id);
                                     } else {
@@ -831,6 +879,7 @@ export component AccountRow inherits Rectangle {
                                     }
                                 }
                                 finish-setup => { root.go-accounts(); }
+                                reason(r) => { root.tap-reason = r; }
                             }
                         }
                     }
@@ -862,7 +911,7 @@ export component AccountRow inherits Rectangle {
                                 hot: root.hovered && Device.hover;
                                 notch-override: root.notch-at;
                                 owner-label: root.section.label + " · " + root.account.email;
-                                clicked => { root.open-details(root.account.id); }
+                                clicked => { root.tap-reason = ""; root.open-details(root.account.id); }
                                 value-changed => { root.flash(); }
                             }
                         }
@@ -893,7 +942,7 @@ export component AccountRow inherits Rectangle {
                                 hot: root.hovered && Device.hover;
                                 notch-override: root.notch-at;
                                 owner-label: root.section.label + " · " + root.account.email;
-                                clicked => { root.open-details(root.account.id); }
+                                clicked => { root.tap-reason = ""; root.open-details(root.account.id); }
                                 value-changed => { root.flash(); }
                             }
                         }
@@ -926,6 +975,13 @@ export component AccountRow inherits Rectangle {
                 background: Theme.rule-2;
                 visible: !root.last;
             }
+        }
+        if Breakpoints.below-d && root.tap-reason != "": VerticalLayout {
+            padding-left: root.pad-x;
+            padding-right: root.pad-x;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            IconNote { text: root.tap-reason; }
         }
         if root.table && root.account.confirm: ConfirmLine {
             runs: root.account.confirm-runs;
@@ -1419,8 +1475,8 @@ export component AccountSection inherits Plate {
                             spacing: 10px;
                             VerticalLayout {
                                 alignment: center;
-                                Toggle {
-                                    on: root.section.auto.enabled;
+                                BoundToggle {
+                                    model-on: root.section.auto.enabled;
                                     enabled: root.section.auto.available && (root.section.auto.enabled || root.section.auto.can-enable) && !root.busy;
                                     label: "Auto-switch";
                                     toggled(on) => { root.auto-toggled(root.section.id, on); }
@@ -1502,8 +1558,8 @@ export component AccountSection inherits Plate {
                         spacing: 8px;
                         VerticalLayout {
                             alignment: center;
-                            Toggle {
-                                on: root.section.auto.enabled;
+                            BoundToggle {
+                                model-on: root.section.auto.enabled;
                                 enabled: root.section.auto.available && (root.section.auto.enabled || root.section.auto.can-enable) && !root.busy;
                                 label: "Auto-switch";
                                 toggled(on) => { root.auto-toggled(root.section.id, on); }
