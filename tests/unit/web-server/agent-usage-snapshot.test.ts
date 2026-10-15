@@ -330,6 +330,48 @@ describe('agent usage burn rate', () => {
     expect(withSilent.pace).toBeNull();
   });
 
+  it('splits at a reset reported by a reading with no numbers, from history and from the ring', () => {
+    const row = account({
+      windows: [window({ usedPercent: 60, remainingPercent: 40, resetAt: null })],
+    });
+    const resetOnly = window({
+      usedPercent: null,
+      remainingPercent: null,
+      resetAt: '2026-10-15T11:55:00.000Z',
+    });
+    const stored = [
+      {
+        ...record(row, 15, 40),
+        windows: [window({ usedPercent: 40, remainingPercent: 60, resetAt: null })],
+      },
+      { ...record(row, 10, 0), windows: [resetOnly] },
+    ];
+    const projected = projectAgentUsage([row], { now: NOW }).accounts;
+    const fromHistory = usageHistory([row], projected, history(stored), NOW);
+    expect(
+      fromHistory.rates.get('codex:gmail')?.get(burnKey('five_hour', null, null))?.pace
+    ).toBeNull();
+    expect(fromHistory.series[0].points.map((point) => point[1])).toEqual([40, 60]);
+    const recent = new RecentReadings();
+    recent.add(
+      [
+        account({
+          sampledAt: new Date(NOW - 15 * MINUTE).toISOString(),
+          windows: [window({ usedPercent: 40, resetAt: null })],
+        }),
+      ],
+      NOW - 15 * MINUTE
+    );
+    recent.add(
+      [account({ sampledAt: new Date(NOW - 10 * MINUTE).toISOString(), windows: [resetOnly] })],
+      NOW - 10 * MINUTE
+    );
+    const fromRing = usageHistory([row], projected, null, NOW, recent);
+    expect(
+      fromRing.rates.get('codex:gmail')?.get(burnKey('five_hour', null, null))?.pace
+    ).toBeNull();
+  });
+
   it("keeps an account's history through an outage, without a reading or a pace", () => {
     const live = account();
     const down = account({ status: 'unavailable', windows: [] });

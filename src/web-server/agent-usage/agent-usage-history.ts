@@ -135,8 +135,9 @@ export function windowReadings(
     if (!Number.isFinite(at) || at < since) continue;
     const used = finite(match.usedPercent);
     const remaining = finite(match.remaining);
-    if (used === null && remaining === null) continue;
     const reset = Date.parse(match.resetAt ?? '');
+    // A reading with only a reset time is kept: it marks a period boundary, never a rate.
+    if (used === null && remaining === null && !Number.isFinite(reset)) continue;
     readings.push({ at, used, remaining, resetAt: Number.isFinite(reset) ? reset : null });
   }
   // One reading per observation: a retained window repeats its time in later records.
@@ -158,8 +159,9 @@ export function rowReading(row: DashboardAccount, window: DashboardAccountWindow
   const at = observedAt(window, row.sampledAt);
   const used = finite(window.usedPercent);
   const remaining = finite(window.remaining);
-  if (!Number.isFinite(at) || (used === null && remaining === null)) return null;
   const reset = Date.parse(window.resetAt ?? '');
+  if (!Number.isFinite(at) || (used === null && remaining === null && !Number.isFinite(reset)))
+    return null;
   return { at, used, remaining, resetAt: Number.isFinite(reset) ? reset : null };
 }
 
@@ -349,7 +351,11 @@ export function usageHistory(
           burnKey(window.key, window.unit ?? null, window.poolId ?? null),
           burnRate(readings, window.resetAt)
         );
-      if (readings.length === 0) continue;
+      // The published series holds measured numbers; reset-only readings only split periods.
+      const measured = readings.filter(
+        (reading) => reading.used !== null || reading.remaining !== null
+      );
+      if (measured.length === 0) continue;
       series.push({
         accountId: account.id,
         provider: account.provider,
@@ -362,7 +368,7 @@ export function usageHistory(
         pool: window.poolLabel ?? null,
         kind: window.kind ?? 'rate_limit',
         unit: window.unit ?? null,
-        points: readings.map((reading) => [minuteIso(reading.at), reading.used, reading.remaining]),
+        points: measured.map((reading) => [minuteIso(reading.at), reading.used, reading.remaining]),
       });
     }
     rates.set(account.id, perWindow);
