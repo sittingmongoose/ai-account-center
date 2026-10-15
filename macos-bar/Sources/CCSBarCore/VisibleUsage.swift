@@ -41,8 +41,9 @@ extension DashboardAccount {
           let hasTiming = AccountFormatting.date(window.resetAt) != nil
             || AccountFormatting.date(window.expiresAt) != nil
           if ["resetpacks5h", "resetpacksweekly"].contains(Self.normalized(window.key)) {
-            // Zero summary counts have no individual pack details to display.
-            return window.remaining.map { $0.isFinite && $0 > 0 } == true || hasTiming
+            // A kind's roll-up stays while it holds or used a pack; an account with none hides it.
+            return [window.remaining, window.used, window.limit].contains { $0.map { $0.isFinite && $0 > 0 } == true }
+              || hasTiming
           }
           return Self.hasUsageValue(window) || hasTiming
         }

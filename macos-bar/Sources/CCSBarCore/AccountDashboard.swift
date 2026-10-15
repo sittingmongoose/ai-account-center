@@ -386,9 +386,9 @@ public enum AccountFormatting {
     return "Resets \(absolute) · \(relative)"
   }
 
-  public static func expiration(_ iso: String?) -> String {
+  public static func expiration(_ iso: String?, prefix: String = "Expires") -> String {
     guard let date = date(iso) else { return "Expiration unavailable" }
-    return "Expires \(expirationFormatter.string(from: date))"
+    return "\(prefix) \(expirationFormatter.string(from: date))"
   }
 
   private static let blockedAutoSwitch: Set<String> = ["waiting_idle", "no_quota", "no_candidate", "error"]

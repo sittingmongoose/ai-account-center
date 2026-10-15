@@ -177,9 +177,15 @@ struct AmountRow: View {
     return TrayFormat.number(value) + (unit.map { " \($0)" } ?? "")
   }
 
+  /// A Z.ai row that counts every reset pack of one kind (the collector's roll-up).
+  private var rolledUpPacks: Bool { provider == "zai" && ["reset-packs-5h", "reset-packs-weekly"].contains(window.key) }
+
   private var value: String {
     if window.enabled == false { return window.kind == "extra_usage" ? "Off" : "Disabled" }
     if window.unlimited == true { return "Unlimited" }
+    if rolledUpPacks, let remaining = window.remaining, let limit = window.limit {
+      return "\(TrayFormat.number(remaining)) of \(quantity(limit)) left"
+    }
     if let remaining = window.remaining { return "\(quantity(remaining)) left" }
     if let used = window.used, let limit = window.limit { return "\(quantity(used)) of \(quantity(limit))" }
     if let used = window.used { return "\(quantity(used)) used" }
@@ -189,6 +195,14 @@ struct AmountRow: View {
 
   private var sub: String? {
     var parts: [String] = []
+    if rolledUpPacks {
+      // "2 used · Next expires Nov 1": the packs used, and the soonest expiry among those left.
+      if let used = window.used, used > 0 { parts.append("\(TrayFormat.number(used)) used") }
+      if window.expiresAt != nil {
+        parts.append(AccountFormatting.expiration(window.expiresAt, prefix: (window.remaining ?? 0) > 1 ? "Next expires" : "Expires"))
+      }
+      return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
     if window.remaining != nil, let used = window.used, let limit = window.limit { parts.append("\(quantity(used)) of \(quantity(limit)) used") }
     if window.resetAt != nil { parts.append(TrayFormat.longReset(window.resetAt)) }
     if window.expiresAt != nil || window.kind == "balance" { parts.append(AccountFormatting.expiration(window.expiresAt)) }

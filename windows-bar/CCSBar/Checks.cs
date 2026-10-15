@@ -90,6 +90,11 @@ public static partial class Checks
         report.Checks["qwen_unknown_pack_expiry_not_inferred"] = Formatting.Expiration(packs[1].ExpiresAt) == "Expiration date unavailable" && packs[1].ExpiresAt is null;
         var zai = new DashboardAccount { Provider = "zai", Windows = new List<QuotaWindow> { new() { Key = "reset-packs-5h", Remaining = 0 }, new() { Key = "reset-packs-weekly" }, new() { Key = "reset-packs-positive", Remaining = 2 }, new() { Key = "pack-record", Remaining = 0, ExpiresAt = "2027-01-01T00:00:00Z" } } };
         report.Checks["zai_empty_pack_summaries_hidden_actual_packs_retained"] = Formatting.VisibleWindows(zai).Select(window => window.Key).SequenceEqual(new[] { "reset-packs-positive", "pack-record" });
+        var rolled = new DashboardAccount { Provider = "zai", Windows = new List<QuotaWindow> { new() { Key = "reset-packs-5h", Unit = "packs", Remaining = 3, Used = 2, Limit = 5, ExpiresAt = "2027-01-01T00:00:00Z" }, new() { Key = "reset-packs-weekly", Unit = "packs", Remaining = 0, Used = 5, Limit = 5 }, new() { Key = "reset-packs-none", Unit = "packs", Remaining = 0, Used = 0, Limit = 0 } } };
+        report.Checks["zai_reset_pack_rollup_counts_left_used_and_next_expiry"] = Formatting.VisibleWindows(rolled).Select(window => window.Key).SequenceEqual(new[] { "reset-packs-5h", "reset-packs-weekly" })
+            && Formatting.IsResetPackRollup(rolled, rolled.Windows[0]) && Formatting.ResetPackRollupValue(rolled.Windows[0]) == "3 of 5 packs left"
+            && Formatting.ResetPackRollupDetail(rolled.Windows[0]).StartsWith("2 used · Next expires ", StringComparison.Ordinal)
+            && Formatting.ResetPackRollupDetail(rolled.Windows[1]) == "5 used";
         var balance = JsonSerializer.Deserialize<QuotaWindow>("{\"kind\":\"balance\",\"remaining\":42.75,\"expiresAt\":\"2027-01-01T00:00:00Z\",\"unlimited\":true,\"enabled\":false}", Formatting.Json)!;
         report.Checks["optional_usage_metadata_decoded"] = balance.Kind == "balance" && balance.Remaining == 42.75 && balance.ExpiresAt == "2027-01-01T00:00:00Z" && balance.Unlimited && balance.Enabled == false && balance.DisplayPercent is null;
         var cachedWindow = JsonSerializer.Deserialize<QuotaWindow>("{\"kind\":\"balance\",\"remaining\":42.75,\"status\":\"cached\",\"sampledAt\":\"2026-09-28T13:00:00Z\"}", Formatting.Json)!;

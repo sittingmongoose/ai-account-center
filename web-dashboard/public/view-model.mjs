@@ -416,6 +416,10 @@ const emptyCell = (account, key) => ({
   notchOff: false,
 });
 
+/** A Z.ai row that counts all reset packs of one kind (the collector's roll-up). */
+const rolledUpPacks = (account, w) =>
+  account?.provider === 'zai' && /^reset-packs-(?:5h|weekly)$/.test(text(w.key));
+
 /** Packs, balances, credits and spend as an AmountView. */
 export function amountView(account, w, now = Date.now(), { noExpiry = false } = {}) {
   const unit = text(w.unit);
@@ -429,7 +433,20 @@ export function amountView(account, w, now = Date.now(), { noExpiry = false } = 
     sub = '',
     icon = 'wallet',
     spent = false;
-  if (/pack/i.test(text(w.label)) && finite(w.limit)) {
+  if (rolledUpPacks(account, w) && finite(w.limit)) {
+    // Every Z.ai reset pack of one kind on one line: how many are left, how many were used and
+    // the soonest expiry among those left.
+    icon = 'pack';
+    value = unitAmount(w.remaining, null) || 'Unavailable';
+    suffix = `of ${unitAmount(w.limit, unit)} left`;
+    spent = w.remaining === 0;
+    sub = [
+      finite(w.used) && w.used > 0 ? `${nf2.format(w.used)} used` : '',
+      noExpiry ? '' : exact(w.expiresAt, w.remaining > 1 ? 'Next expires ' : 'Expires '),
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  } else if (/pack/i.test(text(w.label)) && finite(w.limit)) {
     icon = 'pack';
     value = unitAmount(w.remaining, null) || 'Unavailable';
     suffix = `of ${unitAmount(w.limit, unit)} left`;
@@ -1066,8 +1083,9 @@ function providerCards(accounts, hidden, now) {
       const planExpiry = visibleMeters(account).find((w) => w.planExpiry && validDate(w.expiresAt));
       // Packs that all expire together say so once instead of on every line.
       const amountWindows = visibleAmounts(account);
+      // A rolled-up Z.ai row counts many packs and states its own soonest expiry.
       const packs = amountWindows.filter(
-        (w) => /pack/i.test(text(w.label)) && validDate(w.expiresAt)
+        (w) => /pack/i.test(text(w.label)) && validDate(w.expiresAt) && !rolledUpPacks(account, w)
       );
       const sameExpiry = packs.length > 1 && packs.every((w) => w.expiresAt === packs[0].expiresAt);
       const sampledAt = account.sampledAt || account.fetchedAt;

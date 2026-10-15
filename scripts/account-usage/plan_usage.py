@@ -239,12 +239,13 @@ def _zai_pack_expiry(value):
     return reset_at(value)
 
 
-def parse_zai_reset_packs(payload):
+def parse_zai_reset_packs(payload, now=None):
     if payload.get("success") is not True or payload.get("code") not in (None, 0, 200, "0", "200"):
         raise CollectionError("error", "Reset pack inventory could not be read.")
     data = payload.get("data")
     if not isinstance(data, dict):
         raise CollectionError("error", "Reset pack inventory could not be read.")
+    current = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds").replace("+00:00", "Z")
     windows = []
     recognized = False
     for field, prefix, label in (("fiveHourResets", "5h", "5-hour"), ("weekResets", "weekly", "Weekly")):
@@ -252,25 +253,38 @@ def parse_zai_reset_packs(payload):
         if not isinstance(rows, list):
             continue
         recognized = True
-        # Preserve known-zero availability only for an explicitly complete list.
-        availability_known = len(rows) <= 100 and all(isinstance(row, dict) and isinstance(row.get("available"), bool) for row in rows)
-        if availability_known:
-            count = sum(1 for row in rows if row["available"])
-            windows.append(usage_window("reset-packs-" + prefix, "Available " + label.lower() + " reset packs",
-                                        remaining=count, unit="packs", kind="balance"))
-        for index, row in enumerate(rows[:100]):
+        # One row per kind however many packs the account holds: how many are left, how many
+        # were used, and the soonest expiry among those left. "available": false means used OR
+        # expired, so only a pack that went unavailable before its expiry counts as used; one
+        # past its expiry is gone either way and is not counted.
+        left = used = 0
+        expiries = []
+        # Known counts (zero included) only for an explicitly complete list.
+        complete = len(rows) <= 100
+        for row in rows[:100]:
             if not isinstance(row, dict):
+                complete = False
                 continue
             expiry = _zai_pack_expiry(row.get("expireTime"))
+            # The ISO strings share one UTC format, so they compare in time order.
+            in_date = expiry is None or expiry > current
             available = row.get("available")
-            if expiry is None and not isinstance(available, bool):
-                continue
-            identifier = row.get("recordId")
-            stable = str(identifier) if isinstance(identifier, (int, str)) and not isinstance(identifier, bool) else str(index)
-            key = "reset-pack-{}-{}".format(prefix, hashlib.sha256(stable.encode()).hexdigest()[:12])
-            windows.append(usage_window(key, label + " reset pack", expires_at=expiry,
-                                        remaining=(1 if available else 0) if isinstance(available, bool) else None,
-                                        unit="packs", kind="balance"))
+            if not isinstance(available, bool):
+                complete = False
+                if expiry is not None and in_date:
+                    expiries.append(expiry)
+            elif available and in_date:
+                left += 1
+                if expiry is not None:
+                    expiries.append(expiry)
+            elif not available and expiry is not None and in_date:
+                used += 1
+        windows.append(usage_window("reset-packs-" + prefix, label + " reset packs",
+                                    remaining=left if complete else None,
+                                    used=used if complete else None,
+                                    limit=left + used if complete else None,
+                                    expires_at=min(expiries) if expiries else None,
+                                    unit="packs", kind="balance"))
     if not recognized:
         raise CollectionError("error", "Reset pack inventory could not be read.")
     return windows

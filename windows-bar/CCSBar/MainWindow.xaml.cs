@@ -1436,9 +1436,11 @@ public partial class MainWindow : Window
                 var agPlan = account.AntigravityPlan;
                 var credits = agPlan is not null && window.Key == "google-ai-credits";
                 var label = Ui.Text(credits ? "AI credits (overage)" : Formatting.WindowLabel(account, window), 12.5, "Ink2", trim: true); Grid.SetColumn(label, 2); row.Children.Add(label);
-                var value = Ui.Text(AmountValue(window), 12.5, "Ink", FontWeights.SemiBold); Grid.SetColumn(value, 3); row.Children.Add(value);
+                var rollup = Formatting.IsResetPackRollup(account, window);
+                var value = Ui.Text((rollup ? Formatting.ResetPackRollupValue(window) : null) ?? AmountValue(window), 12.5, "Ink", FontWeights.SemiBold); Grid.SetColumn(value, 3); row.Children.Add(value);
                 var subParts = new List<string>();
                 if (credits) subParts.Add(agPlan!.CreditsOverage == false ? "Not usable for Antigravity on this plan." : "Used only after the plan quota runs out, when AI Credit Overages is on.");
+                else if (rollup) { var packs = Formatting.ResetPackRollupDetail(window); if (packs.Length > 0) subParts.Add(packs); }
                 else if (window.ExpiresAt is not null || window.Kind is "balance") subParts.Add(Formatting.Expiration(window.ExpiresAt));
                 if (window.Status == "cached") subParts.Add("Cached · " + Formatting.WindowSample(window.SampledAt));
                 if (subParts.Count > 0) { var sub = Ui.Text(string.Join(" · ", subParts), 11.5, "Ink3", trim: true); Grid.SetRow(sub, 1); Grid.SetColumn(sub, 2); Grid.SetColumnSpan(sub, 2); row.Children.Add(sub); }

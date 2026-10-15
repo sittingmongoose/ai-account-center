@@ -423,6 +423,43 @@ test('meters keep raw overage and at most two decimals; packs, balances and spen
     ],
   });
   assert.equal(dashboardViewModel(data([zai]), { now }).cards[0].amounts.length, 0);
+  // The collector rolls every reset pack of a kind into one row: left of total, used, soonest expiry.
+  const expiry = new Date(now + 17 * 24 * 3600 * 1000).toISOString();
+  const packs = (key, label, remaining, used, expiresAt) => ({
+    key,
+    label,
+    kind: 'balance',
+    unit: 'packs',
+    remaining,
+    used,
+    limit: remaining + used,
+    ...(expiresAt ? { expiresAt } : {}),
+  });
+  const rolled = dashboardViewModel(
+    data([
+      account({
+        id: 'zai:a',
+        provider: 'zai',
+        windows: [
+          window({ key: 'usage-2', label: 'Weekly · Tokens' }),
+          packs('reset-packs-5h', '5-hour reset packs', 3, 2, expiry),
+          packs('reset-packs-weekly', 'Weekly reset packs', 0, 5, null),
+        ],
+      }),
+    ]),
+    { now }
+  ).cards[0];
+  assert.deepEqual(
+    rolled.amounts.map((a) => [a.label, a.value, a.unit]),
+    [
+      ['5-hour reset packs', '3', 'of 5 packs left'],
+      ['Weekly reset packs', '0', 'of 5 packs left'],
+    ]
+  );
+  assert.match(rolled.amounts[0].sub, /^2 used · Next expires /);
+  assert.equal(rolled.amounts[1].sub, '5 used');
+  // Two roll-ups are not "All 2 packs".
+  assert.equal(rolled.packsNote, '');
 });
 
 test('codex rows summarise credits and banked resets of that account only', () => {

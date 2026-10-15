@@ -528,7 +528,7 @@ export function agendaEvents(accounts, now) {
     }
     for (const w of a.windows.filter(x => !x.meter)) {
       const lab = w.label;
-      if (w.expiresAt && w.expiresAt > now && !(finite(w.remaining) && w.remaining === 0)) ev.push({ t: w.expiresAt, a, what: /pack/i.test(lab) ? 'Credit pack expires' : /bank|reset/i.test(lab) ? 'Banked reset expires' : `${lab} expires`, kind: 'exp', amt: finite(w.remaining) ? `${unitAmount(w.remaining, w.unit)} left` : '' });
+      if (w.expiresAt && w.expiresAt > now && !(finite(w.remaining) && w.remaining === 0)) ev.push({ t: w.expiresAt, a, what: /reset pack/i.test(lab) ? 'Reset pack expires' : /pack/i.test(lab) ? 'Credit pack expires' : /bank|reset/i.test(lab) ? 'Banked reset expires' : `${lab} expires`, kind: 'exp', amt: finite(w.remaining) ? `${unitAmount(w.remaining, w.unit)} left` : '' });
       if (w.kind === 'spend' && w.resetAt && w.resetAt > now) addReset(w);
     }
     for (const ws of resets.values()) {

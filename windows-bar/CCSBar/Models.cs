@@ -389,11 +389,30 @@ public static class Formatting
         return (reset <= DateTimeOffset.UtcNow ? "Reset " : "Resets ") + at;
     }
 
-    public static string Expiration(string? timestamp)
+    public static string Expiration(string? timestamp, string prefix = "Expires")
     {
         return DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date)
-            ? "Expires " + date.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture)
+            ? prefix + " " + date.ToLocalTime().ToString("MMM d, yyyy h:mm tt", CultureInfo.CurrentCulture)
             : "Expiration date unavailable";
+    }
+
+    /// <summary>A Z.ai row that counts every reset pack of one kind (the collector's roll-up).</summary>
+    public static bool IsResetPackRollup(DashboardAccount account, QuotaWindow window) =>
+        account.Provider == "zai" && window.Key is "reset-packs-5h" or "reset-packs-weekly";
+
+    /// <summary>"3 of 5 packs left", or null when the counts are not reported.</summary>
+    public static string? ResetPackRollupValue(QuotaWindow window) =>
+        window.Remaining is double left && double.IsFinite(left) && window.Limit is double total && double.IsFinite(total)
+            ? Amount(left, null) + " of " + Amount(total, total == 1 ? "pack" : window.Unit) + " left"
+            : null;
+
+    /// <summary>"2 used · Next expires ...": the packs used and the soonest expiry among those left.</summary>
+    public static string ResetPackRollupDetail(QuotaWindow window)
+    {
+        var parts = new List<string>();
+        if (window.Used is double used && double.IsFinite(used) && used > 0) parts.Add(Amount(used, null) + " used");
+        if (window.ExpiresAt is not null) parts.Add(Expiration(window.ExpiresAt, window.Remaining is double left && left > 1 ? "Next expires" : "Expires"));
+        return string.Join(" · ", parts);
     }
 
     public static string Amount(double amount, string? unit)

@@ -954,6 +954,12 @@ private func checkVisibleUsageWindows() throws {
   ]))
   try expect(timedSummary.visibleWindows.count == 1 && timedSummary.visibleWindows[0].resetAt == "2026-12-31T01:02:03Z",
     "A reset-pack summary with actual timing detail must not be hidden solely because its count is zero")
+  let usedUp = try decodeAccount(accountObject("zai-used-up", "zai", [
+    window("reset-packs-5h", "5-hour reset packs", ["remaining": 0, "used": 5, "limit": 5, "unit": "packs"]),
+    window("reset-packs-weekly", "Weekly reset packs", ["remaining": 0, "used": 0, "limit": 0, "unit": "packs"]),
+  ]))
+  try expect(usedUp.visibleWindows.map(\.key) == ["reset-packs-5h"],
+    "A Z.ai reset-pack roll-up whose packs were all used stays visible; one with no packs at all hides")
   for provider in ["claude", "cursor", "muse", "antigravity", "kimi-code", "opencode-go"] {
     let untouched = try decodeAccount(accountObject(provider, provider, common, plan: "Pro"))
     try expect(untouched.visibleWindows.map(\.key) == rawKeys && untouched.windows.count == common.count,

@@ -436,27 +436,51 @@ class PlanUsageTests(unittest.TestCase):
             self.assertNotIn("minutes", window["label"])
             self.assertIsNotNone(window["resetAt"])
 
-    def test_zai_reset_pack_inventory_counts_and_authoritative_utc8_expiry(self):
+    def test_zai_reset_packs_roll_up_to_one_row_per_kind_with_utc8_expiry(self):
+        now = usage.dt.datetime(2026, 9, 15, tzinfo=usage.dt.timezone.utc)
         windows = usage.parse_zai_reset_packs({"code": 200, "success": True, "data": {
             "fiveHourResets": [{"recordId": "private-record-1", "expireTime": "2026-10-02 08:00:00", "available": True},
-                               {"recordId": "private-record-2", "expireTime": "2026-09-01 08:00:00", "available": False}],
+                               {"recordId": "private-record-2", "expireTime": "2026-10-01 08:00:00", "available": True},
+                               # Unavailable before its expiry: used.
+                               {"recordId": "private-record-3", "expireTime": "2026-10-02 08:00:00", "available": False},
+                               # Unavailable after its expiry: used OR expired, so not counted.
+                               {"recordId": "private-record-4", "expireTime": "2026-09-01 08:00:00", "available": False},
+                               # Never used and past its expiry: gone.
+                               {"recordId": "private-record-5", "expireTime": "2026-09-01 08:00:00", "available": True}],
             "weekResets": [{"recordId": 3, "expireTime": "2026-10-03 08:00:00", "available": True}],
-            "lastFiveHourResetTime": "2026-09-30 08:00:00"}})
-        self.assertEqual(windows[0]["remaining"], 1)
-        self.assertEqual(windows[0]["unit"], "packs")
-        self.assertEqual(windows[1]["expiresAt"], "2026-10-02T00:00:00Z")
-        self.assertEqual(windows[2]["remaining"], 0)
-        self.assertIsNone(windows[2]["used"])  # False means used OR expired.
-        self.assertEqual(windows[3]["remaining"], 1)
-        self.assertEqual(windows[4]["expiresAt"], "2026-10-03T00:00:00Z")
+            "lastFiveHourResetTime": "2026-09-30 08:00:00"}}, now=now)
+        self.assertEqual([window["key"] for window in windows], ["reset-packs-5h", "reset-packs-weekly"])
+        five, weekly = windows
+        self.assertEqual(five["label"], "5-hour reset packs")
+        self.assertEqual((five["remaining"], five["used"], five["limit"]), (2, 1, 3))
+        # The soonest expiry among the packs left, from the console's UTC+8 time.
+        self.assertEqual(five["expiresAt"], "2026-10-01T00:00:00Z")
+        self.assertEqual(weekly["label"], "Weekly reset packs")
+        self.assertEqual((weekly["remaining"], weekly["used"], weekly["limit"]), (1, 0, 1))
+        self.assertEqual(weekly["expiresAt"], "2026-10-03T00:00:00Z")
         for window in windows:
+            self.assertEqual((window["unit"], window["kind"]), ("packs", "balance"))
             self.assertIsNone(window["resetAt"])
             self.assertIsNone(window["usedPercent"])
         self.assertNotIn("private-record", json.dumps(windows))
 
+    def test_zai_many_reset_packs_stay_one_row_and_count_the_used_ones(self):
+        now = usage.dt.datetime(2026, 10, 15, tzinfo=usage.dt.timezone.utc)
+        packs = [{"recordId": index, "expireTime": "2026-11-01 21:59:12", "available": index >= 7}
+                 for index in range(40)]
+        windows = usage.parse_zai_reset_packs({"success": True, "data": {"fiveHourResets": packs,
+                                                                         "weekResets": packs[:5]}}, now=now)
+        self.assertEqual(len(windows), 2)
+        self.assertEqual((windows[0]["remaining"], windows[0]["used"], windows[0]["limit"]), (33, 7, 40))
+        self.assertEqual(windows[0]["expiresAt"], "2026-11-01T13:59:12Z")
+        # Every weekly pack used: none left, and no expiry to show for them.
+        self.assertEqual((windows[1]["remaining"], windows[1]["used"], windows[1]["limit"]), (0, 5, 5))
+        self.assertNotIn("expiresAt", windows[1])
+
     def test_zai_empty_reset_lists_prove_zero_but_missing_lists_do_not(self):
         empty = usage.parse_zai_reset_packs({"success": True, "data": {"fiveHourResets": [], "weekResets": []}})
         self.assertEqual([window["remaining"] for window in empty], [0, 0])
+        self.assertEqual([window["limit"] for window in empty], [0, 0])
         partial = usage.parse_zai_reset_packs({"success": True, "data": {"fiveHourResets": []}})
         self.assertEqual([window["key"] for window in partial], ["reset-packs-5h"])
         with self.assertRaises(common.CollectionError):
@@ -466,9 +490,12 @@ class PlanUsageTests(unittest.TestCase):
 
     def test_zai_unknown_reset_pack_availability_is_not_zero(self):
         windows = usage.parse_zai_reset_packs({"success": True, "data": {"fiveHourResets": [
-            {"recordId": 1, "expireTime": "2026-10-02 08:00:00", "available": "true"}]}})
+            {"recordId": 1, "expireTime": "2026-10-02 08:00:00", "available": "true"}]}},
+            now=usage.dt.datetime(2026, 9, 15, tzinfo=usage.dt.timezone.utc))
         self.assertEqual(len(windows), 1)
         self.assertNotIn("remaining", windows[0])
+        self.assertIsNone(windows[0]["used"])
+        self.assertIsNone(windows[0]["limit"])
         self.assertEqual(windows[0]["expiresAt"], "2026-10-02T00:00:00Z")
 
     def test_zai_denied_reset_inventory_keeps_current_quota_and_no_fake_cards(self):
