@@ -1,22 +1,27 @@
 /**
  * The CLIProxyAPI management shapes that T3 Code reads, mirrored from its
- * client (pingdotgg/t3code tag v0.0.46-nightly.20261006.2735,
- * `apps/server/src/usage/cliproxyApi.ts`). T3 decodes every answer with Effect
- * Schema, which ignores extra keys and rejects a missing required key, so the
- * required fields below are always present.
+ * client (pingdotgg/t3code `apps/server/src/usage/cliproxyApi.ts`, first at tag
+ * v0.0.46-nightly.20261006.2735; line numbers below are from
+ * v0.0.46-nightly.20261015.3145, where every shape here is unchanged). T3
+ * decodes every answer with Effect Schema, which ignores extra keys and rejects
+ * a missing required key, so the required fields below are always present.
  *
- * T3 calls, for Codex and Claude accounts only (cliproxyApi.ts:303-310):
- * - `GET /v0/management/auth-files` -> `{ files: AuthFile[] }` (lines 20-33, 143-146);
+ * T3 calls, for Codex and Claude accounts only (cliproxyApi.ts:316-324):
+ * - `GET /v0/management/auth-files` -> `{ files: AuthFile[] }` (lines 20-33);
  * - `POST /v0/management/api-call` with `{ auth_index, method, url, header, data? }`
  *   -> `{ status_code, body }`, where `body` is the upstream answer as a JSON
- *   string (lines 34, 148-180);
- *   - Codex usage: `https://chatgpt.com/backend-api/wham/usage` (lines 35-48, 240);
- *   - Claude usage: `https://api.anthropic.com/api/oauth/usage` (lines 49-72, 211);
- *   - Codex reset credits (lines 73-82, 182-197) and their redemption (lines
- *     313-365) are refused here, so T3 never offers "Use reset" for AAC rows.
+ *   string (lines 34, 176-188);
+ *   - Codex usage: `https://chatgpt.com/backend-api/wham/usage` (lines 35-48, 253);
+ *   - Claude usage: `https://api.anthropic.com/api/oauth/usage` (lines 49-72, 224);
+ *   - Codex reset credits (lines 73-82, 192-207) and their redemption (lines
+ *     326-377) are refused here, so T3 never offers "Use reset" for AAC rows.
  *
- * The URL is built as `new URL('/v0/management/' + path, hubUrl)` (line 124),
- * so a path prefix in the hub URL is dropped: the hub answers at the origin root.
+ * The URL is built from the hub address with any path dropped (line 134), so
+ * the hub answers at the origin root; the key arrives as `Authorization: Bearer`
+ * (line 139). Since 20261010 T3 also reads an optional
+ * `id_token.chatgpt_account_id` (the Codex workspace, lines 218-220) to tell one
+ * email's workspaces apart; this hub does not send it, so an AAC row joins T3's
+ * own login by email alone.
  *
  * `src/cliproxy/services/stats-fetcher.ts` has a looser client-side
  * `CliproxyManagementAuthFile` (every field optional, numeric indexes). It
@@ -58,7 +63,7 @@ export interface UsageHubAuthFiles {
   files: UsageHubAuthFile[];
 }
 
-/** The `api-call` request body as T3 sends it (cliproxyApi.ts:166-172). */
+/** The `api-call` request body as T3 sends it (cliproxyApi.ts:176-188). */
 export interface UsageHubApiCallRequest {
   auth_index?: unknown;
   method?: unknown;

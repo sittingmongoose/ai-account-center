@@ -41,7 +41,8 @@ reading (up to one refresh interval) is not visible in T3; `sampled_at` in
 `auth-files` shows it.
 
 The contract is mirrored from T3's client, `apps/server/src/usage/cliproxyApi.ts`
-in pingdotgg/t3code (tag `v0.0.46-nightly.20261006.2735`); see
+in pingdotgg/t3code (tag `v0.0.46-nightly.20261006.2735`, rechecked against
+`v0.0.46-nightly.20261015.3145` with no shape change); see
 `src/web-server/usage-hub/usage-hub-contract.ts` for line references.
 
 ## Security
