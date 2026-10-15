@@ -2,7 +2,11 @@
 
 The dashboard's authenticated `POST /api/app-updates/start` accepts exactly `{}`.
 It starts one asynchronous, persisted job and returns immediately. Authenticated
-`GET /api/app-updates/status` reads state only. Duplicate active jobs are rejected.
+`GET /api/app-updates/status` reads state only. Duplicate active jobs return 409 with the running job, which the dashboard adopts.
+Accounts & Settings entry, window focus and a 30-second idle poll discover jobs
+started in another tab; active jobs poll every 3 seconds. Completion toasts
+report updated, failed, unknown and held counts once per observed job, and never
+claim apps updated when none changed or the job failed.
 The server invokes only Ubuntu locally and the fixed Mac, Windows and Nas1
 SSH aliases (`APP_UPDATE_SSH_HOSTS`); callers cannot supply hosts, commands, app IDs, paths or download URLs.
 Nas1 is a second Ubuntu computer reached as `nas1-agent` (see [Nas1](#nas1-the-fourth-computer)).
@@ -38,11 +42,18 @@ Nothing can wait forever:
 - each helper stops starting apps after 15 minutes (`timeout` rows), and the
   dashboard stops a computer after 18 minutes (helper sync included): every app
   without a result then reads `unknown` / `host_timeout` ("Timed out") while
-  rows that did arrive keep their real results.
+  rows that did arrive keep their real results. The Windows coordinator waits
+  16 minutes and keeps completed rows when it times out; only unanswered apps
+  become `unknown` / `host_timeout`. A still-running scheduled task reports `busy`.
+  Desktop downloads and Windows installations share the remaining helper budget
+  with 90 seconds reserved for recovery. The Windows task limit is 20 minutes,
+  longer than the coordinator wait.
 
 The Python helper defaults to **read-only inventory**. Only `--apply` updates or
 restarts apps. It detects the active installation, skips absent apps, and returns
-one bounded, whitelist result for each of the ten fixed apps. It does not copy,
+one bounded, whitelist result for each of the ten fixed apps. A failed or malformed
+detection probe reports `unknown` / `readiness_unknown` and never starts an
+updater; a successful absent answer alone reports `not_installed`. It does not copy,
 modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
@@ -379,7 +390,11 @@ see [CLI instances and background sessions](#cli-instances-and-background-sessio
 `tmux -L ccs-updates-...` server; Mac uses Terminal; Windows uses Windows Terminal.
 An explicitly selected valid session UUID may be resumed. Original prompts,
 print/exec arguments, stdin and commands are never replayed. Existing cwd and
-private auth environment stay in memory; Mac uses an owner-private one-shot Unix socket; Windows uses a local named
+private auth environment stay in memory. At the TS and Python updater boundaries,
+`CCS_SESSION_SECRET`, `CCS_DASHBOARD_*` and every `*_PASSWORD_HASH` are stripped
+(case-insensitively), including captured restart environments. CLI auth variables
+remain available. Ubuntu terminal launches pass only `--setenv=NAME` to
+`systemd-run`, inheriting values from its private environment rather than argv; Mac uses an owner-private one-shot Unix socket; Windows uses a local named
 pipe restricted to the signed-in user SID to enter the new terminal. Original terminal scrollback and the old
 conversation display do not migrate. Safe result `restartTargets` identifies new
 terminal/tmux sessions; authentication environment is never serialized.
@@ -392,7 +407,11 @@ that is attached to a terminal the user has, so an idle copy can be reopened in
 a terminal. Every other running CLI process is a **background session** and is
 **never stopped, relaunched or judged**: T3's agent sessions, a `claude -p` or
 `codex exec` from a script or cron job, another Agent SDK or ACP harness, a
-service. It has no terminal to come back to. Children of either kind go with it.
+service. It has no terminal to come back to. Children of either kind go with it. npm launch selection requires node, bun or
+the CLI executable plus a declared package bin/main entrypoint (or Codex's fixed
+`bin/codex.js`), or an executable inside that package. Editors merely opening a
+package file are excluded. Mac process inventory filters by this user at the
+`ps` source, allows 2 MiB, and fails rather than truncating an oversized result.
 
 What counts as attached to a terminal, checked per main process:
 
@@ -477,7 +496,10 @@ The updater stops only captured proxies with SSH ancestry, then verifies old PID
 are gone and replacement proxies execute the updated active binary. Unknown
 unsupervised proxies yield an explicit restart failure. A private **version-only**
 pending-restart marker permits a subsequent explicit click to retry after timeout.
-No account authentication is changed.
+For real desktop upgrades, the bridge verifies the requested candidate and a
+changed installed version before claiming success. An explicit pending-restart
+recovery may reuse the installed version without another upgrade. No account
+authentication is changed.
 
 An npm global Codex CLI (Codex CLI row above, as on Nas1) never takes this bridge: that host has
 no AAC shared daemon, and the bridge's stop/start runtime is built around the fixed
@@ -604,7 +626,8 @@ replace anything.
 package that is not installed). Neither package present is `not_installed`. npm's
 `latest` documents (`https://registry.npmjs.org/@brokkai%2fmuse-acp/latest`,
 `https://registry.npmjs.org/zcode-acp-server/latest`, 1 MiB at most) decide:
-every installed package at least that version is `current` and nothing runs. An
+npm SemVer ordering (including prereleases) decides whether each installed
+package is current; vendor/MSIX/nightly comparisons keep their existing rules. An
 `updated` row has at least one package whose version changed. A part that was
 behind and skipped because it is in use carries `inUse: true` and keeps its version.
 Status precedence: any part that really failed makes the row `failed` with its code;
@@ -612,6 +635,9 @@ else a held part makes it `action_required` / `in_use`, whose words name the hel
 adapter and say the other one updated when it did; else `updated`. Each part still
 reports its before and after versions. On Ubuntu and Nas1 the same rule holds for a
 behind part left unchanged while an adapter still runs; the Mac script never defers.
+A required part left unchanged otherwise makes the row failed even when its
+partner updated. A shared unit failure alone does not fail an adapter row whose
+required updates all succeeded.
 
 **Unreadable sources.** When the ZCode page or the npm registry does not answer
 clearly, nothing runs and the row is `failed` / `update_failed`, as T3 and Claude
@@ -624,7 +650,8 @@ The server syncs every `app_update_*.py`, `app_updates.py`, and
 `app_update_codex.cjs` from its own build, plus the generated
 `app_update_codex_runtime.cjs` from `dist/app-updates`, into `~/.ccs/app-updates` on
 Mac, Windows and Nas1 before each run, checksum-gated so up-to-date hosts only answer one
-hash query; a sync failure leaves the deployed helpers untouched. Python must be
+hash query. A sync failure reports `failed` / `helper_sync_failed` for that host
+and never invokes its helper. Python must be
 available. On Windows register `install-windows-task.ps1` once as the signed-in
 user: its fixed `CCS App Updates` InteractiveToken/Limited task runs the private
 helper. Registration does **not** run an update. The helper queues that task
@@ -639,14 +666,24 @@ the Windows Terminal tab that reopens a CLI still appear normally. Re-running
 `install-windows-task.ps1` applies the hidden setting to a task that is already
 registered.
 
-The Mac and Nas1 syncs extract with `/bin/mkdir`, `/bin/chmod` and `/usr/bin/tar`
-(macOS has no `/usr/bin/chmod`; that path silently broke every Mac sync until
-2026-10-06, so Mac kept running its Oct-2 helpers). Ubuntu's `/bin` is the same
-folder as `/usr/bin`, so the three paths work on Nas1 too. The hash query differs
-by system: the Mac uses `/usr/bin/shasum -a 256`, Nas1 uses `/usr/bin/sha256sum`.
+Remote sync uses the host's existing Python (`/usr/bin/python3` on Mac/Nas1,
+`python.exe` through encoded PowerShell on Windows). It extracts into a private
+sibling staging folder, rejects unexpected/duplicate/non-file archive entries,
+and verifies all 13 SHA256 checksums before publishing an immutable `helpers-*`
+generation. Only the small `app_updates.py` launcher is atomically replaced;
+state directories, locks, results and restart markers stay in place. Existing
+runs keep their old generation. The hash query follows the selected generation.
+Failed staging is removed and the previous launcher remains usable.
+
+The dashboard lock records PID plus Linux boot ID and process start ticks, using
+the same identity as the detached Python writer. Reused PIDs are stale; malformed
+locks become stale after a five-second write grace. A live matching owner never
+expires merely because it is old. Helper execution/protocol failures report
+`helper_invalid`, distinct from an unreachable transport (`host_unknown`), and
+streamed rows survive both failures without exposing stderr.
 
 Results are `updated`, `current`, `not_installed`, `failed`, `restart_failed`,
-`skipped`, `unknown`, or `action_required`, with bounded versions, fixed message
+`skipped`, `unknown`, `held`, or `action_required`, with bounded versions, fixed message
 codes, restart counts/forced-stop counts and safe terminal target metadata. Raw
 package command output, process argv, environments, installer response bodies and
 credentials are never returned. Host/helper execution locks prevent overlapping
@@ -675,6 +712,10 @@ Windows npm updates first ask the registry whether anything is newer, then run
 paths) after stopping mapped instances first, since Windows cannot replace a
 running npm tree.
 
+An unreadable Windows Codex Store feed returns `unknown` / `readiness_unknown`
+before consulting the stale direct MSIX manifest. Claude's direct MSIX path is
+unchanged. T3 download refusals use `update_failed`, an existing result code.
+
 ## Nas1, the fourth computer
 
 Nas1 is a second Ubuntu computer reached over the fixed alias `nas1-agent`
@@ -689,8 +730,8 @@ three. It follows the Ubuntu rows of this guide except where noted here.
   `ubuntu` and the dashboard files the rows under Nas1. Nas1 gets neither
   `--state-dir` nor `--dashboard-job`; those belong to the dashboard's own
   Ubuntu run.
-- **Helper sync.** The `sha256sum` hash query and POSIX `tar` extract above fill
-  `~/.ccs/app-updates` (mode 0700) with 13 files: the 12 source helpers and the
+- **Helper sync.** The Python hash query and verified generation publish above
+  keep `~/.ccs/app-updates` private, with 13 files in each helper generation: the 12 source helpers and the
   generated Codex runtime below.
 - **Codex runtime.** Nas1 has no AI Account Center, so its Codex bridge loads
   the bundled `app_update_codex_runtime.cjs` that the sync ships beside the

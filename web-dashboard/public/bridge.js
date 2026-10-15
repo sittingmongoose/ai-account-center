@@ -31,6 +31,8 @@ let profiles = [];
 let antigravityInventory = null;
 let antigravityAuto = null;
 let updateJob = null;
+let updateStatusPending = false;
+let updateCompletionId = null;
 let updateDoneTimer = null;
 let refreshing = null;
 let refreshGeneration = 0;
@@ -691,25 +693,31 @@ async function loadSettings() {
 }
 function renderUpdate(done = false) { set_update_status(JSON.stringify(updateViewModel(updateJob, { done }))); renderAccounts(); }
 async function updateStatus() {
-  if (!authenticated) return;
-  const wasRunning = updateJob?.state === 'running';
+  if (!authenticated || updateStatusPending) return;
+  updateStatusPending = true;
+  const observedJob = updateJob;
+  const runningId = updateJob?.state === 'running' ? updateJob.id : null;
   try {
     const result = await request('/api/app-updates/status');
+    if (!authenticated || updateJob !== observedJob) return;
     updateJob = result?.job || null;
-    if (wasRunning && updateJob && updateJob.state !== 'running') {
+    if (runningId && updateJob?.id === runningId && updateJob.state !== 'running' && updateCompletionId !== updateJob.id) {
+      updateCompletionId = updateJob.id;
       // On finish the button morphs to a check for 2 s and the result appears in a toast.
       const results = Array.isArray(updateJob.results) ? updateJob.results : [];
       const count = status => results.filter(row => row.status === status).length;
       const failed = count('failed') + count('restart_failed');
-      const skippedN = count('skipped'), unknownN = count('unknown'), actionN = count('action_required');
-      toast(failed ? 'err' : 'ok', failed ? 'App update finished with failures' : 'Apps updated', `${count('updated')} updated, ${count('current')} already current, ${count('not_installed')} not installed${failed ? `, ${failed} failed` : ''}${actionN ? `, ${actionN} need action` : ''}${skippedN ? `, ${skippedN} skipped` : ''}${unknownN ? `, ${unknownN} unknown` : ''}. Details under Accounts & Settings.`, 7000);
+      const skippedN = count('skipped'), unknownN = count('unknown'), actionN = count('action_required'), heldN = count('held');
+      const incomplete = updateJob.state === 'failed' || failed > 0 || unknownN > 0;
+      const title = incomplete ? 'App updates finished with issues' : count('updated') > 0 ? 'App updates finished' : 'App checks finished';
+      toast(incomplete ? 'err' : 'ok', title, `${count('updated')} updated, ${failed} failed, ${unknownN} unknown, ${heldN} held, ${count('current')} already current, ${count('not_installed')} not installed${actionN ? `, ${actionN} need action` : ''}${skippedN ? `, ${skippedN} skipped` : ''}. Details under Accounts & Settings.`, 7000);
       renderUpdate(true);
       clearTimeout(updateDoneTimer);
       updateDoneTimer = setTimeout(() => renderUpdate(false), 2000);
       return;
     }
     renderUpdate(false);
-  } catch { renderUpdate(false); }
+  } catch { renderUpdate(false); } finally { updateStatusPending = false; }
 }
 function navigate(page, { replace = false } = {}) {
   if (!PAGES.includes(page)) page = 'home';
@@ -724,7 +732,7 @@ function navigate(page, { replace = false } = {}) {
   const method = replace || !wasHome || page === 'home' ? 'replaceState' : 'pushState';
   try { globalThis.history?.[method]?.(null, '', url); } catch {}
   if (page === 'analytics' && authenticated) enterAnalytics();
-  if (page === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') void accounts.loadAll(); }
+  if (page === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') { void accounts.loadAll(); void updateStatus(); } }
 }
 async function loadAuthSetup() {
   try {
@@ -1029,7 +1037,13 @@ window.ccsDashboardAction = async (action, value) => {
       return;
     }
     if (action === 'update-apps') {
-      const result = await mutation('/api/app-updates/start', {}); updateJob = result.job;
+      try {
+        const result = await mutation('/api/app-updates/start', {}); updateJob = result.job;
+      } catch (error) {
+        const job = error?.payload?.job;
+        if (error?.status !== 409 || !job || typeof job.id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(job.id) || job.state !== 'running' || !Number.isFinite(Date.parse(job.startedAt)) || !Array.isArray(job.results) || job.results.length > 40) throw error;
+        updateJob = job;
+      }
       renderUpdate(false); return;
     }
     if (action === 'update-cancel') {
@@ -1339,7 +1353,7 @@ try {
     }
     currentPage = pageFromLocation(); set_current_page(currentPage);
     if (currentPage === 'analytics' && authenticated) enterAnalytics();
-    if (currentPage === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') void accounts.loadAll(); }
+    if (currentPage === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') { void accounts.loadAll(); void updateStatus(); } }
   });
   themeModeName = storedTheme();
   set_theme_mode(THEMES[themeModeName]);
@@ -1357,6 +1371,8 @@ try {
   applyRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
   setInterval(() => { activationConfirmation.expire(); antigravityConfirmation.expire(); }, 1_000);
   setInterval(() => { if (authenticated && updateJob?.state === 'running') void updateStatus(); }, 3_000);
+  setInterval(() => { if (authenticated && updateJob?.state !== 'running') void updateStatus(); }, 30_000);
+  addEventListener('focus', () => { if (authenticated) void updateStatus(); });
   // "Updated 1m ago" and the reset countdowns stay current between refreshes.
   setInterval(() => { if (authenticated && !refreshing) { renderChrome(false); renderAnalyticsHead(); } }, 15_000);
   setInterval(() => { if (authenticated && !refreshing && !busy) render(); }, 60_000);

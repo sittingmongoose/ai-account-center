@@ -447,6 +447,67 @@ test('open access keeps Home usable and Accounts explicitly restricted without e
   } finally { b.restore(); }
 });
 
+test('Update apps adopts a validated conflict job and reports its incomplete finish once', async () => {
+  const { server } = fixtureServer();
+  const id = '11111111-1111-4111-8111-111111111111';
+  let job = null;
+  const b = await loadBridge((method, path, body) => {
+    if (path === '/api/app-updates/start') return { status: 409, payload: { job: { id, state: 'running', startedAt: new Date().toISOString(), results: [] } } };
+    if (path === '/api/app-updates/status') return { payload: { job } };
+    return server(method, path, body);
+  });
+  try {
+    await flush();
+    await b.action('update-apps', '');
+    job = { id, state: 'failed', results: [{ status: 'unknown' }, { status: 'held' }] };
+    b.timers.find(timer => timer.ms === 3_000).fn();
+    await flush();
+    const finishes = () => b.toasts.filter(toast => /App (updates|checks) finished/.test(toast.title));
+    assert.equal(finishes().length, 1);
+    assert.equal(finishes()[0].kind, 'err');
+    assert.match(finishes()[0].body, /0 updated, 0 failed, 1 unknown, 1 held/);
+    b.event('focus');
+    b.timers.find(timer => timer.ms === 30_000).fn();
+    await flush();
+    assert.equal(finishes().length, 1);
+  } finally { b.restore(); }
+});
+
+test('Update apps discovers another tab job on focus and idle polling, with honest zero-update wording', async () => {
+  const { server } = fixtureServer();
+  const id = '22222222-2222-4222-8222-222222222222';
+  let job = null;
+  const b = await loadBridge((method, path, body) => path === '/api/app-updates/status' ? { payload: { job } } : server(method, path, body));
+  try {
+    await flush();
+    job = { id, state: 'running', results: [] };
+    b.event('focus');
+    await flush();
+    job = { id, state: 'completed', results: [{ status: 'current' }, { status: 'held' }] };
+    b.timers.find(timer => timer.ms === 3_000).fn();
+    await flush();
+    const completion = b.toasts.find(toast => toast.title === 'App checks finished');
+    assert.ok(completion);
+    assert.match(completion.body, /0 updated, 0 failed, 0 unknown, 1 held/);
+    job = { id: '33333333-3333-4333-8333-333333333333', state: 'running', results: [] };
+    const before = b.calls.filter(call => call.path === '/api/app-updates/status').length;
+    b.timers.find(timer => timer.ms === 30_000).fn();
+    await flush();
+    assert.equal(b.calls.filter(call => call.path === '/api/app-updates/status').length, before + 1);
+  } finally { b.restore(); }
+});
+
+test('Update apps rejects a malformed conflict job', async () => {
+  const { server } = fixtureServer();
+  const b = await loadBridge((method, path, body) => path === '/api/app-updates/start'
+    ? { status: 409, payload: { error: 'Already running', job: { id: 'invalid', state: 'running', results: [] } } }
+    : server(method, path, body));
+  try {
+    await b.action('update-apps', '');
+    assert.ok(b.toasts.some(toast => toast.kind === 'err'));
+  } finally { b.restore(); }
+});
+
 
 test('the Accounts About row receives the current server version from the dashboard DTO', async () => {
   const fixture = fixtureServer();
@@ -457,4 +518,43 @@ test('the Accounts About row receives the current server version from the dashbo
   });
   try { assert.equal(b.accountViews.at(-1).about.version, 'Version 8.10.test'); }
   finally { b.restore(); }
+});
+
+test('entering Accounts & Settings reads the current update job', async () => {
+  const { server } = fixtureServer();
+  const b = await loadBridge(server, { pathname: '/' });
+  try {
+    await flush();
+    const before = b.calls.filter(call => call.path === '/api/app-updates/status').length;
+    await b.action('settings', '');
+    await flush();
+    assert.equal(b.calls.filter(call => call.path === '/api/app-updates/status').length, before + 1);
+  } finally { b.restore(); }
+});
+
+
+test('an older status read cannot erase a job adopted from a 409', async () => {
+  const { server } = fixtureServer();
+  const id = '44444444-4444-4444-8444-444444444444';
+  let hold = false, release;
+  let job = null;
+  const b = await loadBridge((method, path, body) => {
+    if (path === '/api/app-updates/start') return { status: 409, payload: { job: { id, state: 'running', startedAt: new Date().toISOString(), results: [] } } };
+    if (path === '/api/app-updates/status') return hold ? new Promise(resolve => { release = resolve; }) : { payload: { job } };
+    return server(method, path, body);
+  });
+  try {
+    await flush();
+    hold = true;
+    b.event('focus');
+    await flush();
+    await b.action('update-apps', '');
+    hold = false;
+    release({ payload: { job: null } });
+    await flush();
+    job = { id, state: 'completed', results: [{ status: 'current' }] };
+    b.timers.find(timer => timer.ms === 3_000).fn();
+    await flush();
+    assert.equal(b.toasts.filter(toast => toast.title === 'App checks finished').length, 1);
+  } finally { b.restore(); }
 });
