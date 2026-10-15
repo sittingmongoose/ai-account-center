@@ -52,6 +52,7 @@ const SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 function isUsageLogSource(value: unknown): value is UsageLogSource {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const source = value as Record<string, unknown>;
+  if (source.tool === 'jsonl' && source.host !== 'ubuntu') return false;
   const keys = Object.keys(source);
   if (
     !keys.every((key) => ['id', 'tool', 'host', 'path', 'fieldMapping'].includes(key)) ||
@@ -217,7 +218,75 @@ export function writeDashboardPreferences(
   value: DashboardPreferences,
   ccsDir = getCcsDir()
 ): DashboardPreferences {
+  if (value?.usageLogSources?.some((source) => source.tool === 'jsonl' && source.host !== 'ubuntu'))
+    throw new ConfigError('Generic JSONL usage log sources are supported only on ubuntu');
   if (!isDashboardPreferences(value)) throw new ConfigError('Invalid dashboard preferences');
+  const normalized = value.usageLogSources.map((source) => {
+    const syntax = source.host === 'windows' ? path.win32 : path.posix;
+    let root = syntax.normalize(source.path);
+    if (source.host === 'ubuntu' && process.platform !== 'win32') {
+      try {
+        root = fs.realpathSync(root);
+      } catch {
+        /* Missing sources can be saved; lexical overlap is still checked. */
+      }
+    }
+    if (source.tool === 'codex') root = syntax.join(root, 'sessions');
+    root = root.replace(/[\\/]+$/, '');
+    if (source.host === 'windows') root = root.toLowerCase();
+    return { source, root, sep: syntax.sep };
+  });
+  for (let index = 0; index < normalized.length; index++) {
+    const current = normalized[index];
+    // Standard built-in tool homes on every host. Custom/environment roots are also
+    // canonicalized and excluded by the readers on the computer that owns them.
+    const portable = current.root.replace(/\\/g, '/');
+    const home = portable.match(
+      /^(?:\/Users\/[^/]+|\/home\/[^/]+|\/root|[a-z]:\/users\/[^/]+)(?:\/|$)/
+    )?.[0];
+    const relative = home ? portable.slice(home.length) : null;
+    const builtins: Partial<Record<UsageLogTool, string[]>> = {
+      'claude-code': ['.claude/projects'],
+      codex: ['.codex/sessions'],
+      omp: ['.omp/agent/sessions'],
+      muse: ['.local/share/muse/sessions'],
+      zcode: ['.zcode/cli/db'],
+    };
+    const profile = relative?.match(/^\.omp\/profiles\/[^/]+/)?.[0];
+    if (profile) builtins.omp?.push(`${profile}/agent/sessions`);
+    const readRoots =
+      current.source.tool === 'jsonl'
+        ? Object.values(builtins).flat()
+        : (builtins[current.source.tool] ?? []);
+    const overlap =
+      relative !== null &&
+      readRoots.some(
+        (root) =>
+          !relative ||
+          relative === root ||
+          relative.startsWith(root + '/') ||
+          root.startsWith(relative + '/')
+      );
+    if (overlap)
+      throw new ConfigError(`Usage log source ${current.source.id} overlaps a built-in root`);
+    for (const prior of normalized.slice(0, index)) {
+      if (prior.source.host !== current.source.host) continue;
+      if (
+        prior.source.tool !== current.source.tool &&
+        prior.source.tool !== 'jsonl' &&
+        current.source.tool !== 'jsonl'
+      )
+        continue;
+      if (
+        current.root === prior.root ||
+        current.root.startsWith(prior.root + current.sep) ||
+        prior.root.startsWith(current.root + current.sep)
+      )
+        throw new ConfigError(
+          `Usage log sources ${prior.source.id} and ${current.source.id} overlap`
+        );
+    }
+  }
   fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
   const file = path.join(ccsDir, PREFERENCES_FILE);
   const temporary = `${file}.${randomBytes(12).toString('hex')}.tmp`;

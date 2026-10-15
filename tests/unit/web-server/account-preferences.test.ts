@@ -35,6 +35,53 @@ function directory(): string {
 }
 
 describe('dashboard preferences', () => {
+  it('rejects remote generic JSONL sources with a clear error', () => {
+    for (const host of ['mac', 'windows', 'nas1'] as const) {
+      const prefs = {
+        ...defaultDashboardPreferences(),
+        usageLogSources: [
+          {
+            id: 'remote',
+            tool: 'jsonl' as const,
+            host,
+            path: '/logs',
+            fieldMapping: { timestamp: 'ts', model: 'model' },
+          },
+        ],
+      };
+      expect(isDashboardPreferences(prefs)).toBe(false);
+      expect(() => writeDashboardPreferences(prefs, directory())).toThrow(
+        'supported only on ubuntu'
+      );
+    }
+  });
+
+  it('rejects overlapping saved roots and standard built-in sources', () => {
+    expect(() =>
+      writeDashboardPreferences(
+        {
+          ...defaultDashboardPreferences(),
+          usageLogSources: [
+            { id: 'parent', tool: 'muse', host: 'mac', path: '/logs' },
+            { id: 'child', tool: 'muse', host: 'mac', path: '/logs/nested' },
+          ],
+        },
+        directory()
+      )
+    ).toThrow('overlap');
+    expect(() =>
+      writeDashboardPreferences(
+        {
+          ...defaultDashboardPreferences(),
+          usageLogSources: [
+            { id: 'builtin', tool: 'claude-code', host: 'mac', path: '/Users/u/.claude' },
+          ],
+        },
+        directory()
+      )
+    ).toThrow('built-in root');
+  });
+
   it('defaults to America/New_York with automatic snapshot cleanup and no extra sources', () => {
     expect(defaultDashboardPreferences()).toEqual({
       timeZone: 'America/New_York',
@@ -254,5 +301,27 @@ describe('dashboard preferences', () => {
     );
     expect(drive.status).toBe(400);
     expect(readDashboardPreferences(dir).usageLogSources).toEqual([nas1]);
+    const remoteJsonl = {
+      id: 'generic',
+      tool: 'jsonl',
+      host: 'nas1',
+      path: '/logs',
+      fieldMapping: { timestamp: 'ts', model: 'model' },
+    };
+    const rejected = await put(
+      { ...defaultDashboardPreferences(), usageLogSources: [remoteJsonl] },
+      { 'x-test-session': 'true' }
+    );
+    expect(rejected.status).toBe(400);
+    expect(((await rejected.json()) as { error: string }).error).toContain(
+      'supported only on ubuntu'
+    );
+    const patch = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', origin: base, 'x-test-session': 'true' },
+      body: JSON.stringify({ addUsageLogSource: remoteJsonl }),
+    });
+    expect(patch.status).toBe(400);
+    expect(((await patch.json()) as { error: string }).error).toContain('supported only on ubuntu');
   });
 });

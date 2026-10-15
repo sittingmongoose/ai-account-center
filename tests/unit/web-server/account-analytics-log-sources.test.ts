@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { extraActivityRequests } from '../../../src/web-server/services/account-analytics-activity';
+import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
 import { remoteExtraRoots } from '../../../src/web-server/services/analytics-remote-sources';
 import {
   defaultDashboardPreferences,
@@ -141,6 +142,84 @@ describe('extra usage-log sources', () => {
       sources.push(source({ id: `x-${index}`, tool: 'omp', path: dir }));
     }
     expect(extras(sources).length).toBe(24);
+  });
+
+  it('counts overlapping built-in OMP, Claude and JSONL sources once, retaining parent-only files', async () => {
+    for (const tool of ['omp', 'claude', 'jsonl'] as const) {
+      const parent = path.join(root, tool);
+      const builtIn = path.join(parent, 'sessions');
+      fs.mkdirSync(builtIn, { recursive: true });
+      const record =
+        tool === 'omp'
+          ? {
+              type: 'message',
+              timestamp: '2026-10-01T15:00:00Z',
+              message: {
+                role: 'assistant',
+                model: 'k3',
+                usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            }
+          : {
+              type: 'assistant',
+              timestamp: '2026-10-01T15:00:00Z',
+              sessionId: 's',
+              message: {
+                id: 'm',
+                model: 'claude-opus-5-5',
+                usage: { input_tokens: 1, output_tokens: 2 },
+              },
+            };
+      const name = tool === 'omp' ? '2026-10-01T15-00_overlap.jsonl' : 's.jsonl';
+      fs.writeFileSync(path.join(builtIn, name), `${JSON.stringify(record)}\n`);
+      fs.writeFileSync(path.join(parent, name), `${JSON.stringify(record)}\n`);
+      const baselineKind = tool === 'omp' ? 'omp' : 'claude';
+      const builtinRequest =
+        baselineKind === 'omp'
+          ? { kind: 'omp' as const, roots: [builtIn] }
+          : { kind: 'claude' as const, projectsDir: builtIn };
+      const baseline = await collectAccountActivity(builtinRequest, {
+        minDate: MIN_DATE,
+        cacheDir: path.join(root, 'cache'),
+      });
+      const fieldMapping =
+        tool === 'jsonl'
+          ? {
+              timestamp: 'timestamp',
+              model: 'message.model',
+              inputTokens: 'message.usage.input_tokens',
+            }
+          : undefined;
+      const planned = extras(
+        [
+          source({
+            id: 'parent',
+            tool: tool === 'claude' ? 'claude-code' : tool,
+            path: parent,
+            fieldMapping,
+          }),
+          source({
+            id: 'nested',
+            tool: tool === 'claude' ? 'claude-code' : tool,
+            path: builtIn,
+            fieldMapping,
+          }),
+        ],
+        new Set([`${baselineKind}:${fs.realpathSync(builtIn)}`])
+      );
+      expect(planned).toHaveLength(1);
+      const request = planned[0].request;
+      if (
+        !('activity' in request) ||
+        !request.activity ||
+        request.kind === 'droid' ||
+        request.kind === 'experiment-roots'
+      )
+        throw new Error('Expected activity request');
+      const extra = await collectAccountActivity(request, request.activity);
+      expect(baseline.eventCount).toBe(1);
+      expect(extra.eventCount).toBe(1);
+    }
   });
 });
 

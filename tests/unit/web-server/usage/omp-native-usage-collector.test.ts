@@ -7,7 +7,9 @@ import {
   ompSessionIdForFile,
   parseOmpUsageLine,
   resolveOmpSessionRoots,
+  OMP_ROOTS_RULE_VERSION,
 } from '../../../../src/web-server/usage/omp-native-usage-collector';
+import { collectAccountActivity } from '../../../../src/web-server/usage/account-activity-collector';
 
 function assistant(overrides: Record<string, unknown> = {}) {
   const { message: messageOverrides, ...rest } = overrides;
@@ -182,6 +184,59 @@ describe('omp session roots', () => {
     expect(starved).not.toContain(custom);
     const found = await resolveOmpSessionRoots({ env: {}, homeDir: home });
     expect(found).toContain(custom);
+  });
+
+  it('discovers and reads depth-nine native sessions, reporting a depth-limited search', async () => {
+    const deep = path.join(
+      home,
+      'PM-Experiments',
+      ...Array.from({ length: 8 }, (_, i) => `d${i}`),
+      'native_sessions'
+    );
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(
+      path.join(deep, '2026-10-01T15-00_deep.jsonl'),
+      `${JSON.stringify(assistant())}\n`
+    );
+    const discovery = { truncated: false };
+    const roots = await resolveOmpSessionRoots({ env: {}, homeDir: home, discovery });
+    expect(roots).toContain(deep);
+    expect(discovery.truncated).toBe(false);
+    const data = await collectAccountActivity(
+      { kind: 'omp', roots: [deep, path.dirname(deep)] },
+      { minDate: Date.parse('2026-09-01'), cacheDir: path.join(home, 'cache') }
+    );
+    expect(data.eventCount).toBe(1);
+    await resolveOmpSessionRoots({
+      env: {},
+      homeDir: home,
+      discovery,
+      scanBounds: { maxDepth: 2 },
+    });
+    expect(discovery.truncated).toBe(true);
+  });
+
+  it('rebuilds an old rule cache and revalidates cached sandbox roots', async () => {
+    const cacheDir = path.join(home, 'cache');
+    const deep = path.join(home, 'PM-Experiments', 'exp', 'native_sessions');
+    fs.mkdirSync(deep, { recursive: true });
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(deep, '2026-10-01T15-00_cache.jsonl'), '{}\n');
+    const cache = path.join(cacheDir, 'omp-session-roots-v1.json');
+    fs.writeFileSync(
+      cache,
+      JSON.stringify({
+        version: 2,
+        ruleVersion: OMP_ROOTS_RULE_VERSION - 1,
+        scannedAt: Date.now(),
+        truncated: false,
+        roots: [],
+      })
+    );
+    expect(await resolveOmpSessionRoots({ env: {}, homeDir: home, cacheDir })).toContain(deep);
+    expect(JSON.parse(fs.readFileSync(cache, 'utf8')).ruleVersion).toBe(OMP_ROOTS_RULE_VERSION);
+    fs.writeFileSync(path.join(path.dirname(deep), '.aac-synthetic'), 'fixture\n');
+    expect(await resolveOmpSessionRoots({ env: {}, homeDir: home, cacheDir })).not.toContain(deep);
   });
 
   it('caches the marker scan for six hours', async () => {

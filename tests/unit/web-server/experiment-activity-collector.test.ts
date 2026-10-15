@@ -102,6 +102,38 @@ describe('Claude experiment roots', () => {
     expect(after.scan?.readBytes).toBe(0);
   });
 
+  it('caps experiment files by newest mtime and reports the dropped files', async () => {
+    const files = [
+      put('exp/a/old.jsonl', [streamLine('old', 1)]),
+      put('exp/a/mid.jsonl', [streamLine('mid', 20)]),
+      put('exp/a/new.jsonl', [streamLine('new', 300)]),
+    ];
+    files.forEach((file, index) =>
+      fs.utimesSync(file, new Date(NOW + index * 1000), new Date(NOW + index * 1000))
+    );
+    const data = await collectAccountActivity(
+      { kind: 'claude', projectsDir: projects(), experimentRoots: [path.dirname(files[0])] },
+      { minDate, cacheDir: path.join(root, 'cache'), maxFiles: 2 }
+    );
+    expect(data.eventCount).toBe(2);
+    expect(total(data, 'outputTokens')).toBe(320);
+    expect(data.scan?.complete).toBe(false);
+    expect(data.scan?.failedFiles).toBe(1);
+  });
+
+  it('never counts copies when the reference file list overflows', async () => {
+    put('claude/projects/p/one.jsonl', [transcriptLine('one', 10)]);
+    put('claude/projects/p/two.jsonl', [transcriptLine('two', 20)]);
+    put('exp/a/copy.jsonl', [streamLine('one', 10)]);
+    const data = await collectAccountActivity(
+      { kind: 'claude', projectsDir: projects(), experimentRoots: [path.join(root, 'exp/a')] },
+      { minDate, cacheDir: path.join(root, 'cache'), maxFiles: 1 }
+    );
+    expect(data.eventCount).toBe(0);
+    expect(data.scan?.complete).toBe(false);
+    expect(data.scan?.failedFiles).toBeGreaterThan(0);
+  });
+
   it('counts a response only an experiment capture holds once, however many copies exist', async () => {
     put('claude/projects/p/s.jsonl', [transcriptLine('m1', 10)]);
     // Two non-identical captures (one with an extra, earlier block) of new response m9.
@@ -466,6 +498,43 @@ describe('experiment activity requests', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-exp-requests-'));
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('propagates first-round scanning, truncated and per-tool capped discovery', () => {
+    const found = { claude: [], codex: [], muse: [], zcode: [] };
+    const defaults = {
+      projectsDir: path.join(root, 'projects'),
+      codexHome: path.join(root, 'codex'),
+      sessionsDir: path.join(root, 'muse'),
+      dbPath: path.join(root, 'zcode.sqlite'),
+    };
+    const activity = { minDate, cacheDir: path.join(root, 'cache') };
+    const view = {
+      roots: found,
+      scanning: true,
+      truncated: false,
+      capped: [] as Array<'claude' | 'codex' | 'muse' | 'zcode'>,
+      completedAt: 0,
+    };
+    const plan = (discovery = view) =>
+      experimentActivityRequests(
+        found,
+        defaults,
+        activity,
+        activity.cacheDir,
+        new Set(),
+        undefined,
+        discovery
+      );
+    expect(plan()).toHaveLength(4);
+    expect(
+      plan().every(({ request }) => 'activity' in request && request.activity?.discoveryTruncated)
+    ).toBe(true);
+    expect(plan({ ...view, completedAt: NOW })).toEqual([]);
+    expect(plan({ ...view, completedAt: NOW, truncated: true })).toHaveLength(4);
+    expect(
+      plan({ ...view, completedAt: NOW, capped: ['claude'] }).map(({ provider }) => provider)
+    ).toEqual(['claude']);
+  });
 
   it('builds one request per tool, leaving out missing roots and roots already read', () => {
     const dir = (relative: string) => {

@@ -103,7 +103,7 @@ WALK_MAX_DIRS = 10000
 WALK_MAX_ENTRIES = 100000
 # Breadth-first marker scan under ~/PM-Experiments for custom --session-dir
 # roots, with the server scanner's bounds plus a share of the request budget.
-SCAN_MAX_DEPTH = 6
+SCAN_MAX_DEPTH = 12
 SCAN_MAX_DIRS = 100000
 SCAN_MAX_ENTRIES = 2000000
 SCAN_BUDGET_SHARE = 0.4
@@ -455,7 +455,7 @@ def _iter_jsonl_files(root, accept, collector, skip_dir=None):
                 continue
             path = os.path.join(directory, name)
             try:
-                if os.path.isdir(path) and not os.path.islink(path):
+                if os.path.isdir(path) and not _is_link(path):
                     if skip_dir is not None and skip_dir(name):
                         continue
                     if depth < 64:
@@ -561,6 +561,9 @@ def _scan_session_roots(base, collector):
         except OSError:
             continue
         examined += len(entries)
+        if examined > SCAN_MAX_ENTRIES:
+            collector.discovery_truncated = True
+            break
         # Synthetic sandbox trees are never roots and never descended: their
         # fixture records would otherwise count as real usage.
         if _is_sandbox_tree(directory, entries):
@@ -583,6 +586,8 @@ def _scan_session_roots(base, collector):
                 found.append(directory)
                 continue
         if depth >= SCAN_MAX_DEPTH:
+            if any(entry.is_dir(follow_symlinks=False) and entry.name not in SCAN_SKIP_DIRS for entry in entries):
+                collector.discovery_truncated = True
             # One level past the depth cap, still examine session-container
             # children: experiment runners nest per-job session dirs one level
             # deeper than the cap (`runs/<run>/jobs/<job>/sessions`), and the
@@ -593,6 +598,7 @@ def _scan_session_roots(base, collector):
                 for entry in entries:
                     if (
                         len(found) >= SCAN_MAX_ROOTS
+                        or visited >= SCAN_MAX_DIRS
                         or examined > SCAN_MAX_ENTRIES
                         or time.monotonic() >= deadline
                     ):
@@ -603,6 +609,7 @@ def _scan_session_roots(base, collector):
                         continue
                     if not is_dir or "sessions" not in entry.name:
                         continue
+                    visited += 1
                     try:
                         with os.scandir(entry.path) as iterator:
                             child_entries = list(iterator)
@@ -830,11 +837,9 @@ def _drop_resume_copies(paths):
 
 
 def _collect_omp(collector, home, env, extra=()):
-    roots = [
-        root
-        for root in _omp_roots(home, env, collector, extra)
-        if os.path.isdir(root) and not os.path.islink(root)
-    ]
+    # Follow a root link once; the walker never follows child links or loops.
+    roots = _dedup_dirs(_omp_roots(home, env, collector, extra))
+    roots = [root for root in roots if os.path.isdir(root)]
     if not roots:
         return "not_installed"
 
@@ -1028,13 +1033,7 @@ def _collect_muse(collector, home, env, extra=()):
         if override and os.path.isabs(os.path.expanduser(override))
         else os.path.join(home, ".local", "share", "muse", "sessions")
     )
-    seen = set()
-    dirs = []
-    for candidate in (sessions, *extra):
-        absolute = os.path.abspath(candidate)
-        if absolute not in seen:
-            seen.add(absolute)
-            dirs.append(absolute)
+    dirs = _dedup_dirs((sessions, *extra))
     scanned = False
     for directory in dirs:
         if not os.path.isdir(directory) or os.path.islink(directory):
@@ -1384,13 +1383,12 @@ def _record_keys(collector, kind, copies, parse, flush):
 
 
 def _dedup_dirs(candidates):
-    seen = set()
+    """Canonical roots, widest first: recursive reads never visit an overlap twice."""
     dirs = []
-    for candidate in candidates:
-        absolute = os.path.abspath(candidate)
-        if absolute not in seen:
-            seen.add(absolute)
-            dirs.append(absolute)
+    candidates = {os.path.realpath(candidate) for candidate in candidates}
+    for real in sorted(candidates, key=lambda p: (len(p), p)):
+        if not _same_or_inside(real, dirs):
+            dirs.append(real)
     return dirs
 
 

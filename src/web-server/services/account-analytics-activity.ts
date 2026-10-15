@@ -541,7 +541,8 @@ function localRequestPlan(): {
         activity,
         path.join(ccsDir, 'cache'),
         readNow,
-        t3
+        t3,
+        experimentView
       )
     );
   } catch {
@@ -552,9 +553,13 @@ function localRequestPlan(): {
     const discovered: AccountAnalyticsActivityRequest[] = [];
     try {
       const ompRoots: string[] = [];
-      for (const root of await resolveOmpSessionRoots({ cacheDir: path.join(ccsDir, 'cache') }))
+      const discovery = { truncated: false };
+      for (const root of await resolveOmpSessionRoots({
+        cacheDir: path.join(ccsDir, 'cache'),
+        discovery,
+      }))
         if (await isDirectory(root)) ompRoots.push(root);
-      if (ompRoots.length) {
+      if (ompRoots.length || discovery.truncated) {
         for (const root of ompRoots) {
           try {
             seen('omp', fs.realpathSync(root));
@@ -562,7 +567,14 @@ function localRequestPlan(): {
             /* Realpath failure still scans under the resolved root. */
           }
         }
-        discovered.push({ provider: 'omp', request: { kind: 'omp', roots: ompRoots, activity } });
+        discovered.push({
+          provider: 'omp',
+          request: {
+            kind: 'omp',
+            roots: ompRoots,
+            activity: { ...activity, discoveryTruncated: discovery.truncated },
+          },
+        });
       }
     } catch {
       /* Absent history is not an error or measured zero. */
@@ -614,7 +626,8 @@ export function experimentActivityRequests(
   activity: { minDate: number; cacheDir: string },
   cacheDir: string,
   scanned: Set<string>,
-  t3: T3UsageRoots = { claude: [], codex: [] }
+  t3: T3UsageRoots = { claude: [], codex: [] },
+  discovery: ExperimentRootsView | null = null
 ): AccountAnalyticsActivityRequest[] {
   const readRoots = (kind: string): string[] =>
     [...scanned]
@@ -651,6 +664,14 @@ export function experimentActivityRequests(
     return [...kept];
   };
   const requests: AccountAnalyticsActivityRequest[] = [];
+  const activityFor = (kind: keyof ExperimentRootSet) => ({
+    ...activity,
+    discoveryTruncated:
+      !!discovery &&
+      (discovery.truncated ||
+        discovery.capped.includes(kind) ||
+        (discovery.scanning && !discovery.completedAt)),
+  });
   const claude = pick('claude', found.claude);
   const claudeHomes = pick('claude', t3.claude).filter((root) => !claude.includes(root));
   let projectsDir = defaults.projectsDir;
@@ -659,7 +680,7 @@ export function experimentActivityRequests(
   } catch {
     /* A missing default folder still names the request's cache. */
   }
-  if (claude.length || claudeHomes.length)
+  if (claude.length || claudeHomes.length || activityFor('claude').discoveryTruncated)
     requests.push({
       provider: 'claude',
       request: {
@@ -668,12 +689,12 @@ export function experimentActivityRequests(
         experimentRoots: claude,
         ...(claudeHomes.length ? { homeRoots: claudeHomes } : {}),
         referenceRoots: [...new Set([projectsDir, ...readRoots('claude')])],
-        activity,
+        activity: activityFor('claude'),
       },
     });
   const codex = pick('codex', found.codex);
   const codexHomes = pick('codex', t3.codex).filter((root) => !codex.includes(root));
-  if (codex.length || codexHomes.length)
+  if (codex.length || codexHomes.length || activityFor('codex').discoveryTruncated)
     requests.push({
       provider: 'codex',
       request: {
@@ -682,20 +703,30 @@ export function experimentActivityRequests(
         cacheDir,
         experimentRoots: codex,
         ...(codexHomes.length ? { homeRoots: codexHomes } : {}),
-        activity,
+        activity: activityFor('codex'),
       },
     });
   const muse = pick('muse', found.muse);
-  if (muse.length)
+  if (muse.length || activityFor('muse').discoveryTruncated)
     requests.push({
       provider: 'muse',
-      request: { kind: 'muse', sessionsDir: defaults.sessionsDir, experimentRoots: muse, activity },
+      request: {
+        kind: 'muse',
+        sessionsDir: defaults.sessionsDir,
+        experimentRoots: muse,
+        activity: activityFor('muse'),
+      },
     });
   const zcode = pick('zcode', found.zcode, true);
-  if (zcode.length)
+  if (zcode.length || activityFor('zcode').discoveryTruncated)
     requests.push({
       provider: 'zcode',
-      request: { kind: 'zcode', dbPath: defaults.dbPath, experimentDbs: zcode, activity },
+      request: {
+        kind: 'zcode',
+        dbPath: defaults.dbPath,
+        experimentDbs: zcode,
+        activity: activityFor('zcode'),
+      },
     });
   return requests;
 }
@@ -730,9 +761,21 @@ export function extraActivityRequests(
   scanned: Set<string>
 ): AccountAnalyticsActivityRequest[] {
   const requests: AccountAnalyticsActivityRequest[] = [];
+  let excludeRoots: string[] = [];
   const claim = (kind: string, resolved: string, mapping = ''): boolean => {
     const key = `${kind}:${resolved}${mapping}`;
-    if (scanned.has(key)) return false;
+    excludeRoots = [];
+    const inside = (child: string, parent: string) =>
+      child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
+    for (const existing of scanned) {
+      const colon = existing.indexOf(':');
+      const tool = existing.slice(0, colon);
+      const [root, priorMapping = ''] = existing.slice(colon + 1).split('\n');
+      if (tool !== kind && kind !== 'jsonl' && tool !== 'jsonl') continue;
+      if (tool === 'jsonl' && kind === 'jsonl' && `\n${priorMapping}` !== mapping) continue;
+      if (inside(resolved, root)) return false;
+      if (inside(root, resolved)) excludeRoots.push(root);
+    }
     scanned.add(key);
     return true;
   };
@@ -746,7 +789,7 @@ export function extraActivityRequests(
         if (!claim('claude', real)) continue;
         requests.push({
           provider: 'claude',
-          request: { kind: 'claude', projectsDir: real, activity },
+          request: { kind: 'claude', projectsDir: real, activity: { ...activity, excludeRoots } },
         });
       } else if (source.tool === 'codex') {
         if (!fs.existsSync(path.join(source.path, 'sessions'))) continue;
@@ -758,19 +801,25 @@ export function extraActivityRequests(
             kind: 'codex',
             codexHome: source.path,
             cacheDir: path.join(ccsDir, 'cache'),
-            activity,
+            activity: { ...activity, excludeRoots },
           },
         });
       } else if (source.tool === 'omp') {
         if (!fs.statSync(source.path).isDirectory()) continue;
         const real = fs.realpathSync(source.path);
         if (!claim('omp', real)) continue;
-        requests.push({ provider: 'omp', request: { kind: 'omp', roots: [real], activity } });
+        requests.push({
+          provider: 'omp',
+          request: { kind: 'omp', roots: [real], activity: { ...activity, excludeRoots } },
+        });
       } else if (source.tool === 'muse') {
         if (!fs.statSync(source.path).isDirectory()) continue;
         const real = fs.realpathSync(source.path);
         if (!claim('muse', real)) continue;
-        requests.push({ provider: 'muse', request: { kind: 'muse', sessionsDir: real, activity } });
+        requests.push({
+          provider: 'muse',
+          request: { kind: 'muse', sessionsDir: real, activity: { ...activity, excludeRoots } },
+        });
       } else if (source.tool === 'zcode') {
         if (!fs.statSync(source.path).isFile()) continue;
         const real = fs.realpathSync(source.path);
@@ -795,7 +844,12 @@ export function extraActivityRequests(
         if (!claim('jsonl', real, `\n${JSON.stringify(mapping)}`)) continue;
         requests.push({
           provider: 'jsonl',
-          request: { kind: 'jsonl', roots: [real], mapping, activity },
+          request: {
+            kind: 'jsonl',
+            roots: [real],
+            mapping,
+            activity: { ...activity, excludeRoots },
+          },
         });
       }
     } catch {
@@ -928,7 +982,10 @@ export class AccountAnalyticsActivityService {
       }
       const existing = collected.get(provider) ?? [];
       const data = result.value;
-      if (data.scan && !data.scan.complete) {
+      if (
+        (data.scan && !data.scan.complete) ||
+        ('activity' in source.request && source.request.activity?.discoveryTruncated)
+      ) {
         failed = true;
         if (unfinished.get(provider) !== 'failed') unfinished.set(provider, 'partial');
       }
@@ -1131,6 +1188,19 @@ export class AccountAnalyticsActivityService {
       remotePending,
       pendingHosts
     );
+    for (const source of state.sourceStates) {
+      if (
+        source.host === 'ubuntu' &&
+        requests.some(
+          (entry) =>
+            entry.provider === source.tool &&
+            'activity' in entry.request &&
+            entry.request.activity?.discoveryTruncated
+        )
+      )
+        source.detail =
+          'usage-root discovery is incomplete or hit its depth or scan budget; records from roots found so far are shown';
+    }
     // Convergence tracking: a grid that still holds a scanning cell re-collects
     // on the shorter converge cadence (bounded; see get()).
     if (state.sourceStates.some((entry) => entry.state === 'scanning')) state.scanningSince ??= now;

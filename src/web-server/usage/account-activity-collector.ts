@@ -103,6 +103,12 @@ export interface AccountActivityScanOptions {
   /** Testable inner budget, always less than the HTTP service worker deadline. */
   budgetMs?: number;
   maxBytesPerFile?: number;
+  /** Discovery is still running or hit a bound; found logs remain readable but partial. */
+  discoveryTruncated?: boolean;
+  /** Real subtrees already read by another request (saved parent sources). */
+  excludeRoots?: string[];
+  /** Experiment file cap, reducible for fixtures without raising the production ceiling. */
+  maxFiles?: number;
   /** Smaller fixture/embedding budgets cannot raise the production ceilings. */
   traversalLimits?: { maxDepth?: number; maxDirectories?: number; maxEntries?: number };
   /**
@@ -244,9 +250,17 @@ function filesUnder(
   deadline: number,
   limits: AccountActivityScanOptions['traversalLimits'],
   /** Folders deeper than this are outside the root's scope: skipped without counting a failure. */
-  scopeDepth?: number
+  scopeDepth?: number,
+  excludeRoots: string[] = [],
+  newestBeforeCap = false
 ): string[] {
   const { maxDepth, maxDirectories, maxEntries } = walkCeilings(limits);
+  try {
+    root = fs.realpathSync(root);
+  } catch {
+    issues.failed++;
+    return [];
+  }
   const result: string[] = [];
   const pending = [{ directory: root, depth: 0 }];
   let visitedDirectories = 0;
@@ -258,6 +272,14 @@ function filesUnder(
     }
     const current = pending.pop();
     if (!current) break;
+    if (
+      excludeRoots.some(
+        (root) =>
+          current.directory === root ||
+          current.directory.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
+      )
+    )
+      continue;
     visitedDirectories++;
     try {
       // Streaming iteration also bounds directories containing many irrelevant
@@ -268,7 +290,7 @@ function filesUnder(
           if (
             Date.now() >= deadline ||
             visitedEntries >= maxEntries ||
-            result.length >= MAX_FILES
+            (!newestBeforeCap && result.length >= MAX_FILES)
           ) {
             issues.failed++;
             return result;
@@ -2121,13 +2143,24 @@ async function collectExperimentActivity(
   fs.chmodSync(directory, 0o700);
   const deadline = Date.now() + Math.max(1, Math.min(12_000, options.budgetMs ?? 12_000));
   const issues = { failed: 0 };
+  const maxFiles = Math.max(1, Math.min(MAX_FILES, options.maxFiles ?? MAX_FILES));
+  const capNewest = (files: Array<{ file: string; stats: fs.Stats }>): boolean => {
+    files.sort(
+      (left, right) =>
+        right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
+    );
+    const overflow = Math.max(0, files.length - maxFiles);
+    issues.failed += overflow;
+    files.length = Math.min(files.length, maxFiles);
+    return overflow > 0;
+  };
   const statFiles = (
     list: string[],
     into: Array<{ file: string; stats: fs.Stats }>,
     skip: Set<string>
   ): void => {
     for (const file of list) {
-      if (skip.has(file) || into.length >= MAX_FILES) continue;
+      if (skip.has(file)) continue;
       skip.add(file);
       try {
         const stats = fs.statSync(file);
@@ -2136,6 +2169,7 @@ async function collectExperimentActivity(
         issues.failed++;
       }
     }
+    capNewest(into);
   };
   const seen = new Set<string>();
   const experimentFiles: Array<{ file: string; stats: fs.Stats }> = [];
@@ -2146,7 +2180,7 @@ async function collectExperimentActivity(
     }
     const scope = kind === 'claude' ? EXPERIMENT_CLAUDE_ROOT_DEPTH : undefined;
     statFiles(
-      filesUnder(root, kind, issues, deadline, options.traversalLimits, scope),
+      filesUnder(root, kind, issues, deadline, options.traversalLimits, scope, [], true),
       experimentFiles,
       seen
     );
@@ -2160,12 +2194,13 @@ async function collectExperimentActivity(
     const walked = filesUnderT3Root(root, (name) => wantedFile(kind, name), references, {
       deadline,
       ...walkCeilings(options.traversalLimits),
-      maxFiles: MAX_FILES,
+      maxFiles: MAX_ENTRIES,
     });
     if (walked.truncated) issues.failed++;
     statFiles(walked.files, experimentFiles, seen);
   }
   const referenceFiles: Array<{ file: string; stats: fs.Stats }> = [];
+  const referenceSeen = new Set<string>();
   let referenceComplete = true;
   const sessions =
     kind === 'claude'
@@ -2174,16 +2209,28 @@ async function collectExperimentActivity(
   for (const reference of references) {
     if (!fs.existsSync(reference)) continue;
     const referenceIssues = { failed: 0 };
-    const listed = filesUnder(reference, kind, referenceIssues, deadline, options.traversalLimits);
+    const listed = filesUnder(
+      reference,
+      kind,
+      referenceIssues,
+      deadline,
+      options.traversalLimits,
+      undefined,
+      [],
+      true
+    );
     if (referenceIssues.failed) referenceComplete = false;
+    issues.failed += referenceIssues.failed;
     // Codex/Muse: only default logs of a session an experiment log names can hold its records.
+    const before = issues.failed;
     statFiles(
       sessions && kind !== 'claude'
         ? listed.filter((file) => sessions.has(experimentSessionOf(kind, file)))
         : listed,
       referenceFiles,
-      seen
+      referenceSeen
     );
+    if (issues.failed > before) referenceComplete = false;
   }
   // One real file is read once: a hard link to a default log, or a second path to the same file
   // (a T3 shadow home), is the default log or the first copy already listed.
@@ -2301,7 +2348,7 @@ async function collectExperimentActivity(
     eventCount: chosen.size,
     scan: scan(
       completed === scanned.length &&
-        experimentFiles.length < MAX_FILES &&
+        !options.discoveryTruncated &&
         !skippedLines &&
         !failed &&
         referenceComplete
@@ -2363,8 +2410,17 @@ export async function collectAccountActivity(
   // drops out-of-window ones. "Found files but all are stale" means no usage in
   // the window (a complete, empty scan), never an unavailable source.
   let sawAnyFile = false;
+  const fileIdentities = new Set<string>();
   for (const root of roots) {
-    for (const file of filesUnder(root, request.kind, issues, deadline, options.traversalLimits)) {
+    for (const file of filesUnder(
+      root,
+      request.kind,
+      issues,
+      deadline,
+      options.traversalLimits,
+      undefined,
+      options.excludeRoots
+    )) {
       sawAnyFile = true;
       if (Date.now() >= deadline) {
         issues.failed++;
@@ -2373,6 +2429,9 @@ export async function collectAccountActivity(
       try {
         const stats = fs.statSync(file);
         if (stats.mtimeMs < options.minDate - MTIME_SKIP_MARGIN_MS) continue;
+        const identity = `${stats.dev}:${stats.ino}`;
+        if (fileIdentities.has(identity)) continue;
+        fileIdentities.add(identity);
         files.push({ file, stats });
       } catch {
         issues.failed++;
@@ -2476,7 +2535,11 @@ export async function collectAccountActivity(
     eventCount: rows.reduce((sum, row) => sum + row.events, 0),
     scan: {
       complete:
-        completed === scanned.length && files.length < MAX_FILES && !skippedLines && !failed,
+        completed === scanned.length &&
+        files.length < MAX_FILES &&
+        !skippedLines &&
+        !failed &&
+        !options.discoveryTruncated,
       completedFiles: completed,
       totalFiles: scanned.length,
       skippedLines,

@@ -381,7 +381,11 @@ export function runExperimentRootsSlice(options: ExperimentScanOptions): boolean
       const file = path.join(directory, name);
       if (isZcodeDatabase(file)) accept('zcode', file);
     }
-    if (depth >= maxDepth) continue;
+    if (depth >= maxDepth) {
+      if (entries.some((entry) => entry.isDirectory() && !SCAN_SKIP_DIRS.has(entry.name)))
+        round.truncated = true;
+      continue;
+    }
     // Below a Codex/Muse root found here, the collector reads everything: no visits needed.
     if (rootsHere.some((root) => under(directory, root))) continue;
     // Children are pushed in reverse so the walk visits them in name order.
@@ -400,12 +404,14 @@ export function runExperimentRootsSlice(options: ExperimentScanOptions): boolean
   }
   const digests = { ...published.digests, ...round.digests };
   if (!round.stack.length) {
-    // Round complete: its finds replace the published roots.
+    // A cut round cannot invalidate roots in subtrees it never reached.
+    const incomplete = round.truncated || round.capped.length > 0;
+    const roots = incomplete ? mergeRoots(published.roots, round.found) : round.found;
     writeJson(options.cacheDir, ROOTS_FILE, {
       version: 1,
       base,
-      roots: { ...round.found, zcode: onePerDigest(round.found.zcode, round.digests) },
-      digests: round.digests,
+      roots: { ...roots, zcode: onePerDigest(roots.zcode, incomplete ? digests : round.digests) },
+      digests: incomplete ? digests : round.digests,
       completedAt: now(),
       scanning: false,
       truncated: round.truncated,

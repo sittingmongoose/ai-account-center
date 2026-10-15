@@ -105,6 +105,29 @@ describe('native local analytics activity', () => {
     }
     throw new Error('background collection did not settle');
   }
+  it('reports bounded root discovery as partial even when every found file was read', async () => {
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => ({ results: [], states: [] }),
+      now: () => NOW,
+      scope: () => '/fixture-discovery-limited',
+      requests: () => [
+        {
+          provider: 'omp',
+          request: {
+            kind: 'omp',
+            roots: [],
+            activity: { minDate: FROM, cacheDir: '/fixture/cache', discoveryTruncated: true },
+          },
+        },
+      ],
+      loadWorker: async () => data('k3', 100, 1),
+    });
+    const result = await settled(service);
+    expect(result.status).toBe('cached');
+    const source = result.sources.find((entry) => entry.tool === 'omp' && entry.host === 'ubuntu');
+    expect(source?.state).toBe('cached');
+    expect(source?.detail).toContain('usage-root discovery');
+  });
   it('publishes real bounded progress, then warm completion, while keeping shared logs unattributed', async () => {
     let now = NOW;
     let complete = false;

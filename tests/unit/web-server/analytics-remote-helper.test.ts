@@ -133,7 +133,13 @@ function runPatchedHelper(
     encoding: 'utf8',
     timeout: 30_000,
     maxBuffer: 8 * 1024 * 1024,
-    env: { ...process.env, HOME: home, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
+    },
   });
   return JSON.parse(output) as Record<string, unknown>;
 }
@@ -162,12 +168,87 @@ function runHelper(request: Record<string, unknown>): Record<string, unknown> {
     encoding: 'utf8',
     timeout: 30_000,
     maxBuffer: 8 * 1024 * 1024,
-    env: { ...process.env, HOME: home, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
+    },
   });
   return JSON.parse(output) as Record<string, unknown>;
 }
 
 describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
+  it('finds depth-nine native OMP sessions and reports depth and entry bounds', () => {
+    const deep = path.join(
+      home,
+      'PM-Experiments',
+      ...Array.from({ length: 8 }, (_, i) => `d${i}`),
+      'native_sessions'
+    );
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, '2026-10-01T15-00_deep.jsonl'), `${ompRecord()}\n`);
+    const request = { kinds: ['omp'], minDateMs: MIN_DATE };
+    const found = runPatchedHelper(request, { SCAN_MAX_DIRS: 100 });
+    expect(found.discoveryTruncated).toBe(false);
+    expect((found.rows as Array<{ n: number }>).reduce((sum, row) => sum + row.n, 0)).toBe(1);
+    expect(runPatchedHelper(request, { SCAN_MAX_DEPTH: 2 }).discoveryTruncated).toBe(true);
+    expect(runPatchedHelper(request, { SCAN_MAX_ENTRIES: 1 }).discoveryTruncated).toBe(true);
+  });
+
+  it('reads overlapping OMP parent, Muse nested and Claude parent roots once', () => {
+    writeFixtures({ zcode: false });
+    const projects = path.join(home, '.claude', 'projects', 'p');
+    fs.mkdirSync(projects, { recursive: true });
+    fs.writeFileSync(
+      path.join(projects, 's.jsonl'),
+      `${JSON.stringify({ type: 'assistant', timestamp: '2026-10-01T15:00:00Z', message: { id: 'm', model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 2 } } })}\n`
+    );
+    const request = { kinds: ['omp', 'muse', 'claude'], minDateMs: MIN_DATE };
+    const baseline = runHelper(request);
+    const overlapped = runHelper({
+      ...request,
+      extraRoots: {
+        omp: [path.join(home, '.omp', 'agent')],
+        muse: [path.join(home, '.local', 'share', 'muse', 'sessions', '2026')],
+        claude: [path.join(home, '.claude')],
+      },
+    });
+    const counts = (result: Record<string, unknown>) =>
+      (result.rows as Array<{ k: string; n: number }>).reduce<Record<string, number>>(
+        (out, row) => {
+          out[row.k] = (out[row.k] ?? 0) + row.n;
+          return out;
+        },
+        {}
+      );
+    expect(counts(overlapped)).toEqual(counts(baseline));
+    expect(counts(overlapped)).toEqual({ omp: 2, muse: 1, claude: 1 });
+    expect(overlapped.truncated).toBe(false);
+  });
+
+  it('follows an OMP root link once and ignores a child link loop', () => {
+    const target = path.join(home, 'actual');
+    const agent = path.join(home, '.omp', 'agent');
+    fs.mkdirSync(target, { recursive: true });
+    fs.mkdirSync(agent, { recursive: true });
+    fs.writeFileSync(path.join(target, '2026-10-01T15-00_link.jsonl'), `${ompRecord()}\n`);
+    fs.symlinkSync(
+      target,
+      path.join(agent, 'sessions'),
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    fs.symlinkSync(
+      target,
+      path.join(target, 'loop'),
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+    const result = runPatchedHelper({ kinds: ['omp'], minDateMs: MIN_DATE }, { WALK_MAX_DIRS: 4 });
+    expect((result.rows as Array<{ n: number }>).reduce((sum, row) => sum + row.n, 0)).toBe(1);
+    expect(result.truncated).toBe(false);
+  });
+
   it('reaches Muse subagent logs past thousands of tool-output folders, which hold no log', () => {
     writeFixtures({ zcode: false });
     const session = path.join(home, '.local', 'share', 'muse', 'sessions', '2026', '10', '01');
@@ -1076,7 +1157,13 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       encoding: 'utf8',
       timeout: 30_000,
       maxBuffer: 8 * 1024 * 1024,
-      env: { ...process.env, HOME: home, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+      env: {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1',
+      },
     });
     const response = JSON.parse(output) as Record<string, unknown>;
     expect(response.version).toBe(1);

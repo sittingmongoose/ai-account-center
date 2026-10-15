@@ -1,5 +1,6 @@
 import type { Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
+import { ConfigError } from '../../errors/error-types';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import {
@@ -57,6 +58,20 @@ export function createAccountPreferencesRouter(deps: PreferencesRouterDeps = {})
       return;
     }
     const patch = req.method === 'PATCH';
+    const sources = Array.isArray(req.body?.usageLogSources)
+      ? req.body.usageLogSources
+      : [req.body?.addUsageLogSource];
+    if (
+      sources.some(
+        (source: { tool?: string; host?: string } | null | undefined) =>
+          source?.tool === 'jsonl' && source.host !== 'ubuntu'
+      )
+    ) {
+      res
+        .status(400)
+        .json({ error: 'Generic JSONL usage log sources are supported only on ubuntu' });
+      return;
+    }
     if (!(patch ? isDashboardPreferencesPatch(req.body) : isDashboardPreferences(req.body))) {
       res.status(400).json({ error: 'Preferences are not valid.' });
       return;
@@ -69,7 +84,11 @@ export function createAccountPreferencesRouter(deps: PreferencesRouterDeps = {})
               (deps.write ?? writeDashboardPreferences)(req.body)
             )
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof ConfigError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
       res.status(500).json({ error: 'Dashboard preferences could not be saved.' });
     }
   }

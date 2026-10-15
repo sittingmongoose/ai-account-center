@@ -149,6 +149,24 @@ describe('experiment usage root discovery', () => {
   });
   afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
 
+  it('preserves published roots when a later discovery round is truncated', async () => {
+    write('a/one.jsonl', lines(transcript));
+    write('z/two.jsonl', lines({ ...transcript, uuid: 'u-9' }));
+    const now = Date.now();
+    runExperimentRootsSlice({ homeDir: home, cacheDir, now: () => now });
+    const before = readExperimentRoots(cacheDir, { homeDir: home });
+    expect(before.roots.claude).toHaveLength(2);
+    runExperimentRootsSlice({
+      homeDir: home,
+      cacheDir,
+      now: () => now + EXPERIMENT_ROOTS_TTL_MS + 1,
+      maxDirs: 1,
+    });
+    const after = readExperimentRoots(cacheDir, { homeDir: home });
+    expect(after.truncated).toBe(true);
+    expect(after.roots.claude).toEqual(before.roots.claude);
+  });
+
   it('finds every tool by content in private tool homes, at any folder name', async () => {
     write('exp-a/runs/r1/jobs/J1/sessions/abc.jsonl', lines(transcript));
     write(

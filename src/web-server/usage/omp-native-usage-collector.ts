@@ -6,7 +6,9 @@ import type { RawUsageEntry } from '../jsonl-parser';
 
 export const OMP_TARGET = 'omp';
 /** Bounded marker scan under ~/PM-Experiments for custom --session-dir roots. */
-export const OMP_SCAN_MAX_DEPTH = 6;
+export const OMP_SCAN_MAX_DEPTH = 12;
+/** Bump when discovery/skip rules change, independently of the cache file schema. */
+export const OMP_ROOTS_RULE_VERSION = 3;
 export const OMP_SCAN_MAX_DIRS = 5000;
 export const OMP_SCAN_MAX_ROOTS = 512;
 export const OMP_SCAN_CACHE_TTL_MS = 6 * 3_600_000;
@@ -153,6 +155,7 @@ export interface OmpRootOptions {
   cacheDir?: string;
   now?: () => number;
   scanBounds?: OmpScanBounds;
+  discovery?: { truncated: boolean };
 }
 
 export interface OmpScanBounds {
@@ -253,6 +256,7 @@ async function scanSessionRoots(
   let head = 0;
   let visited = 0;
   let examined = 0;
+  let depthLimited = false;
   while (head < pending.length && found.length < OMP_SCAN_MAX_ROOTS) {
     if (visited >= maxDirs || Date.now() >= deadline) break;
     const current = pending[head++];
@@ -288,6 +292,8 @@ async function scanSessionRoots(
       }
     }
     if (current.depth >= maxDepth) {
+      if (entries.some((entry) => entry.isDirectory() && !SCAN_SKIP_DIRS.has(entry.name)))
+        depthLimited = true;
       // One level past the depth cap, still examine session-container
       // children: experiment runners nest per-job session dirs one level
       // deeper than the cap (`runs/<run>/jobs/<job>/sessions`), and the usage
@@ -297,8 +303,10 @@ async function scanSessionRoots(
       // locations need explicit extra usage-log sources.
       if (current.depth === maxDepth) {
         for (const entry of entries) {
-          if (Date.now() >= deadline || found.length >= OMP_SCAN_MAX_ROOTS) break;
+          if (visited >= maxDirs || Date.now() >= deadline || found.length >= OMP_SCAN_MAX_ROOTS)
+            break;
           if (!entry.isDirectory() || !entry.name.includes('sessions')) continue;
+          visited++;
           const child = path.join(current.directory, entry.name);
           let childEntries: fs.Dirent[];
           try {
@@ -335,7 +343,11 @@ async function scanSessionRoots(
   // Truncated when the walk stopped with directories still pending or hit the
   // root cap: the tree is larger than one bounded scan, so the caller unions
   // this result with the cache and rescans soon to converge over collections.
-  const truncated = head < pending.length || found.length >= OMP_SCAN_MAX_ROOTS;
+  const truncated =
+    depthLimited ||
+    examined > maxEntries ||
+    head < pending.length ||
+    found.length >= OMP_SCAN_MAX_ROOTS;
   return { roots: found, truncated };
 }
 
@@ -350,6 +362,7 @@ const ROOTS_CACHE_TRUNCATED_TTL_MS = 30 * 60_000;
 
 interface OmpRootsCache {
   version: 2;
+  ruleVersion: number;
   scannedAt: number;
   roots: string[];
   truncated: boolean;
@@ -361,6 +374,7 @@ function readRootsCacheRaw(cacheDir: string): OmpRootsCache | null {
     const value = JSON.parse(raw) as OmpRootsCache;
     if (
       value.version !== 2 ||
+      value.ruleVersion !== OMP_ROOTS_RULE_VERSION ||
       !Number.isFinite(value.scannedAt) ||
       !Array.isArray(value.roots) ||
       value.roots.length > OMP_SCAN_MAX_ROOTS ||
@@ -388,6 +402,7 @@ function writeRootsCache(
       temporary,
       JSON.stringify({
         version: 2,
+        ruleVersion: OMP_ROOTS_RULE_VERSION,
         scannedAt,
         truncated,
         roots: roots.slice(0, OMP_SCAN_MAX_ROOTS),
@@ -449,9 +464,46 @@ export async function resolveOmpSessionRoots(options: OmpRootOptions = {}): Prom
   }
   const base = path.join(homeDir, 'PM-Experiments');
   const cached = options.cacheDir ? readRootsCacheRaw(options.cacheDir) : null;
+  // Cached discoveries are never explicit overrides of today's sandbox/skip rules.
+  if (cached) {
+    const valid: string[] = [];
+    const allowedDirectories = new Map<string, boolean>();
+    for (const root of cached.roots) {
+      const relative = path.relative(base, root);
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      const parts = relative.split(path.sep);
+      if (parts.some((part) => SCAN_SKIP_DIRS.has(part))) continue;
+      let allowed = true;
+      for (let index = 0; index <= parts.length; index++) {
+        const directory = path.join(base, ...parts.slice(0, index));
+        try {
+          if (!allowedDirectories.has(directory)) {
+            const stats = await fs.promises.lstat(directory);
+            if (stats.isSymbolicLink()) {
+              allowedDirectories.set(directory, false);
+              allowed = false;
+              break;
+            }
+            const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+            allowedDirectories.set(
+              directory,
+              !stats.isSymbolicLink() && !(await isSandboxTree(directory, entries))
+            );
+          }
+          allowed = allowedDirectories.get(directory) === true;
+        } catch {
+          allowed = false;
+        }
+        if (!allowed) break;
+      }
+      if (allowed) valid.push(root);
+    }
+    cached.roots = valid;
+  }
   if (cached) {
     const ttl = cached.truncated ? ROOTS_CACHE_TRUNCATED_TTL_MS : ROOTS_CACHE_TTL_MS;
     if (now - cached.scannedAt <= ttl) {
+      if (options.discovery) options.discovery.truncated = cached.truncated;
       for (const found of cached.roots) add(found);
       return roots.slice(0, OMP_SCAN_MAX_ROOTS);
     }
@@ -469,7 +521,9 @@ export async function resolveOmpSessionRoots(options: OmpRootOptions = {}): Prom
   const union = new Set<string>(scanned);
   for (const prior of cached?.roots ?? []) union.add(prior);
   const merged = [...union].slice(0, OMP_SCAN_MAX_ROOTS);
-  if (options.cacheDir) writeRootsCache(options.cacheDir, merged, truncated, now);
+  const limited = truncated || union.size > OMP_SCAN_MAX_ROOTS;
+  if (options.discovery) options.discovery.truncated = limited;
+  if (options.cacheDir) writeRootsCache(options.cacheDir, merged, limited, now);
   for (const found of merged) add(found);
   return roots.slice(0, OMP_SCAN_MAX_ROOTS);
 }
