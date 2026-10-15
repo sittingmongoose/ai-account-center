@@ -45,7 +45,16 @@ STORE_NO_NEWER_SECONDS = 6 * 60 * 60
 STORE_MEMORY_BYTES = 4096
 
 
-def download_desktop(url, destination):
+def desktop_budget(deadline, maximum):
+    if deadline is None:
+        return maximum
+    remaining = int(deadline - time.monotonic()) - 90
+    if remaining <= 0:
+        raise UpdateFailure("timeout")
+    return min(maximum, remaining)
+
+
+def download_desktop(url, destination, deadline=None):
     """Fetch a desktop package, tolerating flaky bot-challenge refusals.
 
     Raises UpdateFailure('download_blocked') when every attempt is refused so
@@ -53,7 +62,7 @@ def download_desktop(url, destination):
     """
     for attempt in range(DOWNLOAD_BLOCKED_RETRIES):
         try:
-            download(url, destination, maximum=DESKTOP_DOWNLOAD_MAXIMUM, timeout=DESKTOP_DOWNLOAD_TIMEOUT)
+            download(url, destination, maximum=DESKTOP_DOWNLOAD_MAXIMUM, timeout=desktop_budget(deadline, DESKTOP_DOWNLOAD_TIMEOUT))
             return
         except UpdateFailure as error:
             if error.code != "download_blocked" or attempt + 1 == DOWNLOAD_BLOCKED_RETRIES:
@@ -138,24 +147,26 @@ def windows_package(app_id):
     try:
         raw = powershell(script, timeout=30)
         value = json.loads(raw) if raw.strip() else None
-        if not isinstance(value, dict) or value.get("name") != identity or not isinstance(value.get("root"), str):
+        if value is None and not raw.strip():
             return None
+        if not isinstance(value, dict) or value.get("name") != identity or not isinstance(value.get("root"), str):
+            return Install(app_id, "windows", None, manager="msix", probe="failed")
         root = pathlib.Path(value["root"])
         target = root / executable
         if not target.is_file():
-            return None
+            return Install(app_id, "windows", target, manager="msix", probe="failed")
         # Only the exact <Name>_<13-character publisher id> may become an AUMID.
         package_family = value.get("family")
         if not isinstance(package_family, str) or not re.fullmatch(re.escape(identity) + "_[a-z0-9]{13}", package_family):
             package_family = None
         return MsixInstall(app_id, "windows", target, version_text(value.get("version")), "msix", identity, value.get("publisher"), root,
-                           package_family=package_family)
+                           package_family=package_family, probe=None if version_text(value.get("version")) and isinstance(value.get("publisher"), str) and value["publisher"] else "failed")
     except UpdateFailure as error:
         # A query that ran out of time says nothing about the package: report
         # "Check timed out" rather than "not installed".
-        return Install(app_id, "windows", None, manager="msix", probe="timeout") if error.code == "timeout" else None
+        return Install(app_id, "windows", None, manager="msix", probe="timeout" if error.code == "timeout" else "failed")
     except ValueError:
-        return None
+        return Install(app_id, "windows", None, manager="msix", probe="failed")
 
 
 def detect_desktop(app_id, platform):
@@ -163,6 +174,8 @@ def detect_desktop(app_id, platform):
         name, identity, _, _ = MAC[app_id]
         for path in (pathlib.Path("/Applications") / name, pathlib.Path.home() / "Applications" / name):
             info = bundle_info(path)
+            if path.exists() and (info.get("CFBundleIdentifier") != identity or not version_text(info.get("CFBundleShortVersionString"))):
+                return Install(app_id, platform, path, manager="official-download", probe="failed")
             if info.get("CFBundleIdentifier") == identity:
                 return Install(app_id, platform, path, version_text(info.get("CFBundleShortVersionString")), "official-download", identity, package_root=path)
         return None
@@ -173,11 +186,11 @@ def detect_desktop(app_id, platform):
         return None
     try:
         text = command(["/usr/bin/dpkg-query", "-W", "-f=${Version}", package], timeout=20, capture=True)
-        return Install(app_id, platform, pathlib.Path(executable), version_text(text), "apt", package, package_root=pathlib.Path(executable).parent)
+        return Install(app_id, platform, pathlib.Path(executable), version_text(text), "apt", package, probe=None if version_text(text) else "failed", package_root=pathlib.Path(executable).parent)
     except UpdateFailure as error:
         if error.code == "timeout":
             return Install(app_id, platform, pathlib.Path(executable), None, "apt", package, probe="timeout")
-        return None
+        return Install(app_id, platform, pathlib.Path(executable), None, "apt", package, probe="failed")
 
 
 def verify_mac(app, app_id):
@@ -203,10 +216,10 @@ def verify_mac(app, app_id):
     return info
 
 
-def dmg_candidates(install, temporary):
+def dmg_candidates(install, temporary, deadline=None):
     """Mount the fixed publisher DMG; return (matching apps, device to detach)."""
     dmg = temporary / "update.dmg"
-    download_desktop(MAC[install.app_id][3], dmg)
+    download_desktop(MAC[install.app_id][3], dmg, deadline)
     mounted = command(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-plist", dmg], timeout=60, capture=True)
     try:
         mounted = plistlib.loads(mounted.encode("utf-8"))
@@ -219,7 +232,7 @@ def dmg_candidates(install, temporary):
     return candidates, attached
 
 
-def claude_release_url(install, temporary):
+def claude_release_url(install, temporary, deadline=None):
     """Claude's own release feed: the newer package URL, or None when the installed app is current.
 
     The old claude.ai download redirect answers 403 (Cloudflare challenge) to
@@ -229,7 +242,7 @@ def claude_release_url(install, temporary):
     and lets a running app report "quit first" before any download.
     """
     feed = temporary / "RELEASES.json"
-    download(CLAUDE_DARWIN_FEED, feed, maximum=256 * 1024, timeout=60)
+    download(CLAUDE_DARWIN_FEED, feed, maximum=256 * 1024, timeout=desktop_budget(deadline, 60))
     try:
         value = json.loads(feed.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -251,13 +264,13 @@ def claude_release_url(install, temporary):
     raise UpdateFailure("update_failed")
 
 
-def claude_zip_candidates(install, temporary, url):
+def claude_zip_candidates(install, temporary, url, deadline=None):
     package = temporary / "update.zip"
-    download_desktop(url, package)
+    download_desktop(url, package, deadline)
     extracted = temporary / "extracted"
     extracted.mkdir()
     # ditto keeps symlinks, resources and the code signature intact.
-    command(["/usr/bin/ditto", "-x", "-k", str(package), str(extracted)], timeout=600)
+    command(["/usr/bin/ditto", "-x", "-k", str(package), str(extracted)], timeout=desktop_budget(deadline, 600))
     return [path for path in extracted.glob("*.app") if bundle_info(path).get("CFBundleIdentifier") == install.identity]
 
 
@@ -292,7 +305,7 @@ def remember_dmg_version(install, fingerprint, version):
         pass
 
 
-def update_mac(install, phase=None):
+def update_mac(install, phase=None, deadline=None):
     """Update a Mac desktop app only while it is not running; never quit it.
 
     A running app with a newer version reports quit_first within seconds:
@@ -314,13 +327,13 @@ def update_mac(install, phase=None):
         fingerprint = None
         try:
             if install.app_id == "claude-desktop":
-                url = claude_release_url(install, temporary)
+                url = claude_release_url(install, temporary, deadline)
                 if url is None:
                     return result(install.app_id, "mac", "current", before, before, install.manager)
                 if running:
                     return quit_first(install, before)
                 phase("downloading")
-                candidates = claude_zip_candidates(install, temporary, url)
+                candidates = claude_zip_candidates(install, temporary, url, deadline)
             else:
                 fingerprint = remote_fingerprint(MAC[install.app_id][3])
                 known = remembered_dmg_version(install, fingerprint)
@@ -329,7 +342,7 @@ def update_mac(install, phase=None):
                 if known and running:
                     return quit_first(install, before)
                 phase("downloading")
-                candidates, attached = dmg_candidates(install, temporary)
+                candidates, attached = dmg_candidates(install, temporary, deadline)
             phase("updating")
             if len(candidates) != 1:
                 raise UpdateFailure("signature_failed")
@@ -351,6 +364,7 @@ def update_mac(install, phase=None):
             # again right before the swap and never replace it under a user.
             if desktop_running(install):
                 return quit_first(install, before)
+            desktop_budget(deadline, 1)
             os.rename(install.path, backup)
             try:
                 os.rename(stage, install.path)
@@ -399,7 +413,7 @@ def msix_info(path):
         raise UpdateFailure("signature_failed") from None
 
 
-def add_appx_package(package):
+def add_appx_package(package, timeout=600):
     """Install the verified MSIX, classifying needs-closing rejections.
 
     The wrapper always exits 0 and reports on stdout, which stays private and
@@ -408,7 +422,7 @@ def add_appx_package(package):
     """
     script = ("$ErrorActionPreference='Stop'; try { Add-AppxPackage -Path " + ps_quote(package)
               + "; Write-Output 'CCS_ADDAPPX_OK' } catch { Write-Output ('CCS_ADDAPPX_FAILED: ' + $_.Exception.ToString()) }")
-    text = powershell(script, timeout=600)
+    text = powershell(script, timeout=timeout)
     if "CCS_ADDAPPX_OK" in text.split():
         return
     lowered = text.lower()
@@ -632,7 +646,7 @@ def forget_store_answer(install):
         store_memory(install).unlink(missing_ok=True)
 
 
-def update_windows_store(install, phase, feed):
+def update_windows_store(install, phase, feed, deadline=None):
     """Install the newer Codex Store build through winget's msstore source, reopening a running Codex.
 
     Only winget's install can say whether the Store offers a newer build here: its
@@ -652,7 +666,7 @@ def update_windows_store(install, phase, feed):
         # The Store verifies the package and upgrades the same OpenAI.Codex family in place.
         try:
             command([winget, "install", "--id", CODEX_STORE_ID, "--source", "msstore", "--exact", "--silent",
-                     "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=900)
+                     "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=desktop_budget(deadline, 900))
         except UpdateFailure as error:
             if error.exit_code is not None and (error.exit_code & 0xFFFFFFFF) in WINGET_NO_NEWER:
                 remember_store_answer(install, feed)
@@ -662,10 +676,11 @@ def update_windows_store(install, phase, feed):
 
     def accepted(refreshed):
         return refreshed.publisher == install.publisher and bool(refreshed.version) and version_tuple(refreshed.version) > version_tuple(install.version)
+    desktop_budget(deadline, 1)
     return windows_replace(install, install.version, deploy, accepted, current_codes=("store_no_newer",))
 
 
-def update_windows(install, phase=None):
+def update_windows(install, phase=None, deadline=None):
     """Update a Windows MSIX desktop app, closing and reopening it when it runs.
 
     The published manifest alone (HTTP ranges, under a second) says whether a
@@ -688,10 +703,15 @@ def update_windows(install, phase=None):
 
     if install.app_id == "codex-desktop":
         store = codex_store_version(install)
+        if store is None:
+            return result(install.app_id, "windows", "unknown", before, before, install.manager, "readiness_unknown")
         if store and version_tuple(store) > version_tuple(before):
-            return update_windows_store(install, phase, store)
+            try:
+                return update_windows_store(install, phase, store, deadline)
+            except UpdateFailure as error:
+                return result(install.app_id, "windows", "failed", before, before, install.manager, error.code)
     try:
-        remote = remote_msix_identity(url)
+        remote = remote_msix_identity(url, timeout=desktop_budget(deadline, REMOTE_MANIFEST_SECONDS))
         available = published(remote) if remote is not None else None
         if available and version_tuple(available) <= version_tuple(before):
             return result(install.app_id, "windows", "current", before, before, install.manager)
@@ -706,7 +726,7 @@ def update_windows(install, phase=None):
         package = temporary / "update.msix"
         try:
             phase("downloading")
-            download_desktop(url, package)
+            download_desktop(url, package, deadline)
             phase("updating")
             after = published(msix_info(package))
             if not after:
@@ -720,7 +740,11 @@ def update_windows(install, phase=None):
         # Add-AppxPackage verifies the Microsoft Store/publisher signature and
         # upgrades the same per-user package, preserving LocalState. A
         # rejection for a running app (0x80073D02) reports quit_first.
-        return windows_replace(install, before, lambda: add_appx_package(package), lambda refreshed: refreshed.version == after)
+        try:
+            desktop_budget(deadline, 1)
+            return windows_replace(install, before, lambda: add_appx_package(package, timeout=desktop_budget(deadline, 600)), lambda refreshed: refreshed.version == after)
+        except UpdateFailure as error:
+            return result(install.app_id, "windows", "failed", before, before, install.manager, error.code)
 
 
 def apt_package_sources(policy):
@@ -765,7 +789,8 @@ def update_linux(install, deadline=None):
             bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
             # Same bounded bridge budget as the Codex CLI (lock, idle wait, apt).
             seconds = max(30, min(420, int((deadline or time.monotonic() + 420) - time.monotonic())))
-            return json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "desktop", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
+            restart_only = retry_restart and version_tuple(candidate) <= version_tuple(before)
+            return json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "desktop", "--expected-version", before if restart_only else candidate, "--restart-only", str(restart_only).lower(), "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
         contexts = main_contexts(install, scan("ubuntu"))
         forced = terminate_desktops(install, contexts)
         command(["/usr/bin/sudo", "-n", "/usr/bin/apt-get", "install", "--only-upgrade", "-y", install.identity], timeout=180,
@@ -801,7 +826,7 @@ def update_desktop(install, deadline=None, phase=None):
         clear_restart(install)
     except OSError:
         pass
-    return {"mac": update_mac, "windows": update_windows}[install.platform](install, phase)
+    return {"mac": update_mac, "windows": update_windows}[install.platform](install, phase, deadline)
 
 
 def restart_marker(install):

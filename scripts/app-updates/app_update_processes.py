@@ -114,7 +114,7 @@ def mac_arguments(pid):
 
 
 def mac_processes():
-    output = command(["/bin/ps", "-A", "-o", "pid=,ppid=,uid=,lstart="], timeout=10, capture=True)
+    output = command(["/bin/ps", "-U", str(os.getuid()), "-o", "pid=,ppid=,uid=,lstart="], timeout=10, capture=True, capture_limit=2 * 1024 * 1024)
     libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
     libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     values = []
@@ -132,7 +132,8 @@ def mac_processes():
         if libproc.proc_pidpath(pid, path, len(path)) <= 0:
             continue
         exe = path.value.decode("utf-8", "surrogateescape")
-        values.append(Process(pid, ppid, uid, exe, parts[3]))
+        args = mac_arguments(pid) if pathlib.Path(exe).name.lower() in ("node", "bun") else []
+        values.append(Process(pid, ppid, uid, exe, parts[3], args))
     return values
 
 
@@ -205,14 +206,36 @@ def is_under(exe, root):
 def family(install, processes):
     active = os.path.normcase(os.path.realpath(install.path))
     root = install.package_root
+    entrypoints = set()
+    if install.manager == "npm" and root is not None:
+        try:
+            raw = (root / "package.json").read_bytes()
+            package = json.loads(raw) if len(raw) <= 65536 else {}
+            bins = package.get("bin", {})
+            names = list(bins.values()) if isinstance(bins, dict) else [bins]
+            names.append(package.get("main"))
+            entrypoints = {os.path.normcase(os.path.realpath(root / name)) for name in names if isinstance(name, str) and is_under(root / name, root)}
+        except (OSError, ValueError, AttributeError):
+            pass
+        if install.app_id == "codex-cli":
+            entrypoints.add(os.path.normcase(os.path.realpath(root / "bin/codex.js")))
     values = []
     for process in processes:
         exact = os.path.normcase(os.path.realpath(process.exe)) == active
         owned_package = root is not None and is_under(process.exe, root)
-        node_module = install.manager == "npm" and root is not None and len(process.args) >= 2 and is_under(process.args[1], root)
+        runtime = pathlib.Path(process.exe).name.lower() in ("node", "node.exe", "bun", "bun.exe", install.path.name.lower())
+        node_module = runtime and len(process.args) >= 2 and os.path.normcase(os.path.realpath(process.args[1])) in entrypoints
         muse_binary = install.app_id == "muse-code" and os.path.normcase(pathlib.Path(process.exe).name).startswith("muse-bin-") and pathlib.Path(process.exe).parent == install.path.parent
         if exact or owned_package or node_module or muse_binary:
             values.append(process)
+    if install.manager == "npm":
+        pids = {item.pid for item in values}
+        while True:
+            children = [item for item in processes if item.pid not in pids and item.ppid in pids]
+            if not children:
+                break
+            values.extend(children)
+            pids.update(item.pid for item in children)
     # Some signed Codex desktop children live in its per-user staged runtime,
     # outside the MSIX root. Include only that fixed path AND desktop ancestry.
     if install.platform == "windows" and install.app_id == "codex-desktop":

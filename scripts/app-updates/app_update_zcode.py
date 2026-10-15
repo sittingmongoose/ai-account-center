@@ -23,7 +23,7 @@ import uuid
 
 from app_update_common import (
     Install, UpdateFailure, asar_package, command, download, powershell, private_temporary, ps_quote,
-    resolve_npm, result, version_tuple,
+    resolve_npm, result, version_tuple, npm_version_key,
 )
 from app_update_processes import (
     family, live_contexts, mac_arguments, main_contexts, restart_desktops, scan, terminate_desktops,
@@ -566,12 +566,14 @@ def adapters_row(install, status, after=None, code=None, attempted=False, held=(
 
 
 def adapters_outcome(install, code, busy=None, behind=()):
-    """A behind adapter left unchanged while an adapter still runs is in_use; else updated when any changed; else failed."""
+    """Every required adapter must move; a busy unchanged adapter remains in_use."""
     after = read_parts(install.path)
     changed = [name for name in PACKAGES if after[name] and after[name] != install.parts.get(name)]
     unchanged = [name for name in behind if name not in changed]
     if unchanged and busy is not None and busy():
         return adapters_row(install, "action_required", after, "in_use", True, unchanged)
+    if unchanged:
+        return adapters_row(install, "failed", after, code or "update_failed", True)
     if changed:
         return adapters_row(install, "updated", after, attempted=True)
     return adapters_row(install, "failed", after, code or "update_failed", True)
@@ -657,7 +659,7 @@ def update_adapters(install, deadline, phase=None):
             # Without the registry's answer nothing can be called current, so nothing runs.
             raise UpdateFailure("update_failed")
         # Only a package behind its latest is installed; one already current is never reinstalled.
-        behind = [name for name in present if version_tuple(latest[name]) > version_tuple(install.parts[name])]
+        behind = [name for name in present if npm_version_key(latest[name]) > npm_version_key(install.parts[name])]
         if not behind:
             return adapters_row(install, "current")
         return {"ubuntu": adapters_ubuntu, "mac": adapters_mac, "windows": adapters_windows}[install.platform](install, deadline, phase, state, behind)

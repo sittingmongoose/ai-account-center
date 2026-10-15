@@ -234,3 +234,39 @@ describe('Codex update runtime resolution', () => {
     expect(bridge.loadRuntime([bundle])).toBeNull();
   });
 });
+
+describe('Codex desktop version verification', () => {
+  it('does not report a successful installer with unchanged bits as updated', async () => {
+    const value = fixture();
+    value.deps.update = async () => {};
+    const result = await bridge.execute({
+      ...value.deps,
+      operation: 'desktop',
+      expectedCandidate: '2.0.0',
+    });
+    expect(result.status).toBe('failed');
+    expect(value.events).not.toContain('mark');
+  });
+  it('can recover a pending restart without requiring another version change', async () => {
+    const value = fixture();
+    value.deps.mark();
+    const result = await bridge.execute({
+      ...value.deps,
+      operation: 'desktop',
+      expectedCandidate: '1.0.0',
+      restartOnly: true,
+    });
+    expect(result.status).toBe('updated');
+    expect(value.events).not.toContain('update');
+    expect(value.pending()).toBe(false);
+  });
+  it('rejects a changed version that is not the requested candidate', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      operation: 'desktop',
+      expectedCandidate: '3.0.0',
+    });
+    expect(result.status).not.toBe('updated');
+  });
+});

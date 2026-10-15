@@ -441,14 +441,14 @@ def detect_cli(app_id, platform):
         try:
             info = json.loads((root / "package.json").read_text(encoding="utf-8"))
             if info.get("name") != "@openai/codex":
-                return None
+                return Install(app_id, platform, path, manager="npm", probe="failed")
             version = version_text(info.get("version"))
-        except (OSError, ValueError):
-            return None
-        return Install(app_id, platform, path, version, "npm", package_root=root)
+        except (OSError, ValueError, AttributeError):
+            return Install(app_id, platform, path, manager="npm", probe="failed")
+        return Install(app_id, platform, path, version, "npm", package_root=root, probe=None if version else "failed")
     version, probe = cli_probe(path)
-    if probe == "timeout":
-        return Install(app_id, platform, path, None, "native", probe="timeout")
+    if probe is not None or not version:
+        return Install(app_id, platform, path, None, "native", probe=probe or "failed")
     resolved = path.resolve()
     home = pathlib.Path.home()
     # normcase folds case on Windows only, where resolve() reports the on-disk spelling.
@@ -891,8 +891,18 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
     root = pathlib.Path.home() / ".ccs/app-updates"
     request_path, result_path = root / "windows-task-request.json", root / "windows-task-result.json"
     progress_path, cancel_path = root / "windows-task-progress.json", root / "windows-task-cancel.json"
+    completed = {}
+
+    def task_command(script):
+        try:
+            return powershell(script, timeout=15)
+        except UpdateFailure as error:
+            if error.exit_code == 3:
+                raise UpdateFailure("busy") from None
+            raise
+
     with execution_lock("windows-coordinator.lock"):
-        powershell("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}", timeout=15)
+        task_command("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}")
         nonce = uuid.uuid4().hex
         for stale in (progress_path, cancel_path):
             stale.unlink(missing_ok=True)
@@ -900,7 +910,7 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
         if agy_reviewed is not None:
             request["agyReviewed"] = sorted(agy_reviewed)
         write_private_json(request_path, request)
-        powershell("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; Start-ScheduledTask -TaskName 'CCS App Updates'", timeout=15)
+        task_command("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; Start-ScheduledTask -TaskName 'CCS App Updates'")
         deadline = time.monotonic() + 16 * 60
         relayed, cancel_sent = 0, False
         while time.monotonic() < deadline:
@@ -915,6 +925,10 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
                 events = value.get("events") if value.get("nonce") == nonce else None
                 if isinstance(events, list):
                     for event in events[relayed:]:
+                        if isinstance(event, dict) and event.get("event") == "result":
+                            row = event.get("result")
+                            if isinstance(row, dict) and row.get("appId") in APP_LABELS:
+                                completed[row["appId"]] = row
                         emit(event)
                     relayed = max(relayed, len(events))
             except (OSError, ValueError, AttributeError):
@@ -926,7 +940,7 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
             except (OSError, ValueError, AttributeError):
                 pass
             time.sleep(1)
-        raise UpdateFailure("timeout")
+        return {"results": [completed.get(app_id) or result(app_id, "windows", "unknown", code="host_timeout") for app_id in APP_LABELS]}
 
 
 def task_child_progress(nonce):
@@ -1045,6 +1059,15 @@ def main():
         # Only a dashboard that reads line-by-line progress sets this; an
         # older one keeps receiving exactly one JSON document.
         emit, cancelled = stream_progress()
+    completed = {}
+    progress = emit or (lambda event: None)
+    def remember(event):
+        if isinstance(event, dict) and event.get("event") == "result":
+            row = event.get("result")
+            if isinstance(row, dict) and row.get("appId") in APP_LABELS:
+                completed[row["appId"]] = row
+        progress(event)
+    emit = remember
     try:
         if not args.apply:
             installations = detect(args.platform)
@@ -1059,9 +1082,9 @@ def main():
         else:
             payload = run_apply(args.platform, emit, cancelled, agy_reviewed)
     except UpdateFailure as error:
-        payload = {"results": [result(app_id, args.platform, "failed", code=error.code) for app_id in APP_LABELS]}
+        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "unknown" if error.code == "timeout" else "failed", code="host_timeout" if error.code == "timeout" else error.code) for app_id in APP_LABELS]}
     except Exception:
-        payload = {"results": [result(app_id, args.platform, "failed", code="update_failed") for app_id in APP_LABELS]}
+        payload = {"results": [completed.get(app_id) or result(app_id, args.platform, "failed", code="update_failed") for app_id in APP_LABELS]}
     if args.task_child and args.apply and args.platform == "windows":
         request_path = pathlib.Path.home() / ".ccs/app-updates/windows-task-request.json"
         try:

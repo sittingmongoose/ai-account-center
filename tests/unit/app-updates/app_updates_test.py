@@ -122,7 +122,7 @@ class UpdaterTests(unittest.TestCase):
             install = common.Install('codex-desktop', 'windows', root / 'ChatGPT.exe', '1.0.0.0', 'msix', 'OpenAI.Codex', 'Expected')
             with mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root)), mock.patch.object(desktop, 'download'), \
                     mock.patch.object(desktop, 'scan', return_value=[]), mock.patch.object(desktop, 'remote_msix_identity', return_value=None), \
-                    mock.patch.object(desktop, 'codex_store_version', return_value=None), mock.patch.object(desktop, 'terminate_desktops') as stop:
+                    mock.patch.object(desktop, 'codex_store_version', side_effect=lambda install: install.version), mock.patch.object(desktop, 'terminate_desktops') as stop:
                 value = desktop.update_windows(install)
             self.assertEqual(value['messageCode'], 'signature_failed')
             stop.assert_not_called()
@@ -412,7 +412,7 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn('--collect', argv)
         self.assertIn('--service-type=forking', argv)
         self.assertIn('--working-directory=/tmp', argv)
-        self.assertIn('--setenv=HOME=/tmp', argv)
+        self.assertIn('--setenv=HOME', argv)
         self.assertNotIn('--scope', argv)
         unit = next(item for item in argv if item.startswith('--unit='))
         self.assertRegex(unit, r'^--unit=aac-launch-codex-cli-[0-9a-f]{12}$')
@@ -774,7 +774,7 @@ class BoundedUpdateTests(unittest.TestCase):
         self.assertIsNotNone(install)
         self.assertEqual(install.probe, 'timeout')
         with mock.patch.object(desktop, 'powershell', side_effect=common.UpdateFailure('update_failed')):
-            self.assertIsNone(desktop.windows_package('codex-desktop'))
+            self.assertEqual(desktop.windows_package('codex-desktop').probe, 'failed')
 
     def test_cancel_skips_every_app_not_yet_started(self):
         installations = {key: common.Install(key, 'ubuntu', pathlib.Path('/fixture/app'), '1.0.0') for key in common.APP_LABELS}
@@ -1000,7 +1000,7 @@ class DesktopWaitTests(unittest.TestCase):
             mock.patch.object(desktop, 'scan', return_value=[]),
             mock.patch.object(desktop, 'remote_fingerprint', return_value=None),
             mock.patch.object(desktop, 'remote_msix_identity', return_value=None),
-            mock.patch.object(desktop, 'codex_store_version', return_value=None),
+            mock.patch.object(desktop, 'codex_store_version', side_effect=lambda install: install.version),
             # Any attempt to stop, close or relaunch a desktop app fails the test.
             mock.patch.object(desktop, 'terminate_desktops', side_effect=AssertionError('desktop app stopped')),
             mock.patch.object(desktop, 'restart_desktops', side_effect=AssertionError('desktop app relaunched')),
@@ -1259,7 +1259,7 @@ class DesktopWaitTests(unittest.TestCase):
         with mock.patch.object(desktop, 'update_mac', return_value={'status': 'current'}) as flow:
             value = desktop.update_desktop(install)
         self.assertFalse(marker.exists())
-        flow.assert_called_once_with(install, None)
+        flow.assert_called_once_with(install, None, None)
         self.assertEqual(value, {'status': 'current'})
 
     def test_mac_download_timeout_keeps_its_code(self):
@@ -1378,10 +1378,10 @@ class WindowsDesktopReopenTests(unittest.TestCase):
             mock.patch.object(desktop.subprocess, 'Popen', side_effect=self.popen),
             mock.patch.object(desktop, 'windows_package', side_effect=lambda app_id: self.package(self.registered, self.registered_version)),
             mock.patch.object(desktop, 'add_appx_package', side_effect=self.install),
-            mock.patch.object(desktop, 'download_desktop', side_effect=lambda url, target: self.events.append('download')),
+            mock.patch.object(desktop, 'download_desktop', side_effect=lambda url, target, *args: self.events.append('download')),
             mock.patch.object(desktop, 'msix_info', side_effect=lambda path: self.manifest()),
-            mock.patch.object(desktop, 'remote_msix_identity', side_effect=lambda url: self.manifest()),
-            mock.patch.object(desktop, 'codex_store_version', return_value=None),
+            mock.patch.object(desktop, 'remote_msix_identity', side_effect=lambda url, **kwargs: self.manifest()),
+            mock.patch.object(desktop, 'codex_store_version', side_effect=lambda install: install.version),
             mock.patch.object(desktop.time, 'sleep'),
         ]
         for patch in patches:
@@ -1418,7 +1418,7 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.processes = [item for item in self.processes if item.pid not in mains and item.ppid not in mains]
         return self.forced
 
-    def install(self, package):
+    def install(self, package, **kwargs):
         self.events.append('install')
         self.registered, self.registered_version = self.new_root, self.NEW
 
@@ -1832,7 +1832,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
             self.assertIsNone(updater.parse_reviewed_versions(hostile), hostile)
 
     def test_release_file_is_read_like_the_dashboard_reads_it(self):
-        self.assertIn('1.3.0', updater.read_release_versions())
+        self.assertIsNone(updater.read_release_versions(self.root / 'missing-release.json'))
         release = self.root / 'release.json'
         entry = lambda version, digit: {'nativeVersion': version, 'nativeSha256': digit * 64}
         release.write_text(json.dumps({'reviewedNatives': [entry('1.2.14', 'a'), entry('1.2.16', 'b')]}))
@@ -2085,7 +2085,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
     def test_main_passes_the_dashboard_list_and_falls_back_to_the_release_file(self):
         seen = []
         with mock.patch.object(updater, 'run_apply', side_effect=lambda platform, emit, cancelled, reviewed: seen.append(reviewed) or {'results': []}), \
-                contextlib.redirect_stdout(io.StringIO()):
+                mock.patch.object(updater, 'read_release_versions', return_value=frozenset({'1.3.0'})), contextlib.redirect_stdout(io.StringIO()):
             with mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu', '--agy-reviewed', '1.2.16,1.3.0']):
                 updater.main()
             with mock.patch.object(sys, 'argv', ['helper', '--apply', '--platform', 'ubuntu', '--agy-reviewed', '1.2.16;id']):

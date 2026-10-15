@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 
-from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command
+from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, strip_dashboard_secrets
 from app_update_processes import scan, user_family
 
 
@@ -37,7 +37,7 @@ def restart_environment(context):
     values.update({key: value for key, value in NO_AUTO_UPDATE.items() if key != "CODEX_NON_INTERACTIVE"})
     values.pop("MUSE_LAUNCHER_INSTALL", None)
     values.pop("MUSE_UPGRADE_MODE", None)
-    return values
+    return strip_dashboard_secrets(values)
 
 
 def sanitize_unit_fragment(value):
@@ -65,10 +65,12 @@ def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple"):
         wrapped.append("--service-type=" + service_type)
     if cwd:
         wrapped.append("--working-directory=" + str(cwd))
-    for key, value in (env or {}).items():
+    for key, value in strip_dashboard_secrets(env or {}).items():
         if value is None:
             continue
-        wrapped.append("--setenv=%s=%s" % (key, value))
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise UpdateFailure("restart_context")
+        wrapped.append("--setenv=" + key)
     wrapped.append("--")
     wrapped.extend(argv)
     return wrapped
@@ -172,7 +174,7 @@ def restart_cli(install, contexts):
             # Type=simple unit would go inactive and lose track of the server.
             argv = systemd_user_service_argv(unit, context.cwd, restart_environment(context),
                                             tmux_argv, service_type="forking")
-            command(argv, timeout=15)
+            command(argv, timeout=15, env=restart_environment(context), preserve_env=True)
             sessions.append({"kind": "tmux", "server": server, "session": session})
         else:
             _broker_terminal(install, context, args)

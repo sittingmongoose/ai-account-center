@@ -27,10 +27,11 @@ const LOCK_WAIT_SECONDS = 30;
 const output = { appId: operation === 'desktop' ? 'codex-desktop' : 'codex-cli', platform: 'ubuntu',
   status: 'failed', previousVersion: null, version: null, manager: operation === 'desktop' ? 'apt' : 'native',
   messageCode: 'update_failed', updateAttempted: false, restartedProcesses: 0, forcedStops: 0 };
+const cleanEnvironment = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !/^CCS_SESSION_SECRET$|^CCS_DASHBOARD_|_PASSWORD_HASH$/i.test(key)));
 const version = (text) => typeof text === 'string' ? text.match(/\d+\.\d+(?:\.\d+){0,3}/)?.[0] ?? null : null;
 function run(binary, args, timeout = 10000) {
   return new Promise((resolve, reject) => execFile(binary, args, { timeout, maxBuffer: 65536, encoding: 'utf8',
-    env: { ...process.env, CODEX_NON_INTERACTIVE: '1', NO_UPDATE_NOTIFIER: '1', DEBIAN_FRONTEND: 'noninteractive' } },
+    env: { ...cleanEnvironment(process.env), CODEX_NON_INTERACTIVE: '1', NO_UPDATE_NOTIFIER: '1', DEBIAN_FRONTEND: 'noninteractive' } },
     (error, stdout) => error ? reject(new Error('Fixed app command failed.')) : resolve(stdout)));
 }
 function privateScan() {
@@ -73,15 +74,19 @@ function markPending() {
 async function execute(deps) {
   const idle = Math.max(1, Math.min(seconds, deps.idleSeconds ?? IDLE_WAIT_SECONDS));
   const deadline = deps.now() + idle * 1000;
+  const mode = deps.operation ?? operation;
+  const expected = deps.expectedCandidate ?? flags['--expected-version'];
+  const restartOnly = deps.restartOnly ?? flags['--restart-only'] === 'true';
   let runtime, stopped = false, busy = false;
   try {
     output.previousVersion = output.version = version(await deps.readVersion());
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
-    if (operation === 'cli') {
+    if (mode === 'cli') {
       output.updateAttempted = true;
       await deps.update();
       output.version = version(await deps.readVersion());
       if (!output.version) { output.messageCode = 'version_unknown'; return output; }
+      if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
       if (output.version === output.previousVersion && !deps.pending(output.version)) {
         output.status = 'current'; output.messageCode = 'current'; return output;
       }
@@ -96,11 +101,11 @@ async function execute(deps) {
         await deps.sleep(Math.min(5000, deadline - deps.now()));
       }
     }
-    if (operation === 'desktop') {
-      output.updateAttempted = true;
-      await deps.update();
+    if (mode === 'desktop') {
+      output.updateAttempted = !restartOnly;
+      if (!restartOnly) await deps.update();
       output.version = version(await deps.readVersion());
-      if (!output.version) throw new Error('Version unknown.');
+      if (!output.version || (!restartOnly && output.version === output.previousVersion) || (expected && output.version !== version(expected))) throw new Error('Candidate not installed.');
       deps.mark();
     }
     await deps.restartProxies?.();
@@ -192,7 +197,7 @@ async function main() {
     runtime: () => createCodexActivationRuntime(path.join(home, '.codex'), { scan: async () => privateScan(),
       launch: async (target, desktop) => {
         const actual = desktop ? target.exe : executable;
-        const child = spawn(actual, target.args.slice(1), { cwd: target.cwd, env: target.env, detached: true,
+        const child = spawn(actual, target.args.slice(1), { cwd: target.cwd, env: cleanEnvironment(target.env), detached: true,
           argv0: desktop ? target.args[0] : executable, stdio: ['ignore', 'ignore', 'ignore'] });
         await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new Error('Launch failed.'))); });
         child.unref(); output.restartedProcesses++;

@@ -55,11 +55,16 @@ class Install:
     strays: list = dataclasses.field(default_factory=list)
 
 
+def strip_dashboard_secrets(values):
+    return {key: value for key, value in values.items() if key.upper() != "CCS_SESSION_SECRET"
+            and not key.upper().startswith("CCS_DASHBOARD_") and not key.upper().endswith("_PASSWORD_HASH")}
+
+
 def environment(extra=None):
     result = dict(os.environ)
     result.update(NO_AUTO_UPDATE)
     result.update(extra or {})
-    return result
+    return strip_dashboard_secrets(result)
 
 
 def _stop_group(process):
@@ -122,7 +127,7 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
     try:
         returncode, data = _run_bounded(
             [str(arg) for arg in argv], timeout,
-            dict(env) if preserve_env and env is not None else environment(env), capture, visible, errors,
+            strip_dashboard_secrets(env) if preserve_env and env is not None else environment(env), capture, visible, errors,
         )
     except subprocess.TimeoutExpired:
         raise UpdateFailure("timeout") from None
@@ -154,6 +159,26 @@ def version_text(value):
 
 def version_tuple(value):
     return tuple(int(part) for part in re.findall(r"\d+", (value or "").split("-")[0]))
+
+
+def npm_version_key(value):
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", value or "")
+    if not match:
+        raise UpdateFailure("version_unknown")
+    prerelease = match[4]
+    identifiers = tuple((0, int(part)) if part.isdigit() else (1, part) for part in (prerelease or "").split("."))
+    return (*map(int, match.groups()[:3]), prerelease is None, identifiers)
+
+
+def process_identity(pid):
+    """Linux start ticks and boot identity, shared with the dashboard lock writer."""
+    try:
+        stat = pathlib.Path("/proc", str(pid), "stat").read_text()
+        start = stat[stat.rfind(")") + 2:].split()[19]
+        boot = pathlib.Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return boot + ":" + start
+    except (OSError, IndexError):
+        return None
 
 
 def asar_package(path, header_limit=2 * 1024 * 1024):

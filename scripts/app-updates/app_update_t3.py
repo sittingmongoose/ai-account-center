@@ -23,7 +23,7 @@ import zipfile
 
 from app_update_common import (
     Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock, powershell, private_temporary,
-    ps_quote, result, write_private_json,
+    ps_quote, result, write_private_json, process_identity,
 )
 from app_update_processes import live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
 
@@ -476,6 +476,8 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
             parent_alive = True
         except ProcessLookupError:
             parent_alive = False
+        except PermissionError:
+            parent_alive = True
         try:
             # Same per-user lock as standalone --apply, even when the dashboard
             # stores its job in a custom directory. File existence is not a lock.
@@ -492,7 +494,7 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
                         continue
                     try:
                         with os.fdopen(descriptor, "w") as output:
-                            json.dump({"pid": os.getpid()}, output)
+                            json.dump({"pid": os.getpid(), "identity": process_identity(os.getpid())}, output)
                         if marker.exists() and job_finished(root, dashboard):
                             # Without a readable target version the restart cannot be verified; do not start one.
                             expected = marker_version(marker)
@@ -836,7 +838,7 @@ def update_t3(install, deadline, phase=None):
         if attempted and install.desktop:
             after = mac_bundle_version(install.path) if install.platform == "mac" else windows_bundle_version(install.path)
         status = "restart_failed" if (after and after != before) or error.code == "restart_failed" else "failed"
-        return result("t3-code", install.platform, status, before, after, install.manager, error.code, attempted)
+        return result("t3-code", install.platform, status, before, after, install.manager, "update_failed" if error.code == "download_blocked" else error.code, attempted)
     except Exception:
         if attempted and install.desktop:
             after = mac_bundle_version(install.path) if install.platform == "mac" else windows_bundle_version(install.path)
