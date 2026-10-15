@@ -48,6 +48,8 @@ export interface AnalyticsRemoteFingerprint {
   /** Claude's basename digest and SSH mirror flag; no filenames or paths travel. */
   claudeName?: string;
   claudeMirror?: boolean;
+  /** Stable copy-group identity, including across unreadable or removed owners. */
+  claudeGroup?: string;
   /** An oversized usage-capable line was skipped, even on an unchanged file. */
   usageSkipped?: boolean;
   /** zcode only: the write-ahead log, where new rows wait for a checkpoint. */
@@ -95,10 +97,14 @@ export interface AnalyticsRemoteKindResult {
   /** `error`: the data exists but could not be read; nothing of it was confirmed. */
   /** `pending`: the scan ran out of time before it reached the kind; none of its files were visited. */
   state: 'ok' | 'not_installed' | 'error' | 'pending';
-  /** A cap or the deadline cut this kind's own scan short: its numbers are incomplete. */
+  /** A cap, deadline or unreadable log left this kind's own scan incomplete. */
   partial?: boolean;
   /** Codex rollouts whose compressed bytes could not be decoded on this host. */
   compressedUnread?: number;
+  /** Distinct logs whose fingerprint or read failed this scan. */
+  readFailures?: number;
+  /** Claude files atomically replaced by this answer's copy-group aggregates. */
+  replacedFiles?: string[];
   fingerprints: Record<string, AnalyticsRemoteFingerprint>;
   /** zcode: an immutable open cannot read rows still in the write-ahead log. */
   walUnread?: boolean;
@@ -240,6 +246,8 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
     (print.claudeName === undefined ||
       (typeof print.claudeName === 'string' && SHA256_HEX.test(print.claudeName))) &&
     (print.claudeMirror === undefined || typeof print.claudeMirror === 'boolean') &&
+    (print.claudeGroup === undefined ||
+      (typeof print.claudeGroup === 'string' && SHA256_HEX.test(print.claudeGroup))) &&
     (print.usageSkipped === undefined || typeof print.usageSkipped === 'boolean') &&
     (print.walSize === undefined || nonNegative(print.walSize)) &&
     (print.walMtimeMs === undefined || nonNegative(print.walMtimeMs))
@@ -284,6 +292,8 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       state?: unknown;
       partial?: unknown;
       compressedUnread?: unknown;
+      readFailures?: unknown;
+      replacedFiles?: unknown;
       fingerprints?: unknown;
       walUnread?: unknown;
       unreadable?: unknown;
@@ -308,6 +318,24 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     )
       throw new AnalyticsRemoteTransportError();
     if (entry.walUnread !== undefined && typeof entry.walUnread !== 'boolean')
+      throw new AnalyticsRemoteTransportError();
+    if (
+      entry.readFailures !== undefined &&
+      (!Number.isSafeInteger(entry.readFailures) ||
+        (entry.readFailures as number) < 1 ||
+        (entry.readFailures as number) > 20_000 ||
+        entry.partial !== true)
+    )
+      throw new AnalyticsRemoteTransportError();
+    if (
+      entry.replacedFiles !== undefined &&
+      (kind !== 'claude' ||
+        !Array.isArray(entry.replacedFiles) ||
+        entry.replacedFiles.length > 40_000 ||
+        !entry.replacedFiles.every((key) => typeof key === 'string' && SHA256_HEX.test(key)) ||
+        new Set(entry.replacedFiles).size !== entry.replacedFiles.length ||
+        entry.state !== 'ok')
+    )
       throw new AnalyticsRemoteTransportError();
     if (entry.unreadable !== undefined && typeof entry.unreadable !== 'boolean')
       throw new AnalyticsRemoteTransportError();
@@ -334,6 +362,10 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
         ? { compressedUnread: entry.compressedUnread as number }
         : {}),
       fingerprints: prints as Record<string, AnalyticsRemoteFingerprint>,
+      ...(entry.readFailures !== undefined ? { readFailures: entry.readFailures as number } : {}),
+      ...(entry.replacedFiles !== undefined
+        ? { replacedFiles: entry.replacedFiles as string[] }
+        : {}),
       ...(entry.walUnread === true ? { walUnread: true } : {}),
       ...(entry.unreadable === true ? { unreadable: true } : {}),
     };

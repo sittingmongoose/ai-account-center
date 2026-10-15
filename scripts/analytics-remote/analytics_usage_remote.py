@@ -32,6 +32,11 @@ Response:
               "cw": 4, "c": 0.01, "n": 5}]}
 Only files whose fingerprint is new or changed contribute rows; the caller
 merges rows by filekey and drops rows whose filekey disappeared.
+Claude fingerprints carry a hashed "claudeGroup" identity. When a group is
+read, "replacedFiles" lists all current and previous member keys whose cached
+hourly and session rows must be replaced together, even if no new rows exist.
+"readFailures" counts distinct logs whose fingerprint or read failed; it is
+separate from deadline/cap truncation and always marks the kind partial.
 
 "zcodeRecords": true (local experiment databases only, never sent to a remote
 host) replaces zcode's hourly and session rows with one entry per in-window
@@ -343,6 +348,8 @@ class Collector(object):
         self.codex_compressed_unread = set()
         self.usage_partial = set()
         self.claude_chosen = None
+        self.read_failures = {}
+        self.replaced_files = set()
 
     def keep_record(self, key):
         """False when the record is captured as a key or is a known copy."""
@@ -367,6 +374,8 @@ class Collector(object):
             return None
         current = _fingerprint(path)
         if current is None:
+            self.read_failures.setdefault(kind, set()).add(_filekey(kind, path))
+            self.usage_partial.add(kind)
             return None
         if kind == "claude":
             current["claudeName"] = hashlib.sha256(os.path.basename(path).encode("utf-8")).hexdigest()
@@ -1178,9 +1187,17 @@ def _scan_claude_groups(collector, paths, parse, flush):
         return index
 
     aliases = {}
+    prior = collector.prior.get("claude", {})
+    prior_groups = {}
+    for key, stamp in prior.items():
+        if stamp.get("claudeGroup"):
+            prior_groups.setdefault(stamp["claudeGroup"], set()).add(key)
     for index, path in enumerate(paths):
         mirror = _claude_mirror(path)
         keys = [(mirror, os.path.basename(path))]
+        previous = prior.get(_filekey("claude", path), {}).get("claudeGroup")
+        if previous:
+            keys.append((mirror, "prior", previous))
         stamp = _fingerprint(path)
         if stamp is not None:
             keys.append((mirror, stamp["size"], stamp["head"], stamp["tail"]))
@@ -1197,11 +1214,16 @@ def _scan_claude_groups(collector, paths, parse, flush):
         # Every dependency, including an unreadable/missing copy, invalidates
         # the whole group's aggregate. Keep the identity stable across reads.
         deps = _deps_print("claude", group) + ":" + _filekey("claude", group[0])
+        members = {_filekey("claude", p) for p in group}
+        previous = {prior[key]["claudeGroup"] for key in members
+                    if prior.get(key, {}).get("claudeGroup")}
+        identity = min(members | previous)
         changed = False
         usable = []
         for path in group:
             changed = collector.note_file("claude", path, deps) is not None or changed
             if _filekey("claude", path) in collector.pending.get("claude", {}):
+                collector.pending["claude"][_filekey("claude", path)]["claudeGroup"] = identity
                 usable.append(path)
             else:
                 collector.usage_partial.add("claude")
@@ -1217,6 +1239,7 @@ def _scan_claude_groups(collector, paths, parse, flush):
             try:
                 stamped.append((os.path.getsize(path), path))
             except OSError:
+                collector.read_failures.setdefault("claude", set()).add(_filekey("claude", path))
                 collector.usage_partial.add("claude")
                 collector.truncated = True
         kept, covered = [], {}
@@ -1249,6 +1272,7 @@ def _scan_claude_groups(collector, paths, parse, flush):
                 if outcome == "cut":
                     return True
                 if outcome == "unreadable":
+                    collector.read_failures.setdefault("claude", set()).add(_filekey("claude", path))
                     collector.rows = {k: r for k, r in collector.rows.items() if r["f"] != filekey}
                     collector.srows = {k: r for k, r in collector.srows.items() if r["f"] != filekey}
                     collector.usage_partial.add("claude")
@@ -1280,6 +1304,11 @@ def _scan_claude_groups(collector, paths, parse, flush):
         for path in group:
             if path in confirmed:
                 collector.confirm_file("claude", _filekey("claude", path))
+        # Replacing a readable sibling also retires every previous group owner,
+        # including owners no longer present or readable in this scan.
+        collector.replaced_files.update(members)
+        for old in previous:
+            collector.replaced_files.update(prior_groups.get(old, ()))
     return False
 
 
@@ -1439,7 +1468,9 @@ def _scan_kind_files(collector, kind, dirs, accept, parse, flush=None, t3_dirs=(
             return True
         if outcome == "ok":
             collector.confirm_file(kind, filekey)
-        elif kind == "codex" and path.endswith(".jsonl.zst"):
+        else:
+            collector.read_failures.setdefault(kind, set()).add(filekey)
+            collector.usage_partial.add(kind)
             # A failed decoder may have emitted a prefix. None of it is fresh.
             collector.rows = {k: r for k, r in collector.rows.items() if r["f"] != filekey}
             collector.srows = {k: r for k, r in collector.srows.items() if r["f"] != filekey}
@@ -3043,6 +3074,11 @@ def main():
         }
         if kind in partials:
             entry["partial"] = True
+        if collector.read_failures.get(kind):
+            entry["partial"] = True
+            entry["readFailures"] = len(collector.read_failures[kind])
+        if kind == "claude" and collector.replaced_files:
+            entry["replacedFiles"] = sorted(collector.replaced_files)
         if kind == "codex" and collector.codex_compressed_unread:
             entry["partial"] = True
             entry["compressedUnread"] = len(collector.codex_compressed_unread)

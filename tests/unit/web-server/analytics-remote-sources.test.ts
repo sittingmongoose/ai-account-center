@@ -363,12 +363,155 @@ describe('analytics remote helper integrity', () => {
     // Nas1 streams the same packaged helper as the Mac and Windows; adding the host changed no byte
     // of it. Change this value only together with the helper itself.
     expect(ANALYTICS_HELPER_SHA256).toBe(
-      '5ace65f0cae8f8c86696ceb6143f28d0aca3e9ef2d386194bba86bc66be26c9b'
+      'eddd174e9ccad171280ac7c8cc11ca253e99d9a5fb8982d5b2889679a150df54'
     );
   });
 });
 
 describe('analytics remote sources', () => {
+  it('replaces every Claude copy owner atomically on repeated partial reads and recovery', async () => {
+    const other = 'b2'.repeat(32);
+    const print = { size: 10, mtimeMs: 20, claudeGroup: FILE_1 };
+    let pass = 0;
+    const deps = {
+      cacheDir: cache,
+      hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null }),
+      runHelper: async () => {
+        const owner = pass === 0 || pass === 3 ? FILE_1 : other;
+        return parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              truncated: pass === 1 || pass === 2,
+              kinds: {
+                claude: {
+                  state: 'ok',
+                  ...(pass === 1 || pass === 2 ? { partial: true, readFailures: 1 } : {}),
+                  fingerprints:
+                    pass === 1 || pass === 2
+                      ? { [other]: print }
+                      : { [FILE_1]: print, [other]: print },
+                  replacedFiles: [FILE_1, other],
+                },
+              },
+              rows: [row({ k: 'claude', f: owner, i: 200 })],
+              srows: [srow({ k: 'claude', f: owner, i: 200 })],
+            })
+          )
+        );
+      },
+    };
+    for (pass = 0; pass < 4; pass++) {
+      const answer = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+      const data = answer.results.find((entry) => entry.tool === 'claude')?.data;
+      expect(data?.hourly.reduce((sum, hour) => sum + hour.inputTokens, 0)).toBe(200);
+      expect(data?.session.reduce((sum, session) => sum + session.inputTokens, 0)).toBe(200);
+      const saved = JSON.parse(
+        fs.readFileSync(path.join(cache, 'analytics-remote-v1/mac.json'), 'utf8')
+      );
+      expect(saved.rows).toHaveLength(1);
+      expect(saved.srows).toHaveLength(1);
+    }
+    // Version 5 could contain accumulated owners; neither rows nor prints may survive migration.
+    const file = path.join(cache, 'analytics-remote-v1/mac.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(saved.version).toBe(6);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ ...saved, version: 5, rows: [...saved.rows, ...saved.rows] })
+    );
+    expect(loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).results).toEqual([]);
+    pass = 0;
+    let sawEmptyPrints = false;
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      ...deps,
+      runHelper: async (...args) => {
+        sawEmptyPrints = Object.keys(args[2].fingerprints).length === 0;
+        return deps.runHelper();
+      },
+    });
+    expect(sawEmptyPrints).toBe(true);
+  });
+
+  it('keeps the last confirmed per-kind date through repeated failed reads and cache fallback', async () => {
+    let pass = 0;
+    const started = Date.parse('2026-10-02T16:01:00Z');
+    const deps = {
+      cacheDir: cache,
+      hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null }),
+      now: () => started + pass * 60_000,
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              truncated: pass > 0,
+              kinds: {
+                claude: {
+                  state: 'ok',
+                  ...(pass > 0 ? { partial: true, readFailures: 2 } : {}),
+                  fingerprints: pass > 0 ? {} : { [FILE_1]: { size: 10, mtimeMs: 20 } },
+                },
+              },
+              rows: pass > 0 ? [] : [row({ k: 'claude', i: 200 })],
+            })
+          )
+        ),
+    };
+    for (pass = 0; pass < 3; pass++) {
+      const answer = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+      const state = answer.states.find((entry) => entry.host === 'mac' && entry.tool === 'claude');
+      expect(state?.lastScanAt).toBe('2026-10-02T16:01:00.000Z');
+      expect(
+        answer.results.find((entry) => entry.tool === 'claude')?.data.hourly[0].inputTokens
+      ).toBe(200);
+      if (pass > 0) {
+        expect(state?.state).toBe('cached');
+        expect(state?.detail).toBe(
+          '2 logs could not be read on this computer; showing previously read usage'
+        );
+      }
+    }
+    expect(
+      loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).states.find(
+        (entry) => entry.host === 'mac' && entry.tool === 'claude'
+      )?.lastScanAt
+    ).toBe('2026-10-02T16:01:00.000Z');
+  });
+
+  it('validates copy-group replacement keys and read failure counts strictly', () => {
+    const parse = (fields: Record<string, unknown>, tool = 'claude') =>
+      parseAnalyticsRemoteResponse(
+        JSON.stringify(
+          response({
+            kinds: { [tool]: { state: 'ok', partial: true, fingerprints: {}, ...fields } },
+            rows: [],
+          })
+        )
+      );
+    expect(parse({ replacedFiles: [FILE_1], readFailures: 2 }).kinds.claude.readFailures).toBe(2);
+    for (const value of [null, '1', 0, -1, 1.5, 20_001])
+      expect(() => parse({ readFailures: value })).toThrow();
+    expect(() => parse({ readFailures: 1, partial: false })).toThrow();
+    for (const value of [
+      null,
+      FILE_1,
+      ['raw-path'],
+      [1],
+      [FILE_1, FILE_1],
+      Array(40_001).fill(FILE_1),
+    ])
+      expect(() => parse({ replacedFiles: value })).toThrow();
+    expect(() => parse({ replacedFiles: [FILE_1] }, 'codex')).toThrow();
+    expect(() => parse({ replacedFiles: [FILE_1], state: 'pending' })).toThrow();
+    for (const value of [null, 1, 'raw-path'])
+      expect(() =>
+        parse({
+          fingerprints: {
+            [FILE_1]: { size: 10, mtimeMs: 20, claudeGroup: value },
+          },
+        })
+      ).toThrow();
+  });
+
   it('keeps per-kind dates and measured empty states through pending, errors and cache fallback', async () => {
     let now = Date.parse('2026-10-02T00:00:00Z');
     let pass = 0;
@@ -825,7 +968,7 @@ describe('analytics remote sources', () => {
         version: number;
         srows: unknown[];
       };
-      expect(saved.version).toBe(5);
+      expect(saved.version).toBe(6);
       expect(saved.srows).toHaveLength(1);
       fs.writeFileSync(file, JSON.stringify({ ...saved, version: 2, srows: [] }));
     }

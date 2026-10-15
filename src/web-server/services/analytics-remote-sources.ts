@@ -85,15 +85,16 @@ export function analyticsRemoteTargets(host: AnalyticsRemoteHost): AnalyticsRemo
 const MAX_CACHED_ROWS = 100_000;
 
 /**
+ * 6: Atomically replace Claude copy groups; discard accumulated duplicate owners.
  * 5: Claude copy groups, mirror tags and persistent oversized-line verdicts.
  * 4: Claude counts one API response, not one content block; rows cached by
  * version 3 are read again. (3: per-session aggregates ride with the hourly
  * rows, so remote sessions count like local ones.)
  */
-const CACHE_VERSION = 5;
+const CACHE_VERSION = 6;
 
 interface RemoteCache {
-  /** Per-tool last complete read, including measured empty/absent answers. */
+  /** Per-tool last confirmed read, including measured empty/absent answers. */
   kinds?: Partial<
     Record<AnalyticsRemoteKind, { lastScanAt: string | null; state: AnalyticsSourceState }>
   >;
@@ -657,8 +658,17 @@ export async function loadAnalyticsRemoteSources(
         // Rows and prints are adopted together. A failed kind retries every changed database.
         for (const tool of kinds)
           freshPrints[tool] = discarded(tool) ? {} : (response.kinds[tool]?.fingerprints ?? {});
+        // Explicit group replacement includes unreadable and previous owners.
+        // Emitted rows also replace their own file even if its print is unchanged.
+        const replaced = new Map(kinds.map((tool) => [tool, new Set<string>()]));
+        if (!discarded('claude'))
+          for (const key of response.kinds.claude?.replacedFiles ?? [])
+            replaced.get('claude')?.add(key);
+        for (const row of [...response.rows, ...(response.srows ?? [])])
+          if (!discarded(row.k)) replaced.get(row.k)?.add(row.f);
         const kept = cached.rows.filter((row) => {
           if (!kinds.includes(row.k) || !inWindow(row, minDateMs)) return false;
+          if (replaced.get(row.k)?.has(row.f)) return false;
           const print = freshPrints[row.k]?.[row.f];
           if (print === undefined) return keepsUnvisited(row.k);
           return samePrint(print, cached.fingerprints[row.k]?.[row.f]);
@@ -671,6 +681,7 @@ export async function loadAnalyticsRemoteSources(
         // hourly rows: a re-read file replaces both, an unvisited one keeps both.
         const keptSessions = cached.srows.filter((row) => {
           if (!kinds.includes(row.k) || !sessionInWindow(row, minDateMs)) return false;
+          if (replaced.get(row.k)?.has(row.f)) return false;
           const print = freshPrints[row.k]?.[row.f];
           if (print === undefined) return keepsUnvisited(row.k);
           return samePrint(print, cached.fingerprints[row.k]?.[row.f]);
@@ -683,18 +694,15 @@ export async function loadAnalyticsRemoteSources(
         const kindReads = { ...cached.kinds };
         for (const tool of kinds) {
           const kind = response.kinds[tool];
-          if (
-            !kind ||
-            discarded(tool) ||
-            cutKinds.has(tool) ||
-            kind.partial ||
-            (tool === 'omp' && response.discoveryTruncated)
-          )
-            continue;
+          if (!kind || discarded(tool)) continue;
+          const partial =
+            cutKinds.has(tool) || kind.partial || (tool === 'omp' && response.discoveryTruncated);
+          if (partial && Object.keys(freshPrints[tool] ?? {}).length === 0) continue;
           kindReads[tool] = {
             lastScanAt: scannedAt,
-            state:
-              kind.state === 'not_installed'
+            state: partial
+              ? 'cached'
+              : kind.state === 'not_installed'
                 ? 'not_installed'
                 : merged.some((row) => row.k === tool)
                   ? 'ok'
@@ -707,6 +715,8 @@ export async function loadAnalyticsRemoteSources(
         for (const [kind, entries] of Object.entries(cached.fingerprints)) {
           if (!kinds.includes(kind as AnalyticsRemoteKind)) continue;
           if (!keepsUnvisited(kind as AnalyticsRemoteKind)) continue;
+          // Keep group metadata for unreadable members even after their rows
+          // were replaced, so renamed aliases still join on the next scan.
           for (const [key, print] of Object.entries(entries)) {
             prints[kind] ??= {};
             prints[kind][key] ??= print;
@@ -793,9 +803,8 @@ export async function loadAnalyticsRemoteSources(
             continue;
           }
           if (kind?.partial === true || (tool === 'antigravity' && kind?.unreadable)) {
-            // A cap or the deadline cut this tool's own scan short: partial
-            // numbers are shown until a later scan finishes it, and with
-            // nothing read yet it is still scanning, not failed.
+            // Incomplete scans retain earlier usage. Only confirmed files
+            // advance the read date; failures and bounds have distinct details.
             const oversized = Object.values(freshPrints[tool] ?? {}).some(
               (print) => print.usageSkipped === true
             );
@@ -806,18 +815,20 @@ export async function loadAnalyticsRemoteSources(
               lastScanAt:
                 tool === 'antigravity' && kind?.unreadable
                   ? (cached.kinds?.[tool]?.lastScanAt ?? null)
-                  : scannedAt,
+                  : (kindReads[tool]?.lastScanAt ?? null),
               rowCount: events,
               detail:
                 tool === 'antigravity' && kind?.unreadable
                   ? 'some Antigravity conversation databases could not be read (busy or damaged); showing previously read aggregates'
                   : tool === 'codex' && kind?.compressedUnread
                     ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
-                    : oversized
-                      ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
-                      : kept
-                        ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                        : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+                    : kind?.readFailures
+                      ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
+                      : oversized
+                        ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
+                        : kept
+                          ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                          : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }

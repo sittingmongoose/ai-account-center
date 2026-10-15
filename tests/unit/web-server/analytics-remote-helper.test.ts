@@ -8,6 +8,11 @@ import { zstdCompressSync } from 'zlib';
 import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
 import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
 import { ompSessionIdForFile } from '../../../src/web-server/usage/omp-native-usage-collector';
+import { loadAnalyticsRemoteSources } from '../../../src/web-server/services/analytics-remote-sources';
+import {
+  parseAnalyticsRemoteResponse,
+  type AnalyticsRemoteRequest,
+} from '../../../src/web-server/services/analytics-remote-transport';
 
 const HELPER = path.resolve(
   import.meta.dir,
@@ -526,6 +531,101 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       expect(codexKind(data).fingerprints).toEqual({});
       expect(data.rows).toEqual([]);
     }
+  );
+
+  it.each(['fingerprint', 'read'])(
+    'merges real Claude copy groups once across repeated %s failures, recovery and total failure',
+    async (failure) => {
+      const a = path.join(home, '.claude', 'projects', 'a', 'original.jsonl');
+      const b = path.join(home, '.claude', 'projects', 'b', 'renamed.jsonl');
+      for (const file of [a, b]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, claude('m1', 0) + '\n' + claude('m2', 0) + '\n');
+      }
+      const key = (file: string) =>
+        createHash('sha256').update('claude\0').update(path.resolve(file)).digest('hex');
+      let pass = 0;
+      const started = Date.parse('2026-10-02T16:01:00Z');
+      const deps = {
+        cacheDir: path.join(home, 'cache'),
+        hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
+        now: () => started + pass * 60_000,
+        claudeLogNames: () => ({ originals: new Set<string>(), complete: true }),
+        runHelper: async (_alias: string, _host: string, request: AnalyticsRemoteRequest) => {
+          const broken = pass === 1 || pass === 2 || pass >= 4;
+          const all = pass >= 4;
+          const setup = !broken
+            ? []
+            : failure === 'fingerprint'
+              ? [
+                  'fingerprint = module._fingerprint',
+                  'def fail_fingerprint(path):',
+                  `    if ${all ? 'True' : 'module.os.path.basename(module.os.path.dirname(path)) == "a"'}: return None`,
+                  '    return fingerprint(path)',
+                  'module._fingerprint = fail_fingerprint',
+                ]
+              : [
+                  // Prevent prefix suppression so a post-fingerprint read failure is exercised.
+                  'module._claude_prefix = lambda *args: False',
+                  'module._same_fingerprint = lambda *args: False',
+                  'read_file = module._read_file',
+                  'def fail_read(collector, kind, path, *args):',
+                  `    if ${all ? 'True' : 'module.os.path.basename(module.os.path.dirname(path)) == "a"'}: return "unreadable"`,
+                  '    return read_file(collector, kind, path, *args)',
+                  'module._read_file = fail_read',
+                ];
+          const answer = parseAnalyticsRemoteResponse(
+            JSON.stringify(runPatchedHelper({ ...request }, {}, setup))
+          );
+          if (request.kinds.includes('claude') && broken) {
+            expect(answer.kinds.claude.readFailures).toBe(all ? 2 : 1);
+            if (all) {
+              expect(answer.kinds.claude.fingerprints).toEqual({});
+              expect(answer.kinds.claude.replacedFiles).toBeUndefined();
+            } else {
+              expect(answer.kinds.claude.replacedFiles).toEqual([key(a), key(b)].sort());
+            }
+          }
+          return answer;
+        },
+      };
+      for (pass = 0; pass < 6; pass++) {
+        const answer = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+        const data = answer.results.find((entry) => entry.tool === 'claude')?.data;
+        expect(
+          data?.hourly.reduce((sum, hour) => sum + hour.inputTokens + hour.outputTokens, 0)
+        ).toBe(200);
+        expect(
+          data?.session.reduce(
+            (sum, session) => sum + session.inputTokens + session.outputTokens,
+            0
+          )
+        ).toBe(200);
+        const state = answer.states.find(
+          (entry) => entry.tool === 'claude' && entry.host === 'mac'
+        );
+        expect(state?.lastScanAt).toBe(
+          new Date(started + Math.min(pass, 3) * 60_000).toISOString()
+        );
+        if (pass >= 4)
+          expect(state?.detail).toBe(
+            '2 logs could not be read on this computer; showing previously read usage'
+          );
+        const saved = JSON.parse(
+          fs.readFileSync(path.join(home, 'cache/analytics-remote-v1/mac.json'), 'utf8')
+        );
+        expect(saved.rows).toHaveLength(1);
+        expect(saved.srows).toHaveLength(1);
+      }
+      // Deleting the previous owner elects the surviving alias without retaining its old rows.
+      fs.unlinkSync(a);
+      pass = 3;
+      const orphan = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+      expect(
+        orphan.results.find((entry) => entry.tool === 'claude')?.data.hourly[0].inputTokens
+      ).toBe(200);
+    },
+    30_000
   );
 
   const claude = (id: string, output = 10) =>
