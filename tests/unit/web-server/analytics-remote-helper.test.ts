@@ -26,7 +26,14 @@ try {
       'python3',
       [
         '-c',
-        'import sys,shutil,json; print(json.dumps([sys.version_info >= (3,14), shutil.which("zstd")]))',
+        [
+          'import importlib.util,json,sys',
+          "spec=importlib.util.spec_from_file_location('helper',sys.argv[1])",
+          'module=importlib.util.module_from_spec(spec)',
+          'spec.loader.exec_module(module)',
+          'print(json.dumps([module.ZSTD_MODULE is not None, module.ZSTD_TOOL]))',
+        ].join('\n'),
+        HELPER,
       ],
       { encoding: 'utf8' }
     )
@@ -325,6 +332,40 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     );
     expect(result).toEqual([home, home, null, null]);
     expect(process.env.CCS_HOME).toBe(path.join(home, 'ccs'));
+  });
+
+  it('finds zstd outside the SSH PATH, preferring PATH and rejecting missing, relative or non-file fallbacks', () => {
+    const code = [
+      'import importlib.util,os,posixpath,sys',
+      'from unittest.mock import patch',
+      "spec=importlib.util.spec_from_file_location('helper',sys.argv[1])",
+      'module=importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'homebrew="/opt/homebrew/bin/zstd"',
+      'local="/usr/local/bin/zstd"',
+      'system="/usr/bin/zstd"',
+      'path_tool=os.path.abspath("path-zstd")',
+      'with patch.object(module.shutil,"which",return_value=path_tool) as which:',
+      ' with patch.object(module.os.path,"isfile",side_effect=lambda p: p in (path_tool,homebrew)):',
+      '  assert module._find_zstd_tool() == path_tool',
+      '  which.assert_called_once_with("zstd")',
+      'with patch.object(module.shutil,"which",return_value=None):',
+      ' for target in (homebrew,local,system):',
+      '  with patch.object(module.os,"path",posixpath), patch.object(posixpath,"isfile",side_effect=lambda p: p == target):',
+      '   assert module._find_zstd_tool() == target',
+      ' with patch.object(module.os,"name","nt"), patch.dict(module.os.environ,{"LOCALAPPDATA":sys.argv[2]}):',
+      '  winget=os.path.join(sys.argv[2],"Microsoft","WinGet","Links","zstd.exe")',
+      '  with patch.object(module.os.path,"isfile",side_effect=lambda p: p == winget):',
+      '   assert module._find_zstd_tool() == winget',
+      ' with patch.object(module.os,"name","nt"), patch.dict(module.os.environ,{"LOCALAPPDATA":"relative"}):',
+      '  with patch.object(module.os.path,"isfile",side_effect=lambda p: not module.os.path.isabs(p)):',
+      '   assert module._find_zstd_tool() is None',
+      ' with patch.object(module.os.path,"isfile",return_value=False):',
+      '  assert module._find_zstd_tool() is None',
+    ].join('\n');
+    expect(() =>
+      execFileSync('python3', ['-c', code, HELPER, home], { stdio: 'pipe' })
+    ).not.toThrow();
   });
 
   const compressedName = 'rollout-2026-10-01T15-00-00-01234567-1234-1234-1234-0123456789ab.jsonl';

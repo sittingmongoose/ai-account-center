@@ -86,7 +86,24 @@ try:
     from compression import zstd as ZSTD_MODULE
 except ImportError:
     ZSTD_MODULE = None
-ZSTD_TOOL = shutil.which("zstd")
+
+
+def _find_zstd_tool():
+    # SSH's non-login PATH omits Homebrew on the Mac and can omit WinGet on Windows.
+    found = shutil.which("zstd")
+    candidates = [os.path.abspath(found) if found else None,
+                  "/opt/homebrew/bin/zstd", "/usr/local/bin/zstd", "/usr/bin/zstd"]
+    local = os.environ.get("LOCALAPPDATA")
+    if os.name == "nt" and local:
+        candidates.append(os.path.join(local, "Microsoft", "WinGet", "Links", "zstd.exe"))
+    for candidate in candidates:
+        # isfile follows links, and rejects directories and broken links.
+        if candidate and os.path.isabs(candidate) and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+ZSTD_TOOL = _find_zstd_tool()
 
 VERSION = 1
 # Same ceilings the server collector uses where they apply.
