@@ -313,6 +313,21 @@ function cachedHostSources(
 
 type HostRows = Pick<RemoteCache, 'rows' | 'srows' | 'fingerprints'>;
 
+/** Local workers may finish after the remote scan; re-elect before publishing. */
+function mirrorReconciler(
+  parts: Map<AnalyticsRemoteHost, HostRows>,
+  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>,
+  states: AnalyticsRemoteSourceState[],
+  inventory: () => ClaudeLogNames
+): () => void {
+  const baseline = states.map((state) => ({ ...state }));
+  return () => {
+    states.splice(0, states.length, ...baseline.map((state) => ({ ...state })));
+    selectClaudeMirrors(parts, results, states, inventory());
+    states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
+  };
+}
+
 /**
  * Caches always retain RAW mirror rows. Select only after every host has settled,
  * including cache fallbacks, so scan order cannot change totals. Hashing basenames
@@ -385,6 +400,7 @@ export function loadAnalyticsRemoteCachedSources(
   deps: Pick<AnalyticsRemoteSourceDeps, 'cacheDir' | 'claudeLogNames'> = {}
 ): {
   fetchedAt: string | undefined;
+  reconcileClaudeMirrors: () => void;
   results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 } {
@@ -406,14 +422,14 @@ export function loadAnalyticsRemoteCachedSources(
     results.push(...part.results);
     states.push(...part.states);
   }
-  selectClaudeMirrors(
+  const reconcileClaudeMirrors = mirrorReconciler(
     parts,
     results,
     states,
-    deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
+    () => deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
   );
-  states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
-  return { results, states, fetchedAt };
+  reconcileClaudeMirrors();
+  return { results, states, fetchedAt, reconcileClaudeMirrors };
 }
 
 /**
@@ -555,6 +571,7 @@ export async function loadAnalyticsRemoteSources(
   deps: AnalyticsRemoteSourceDeps = {}
 ): Promise<{
   fetchedAt: string;
+  reconcileClaudeMirrors: () => void;
   results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 }> {
@@ -829,12 +846,12 @@ export async function loadAnalyticsRemoteSources(
     );
   }
   await Promise.all(jobs);
-  selectClaudeMirrors(
+  const reconcileClaudeMirrors = mirrorReconciler(
     parts,
     results,
     states,
-    deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
+    () => deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
   );
-  states.sort((a, b) => a.tool.localeCompare(b.tool) || a.host.localeCompare(b.host));
-  return { results, states, fetchedAt: new Date(now()).toISOString() };
+  reconcileClaudeMirrors();
+  return { results, states, fetchedAt: new Date(now()).toISOString(), reconcileClaudeMirrors };
 }

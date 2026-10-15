@@ -99,6 +99,8 @@ export type AccountAnalyticsActivityRequest = {
 };
 
 type RemoteAnswer = {
+  /** Re-elect mirrors against the inventory at publication, after local workers settle. */
+  reconcileClaudeMirrors?: () => void;
   fetchedAt?: string;
   results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
@@ -1033,7 +1035,9 @@ export class AccountAnalyticsActivityService {
     if (generation !== state.generation) return;
     if (skipped > 0) failed = true;
     state.requests = requests;
-    const discoveryComplete = !discoveryFailed && skipped === 0;
+    // runBounded returns every enumerated request, including unstarted ones.
+    // A worker cap does not make that inventory incomplete.
+    const discoveryComplete = !discoveryFailed;
     const presence = this.deps.requests === undefined ? localSourcePresence(requests) : null;
     const succeeded = new Set<AccountAnalyticsActivityProvider>();
     const unfinished = new Map<
@@ -1059,6 +1063,10 @@ export class AccountAnalyticsActivityService {
       }
       const data = result.value;
       const prior = state.local.get(key);
+      const authoritativeEmpty =
+        data.scan?.complete === true &&
+        data.scan.failedFiles === 0 &&
+        !('activity' in source.request && source.request.activity?.discoveryTruncated);
       if (
         (data.scan && !data.scan.complete) ||
         ('activity' in source.request && source.request.activity?.discoveryTruncated)
@@ -1069,6 +1077,7 @@ export class AccountAnalyticsActivityService {
       }
       if (
         data.eventCount === 0 &&
+        !authoritativeEmpty &&
         state.local.get(key)?.data.some((entry) => entry.eventCount > 0)
       ) {
         failed = true;
@@ -1097,11 +1106,9 @@ export class AccountAnalyticsActivityService {
         session: retainedSessions(recentSessions, cutoff),
       };
       const newRows = !prior || JSON.stringify(prior.data[0]?.hourly) !== JSON.stringify(hourly);
-      // Empty answers never erase an earlier share of a multi-request tool.
-      if (
-        (data.eventCount > 0 || !state.local.has(key)) &&
-        !(data.scan?.failedFiles && state.local.has(key))
-      ) {
+      // Collectors retain failed files' checkpoint rows alongside fresh files.
+      // Only a complete empty scan can retire a previously measured share.
+      if (data.eventCount > 0 || authoritativeEmpty || !state.local.has(key)) {
         state.local.set(key, {
           provider,
           data: [retained],
@@ -1110,7 +1117,7 @@ export class AccountAnalyticsActivityService {
       }
       if (
         data.eventCount > 0 &&
-        (data.readAt || !data.scan || data.scan.failedFiles === 0) &&
+        (data.readAt || !data.scan || data.scan.failedFiles === 0 || data.scan.readBytes > 0) &&
         (data.readAt ||
           !data.scan ||
           data.scan.completedFiles > 0 ||
@@ -1302,6 +1309,7 @@ export class AccountAnalyticsActivityService {
     const merged = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
     for (const [provider, data] of collected) merged.set(provider, [...data]);
     const answer = remoteAnswer === undefined ? state.remote : remoteAnswer;
+    answer?.reconcileClaudeMirrors?.();
     if (answer) {
       for (const entry of answer.results) {
         const existing = merged.get(entry.tool) ?? [];
@@ -1424,11 +1432,9 @@ export class AccountAnalyticsActivityService {
                   ? 'unavailable'
                   : 'scanning',
           // Only productive partial reads advance the date; replayed aggregates carry their
-          // saved time. Failed or unreached reads keep the previously published date.
-          lastScanAt:
-            events > 0 && pending !== 'failed'
-              ? (localReadAt.get(tool) ?? old?.lastScanAt ?? null)
-              : (old?.lastScanAt ?? localReadAt.get(tool) ?? null),
+          // saved time. Failed files alone never advance the date, but a
+          // productive sibling may still have supplied fresh rows.
+          lastScanAt: localReadAt.get(tool) ?? old?.lastScanAt ?? null,
           rowCount: events,
           detail:
             pending === 'failed'

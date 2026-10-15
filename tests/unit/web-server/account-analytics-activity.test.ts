@@ -11,6 +11,10 @@ import {
 } from '../../../src/web-server/services/account-analytics-activity';
 import type { AccountAnalyticsActivityRequest } from '../../../src/web-server/services/account-analytics-activity';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
+import { createHash } from 'crypto';
+import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
+import { loadAnalyticsRemoteSources } from '../../../src/web-server/services/analytics-remote-sources';
+import { parseAnalyticsRemoteResponse } from '../../../src/web-server/services/analytics-remote-transport';
 import type { AccountAnalyticsQuery } from '../../../src/web-server/services/account-analytics-types';
 import type {
   UsageWorkerRequest,
@@ -225,6 +229,203 @@ describe('native local analytics activity', () => {
     fail = true;
     await service.get({ ...QUERY, refresh: true }, FROM, NOW);
     expect((await settled(service)).totals?.inputTokens).toBe(100_777);
+  });
+
+  it('adopts growing readable files while retaining an unreadable file checkpoint', async () => {
+    let now = NOW;
+    const projectsDir = path.join(fixtureConfig, 'projects');
+    fs.mkdirSync(projectsDir);
+    const readable = path.join(projectsDir, 'readable.jsonl');
+    const unreadable = path.join(projectsDir, 'unreadable.jsonl');
+    const line = (id: string, input: number) =>
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: '2026-10-01T15:00:00Z',
+        sessionId: id,
+        message: {
+          id,
+          model: 'claude-sonnet-4-6',
+          usage: { input_tokens: input, output_tokens: 1 },
+        },
+      }) + '\n';
+    fs.writeFileSync(readable, line('readable-1', 100));
+    fs.writeFileSync(unreadable, line('unreadable-1', 40));
+    const request: UsageWorkerRequest = { kind: 'claude', projectsDir };
+    const service = new AccountAnalyticsActivityService({
+      now: () => now,
+      requests: () => [{ provider: 'claude', request }],
+      remote: async () => ({ results: [], states: [] }),
+      loadWorker: async (source) =>
+        collectAccountActivity(source, {
+          minDate: FROM,
+          cacheDir: path.join(fixtureConfig, 'cache'),
+        }),
+    });
+    expect((await settled(service)).totals?.inputTokens).toBe(140);
+    fs.appendFileSync(readable, line('readable-2', 100));
+    const open = fs.openSync;
+    const blocked = spyOn(fs, 'openSync').mockImplementation(((file, ...args) => {
+      if (file === unreadable) throw new Error('fixture unreadable');
+      return open(file, ...args);
+    }) as typeof fs.openSync);
+    try {
+      for (let pass = 0; pass < 2; pass++) {
+        now += 1000;
+        await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+        const answer = await settled(service);
+        expect(answer.totals?.inputTokens).toBe(240);
+        expect(
+          answer.sources.find((entry) => entry.tool === 'claude' && entry.host === 'ubuntu')
+            ?.lastScanAt
+        ).toBe(new Date(NOW + 1000).toISOString());
+        expect(
+          answer.sources.find((entry) => entry.tool === 'claude' && entry.host === 'ubuntu')?.detail
+        ).toContain('local scan failed');
+      }
+    } finally {
+      blocked.mockRestore();
+    }
+    await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    expect((await settled(service)).totals?.inputTokens).toBe(240);
+  });
+
+  it.each([false, true])(
+    'restores a pruned original mirror exactly once (remote finishes early: %s)',
+    async (early) => {
+      let pruned = false;
+      let pruneOnRead = false;
+      const name = createHash('sha256').update('original.jsonl').digest('hex');
+      const file = '11'.repeat(32);
+      const remote = () =>
+        loadAnalyticsRemoteSources(FROM, {
+          cacheDir: path.join(fixtureConfig, 'remote'),
+          hosts: async () => ({ mac: 'fixture-mac', windows: 'fixture-windows', nas1: null }),
+          claudeLogNames: () => ({ originals: new Set(pruned ? [] : [name]), complete: true }),
+          now: () => NOW,
+          runHelper: async (_alias, _host, request) =>
+            parseAnalyticsRemoteResponse(
+              JSON.stringify({
+                version: 1,
+                truncated: false,
+                kinds: Object.fromEntries(
+                  request.kinds.map((kind) => [
+                    kind,
+                    {
+                      state: kind === 'claude' ? 'ok' : 'not_installed',
+                      fingerprints:
+                        kind === 'claude'
+                          ? {
+                              [file]: {
+                                size: 10,
+                                mtimeMs: 20,
+                                claudeName: name,
+                                claudeMirror: true,
+                              },
+                            }
+                          : {},
+                    },
+                  ])
+                ),
+                rows:
+                  request.kinds.includes('claude') && !request.fingerprints.claude?.[file]
+                    ? [
+                        {
+                          k: 'claude',
+                          f: file,
+                          m: 'claude-sonnet-4-6',
+                          h: '2026-10-01 15:00',
+                          i: 100,
+                          o: 0,
+                          cr: 0,
+                          cw: 0,
+                          c: 0,
+                          n: 1,
+                        },
+                      ]
+                    : [],
+              })
+            ),
+        });
+      // Resolve remote ownership before the local result to reproduce the race.
+      let ready: ReturnType<typeof remote>;
+      const service = new AccountAnalyticsActivityService({
+        now: () => NOW,
+        requests: () => [
+          { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture/original' } },
+        ],
+        remote: () => {
+          ready = remote();
+          return ready;
+        },
+        loadWorker: async () => {
+          if (early) await ready;
+          if (pruneOnRead) pruned = true;
+          if (!pruned) return data('claude-sonnet-4-6', 100, 0);
+          return {
+            daily: [],
+            monthly: [],
+            hourly: [],
+            session: [],
+            eventCount: 0,
+            scan: {
+              complete: true,
+              totalFiles: 0,
+              completedFiles: 0,
+              failedFiles: 0,
+              skippedLines: 0,
+              readBytes: 0,
+            },
+          };
+        },
+      });
+      expect((await settled(service)).totals?.inputTokens).toBe(100);
+      // For the early-remote case, change the inventory only after its answer.
+      pruneOnRead = true;
+      if (!early) pruned = true;
+      for (let pass = 0; pass < 2; pass++) {
+        await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+        expect((await settled(service)).totals?.inputTokens).toBe(100);
+      }
+    }
+  );
+
+  it('retires superseded roots under the worker cap while keeping still-planned skipped shares', async () => {
+    let pass = 0;
+    const started: string[][] = [[], [], []];
+    const service = new AccountAnalyticsActivityService({
+      concurrency: 1,
+      now: () => NOW,
+      remote: async () => ({ results: [], states: [] }),
+      requests: () => [
+        {
+          provider: 'omp',
+          request: { kind: 'omp', roots: pass ? ['/fixture/A', '/fixture/B'] : ['/fixture/A'] },
+        },
+        ...Array.from(
+          { length: 25 },
+          (_, index): AccountAnalyticsActivityRequest => ({
+            provider: 'claude',
+            request: { kind: 'claude', projectsDir: `/fixture/${index}` },
+          })
+        ),
+      ],
+      loadWorker: async (request) => {
+        started[pass].push(request.kind);
+        return data(
+          request.kind === 'omp' ? 'k3' : 'claude-sonnet-4-6',
+          request.kind === 'omp' ? (pass ? 200 : 100) : 1,
+          0
+        );
+      },
+    });
+    expect((await settled(service)).totals?.inputTokens).toBe(124);
+    pass++;
+    await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    expect((await settled(service)).totals?.inputTokens).toBe(225);
+    pass++;
+    await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+    expect((await settled(service)).totals?.inputTokens).toBe(225);
+    expect(started.map((entries) => entries.length)).toEqual([25, 25, 25]);
   });
 
   it('restores per-request local shares after a restart without doubling remote rows', async () => {

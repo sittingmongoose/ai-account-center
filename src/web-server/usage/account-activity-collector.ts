@@ -382,7 +382,8 @@ function loadCheckpoint(
   stats: fs.Stats,
   minDate: number,
   kind: ActivityKind,
-  mode?: ReadMode
+  mode?: ReadMode,
+  stale = false
 ): Checkpoint {
   try {
     if (fs.statSync(cache).size > MAX_CACHE_BYTES) return fresh(stats, minDate, kind, mode);
@@ -392,19 +393,19 @@ function loadCheckpoint(
       value.identity !== `${stats.dev}:${stats.ino}` ||
       !Number.isSafeInteger(value.offset) ||
       value.offset < 0 ||
-      value.offset > stats.size ||
+      (!stale && value.offset > stats.size) ||
       (value.decodedOffset !== undefined &&
         (!Number.isSafeInteger(value.decodedOffset) || value.decodedOffset < 0)) ||
       (value.compressedReplayStalled !== undefined &&
         typeof value.compressedReplayStalled !== 'boolean') ||
-      value.size > stats.size ||
+      (!stale && value.size > stats.size) ||
       !Number.isFinite(value.minDate) ||
       value.minDate > minDate ||
       !Array.isArray(value.rows) ||
       value.rows.length > MAX_FILE_ROWS ||
       !value.state ||
       typeof value.state.sessionId !== 'string' ||
-      (value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
+      (!stale && value.size === stats.size && value.mtimeMs !== stats.mtimeMs) ||
       (value.skippedLines > 0 && value.largeLineParserVersion !== 5) ||
       value.parser !== PARSER_VERSION[kind] ||
       (value.pendingClaude !== undefined &&
@@ -416,28 +417,31 @@ function loadCheckpoint(
       (mode === 'keys' && (!Array.isArray(value.keys) || value.keys.length > MAX_FILE_KEYS))
     )
       return fresh(stats, minDate, kind, mode);
-    const fd = fs.openSync(file, 'r');
+    // A failed file contributes its last checkpoint, never partially mutated
+    // rows from a failed read/save. Metadata still guards identity and parser.
+    const fd = stale ? undefined : fs.openSync(file, 'r');
     try {
       // Check the consumed prefix and boundary before resuming an append. A
       // replaced/truncated/re-written log never inherits cumulative counters.
       if (
-        value.head !==
+        fd !== undefined &&
+        (value.head !==
           fingerprint(fd, 0, Math.min(256, file.endsWith('.zst') ? stats.size : value.offset)) ||
-        value.tail !==
-          fingerprint(
-            fd,
-            Math.max(0, (file.endsWith('.zst') ? stats.size : value.offset) - 256),
-            Math.min(256, file.endsWith('.zst') ? stats.size : value.offset)
-          )
+          value.tail !==
+            fingerprint(
+              fd,
+              Math.max(0, (file.endsWith('.zst') ? stats.size : value.offset) - 256),
+              Math.min(256, file.endsWith('.zst') ? stats.size : value.offset)
+            ))
       )
         return fresh(stats, minDate, kind, mode);
     } finally {
-      fs.closeSync(fd);
+      if (fd !== undefined) fs.closeSync(fd);
     }
     value.rows = value.rows.filter((row) => Date.parse(row.entry.timestamp) >= minDate);
     if (value.keyed)
       value.keyed = value.keyed.filter((item) => Date.parse(item.e.timestamp) >= minDate);
-    if (stats.size > value.size) value.complete = false;
+    if (stale || stats.size > value.size) value.complete = false;
     return value;
   } catch {
     return fresh(stats, minDate, kind, mode);
@@ -1964,8 +1968,9 @@ export async function collectCodexPartition(
   const outcomes: CodexPartitionFileResult[] = [];
   for (const file of spec.files) {
     const cache = path.join(spec.checkpointDir, `${hash(file)}.json`);
+    let stats: fs.Stats | undefined;
     try {
-      const stats = fs.statSync(file);
+      stats = fs.statSync(file);
       const value = loadCheckpoint(cache, file, stats, options.minDate, 'codex');
       const before = checkpointProgress(value);
       const beforeOffset = value.offset;
@@ -1995,7 +2000,9 @@ export async function collectCodexPartition(
     } catch {
       outcomes.push({
         file,
-        rows: [],
+        rows: stats
+          ? loadCheckpoint(cache, file, stats, options.minDate, 'codex', undefined, true).rows
+          : [],
         complete: false,
         skippedLines: 0,
         readBytes: 0,
@@ -2070,8 +2077,8 @@ function tallyCodexFile(
  * them. A reader that overruns its bound is every one of its files past the
  * deadline (starting rows, no failed++): its finished files already saved
  * their checkpoints, so the next pass resumes them and the scan converges. A
- * single file a live reader could not read throws like the inline loop (no
- * rows, failed++).
+ * single file a live reader could not read keeps its checkpoint rows and
+ * reports failed++, like the inline loop.
  */
 async function readCodexFiles(
   request: Extract<UsageWorkerRequest, { kind: 'codex' }>,
@@ -2148,6 +2155,25 @@ async function readCodexFiles(
         });
       } catch {
         counters.failed++;
+        tallyCodexFile(
+          rows,
+          {
+            rows: loadCheckpoint(
+              item.cache,
+              item.file,
+              item.stats,
+              options.minDate,
+              'codex',
+              undefined,
+              true
+            ).rows,
+            complete: false,
+            skippedLines: 0,
+            readBytes: 0,
+            unfinishedTail: false,
+          },
+          counters
+        );
       }
     }
     for (const item of loaded) {
@@ -2230,10 +2256,9 @@ async function readCodexFiles(
       if (partitioned.has(item.file)) counters.failed++;
       continue;
     }
-    // A single file a live reader could not read (vanished, unreadable) reads
-    // as a file error with no rows, exactly like a throw in the inline loop.
+    // Failed files carry their last checkpoint, like the inline reader.
     if (outcome.failed) counters.failed++;
-    else tallyCodexFile(rows, outcome, counters);
+    tallyCodexFile(rows, outcome, counters);
   }
   return { rows, ...counters };
 }
@@ -2483,7 +2508,10 @@ async function collectExperimentActivity(
       return { value, read };
     } catch {
       failed++;
-      return undefined;
+      return {
+        value: loadCheckpoint(cache, item.file, item.stats, options.minDate, kind, mode, true),
+        read: false,
+      };
     }
   };
   for (const item of kind === 'codex' ? preferPlainCodexRollouts(referenceFiles) : referenceFiles) {
@@ -2714,25 +2742,30 @@ export async function collectAccountActivity(
   } else {
     for (const { file, stats } of scanned) {
       const cache = path.join(directory, `${hash(file)}.json`);
+      const mode = (claudeNames.get(path.basename(file)) ?? 0) > 1 ? 'keyed' : undefined;
       try {
-        const mode = (claudeNames.get(path.basename(file)) ?? 0) > 1 ? 'keyed' : undefined;
-        const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind, mode);
+        let value = loadCheckpoint(cache, file, stats, options.minDate, request.kind, mode);
         const before = value.offset;
-        if (Date.now() < deadline) {
-          await readBatch(
-            file,
-            value,
-            stats,
-            request.kind,
-            options,
-            deadline,
-            request.kind === 'jsonl' ? request.mapping : undefined,
-            mode
-          );
-          if (value.offset !== before || !fs.existsSync(cache))
-            saveCheckpoint(cache, file, value, stats);
+        try {
+          if (Date.now() < deadline) {
+            await readBatch(
+              file,
+              value,
+              stats,
+              request.kind,
+              options,
+              deadline,
+              request.kind === 'jsonl' ? request.mapping : undefined,
+              mode
+            );
+            if (value.offset !== before || !fs.existsSync(cache))
+              saveCheckpoint(cache, file, value, stats);
+          }
+          readBytes += Math.max(0, value.offset - before);
+        } catch {
+          failed++;
+          value = loadCheckpoint(cache, file, stats, options.minDate, request.kind, mode, true);
         }
-        readBytes += Math.max(0, value.offset - before);
         if (value.complete) completed++;
         if (value.unfinishedTail) unfinishedFiles++;
         skippedLines += value.skippedLines;

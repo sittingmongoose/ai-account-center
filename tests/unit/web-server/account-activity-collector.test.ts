@@ -118,6 +118,53 @@ describe('bounded native account activity checkpoints', () => {
     expect(result.scan?.totalFiles).toBe(1);
   });
 
+  it.each(['inline', 'partition'] as const)(
+    'keeps failed Codex file rows alongside fresh sibling rows (%s)',
+    async (reader) => {
+      write([meta(), model(), tokens(100, 0, 10)]);
+      const sibling = path.join(path.dirname(file), 'rollout-sibling.jsonl');
+      fs.writeFileSync(
+        sibling,
+        [meta(), model(), tokens(40, 0, 5)].map(JSON.stringify).join('\n') + '\n'
+      );
+      expect(sum(await collect(), 'inputTokens')).toBe(140);
+      fs.appendFileSync(sibling, JSON.stringify(tokens(140, 0, 15)) + '\n');
+      const open = fs.openSync;
+      const blocked = spyOn(fs, 'openSync').mockImplementation(((target, ...args) => {
+        if (target === file) throw new Error('fixture unreadable');
+        return open(target, ...args);
+      }) as typeof fs.openSync);
+      try {
+        for (let pass = 0; pass < 2; pass++) {
+          if (reader === 'inline') {
+            const result = await collect();
+            expect(sum(result, 'inputTokens')).toBe(240);
+            expect(result.scan).toMatchObject({ complete: false, failedFiles: 1 });
+          } else {
+            const directory = fs.readdirSync(path.join(root, 'cache', 'account-activity-v1'))[0];
+            const outcomes = await collectCodexPartition(
+              {
+                files: [file, sibling],
+                checkpointDir: path.join(root, 'cache', 'account-activity-v1', directory),
+                deadline: Date.now() + 12_000,
+              },
+              { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+            );
+            expect(
+              outcomes
+                .flatMap((outcome) => outcome.rows)
+                .reduce((total, row) => total + row.entry.inputTokens, 0)
+            ).toBe(240);
+            expect(outcomes[0]).toMatchObject({ failed: true, complete: false, readBytes: 0 });
+          }
+        }
+      } finally {
+        blocked.mockRestore();
+      }
+      expect(sum(await collect(), 'inputTokens')).toBe(240);
+    }
+  );
+
   it.each([
     { limits: { maxDirectories: 4 }, irrelevant: 'directories' },
     { limits: { maxEntries: 8 }, irrelevant: 'files' },
