@@ -50,9 +50,13 @@ const MAX_SESSIONS = 500;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_BYTES = 8 * 1024;
 const SAVE_LATER_MS = 60_000;
-/** The writer refreshes its claim this often; a claim older than OWNER_STALE_MS is free. */
+/**
+ * The writer refreshes its claim this often. A claim is free when its process is gone, when it was
+ * made before this computer last started, or when it was not refreshed for OWNER_STALE_MS (a reused
+ * process id); a live writer is never displaced sooner.
+ */
 const OWNER_BEAT_MS = 60_000;
-const OWNER_STALE_MS = 3 * OWNER_BEAT_MS;
+const OWNER_STALE_MS = 60 * OWNER_BEAT_MS;
 
 const logger = createLogger('dashboard-auth');
 
@@ -136,7 +140,7 @@ export class DashboardSessionStore extends session.Store {
   }
 
   private claimText(): string {
-    return JSON.stringify({ pid: process.pid, host: os.hostname() });
+    return JSON.stringify({ pid: process.pid, host: os.hostname(), boot: bootMinute() });
   }
 
   /**
@@ -187,15 +191,21 @@ export class DashboardSessionStore extends session.Store {
 
   private async claimIsStale(held: string): Promise<boolean> {
     const stat = await fs.stat(this.ownerFile).catch(() => null);
-    let owner: { pid?: unknown; host?: unknown } = {};
+    let owner: { pid?: unknown; host?: unknown; boot?: unknown } = {};
     try {
       owner = JSON.parse(held) as typeof owner;
     } catch {
       /* An unreadable claim is free. */
     }
     const fresh = stat !== null && Date.now() - stat.mtimeMs < OWNER_STALE_MS;
+    // A claim from before this computer last started belongs to a process that is gone, whatever
+    // now runs under its process id.
+    const sameBoot = typeof owner.boot === 'number' && Math.abs(owner.boot - bootMinute()) <= 2;
     const alive =
-      typeof owner.pid === 'number' && owner.host === os.hostname() && pidAlive(owner.pid);
+      typeof owner.pid === 'number' &&
+      owner.host === os.hostname() &&
+      sameBoot &&
+      pidAlive(owner.pid);
     return !(fresh && alive);
   }
 
@@ -210,7 +220,7 @@ export class DashboardSessionStore extends session.Store {
     if (this.closed) return;
     if (this.writer) {
       if (!(await this.stillWriter())) {
-        this.writer = false;
+        this.displaced();
         return;
       }
       const at = new Date();
@@ -309,17 +319,29 @@ export class DashboardSessionStore extends session.Store {
   }
 
   /**
+   * Another dashboard took the file over (this one was gone or frozen too long). The sessions this
+   * process held from the file are now the other one's to keep or end, and a sign-out here could no
+   * longer reach them, so they are dropped here: those browsers sign in again on this dashboard.
+   */
+  private displaced(): void {
+    if (!this.writer) return;
+    this.writer = false;
+    this.sessions.clear();
+    this.warn('save', new Error('another dashboard took over the saved sign-ins'));
+  }
+
+  /**
    * Writes the current sessions; resolves once the file holds them and rejects when the write
-   * failed. A reader, a closed store and a home that is gone write nothing.
+   * failed. A reader, a closed store and a home that is gone write nothing; a writer that finds
+   * another dashboard holds the file now rejects (a sign-out there was not saved).
    */
   private write(): Promise<void> {
     const run = this.saving.then(async () => {
       await this.ready;
       if (!this.writer || this.closed || !this.homeExists()) return;
       if (!(await this.stillWriter())) {
-        // Another dashboard took the file over: this process keeps its sessions in memory.
-        this.writer = false;
-        return;
+        this.displaced();
+        throw new Error('Another dashboard holds the saved sign-ins.');
       }
       this.prune();
       const sessions = [...this.sessions.entries()].map(([key, entry]) => ({ key, ...entry }));
@@ -411,8 +433,9 @@ export class DashboardSessionStore extends session.Store {
     void this.ready.then(() => {
       const key = sessionKey(sid);
       this.ended.add(key);
-      if (!this.sessions.delete(key)) return callback?.();
-      // A sign-out is answered only once the file no longer holds the session.
+      this.sessions.delete(key);
+      // A sign-out is answered only once the file no longer holds the session. It writes even when
+      // the session is already gone from memory: an earlier sign-out whose save failed is retried.
       this.write().then(
         () => callback?.(),
         (error: unknown) => callback?.(error)
@@ -442,11 +465,16 @@ export class DashboardSessionStore extends session.Store {
 /** A claim's text in one canonical form, so a rewritten claim compares equal. */
 function normalClaim(text: string): string {
   try {
-    const value = JSON.parse(text) as { pid?: unknown; host?: unknown };
-    return JSON.stringify({ pid: value.pid, host: value.host });
+    const value = JSON.parse(text) as { pid?: unknown; host?: unknown; boot?: unknown };
+    return JSON.stringify({ pid: value.pid, host: value.host, boot: value.boot });
   } catch {
     return text;
   }
+}
+
+/** When this computer last started, in whole minutes since the epoch (stable within a boot). */
+function bootMinute(): number {
+  return Math.round((Date.now() - os.uptime() * 1000) / 60_000);
 }
 
 /** The cookie's expiry in epoch milliseconds, or null for a browser-session cookie. */

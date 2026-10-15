@@ -8,7 +8,12 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import yaml from 'js-yaml';
 
-import { loadOrCreateUnifiedConfig } from '../../../src/config/config-loader-facade';
+import {
+  invalidateConfigCache,
+  loadOrCreateUnifiedConfig,
+} from '../../../src/config/config-loader-facade';
+import { saveUnifiedConfig } from '../../../src/config/unified-config-loader';
+import { bumpSessionEpoch } from '../../../src/web-server/services/dashboard-auth-state';
 import {
   DEFAULT_DASHBOARD_AUTH_CONFIG,
   effectiveSessionLifetimeDays,
@@ -157,6 +162,19 @@ describe('session lifetime', () => {
     expect((await browser.send('GET', '/api/auth/check')).body).toMatchObject({
       authenticated: true,
     });
+  });
+
+  it('does not let a revoked kept cookie into Accounts & Settings after sign-in is turned off', async () => {
+    harness = await startAuthHarness();
+    const browser = await signedIn(harness);
+    expect((await browser.send('GET', '/api/accounts/settings')).status).toBe(200);
+    const config = loadOrCreateUnifiedConfig();
+    config.dashboard_auth = { ...config.dashboard_auth!, enabled: false };
+    saveUnifiedConfig(config);
+    invalidateConfigCache();
+    // What the next start's credential check does after sign-in was turned off.
+    await bumpSessionEpoch();
+    expect((await browser.send('GET', '/api/accounts/settings')).status).not.toBe(200);
   });
 
   it('keeps a remembered session remembered when other browsers are signed out', async () => {

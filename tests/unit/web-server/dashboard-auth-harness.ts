@@ -19,6 +19,7 @@ import { saveUnifiedConfig } from '../../../src/config/unified-config-loader';
 import { invalidateConfigCache } from '../../../src/config/config-loader-facade';
 import {
   authMiddleware,
+  closeDashboardSessions,
   createSessionMiddleware,
   isApiRequestPath,
   loginRateLimiter,
@@ -205,7 +206,8 @@ export async function startAuthHarness(options: HarnessOptions = {}): Promise<Ha
     peer,
     origin: () => (peer.host ? `http://${peer.host}` : baseUrl),
     async close() {
-      // Background last-seen writes land before the fixture folder goes away.
+      // The session store saves and stops its timers; background writes land before the folder goes.
+      await closeDashboardSessions();
       await settleAuthWrites();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());

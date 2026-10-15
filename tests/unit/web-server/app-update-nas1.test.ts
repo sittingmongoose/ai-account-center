@@ -116,12 +116,20 @@ describe('Nas1 as the fourth update computer', () => {
 
   it('hashes the selected immutable generation with the existing Python prerequisite', () => {
     expect(helperHashQuery('nas1')).toBe(helperHashQuery('mac'));
-    const encoded = helperHashQuery('nas1').match(/b64decode\("([^" ]+)"\)/)![1];
+    // The script is its own base64 argument; the inline code holds no quote (Windows PowerShell
+    // strips embedded double quotes on its way to a native program).
+    const query = helperHashQuery('nas1');
+    expect(query).toMatch(/^\/usr\/bin\/python3 -c '[^"]+' [A-Za-z0-9+/=]+$/);
+    const encoded = query.split(' ').at(-1)!;
     const script = Buffer.from(encoded, 'base64').toString();
     expect(script).toContain('hashlib.sha256');
     expect(script).toContain('# aac-helpers: helpers-');
     for (const name of HELPER_FILES) expect(script).toContain(name);
     expect(helperHashQuery('windows')).toMatch(/^powershell\.exe -NoProfile /);
+    const windows = Buffer.from(helperHashQuery('windows').split(' ').at(-1)!, 'base64').toString(
+      'utf16le'
+    );
+    expect(windows).toMatch(/^& python\.exe -c '[^"]+' [A-Za-z0-9+/=]+; exit \$LASTEXITCODE$/);
   });
 
   // The real sha256sum is only present where the tests run on Linux.

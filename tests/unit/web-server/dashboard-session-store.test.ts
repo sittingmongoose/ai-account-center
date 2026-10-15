@@ -66,6 +66,15 @@ function signedIn(expires: number | null, epoch = 3): session.SessionData {
   } as unknown as session.SessionData;
 }
 
+/** A writer claim as another dashboard process on this computer, in this boot, would write it. */
+function claimFor(pid: number): void {
+  const boot = Math.round((Date.now() - os.uptime() * 1000) / 60_000);
+  fs.writeFileSync(
+    path.join(path.dirname(sessionsFile()), 'sessions.owner'),
+    JSON.stringify({ pid, host: os.hostname(), boot })
+  );
+}
+
 function call<T>(run: (done: (error: unknown, value?: T) => void) => void): Promise<T | undefined> {
   return new Promise((resolve, reject) =>
     run((error, value) => (error ? reject(error) : resolve(value)))
@@ -179,10 +188,7 @@ describe('dashboard session store', () => {
     await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
     await first.whenSaved();
     // Another live process on this computer holds the writer claim.
-    fs.writeFileSync(
-      path.join(path.dirname(sessionsFile()), 'sessions.owner'),
-      JSON.stringify({ pid: process.ppid, host: os.hostname() })
-    );
+    claimFor(process.ppid);
     const second = store();
     expect(second.isWriter).toBe(false);
     // A sign-out there could not reach the writer's file, so the writer's sessions are not valid there.
@@ -201,10 +207,7 @@ describe('dashboard session store', () => {
     await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
     await first.whenSaved();
     const exited = spawnSync(process.execPath, ['-e', '0']);
-    fs.writeFileSync(
-      path.join(path.dirname(sessionsFile()), 'sessions.owner'),
-      JSON.stringify({ pid: exited.pid, host: os.hostname() })
-    );
+    claimFor(exited.pid!);
     const next = store();
     expect(await call<session.SessionData | null>((done) => next.get(SID, done))).not.toBeNull();
     expect(next.isWriter).toBe(true);
@@ -226,6 +229,34 @@ describe('dashboard session store', () => {
     expect(
       await call<session.SessionData | null>((done) => restarted.get('fresh', done))
     ).not.toBeNull();
+  });
+
+  it('retries a sign-out whose save failed, so a restart cannot bring the session back', async () => {
+    const first = store();
+    await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
+    await first.whenSaved();
+    // The next save fails: a folder stands where the file goes.
+    const saved = fs.readFileSync(sessionsFile(), 'utf8');
+    fs.rmSync(sessionsFile());
+    fs.mkdirSync(sessionsFile());
+    await expect(call((done) => first.destroy(SID, done))).rejects.toBeDefined();
+    fs.rmSync(sessionsFile(), { recursive: true });
+    fs.writeFileSync(sessionsFile(), saved, { mode: 0o600 });
+    // The retry is saved although the session already left memory.
+    await call((done) => first.destroy(SID, done));
+    const restarted = store();
+    expect(await call<session.SessionData | null>((done) => restarted.get(SID, done))).toBeNull();
+  });
+
+  it('a writer that another dashboard took over drops its sessions and fails a sign-out', async () => {
+    const first = store();
+    await call((done) => first.set(SID, signedIn(NOW + 7 * DAY), done));
+    await first.whenSaved();
+    expect(first.isWriter).toBe(true);
+    claimFor(process.ppid);
+    await expect(call((done) => first.destroy(SID, done))).rejects.toBeDefined();
+    expect(first.isWriter).toBe(false);
+    expect(await call<session.SessionData | null>((done) => first.get(SID, done))).toBeNull();
   });
 
   it('defaults new setups to a 7-day session', () => {

@@ -18,7 +18,7 @@ import {
   isDashboardAuthEnabled,
 } from '../../config/config-loader-facade';
 import { effectiveSessionLifetimeDays } from '../../config/schemas/auth';
-import { bearerToken, guardApiRequest } from './api-request-guard';
+import { bearerToken, guardApiRequest, settleSessionEpoch } from './api-request-guard';
 import { rateLimitClientKey } from './rate-limit-keys';
 import { authKind } from './request-auth';
 import { credentialAllowedOnRequest, isLanProxyPeer, isSecureTransport } from './secure-transport';
@@ -314,8 +314,11 @@ export function createSessionMiddleware(): (
  * Only active when dashboard_auth.enabled = true.
  */
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
-  // Skip auth if disabled
+  // Skip auth if disabled. A kept session from an older epoch is still turned signed-out first:
+  // with sessions surviving restarts, a cookie revoked before sign-in was turned off must not
+  // reach the routes that ask for a signed-in browser.
   if (!isDashboardAuthEnabled()) {
+    settleSessionEpoch(req);
     return next();
   }
 

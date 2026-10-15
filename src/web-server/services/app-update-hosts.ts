@@ -354,10 +354,12 @@ finally:
 }
 
 function pythonCommand(platform: RemotePlatform, script: string): string {
+  // The script travels as its own base64 argument: no quote inside the code, because Windows
+  // PowerShell strips embedded double quotes when it calls a native program.
   const encoded = Buffer.from(script).toString('base64');
-  const code = `import base64;exec(base64.b64decode("${encoded}"))`;
-  if (HOST_OS[platform] !== 'windows') return `/usr/bin/python3 -c '${code}'`;
-  const ps = `& python.exe -c '${code}'; exit $LASTEXITCODE`;
+  const code = 'import base64,sys;exec(base64.b64decode(sys.argv[1]))';
+  if (HOST_OS[platform] !== 'windows') return `/usr/bin/python3 -c '${code}' ${encoded}`;
+  const ps = `& python.exe -c '${code}' ${encoded}; exit $LASTEXITCODE`;
   return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(ps, 'utf16le').toString('base64')}`;
 }
 export const POSIX_EXTRACT = pythonCommand('mac', helperPublishScript({}));
