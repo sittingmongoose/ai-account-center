@@ -67,19 +67,22 @@
   }
 
   /**
-   * Whether a fetched response may be stored: a plain same-origin 200 with no
-   * visible auth data. Anything else (an opaque cross-origin answer, an error,
-   * a response carrying a cookie) is served but never written to the cache.
+   * Whether a fetched response may be stored: a plain same-origin 200 the server
+   * did not mark `no-store`. Anything else (an opaque cross-origin answer, an
+   * error) is served but never written to the cache. Browsers hide Set-Cookie
+   * from a worker, so the cookie check only catches synthetic responses; what
+   * keeps private data out is route(): /api, /v0 and /ws are never intercepted.
+   * `no-cache` (the revalidated shell) is still stored.
    */
   function cacheable(response) {
     if (!response || response.status !== 200) return false;
     if (response.type !== 'basic' && response.type !== 'default') return false;
     try {
-      if (
-        response.headers &&
-        typeof response.headers.has === 'function' &&
-        response.headers.has('set-cookie')
-      )
+      var headers = response.headers;
+      if (headers && typeof headers.has === 'function' && headers.has('set-cookie')) return false;
+      var control =
+        headers && typeof headers.get === 'function' ? headers.get('cache-control') : null;
+      if (typeof control === 'string' && /(?:^|,)\s*no-store\s*(?:,|$)/i.test(control))
         return false;
     } catch {
       return false;

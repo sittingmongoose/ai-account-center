@@ -187,16 +187,26 @@ test('only HTML documents count as navigation shells', () => {
   );
 });
 
-test('only plain same-origin 200s without auth data are stored', () => {
+test('only plain same-origin 200s the server did not mark no-store are stored', () => {
   const headers = (entries = {}) => ({ has: (name) => name.toLowerCase() in entries });
   assert.equal(cacheable({ status: 200, type: 'basic', headers: headers() }), true);
   assert.equal(
     cacheable({ status: 200, type: 'basic', headers: headers({ 'content-type': 'x' }) }),
     true
   );
+  // Browsers hide Set-Cookie from a worker; this only catches a synthetic response.
   assert.equal(
     cacheable({ status: 200, type: 'basic', headers: headers({ 'set-cookie': 'a=b' }) }),
     false
+  );
+  const real = (control) => new Headers({ 'cache-control': control });
+  assert.equal(cacheable({ status: 200, type: 'basic', headers: real('no-store') }), false);
+  assert.equal(cacheable({ status: 200, type: 'basic', headers: real('private, No-Store') }), false);
+  // The revalidated shell (no-cache) and the immutable runtime are stored.
+  assert.equal(cacheable({ status: 200, type: 'basic', headers: real('no-cache') }), true);
+  assert.equal(
+    cacheable({ status: 200, type: 'basic', headers: real('public, max-age=31536000, immutable') }),
+    true
   );
   assert.equal(cacheable({ status: 200, type: 'opaque', headers: headers() }), false);
   assert.equal(cacheable({ status: 200, type: 'opaqueredirect', headers: headers() }), false);

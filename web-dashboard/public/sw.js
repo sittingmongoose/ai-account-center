@@ -42,8 +42,12 @@ function fromNetwork(request, timeoutMs) {
   );
 }
 
+// Stores a copy of a fetched response. The copies are cloned right away, before
+// the original goes back to the page and its body is read; cloning later, after
+// the cache opened, failed silently and left the cache empty.
 function store(request, response) {
   if (!AacSwRoute.cacheable(response)) return Promise.resolve();
+  var copy = response.clone();
   var mirror = null;
   try {
     var url = new URL(request.url);
@@ -65,27 +69,40 @@ function store(request, response) {
   } catch {
     mirror = null;
   }
+  // A separate copy per entry; the original stays with the page.
+  var mirrorCopy = mirror ? response.clone() : null;
   return caches
     .open(CACHE)
     .then(function (cache) {
-      // A separate clone per entry; the original stays with the page.
-      var puts = [cache.put(request, response.clone())];
-      if (mirror) puts.push(cache.put(mirror, response.clone()));
+      var puts = [cache.put(request, copy)];
+      if (mirror) puts.push(cache.put(mirror, mirrorCopy));
       return Promise.all(puts);
     })
     .catch(function () {});
 }
 
-// An offline navigation missed its own cache entry: walk the pure fallback
-// lookups in order (same URL ignoring the query, the start-URL shell, any
-// cached navigation shell), and only then answer the bare offline page.
-function offlineNavigation(request, url) {
+// Keeps the worker alive until the copy is stored.
+function storeFor(event, request, response) {
+  var done = store(request, response);
+  try {
+    event.waitUntil(done);
+  } catch {
+    // The event already finished; the store still runs while the worker lives.
+  }
+}
+
+// A navigation's cached answer: its own entry, then the pure fallback lookups in
+// order (same URL ignoring the query, the start-URL shell, any cached navigation
+// shell). Undefined when the cache has no shell at all.
+function cachedNavigation(request, url) {
   var lookups = AacSwRoute.navigationFallbackLookups({
     method: request.method,
     sameOrigin: url.origin === self.location.origin,
     pathname: url.pathname,
   });
-  var chain = Promise.resolve(undefined);
+  var chain = caches.match(request).catch(function () {
+    return undefined;
+  });
   lookups.forEach(function (lookup) {
     chain = chain.then(function (cached) {
       if (cached) return cached;
@@ -94,7 +111,13 @@ function offlineNavigation(request, url) {
       });
     });
   });
-  return chain.then(function (cached) {
+  return chain;
+}
+
+// A navigation the network could not answer: a cached shell, and only then the
+// bare offline page.
+function offlineNavigation(request, url) {
+  return cachedNavigation(request, url).then(function (cached) {
     if (cached) return cached;
     return new Response(OFFLINE_PAGE, {
       status: AacSwRoute.OFFLINE_STATUS,
@@ -153,32 +176,60 @@ function anyCachedShell() {
     });
 }
 
+// What the cache holds for a shell request: the entry itself, or for a
+// navigation any cached shell. Undefined when nothing can answer.
+function cachedShell(request) {
+  if (request.mode === 'navigate') return cachedNavigation(request, new URL(request.url));
+  return caches.match(request).catch(function () {
+    return undefined;
+  });
+}
+
 // The shell (index.html, bridge.js, *.mjs, fonts, icons, page routes): the
 // network first, so the shell stays in step with the server, then the cache.
-function networkFirst(request, timeoutMs) {
-  return fromNetwork(request, timeoutMs).then(
-    function (response) {
-      store(request, response);
-      return response;
-    },
-    function () {
-      return caches.match(request).then(function (cached) {
-        if (cached) return cached;
-        if (request.mode === 'navigate') {
-          return offlineNavigation(request, new URL(request.url));
+// A navigation gives up on a slow network only when a cached shell can answer
+// instead; with nothing cached it waits, since the bare offline page would be
+// worse than a slow start. A server error (a proxy's 502 while the dashboard
+// restarts) is answered from the cache too when the cache has the shell.
+function networkFirst(event, request, timeoutMs) {
+  var waited =
+    timeoutMs > 0
+      ? cachedShell(request).then(function (cached) {
+          return cached ? timeoutMs : 0;
+        })
+      : Promise.resolve(0);
+  return waited
+    .then(function (ms) {
+      return fromNetwork(request, ms);
+    })
+    .then(
+      function (response) {
+        if (response.status >= 500 && response.status <= 599) {
+          return cachedShell(request).then(function (cached) {
+            return cached || response;
+          });
         }
-        throw new Error('The app shell is not cached yet.');
-      });
-    }
-  );
+        storeFor(event, request, response);
+        return response;
+      },
+      function () {
+        return caches.match(request).then(function (cached) {
+          if (cached) return cached;
+          if (request.mode === 'navigate') {
+            return offlineNavigation(request, new URL(request.url));
+          }
+          throw new Error('The app shell is not cached yet.');
+        });
+      }
+    );
 }
 
 // The content-addressed runtime: immutable, so the cache answers first.
-function cacheFirst(request) {
+function cacheFirst(event, request) {
   return caches.match(request).then(function (cached) {
     if (cached) return cached;
     return fetch(request).then(function (response) {
-      store(request, response);
+      storeFor(event, request, response);
       return response;
     });
   });
@@ -198,10 +249,10 @@ self.addEventListener('fetch', function (event) {
     pathname: url.pathname,
   });
   if (decision === 'cache-first') {
-    event.respondWith(cacheFirst(request));
+    event.respondWith(cacheFirst(event, request));
   } else if (decision === 'network-first') {
     event.respondWith(
-      networkFirst(request, AacSwRoute.navigationTimeoutMs(request.mode === 'navigate'))
+      networkFirst(event, request, AacSwRoute.navigationTimeoutMs(request.mode === 'navigate'))
     );
   }
   // 'passthrough': /api, /v0, /ws, non-GET and cross-origin requests are never

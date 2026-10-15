@@ -318,3 +318,13 @@ test('the real login inputs follow the sign-in layer, the Slint Sign in button u
     await b.action('login-field-focus', 'pass');
   } finally { b.restore(); }
 });
+
+test('a server error on the launch check shows the offline card with its retry, not the sign-in form', async () => {
+  // A proxy's 502 while the dashboard restarts says nothing about the sign-in, which may still be valid.
+  const { server } = fixtureServer({ routes: { 'GET /api/auth/check': () => ({ status: 502, payload: null }) } });
+  const b = await loadBridge(server);
+  try {
+    await flush();
+    assert.deepEqual([b.lastAuth().signedIn, b.lastAuth().state], [false, 'offline']);
+  } finally { b.restore(); }
+});

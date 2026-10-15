@@ -772,7 +772,9 @@ async function checkSession(early = null) {
       if (reason) sessionEnded(reason); else auth(false, 'default');
     }
   } catch (error) {
-    if (error?.network) goOffline();
+    // A server error (a proxy's 502 while the dashboard restarts) is offline too, so the
+    // retry runs; it says nothing about the sign-in, which may still be valid.
+    if (error?.network || error?.status >= 500) goOffline();
     else auth(false, 'default', { message: 'Unable to connect to AI Account Center. Try refreshing this page.' });
   } finally { sessionChecking = false; }
 }
