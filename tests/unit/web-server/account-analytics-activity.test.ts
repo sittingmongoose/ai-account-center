@@ -463,9 +463,11 @@ describe('native local analytics activity', () => {
     expect(started.map((entries) => entries.length)).toEqual([25, 25, 25]);
   });
 
-  it.each(['pruned', 'returned', 'unchanged'] as const)(
-    'keeps a coherent saved Claude mirror election until the first local publish (%s original)',
-    async (change) => {
+  it.each(['pruned', 'returned', 'unchanged', 'pruned-rejected', 'returned-rejected'] as const)(
+    'keeps a coherent saved Claude mirror election (%s)',
+    async (scenario) => {
+      const rejectFirst = scenario.endsWith('-rejected');
+      const change = scenario.split('-')[0];
       const scope = path.join(fixtureConfig, 'mirror-snapshot');
       fs.mkdirSync(scope);
       const cacheDir = path.join(scope, 'cache');
@@ -565,11 +567,14 @@ describe('native local analytics activity', () => {
       const pendingRemote = new Promise<Awaited<ReturnType<typeof remote>>>((resolve) => {
         finishRemote = resolve;
       });
+      let rejectLocal = rejectFirst;
+      let remoteCalls = 0;
       const restarted = new AccountAnalyticsActivityService({
         ...deps,
-        remote: () => pendingRemote,
+        remote: () => (remoteCalls++ === 0 ? pendingRemote : remote()),
         loadWorker: async () => {
           await pendingLocal;
+          if (rejectLocal) throw new Error('fixture rejected Claude worker');
           return deps.loadWorker();
         },
       });
@@ -590,14 +595,44 @@ describe('native local analytics activity', () => {
       expect(localPublished.refreshing).toBe(true);
       expect(
         localPublished.sources?.find((s) => s.tool === 'claude' && s.host === 'mac')?.rowCount
-      ).toBe(original ? 0 : 1);
+      ).toBe(rejectFirst ? savedMirrorRows : original ? 0 : 1);
       expect(
         localPublished.sources?.find((s) => s.tool === 'claude' && s.host === 'ubuntu')?.rowCount
-      ).toBe(original ? 99 : 0);
-      finishRemote(cached());
+      ).toBe(rejectFirst ? (savedMirrorRows ? 0 : 99) : original ? 99 : 0);
+      const lateRemote = cached();
+      if (rejectFirst) lateRemote.results.push({ tool: 'codex', data: data('gpt-5.4', 7, 0) });
+      finishRemote(lateRemote);
       const fresh = await settled(restarted);
-      expect(fresh.totals?.inputTokens).toBe(100);
+      expect(fresh.totals?.inputTokens).toBe(rejectFirst ? 107 : 100);
       expect(fresh.refreshing).toBe(false);
+      if (rejectFirst) {
+        // A late remote answer already elected against the changed inventory must
+        // not replace the election paired with the retained local contribution.
+        expect(fresh.sources?.find((s) => s.tool === 'claude' && s.host === 'mac')?.rowCount).toBe(
+          savedMirrorRows
+        );
+        // A second failed pass and its remote answer must keep the same pair too.
+        await restarted.get({ ...QUERY, refresh: true }, FROM, NOW);
+        expect((await settled(restarted)).totals?.inputTokens).toBe(100);
+        const failedRestart = new AccountAnalyticsActivityService({
+          ...deps,
+          remote,
+          loadWorker: async () => {
+            throw new Error('fixture still rejected after another restart');
+          },
+        });
+        expect((await settled(failedRestart)).totals?.inputTokens).toBe(100);
+        rejectLocal = false;
+        await restarted.get({ ...QUERY, refresh: true }, FROM, NOW);
+        const recovered = await settled(restarted);
+        expect(recovered.totals?.inputTokens).toBe(100);
+        expect(
+          recovered.sources?.find((s) => s.tool === 'claude' && s.host === 'mac')?.rowCount
+        ).toBe(original ? 0 : 1);
+        expect(
+          recovered.sources?.find((s) => s.tool === 'claude' && s.host === 'ubuntu')?.rowCount
+        ).toBe(original ? 99 : 0);
+      }
 
       // A serialized answer has no callback. The raw cache has an equal timestamp,
       // and must still replace it when an offline refresh changes mirror ownership.

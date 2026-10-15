@@ -75,7 +75,7 @@ interface ActivityState {
   attempts: Map<string, number>;
   attemptSequence: number;
   fetchedAt: number;
-  /** A restored snapshot keeps its saved mirror election until the first local publish. */
+  /** A restored snapshot starts a local refresh even when its timestamp is recent. */
   needsLocalRefresh: boolean;
   pending: Promise<void> | null;
   generation: number;
@@ -1019,6 +1019,8 @@ export class AccountAnalyticsActivityService {
   private async collect(state: ActivityState, generation: number): Promise<void> {
     const deadline = Date.now() + MAX_COLLECTION_TIME_MS;
     const cutoff = (this.deps.now ?? Date.now)() - 31 * 86_400_000;
+    const hadClaude = [...state.local.values()].some((source) => source.provider === 'claude');
+    const previousRemote = state.remote;
     try {
       void this.deps.refreshPricing?.();
     } catch {
@@ -1139,6 +1141,7 @@ export class AccountAnalyticsActivityService {
     const attempted = new Set<AccountAnalyticsActivityProvider>();
     const localEvents = new Map<AccountAnalyticsActivityProvider, number>();
     const localReadAt = new Map<AccountAnalyticsActivityProvider, string>();
+    const replacedLocal = new Set<string>();
     requests.forEach((source, index) => {
       const key = localRequestKey(source);
       const result = settled[index];
@@ -1206,6 +1209,7 @@ export class AccountAnalyticsActivityService {
           data: [retained],
           fetchedAt: data.readAt ?? new Date((this.deps.now ?? Date.now)()).toISOString(),
         });
+        replacedLocal.add(key);
       }
       if (
         data.eventCount > 0 &&
@@ -1223,6 +1227,15 @@ export class AccountAnalyticsActivityService {
       succeeded.add(provider);
     });
     if (generation !== state.generation) return;
+    // Mirror ownership covers all Claude requests. Keep that contribution and
+    // its election together if any request still carries rows from the old pass.
+    const retainClaude =
+      ((hadClaude || previousRemote !== null) &&
+        requests.some(
+          (source) => source.provider === 'claude' && !replacedLocal.has(localRequestKey(source))
+        )) ||
+      (!discoveryComplete && hadClaude);
+    const retainedClaudeRemote = retainClaude ? previousRemote : undefined;
     for (const [key, source] of state.local) {
       if (!seenRequests.has(key)) {
         const next = replacements.get(key) ?? [];
@@ -1258,9 +1271,9 @@ export class AccountAnalyticsActivityService {
           source.data.reduce((sum, data) => sum + data.eventCount, 0)
       );
     }
-    // JSON drops the mirror reconciler. Rebuild it only after the first local pass,
-    // so current mirror ownership never mixes with the saved local contributions.
-    if (state.needsLocalRefresh) {
+    // JSON (and a retained election) drops the reconciler. Rebuild it only when
+    // every Claude request published a replacement, never after a rejected pass.
+    if (!retainClaude && !state.remote?.reconcileClaudeMirrors) {
       try {
         state.remote = newerRemote(
           state.remote,
@@ -1276,6 +1289,7 @@ export class AccountAnalyticsActivityService {
     this.publish(state, {
       scope: (this.deps.scope ?? getCcsDir)(),
       collected,
+      retainedClaudeRemote,
       requests,
       succeeded,
       unfinished,
@@ -1331,6 +1345,7 @@ export class AccountAnalyticsActivityService {
     this.publish(state, {
       scope: (this.deps.scope ?? getCcsDir)(),
       collected,
+      retainedClaudeRemote,
       requests,
       succeeded,
       unfinished,
@@ -1353,6 +1368,7 @@ export class AccountAnalyticsActivityService {
         this.publish(state, {
           scope: (this.deps.scope ?? getCcsDir)(),
           collected,
+          retainedClaudeRemote,
           requests,
           succeeded,
           unfinished,
@@ -1382,6 +1398,8 @@ export class AccountAnalyticsActivityService {
     args: {
       scope: string;
       collected: Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>;
+      /** The election paired with retained Claude local rows, including no remote rows. */
+      retainedClaudeRemote?: RemoteAnswer | null;
       /** This collection's local requests; a root-discovery bound on one is named on its tool. */
       requests: AccountAnalyticsActivityRequest[];
       succeeded: Set<AccountAnalyticsActivityProvider>;
@@ -1419,8 +1437,23 @@ export class AccountAnalyticsActivityService {
     const cutoff = args.cutoff ?? (this.deps.now ?? Date.now)() - 31 * 86_400_000;
     const merged = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
     for (const [provider, data] of collected) merged.set(provider, [...data]);
-    const answer = remoteAnswer === undefined ? state.remote : remoteAnswer;
-    answer?.reconcileClaudeMirrors?.();
+    let answer = remoteAnswer === undefined ? state.remote : remoteAnswer;
+    const retainingClaude = args.retainedClaudeRemote !== undefined;
+    if (retainingClaude) {
+      answer = {
+        fetchedAt: answer?.fetchedAt,
+        results: [
+          ...(answer?.results.filter((entry) => entry.tool !== 'claude') ?? []),
+          ...(args.retainedClaudeRemote?.results.filter((entry) => entry.tool === 'claude') ?? []),
+        ],
+        states: [
+          ...(answer?.states.filter((entry) => entry.tool !== 'claude') ?? []),
+          ...(args.retainedClaudeRemote?.states.filter((entry) => entry.tool === 'claude') ?? []),
+        ],
+      };
+      // Persist the same pair we serve, so another restart during failure keeps it.
+      state.remote = answer;
+    } else answer?.reconcileClaudeMirrors?.();
     if (answer) {
       for (const entry of answer.results) {
         const existing = merged.get(entry.tool) ?? [];
@@ -1459,7 +1492,7 @@ export class AccountAnalyticsActivityService {
       unfinished,
       discoveryComplete,
       attempted,
-      remoteStates,
+      retainingClaude ? (answer?.states ?? null) : remoteStates,
       localEvents,
       fetchedAt,
       presence,
@@ -1748,7 +1781,7 @@ export class AccountAnalyticsActivityService {
         state.partial = persisted.partial;
         state.fetchedAt = persisted.fetchedAt;
         // Serve the saved local rows and mirror election together, even when recent.
-        // The first local publish can then replace both against current coverage.
+        // A local pass that replaces the Claude contribution can replace its election.
         state.needsLocalRefresh = true;
       }
       this.states.set(scope, state);
