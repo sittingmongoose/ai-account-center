@@ -91,6 +91,19 @@ export function limitedView(seconds, now = Date.now()) {
 
 const SESSION_KEY = 'aac-signed-in-at';
 const SEEN_KEY = 'aac-session-seen-at';
+const LIFETIME_KEY = 'aac-session-hours';
+/**
+ * The session lifetime in hours as this browser last learned it while signed in (Settings). The server tells a
+ * signed-out visitor behind the LAN proxy nothing about it, so the sign-in page uses this instead of a guess.
+ */
+export function rememberSessionHours(storage, hours) {
+  if (!Number.isInteger(hours) || hours <= 0) return;
+  try { storage?.setItem(LIFETIME_KEY, String(hours)); } catch {}
+}
+/** The remembered session lifetime in hours, or 0 when this browser never learned it. */
+export function rememberedSessionHours(storage) {
+  try { const n = Number(storage?.getItem(LIFETIME_KEY)); return Number.isInteger(n) && n > 0 ? n : 0; } catch { return 0; }
+}
 /** Remember when this browser signed in (a per-viewer convenience), so the page can say a session ended. */
 export function rememberSignIn(storage, now = Date.now()) {
   try { storage?.setItem(SESSION_KEY, String(now)); storage?.setItem(SEEN_KEY, String(now)); } catch {}
@@ -113,9 +126,12 @@ export function lastSeenAt(storage) {
  */
 export function endedReason(at, hours = 168, now = Date.now()) {
   if (!Number.isFinite(at)) return null;
+  // Without a known lifetime the page cannot say the session ran out.
+  if (!Number.isInteger(hours) || hours <= 0) return 'ended';
   return now - at >= hours * 3_600_000 - 60_000 ? 'expired' : 'ended';
 }
 export function expiredBanner(reason, hours = 168) {
+  if (reason === 'expired' && (!Number.isInteger(hours) || hours <= 0)) reason = 'ended';
   if (reason === 'revoked') {
     return { title: 'Signed out from another browser', body: 'This browser was signed out from another one, with Sign out other browsers, a password change or Sign out all devices. Sign in again to continue.' };
   }

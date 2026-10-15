@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   strength, validateSetup, limitWindowMinutes, triesLeft, triesLine, retrySeconds, limitedView,
   rememberSignIn, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason, expiredBanner,
+  rememberSessionHours, rememberedSessionHours,
 } from '../public/auth-view.mjs';
 
 const headers = values => ({ get: name => values[name] ?? null });
@@ -131,4 +132,41 @@ test('the offline card names the host and the last try, and retries every 15 s',
   assert.match(words.body, /did not answer/);
   assert.match(words.meta, /Last tried .* · trying again every 15 s/);
   assert.equal(offlineView('', Date.now()).strong, '');
+});
+
+test('the sign-in page keeps the session lifetime learned while signed in, and never guesses one', () => {
+  const store = new Map();
+  const storage = { setItem: (k, v) => store.set(k, v), getItem: k => store.get(k) ?? null, removeItem: k => store.delete(k) };
+  // Behind the LAN proxy a signed-out visitor is told no lifetime: never learned means unknown, not 7 days.
+  assert.equal(rememberedSessionHours(storage), 0);
+  rememberSessionHours(storage, 720);
+  assert.equal(rememberedSessionHours(storage), 720);
+  // A Settings change while signed in replaces it; nonsense is ignored.
+  rememberSessionHours(storage, 2160);
+  rememberSessionHours(storage, 0);
+  rememberSessionHours(storage, -5);
+  rememberSessionHours(storage, 1.5);
+  assert.equal(rememberedSessionHours(storage), 2160);
+  // Signing out keeps it (the next sign-in page still knows the length).
+  forgetSignIn(storage);
+  assert.equal(rememberedSessionHours(storage), 2160);
+  assert.equal(rememberedSessionHours(null), 0);
+  // With the lifetime unknown, an ended session is never called expired after a made-up length.
+  const now = Date.parse('2026-10-15T12:00:00Z');
+  assert.equal(endedReason(now - 30 * 24 * 3_600_000, 0, now), 'ended');
+  assert.equal(expiredBanner('expired', 0).title, 'Your session ended');
+  assert.equal(expiredBanner('expired', 720).title, 'Signed out after 30 days');
+});
+
+test('the sign-in screen states the remembered lifetime and words an unknown one without a number', async () => {
+  const fs = await import('node:fs');
+  const slint = fs.readFileSync(new URL('../ui/shell/signin.slint', import.meta.url), 'utf8');
+  const bridge = fs.readFileSync(new URL('../public/bridge.js', import.meta.url), 'utf8');
+  assert.match(slint, /if hours <= 0 \{ return "Session length is set in the dashboard's Settings"; \}/);
+  assert.doesNotMatch(slint, /return "7 days"/);
+  assert.equal((slint.match(/SessionLength\.line\(root\.auth\.session-hours\)/g) || []).length, 3);
+  // The bridge starts from the remembered lifetime and learns it from setup and from Settings' session read.
+  assert.match(bridge, /let sessionHours = rememberedSessionHours\(/);
+  assert.match(bridge, /learnSessionHours\(setup\.sessionTimeoutHours\)/);
+  assert.match(bridge, /learnSessionHours\(st\.signin\?\.session\?\.sessionTimeoutHours\)/);
 });

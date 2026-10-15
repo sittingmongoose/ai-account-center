@@ -29,14 +29,15 @@ import { Field } from "../components/field.slint";
 import { Reveal } from "../components/reveal.slint";
 import { ProbeMark } from "../components/probe.slint";
 
-// How long a remembered sign-in lasts, from the server's lifetime in hours: "7 days", "1 day", "1 year".
+// How long a remembered sign-in lasts, from the server's lifetime in hours: "Sessions last 30 days". 0 means
+// this browser was never told (a signed-out visitor behind the LAN proxy): the line then names no number.
 global SessionLength {
-    public pure function text(hours: int) -> string {
-        if hours <= 0 { return "7 days"; }
-        if hours == 8760 { return "1 year"; }
-        if hours == 24 { return "1 day"; }
-        if mod(hours, 24) == 0 { return (hours / 24) + " days"; }
-        return hours + " hours";
+    public pure function line(hours: int) -> string {
+        if hours <= 0 { return "Session length is set in the dashboard's Settings"; }
+        if hours == 8760 { return "Sessions last 1 year"; }
+        if hours == 24 { return "Sessions last 1 day"; }
+        if mod(hours, 24) == 0 { return "Sessions last " + (hours / 24) + " days"; }
+        return "Sessions last " + hours + " hours";
     }
 }
 
@@ -1000,7 +1001,7 @@ component ScrolledHost inherits Rectangle {
                 if root.footer: Rectangle { height: 20px; }
                 if root.footer: VerticalLayout {
                     spacing: 8px;
-                    FootLine { icon: "clock"; text: "Sessions last " + SessionLength.text(root.auth.session-hours); }
+                    FootLine { icon: "clock"; text: SessionLength.line(root.auth.session-hours); }
                     FootLine { icon: "link"; text: "The Mac and Windows trays stay signed in with their own device tokens"; }
                 }
                 Rectangle { height: 16px + Device.safe-bottom; }
@@ -1066,7 +1067,7 @@ component ShortHost inherits Rectangle {
                     if root.footer: Rectangle { height: 16px; }
                     if root.footer: VerticalLayout {
                         spacing: 8px;
-                        FootLine { icon: "clock"; text: "Sessions last " + SessionLength.text(root.auth.session-hours); }
+                        FootLine { icon: "clock"; text: SessionLength.line(root.auth.session-hours); }
                         FootLine { icon: "link"; text: "The Mac and Windows trays stay signed in with their own device tokens"; }
                     }
                 }
@@ -1905,7 +1906,7 @@ export component SignInLayer inherits Rectangle {
             spacing: 8px;
             VerticalLayout { alignment: center; Icon { name: "clock"; tint: Theme.ink-4; width: 15px; height: 15px; } }
             Text {
-                text: "Sessions last " + SessionLength.text(root.auth.session-hours);
+                text: SessionLength.line(root.auth.session-hours);
                 font-size: 12.5px;
                 color: Theme.ink-3;
                 vertical-alignment: center;

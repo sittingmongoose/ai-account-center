@@ -1,7 +1,7 @@
 import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
-import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView } from './auth-view.mjs';
+import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView, rememberSessionHours, rememberedSessionHours } from './auth-view.mjs';
 import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
 import { copyText, signOutFailureText } from './account-actions.mjs';
 import { createActivationConfirmation } from './activation-confirmation.mjs';
@@ -56,8 +56,9 @@ let pollFails = 0;
 let openDetailsId = '';
 // Counts Details opens, so a click outside the panel can tell a row click (which opens that row) from any other.
 let detailsOpens = 0;
-// Sign-in: the session length from GET /api/auth/setup, and what the first-run form may do.
-let sessionHours = 168;
+// Sign-in: the session length (GET /api/auth/setup, or what this browser last learned while signed in; 0 when
+// unknown, which the sign-in page words without a number), and what the first-run form may do.
+let sessionHours = rememberedSessionHours((() => { try { return globalThis.localStorage; } catch { return null; } })());
 let setupInfo = { form: false, codeRequired: false };
 let authNonce = 0;
 // GET /api/auth/check as last read: the trusted local network state and this connection, for the sign-in page's
@@ -269,10 +270,18 @@ function render() {
   // the quota history and the agenda read the current readings too
   if (currentPage === 'analytics' && analyticsPayload) renderAnalytics();
 }
+/** The session lifetime the server reported: kept for the sign-in page, which a proxy visitor is not told. */
+function learnSessionHours(hours) {
+  if (!Number.isInteger(hours) || hours <= 0) return;
+  sessionHours = hours;
+  rememberSessionHours(globalThis.localStorage, hours);
+}
 /** Accounts & Settings (version 3, accounts-view.mjs): drawn while the page is open. */
 function renderAccounts() {
   if ((!serverData && authCheck?.accessMode !== 'open') || currentPage !== 'accounts') return;
   const st = accounts.state;
+  // Settings reads the session (GET /api/auth/session) and changes its lifetime: the sign-in page follows.
+  learnSessionHours(st.signin?.session?.sessionTimeoutHours);
   try {
     const vm = accountsViewModel(serverData || { accounts: [], providers: [] }, context({
       refreshing: false,
@@ -737,7 +746,7 @@ function navigate(page, { replace = false } = {}) {
 async function loadAuthSetup() {
   try {
     const setup = await request('/api/auth/setup');
-    if (Number.isInteger(setup?.sessionTimeoutHours) && setup.sessionTimeoutHours > 0) sessionHours = setup.sessionTimeoutHours;
+    if (Number.isInteger(setup?.sessionTimeoutHours) && setup.sessionTimeoutHours > 0) learnSessionHours(setup.sessionTimeoutHours);
     // The first-run form needs POST /api/auth/setup; the server announces that route with `setupCodeRequired`
     // (CONTRACT-auth-devices.md section 4). Until then the setup state shows the command that sets sign-in up.
     setupInfo = { form: typeof setup?.setupCodeRequired === 'boolean', codeRequired: setup?.setupCodeRequired === true };
