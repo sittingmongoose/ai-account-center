@@ -629,6 +629,20 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(claudeTotals(runHelper({ kinds: ['claude'], minDateMs: MIN_DATE })).n).toBe(16);
   });
 
+  it('drops an exact Claude copy even when its filename changed', () => {
+    const directory = path.join(home, '.claude', 'projects', 'p');
+    fs.mkdirSync(directory, { recursive: true });
+    for (const name of ['s.jsonl', 'renamed.jsonl'])
+      fs.writeFileSync(path.join(directory, name), claude('m1') + '\n');
+    const answer = runHelper({ kinds: ['claude'], minDateMs: MIN_DATE });
+    expect(claudeTotals(answer).n).toBe(1);
+    const prints = Object.values(
+      (answer.kinds as Record<string, { fingerprints: Record<string, { claudeName: string }> }>)
+        .claude.fingerprints
+    );
+    expect(new Set(prints.map((print) => print.claudeName)).size).toBe(2);
+  });
+
   it.each(['user', 'assistant'])(
     'parses BOM usage and retains the oversized Claude %s verdict on cache hits',
     (type) => {
@@ -1572,13 +1586,15 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
   it('visits claude project files newest first', () => {
     const dir = path.join(home, '.claude', 'projects', 'proj1');
     fs.mkdirSync(dir, { recursive: true });
-    const record = JSON.stringify({
-      type: 'assistant',
-      message: { model: 'claude-haiku-4-5', usage: { input_tokens: 3 } },
-      timestamp: '2026-10-01T15:05:00Z',
-    });
+    const record = (sessionId: string) =>
+      JSON.stringify({
+        type: 'assistant',
+        sessionId,
+        message: { model: 'claude-haiku-4-5', usage: { input_tokens: 3 } },
+        timestamp: '2026-10-01T15:05:00Z',
+      });
     for (const name of ['a.jsonl', 'b.jsonl', 'c.jsonl'])
-      fs.writeFileSync(path.join(dir, name), `${record}\n`);
+      fs.writeFileSync(path.join(dir, name), `${record(name)}\n`);
     const atime = new Date('2026-10-02T00:00:00Z');
     fs.utimesSync(path.join(dir, 'a.jsonl'), atime, new Date('2026-10-01T00:00:00Z'));
     fs.utimesSync(path.join(dir, 'b.jsonl'), atime, new Date('2026-10-03T00:00:00Z'));

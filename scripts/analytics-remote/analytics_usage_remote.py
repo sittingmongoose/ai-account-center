@@ -1170,8 +1170,16 @@ def _scan_claude_groups(collector, paths, parse, flush):
     # copy, so growth, divergence, addition and pruning all invalidate the group.
     # Mirror groups stay separate/raw for the server's order-independent host merge.
     groups = {}
+    exact_names = {}
     for path in dict.fromkeys(paths):
-        groups.setdefault((_claude_mirror(path), os.path.basename(path)), []).append(path)
+        mirror, name = _claude_mirror(path), os.path.basename(path)
+        stamp = _fingerprint(path)
+        if stamp is not None:
+            exact = (mirror, stamp["size"], stamp["head"], stamp["tail"])
+            # Join renamed exact copies to the same group, but retain every
+            # physical file's name tag for cross-host mirror matching.
+            name = exact_names.setdefault(exact, name)
+        groups.setdefault((mirror, name), []).append(path)
     order = {path: index for index, path in enumerate(_newest_first(paths))}
     for group in sorted(groups.values(), key=lambda group: min(order.get(p, MAX_FILES) for p in group)):
         if collector.expired():

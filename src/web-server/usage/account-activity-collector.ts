@@ -1766,9 +1766,10 @@ function dropClaudePrefixCopies<T extends { file: string; stats: fs.Stats }>(
  * dropOmpResumeCopies (a superset of exact copies), so this covers the rest.
  */
 export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stats }>(
-  files: T[]
+  files: T[],
+  preserveSameNameCopies = false
 ): T[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
   const result: T[] = [];
   let dropped = 0;
   for (const item of files) {
@@ -1786,11 +1787,16 @@ export function dropExactDuplicateFiles<T extends { file: string; stats: fs.Stat
     }
     // Unreadable here: keep it so readBatch surfaces the failure honestly.
     if (key !== null) {
-      if (seen.has(key)) {
+      // Claude verifies same-name prefixes byte for byte and keys divergent
+      // records. Preserve the legacy exact-copy rule for renamed copies too.
+      if (
+        seen.has(key) &&
+        (!preserveSameNameCopies || seen.get(key) !== path.basename(item.file))
+      ) {
         dropped++;
         continue;
       }
-      seen.add(key);
+      seen.set(key, path.basename(item.file));
     }
     result.push(item);
   }
@@ -2620,7 +2626,7 @@ export async function collectAccountActivity(
     request.kind === 'omp'
       ? dropOmpResumeCopies(files)
       : request.kind === 'claude'
-        ? dropClaudePrefixCopies(files, deadline)
+        ? dropClaudePrefixCopies(dropExactDuplicateFiles(files, true), deadline)
         : dropExactDuplicateFiles(
             request.kind === 'codex' ? preferPlainCodexRollouts(files) : files
           );

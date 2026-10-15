@@ -476,6 +476,13 @@ describe('claude response collapsing', () => {
     expect((await collectClaude()).eventCount).toBe(16);
   });
 
+  it('preserves exact-copy deduplication when the copy was renamed', async () => {
+    writeClaude([line('m1', 'r1', 10)]);
+    const directory = path.join(root, 'claude', 'projects', 'p');
+    fs.copyFileSync(path.join(directory, 's.jsonl'), path.join(directory, 'renamed.jsonl'));
+    expect((await collectClaude()).eventCount).toBe(1);
+  });
+
   it('counts one multi-line API response once, keeping the last usage', async () => {
     writeClaude([
       line('m1', 'r1', 10),
