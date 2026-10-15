@@ -8,6 +8,7 @@ import {
   parseOmpUsageLine,
   resolveOmpSessionRoots,
   OMP_ROOTS_RULE_VERSION,
+  OMP_SCAN_MAX_ROOTS,
 } from '../../../../src/web-server/usage/omp-native-usage-collector';
 import { collectAccountActivity } from '../../../../src/web-server/usage/account-activity-collector';
 
@@ -184,6 +185,20 @@ describe('omp session roots', () => {
     expect(starved).not.toContain(custom);
     const found = await resolveOmpSessionRoots({ env: {}, homeDir: home });
     expect(found).toContain(custom);
+  });
+
+  it('reports explicit roots cut by the combined root cap', async () => {
+    const discovery = { truncated: false };
+    const extra = Array.from({ length: OMP_SCAN_MAX_ROOTS }, (_, index) =>
+      path.join(home, `extra-${index}`)
+    );
+    const roots = await resolveOmpSessionRoots({
+      homeDir: home,
+      env: { OMP_SESSION_DIRS: extra.join(path.delimiter) },
+      discovery,
+    });
+    expect(roots).toHaveLength(OMP_SCAN_MAX_ROOTS);
+    expect(discovery.truncated).toBe(true);
   });
 
   it('discovers and reads depth-nine native sessions, reporting a depth-limited search', async () => {

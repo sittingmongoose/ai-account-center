@@ -503,8 +503,9 @@ export async function resolveOmpSessionRoots(options: OmpRootOptions = {}): Prom
   if (cached) {
     const ttl = cached.truncated ? ROOTS_CACHE_TRUNCATED_TTL_MS : ROOTS_CACHE_TTL_MS;
     if (now - cached.scannedAt <= ttl) {
-      if (options.discovery) options.discovery.truncated = cached.truncated;
       for (const found of cached.roots) add(found);
+      if (options.discovery)
+        options.discovery.truncated = cached.truncated || roots.length > OMP_SCAN_MAX_ROOTS;
       return roots.slice(0, OMP_SCAN_MAX_ROOTS);
     }
   }
@@ -525,6 +526,7 @@ export async function resolveOmpSessionRoots(options: OmpRootOptions = {}): Prom
   if (options.discovery) options.discovery.truncated = limited;
   if (options.cacheDir) writeRootsCache(options.cacheDir, merged, limited, now);
   for (const found of merged) add(found);
+  if (options.discovery) options.discovery.truncated ||= roots.length > OMP_SCAN_MAX_ROOTS;
   return roots.slice(0, OMP_SCAN_MAX_ROOTS);
 }
 
