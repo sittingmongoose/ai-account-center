@@ -132,7 +132,7 @@ export const MESSAGES = {
     'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
   t3_updated: 'Updated T3 Code and its installed server runtime.',
   t3_restart_scheduled:
-    'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect.',
+    'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect. A release that upgrades a large T3 database can keep T3 offline for several minutes before it reconnects.',
   desktop_reopened: 'Updated: it closed, installed the update and reopened.',
   // Older helpers and saved rows: T3 sessions were the only background sessions recognised.
   t3_sessions_kept:

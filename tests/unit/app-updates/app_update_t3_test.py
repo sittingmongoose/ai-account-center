@@ -276,6 +276,67 @@ class T3Fixtures(unittest.TestCase):
         self.assertFalse((root / "dashboard-update.lock").exists())
         self.assertFalse((root / "t3-code-pending-restart.json").exists())
 
+    def test_detached_restart_waits_through_a_slow_database_migration(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
+        waits = []
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), mock.patch.object(t3, "job_finished", return_value=True), \
+                mock.patch.object(t3.time, "sleep"), mock.patch.object(t3, "command", side_effect=lambda argv, **kwargs: systemctl(argv)), \
+                mock.patch.object(t3, "health_check", side_effect=lambda *args: waits.append(args)), \
+                mock.patch.object(t3, "running_runtime_version", return_value=NEW), mock.patch.object(t3, "finish_ubuntu_restart"):
+            t3.deferred_restart(12345)
+        self.assertEqual(waits, [("ubuntu", t3.UBUNTU_READY_SECONDS, "t3code.service")])
+        self.assertGreaterEqual(t3.UBUNTU_READY_SECONDS, 30 * 60)
+
+    def test_service_health_waits_while_t3_starts_and_fails_only_on_a_failed_unit(self):
+        now = [0.0]
+        def clock():
+            return now[0]
+        def sleep(seconds):
+            now[0] += seconds
+        def refused(*args, **kwargs):
+            raise OSError("connection refused")
+        # Eleven minutes of a migration: systemd reports the unit active the whole time.
+        answers = {"state": "ActiveState=active\nNRestarts=0\n"}
+        def show(argv, **kwargs):
+            self.assertEqual(argv, ["/usr/bin/systemctl", "--user", "show", "--property=ActiveState,NRestarts", "t3code.service"])
+            return answers["state"]
+        class Ready:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+        def opened(*args, **kwargs):
+            if now[0] < 11 * 60:
+                raise OSError("connection refused")
+            return Ready()
+        with mock.patch.object(t3.time, "monotonic", side_effect=clock), mock.patch.object(t3.time, "sleep", side_effect=sleep), \
+                mock.patch.object(t3, "command", side_effect=show), mock.patch.object(t3.urllib.request, "urlopen", side_effect=opened):
+            t3.health_check("ubuntu", t3.UBUNTU_READY_SECONDS, "t3code.service")
+        self.assertGreaterEqual(now[0], 11 * 60)
+        for state, restarts in (("failed", "0"), ("inactive", "0"), ("active", "1")):
+            now[0] = 0.0
+            answers["state"] = "ActiveState=active\nNRestarts=0\n"
+            def flip(argv, state=state, restarts=restarts, **kwargs):
+                value = answers["state"]
+                answers["state"] = "ActiveState=" + state + "\nNRestarts=" + restarts + "\n"
+                return value
+            with mock.patch.object(t3.time, "monotonic", side_effect=clock), mock.patch.object(t3.time, "sleep", side_effect=sleep), \
+                    mock.patch.object(t3, "command", side_effect=flip), mock.patch.object(t3.urllib.request, "urlopen", side_effect=refused):
+                with self.assertRaisesRegex(common.UpdateFailure, "restart_failed"):
+                    t3.health_check("ubuntu", t3.UBUNTU_READY_SECONDS, "t3code.service")
+            self.assertLess(now[0], 60)
+
+    def test_desktop_health_check_keeps_its_thirty_second_bound(self):
+        now = [0.0]
+        def sleep(seconds):
+            now[0] += seconds
+        with mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), mock.patch.object(t3.time, "sleep", side_effect=sleep), \
+                mock.patch.object(t3.urllib.request, "urlopen", side_effect=OSError("refused")), mock.patch.object(t3, "command") as command:
+            with self.assertRaisesRegex(common.UpdateFailure, "restart_failed"):
+                t3.health_check("mac")
+        self.assertLessEqual(now[0], 31)
+        command.assert_not_called()
+
     def test_active_parent_or_lock_prevents_detached_restart(self):
         root = t3.state_root(); root.mkdir(parents=True)
         common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
@@ -331,7 +392,7 @@ class T3Fixtures(unittest.TestCase):
         def command_locked(argv, **kwargs):
             check_locks()
             return systemctl(argv)
-        def health_locked(host):
+        def health_locked(host, *wait):
             check_locks()
         with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), \
                 mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \

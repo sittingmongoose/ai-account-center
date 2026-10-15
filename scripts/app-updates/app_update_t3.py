@@ -239,8 +239,30 @@ def verify_windows(package):
         raise UpdateFailure("signature_failed") from None
 
 
-def health_check(host):
-    deadline = time.monotonic() + 30
+# A restarted Ubuntu server migrates its database before it listens: a large install's 35 GB state took
+# about 11 minutes for one added index (2026-10-15), while a 13 GB one took under 2. The
+# detached worker therefore waits this long, failing early only when systemd says T3 failed.
+UBUNTU_READY_SECONDS = 45 * 60
+
+
+def service_state(service):
+    """(ActiveState, NRestarts) of one user unit, or None when systemd cannot be asked."""
+    try:
+        text = command(["/usr/bin/systemctl", "--user", "show", "--property=ActiveState,NRestarts", service],
+                       timeout=10, capture=True)
+    except UpdateFailure:
+        return None
+    values = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    restarts = values.get("NRestarts", "")
+    return values.get("ActiveState", ""), int(restarts) if restarts.isdigit() else None
+
+
+def health_check(host, seconds=30, service=None):
+    """Wait for T3's local server to answer. With a service, a slow start is not a failure: only a
+    unit that failed, stopped or was restarted again by systemd ends the wait early."""
+    deadline = time.monotonic() + seconds
+    first = service_state(service) if service else None
+    checked = time.monotonic()
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen("http://127.0.0.1:3773/", timeout=2) as response:
@@ -248,7 +270,13 @@ def health_check(host):
                     return
         except Exception:
             pass
-        time.sleep(.3)
+        if service and time.monotonic() - checked >= 5:
+            checked = time.monotonic()
+            state = service_state(service)
+            if state and (state[0] in ("failed", "inactive") or
+                          (first and first[1] is not None and state[1] is not None and state[1] > first[1])):
+                raise UpdateFailure("restart_failed")
+        time.sleep(1 if service else .3)
     raise UpdateFailure("restart_failed")
 
 
@@ -403,7 +431,8 @@ def schedule_restart(version):
     write_private_json(marker, {"version": version})
     unit = "aac-t3-restart-" + uuid.uuid4().hex[:12]
     command(["/usr/bin/systemd-run", "--user", "--collect", "--unit=" + unit,
-             "--property=RuntimeMaxSec=1200", "/usr/bin/python3", pathlib.Path(__file__).resolve(),
+             # The 18-minute wait for the job, the restart and UBUNTU_READY_SECONDS, with room to spare.
+             "--property=RuntimeMaxSec=4200", "/usr/bin/python3", pathlib.Path(__file__).resolve(),
              "--restart-service", str(os.getpid()), "--state-dir", str(root),
              *(["--dashboard-job"] if os.environ.get("AAC_UPDATE_DASHBOARD_JOB") == "1" else [])], timeout=15)
     return {"kind": "systemd", "service": "t3code.service", "delaySeconds": 30}
@@ -471,7 +500,7 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
                                 raise UpdateFailure("restart_failed")
                             daemon_reload = reload_unit()
                             command(["/usr/bin/systemctl", "--user", "restart", "t3code.service"], timeout=60)
-                            health_check("ubuntu")
+                            health_check("ubuntu", UBUNTU_READY_SECONDS, "t3code.service")
                             # A stale launcher can keep an old server up; keep the marker for a retry.
                             if running_runtime_version() != expected:
                                 raise UpdateFailure("restart_failed")

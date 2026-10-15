@@ -153,7 +153,11 @@ restarts **only `t3code.service`**;
 `ccs-dashboard.service` is never stopped or restarted. A new update job delays
 the restart again. The detached worker has an 18-minute wait limit and verifies
 HTTP health after restarting, then checks that the running server reports the
-installed version. The unit's main process is a launcher that starts the server
+installed version. T3 migrates its database before it listens, which took about
+11 minutes for one added index on a large install's 35 GB state, so the health wait lasts up
+to 45 minutes while systemd reports `t3code.service` running; a unit that fails,
+stops or is restarted again by systemd ends it early. The worker unit's
+`RuntimeMaxSec` covers both waits. The unit's main process is a launcher that starts the server
 from the runtime named in `service-state.json`, so the version is read from the
 launcher's direct `serve` child (a process from `~/.t3/runtime/versions/<version>/t3`);
 a plain server is read directly. Nothing is restarted to read it.
