@@ -92,6 +92,8 @@ export interface AnalyticsRemoteKindResult {
   state: 'ok' | 'not_installed' | 'error' | 'pending';
   /** A cap or the deadline cut this kind's own scan short: its numbers are incomplete. */
   partial?: boolean;
+  /** Codex rollouts whose compressed bytes could not be decoded on this host. */
+  compressedUnread?: number;
   fingerprints: Record<string, AnalyticsRemoteFingerprint>;
   /** zcode: an immutable open cannot read rows still in the write-ahead log. */
   walUnread?: boolean;
@@ -272,6 +274,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     const entry = value as {
       state?: unknown;
       partial?: unknown;
+      compressedUnread?: unknown;
       fingerprints?: unknown;
       walUnread?: unknown;
       unreadable?: unknown;
@@ -285,6 +288,15 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     )
       throw new AnalyticsRemoteTransportError();
     if (entry.partial !== undefined && typeof entry.partial !== 'boolean')
+      throw new AnalyticsRemoteTransportError();
+    if (
+      entry.compressedUnread !== undefined &&
+      (kind !== 'codex' ||
+        !Number.isSafeInteger(entry.compressedUnread) ||
+        (entry.compressedUnread as number) < 1 ||
+        (entry.compressedUnread as number) > 20_000 ||
+        entry.partial !== true)
+    )
       throw new AnalyticsRemoteTransportError();
     if (entry.walUnread !== undefined && typeof entry.walUnread !== 'boolean')
       throw new AnalyticsRemoteTransportError();
@@ -309,6 +321,9 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
               ? 'pending'
               : 'ok',
       ...(entry.partial === true ? { partial: true } : {}),
+      ...(entry.compressedUnread !== undefined
+        ? { compressedUnread: entry.compressedUnread as number }
+        : {}),
       fingerprints: prints as Record<string, AnalyticsRemoteFingerprint>,
       ...(entry.walUnread === true ? { walUnread: true } : {}),
       ...(entry.unreadable === true ? { unreadable: true } : {}),

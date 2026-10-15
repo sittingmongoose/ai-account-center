@@ -2,6 +2,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
+import { codexRolloutKey, codexZstdChunks, preferPlainCodexRollouts } from './codex-rollout-files';
 import { CCSError } from '../../errors/error-types';
 import { parseUsageEntry, type RawUsageEntry } from '../jsonl-parser';
 import {
@@ -59,6 +60,8 @@ interface Checkpoint {
   head: string;
   tail: string;
   offset: number;
+  /** Compressed files restart decoding, skipping this already-parsed byte prefix. */
+  decodedOffset?: number;
   minDate: number;
   complete: boolean;
   discardingLine: boolean;
@@ -166,7 +169,7 @@ const PARSER_VERSION: Partial<Record<ActivityKind, number>> = { omp: 2, muse: 2,
 
 function wantedFile(kind: string, name: string): boolean {
   if (kind === 'claude') return name.endsWith('.jsonl');
-  if (kind === 'codex') return name.endsWith('.jsonl') && name.startsWith('rollout-');
+  if (kind === 'codex') return name.startsWith('rollout-') && /\.jsonl(?:\.zst)?$/.test(name);
   // OMP session files (`<ts>_<uuid>[.jsonl]`, `__advisor.jsonl`, `SubAgent/`
   // records); Muse keeps `session.jsonl` per session and subagent.
   if (kind === 'omp') return name.endsWith('.jsonl') || isOmpSessionFilename(name);
@@ -376,6 +379,8 @@ function loadCheckpoint(
       !Number.isSafeInteger(value.offset) ||
       value.offset < 0 ||
       value.offset > stats.size ||
+      (value.decodedOffset !== undefined &&
+        (!Number.isSafeInteger(value.decodedOffset) || value.decodedOffset < 0)) ||
       value.size > stats.size ||
       !Number.isFinite(value.minDate) ||
       value.minDate > minDate ||
@@ -400,8 +405,14 @@ function loadCheckpoint(
       // Check the consumed prefix and boundary before resuming an append. A
       // replaced/truncated/re-written log never inherits cumulative counters.
       if (
-        value.head !== fingerprint(fd, 0, Math.min(256, value.offset)) ||
-        value.tail !== fingerprint(fd, Math.max(0, value.offset - 256), Math.min(256, value.offset))
+        value.head !==
+          fingerprint(fd, 0, Math.min(256, file.endsWith('.zst') ? stats.size : value.offset)) ||
+        value.tail !==
+          fingerprint(
+            fd,
+            Math.max(0, (file.endsWith('.zst') ? stats.size : value.offset) - 256),
+            Math.min(256, file.endsWith('.zst') ? stats.size : value.offset)
+          )
       )
         return fresh(stats, minDate, kind, mode);
     } finally {
@@ -419,8 +430,9 @@ function loadCheckpoint(
 function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: fs.Stats): void {
   const fd = fs.openSync(file, 'r');
   try {
-    value.head = fingerprint(fd, 0, Math.min(256, value.offset));
-    value.tail = fingerprint(fd, Math.max(0, value.offset - 256), Math.min(256, value.offset));
+    const boundary = file.endsWith('.zst') ? stats.size : value.offset;
+    value.head = fingerprint(fd, 0, Math.min(256, boundary));
+    value.tail = fingerprint(fd, Math.max(0, boundary - 256), Math.min(256, boundary));
   } finally {
     fs.closeSync(fd);
   }
@@ -827,6 +839,55 @@ function oversizedLineCarriesUsage(
 /** Bytes read per chunk; each chunk is a fresh buffer because line fragments keep slices of it. */
 const READ_CHUNK_BYTES = 1024 * 1024;
 
+function* plainChunks(file: string, start: number, end: number): Generator<Buffer> {
+  const fd = fs.openSync(file, 'r');
+  try {
+    for (let at = start; at < end; ) {
+      const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, end - at));
+      const read = fs.readSync(fd, buffer, 0, buffer.length, at);
+      if (!read) break;
+      at += read;
+      yield buffer.subarray(0, read);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function checkpointProgress(value: Checkpoint): number {
+  return value.decodedOffset ?? value.offset;
+}
+
+/**
+ * A removed plain twin's measured rows stay visible until its compressed replacement is read
+ * whole. This also adopts checkpoints written before zstd support, without trusting their byte
+ * offsets or cumulative parser state for a different physical file.
+ */
+function priorPlainCodexRows(
+  directory: string,
+  file: string,
+  minDate: number
+): CompactEntry[] | null {
+  if (!file.endsWith('.jsonl.zst')) return null;
+  try {
+    const cache = path.join(directory, `${hash(file.slice(0, -4))}.json`);
+    if (fs.statSync(cache).size > MAX_CACHE_BYTES) return null;
+    const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
+    if (
+      value.version !== 2 ||
+      value.mode !== undefined ||
+      !Number.isFinite(value.minDate) ||
+      value.minDate > minDate ||
+      !Array.isArray(value.rows) ||
+      value.rows.length > MAX_FILE_ROWS
+    )
+      return null;
+    return value.rows.filter((row) => Date.parse(row.entry.timestamp) >= minDate);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read one file's next records into its checkpoint. Reads are synchronous on purpose: this runs
  * inside a collector's worker thread, never on the server's event loop, so a blocking read only
@@ -834,7 +895,7 @@ const READ_CHUNK_BYTES = 1024 * 1024;
  * (low-priority) threads instead of queueing on the process's small shared libuv pool, which the
  * server's own file and crypto work also needs.
  */
-function readBatch(
+async function readBatch(
   file: string,
   value: Checkpoint,
   stats: fs.Stats,
@@ -843,8 +904,9 @@ function readBatch(
   deadline: number,
   mapping?: JsonlFieldMapping,
   mode?: ReadMode
-): void {
+): Promise<void> {
   if (value.complete && value.offset === stats.size) return;
+  const compressed = kind === 'codex' && file.endsWith('.jsonl.zst');
   value.unfinishedTail = false;
   const rows = new Map(value.rows.map((row) => [rowKey(row), row]));
   const keySet = mode === 'keys' ? new Set(value.keys ?? []) : null;
@@ -871,14 +933,19 @@ function readBatch(
   let fragments: Buffer[] = [];
   let lineBytes = 0;
   let discarding = value.discardingLine;
-  let position = value.offset;
+  let position = checkpointProgress(value);
+  const resumeAt = position;
+  const advance = (): void => {
+    if (compressed) value.decodedOffset = position;
+    else value.offset = position;
+  };
   // A partition reader owns its chunk alone: no file can starve another, so the
   // default per-file byte cap is lifted and the scan deadline bounds the read.
   const maxBytes =
     options.codexPartitionRead === true && options.maxBytesPerFile === undefined
       ? Number.MAX_SAFE_INTEGER
       : Math.max(1, Math.min(512 * 1024 * 1024, options.maxBytesPerFile ?? 256 * 1024 * 1024));
-  const end = Math.min(stats.size, position + maxBytes);
+  const end = Math.min(compressed ? Number.MAX_SAFE_INTEGER : stats.size, position + maxBytes);
   if (end <= position) {
     value.complete = position === stats.size && !discarding;
     return;
@@ -939,79 +1006,85 @@ function readBatch(
     }
     if (entry) commit(entry);
   };
-  const fd = fs.openSync(file, 'r');
-  try {
-    for (let readAt = position; readAt < end; ) {
-      const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, end - readAt));
-      const read = fs.readSync(fd, buffer, 0, buffer.length, readAt);
-      if (read <= 0) break;
-      readAt += read;
-      const chunk = read === buffer.length ? buffer : buffer.subarray(0, read);
-      let start = 0;
-      while (start < chunk.length) {
-        const newline = chunk.indexOf(10, start);
-        const stop = newline < 0 ? chunk.length : newline;
-        const slice = chunk.subarray(start, stop);
-        if (!discarding) {
-          lineBytes += slice.length;
-          if (lineBytes > MAX_LINE_BYTES) {
-            discarding = true;
-            // A native response_item contains conversation content, never a
-            // token_count. Its unambiguous leading top-level type lets us skip
-            // even enormous payload strings without losing any usage records.
-            const prefixParts: Buffer[] = [];
-            let prefixBytes = 0;
-            for (const fragment of fragments.length ? fragments : [slice]) {
-              const part = fragment.subarray(0, 512 - prefixBytes);
-              prefixParts.push(part);
-              prefixBytes += part.length;
-              if (prefixBytes >= 512) break;
-            }
-            const prefix = Buffer.concat(prefixParts, prefixBytes).toString('utf8');
-            const recordType = prefix.match(
-              /^\s*\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?"type"\s*:\s*"([^"\\]+)"/
-            );
-            if (oversizedLineCarriesUsage(kind, recordType?.[1], prefix)) value.skippedLines++;
-            fragments = [];
-          } else fragments.push(slice);
-        }
-        position += stop - start + (newline >= 0 ? 1 : 0);
-        if (newline >= 0) {
-          if (!discarding)
-            consume(fragments.length === 1 ? fragments[0] : Buffer.concat(fragments, lineBytes));
-          fragments = [];
-          lineBytes = 0;
-          discarding = false;
-          value.offset = position;
-        }
-        start = stop + (newline >= 0 ? 1 : 0);
-      }
-      if (Date.now() >= deadline) break;
+  let decodedAt = 0;
+  let reachedEnd = true;
+  const chunks = compressed ? codexZstdChunks(file) : plainChunks(file, position, end);
+  for await (const buffer of chunks) {
+    if (Date.now() >= deadline) {
+      reachedEnd = false;
+      break;
     }
-    if (position === stats.size && lineBytes > 0 && !discarding) {
-      const final = Buffer.concat(fragments, lineBytes);
-      // A complete final record without a newline is valid. An unfinished
-      // record remains at its prior boundary until the writer finishes it.
-      try {
-        JSON.parse(final.toString('utf8'));
-        consume(final);
-        value.offset = position;
-      } catch {
-        value.unfinishedTail = true;
+    // zstd has no seekable decoded offset: replay the prefix without parsing it again.
+    const skip = compressed ? Math.max(0, Math.min(buffer.length, resumeAt - decodedAt)) : 0;
+    decodedAt += buffer.length;
+    const chunk = buffer.subarray(skip, skip + Math.min(buffer.length - skip, end - position));
+    let start = 0;
+    while (start < chunk.length) {
+      const newline = chunk.indexOf(10, start);
+      const stop = newline < 0 ? chunk.length : newline;
+      const slice = chunk.subarray(start, stop);
+      if (!discarding) {
+        lineBytes += slice.length;
+        if (lineBytes > MAX_LINE_BYTES) {
+          discarding = true;
+          // A native response_item contains conversation content, never a
+          // token_count. Its unambiguous leading top-level type lets us skip
+          // even enormous payload strings without losing any usage records.
+          const prefixParts: Buffer[] = [];
+          let prefixBytes = 0;
+          for (const fragment of fragments.length ? fragments : [slice]) {
+            const part = fragment.subarray(0, 512 - prefixBytes);
+            prefixParts.push(part);
+            prefixBytes += part.length;
+            if (prefixBytes >= 512) break;
+          }
+          const prefix = Buffer.concat(prefixParts, prefixBytes).toString('utf8');
+          const recordType = prefix.match(
+            /^\s*\{\s*(?:"timestamp"\s*:\s*"[^"\\]*"\s*,\s*)?(?:"ordinal"\s*:\s*\d+\s*,\s*)?"type"\s*:\s*"([^"\\]+)"/
+          );
+          if (oversizedLineCarriesUsage(kind, recordType?.[1], prefix)) value.skippedLines++;
+          fragments = [];
+        } else fragments.push(slice);
       }
-    } else if (discarding) value.offset = position;
-    value.discardingLine = discarding;
-    // The open response is never committed at EOF: the last group may still
-    // be growing, and committing it here counts it again when the next scan
-    // continues it (R2-1). It stays in the checkpoint and is folded into the
-    // reported totals only (see collectAccountActivity).
-    value.complete = value.offset === stats.size && !discarding;
-    value.rows = [...rows.values()];
-    if (keySet) value.keys = [...keySet];
-    if (keyed) value.keyed = keyed;
-  } finally {
-    fs.closeSync(fd);
+      position += stop - start + (newline >= 0 ? 1 : 0);
+      if (newline >= 0) {
+        if (!discarding)
+          consume(fragments.length === 1 ? fragments[0] : Buffer.concat(fragments, lineBytes));
+        fragments = [];
+        lineBytes = 0;
+        discarding = false;
+        advance();
+      }
+      start = stop + (newline >= 0 ? 1 : 0);
+    }
+    if (Date.now() >= deadline || position >= end) {
+      reachedEnd = false;
+      break;
+    }
   }
+  const atEnd = compressed ? reachedEnd : position === stats.size;
+  if (atEnd && lineBytes > 0 && !discarding) {
+    const final = Buffer.concat(fragments, lineBytes);
+    // A complete final record without a newline is valid. An unfinished
+    // record remains at its prior boundary until the writer finishes it.
+    try {
+      JSON.parse(final.toString('utf8'));
+      consume(final);
+      advance();
+    } catch {
+      value.unfinishedTail = true;
+    }
+  } else if (discarding) advance();
+  value.discardingLine = discarding;
+  // The open response is never committed at EOF: the last group may still
+  // be growing, and committing it here counts it again when the next scan
+  // continues it (R2-1). It stays in the checkpoint and is folded into the
+  // reported totals only (see collectAccountActivity).
+  value.complete = atEnd && checkpointProgress(value) === position && !discarding;
+  if (compressed) value.offset = value.complete ? stats.size : 0;
+  value.rows = [...rows.values()];
+  if (keySet) value.keys = [...keySet];
+  if (keyed) value.keyed = keyed;
 }
 
 interface ZcodeCache {
@@ -1806,18 +1879,25 @@ export async function collectCodexPartition(
     try {
       const stats = fs.statSync(file);
       const value = loadCheckpoint(cache, file, stats, options.minDate, 'codex');
-      const before = value.offset;
+      const before = checkpointProgress(value);
+      const beforeOffset = value.offset;
       if (Date.now() < spec.deadline) {
-        readBatch(file, value, stats, 'codex', readerOptions, spec.deadline);
-        if (value.offset !== before || !fs.existsSync(cache))
+        await readBatch(file, value, stats, 'codex', readerOptions, spec.deadline);
+        if (
+          checkpointProgress(value) !== before ||
+          value.offset !== beforeOffset ||
+          !fs.existsSync(cache)
+        )
           saveCheckpoint(cache, file, value, stats);
       }
       outcomes.push({
         file,
-        rows: value.rows,
+        rows: value.complete
+          ? value.rows
+          : (priorPlainCodexRows(spec.checkpointDir, file, options.minDate) ?? value.rows),
         complete: value.complete,
         skippedLines: value.skippedLines,
-        readBytes: Math.max(0, value.offset - before),
+        readBytes: Math.max(0, checkpointProgress(value) - before),
         unfinishedTail: value.unfinishedTail === true,
         failed: false,
       });
@@ -1940,19 +2020,26 @@ async function readCodexFiles(
   if (readers < 2 || Date.now() >= deadline || needsRead.length === 0) {
     for (const item of loaded) {
       try {
-        const before = item.value.offset;
+        const before = checkpointProgress(item.value);
+        const beforeOffset = item.value.offset;
         if (Date.now() < deadline) {
-          readBatch(item.file, item.value, item.stats, 'codex', options, deadline);
-          if (item.value.offset !== before || !fs.existsSync(item.cache))
+          await readBatch(item.file, item.value, item.stats, 'codex', options, deadline);
+          if (
+            checkpointProgress(item.value) !== before ||
+            item.value.offset !== beforeOffset ||
+            !fs.existsSync(item.cache)
+          )
             saveCheckpoint(item.cache, item.file, item.value, item.stats);
         }
         tallyCodexFile(
           rows,
           {
-            rows: item.value.rows,
+            rows: item.value.complete
+              ? item.value.rows
+              : (priorPlainCodexRows(directory, item.file, options.minDate) ?? item.value.rows),
             complete: item.value.complete,
             skippedLines: item.value.skippedLines,
-            readBytes: Math.max(0, item.value.offset - before),
+            readBytes: Math.max(0, checkpointProgress(item.value) - before),
             unfinishedTail: item.value.unfinishedTail === true,
           },
           counters
@@ -2007,7 +2094,9 @@ async function readCodexFiles(
     }
   }
   const startingTallies = (item: (typeof loaded)[number]): CodexFileTallies => ({
-    rows: item.value.rows,
+    rows: item.value.complete
+      ? item.value.rows
+      : (priorPlainCodexRows(directory, item.file, options.minDate) ?? item.value.rows),
     complete: item.value.complete,
     skippedLines: item.value.skippedLines,
     readBytes: 0,
@@ -2042,8 +2131,6 @@ async function readCodexFiles(
   return { rows, ...counters };
 }
 
-const SESSION_UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
-
 /**
  * The session a Codex or Muse log belongs to, as its path names it: the conversation id that ends
  * a rollout's name (Codex), the session folder (Muse). A copied or resumed log keeps it, so only
@@ -2051,7 +2138,7 @@ const SESSION_UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  */
 function experimentSessionOf(kind: 'codex' | 'muse', file: string): string {
   return kind === 'codex'
-    ? (SESSION_UUID.exec(path.basename(file))?.[1]?.toLowerCase() ?? path.basename(file))
+    ? path.basename(codexRolloutKey(file))
     : path.basename(path.dirname(file));
 }
 
@@ -2247,7 +2334,9 @@ async function collectExperimentActivity(
     identities.add(identity);
     return true;
   });
-  const scanned = dropExactDuplicateFiles(distinct);
+  const scanned = dropExactDuplicateFiles(
+    kind === 'codex' ? preferPlainCodexRollouts(distinct) : distinct
+  );
   scanned.sort(
     (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
   );
@@ -2259,21 +2348,26 @@ async function collectExperimentActivity(
   const referenceKeys = new Set<string>();
   const keyedByFile: Array<{ file: string; entries: KeyedEntry[] }> = [];
   /** The file's checkpoint after this pass, and whether this pass read it (budget left). */
-  const visit = (
+  const visit = async (
     item: { file: string; stats: fs.Stats },
     mode: ReadMode
-  ): { value: Checkpoint; read: boolean } | undefined => {
+  ): Promise<{ value: Checkpoint; read: boolean } | undefined> => {
     const cache = path.join(directory, `${hash(`${mode}:${item.file}`)}.json`);
     try {
       const value = loadCheckpoint(cache, item.file, item.stats, options.minDate, kind, mode);
-      const before = value.offset;
+      const before = checkpointProgress(value);
+      const beforeOffset = value.offset;
       const read = Date.now() < deadline;
       if (read) {
-        readBatch(item.file, value, item.stats, kind, options, deadline, undefined, mode);
-        if (value.offset !== before || !fs.existsSync(cache))
+        await readBatch(item.file, value, item.stats, kind, options, deadline, undefined, mode);
+        if (
+          checkpointProgress(value) !== before ||
+          value.offset !== beforeOffset ||
+          !fs.existsSync(cache)
+        )
           saveCheckpoint(cache, item.file, value, item.stats);
       }
-      readBytes += Math.max(0, value.offset - before);
+      readBytes += Math.max(0, checkpointProgress(value) - before);
       if (value.unfinishedTail) unfinishedFiles++;
       return { value, read };
     } catch {
@@ -2281,11 +2375,17 @@ async function collectExperimentActivity(
       return undefined;
     }
   };
-  for (const item of referenceFiles) {
-    const visited = visit(item, 'keys');
+  for (const item of kind === 'codex' ? preferPlainCodexRollouts(referenceFiles) : referenceFiles) {
+    const visited = await visit(item, 'keys');
     // Caught up: read to the end, or to a last line still being written (a default transcript in
     // use always has one; its response is not complete anywhere yet, so it has no copies).
-    if (!visited || !(visited.value.complete || (visited.read && visited.value.unfinishedTail)))
+    if (
+      !visited ||
+      !(
+        visited.value.complete ||
+        (visited.read && visited.value.unfinishedTail && !item.file.endsWith('.zst'))
+      )
+    )
       referenceComplete = false;
     if (!visited) continue;
     const value = visited.value;
@@ -2295,7 +2395,7 @@ async function collectExperimentActivity(
       referenceKeys.add(experimentRecordKey(kind, value.pendingClaude.entry));
   }
   for (const item of scanned) {
-    const visited = visit(item, 'keyed');
+    const visited = await visit(item, 'keyed');
     if (!visited) continue;
     const value = visited.value;
     if (value.complete) completed++;
@@ -2360,7 +2460,15 @@ async function collectExperimentActivity(
         referenceComplete
     ),
   };
-  saveLastResult(directory, result);
+  if (
+    kind === 'codex' &&
+    scanned.some((item) => item.file.endsWith('.zst')) &&
+    !result.scan?.complete
+  ) {
+    const last = loadLastResult(directory, options.minDate);
+    if (last) return { ...last, scan: result.scan };
+  }
+  if (kind !== 'codex' || result.scan?.complete) saveLastResult(directory, result);
   return result;
 }
 
@@ -2452,7 +2560,9 @@ export async function collectAccountActivity(
   if (!sawAnyFile && issues.failed) throw new CCSError('Native log sources are unavailable');
   // Resumed OMP runs copy a session into a new root; its records count once.
   const scanned =
-    request.kind === 'omp' ? dropOmpResumeCopies(files) : dropExactDuplicateFiles(files);
+    request.kind === 'omp'
+      ? dropOmpResumeCopies(files)
+      : dropExactDuplicateFiles(request.kind === 'codex' ? preferPlainCodexRollouts(files) : files);
   scanned.sort(
     (left, right) => right.stats.mtimeMs - left.stats.mtimeMs || left.file.localeCompare(right.file)
   );
@@ -2481,7 +2591,7 @@ export async function collectAccountActivity(
         const value = loadCheckpoint(cache, file, stats, options.minDate, request.kind);
         const before = value.offset;
         if (Date.now() < deadline) {
-          readBatch(
+          await readBatch(
             file,
             value,
             stats,

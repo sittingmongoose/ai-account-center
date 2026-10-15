@@ -896,6 +896,43 @@ describe('analytics remote sources', () => {
     expect(zcode?.detail).toContain('the next scan continues');
   });
 
+  it('keeps Codex rows and explains unread compressed logs, or reports scanning on a cold read', async () => {
+    const first = response({
+      kinds: { codex: { state: 'ok', fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20 } } } },
+      rows: [row({ k: 'codex', m: 'gpt-5.4' })],
+      srows: [srow({ k: 'codex' })],
+    });
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(first)),
+    });
+    const skipped = response({
+      kinds: { codex: { state: 'ok', partial: true, compressedUnread: 7, fingerprints: {} } },
+      rows: [],
+      srows: [],
+    });
+    const read = (cacheDir: string) =>
+      loadAnalyticsRemoteSources(MIN_DATE, {
+        hosts,
+        cacheDir,
+        runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(skipped)),
+      });
+    const cached = await read(cache);
+    expect(
+      cached.states.find((entry) => entry.tool === 'codex' && entry.host === 'mac')
+    ).toMatchObject({ state: 'cached', rowCount: 2 });
+    expect(
+      cached.states.find((entry) => entry.tool === 'codex' && entry.host === 'mac')?.detail
+    ).toContain('7 compressed Codex logs');
+    expect(cached.results.find((entry) => entry.tool === 'codex')?.data.session).toHaveLength(1);
+    const cold = await read(path.join(cache, 'cold'));
+    const state = cold.states.find((entry) => entry.tool === 'codex' && entry.host === 'mac');
+    expect(state).toMatchObject({ state: 'scanning', rowCount: 0 });
+    expect(state?.detail).toContain('needs Python 3.14 or the zstd tool');
+    expect(cold.results).toEqual([]);
+  });
+
   it('keeps the rows of a kind the host could not read', async () => {
     const zcodeRow = row({ k: 'zcode', f: DB_1, m: 'GLM-5.3-Flash', c: 0, i: 40 });
     const first = response({

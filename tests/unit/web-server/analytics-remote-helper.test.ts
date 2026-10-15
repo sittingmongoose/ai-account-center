@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { zstdCompressSync } from 'zlib';
 import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
 import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
 import { ompSessionIdForFile } from '../../../src/web-server/usage/omp-native-usage-collector';
@@ -15,9 +16,22 @@ const HELPER = path.resolve(
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 
 let HAVE_PYTHON = false;
+let HAVE_PYTHON_ZSTD = false;
+let ZSTD_PATH: string | null = null;
 try {
   execFileSync('python3', ['--version'], { stdio: 'pipe' });
   HAVE_PYTHON = true;
+  const capabilities = JSON.parse(
+    execFileSync(
+      'python3',
+      [
+        '-c',
+        'import sys,shutil,json; print(json.dumps([sys.version_info >= (3,14), shutil.which("zstd")]))',
+      ],
+      { encoding: 'utf8' }
+    )
+  ) as [boolean, string | null];
+  [HAVE_PYTHON_ZSTD, ZSTD_PATH] = capabilities;
 } catch {
   HAVE_PYTHON = false;
 }
@@ -145,7 +159,7 @@ function writeFixtures(options: { muse?: boolean; zcode?: boolean } = {}) {
 /** Runs the helper with some of its module constants replaced (caps too large to reach in a fixture). */
 function runPatchedHelper(
   request: Record<string, unknown>,
-  patch: Record<string, number>
+  patch: Record<string, number | string | null>
 ): Record<string, unknown> {
   const code = [
     'import importlib.util,json,sys',
@@ -312,6 +326,164 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
     expect(result).toEqual([home, home, null, null]);
     expect(process.env.CCS_HOME).toBe(path.join(home, 'ccs'));
   });
+
+  const compressedName = 'rollout-2026-10-01T15-00-00-01234567-1234-1234-1234-0123456789ab.jsonl';
+  function compressedFixture() {
+    const file = path.join(home, '.codex', 'sessions', compressedName);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const body =
+      [
+        { type: 'session_meta', payload: { id: 'compressed-session' } },
+        { type: 'turn_context', payload: { model: 'gpt-5.4' } },
+        ...[1, 1, 2, 3].map((n) => ({
+          timestamp: '2026-10-01T15:05:00Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              total_token_usage: {
+                input_tokens: n * 100,
+                cached_input_tokens: n * 20,
+                output_tokens: n * 10,
+              },
+            },
+          },
+        })),
+      ]
+        .map((line) => JSON.stringify(line))
+        .join('\n') + '\n';
+    fs.writeFileSync(`${file}.zst`, zstdCompressSync(Buffer.from(body)));
+    return { file, body };
+  }
+  const codexKind = (response: Record<string, unknown>) =>
+    (
+      response.kinds as Record<
+        string,
+        {
+          state: string;
+          partial?: boolean;
+          compressedUnread?: number;
+          fingerprints: Record<string, unknown>;
+        }
+      >
+    ).codex;
+
+  it.skipIf(!HAVE_PYTHON_ZSTD)(
+    'streams compressed Codex logs through Python 3.14 and confirms compressed-byte fingerprints',
+    () => {
+      const { file, body } = compressedFixture();
+      fs.writeFileSync(file, body);
+      const plain = runHelper({ kinds: ['codex'], minDateMs: MIN_DATE });
+      fs.unlinkSync(file);
+      const compressed = runPatchedHelper(
+        { kinds: ['codex'], minDateMs: MIN_DATE },
+        { ZSTD_TOOL: null }
+      );
+      expect(compressed.rows).toEqual(plain.rows);
+      expect(compressed.srows).toEqual(plain.srows);
+      expect(codexKind(compressed).partial).toBeUndefined();
+      expect(Object.keys(codexKind(compressed).fingerprints)).toEqual(
+        Object.keys(codexKind(plain).fingerprints)
+      );
+      const print = Object.values(codexKind(compressed).fingerprints)[0] as {
+        size: number;
+        head: string;
+      };
+      expect(print.size).toBe(fs.statSync(`${file}.zst`).size);
+      expect(print.head).toBe(
+        createHash('sha256')
+          .update(fs.readFileSync(`${file}.zst`).subarray(0, 256))
+          .digest('hex')
+      );
+      const warm = runHelper({
+        kinds: ['codex'],
+        minDateMs: MIN_DATE,
+        fingerprints: { codex: codexKind(compressed).fingerprints },
+      });
+      expect(warm.rows).toEqual([]);
+      expect(codexKind(warm).fingerprints).toEqual(codexKind(compressed).fingerprints);
+    }
+  );
+
+  it.skipIf(!ZSTD_PATH)(
+    'streams compressed Codex logs through the zstd executable on older Python',
+    () => {
+      compressedFixture();
+      const data = runPatchedHelper(
+        { kinds: ['codex'], minDateMs: MIN_DATE },
+        { ZSTD_MODULE: null }
+      );
+      expect(codexKind(data).partial).toBeUndefined();
+      expect(data.rows).toMatchObject([{ i: 240, cr: 60, o: 30, n: 3 }]);
+      expect(Object.keys(codexKind(data).fingerprints)).toHaveLength(1);
+    }
+  );
+
+  it('marks compressed Codex logs partial when neither decoder is available, without confirming them', () => {
+    compressedFixture();
+    const data = runPatchedHelper(
+      { kinds: ['codex'], minDateMs: MIN_DATE },
+      { ZSTD_MODULE: null, ZSTD_TOOL: null }
+    );
+    expect(codexKind(data)).toMatchObject({ partial: true, compressedUnread: 1, fingerprints: {} });
+    expect(data.rows).toEqual([]);
+    expect(data.srows).toEqual([]);
+    expect(data.truncated).toBe(false);
+  });
+
+  it('prefers a plain twin and skips stale compressed logs before requiring a decoder', () => {
+    const { file, body } = compressedFixture();
+    fs.writeFileSync(file, body);
+    const old = path.join(path.dirname(file), 'rollout-old.jsonl.zst');
+    fs.writeFileSync(old, 'not a zstd frame');
+    fs.utimesSync(old, new Date(MIN_DATE - 2 * 86400000), new Date(MIN_DATE - 2 * 86400000));
+    const data = runPatchedHelper(
+      { kinds: ['codex'], minDateMs: MIN_DATE },
+      { ZSTD_MODULE: null, ZSTD_TOOL: null }
+    );
+    expect(codexKind(data).partial).toBeUndefined();
+    expect(data.rows).toMatchObject([{ i: 240, cr: 60, o: 30, n: 3 }]);
+    expect(Object.keys(codexKind(data).fingerprints)).toHaveLength(1);
+  });
+
+  it.skipIf(!HAVE_PYTHON_ZSTD && !ZSTD_PATH)(
+    'never confirms a corrupt compressed frame or its decoded prefix',
+    () => {
+      const { file } = compressedFixture();
+      fs.writeFileSync(
+        `${file}.zst`,
+        Buffer.concat([fs.readFileSync(`${file}.zst`), Buffer.from('bad-frame')])
+      );
+      const data = runHelper({ kinds: ['codex'], minDateMs: MIN_DATE });
+      expect(codexKind(data)).toMatchObject({
+        partial: true,
+        compressedUnread: 1,
+        fingerprints: {},
+      });
+      expect(data.rows).toEqual([]);
+      expect(data.srows).toEqual([]);
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'terminates a blocked zstd tool within the helper budget',
+    () => {
+      compressedFixture();
+      const tool = path.join(home, 'slow-zstd');
+      fs.writeFileSync(tool, '#!/usr/bin/env python3\nimport time\ntime.sleep(20)\n', {
+        mode: 0o700,
+      });
+      const start = performance.now();
+      const data = runPatchedHelper(
+        { kinds: ['codex'], minDateMs: MIN_DATE, deadlineMs: 1000 },
+        { ZSTD_MODULE: null, ZSTD_TOOL: tool }
+      );
+      expect(performance.now() - start).toBeLessThan(4000);
+      expect(codexKind(data).partial).toBe(true);
+      expect(codexKind(data).fingerprints).toEqual({});
+      expect(data.rows).toEqual([]);
+    }
+  );
 
   it('reaches Muse subagent logs past thousands of tool-output folders, which hold no log', () => {
     writeFixtures({ zcode: false });

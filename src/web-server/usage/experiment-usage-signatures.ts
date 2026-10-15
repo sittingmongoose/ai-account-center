@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AAC_SANDBOX_MARKER } from './omp-native-usage-collector';
+import { codexZstdChunks } from './codex-rollout-files';
 
 export type ExperimentKind = 'claude' | 'codex' | 'muse' | 'zcode';
 /** Bytes read from the head (and, when the head is inconclusive, the tail) of a candidate. */
@@ -110,6 +111,37 @@ export function classifyUsageLogFile(file: string): ExperimentKind | null {
     return null;
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/** Sniff only the bounded decoded head; compressed frames have no random-access text tail. */
+export async function classifyCompressedCodexRollout(
+  file: string,
+  deadline: number
+): Promise<ExperimentKind | null> {
+  const fragments: Buffer[] = [];
+  let size = 0;
+  try {
+    for await (const chunk of codexZstdChunks(file)) {
+      if (Date.now() >= deadline) return null;
+      const part = chunk.subarray(0, SNIFF_BYTES - size);
+      fragments.push(part);
+      size += part.length;
+      if (size >= SNIFF_BYTES) break;
+    }
+    const text = Buffer.concat(fragments, size).toString('utf8');
+    // Instructions can make session_meta exceed the sniff limit. Its identity fields precede
+    // them, so a bounded prefix still identifies Codex without decoding the conversation.
+    const first = text.trimStart().split('\n', 1)[0];
+    if (
+      first.startsWith('{') &&
+      /"type"\s*:\s*"session_meta"/.test(first.slice(0, 4096)) &&
+      /"(originator|cli_version)"\s*:\s*"/.test(first)
+    )
+      return 'codex';
+    return classifyUsageLogText(text, path.basename(file));
+  } catch {
+    return null;
   }
 }
 

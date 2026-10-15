@@ -74,10 +74,19 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
+import threading
 import time
 import urllib.parse
+
+try:
+    from compression import zstd as ZSTD_MODULE
+except ImportError:
+    ZSTD_MODULE = None
+ZSTD_TOOL = shutil.which("zstd")
 
 VERSION = 1
 # Same ceilings the server collector uses where they apply.
@@ -133,7 +142,7 @@ AAC_SANDBOX_MARKER = ".aac-synthetic"
 T3_MAX_HOMES = 64
 T3_SETTINGS_MAX_BYTES = 1024 * 1024
 CODEX_SESSION_UUID = re.compile(
-    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$", re.I
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$", re.I
 )
 SESSION_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}[:-]\d{2}")
 MODEL_MAX_LEN = 160
@@ -156,7 +165,9 @@ def _filekey(kind, path):
     digest = hashlib.sha256()
     digest.update(kind.encode("utf-8"))
     digest.update(b"\x00")
-    digest.update(os.path.abspath(path).encode("utf-8"))
+    # Plain -> zstd keeps the same row owner; fingerprints still describe the physical bytes.
+    owner = path[:-4] if kind == "codex" and path.endswith(".jsonl.zst") else path
+    digest.update(os.path.abspath(owner).encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -310,6 +321,7 @@ class Collector(object):
         self.skip = None
         # Antigravity databases (or folders) that could not be read this scan.
         self.agy_unreadable = 0
+        self.codex_compressed_unread = set()
 
     def keep_record(self, key):
         """False when the record is captured as a key or is a known copy."""
@@ -1080,9 +1092,50 @@ def _newest_first(paths):
 
 
 def _read_file(collector, kind, path, filekey, parse, flush):
+    """Keep compressed fingerprints unconfirmed unless decoding reaches a clean EOF."""
+    if kind != "codex" or not path.endswith(".jsonl.zst"):
+        return _read_open_file(collector, kind, path, filekey, parse, flush)
+    process = timer = None
+    try:
+        if ZSTD_MODULE is not None:
+            handle = ZSTD_MODULE.open(path, "rb")
+        elif ZSTD_TOOL:
+            process = subprocess.Popen(
+                [ZSTD_TOOL, "-dc", "--", path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            )
+            # Bound a blocked pipe too, not just the time between decoded lines.
+            timer = threading.Timer(max(0.001, collector.deadline - time.monotonic() - 0.05), process.kill)
+            timer.daemon = True
+            timer.start()
+            handle = process.stdout
+        else:
+            collector.codex_compressed_unread.add(path)
+            return "unreadable"
+        outcome = _read_open_file(collector, kind, path, filekey, parse, flush, handle)
+        if outcome == "cut":
+            return outcome
+        if process is not None and process.wait(timeout=max(0.001, collector.deadline - time.monotonic())):
+            outcome = "unreadable"
+        if outcome == "unreadable":
+            collector.codex_compressed_unread.add(path)
+        return outcome
+    except Exception:
+        collector.codex_compressed_unread.add(path)
+        return "unreadable"
+    finally:
+        if timer is not None:
+            timer.cancel()
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            process.stdout.close()
+
+
+def _read_open_file(collector, kind, path, filekey, parse, flush, handle=None):
     """Parse one file whole: "ok", "cut" (deadline or row cap) or "unreadable"."""
     try:
-        handle = open(path, "rb")
+        handle = handle if handle is not None else open(path, "rb")
     except OSError:
         return "unreadable"
     box = {}
@@ -1097,6 +1150,9 @@ def _read_file(collector, kind, path, filekey, parse, flush):
             if len(chunk) > MAX_LINE_BYTES + 1:
                 # Skip the oversized line without decoding content.
                 while chunk and not chunk.endswith(b"\n"):
+                    if collector.expired():
+                        collector.truncated = True
+                        return "cut"
                     chunk = handle.readline(MAX_LINE_BYTES + 2)
                 continue
             try:
@@ -1132,6 +1188,27 @@ def _scan_kind_files(collector, kind, dirs, accept, parse, flush=None, t3_dirs=(
             break
     refs = _t3_files(collector, kind, dirs, paths, t3_dirs, accept) if t3_dirs else {}
     paths.extend(refs)
+    if kind == "codex":
+        recent = []
+        for path in paths:
+            try:
+                if os.stat(path).st_mtime * 1000 < collector.min_date_ms - 86400000:
+                    continue
+            except OSError:
+                continue
+            recent.append(path)
+        plain = {_copy_key(kind, p) for p in recent if not p.endswith(".zst")}
+        compressed = set()
+        paths = []
+        for path in recent:
+            key = _copy_key(kind, path)
+            if path.endswith(".zst"):
+                if key in plain or key in compressed:
+                    continue
+                compressed.add(key)
+            paths.append(path)
+        allowed = set(paths)
+        refs = {p: [c for c in copies if c in allowed] for p, copies in refs.items()}
     for path in _newest_first(paths):
         if collector.expired():
             collector.truncated = True
@@ -1156,6 +1233,10 @@ def _scan_kind_files(collector, kind, dirs, accept, parse, flush=None, t3_dirs=(
             return True
         if outcome == "ok":
             collector.confirm_file(kind, filekey)
+        elif kind == "codex" and path.endswith(".jsonl.zst"):
+            # A failed decoder may have emitted a prefix. None of it is fresh.
+            collector.rows = {k: r for k, r in collector.rows.items() if r["f"] != filekey}
+            collector.srows = {k: r for k, r in collector.srows.items() if r["f"] != filekey}
     return False
 
 
@@ -1317,7 +1398,7 @@ def _copy_key(kind, path):
     id (a Codex rollout's name ends with it)."""
     name = os.path.basename(path)
     match = CODEX_SESSION_UUID.search(name) if kind == "codex" else None
-    return match.group(1).lower() if match else name
+    return match.group(1).lower() if match else (name[:-4] if kind == "codex" and name.endswith(".zst") else name)
 
 
 def _t3_files(collector, kind, dirs, default_paths, t3_dirs, accept):
@@ -1618,7 +1699,7 @@ def _collect_codex(collector, home, env, extra=()):
         return "not_installed"
 
     def _accept(name):
-        return name.startswith("rollout-") and name.endswith(".jsonl")
+        return name.startswith("rollout-") and name.endswith((".jsonl", ".jsonl.zst"))
 
     _scan_kind_files(collector, "codex", dirs, _accept, _parse_codex_line, None, t3_dirs)
     return "ok"
@@ -2749,6 +2830,9 @@ def main():
         }
         if kind in partials:
             entry["partial"] = True
+        if kind == "codex" and collector.codex_compressed_unread:
+            entry["partial"] = True
+            entry["compressedUnread"] = len(collector.codex_compressed_unread)
         if kind == "zcode" and collector.wal_unread:
             entry["walUnread"] = True
         if kind == "antigravity" and collector.agy_unreadable:

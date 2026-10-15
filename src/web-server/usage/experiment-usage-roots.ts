@@ -21,6 +21,7 @@ import * as path from 'path';
 import { SCAN_SKIP_DIRS } from './omp-native-usage-collector';
 import {
   classifyUsageLogFile,
+  classifyCompressedCodexRollout,
   experimentRootFor,
   isRecord,
   isText,
@@ -241,7 +242,7 @@ function depthBelow(child: string, parent: string): number {
  * It stops at its directory or time budget. Returns whether a round is still running (more
  * slices to come).
  */
-export function runExperimentRootsSlice(options: ExperimentScanOptions): boolean {
+export async function runExperimentRootsSlice(options: ExperimentScanOptions): Promise<boolean> {
   const now = options.now ?? Date.now;
   const base = path.join(options.homeDir ?? os.homedir(), 'PM-Experiments');
   const maxDepth = Math.min(
@@ -369,16 +370,28 @@ export function runExperimentRootsSlice(options: ExperimentScanOptions): boolean
       .sort();
     const rootsHere: string[] = [];
     let sniffs = 0;
+    let sniffTimedOut = false;
     const seenKinds = new Set<ExperimentKind>();
     for (const name of files) {
-      if (!name.endsWith('.jsonl') || sniffs >= MAX_SNIFFS_PER_DIR) continue;
+      const compressed = name.startsWith('rollout-') && name.endsWith('.jsonl.zst');
+      if ((!name.endsWith('.jsonl') && !compressed) || sniffs >= MAX_SNIFFS_PER_DIR) continue;
       sniffs++;
       const file = path.join(directory, name);
-      const kind = classifyUsageLogFile(file);
+      const kind = compressed
+        ? await classifyCompressedCodexRollout(file, Date.now() + Math.max(0, deadline - now()))
+        : classifyUsageLogFile(file);
+      if (compressed && !kind && now() >= deadline) {
+        sniffTimedOut = true;
+        break;
+      }
       if (!kind || seenKinds.has(kind)) continue;
       seenKinds.add(kind);
       const root = experimentRootFor(kind, file);
       if (accept(kind, root) && kind !== 'claude') rootsHere.push(root);
+    }
+    if (sniffTimedOut) {
+      round.stack.push([relative, depth]);
+      break;
     }
     let databases = 0;
     for (const name of files) {

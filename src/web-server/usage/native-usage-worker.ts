@@ -44,7 +44,7 @@ async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerRes
     return { ok: true, data: await collectAccountActivity(request, request.activity) };
   if (request.kind === 'experiment-roots') {
     // Discovery only: the slice saves the roots it found under the cache dir.
-    runExperimentRootsSlice({ cacheDir: request.cacheDir });
+    await runExperimentRootsSlice({ cacheDir: request.cacheDir });
     return {
       ok: true,
       data: { daily: [], hourly: [], monthly: [], session: [], eventCount: 0 },

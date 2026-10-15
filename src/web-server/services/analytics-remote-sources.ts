@@ -539,6 +539,7 @@ export async function loadAnalyticsRemoteSources(
         // read, or (OMP) a root search that hit its bounds.
         const keepsUnvisited = (tool: AnalyticsRemoteKind): boolean =>
           cutKinds.has(tool) ||
+          (tool === 'codex' && response.kinds.codex?.partial === true) ||
           errored.has(tool) ||
           response.kinds[tool]?.state === 'pending' ||
           response.kinds[tool]?.partial === true ||
@@ -702,9 +703,11 @@ export async function loadAnalyticsRemoteSources(
               detail:
                 tool === 'antigravity' && kind?.unreadable
                   ? 'some Antigravity conversation databases could not be read (busy or damaged); showing previously read aggregates'
-                  : kept
-                    ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                    : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+                  : tool === 'codex' && kind?.compressedUnread
+                    ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
+                    : kept
+                      ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                      : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }
