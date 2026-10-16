@@ -809,6 +809,186 @@ describe('native local analytics activity', () => {
     }
   );
 
+  it.each(['legacy', 'mixed', 'current', 'legacy-restart'] as const)(
+    'keeps 524 tokens until the capped replacement can publish (%s snapshot)',
+    async (format) => {
+      const scope = path.join(fixtureConfig, 'legacy-replacements');
+      fs.mkdirSync(scope);
+      let expanded = false;
+      const started: string[] = [];
+      const omp = (name: string): AccountAnalyticsActivityRequest => ({
+        provider: 'omp',
+        request: {
+          kind: 'omp',
+          roots: [`/fixture/${name}`, ...(expanded ? [`/fixture/${name}-extra`] : [])],
+        },
+      });
+      const siblings: AccountAnalyticsActivityRequest[] = Array.from({ length: 24 }, (_, i) => ({
+        provider: 'claude',
+        request: { kind: 'claude', projectsDir: `/fixture/claude-${i}` },
+      }));
+      const deps = {
+        concurrency: 1,
+        now: () => NOW + (expanded ? 1000 : 0),
+        scope: () => scope,
+        persistSnapshot: true,
+        remote: async () => ({ results: [], states: [] }),
+        requests: () =>
+          expanded ? [omp('a'), ...siblings, omp('b')] : [omp('a'), omp('b'), ...siblings],
+        loadWorker: async (request: UsageWorkerRequest) => {
+          if (request.kind !== 'omp') return data('claude-sonnet-4-6', 1, 0);
+          started.push(request.roots[0]);
+          return data('k3', request.roots[0].endsWith('/a') ? 400 : expanded ? 200 : 100, 0);
+        },
+      };
+      const previous = new AccountAnalyticsActivityService(deps);
+      await settled(previous);
+      await previous.get({ ...QUERY, refresh: true }, FROM, NOW);
+      expect((await settled(previous)).totals?.inputTokens).toBe(524);
+      const file = path.join(
+        scope,
+        'cache',
+        'account-activity-v1',
+        'analytics-activity-snapshot-v1.json'
+      );
+      const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (format === 'mixed') {
+        const legacyKey = snapshot.local.find(
+          ([, source]: [string, { provider: string; data: UsageWorkerResult[] }]) =>
+            source.provider === 'omp' && source.data[0].hourly[0].inputTokens === 100
+        )[0];
+        snapshot.identities = snapshot.identities.filter(([key]: [string]) => key !== legacyKey);
+      } else if (format !== 'current') delete snapshot.identities;
+      fs.writeFileSync(file, JSON.stringify(snapshot));
+
+      expanded = true;
+      started.length = 0;
+      let service = new AccountAnalyticsActivityService(deps);
+      const capped = await settled(service);
+      expect(started).toEqual(['/fixture/a']);
+      expect(capped.totals?.inputTokens).toBe(524);
+      expect(capped.sources.find((s) => s.tool === 'omp' && s.host === 'ubuntu')?.lastScanAt).toBe(
+        new Date(format === 'current' ? NOW + 1000 : NOW).toISOString()
+      );
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(
+        saved.local.filter(
+          ([, source]: [string, { provider: string }]) => source.provider === 'omp'
+        )
+      ).toHaveLength(2);
+      // A restart discards unpublished coverage and keeps the whole legacy unit.
+      if (format === 'legacy-restart') {
+        started.length = 0;
+        service = new AccountAnalyticsActivityService(deps);
+        expect((await settled(service)).totals?.inputTokens).toBe(524);
+        expect(started).toEqual(['/fixture/a']);
+      }
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      expect((await settled(service)).totals?.inputTokens).toBe(624);
+      expect(started).toContain('/fixture/b');
+      const complete = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(
+        complete.local.filter(
+          ([, source]: [string, { provider: string }]) => source.provider === 'omp'
+        )
+      ).toHaveLength(2);
+      expect(complete.identities).toHaveLength(complete.local.length);
+      expect(JSON.stringify(complete)).not.toContain('/fixture/');
+    }
+  );
+
+  it.each(['success', 'failed-pending', 'partial-empty', 'complete-empty'] as const)(
+    'swaps a legacy provider as one unit across capped passes (%s)',
+    async (outcome) => {
+      const scope = path.join(fixtureConfig, 'legacy-unit');
+      fs.mkdirSync(scope);
+      let pass = 0;
+      const started: string[][] = [];
+      const deps = {
+        concurrency: 1,
+        now: () => NOW + pass * 1000,
+        scope: () => scope,
+        persistSnapshot: true,
+        remote: async () => ({ results: [], states: [] }),
+        requests: (): AccountAnalyticsActivityRequest[] =>
+          Array.from({ length: 27 }, (_, i) => ({
+            provider: 'omp',
+            request: {
+              kind: 'omp',
+              roots: [`/fixture/${i}`, ...(pass ? [`/fixture/${i}-extra`] : [])],
+            },
+          })),
+        loadWorker: async (request: UsageWorkerRequest) => {
+          if (request.kind !== 'omp') throw new Error('unexpected fixture request');
+          (started[pass] ??= []).push(request.roots[0]);
+          if (outcome === 'failed-pending' && pass === 2 && request.roots[0] === '/fixture/0')
+            throw new Error('fixture failure supersedes pending read');
+          if (
+            pass &&
+            (outcome === 'complete-empty' ||
+              (outcome === 'partial-empty' && pass === 2 && request.roots[0] === '/fixture/0'))
+          )
+            return {
+              daily: [],
+              monthly: [],
+              hourly: [],
+              session: [],
+              eventCount: 0,
+              scan: {
+                complete: outcome === 'complete-empty',
+                totalFiles: 0,
+                completedFiles: 0,
+                failedFiles: 0,
+                skippedLines: 0,
+                readBytes: 0,
+              },
+            };
+          return data('k3', pass ? 2 : 1, 0);
+        },
+      };
+      const previous = new AccountAnalyticsActivityService(deps);
+      await settled(previous);
+      await previous.get({ ...QUERY, refresh: true }, FROM, NOW);
+      expect((await settled(previous)).totals?.inputTokens).toBe(27);
+      const file = path.join(
+        scope,
+        'cache',
+        'account-activity-v1',
+        'analytics-activity-snapshot-v1.json'
+      );
+      const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+      delete snapshot.identities;
+      fs.writeFileSync(file, JSON.stringify(snapshot));
+      const legacyKeys = new Set(snapshot.local.map(([key]: [string]) => key));
+      pass = 1;
+      const service = new AccountAnalyticsActivityService(deps);
+      expect((await settled(service)).totals?.inputTokens).toBe(27);
+      expect(started[1]).toHaveLength(25);
+      const retained = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(retained.local.map(([key]: [string]) => key)).toEqual([...legacyKeys]);
+      pass++;
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      const second = await settled(service);
+      expect(started[2]).toHaveLength(25);
+      expect(started[2].slice(0, 2)).toEqual(['/fixture/25', '/fixture/26']);
+      expect(second.totals?.inputTokens ?? 0).toBe(
+        outcome === 'success' ? 54 : outcome === 'complete-empty' ? 0 : 27
+      );
+      if (outcome === 'failed-pending' || outcome === 'partial-empty') {
+        expect(
+          second.sources.find((s) => s.tool === 'omp' && s.host === 'ubuntu')?.lastScanAt
+        ).toBe(new Date(NOW).toISOString());
+        pass++;
+        await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+        expect((await settled(service)).totals?.inputTokens).toBe(54);
+      }
+      const complete = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(complete.local).toHaveLength(27);
+      expect(complete.local.some(([key]: [string]) => legacyKeys.has(key))).toBe(false);
+      expect(complete.identities).toHaveLength(27);
+    }
+  );
+
   it('restores per-request local shares after a restart without doubling remote rows', async () => {
     const scope = path.join(fixtureConfig, 'persisted');
     fs.mkdirSync(scope);
@@ -1017,7 +1197,7 @@ describe('native local analytics activity', () => {
     expect(result.message).not.toContain('remaining files resume');
   });
 
-  it.each(['cold', 'upgrade', 'failed-pending'] as const)(
+  it.each(['cold', 'upgrade', 'legacy', 'failed-pending'] as const)(
     'converges capped Claude replacements with a real remote election (%s)',
     async (scenario) => {
       const scope = path.join(fixtureConfig, 'capped-claude');
@@ -1084,7 +1264,11 @@ describe('native local analytics activity', () => {
         requests: (): AccountAnalyticsActivityRequest[] =>
           Array.from({ length: upgrade ? 1 : 27 }, (_, index) => ({
             provider: 'claude',
-            request: { kind: 'claude', projectsDir: `/fixture/${index}` },
+            request: {
+              kind: 'claude',
+              projectsDir:
+                upgrade && scenario === 'legacy' ? '/fixture/previous' : `/fixture/${index}`,
+            },
           })),
         loadWorker: async (request: UsageWorkerRequest) => {
           if (request.kind !== 'claude') throw new Error('unexpected fixture request');
@@ -1097,6 +1281,17 @@ describe('native local analytics activity', () => {
       if (upgrade) {
         const previous = new AccountAnalyticsActivityService(deps);
         expect((await settled(previous)).totals?.inputTokens).toBe(27);
+        if (scenario === 'legacy') {
+          const file = path.join(
+            scope,
+            'cache',
+            'account-activity-v1',
+            'analytics-activity-snapshot-v1.json'
+          );
+          const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+          delete snapshot.identities;
+          fs.writeFileSync(file, JSON.stringify(snapshot));
+        }
         upgrade = false;
         pass++;
       }
