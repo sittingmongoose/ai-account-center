@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as claudeProfiles from '../../../src/web-server/services/claude-desktop-profile-service';
+import * as liveCache from '../../../src/web-server/services/claude-desktop-live-cache';
 import {
   applyClaudeLiveUsage,
   claudeAccount,
@@ -125,6 +126,18 @@ describe('identity-bound Claude Desktop live usage', () => {
     else process.env.CCS_DIR = previousCcsDir;
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it('returns the live reading when its retained snapshot read never answers (a hung disk)', async () => {
+    spyOn(liveCache, 'readClaudeDesktopLiveSnapshot').mockImplementation(
+      () => new Promise(() => undefined)
+    );
+    const writes = spyOn(liveCache, 'writeClaudeDesktopLiveSnapshot');
+    const result = await getLiveClaudeDesktopUsage('gmail', { refresh: true });
+    expect(result).toMatchObject({ profileId: 'gmail', email: profile.email, plan: 'max' });
+    expect(writes).toHaveBeenCalledTimes(1);
+    // The entry settled: a second caller is not left waiting on the first read.
+    expect(await getLiveClaudeDesktopUsage('gmail')).toMatchObject({ profileId: 'gmail' });
+  }, 9_000);
 
   it('returns live Windows quota for the verified account, preserving zero and actual reset', async () => {
     const result = await getLiveClaudeDesktopUsage('gmail');

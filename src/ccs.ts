@@ -1,3 +1,5 @@
+// First import: sizes Node's file and DNS thread pool before anything uses it.
+import './utils/threadpool-headroom';
 import { prepareCliArguments } from './commands/cli-bootstrap';
 
 /** Select the configuration path before invocation logging or command loads. */

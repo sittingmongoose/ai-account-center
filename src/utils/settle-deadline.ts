@@ -44,6 +44,12 @@ export function withDeadline<T>(
   }).finally(() => clearTimeout(timer));
 }
 
+/**
+ * Limit for reading or writing a small private file. A healthy disk answers in
+ * milliseconds; past this the disk is treated as hung and the cached state is used.
+ */
+export const LOCAL_FILE_DEADLINE_MS = 5_000;
+
 /** Time after a process's own timeout (SIGTERM) before it is killed and settled. */
 export const PROCESS_SETTLE_GRACE_MS = 5_000;
 

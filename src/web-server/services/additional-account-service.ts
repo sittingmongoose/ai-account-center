@@ -1,5 +1,6 @@
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
+import { LOCAL_FILE_DEADLINE_MS, withDeadline } from '../../utils/settle-deadline';
 import type {
   DashboardAccount,
   DashboardAccountWindow,
@@ -60,6 +61,8 @@ export interface AdditionalAccountDeps {
   /** Shared identity-bound source selection; null keeps the legacy collector path. */
   failover?: Pick<UsageFailoverService, 'collect' | 'peek'> | null;
   now?: () => number;
+  /** Overrides LOCAL_FILE_DEADLINE_MS for the account list read, so tests need not wait. */
+  manifestDeadlineMs?: number;
 }
 
 /** Which store listed the accounts: v1 manifest, valid v2 registry, or an unreadable v2 file. */
@@ -458,15 +461,15 @@ export class AdditionalAccountService {
   }
 
   private loadManifest(): Promise<Manifest> {
+    const unreadable = (): Manifest => ({
+      mode: 'v2-invalid',
+      fingerprint: 'invalid-account-registry',
+      valid: false,
+      sources: DEFAULT_SOURCES,
+    });
+    // One read at a time: a hung disk holds one, and later callers share it.
     this.manifestPending ??= this.readManifest()
-      .catch(
-        (): Manifest => ({
-          mode: 'v2-invalid',
-          fingerprint: 'invalid-account-registry',
-          valid: false,
-          sources: DEFAULT_SOURCES,
-        })
-      )
+      .catch(unreadable)
       .then((loaded) => {
         this.lastManifest = loaded;
         return loaded;
@@ -474,7 +477,13 @@ export class AdditionalAccountService {
       .finally(() => {
         this.manifestPending = null;
       });
-    return this.manifestPending;
+    // A read past its deadline keeps the last list in force rather than holding every row.
+    return withDeadline(
+      this.manifestPending,
+      this.deps.manifestDeadlineMs ?? LOCAL_FILE_DEADLINE_MS,
+      undefined,
+      'Account list read'
+    ).catch(() => this.lastManifest ?? unreadable());
   }
 
   private async collect(
