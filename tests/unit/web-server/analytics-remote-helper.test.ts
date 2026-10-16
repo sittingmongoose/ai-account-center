@@ -1052,7 +1052,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
   it('aggregates omp, muse and zcode per model and hour without leaking paths', () => {
     writeFixtures();
     const response = runHelper({ kinds: ['omp', 'muse', 'zcode'], minDateMs: MIN_DATE });
-    expect(response.version).toBe(1);
+    expect(response.version).toBe(2);
     const kinds = response.kinds as Record<string, { state: string }>;
     expect(kinds.omp.state).toBe('ok');
     expect(kinds.muse.state).toBe('ok');
@@ -1955,7 +1955,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       },
     });
     const response = JSON.parse(output) as Record<string, unknown>;
-    expect(response.version).toBe(1);
+    expect(response.version).toBe(2);
   });
 });
 

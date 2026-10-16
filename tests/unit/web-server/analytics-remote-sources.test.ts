@@ -74,7 +74,7 @@ function row(overrides: Record<string, unknown> = {}) {
 
 function response(overrides: Record<string, unknown> = {}) {
   return {
-    version: 1,
+    version: 2,
     truncated: false,
     kinds: {
       omp: { state: 'ok', fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20 } } },
@@ -157,7 +157,7 @@ describe('analytics remote transport', () => {
 
   it('rejects malformed, oversized or unknown-kind payloads', () => {
     expect(() => parseAnalyticsRemoteResponse('not json')).toThrow();
-    expect(() => parseAnalyticsRemoteResponse(JSON.stringify(response({ version: 2 })))).toThrow();
+    expect(() => parseAnalyticsRemoteResponse(JSON.stringify(response({ version: 3 })))).toThrow();
     expect(() =>
       parseAnalyticsRemoteResponse(JSON.stringify(response({ rows: [{ ...row(), h: 'soon' }] })))
     ).toThrow();
@@ -294,7 +294,7 @@ describe('analytics remote helper integrity', () => {
             setImmediate(() =>
               callback(
                 null,
-                JSON.stringify({ version: 1, truncated: false, kinds: {}, rows: [] }),
+                JSON.stringify({ version: 2, truncated: false, kinds: {}, rows: [] }),
                 ''
               )
             );
@@ -363,12 +363,132 @@ describe('analytics remote helper integrity', () => {
     // Nas1 streams the same packaged helper as the Mac and Windows; adding the host changed no byte
     // of it. Change this value only together with the helper itself.
     expect(ANALYTICS_HELPER_SHA256).toBe(
-      '8441469245b3392a025c1f50d7d4914a43345aa3d3d0f14ab67aedc9427349d0'
+      '2e41eaeb70fcae4cb73cc0b23742f59b5b6205a52a582c407d9f591da3f44646'
     );
   });
 });
 
 describe('analytics remote sources', () => {
+  it.each([
+    { version: 1, metadata: 'none' },
+    { version: 1, metadata: 'all' },
+    { version: 2, metadata: 'no replacement keys' },
+    { version: 2, metadata: 'no group identity' },
+  ])('rejects unsafe Claude ownership changes from reader %j through recovery', async (reader) => {
+    const other = 'b2'.repeat(32);
+    const tools = ['codex', 'omp', 'muse', 'zcode', 'antigravity'] as const;
+    const print = { size: 10, mtimeMs: 20, claudeGroup: FILE_1 };
+    const started = Date.parse('2026-10-02T16:00:00Z');
+    let pass = 0;
+    const deps = {
+      cacheDir: cache,
+      hosts: async () => ({ mac: 'fixture', windows: 'fixture', nas1: 'fixture' }),
+      claudeLogNames: () => ({ originals: new Set<string>(), complete: true }),
+      now: () => started + pass * 60_000,
+      runHelper: async () => {
+        const old = pass > 0 && pass < 4;
+        const owner = pass === 0 ? FILE_1 : other;
+        const unchanged = pass === 5;
+        return parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              version: old ? reader.version : 2,
+              truncated: pass === 1 || pass === 2,
+              kinds: {
+                claude: {
+                  state: 'ok',
+                  ...(pass === 1 || pass === 2 ? { partial: true } : {}),
+                  fingerprints: Object.fromEntries(
+                    (pass === 1 || pass === 2 ? [other] : [FILE_1, other]).map((key) => [
+                      key,
+                      old && (reader.metadata === 'none' || reader.metadata === 'no group identity')
+                        ? { size: 10, mtimeMs: 20 }
+                        : print,
+                    ])
+                  ),
+                  ...(!unchanged &&
+                  (!old || reader.metadata === 'all' || reader.metadata === 'no group identity')
+                    ? { replacedFiles: [FILE_1, other] }
+                    : {}),
+                },
+                ...Object.fromEntries(
+                  tools.map((tool) => [
+                    tool,
+                    { state: 'ok', fingerprints: { [FILE_1]: { size: 10 + pass, mtimeMs: 20 } } },
+                  ])
+                ),
+              },
+              rows: [
+                ...(unchanged ? [] : [row({ k: 'claude', f: owner, i: 200 })]),
+                ...tools.map((k) => row({ k, i: 100 + pass })),
+              ],
+              srows: unchanged ? [] : [srow({ k: 'claude', f: owner, i: 200 })],
+            })
+          )
+        );
+      },
+    };
+    for (pass = 0; pass < 6; pass++) {
+      const answer = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+      const old = pass > 0 && pass < 4;
+      for (const host of REMOTE_ANALYTICS_HOSTS) {
+        const saved = JSON.parse(
+          fs.readFileSync(path.join(cache, 'analytics-remote-v1', `${host}.json`), 'utf8')
+        );
+        expect(saved.rows.filter((row: { k: string }) => row.k === 'claude')).toEqual([
+          row({ k: 'claude', f: pass < 4 ? FILE_1 : other, i: 200 }),
+        ]);
+        expect(saved.srows).toEqual([srow({ k: 'claude', f: pass < 4 ? FILE_1 : other, i: 200 })]);
+        expect(saved.fingerprints.claude).toEqual({ [FILE_1]: print, [other]: print });
+        const cell = answer.states.find((state) => state.host === host && state.tool === 'claude');
+        expect(cell).toMatchObject({
+          state: old ? 'cached' : 'ok',
+          lastScanAt: new Date(started + (old ? 0 : pass) * 60_000).toISOString(),
+          rowCount: 2,
+          detail: old
+            ? 'the computer answered with an older reader; showing previously read usage'
+            : null,
+        });
+        if (old) expect(saved.settled).toBe(false);
+        for (const tool of tools) {
+          expect(saved.rows.find((row: { k: string }) => row.k === tool).i).toBe(100 + pass);
+          expect(saved.kinds[tool].lastScanAt).toBe(
+            new Date(started + pass * 60_000).toISOString()
+          );
+        }
+      }
+      for (const { data } of answer.results.filter((entry) => entry.tool === 'claude')) {
+        expect(data.hourly.reduce((sum, row) => sum + row.inputTokens, 0)).toBe(200);
+        expect(data.session.reduce((sum, row) => sum + row.inputTokens, 0)).toBe(200);
+      }
+    }
+  });
+
+  it('does not seed Claude usage or a read date from an older reader on a cold cache', async () => {
+    const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
+      cacheDir: cache,
+      hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
+      runHelper: async () =>
+        parseAnalyticsRemoteResponse(
+          JSON.stringify(
+            response({
+              version: 1,
+              kinds: { claude: { state: 'ok', fingerprints: {} } },
+              rows: [row({ k: 'claude' })],
+            })
+          )
+        ),
+    });
+    expect(answer.results).toEqual([]);
+    expect(
+      answer.states.find((state) => state.host === 'mac' && state.tool === 'claude')
+    ).toMatchObject({
+      state: 'scanning',
+      lastScanAt: null,
+      detail: 'the computer answered with an older reader; waiting for a compatible reader',
+    });
+  });
+
   it.each([350, 150, 200])(
     'keeps both Claude aggregates at %i when an incomplete group emits no replacement',
     async (total) => {
@@ -597,7 +717,9 @@ describe('analytics remote sources', () => {
                 claude: {
                   state: 'ok',
                   ...(pass > 0 ? { partial: true, readFailures: 2 } : {}),
-                  fingerprints: pass > 0 ? {} : { [FILE_1]: { size: 10, mtimeMs: 20 } },
+                  fingerprints:
+                    pass > 0 ? {} : { [FILE_1]: { size: 10, mtimeMs: 20, claudeGroup: FILE_1 } },
+                  ...(pass === 0 ? { replacedFiles: [FILE_1] } : {}),
                 },
               },
               rows: pass > 0 ? [] : [row({ k: 'claude', i: 200 })],
@@ -841,7 +963,10 @@ describe('analytics remote sources', () => {
                 claude: {
                   state: 'ok',
                   partial: true,
-                  fingerprints: { [FILE_1]: { size: 10, mtimeMs: 20, usageSkipped: true } },
+                  fingerprints: {
+                    [FILE_1]: { size: 10, mtimeMs: 20, usageSkipped: true, claudeGroup: FILE_1 },
+                  },
+                  replacedFiles: [FILE_1],
                 },
               },
               rows: [row({ k: 'claude' })],
@@ -915,6 +1040,7 @@ describe('analytics remote sources', () => {
                 mtimeMs: 20,
                 claudeName: name,
                 claudeMirror: true,
+                claudeGroup: name,
               };
             });
           if (host === 'nas1' && !pruned)
@@ -923,12 +1049,13 @@ describe('analytics remote sources', () => {
               mtimeMs: 20,
               claudeName: remoteOriginal,
               claudeMirror: false,
+              claudeGroup: remoteOriginal,
             };
           const fresh = Object.keys(prints).filter((key) => !request.fingerprints.claude?.[key]);
           return parseAnalyticsRemoteResponse(
             JSON.stringify(
               response({
-                kinds: { claude: { state: 'ok', fingerprints: prints } },
+                kinds: { claude: { state: 'ok', fingerprints: prints, replacedFiles: fresh } },
                 rows: fresh.map((f) => row({ k: 'claude', f, n: 1, c: 0 })),
                 srows: fresh.map((f) => srow({ k: 'claude', f, n: 1, c: 0 })),
               })
@@ -1503,7 +1630,7 @@ describe('analytics remote scans per kind', () => {
   const answer = (kinds: string[], extra: Record<string, unknown> = {}) =>
     parseAnalyticsRemoteResponse(
       JSON.stringify({
-        version: 1,
+        version: 2,
         truncated: false,
         kinds: Object.fromEntries(
           kinds.map((kind) => [
@@ -1649,7 +1776,7 @@ describe('analytics remote scans per kind', () => {
       kind === 'omp'
         ? { [FILE_1]: { size: 10, mtimeMs: 20 } }
         : kind === 'claude'
-          ? { [FILE_2]: { size: 10, mtimeMs: 20 } }
+          ? { [FILE_2]: { size: 10, mtimeMs: 20, claudeGroup: FILE_2 } }
           : {};
     // Scan 1: a Claude Code file and an OMP file; zcode is left pending, so scan 2 fans out.
     await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -1659,10 +1786,14 @@ describe('analytics remote scans per kind', () => {
         const kind = request.kinds[0];
         return parseAnalyticsRemoteResponse(
           JSON.stringify({
-            version: 1,
+            version: 2,
             truncated: kind === 'zcode',
             kinds: {
-              [kind]: { state: kind === 'zcode' ? 'pending' : 'ok', fingerprints: prints(kind) },
+              [kind]: {
+                state: kind === 'zcode' ? 'pending' : 'ok',
+                fingerprints: prints(kind),
+                ...(kind === 'claude' ? { replacedFiles: [FILE_2] } : {}),
+              },
             },
             rows:
               kind === 'omp'
@@ -1684,7 +1815,7 @@ describe('analytics remote scans per kind', () => {
         const kind = request.kinds[0];
         return parseAnalyticsRemoteResponse(
           JSON.stringify({
-            version: 1,
+            version: 2,
             truncated: kind === 'claude',
             kinds: { [kind]: { state: 'ok', fingerprints: {} } },
             rows: [],
@@ -1764,10 +1895,17 @@ describe('remote rows price like the local rows of their tool', () => {
       runHelper: async (_alias, _platform, request) =>
         parseAnalyticsRemoteResponse(
           JSON.stringify({
-            version: 1,
+            version: 2,
             truncated: false,
             kinds: Object.fromEntries(
-              request.kinds.map((k) => [k, { state: 'ok', fingerprints: {} }])
+              request.kinds.map((k) => [
+                k,
+                {
+                  state: 'ok',
+                  fingerprints: {},
+                  ...(k === 'claude' ? { replacedFiles: [FILE_1] } : {}),
+                },
+              ])
             ),
             rows: request.kinds.includes('claude')
               ? [
@@ -1825,7 +1963,7 @@ describe('remote rows price like the local rows of their tool', () => {
       runHelper: async (_alias, _platform, request) =>
         parseAnalyticsRemoteResponse(
           JSON.stringify({
-            version: 1,
+            version: 2,
             truncated: false,
             kinds: Object.fromEntries(
               request.kinds.map((k) => [k, { state: 'ok', fingerprints: {} }])

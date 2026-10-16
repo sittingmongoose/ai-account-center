@@ -113,7 +113,8 @@ export interface AnalyticsRemoteKindResult {
 }
 
 export interface AnalyticsRemoteResponse {
-  version: 1;
+  /** v1 is readable for non-Claude tools only; v2 guarantees Claude copy-group replacements. */
+  version: 1 | 2;
   /** A file, row or deadline cap stopped the scan: some files were not read. */
   truncated: boolean;
   /** Only the search for custom OMP session roots hit its bounds. */
@@ -121,6 +122,23 @@ export interface AnalyticsRemoteResponse {
   kinds: Record<AnalyticsRemoteKind, AnalyticsRemoteKindResult>;
   rows: AnalyticsRemoteRow[];
   srows: AnalyticsRemoteSessionRow[];
+}
+
+/**
+ * v1 predates atomic Claude ownership changes, even though some v1 readers
+ * emitted replacement metadata. Require an explicit v2 declaration and the
+ * metadata itself; a future reader must not silently restore file-only merges.
+ * Unchanged or withheld groups legitimately emit no replacement list or rows.
+ */
+export function hasClaudeReplacementMetadata(response: AnalyticsRemoteResponse): boolean {
+  const kind = response.kinds.claude;
+  if (response.version !== 2 || !kind) return false;
+  if (kind.state !== 'ok') return true;
+  if (Object.values(kind.fingerprints).some((print) => !print.claudeGroup)) return false;
+  const replaced = new Set(kind.replacedFiles);
+  const confirmed = (row: AnalyticsRemoteRow | AnalyticsRemoteSessionRow) =>
+    row.k !== 'claude' || replaced.has(row.f);
+  return response.rows.every(confirmed) && response.srows.every(confirmed);
 }
 
 export interface AnalyticsRemoteRequest {
@@ -266,7 +284,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     throw new AnalyticsRemoteTransportError();
   }
   if (
-    response.version !== 1 ||
+    (response.version !== 1 && response.version !== 2) ||
     typeof response.truncated !== 'boolean' ||
     (response.discoveryTruncated !== undefined && typeof response.discoveryTruncated !== 'boolean')
   ) {
@@ -371,7 +389,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     };
   }
   return {
-    version: 1,
+    version: response.version,
     truncated: response.truncated,
     ...(response.discoveryTruncated === true ? { discoveryTruncated: true } : {}),
     kinds: parsed,

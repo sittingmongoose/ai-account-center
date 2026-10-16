@@ -20,7 +20,7 @@ Request (all fields validated, unknown fields rejected):
                    "codex": {...}, "omp": {...}, "muse": {...}, "zcode": {...}}}
 
 Response:
-  {"version": 1, "truncated": false, "discoveryTruncated": false,
+  {"version": 2, "truncated": false, "discoveryTruncated": false,
    "kinds": {"omp": {"state": "ok"|"not_installed"|"error"|"pending",
                      "partial": true?, "fingerprints": {...},
                      "walUnread": true?}} ,
@@ -35,6 +35,7 @@ merges rows by filekey and drops rows whose filekey disappeared.
 Claude fingerprints carry a hashed "claudeGroup" identity. When a group is
 read, "replacedFiles" lists all current and previous member keys whose cached
 hourly and session rows must be replaced together, even if no new rows exist.
+Version 2 declares these Claude replacement semantics; version 1 alone did not.
 "readFailures" counts distinct logs whose fingerprint or read failed; it is
 separate from deadline/cap truncation and always marks the kind partial.
 
@@ -110,7 +111,7 @@ def _find_zstd_tool():
 
 ZSTD_TOOL = _find_zstd_tool()
 
-VERSION = 1
+VERSION = 2
 # Same ceilings the server collector uses where they apply.
 MAX_FILES = 20000
 MAX_LINE_BYTES = 8 * 1024 * 1024

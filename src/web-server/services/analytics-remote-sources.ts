@@ -12,6 +12,7 @@ import {
   AnalyticsHelperIntegrityError,
   REMOTE_ANALYTICS_HOSTS,
   fixedAnalyticsRemoteAliases,
+  hasClaudeReplacementMetadata,
   runAnalyticsRemoteHelper,
   resolveAnalyticsRemoteHosts,
   type AnalyticsRemoteAliases,
@@ -540,6 +541,7 @@ async function scanHost(
   response: AnalyticsRemoteResponse;
   cutKinds: Set<AnalyticsRemoteKind>;
   failedKinds: Set<AnalyticsRemoteKind>;
+  olderClaude: boolean;
 } | null> {
   const groups = cached.settled === true ? [kinds] : kinds.map((kind) => [kind]);
   const answers = new Map<AnalyticsRemoteKind[], AnalyticsRemoteResponse | null>();
@@ -558,7 +560,7 @@ async function scanHost(
     }
   });
   const merged: AnalyticsRemoteResponse = {
-    version: 1,
+    version: 2,
     truncated: false,
     kinds: {} as AnalyticsRemoteResponse['kinds'],
     rows: [],
@@ -566,6 +568,7 @@ async function scanHost(
   };
   const cutKinds = new Set<AnalyticsRemoteKind>();
   const failedKinds = new Set<AnalyticsRemoteKind>();
+  let olderClaude = false;
   for (const group of groups) {
     const answer = answers.get(group) ?? null;
     for (const kind of group) {
@@ -577,6 +580,7 @@ async function scanHost(
       // An omitted requested kind never confirms that its earlier rows disappeared.
       const entry: AnalyticsRemoteKindResult | undefined = answer.kinds[kind];
       merged.kinds[kind] = entry ?? { state: 'error', fingerprints: {} };
+      if (kind === 'claude' && entry && !hasClaudeReplacementMetadata(answer)) olderClaude = true;
       if (answer.truncated) {
         cutKinds.add(kind);
         merged.truncated = true;
@@ -586,7 +590,9 @@ async function scanHost(
       merged.srows.push(...(answer.srows ?? []).filter((row) => row.k === kind));
     }
   }
-  return failedKinds.size === kinds.length ? null : { response: merged, cutKinds, failedKinds };
+  return failedKinds.size === kinds.length
+    ? null
+    : { response: merged, cutKinds, failedKinds, olderClaude };
 }
 
 export async function loadAnalyticsRemoteSources(
@@ -658,13 +664,14 @@ export async function loadAnalyticsRemoteSources(
           states.push(...part.states);
           return;
         }
-        const { response, cutKinds, failedKinds } = scan;
+        const { response, cutKinds, failedKinds, olderClaude } = scan;
         await yieldTurn();
         const errored = new Set(kinds.filter((tool) => response.kinds[tool]?.state === 'error'));
         // Files a scan did not reach keep their rows and prints until a scan
         // reaches them: after a kind's scan was cut, a kind that could not be
         // read, or (OMP) a root search that hit its bounds.
         const keepsUnvisited = (tool: AnalyticsRemoteKind): boolean =>
+          (tool === 'claude' && olderClaude) ||
           cutKinds.has(tool) ||
           (tool === 'codex' && response.kinds.codex?.partial === true) ||
           errored.has(tool) ||
@@ -674,6 +681,10 @@ export async function loadAnalyticsRemoteSources(
           (tool === 'omp' && response.discoveryTruncated === true);
         const freshPrints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
         const discarded = (tool: AnalyticsRemoteKind) =>
+          // Reject the whole Claude kind, even a seemingly complete old scan:
+          // file-only answers cannot prove which cached copy owners to replace.
+          // Retaining rows, prints and their date is safer than inferring a rebuild.
+          (tool === 'claude' && olderClaude) ||
           errored.has(tool) ||
           response.kinds[tool]?.state === 'pending' ||
           (tool === 'antigravity' && response.kinds[tool]?.unreadable === true);
@@ -755,6 +766,7 @@ export async function loadAnalyticsRemoteSources(
             lastScanAt: scannedAt,
             kinds: kindReads,
             settled:
+              !olderClaude &&
               cutKinds.size === 0 &&
               failedKinds.size === 0 &&
               kinds.every(
@@ -774,6 +786,22 @@ export async function loadAnalyticsRemoteSources(
           const srows = mergedSessions.filter((row) => row.k === tool);
           const kind = response.kinds[tool];
           const kindState = kind?.state ?? 'error';
+          if (tool === 'claude' && olderClaude) {
+            if (rows.length || srows.length)
+              results.push({ tool, data: toWorkerResult(rows, srows, tool) });
+            states.push({
+              tool,
+              host,
+              state: rows.length || srows.length ? 'cached' : 'scanning',
+              lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
+              rowCount: rows.reduce((sum, row) => sum + Math.floor(row.n), 0),
+              detail:
+                rows.length || srows.length
+                  ? 'the computer answered with an older reader; showing previously read usage'
+                  : 'the computer answered with an older reader; waiting for a compatible reader',
+            });
+            continue;
+          }
           if (kindState === 'not_installed') {
             states.push({
               tool,
