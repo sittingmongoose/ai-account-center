@@ -1004,7 +1004,9 @@ component ScrolledHost inherits Rectangle {
                     FootLine { icon: "clock"; text: SessionLength.line(root.auth.session-hours); }
                     FootLine { icon: "link"; text: "The Mac and Windows trays stay signed in with their own device tokens"; }
                 }
-                Rectangle { height: 16px + Device.safe-bottom; }
+                // the keyboard covers the safe-bottom inset; while it is up the column grows by its height, so
+                // the keyboard scroll has room even when the page fits the window without it (4.5.2)
+                Rectangle { height: 16px + max(Device.safe-bottom, Device.keyboard); }
             }
         }
     }
@@ -1035,7 +1037,8 @@ component ShortHost inherits Rectangle {
                 padding-left: Breakpoints.gutter + Device.safe-left;
                 padding-right: Breakpoints.gutter + Device.safe-right;
                 padding-top: 24px;
-                padding-bottom: 24px + Device.safe-bottom;
+                // room for the keyboard scroll, as ScrolledHost (4.5.2)
+                padding-bottom: 24px + max(Device.safe-bottom, Device.keyboard);
                 spacing: 24px;
                 VerticalLayout {
                     horizontal-stretch: 1;
@@ -1235,6 +1238,10 @@ export component SignInLayer inherits Rectangle {
     // the focused field's top above safe-top + 8; never scroll back on blur ----
     property <length> kbd-h: Device.keyboard;
     changed kbd-h => { root.retarget(); }
+    // the scrolled page grows by the keyboard after it arrives (ScrolledHost): aim again once the range has
+    // grown, or the first aim is clamped to the range the page had without the keyboard
+    property <length> max-s: SigninScroll.max-scroll;
+    changed max-s => { root.retarget(); }
     changed height => { root.retarget(); }
     pure function focused-y() -> length {
         if root.login-focus == "pass" { return SigninScroll.report.pass.y; }

@@ -2,6 +2,17 @@
 import { Theme, Motion, Type, Breakpoints, Device } from "../theme.slint";
 import { Icon } from "icon.slint";
 
+// The page field that has the keyboard (not the sign-in page's mirror fields, which scroll their own page):
+// its box in window pixels, kept current while it is focused, so the page scroll can keep it above the
+// on-screen keyboard (DESIGN-MOBILE.md 2.5). `serial` changes on every focus; a blur clears `on` only for the
+// field that set it, so moving between fields never drops the newer one.
+export global FocusedField {
+    in-out property <bool> on: false;
+    in-out property <int> serial: 0;
+    in-out property <length> top: 0px;
+    in-out property <length> bottom: 0px;
+}
+
 export component Field inherits VerticalLayout {
     in property <string> label;
     in property <string> aside;
@@ -50,6 +61,26 @@ export component Field inherits VerticalLayout {
 
     property <bool> revealed: false;
     property <bool> focused: input.has-focus || root.ext-focus;
+    property <bool> has-keyboard: input.has-focus && !root.mirror;
+    property <int> focus-serial: -1;
+    changed has-keyboard => {
+        if root.has-keyboard {
+            FocusedField.serial += 1;
+            root.focus-serial = FocusedField.serial;
+            FocusedField.top = root.box-y;
+            FocusedField.bottom = root.box-y + root.box-h;
+            FocusedField.on = true;
+        } else if FocusedField.serial == root.focus-serial {
+            FocusedField.on = false;
+        }
+    }
+    // the page scrolls under a focused field: keep its box current for the next keyboard change
+    changed box-y => {
+        if root.has-keyboard && FocusedField.serial == root.focus-serial {
+            FocusedField.top = root.box-y;
+            FocusedField.bottom = root.box-y + root.box-h;
+        }
+    }
     spacing: 6px;
     HorizontalLayout {
         Text { text: root.label; font-size: root.label-size; font-weight: root.label-weight; color: Theme.ink-2; horizontal-stretch: 1; }

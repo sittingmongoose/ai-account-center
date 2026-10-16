@@ -24,6 +24,7 @@ import { SlideOver } from "components/slide-over.slint";
 import { Sheet, SidePanel, Overlays } from "components/sheet.slint";
 import { Popover } from "components/popover.slint";
 import { Dialog } from "components/dialog.slint";
+import { FocusedField } from "components/field.slint";
 import { ToastStack } from "components/toast.slint";
 import { Hover, HoverLayer } from "components/hover-card.slint";
 import { MobileHeader, TabBar } from "shell/chrome.slint";
@@ -422,6 +423,22 @@ export component Dashboard inherits Window {
     // conditional and cannot be referenced from outside its `if`.
     property <bool> tab-bar-shown: Breakpoints.tier-p && !Breakpoints.short && Device.keyboard == 0px;
     property <length> tab-bar-h: tab-bar-shown ? 52px + max(Device.safe-bottom, 8px) : 0px;
+
+    // A focused page field stays in the band between the chrome and the on-screen keyboard (2.5), 12 px
+    // clear of each: on focus and whenever the keyboard's height changes. The pages' bottom padding already
+    // grows by the keyboard, so there is room to scroll; the sign-in layer scrolls its own page.
+    property <length> kb-h: Device.keyboard;
+    property <int> field-serial: FocusedField.serial;
+    changed kb-h => { root.reveal-field(); }
+    changed field-serial => { root.reveal-field(); }
+    function reveal-field() {
+        if !FocusedField.on || Device.keyboard <= 0px || !root.authenticated { return; }
+        let below = FocusedField.bottom - (root.height - Device.keyboard - 12px);
+        let above = FocusedField.top - (root.chrome-h + 12px);
+        let delta = below > 0px ? min(below, max(0px, above)) : min(0px, above);
+        if delta == 0px { return; }
+        scroller.content-y = clamp(scroller.content-y - delta, -max(0px, scroller.content-height - scroller.height), 0px);
+    }
 
     // ---------- overlays below D (DESIGN-MOBILE.md 3.5-3.9) ----------
     // `pop` is the open header popover (1 status, 2 appearance, 3 account); the account menu is a
