@@ -447,10 +447,11 @@ export component AxHeader inherits Rectangle {
     // The tools share the title's row from 1360 px only while both fit at their natural widths: the title's
     // subline grows with the Updating note and the Included usage flags, and nothing on it elides. The two
     // widths are reported by the title and by whichever tools row exists (both hold the same controls).
+    // The wide row is title, spacer, tools at 28 px spacing, so it needs two 28 px gaps.
     property <length> title-w: 0px;
     property <length> tools-w: 0px;
     property <bool> wide: Breakpoints.width >= 1360px
-        && root.title-w + 28px + root.tools-w <= min(Breakpoints.width, Breakpoints.max-content) - 2 * Breakpoints.gutter;
+        && root.title-w + 56px + root.tools-w <= min(Breakpoints.width, Breakpoints.max-content) - 2 * Breakpoints.gutter;
     property <[AxSegItem]> ranges: [{ value: "24h", label: "24H" }, { value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "month", label: "Month" }, { value: "all", label: "All" }];
     // the 3 + 2 wrap of the range control when a segment would be under 64 px (DESIGN-MOBILE 1.5)
     property <[AxSegItem]> ranges-a: [root.ranges[0], root.ranges[1], root.ranges[2]];

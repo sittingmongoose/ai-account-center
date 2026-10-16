@@ -33,7 +33,7 @@ test('the sign-in pages grow by the keyboard so the Sign in button can scroll ab
 
 test('the Analytics desktop header keeps its tools on the title row only while both fit', () => {
   const source = read('pages/analytics/ax-head.slint');
-  assert.match(source, /property <bool> wide: Breakpoints.width >= 1360px\s*&& root.title-w \+ 28px \+ root.tools-w <= min\(Breakpoints.width, Breakpoints.max-content\) - 2 \* Breakpoints.gutter;/);
+  assert.match(source, /property <bool> wide: Breakpoints.width >= 1360px\s*&& root.title-w \+ 56px \+ root.tools-w <= min\(Breakpoints.width, Breakpoints.max-content\) - 2 \* Breakpoints.gutter;/);
   assert.equal((source.match(/root.title-w = self.natural/g) || []).length, 2);
   // the wide row and the second row both report the same controls' width
   assert.equal((source.match(/root.tools-w = self.natural/g) || []).length, 4);
