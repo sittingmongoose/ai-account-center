@@ -328,22 +328,22 @@ describe('compiled Node usage workers', () => {
     });
   });
 
-  it('terminates a deadline-limited analytics worker without returning raw logs or project paths', async () => {
+  it('never cuts a worker below its own read bound, and returns no raw logs or project paths', async () => {
+    // The collector stops reading at 12 s and needs time to return its checkpoints, so a tiny
+    // budget is raised to the 15 s floor instead of killing the worker mid-write.
     const codexHome = writeCodexFixture();
     const request = { kind: 'codex', codexHome, cacheDir: path.join(tempRoot, 'native-cache') };
     const result = (await runNode(`
       const { loadAccountAnalyticsWorker } = require('./dist/web-server/services/account-analytics-activity');
       (async () => {
-        try { await loadAccountAnalyticsWorker(${JSON.stringify(request)}, 1); throw new Error('Unexpected success'); }
-        catch (error) {
-          if (error.message === 'Unexpected success') throw error;
-          console.log('RESULT ' + JSON.stringify({ bounded: true, message: error.message }));
-        }
+        const data = await loadAccountAnalyticsWorker(${JSON.stringify(request)}, 1);
+        console.log('RESULT ' + JSON.stringify({ keys: Object.keys(data).sort(), text: JSON.stringify(data) }));
       })().catch(error => { console.error(error); process.exitCode = 1; });
-    `)) as { bounded: boolean; message: string };
-    expect(result.bounded).toBe(true);
-    expect(result.message).toBe('Local analytics worker could not return bounded usage history');
-    expect(result.message).not.toContain(tempRoot);
+    `)) as { keys: string[]; text: string };
+    expect(result.keys).toEqual(['daily', 'eventCount', 'hourly', 'monthly', 'session']);
+    expect(JSON.parse(result.text).eventCount).toBe(1);
+    expect(result.text).not.toContain(tempRoot);
+    expect(result.text).not.toContain('token_count');
   });
 
   it('rejects collection errors, startup failures and premature worker exits', async () => {

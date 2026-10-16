@@ -134,8 +134,8 @@ describe('cross-platform', () => {
       assert(packageJson.scripts, 'package.json should have scripts field');
       assert.strictEqual(
         packageJson.scripts.prepack,
-        'bun run build:all',
-        'prepack should rebuild packaged assets before npm pack/publish'
+        'node scripts/check-line-endings.js && bun run build:all',
+        'prepack should refuse CRLF helpers, then rebuild packaged assets before npm pack/publish'
       );
     });
   });
