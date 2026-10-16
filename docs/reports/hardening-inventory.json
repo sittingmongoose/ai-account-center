@@ -1,25 +1,29 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1237,
-    "filesAffected": 127,
-    "hotpathOccurrences": 589,
-    "hotpathFilesAffected": 71,
+    "totalOccurrences": 1335,
+    "filesAffected": 132,
+    "hotpathOccurrences": 690,
+    "hotpathFilesAffected": 77,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 54,
+        "count": 108,
         "calls": [
           "chmodSync",
           "closeSync",
+          "copyFileSync",
           "existsSync",
           "mkdirSync",
           "opendirSync",
           "openSync",
           "readFileSync",
           "readSync",
+          "realpathSync",
           "renameSync",
+          "rmSync",
           "statSync",
+          "unlinkSync",
           "writeFileSync"
         ],
         "markers": []
@@ -76,6 +80,23 @@
         "markers": []
       },
       {
+        "file": "src/web-server/services/usage-failover-cache.ts",
+        "count": 19,
+        "calls": [
+          "closeSync",
+          "fstatSync",
+          "lstatSync",
+          "mkdirSync",
+          "opendirSync",
+          "openSync",
+          "readSync",
+          "renameSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/commands/bar/install-subcommand.ts",
         "count": 18,
         "calls": [
@@ -121,6 +142,22 @@
         "markers": []
       },
       {
+        "file": "src/web-server/services/app-update-service.ts",
+        "count": 17,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "mkdirSync",
+          "openSync",
+          "readFileSync",
+          "renameSync",
+          "statSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/management/shared-manager/shared-dir-linker.ts",
         "count": 16,
         "calls": [
@@ -135,42 +172,31 @@
           "writeFileSync"
         ],
         "markers": []
-      },
+      }
+    ],
+    "topFilesOverall": [
       {
-        "file": "src/web-server/services/account-refresh-settings.ts",
-        "count": 15,
-        "calls": [
-          "closeSync",
-          "fsyncSync",
-          "lstatSync",
-          "mkdirSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "renameSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/services/app-update-service.ts",
-        "count": 15,
+        "file": "src/web-server/usage/account-activity-collector.ts",
+        "count": 108,
         "calls": [
           "chmodSync",
           "closeSync",
+          "copyFileSync",
+          "existsSync",
           "mkdirSync",
+          "opendirSync",
           "openSync",
           "readFileSync",
+          "readSync",
+          "realpathSync",
           "renameSync",
+          "rmSync",
           "statSync",
           "unlinkSync",
           "writeFileSync"
         ],
         "markers": []
-      }
-    ],
-    "topFilesOverall": [
+      },
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
         "count": 85,
@@ -209,24 +235,6 @@
           "renameSync",
           "rmdirSync",
           "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 54,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "existsSync",
-          "mkdirSync",
-          "opendirSync",
-          "openSync",
-          "readFileSync",
-          "readSync",
-          "renameSync",
-          "statSync",
           "writeFileSync"
         ],
         "markers": []
@@ -353,8 +361,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 200,
-    "filesAffected": 76,
+    "totalMarkers": 225,
+    "filesAffected": 78,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -400,6 +408,30 @@
           "// Priority 0.25: Check explicit legacy Cursor bridge profile.",
           "// Priority 3: Check settings-based profiles (glm, km) - LEGACY FALLBACK",
           "// Priority 4: Check account-based profiles (work, personal) - LEGACY FALLBACK"
+        ]
+      },
+      {
+        "file": "src/web-server/usage/account-activity-collector.ts",
+        "count": 17,
+        "calls": [],
+        "markers": [
+          "/** Bounded request-level fallback for legacy paths whose ownership is still unknown. */",
+          "/** Legacy checkpoints have no recoverable path until discovery finds them again. */",
+          "/** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */",
+          "// A complete walk confirms that an unlocated legacy source is gone.",
+          "// legacy rows could belong to any group: retain their previous contributions.",
+          "// records. Preserve the legacy exact-copy rule for renamed copies too.",
+          "// Without an owner or a prior coherent answer, summing compact legacy rows",
+          "chosenClaude.set(key, { entry: e, group: 'legacy' });",
+          "const key = `legacy:${e.sessionId}:${k}`;",
+          "const legacy: Checkpoint[] = [];",
+          "for (const value of legacy) {",
+          "if (request.kind === 'claude' && legacy.length) {",
+          "legacy,",
+          "legacy: Checkpoint[],",
+          "legacy.push(loadCheckpoint(cache, '', stats, minDate, kind, value.mode, true, true));",
+          "legacy.some((value) => value.rows.length || value.pendingClaude || value.keyed?.length)",
+          "totalFiles: scanned.length + legacy.length,"
         ]
       },
       {
@@ -500,17 +532,6 @@
           "* Normalize known legacy iFlow model aliases to current upstream model IDs.",
           "/** Normalize legacy Codex aliases to the current public Codex model IDs. */"
         ]
-      },
-      {
-        "file": "src/commands/bar/uninstall-subcommand.ts",
-        "count": 4,
-        "calls": [],
-        "markers": [
-          ": [paths.canonical, paths.legacy];",
-          "? [paths.legacy, paths.canonical]",
-          "(!target.stat.isSymbolicLink() && target.source === paths.legacy)",
-          "const executables = [paths.canonical, paths.legacy].map((app) =>"
-        ]
       }
     ],
     "explicitShimFiles": [
@@ -522,16 +543,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 674,
-      "typedThrows": 171,
+      "totalThrows": 701,
+      "typedThrows": 194,
       "plainThrows": 72,
-      "otherThrows": 431,
-      "adoptionRatio": 0.2537,
+      "otherThrows": 435,
+      "adoptionRatio": 0.2767,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 314,
-          "typed": 106,
+          "count": 339,
+          "typed": 129,
           "plain": 10
         },
         {
@@ -542,7 +563,7 @@
         },
         {
           "subdomain": "codex-auth",
-          "count": 100,
+          "count": 102,
           "typed": 8,
           "plain": 25
         },
@@ -603,9 +624,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 40,
-      "totalSourceFiles": 426,
-      "coverageRatio": 0.0939,
+      "filesWithCreateLogger": 41,
+      "totalSourceFiles": 446,
+      "coverageRatio": 0.0919,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -632,12 +653,12 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 159,
-          "withLogger": 23
+          "count": 177,
+          "withLogger": 25
         },
         {
           "subdomain": "utils",
-          "count": 40,
+          "count": 41,
           "withLogger": 1
         },
         {
@@ -648,11 +669,11 @@
         {
           "subdomain": "codex-auth",
           "count": 37,
-          "withLogger": 10
+          "withLogger": 9
         },
         {
           "subdomain": "commands",
-          "count": 34,
+          "count": 35,
           "withLogger": 1
         },
         {
@@ -751,16 +772,16 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 52,
-      "countOver600": 20,
+      "countOver400": 58,
+      "countOver600": 21,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 2472
+          "loc": 3724
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1453
+          "loc": 2058
         },
         {
           "file": "src/web-server/model-pricing.ts",
@@ -776,7 +797,15 @@
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
-          "loc": 960
+          "loc": 962
+        },
+        {
+          "file": "src/web-server/services/account-dashboard-service.ts",
+          "loc": 931
+        },
+        {
+          "file": "src/web-server/services/analytics-remote-sources.ts",
+          "loc": 918
         },
         {
           "file": "src/cliproxy/model-catalog.ts",
@@ -787,12 +816,12 @@
           "loc": 871
         },
         {
-          "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 776
+          "file": "src/web-server/usage/native-quota-collector.ts",
+          "loc": 820
         },
         {
-          "file": "src/web-server/usage/native-quota-collector.ts",
-          "loc": 768
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 776
         },
         {
           "file": "src/auth/profile-detector.ts",
@@ -803,16 +832,8 @@
           "loc": 767
         },
         {
-          "file": "src/web-server/services/account-analytics-projection.ts",
-          "loc": 710
-        },
-        {
           "file": "src/web-server/services/additional-account-service.ts",
-          "loc": 689
-        },
-        {
-          "file": "src/web-server/services/codex-auto-switch-service.ts",
-          "loc": 678
+          "loc": 751
         }
       ]
     }
