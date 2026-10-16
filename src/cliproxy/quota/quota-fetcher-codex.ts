@@ -19,12 +19,16 @@ import {
 import { sanitizeCodexFeatureLabel } from './quota-label-sanitizer';
 import { extractCanonicalEmailFromAccountId } from '../accounts/email-account-identity';
 import { createLogger } from '../../services/logging';
+import { DeadlineExceededError, withDeadline } from '../../utils/settle-deadline';
 
 const logger = createLogger('cliproxy:quota:codex');
 
 /** ChatGPT backend API base URL */
 const CODEX_API_BASE = 'https://chatgpt.com/backend-api';
 const CODEX_QUOTA_TIMEOUT_MS = 12000;
+/** Extra time for a cooperative abort to land before the attempt is settled anyway. */
+const CODEX_QUOTA_SETTLE_GRACE_MS = 1000;
+const CODEX_RESET_CREDITS_TIMEOUT_MS = 3000;
 const CODEX_QUOTA_MAX_ATTEMPTS = 2;
 const CODEX_ERROR_DETAIL_MAX_LENGTH = 240;
 
@@ -766,6 +770,46 @@ export async function fetchCodexQuotaWithToken(
   return runCodexUsageFetch(token, accountId, accountId, verbose);
 }
 
+/**
+ * Optional banked-reset details. Settles within its own deadline, including
+ * the body read, and returns null on any failure: the usage response still
+ * carries the authoritative reset count.
+ */
+async function readCodexResetCreditDetails(
+  accessToken: string,
+  chatgptAccountId: string
+): Promise<NonNullable<CodexQuotaResult['resetCredits']>['credits'] | null> {
+  const controller = new AbortController();
+  const work = (async () => {
+    const response = await fetch(`${CODEX_API_BASE}/wham/rate-limit-reset-credits`, {
+      method: 'GET',
+      signal: controller.signal,
+      redirect: 'error',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'ChatGPT-Account-Id': chatgptAccountId,
+        'User-Agent': USER_AGENT,
+      },
+    });
+    if (!response.ok) {
+      // Release the connection instead of leaving an unread body on it.
+      await response.body?.cancel();
+      return null;
+    }
+    return normalizeCodexResetCreditDetails(await response.json());
+  })();
+  try {
+    return await withDeadline(
+      work,
+      CODEX_RESET_CREDITS_TIMEOUT_MS,
+      () => controller.abort(),
+      'Codex reset-credit request'
+    );
+  } catch {
+    return null;
+  }
+}
+
 /** Shared request and normalization for CLIProxy and directly supplied native credentials. */
 async function runCodexUsageFetch(
   accessToken: string,
@@ -779,17 +823,24 @@ async function runCodexUsageFetch(
   for (let attempt = 1; attempt <= CODEX_QUOTA_MAX_ATTEMPTS; attempt++) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CODEX_QUOTA_TIMEOUT_MS);
+    // The abort normally ends the attempt. This backstop settles it even when
+    // the abort is lost, so one request cannot hold a profile's refresh forever.
+    const settleBy = Date.now() + CODEX_QUOTA_TIMEOUT_MS + CODEX_QUOTA_SETTLE_GRACE_MS;
+    const settle = <T>(work: Promise<T>) =>
+      withDeadline(work, settleBy - Date.now(), () => controller.abort(), 'Codex quota request');
 
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'ChatGPT-Account-Id': chatgptAccountId,
-          'User-Agent': USER_AGENT,
-        },
-      });
+      const response = await settle(
+        fetch(url, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'ChatGPT-Account-Id': chatgptAccountId,
+            'User-Agent': USER_AGENT,
+          },
+        })
+      );
 
       if (verbose)
         logger.info('quota.fetch.status', `Codex API status: ${response.status}`, {
@@ -799,11 +850,11 @@ async function runCodexUsageFetch(
         });
 
       if (!response.ok) {
-        const bodyText = await response.text();
+        const bodyText = await settle(response.text());
         return buildCodexHttpFailureResult(accountId, response.status, bodyText);
       }
 
-      const data = (await response.json()) as CodexUsageResponse;
+      const data = (await settle(response.json())) as CodexUsageResponse;
       const windows = buildCodexQuotaWindows(data);
       const unknownWindowLabels = getUnknownCodexWindowLabels(windows);
       if (unknownWindowLabels.length > 0 && shouldLogCodexWindowWarnings(verbose)) {
@@ -820,29 +871,8 @@ async function runCodexUsageFetch(
       const extras = normalizeCodexExtraUsage(data);
       // Optional read-only metadata must never make ordinary quota collection fail.
       if (extras.resetCredits && (extras.resetCredits.available ?? 0) > 0) {
-        const resetController = new AbortController();
-        const resetTimeout = setTimeout(() => resetController.abort(), 3000);
-        try {
-          const resetResponse = await fetch(`${CODEX_API_BASE}/wham/rate-limit-reset-credits`, {
-            method: 'GET',
-            signal: resetController.signal,
-            redirect: 'error',
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              'ChatGPT-Account-Id': chatgptAccountId,
-              'User-Agent': USER_AGENT,
-            },
-          });
-          if (resetResponse.ok) {
-            extras.resetCredits.credits = normalizeCodexResetCreditDetails(
-              await resetResponse.json()
-            );
-          }
-        } catch {
-          /* The quota response still contains the authoritative count. */
-        } finally {
-          clearTimeout(resetTimeout);
-        }
+        const credits = await readCodexResetCreditDetails(accessToken, chatgptAccountId);
+        if (credits) extras.resetCredits.credits = credits;
       }
 
       // Extract plan type
@@ -872,7 +902,8 @@ async function runCodexUsageFetch(
         accountId,
       };
     } catch (err) {
-      const isAbortError = err instanceof Error && err.name === 'AbortError';
+      const isAbortError =
+        err instanceof DeadlineExceededError || (err instanceof Error && err.name === 'AbortError');
       lastErrorMsg = isAbortError
         ? 'Request timeout'
         : err instanceof Error

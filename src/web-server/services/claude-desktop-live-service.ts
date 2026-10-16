@@ -1,7 +1,8 @@
-import { execFile } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
 import { NetworkError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
+import { withProcessDeadline } from '../../utils/settle-deadline';
 import {
   CLAUDE_PROFILE_ID_PATTERN,
   listClaudeDesktopProfiles,
@@ -454,9 +455,10 @@ async function runWindowsHelper(
     ].join('; ');
     return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
   };
-  const execute = (command: string): Promise<string> =>
-    new Promise((resolve, reject) => {
-      execFile(
+  const execute = (command: string): Promise<string> => {
+    let child: ChildProcess | undefined;
+    const run = new Promise<string>((resolve, reject) => {
+      child = execFile(
         'ssh',
         [
           '-T',
@@ -498,6 +500,13 @@ async function runWindowsHelper(
         }
       );
     });
+    return withProcessDeadline(
+      run,
+      () => child,
+      PROCESS_TIMEOUT_MS,
+      () => new ClaudeDesktopLiveUsageError()
+    );
+  };
   try {
     return await execute(scriptFor(helperCall));
   } catch (error) {

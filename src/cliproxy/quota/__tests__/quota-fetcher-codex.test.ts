@@ -777,6 +777,53 @@ describe('Codex Quota Fetcher', () => {
       expect(result.needsReauth).toBeUndefined();
     }, 500);
 
+    it('settles an attempt whose request ignores its abort signal', async () => {
+      const originalSetTimeout = global.setTimeout;
+      spyOn(global, 'setTimeout').mockImplementation(((callback, delay, ...args) =>
+        originalSetTimeout(callback, Math.min(delay ?? 0, 20), ...args)) as typeof setTimeout);
+      let calls = 0;
+      // A lost completion: no abort listener, no body, never settles.
+      global.fetch = mock(() => {
+        calls += 1;
+        return new Promise<Response>(() => undefined);
+      }) as unknown as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
+      expect(calls).toBe(2);
+      expect(result).toMatchObject({
+        success: false,
+        errorCode: 'network_timeout',
+        retryable: true,
+      });
+    }, 500);
+
+    it('keeps the usage reading when the optional reset-credit request never settles', async () => {
+      const originalSetTimeout = global.setTimeout;
+      spyOn(global, 'setTimeout').mockImplementation(((callback, delay, ...args) =>
+        originalSetTimeout(callback, Math.min(delay ?? 0, 20), ...args)) as typeof setTimeout);
+      const urls: string[] = [];
+      global.fetch = mock(async (url: unknown) => {
+        urls.push(String(url));
+        if (String(url).endsWith('/wham/rate-limit-reset-credits'))
+          return new Promise<Response>(() => undefined);
+        return Response.json({
+          plan_type: 'plus',
+          rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 18000 } },
+          rate_limit_reset_credits: { available_count: 2, applicable_available_count: 2 },
+        });
+      }) as unknown as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
+      expect(urls).toEqual([
+        'https://chatgpt.com/backend-api/wham/usage',
+        'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits',
+      ]);
+      expect(result.success).toBe(true);
+      expect(result.coreUsage?.fiveHour?.remainingPercent).toBe(88);
+      expect(result.resetCredits?.available).toBe(2);
+      expect(result.resetCredits?.credits).toBeUndefined();
+    }, 500);
+
     it('uses supplied native headers without looking up CLIProxy auth', async () => {
       const configGenerator = await import('../../config/path-resolver');
       const accountManager = await import('../../accounts/account-manager');

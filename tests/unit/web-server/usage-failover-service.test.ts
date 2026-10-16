@@ -192,6 +192,23 @@ describe('identity-bound usage source failover', () => {
     expect(row.windows).toHaveLength(0);
   });
 
+  it('settles a helper request whose completion is lost and releases its shared slot', async () => {
+    const h = await harness();
+    const service = new UsageFailoverService({
+      ...h.deps,
+      requestDeadlineMs: () => 20,
+      transport: (host, request) =>
+        request.action === 'collect' && host.host === 'mac'
+          ? new Promise<UsageHelperResponse>(() => undefined)
+          : h.deps.transport(host, request),
+    });
+    // Four accounts in turn: a leaked slot per hung request would block the fourth.
+    for (const binding of ['first', 'second', 'third', 'fourth']) {
+      const row = await service.collect({ ...h.target, binding }, template());
+      expect(row).toMatchObject({ platform: 'windows', status: 'ok' });
+    }
+  }, 2000);
+
   it('rejects a changed revision in the helper response before considering its quota', async () => {
     const h = await harness();
     const service = new UsageFailoverService({

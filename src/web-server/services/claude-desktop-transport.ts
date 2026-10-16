@@ -1,8 +1,9 @@
-import { execFile } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import path from 'path';
 import { createHash } from 'crypto';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { readPackagedSource } from '../../utils/packaged-source';
+import { withProcessDeadline } from '../../utils/settle-deadline';
 import {
   CLAUDE_PROFILE_ID_PATTERN,
   type ClaudeDesktopLauncher,
@@ -53,8 +54,10 @@ async function runDesktopSsh(
   privateIndexInput?: Buffer
 ): Promise<string | Buffer> {
   const privatePipe = privateIndexInput !== undefined;
-  return new Promise((resolve, reject) => {
-    const child = execFile(
+  const timeout = privatePipe ? 30000 : SSH_TIMEOUT_MS;
+  let child: ChildProcess | undefined;
+  const run = new Promise<string | Buffer>((resolve, reject) => {
+    child = execFile(
       'ssh',
       [
         '-T',
@@ -74,7 +77,7 @@ async function runDesktopSsh(
       ],
       {
         encoding: privatePipe ? 'buffer' : 'utf8',
-        timeout: privatePipe ? 30000 : SSH_TIMEOUT_MS,
+        timeout,
         maxBuffer: privatePipe ? MAX_PRIVATE_INDEX_BYTES : MAX_HISTORY_BYTES,
         windowsHide: true,
       },
@@ -99,6 +102,12 @@ async function runDesktopSsh(
       child.stdin?.end(privateIndexInput);
     }
   });
+  return withProcessDeadline(
+    run,
+    () => child,
+    timeout,
+    () => new ClaudeDesktopTransportError(true)
+  );
 }
 
 /** Open the configured named wrapper in the console user's GUI session, keeping existing apps. */
