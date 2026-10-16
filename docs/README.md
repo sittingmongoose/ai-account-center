@@ -11,6 +11,7 @@ Do not restore retired features to satisfy outdated prose.
 
 | Need | Guide |
 | --- | --- |
+| Everything a user can see and do, remote access, update and rollback | [User guide](user-guide.md) |
 | Source ownership and current inputs | [Codebase summary](codebase-summary.md) |
 | Engineering and validation | [Code standards](code-standards.md) |
 | Data/credential boundaries | [System architecture](system-architecture/index.md) |

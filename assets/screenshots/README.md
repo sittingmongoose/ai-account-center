@@ -1,43 +1,36 @@
 # AI Account Center screenshot provenance
 
-The [dashboard](ai-account-center-dashboard.png) and
-[Analytics](ai-account-center-analytics.png) previews were captured on
-2026-10-01 from the compiled Slint 1.18.1 dashboard in headed Mac Chrome
-using native WebGL. Dashboard viewport: 1920×1440 CSS pixels. Analytics viewport:
-1920×2160 CSS pixels. Both used a DPR-2 renderer backbuffer; exported PNGs retain
-the CSS viewport dimensions. No image generation or interface mockup was used.
+Every image here shows the real, compiled product with **sample data**. No
+mockups, no image generation and no real accounts: every identity is an
+`example.com` address, and no credential, path or home-network address appears.
 
-The isolated loopback browser served validated public-response fixtures from
-2026-10-01 15:15:58 UTC, covering 15 accounts, all nine providers and 69 usable
-account/window histories. Account names, IDs, emails and source paths were
-sanitized; every visible email uses `example.com`. Credentials were absent.
-Metric, reset, expiration, status and observed-history fields retained their
-source values. Those older fixtures have no Fable Max readings, so the new
-slots remain unavailable. Muse shows its retained cached percentage reading with
-the original 13:20:06 UTC sample time, rather than the later 15:15:19 UTC fetch.
-Displayed dates use the browser's local timezone. The home cards use the compact
-270-pixel layout; Analytics totals use compact labels with exact notes/tooltips.
+Captured 2026-10-16 from the build deployed that day (package 8.10.0, branch
+`fix/analytics-agent-usage`, UI bundle `dist/ui/pkg/aaca825cbf64`).
 
-Analytics displays actual earlier Ubuntu CLI activity from Claude Code and
-Codex logs: input/output/cache tokens, session/parsed-entry counts, daily
-API-equivalent cost estimates and model plots. Estimates are not subscription
-charges or account billing attribution. Model token shares use the listed
-models only. All histories keeps each account/window separate; gaps and reset
-boundaries are preserved instead of connecting missing observations.
+## How each image was made
 
-Captured source fingerprint:
-`e7ecc939770daea2798ef7c9d857265cc4759047d64608dfb217689ac20b040e`.
-Compiled WASM SHA-256:
-`3ad6174f091f854015a64b075d87d20ae5ee0d41dba7db6b92c57420f5559ab3`.
+| Image | Source | Size |
+| --- | --- | --- |
+| `home-light.png`, `home-dark.png`, `analytics-*.png`, `accounts.png`, `switch-review.png` | The compiled Slint dashboard in Chrome on an NVIDIA GPU (WebGL2), 1600 CSS px wide at a real 2x device scale factor (`--force-device-scale-factor`, not emulation) | 3200 px wide |
+| `pwa-phones.png` | The same dashboard at an iPhone viewport (402x874 CSS px, real 3x scale, touch, mobile user agent), framed with a drawn bezel and status bar | 4 screens |
+| `tray-mac-*.png` | The installed Mac menu-bar app's own offline renderer (`CCSBar --render-preview`) | 760 pt panel at 2x |
+| `tray-win-*.png` | The Windows tray's own offline renderer (`--render-fixture`) from a scratch build with the sample data embedded | 760 px panel at 2x |
+| `demo.webp` | A 1920x1080 GPU recording (NVENC) of the dashboard, trimmed of loading frames, 1.5x speed, 12 fps, scaled to 1280 px | 28 s |
 
-| Screenshot | SHA-256 |
-| --- | --- |
-| Dashboard | `04077680de6085a9fdd68de7951d149da6da8681af2d97e20e5a9023e6a5e595` |
-| Analytics | `8027c501a9f5a0eb5fa777a18cadb79d2ec3ff480f9d6425d4cd3bccfd42239f` |
+The `analytics-*.png` images are three crops of one full-page capture.
 
-Rendering completed without page errors. PNG text metadata is absent. The
-isolated preview browser/profile was removed after capture. These screenshots
-verify actual rendering with sanitized fixture responses; they do not establish
-current live-provider availability, deployed-backend authentication or end-to-end
-behavior. Private fixture responses, previous previews and detailed verification
-receipts are retained outside the product checkout.
+## The sample data
+
+A local preview server served the compiled UI and answered its API calls from
+generated data in the current response shapes: 15 accounts across all nine
+providers, designed readings (one account near its weekly limit, Codex
+auto-switch on, a recent automatic switch), 31 days of hourly CLI activity
+priced with the product's own model rate table, a session sample, quota history
+built from each window's reset period, and a finished Update apps run. The
+trays rendered the same dashboard response. The guarded-switch dialog came
+from the preview server answering a manual switch with the same one-use
+confirmation the real server sends while Codex is busy; its process names and
+PIDs are examples.
+
+These images show what the interface looks like. They are not evidence of
+live provider availability, deployed authentication or end-to-end behavior.
