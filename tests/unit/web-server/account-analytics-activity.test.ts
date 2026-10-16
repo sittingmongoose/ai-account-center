@@ -23,6 +23,7 @@ import type {
   UsageWorkerRequest,
   UsageWorkerResult,
 } from '../../../src/web-server/usage/worker-client';
+import { codexFileRevision } from '../../../src/web-server/usage/worker-client';
 
 const NOW = Date.parse('2026-10-01T16:30:00Z');
 let fixtureConfig: string;
@@ -127,6 +128,94 @@ describe('native local analytics activity', () => {
     }
     throw new Error('background collection did not settle');
   }
+
+  it.each([false, true])(
+    'answers while a large compressed read runs, shows its detail, and cancels it on shutdown (empty: %s)',
+    async (empty) => {
+      const file = path.join(fixtureConfig, 'rollout-fixture.jsonl.zst');
+      fs.writeFileSync(file, 'synthetic fixture');
+      const spec = {
+        file,
+        checkpoint: path.join(fixtureConfig, 'checkpoint'),
+        revision: codexFileRevision(fs.statSync(file)),
+        minDate: FROM,
+      };
+      let running = false;
+      let cancelled = false;
+      const service = new AccountAnalyticsActivityService({
+        persistSnapshot: true,
+        remote: async () => ({ results: [], states: [] }),
+        now: () => NOW,
+        scope: () => fixtureConfig,
+        requests: () => [
+          {
+            provider: 'codex',
+            request: { kind: 'codex', codexHome: fixtureConfig, cacheDir: fixtureConfig },
+          },
+        ],
+        loadWorker: async () => ({
+          ...data('gpt-5.4', 100, 0),
+          ...(empty ? { eventCount: 0, hourly: [], session: [] } : {}),
+          scan: {
+            complete: false,
+            completedFiles: 0,
+            totalFiles: 1,
+            skippedLines: 0,
+            failedFiles: 0,
+            readBytes: 0,
+            largeCodexReads: [spec],
+          },
+        }),
+        largeCodexReader: async (_spec, signal) => {
+          running = true;
+          await new Promise<void>((resolve) =>
+            signal.addEventListener(
+              'abort',
+              () => {
+                cancelled = true;
+                resolve();
+              },
+              { once: true }
+            )
+          );
+          return undefined;
+        },
+      });
+      try {
+        await settled(service);
+        for (let tries = 0; tries < 100 && !running; tries++)
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        expect(running).toBe(true);
+        // The background promise remains unresolved while Analytics serves its normal answer.
+        const answer = await settled(service);
+        expect(answer.status).toBe(empty ? 'unavailable' : 'cached');
+        const snapshot = fs.readFileSync(
+          path.join(
+            fixtureConfig,
+            'cache',
+            'account-activity-v1',
+            'analytics-activity-snapshot-v1.json'
+          ),
+          'utf8'
+        );
+        expect(snapshot).not.toContain(spec.file);
+        expect(snapshot).not.toContain('largeCodexReads');
+        expect(
+          answer.sources.find((source) => source.tool === 'codex' && source.host === 'ubuntu')
+            ?.detail
+        ).toBe('reading 1 large compressed Codex log in the background');
+        await service.shutdown();
+        expect(cancelled).toBe(true);
+        expect(
+          (await settled(service)).sources.find(
+            (source) => source.tool === 'codex' && source.host === 'ubuntu'
+          )?.detail
+        ).not.toContain('reading 1 large');
+      } finally {
+        await service.shutdown();
+      }
+    }
+  );
   it('reports bounded root discovery as partial even when every found file was read', async () => {
     const service = new AccountAnalyticsActivityService({
       remote: async () => ({ results: [], states: [] }),

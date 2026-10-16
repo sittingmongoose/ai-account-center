@@ -48,6 +48,11 @@ import type {
   UsageWorkerResult,
   UsageWorkerResponse,
 } from '../usage/worker-client';
+import {
+  LargeCodexReadQueue,
+  type LargeCodexReader,
+  type LargeCodexReadSpec,
+} from '../usage/worker-client';
 import type {
   AccountAnalyticsActivity,
   AccountAnalyticsActivityCoverage,
@@ -69,6 +74,8 @@ export {
 export { detectAccountAnalyticsAnomalies } from './account-analytics-anomalies';
 
 interface ActivityState {
+  /** In-memory scheduling only: paths never enter aggregate snapshots or page responses. */
+  largeCodexReads: Map<string, LargeCodexReadSpec[]>;
   local: Map<string, SourceData>;
   /** Unpublished Claude/legacy replacements survive capped passes, but never a later failed read. */
   pendingLocal: Map<string, { source: SourceData; readAt?: string }>;
@@ -243,6 +250,9 @@ export function coldScanningSourceStates(): AccountAnalyticsSource[] {
 }
 
 export interface AccountAnalyticsActivityDeps {
+  /** Dedicated oversized-file worker, independent of normal collection/response budgets. */
+  largeCodexReader?: LargeCodexReader;
+  largeCodexTimeoutMs?: number;
   /** Reads one request; `budgetMs` is what is left of the collection's deadline. */
   loadWorker?: (request: UsageWorkerRequest, budgetMs?: number) => Promise<UsageWorkerResult>;
   /** Local collectors that may run at once; sized to the machine by default (collectorConcurrency). */
@@ -1004,7 +1014,31 @@ function localSourcePresence(
 
 export class AccountAnalyticsActivityService {
   private readonly states = new Map<string, ActivityState>();
-  constructor(private readonly deps: AccountAnalyticsActivityDeps = {}) {}
+  private readonly largeCodexReads: LargeCodexReadQueue;
+  private readonly onShutdown = (): void => {
+    void this.shutdown();
+  };
+  private closed = false;
+
+  constructor(private readonly deps: AccountAnalyticsActivityDeps = {}) {
+    this.largeCodexReads = new LargeCodexReadQueue(deps.largeCodexReader, deps.largeCodexTimeoutMs);
+  }
+
+  async shutdown(): Promise<void> {
+    this.closed = true;
+    process.removeListener('SIGINT', this.onShutdown);
+    process.removeListener('SIGTERM', this.onShutdown);
+    await this.largeCodexReads.shutdown();
+  }
+
+  private enqueueLargeCodexReads(data: UsageWorkerResult): void {
+    if (this.closed || !data.scan?.largeCodexReads?.length) return;
+    if (!process.listeners('SIGTERM').includes(this.onShutdown)) {
+      process.once('SIGINT', this.onShutdown);
+      process.once('SIGTERM', this.onShutdown);
+    }
+    this.largeCodexReads.enqueue(data.scan.largeCodexReads);
+  }
 
   private cachedRemote(cutoff: number, scope: string): RemoteAnswer | null {
     if (this.deps.remoteCached) return this.deps.remoteCached(cutoff);
@@ -1086,12 +1120,17 @@ export class AccountAnalyticsActivityService {
         const budget = Math.max(15_000, Math.min(MAX_WORKER_TIME_MS, deadline - Date.now()));
         state.attempts.set(localRequestKey(source), ++state.attemptSequence);
         try {
+          const value = await (this.deps.loadWorker
+            ? this.deps.loadWorker(source.request, budget)
+            : loadAccountAnalyticsWorker(source.request, budget));
           settled[index] = {
             status: 'fulfilled',
-            value: await (this.deps.loadWorker
-              ? this.deps.loadWorker(source.request, budget)
-              : loadAccountAnalyticsWorker(source.request, budget)),
+            value: value.scan?.largeCodexReads
+              ? { ...value, scan: { ...value.scan, largeCodexReads: undefined } }
+              : value,
           };
+          state.largeCodexReads.set(localRequestKey(source), value.scan?.largeCodexReads ?? []);
+          this.enqueueLargeCodexReads(value);
         } catch (reason) {
           settled[index] = { status: 'rejected', reason };
         }
@@ -1106,6 +1145,9 @@ export class AccountAnalyticsActivityService {
     );
     // Roots the deadline left unread make the collection partial.
     if (generation !== state.generation) return;
+    const currentKeys = new Set(requests.map(localRequestKey));
+    for (const key of state.largeCodexReads.keys())
+      if (!currentKeys.has(key)) state.largeCodexReads.delete(key);
     if (skipped > 0) failed = true;
     for (const source of requests)
       state.identities.set(localRequestKey(source), localRequestIdentity(source));
@@ -1822,6 +1864,7 @@ export class AccountAnalyticsActivityService {
     let state = this.states.get(scope);
     if (!state) {
       state = {
+        largeCodexReads: new Map(),
         local: new Map(),
         pendingLocal: new Map(),
         identities: new Map(),
@@ -1935,10 +1978,19 @@ export class AccountAnalyticsActivityService {
     // A cold answer while the first collection is still running: the grid
     // names every tool as scanning, so the loading page shows per-host
     // progress from the very first answer instead of an empty grid.
-    const answerSourceStates =
+    let answerSourceStates =
       status === 'loading' && state.sourceStates.length === 0
         ? coldScanningSourceStates()
         : state.sourceStates;
+    if (
+      [...state.largeCodexReads.values()].some((specs) => this.largeCodexReads.isRunning(specs))
+    ) {
+      answerSourceStates = answerSourceStates.map((source) =>
+        source.tool === 'codex' && source.host === 'ubuntu'
+          ? { ...source, detail: 'reading 1 large compressed Codex log in the background' }
+          : source
+      );
+    }
     const scans = state.sources.flatMap((source) =>
       source.data
         .map((data) => data.scan)

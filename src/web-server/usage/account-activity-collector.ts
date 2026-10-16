@@ -46,6 +46,9 @@ import type { ModelBreakdown } from './types';
 import {
   CodexPartitionError,
   spawnCodexPartitionReader,
+  codexFileRevision,
+  type LargeCodexReadSpec,
+  type LargeCodexCompletion,
   type CodexPartitionSpec,
   type JsonlFieldMapping,
   type UsageWorkerRequest,
@@ -546,6 +549,19 @@ function fresh(stats: fs.Stats, minDate: number, kind: ActivityKind, mode?: Read
     ...(mode === undefined ? {} : { mode, ...(mode === 'keyed' ? { keyed: [] } : { keys: [] }) }),
   };
 }
+
+function largeCodexReadSpec(
+  file: string,
+  checkpoint: string,
+  stats: fs.Stats,
+  value: Checkpoint
+): LargeCodexReadSpec | undefined {
+  return file.endsWith('.jsonl.zst') &&
+    !value.complete &&
+    (value.compressedReplay?.terminalUntil ?? 0) > 0
+    ? { file, checkpoint, revision: codexFileRevision(stats), minDate: value.minDate }
+    : undefined;
+}
 function loadCheckpoint(
   cache: string,
   file: string,
@@ -555,11 +571,37 @@ function loadCheckpoint(
   mode?: ReadMode,
   stale = false,
   /** Legacy checkpoints have no recoverable path until discovery finds them again. */
-  unlocated = false
+  unlocated = false,
+  allowLargeHandoff = true
 ): Checkpoint {
   try {
     if (fs.statSync(cache).size > MAX_CACHE_BYTES) return fresh(stats, minDate, kind, mode);
-    const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
+    const baseline = fs.readFileSync(cache, 'utf8');
+    let value = JSON.parse(baseline) as Checkpoint;
+    const completed = `${cache}.large-complete`;
+    let adopt = false;
+    if (
+      allowLargeHandoff &&
+      kind === 'codex' &&
+      file.endsWith('.zst') &&
+      !stale &&
+      !value.complete &&
+      value.compressedReplay?.terminalUntil
+    ) {
+      try {
+        if (fs.statSync(completed).size <= MAX_CACHE_BYTES + 1024) {
+          const candidate = fs.readFileSync(completed, 'utf8');
+          const parsed = JSON.parse(candidate);
+          if (parsed.complete === true && parsed.largeReadBaseline === hash(baseline)) {
+            delete parsed.largeReadBaseline;
+            value = parsed;
+            adopt = true;
+          } else fs.unlinkSync(completed);
+        }
+      } catch {
+        /* No completed background handoff. */
+      }
+    }
     if (
       value.version !== 2 ||
       value.identity !== `${stats.dev}:${stats.ino}` ||
@@ -638,12 +680,28 @@ function loadCheckpoint(
     if (value.keyed)
       value.keyed = value.keyed.filter((item) => Date.parse(item.e.timestamp) >= minDate);
     if (stale || stats.size > value.size) value.complete = false;
+    if (adopt) {
+      const temporary = `${cache}.large-adopt`;
+      try {
+        fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
+        fs.renameSync(temporary, cache);
+        fs.unlinkSync(completed);
+      } catch {
+        // A failed handoff must keep the prior measured prefix, not reset it to a fresh read.
+        try {
+          fs.unlinkSync(temporary);
+        } catch {
+          /* Already renamed or unavailable. */
+        }
+        return loadCheckpoint(cache, file, stats, minDate, kind, mode, stale, unlocated, false);
+      }
+    }
     return value;
   } catch {
     return fresh(stats, minDate, kind, mode);
   }
 }
-function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: fs.Stats): void {
+function checkpointBody(file: string, value: Checkpoint, stats: fs.Stats): string {
   value.file = file;
   const fd = fs.openSync(file, 'r');
   try {
@@ -658,10 +716,63 @@ function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: f
   const body = JSON.stringify(value);
   if (Buffer.byteLength(body) > MAX_CACHE_BYTES)
     throw new CCSError('Native checkpoint exceeds limit');
+  return body;
+}
+function saveCheckpoint(cache: string, file: string, value: Checkpoint, stats: fs.Stats): void {
+  const body = checkpointBody(file, value, stats);
   const temporary = `${cache}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, body, { mode: 0o600 });
   fs.renameSync(temporary, cache);
   fs.chmodSync(cache, 0o600);
+}
+
+/** Full streaming replay in a dedicated worker. Never modifies the paused checkpoint. */
+export async function readLargeCodexCheckpoint(
+  spec: LargeCodexReadSpec,
+  deadline: number
+): Promise<LargeCodexCompletion | undefined> {
+  const stats = fs.statSync(spec.file);
+  if (codexFileRevision(stats) !== spec.revision || !spec.file.endsWith('.jsonl.zst')) return;
+  if (fs.statSync(spec.checkpoint).size > MAX_CACHE_BYTES) return;
+  const baseline = fs.readFileSync(spec.checkpoint, 'utf8');
+  const stored = JSON.parse(baseline) as Checkpoint;
+  const value = loadCheckpoint(
+    spec.checkpoint,
+    spec.file,
+    stats,
+    spec.minDate,
+    'codex',
+    stored.mode,
+    false,
+    false,
+    false
+  );
+  if (!largeCodexReadSpec(spec.file, spec.checkpoint, stats, value)) return;
+  await readBatch(
+    spec.file,
+    value,
+    stats,
+    'codex',
+    {
+      minDate: spec.minDate,
+      cacheDir: path.dirname(spec.checkpoint),
+      codexPartitionRead: true,
+    },
+    deadline,
+    undefined,
+    stored.mode
+  );
+  if (
+    !value.complete ||
+    Date.now() >= deadline ||
+    codexFileRevision(fs.statSync(spec.file)) !== spec.revision ||
+    fs.readFileSync(spec.checkpoint, 'utf8') !== baseline
+  )
+    return;
+  // Compare compressed fingerprints too: a replacement must not inherit the old parser state.
+  const body = checkpointBody(spec.file, value, stats);
+  if (value.head !== stored.head || value.tail !== stored.tail) return;
+  return { baseline: hash(baseline), body };
 }
 /**
  * One compact row per hour, model, session, tool and routing provider. Events
@@ -2486,6 +2597,7 @@ export interface CodexPartitionFileResult {
   failed: boolean;
   compressedReplayStalled?: boolean;
   compressedReplayTerminal?: boolean;
+  largeCodexRead?: LargeCodexReadSpec;
 }
 
 /**
@@ -2541,6 +2653,7 @@ export async function collectCodexPartition(
         failed: false,
         compressedReplayStalled: value.compressedReplayStalled,
         compressedReplayTerminal: (value.compressedReplay?.terminalUntil ?? 0) > 0,
+        largeCodexRead: largeCodexReadSpec(file, cache, stats, value),
       });
     } catch {
       outcomes.push({
@@ -2581,6 +2694,7 @@ interface CodexFileTallies {
   unfinishedTail: boolean;
   compressedReplayStalled?: boolean;
   compressedReplayTerminal?: boolean;
+  largeCodexRead?: LargeCodexReadSpec;
 }
 
 interface CodexCounters {
@@ -2591,6 +2705,7 @@ interface CodexCounters {
   unfinishedFiles: number;
   stalledCompressedFiles: number;
   terminalCompressedFiles: number;
+  largeCodexReads: LargeCodexReadSpec[];
 }
 
 /**
@@ -2608,6 +2723,8 @@ function tallyCodexFile(
   if (tallies.unfinishedTail) counters.unfinishedFiles++;
   if (tallies.compressedReplayStalled) counters.stalledCompressedFiles++;
   if (tallies.compressedReplayTerminal) counters.terminalCompressedFiles++;
+  if (tallies.largeCodexRead && counters.largeCodexReads.length < 64)
+    counters.largeCodexReads.push(tallies.largeCodexRead);
   counters.skippedLines += tallies.skippedLines;
   const available = MAX_TOTAL_ROWS - rows.length;
   rows.push(...tallies.rows.slice(0, Math.max(0, available)));
@@ -2646,6 +2763,7 @@ async function readCodexFiles(
     unfinishedFiles: 0,
     stalledCompressedFiles: 0,
     terminalCompressedFiles: 0,
+    largeCodexReads: [],
   };
   const rows: CompactEntry[] = [];
   const loaded = scanned.map(({ file, stats, unresolved }) => {
@@ -2718,6 +2836,7 @@ async function readCodexFiles(
           unfinishedTail: item.value.unfinishedTail === true,
           compressedReplayStalled: item.value.compressedReplayStalled,
           compressedReplayTerminal: (item.value.compressedReplay?.terminalUntil ?? 0) > 0,
+          largeCodexRead: largeCodexReadSpec(item.file, item.cache, item.stats, item.value),
         });
       } catch {
         counters.failed++;
@@ -2803,6 +2922,7 @@ async function readCodexFiles(
     unfinishedTail: item.value.unfinishedTail === true,
     compressedReplayStalled: item.value.compressedReplayStalled,
     compressedReplayTerminal: (item.value.compressedReplay?.terminalUntil ?? 0) > 0,
+    largeCodexRead: largeCodexReadSpec(item.file, item.cache, item.stats, item.value),
   });
   for (const item of loaded) {
     const error = errors.get(item.file);
@@ -3048,6 +3168,7 @@ async function collectExperimentActivity(
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
   let terminalCompressedFiles = 0;
+  const largeCodexReads: LargeCodexReadSpec[] = [];
   const referenceKeys = new Set<string>();
   const keyedByFile: Array<{ file: string; entries: KeyedEntry[] }> = [];
   const prepared = new Map<string, { cache: string; value: Checkpoint }>();
@@ -3100,6 +3221,8 @@ async function collectExperimentActivity(
       if (value.unfinishedTail) unfinishedFiles++;
       if (value.compressedReplayStalled) stalledCompressedFiles++;
       if (value.compressedReplay?.terminalUntil) terminalCompressedFiles++;
+      const largeRead = largeCodexReadSpec(item.file, cache, item.stats, value);
+      if (largeRead && largeCodexReads.length < 64) largeCodexReads.push(largeRead);
       return { value, read };
     } catch {
       failed++;
@@ -3159,6 +3282,7 @@ async function collectExperimentActivity(
     readBytes,
     unfinishedFiles,
     ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles),
+    ...(largeCodexReads.length ? { largeCodexReads } : {}),
   });
   const source =
     kind === 'codex' ? 'codex-native' : kind === 'muse' ? 'muse-native' : 'custom-parser';
@@ -3394,6 +3518,7 @@ export async function collectAccountActivity(
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
   let terminalCompressedFiles = 0;
+  let largeCodexReads: LargeCodexReadSpec[] = [];
   if (request.kind === 'codex') {
     // Codex alone fans out across partition readers above the unread threshold
     // (N14); below it this reads inline, exactly like the loop below.
@@ -3408,6 +3533,7 @@ export async function collectAccountActivity(
     unfinishedFiles = codex.unfinishedFiles;
     stalledCompressedFiles = codex.stalledCompressedFiles;
     terminalCompressedFiles = codex.terminalCompressedFiles;
+    largeCodexReads = codex.largeCodexReads;
   } else {
     for (const { file, stats, unresolved, frozen, mode, prepared } of scanned) {
       const cache = path.join(directory, `${hash(file)}.json`);
@@ -3592,6 +3718,7 @@ export async function collectAccountActivity(
       readBytes,
       unfinishedFiles,
       ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles),
+      ...(largeCodexReads.length ? { largeCodexReads } : {}),
     },
   };
 }

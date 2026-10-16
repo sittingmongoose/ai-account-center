@@ -1,4 +1,5 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../config/config-loader-facade';
 import { CCSError } from '../../errors/error-types';
@@ -35,6 +36,27 @@ export interface CodexPartitionSpec {
   deadline: number;
 }
 
+/** Compact checkpoint identity, never rollout contents. */
+export interface LargeCodexReadSpec {
+  file: string;
+  checkpoint: string;
+  revision: string;
+  minDate: number;
+}
+
+export interface LargeCodexCompletion {
+  /** A compare-and-swap guard against a normal pass advancing the checkpoint. */
+  baseline: string;
+  body: string;
+}
+
+export function codexFileRevision(stats: fs.Stats): string {
+  return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
+}
+
+export const LARGE_CODEX_READ_TIMEOUT_MS = 15 * 60 * 1000;
+const LARGE_CODEX_RETRY_MS = 24 * 60 * 60 * 1000;
+
 export type UsageWorkerRequest =
   /**
    * `experimentRoots` / `experimentDbs` (experiment-usage-roots.ts) and `homeRoots`
@@ -64,6 +86,7 @@ export type UsageWorkerRequest =
       homeRoots?: string[];
       activity?: AccountActivityScanOptions;
       partition?: CodexPartitionSpec;
+      largeRead?: { spec: LargeCodexReadSpec; deadline: number };
     }
   | { kind: 'omp'; roots: string[]; activity?: AccountActivityScanOptions }
   | {
@@ -106,6 +129,7 @@ export interface UsageWorkerResult {
    * Every other field is empty there; only the parent reads this field.
    */
   partitionFiles?: CodexPartitionFileResult[];
+  largeCodexCompletion?: LargeCodexCompletion;
   /** Internal bounded-scan progress; never claims partial history is complete. */
   scan?: {
     complete: boolean;
@@ -115,6 +139,7 @@ export interface UsageWorkerResult {
     failedFiles: number;
     readBytes: number;
     unfinishedFiles?: number;
+    largeCodexReads?: LargeCodexReadSpec[];
   };
 }
 
@@ -125,6 +150,145 @@ export type UsageWorkerResponse =
 function getUsageWorkerPath(): string {
   // Bun runs source tests directly; installed Node runs the emitted neighbor.
   return path.join(__dirname, `native-usage-worker${path.extname(__filename)}`);
+}
+
+/** Dedicated low-priority worker; the normal pass's heap and deadlines are unchanged. */
+export function spawnLargeCodexReader(
+  spec: LargeCodexReadSpec,
+  signal: AbortSignal,
+  timeoutMs = LARGE_CODEX_READ_TIMEOUT_MS,
+  workerPath = getUsageWorkerPath()
+): Promise<LargeCodexCompletion | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    const boundedMs = Math.max(1, Math.min(LARGE_CODEX_READ_TIMEOUT_MS, timeoutMs));
+    const worker = new Worker(workerPath, {
+      workerData: {
+        kind: 'codex',
+        largeRead: { spec, deadline: Date.now() + boundedMs },
+      },
+      env: { ...process.env, CCS_DIR: getCcsDir() },
+      resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 4 },
+    });
+    let settled = false;
+    const finish = (result?: LargeCodexCompletion): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      worker.removeAllListeners();
+      void worker
+        .terminate()
+        .catch(() => 0)
+        .then(() => resolve(result));
+    };
+    const abort = (): void => finish();
+    const timer = setTimeout(abort, boundedMs);
+    signal.addEventListener('abort', abort, { once: true });
+    worker.once('message', (response: UsageWorkerResponse) =>
+      finish(response?.ok === true ? response.data?.largeCodexCompletion : undefined)
+    );
+    worker.once('error', abort);
+    worker.once('exit', abort);
+  });
+}
+
+export type LargeCodexReader = typeof spawnLargeCodexReader;
+
+/** One reader per dashboard, with a bounded queue and persistent retry back-off. */
+export class LargeCodexReadQueue {
+  private readonly queued = new Map<string, LargeCodexReadSpec>();
+  private active: { spec: LargeCodexReadSpec; controller: AbortController } | undefined;
+  private pending: Promise<void> | undefined;
+  private closed = false;
+
+  constructor(
+    private readonly reader: LargeCodexReader = spawnLargeCodexReader,
+    private readonly timeoutMs = LARGE_CODEX_READ_TIMEOUT_MS
+  ) {}
+
+  isRunning(specs: readonly LargeCodexReadSpec[]): boolean {
+    return specs.some(
+      (spec) =>
+        spec.checkpoint === this.active?.spec.checkpoint &&
+        spec.revision === this.active.spec.revision
+    );
+  }
+
+  enqueue(specs: readonly LargeCodexReadSpec[]): void {
+    if (this.closed) return;
+    for (const spec of specs) {
+      if (this.queued.size >= 64) break;
+      if (!this.isRunning([spec])) this.queued.set(spec.checkpoint, spec);
+    }
+    if (!this.pending) {
+      this.pending = this.drain().finally(() => {
+        this.pending = undefined;
+        if (this.queued.size && !this.closed) this.enqueue([]);
+      });
+    }
+  }
+
+  private async drain(): Promise<void> {
+    while (!this.closed && this.queued.size) {
+      const spec = this.queued.values().next().value as LargeCodexReadSpec;
+      this.queued.delete(spec.checkpoint);
+      const attemptPath = `${spec.checkpoint}.large-attempt`;
+      try {
+        const attempt = JSON.parse(await fs.promises.readFile(attemptPath, 'utf8'));
+        if (attempt.revision === spec.revision && attempt.retryAt > Date.now()) continue;
+      } catch {
+        /* First attempt, or an invalid marker. */
+      }
+      if (this.closed) break;
+      try {
+        if (codexFileRevision(await fs.promises.stat(spec.file)) !== spec.revision) continue;
+        await fs.promises.writeFile(
+          attemptPath,
+          JSON.stringify({
+            revision: spec.revision,
+            retryAt: Date.now() + LARGE_CODEX_RETRY_MS,
+          }),
+          { mode: 0o600 }
+        );
+        if (this.closed) break;
+        const controller = new AbortController();
+        this.active = { spec, controller };
+        const completion = await this.reader(spec, controller.signal, this.timeoutMs);
+        if (
+          !this.closed &&
+          !controller.signal.aborted &&
+          completion &&
+          Buffer.byteLength(completion.body) <= 8 * 1024 * 1024 &&
+          codexFileRevision(await fs.promises.stat(spec.file)) === spec.revision
+        ) {
+          // Only the next normal pass adopts this result. A killed/timed-out worker never writes
+          // canonical checkpoints, and a concurrent pass cannot overwrite a completed handoff.
+          const body = JSON.parse(completion.body);
+          body.largeReadBaseline = completion.baseline;
+          const temporary = `${spec.checkpoint}.large-complete.tmp`;
+          try {
+            await fs.promises.writeFile(temporary, JSON.stringify(body), { mode: 0o600 });
+            if (!this.closed && !controller.signal.aborted)
+              await fs.promises.rename(temporary, `${spec.checkpoint}.large-complete`);
+          } finally {
+            await fs.promises.unlink(temporary).catch(() => undefined);
+          }
+        }
+      } catch {
+        /* Failure keeps the paused checkpoint and its detail untouched. */
+      } finally {
+        this.active = undefined;
+      }
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    this.closed = true;
+    this.queued.clear();
+    this.active?.controller.abort();
+    await this.pending;
+  }
 }
 
 /** A codex partition reader failed or overran its time bound; `timedOut` tells which. */

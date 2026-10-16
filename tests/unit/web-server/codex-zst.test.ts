@@ -10,8 +10,14 @@ import { classifyCompressedCodexRollout } from '../../../src/web-server/usage/ex
 import {
   collectAccountActivity,
   collectCodexPartition,
+  readLargeCodexCheckpoint,
   type AccountActivityScanOptions,
 } from '../../../src/web-server/usage/account-activity-collector';
+import {
+  LargeCodexReadQueue,
+  spawnLargeCodexReader,
+  type LargeCodexReadSpec,
+} from '../../../src/web-server/usage/worker-client';
 import {
   runExperimentRootsSlice,
   readExperimentRoots,
@@ -105,6 +111,212 @@ describe('Codex compressed rollouts', () => {
       reads.mockRestore();
     }
   };
+
+  const waitFor = async (ready: () => boolean) => {
+    const until = performance.now() + 10000;
+    while (!ready() && performance.now() < until)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(ready()).toBe(true);
+  };
+  const pauseLargeFile = async () => {
+    await collect({ maxBytesPerFile: 2 * 1024 * 1024 });
+    let paused: Awaited<ReturnType<typeof collect>> | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      for (let skipped = checkpoint().compressedReplay?.skipPasses ?? 0; skipped > 0; skipped--)
+        await collect({ budgetMs: 1000 });
+      paused = await cutReplay(() => collect({ budgetMs: 1000 }));
+    }
+    expect(checkpoint().compressedReplay.zeroProgress).toBe(3);
+    expect(paused?.scan?.largeCodexReads).toHaveLength(1);
+    return paused!.scan!.largeCodexReads![0];
+  };
+
+  it('completes a paused single-frame file in a background worker, exactly matching plain usage', async () => {
+    const body = rollout(12000);
+    fs.writeFileSync(file, body);
+    const plain = await collect({ cacheDir: path.join(root, 'plain-background') });
+    compress(body);
+    fs.unlinkSync(file);
+    const spec = await pauseLargeFile();
+    const paused = fs.readFileSync(spec.checkpoint, 'utf8');
+    const queue = new LargeCodexReadQueue();
+    try {
+      queue.enqueue([spec]);
+      await waitFor(() => fs.existsSync(`${spec.checkpoint}.large-complete`));
+      // Full success is handed off, never published over a running normal pass.
+      expect(fs.readFileSync(spec.checkpoint, 'utf8')).toBe(paused);
+      const finished = await collect();
+      expect(finished.scan?.complete).toBe(true);
+      expect(finished.scan?.detail).toBeUndefined();
+      expect(finished.hourly).toEqual(plain.hourly);
+      expect(finished.session).toEqual(plain.session);
+      expect(finished.eventCount).toBe(plain.eventCount);
+      const warm = await collect();
+      expect(warm.scan?.readBytes).toBe(0);
+      expect(warm.eventCount).toBe(12000);
+    } finally {
+      await queue.shutdown();
+    }
+  });
+
+  it('keeps the paused checkpoint and detail after a background timeout, including across queue restarts', async () => {
+    compress(rollout(12000));
+    const spec = await pauseLargeFile();
+    const before = fs.readFileSync(spec.checkpoint, 'utf8');
+    // A 1ms outer bound includes worker startup, so no timing race with decoder throughput.
+    expect(await spawnLargeCodexReader(spec, new AbortController().signal, 1)).toBeUndefined();
+    let started = false;
+    const queue = new LargeCodexReadQueue((...args) => {
+      started = true;
+      return spawnLargeCodexReader(...args);
+    }, 1);
+    try {
+      queue.enqueue([spec]);
+      await waitFor(() => started && !queue.isRunning([spec]));
+      expect(fs.readFileSync(spec.checkpoint, 'utf8')).toBe(before);
+      expect(fs.existsSync(`${spec.checkpoint}.large-complete`)).toBe(false);
+      const clock = spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        expect((await collect()).scan?.detail).toContain('earlier usage is kept');
+      } finally {
+        clock.mockRestore();
+      }
+    } finally {
+      await queue.shutdown();
+    }
+    let calls = 0;
+    const restarted = new LargeCodexReadQueue(async () => {
+      calls++;
+      return undefined;
+    });
+    try {
+      restarted.enqueue([spec]);
+      // Let the persisted retry marker be read before stopping the queue.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(calls).toBe(0);
+    } finally {
+      await restarted.shutdown();
+    }
+  });
+
+  it.each(['size', 'mtime', 'identity'] as const)(
+    'discards a background result when the file changes (%s)',
+    async (change) => {
+      compress(rollout(12000));
+      const spec = await pauseLargeFile();
+      const before = fs.readFileSync(spec.checkpoint, 'utf8');
+      const stream = fs.createReadStream;
+      let changed = false;
+      const reads = spyOn(fs, 'createReadStream').mockImplementation((target, options) => {
+        if (String(target) === spec.file && !changed) {
+          changed = true;
+          if (change === 'size') fs.appendFileSync(spec.file, zstdCompressSync(Buffer.from('\n')));
+          else if (change === 'mtime') {
+            const time = new Date(fs.statSync(spec.file).mtimeMs + 5000);
+            fs.utimesSync(spec.file, time, time);
+          } else {
+            fs.renameSync(spec.file, `${spec.file}.old`);
+            fs.copyFileSync(`${spec.file}.old`, spec.file);
+          }
+        }
+        return stream(target, options);
+      });
+      try {
+        expect(await readLargeCodexCheckpoint(spec, Date.now() + 10000)).toBeUndefined();
+        expect(changed).toBe(true);
+        expect(fs.readFileSync(spec.checkpoint, 'utf8')).toBe(before);
+      } finally {
+        reads.mockRestore();
+      }
+    }
+  );
+
+  it('runs one background read at a time, coalesces duplicate offers, and cancels on shutdown', async () => {
+    compress(rollout(12000));
+    const first = await pauseLargeFile();
+    const secondFile = first.file.replace(UUID, 'abcdef01-1234-1234-1234-0123456789ab');
+    fs.copyFileSync(first.file, secondFile);
+    const { codexFileRevision } = await import('../../../src/web-server/usage/worker-client');
+    const second: LargeCodexReadSpec = {
+      ...first,
+      file: secondFile,
+      checkpoint: `${first.checkpoint}-other`,
+      revision: codexFileRevision(fs.statSync(secondFile)),
+    };
+    const starts: string[] = [];
+    let release: (() => void) | undefined;
+    let aborted = false;
+    const queue = new LargeCodexReadQueue(async (spec, signal) => {
+      starts.push(spec.file);
+      await new Promise<void>((resolve) => {
+        release = resolve;
+        signal.addEventListener(
+          'abort',
+          () => {
+            aborted = true;
+            resolve();
+          },
+          { once: true }
+        );
+      });
+      return undefined;
+    });
+    try {
+      queue.enqueue([first, second, first]);
+      await waitFor(() => starts.length === 1);
+      queue.enqueue([first, second]);
+      expect(starts).toEqual([first.file]);
+      release!();
+      await waitFor(() => starts.length === 2);
+      expect(starts).toEqual([first.file, second.file]);
+      await queue.shutdown();
+      expect(aborted).toBe(true);
+      expect(queue.isRunning([first, second])).toBe(false);
+      queue.enqueue([first]);
+      expect(starts).toHaveLength(2);
+    } finally {
+      await queue.shutdown();
+    }
+  });
+
+  it('terminates a real background worker when cancelled', async () => {
+    compress(rollout(12000));
+    const spec = await pauseLargeFile();
+    const before = fs.readFileSync(spec.checkpoint, 'utf8');
+    const controller = new AbortController();
+    const reading = spawnLargeCodexReader(spec, controller.signal);
+    controller.abort();
+    expect(await reading).toBeUndefined();
+    expect(fs.readFileSync(spec.checkpoint, 'utf8')).toBe(before);
+    expect(fs.existsSync(`${spec.checkpoint}.large-complete`)).toBe(false);
+  });
+
+  it('rejects a completed handoff if a normal pass has changed the checkpoint', async () => {
+    compress(rollout(12000));
+    const spec = await pauseLargeFile();
+    const queue = new LargeCodexReadQueue();
+    try {
+      queue.enqueue([spec]);
+      await waitFor(() => fs.existsSync(`${spec.checkpoint}.large-complete`));
+      const replay = checkpoint().compressedReplay;
+      updateCheckpoint(spec.file, {
+        compressedReplay: { ...replay, lastAttempt: replay.lastAttempt + 1 },
+      });
+      const before = fs.readFileSync(spec.checkpoint, 'utf8');
+      const clock = spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const result = await collect();
+        expect(result.scan?.complete).toBe(false);
+        expect(result.eventCount).toBeLessThan(12000);
+      } finally {
+        clock.mockRestore();
+      }
+      expect(fs.readFileSync(spec.checkpoint, 'utf8')).toBe(before);
+      expect(fs.existsSync(`${spec.checkpoint}.large-complete`)).toBe(false);
+    } finally {
+      await queue.shutdown();
+    }
+  });
 
   it.each([
     ['single', 0],

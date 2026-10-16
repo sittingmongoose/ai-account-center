@@ -10,12 +10,31 @@ import {
 } from './data-aggregator';
 import { scanCodexNativeUsageEntries } from './codex-native-usage-collector';
 import { scanDroidNativeUsageEntries } from './droid-native-usage-collector';
-import { collectAccountActivity, collectCodexPartition } from './account-activity-collector';
+import {
+  collectAccountActivity,
+  collectCodexPartition,
+  readLargeCodexCheckpoint,
+} from './account-activity-collector';
 import { lowerCollectorThreadPriority } from './collector-concurrency';
 import { runExperimentRootsSlice } from './experiment-usage-roots';
 import type { UsageWorkerRequest, UsageWorkerResponse } from './worker-client';
 
 async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerResponse> {
+  if (request.kind === 'codex' && request.largeRead)
+    return {
+      ok: true,
+      data: {
+        daily: [],
+        hourly: [],
+        monthly: [],
+        session: [],
+        eventCount: 0,
+        largeCodexCompletion: await readLargeCodexCheckpoint(
+          request.largeRead.spec,
+          request.largeRead.deadline
+        ),
+      },
+    };
   // A fanned-out codex shard: read only the assigned files and hand the
   // per-file outcomes back for the parent's merge. Only `partitionFiles`
   // carries meaning here; the aggregate fields stay empty.
