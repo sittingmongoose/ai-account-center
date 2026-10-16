@@ -106,6 +106,110 @@ describe('Codex compressed rollouts', () => {
     }
   };
 
+  it.each([
+    ['single', 0],
+    ['single', 13],
+    ['multi', 0],
+    ['multi', 13],
+  ] as const)(
+    'keeps a cap inside the final decoded chunk incomplete (%s frame, %i tail bytes)',
+    async (framing, tailBytes) => {
+      const prefix = rollout(1);
+      const second = JSON.stringify(record(2)) + '\n';
+      const third = JSON.stringify(record(3)) + '\n';
+      const body = prefix + second + third;
+      fs.writeFileSync(file, body);
+      const plain = await collect({ cacheDir: path.join(root, 'plain-eof-cap') });
+      fs.unlinkSync(file);
+      const frames = framing === 'single' ? [body] : [prefix, second + third];
+      const encoded = frames.map((frame) => zstdCompressSync(Buffer.from(frame)));
+      fs.writeFileSync(`${file}.zst`, Buffer.concat(encoded));
+
+      const consumed = Buffer.byteLength(prefix + second);
+      const partial = await collect({ maxBytesPerFile: consumed + tailBytes });
+      expect(partial.scan?.complete).toBe(false);
+      expect(partial.eventCount).toBe(2);
+      expect(checkpoint()).toMatchObject({ complete: false, offset: 0, decodedOffset: consumed });
+      expect(checkpoint().compressedFrame?.compressed ?? 0).toBe(
+        framing === 'single' ? 0 : encoded[0].length
+      );
+      const finished = await collect();
+      expect(finished.scan?.complete).toBe(true);
+      expect(finished.eventCount).toBe(3);
+      expect(finished.hourly).toEqual(plain.hourly);
+      expect(finished.session).toEqual(plain.session);
+      expect(checkpoint().offset).toBe(fs.statSync(`${file}.zst`).size);
+      expect((await collect()).scan?.readBytes).toBe(0);
+    }
+  );
+
+  it.each(['single', 'multi'] as const)(
+    'resumes a capped final chunk without losing the 200 -> 300 cumulative snapshot (%s frame)',
+    async (framing) => {
+      const prefix = rollout(2);
+      const padding = (
+        JSON.stringify({ type: 'response_item', payload: 'x'.repeat(1024) }) + '\n'
+      ).repeat(128);
+      const suffix = JSON.stringify(record(3)) + '\n';
+      const body = prefix + padding + suffix;
+      fs.writeFileSync(file, body);
+      const plain = await collect({ cacheDir: path.join(root, 'plain-resumed-eof-cap') });
+      fs.unlinkSync(file);
+      const frames = framing === 'single' ? [body] : [prefix, padding + suffix];
+      const encoded = frames.map((frame) => zstdCompressSync(Buffer.from(frame)));
+      fs.writeFileSync(`${file}.zst`, Buffer.concat(encoded));
+
+      const first = await collect({ maxBytesPerFile: Buffer.byteLength(prefix) });
+      expect(first.scan?.complete).toBe(false);
+      expect(first.eventCount).toBe(2);
+      const resumed = await collect({ maxBytesPerFile: Buffer.byteLength(padding) });
+      expect(resumed.scan?.complete).toBe(false);
+      expect(resumed.hourly).toEqual(first.hourly);
+      expect(resumed.eventCount).toBe(2);
+      expect(checkpoint()).toMatchObject({
+        complete: false,
+        offset: 0,
+        decodedOffset: Buffer.byteLength(prefix + padding),
+      });
+      expect(checkpoint().compressedFrame?.compressed ?? 0).toBe(
+        framing === 'single' ? 0 : encoded[0].length
+      );
+      const finished = await collect();
+      expect(finished.scan?.complete).toBe(true);
+      expect(finished.hourly).toEqual(plain.hourly);
+      expect(finished.session).toEqual(plain.session);
+      expect(finished.eventCount).toBe(3);
+    }
+  );
+
+  it.each([
+    ['single', true],
+    ['single', false],
+    ['multi', true],
+    ['multi', false],
+  ] as const)(
+    'completes only after an exact EOF cap is consumed (%s frame, newline %s)',
+    async (framing, newline) => {
+      const prefix = rollout(2);
+      const suffix = JSON.stringify(record(3)) + (newline ? '\n' : '');
+      const body = prefix + suffix;
+      const frames = framing === 'single' ? [body] : [prefix, suffix];
+      fs.writeFileSync(
+        `${file}.zst`,
+        Buffer.concat(frames.map((frame) => zstdCompressSync(Buffer.from(frame))))
+      );
+      const result = await collect({ maxBytesPerFile: Buffer.byteLength(body) });
+      expect(result.scan?.complete).toBe(true);
+      expect(result.eventCount).toBe(3);
+      expect(checkpoint()).toMatchObject({
+        complete: true,
+        offset: fs.statSync(`${file}.zst`).size,
+        decodedOffset: Buffer.byteLength(body),
+      });
+      expect((await collect()).scan?.readBytes).toBe(0);
+    }
+  );
+
   it('rotates two stalled files so the recoverable sibling finishes before another replay', async () => {
     compress(rollout(12000));
     await collect({ maxBytesPerFile: 128 * 1024 });

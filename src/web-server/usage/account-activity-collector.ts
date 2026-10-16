@@ -1265,6 +1265,9 @@ async function readBatch(
     const skip = compressed ? Math.max(0, Math.min(buffer.length, resumeAt - decodedAt)) : 0;
     decodedAt += buffer.length;
     const chunk = buffer.subarray(skip, skip + Math.min(buffer.length - skip, end - position));
+    // Decoder EOF is not consumed EOF if the byte cap drops this chunk's suffix.
+    // Stop before accepting its frame boundary; resume after the last committed record.
+    const capped = chunk.length < buffer.length - skip;
     let start = 0;
     while (start < chunk.length) {
       const newline = chunk.indexOf(10, start);
@@ -1306,7 +1309,7 @@ async function readBatch(
     }
     keepFrame();
     const pastDeadline = Date.now() >= deadline;
-    if (pastDeadline) {
+    if (capped || pastDeadline) {
       reachedEnd = false;
       deadlineCut = pastDeadline;
       break;
