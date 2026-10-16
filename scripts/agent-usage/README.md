@@ -1,7 +1,7 @@
 # AI account usage for agents
 
-The AI Account Center dashboard on the Ubuntu VM writes the quota left on every AI account the user
-uses into this folder after each refresh (every minute by default). Any agent on any computer can
+The AI Account Center dashboard on the Ubuntu VM writes the quota left on every AI account it
+tracks into this folder after each refresh (every minute by default). Any agent on any computer can
 read it: no key, no network route, nothing to install. AI Account Center keeps every file here
 current; edits are overwritten.
 

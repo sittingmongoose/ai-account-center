@@ -341,9 +341,9 @@ def rules_text(kind="other"):
     lines = [
         "# AI account usage",
         "",
-        "AI Account Center publishes how much quota is left on every AI account the user uses (Claude, Codex, Antigravity, "
-        "Muse, Cursor, Kimi Code, Qwen, Z.ai/GLM, OpenCode), refreshed every minute, in the `aac-usage` folder of the "
-        "network share (`/mnt/share/aac-usage` on the VM and Nas1, `/Volumes/share/aac-usage` on the Mac, "
+        "AI Account Center publishes how much quota is left on every AI account the dashboard tracks (Claude, Codex, "
+        "Antigravity, Muse, Cursor, Kimi Code, Qwen, Z.ai/GLM, OpenCode), refreshed every minute, in the `aac-usage` "
+        "folder of the network share (`/mnt/share/aac-usage` on the VM and Nas1, `/Volumes/share/aac-usage` on the Mac, "
         "`\\\\NAS\\share\\aac-usage` on Windows). Run it here as `" + cmd + "; below, `aac-usage` means that command.",
         "",
         "- `aac-usage` lists every account (provider, label, email, AAC profile, computer, plan, ACTIVE flag) with each "
