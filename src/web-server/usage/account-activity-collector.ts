@@ -2,7 +2,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { codexRolloutKey, codexZstdChunks, preferPlainCodexRollouts } from './codex-rollout-files';
+import {
+  codexRolloutKey,
+  codexZstdChunks,
+  preferPlainCodexRollouts,
+  type CodexZstdBoundary,
+} from './codex-rollout-files';
 import { CCSError } from '../../errors/error-types';
 import { parseUsageEntry, type RawUsageEntry } from '../jsonl-parser';
 import {
@@ -62,10 +67,18 @@ interface Checkpoint {
   head: string;
   tail: string;
   offset: number;
-  /** Compressed files restart decoding, skipping this already-parsed byte prefix. */
+  /** Parsed decoded prefix; resume at compressedFrame and skip to this byte offset. */
   decodedOffset?: number;
   /** The last deadline expired without advancing the decoded checkpoint. */
   compressedReplayStalled?: boolean;
+  /** Latest fully decoded frame at/before the committed JSONL checkpoint. */
+  compressedFrame?: CodexZstdBoundary;
+  compressedReplay?: {
+    lastAttempt: number;
+    zeroProgress: number;
+    skipPasses: number;
+    terminalUntil: number;
+  };
   minDate: number;
   complete: boolean;
   discardingLine: boolean;
@@ -148,12 +161,39 @@ export type AccountActivityScanResult = UsageWorkerResult & {
   scan?: NonNullable<UsageWorkerResult['scan']> & { detail?: string };
 };
 
-function compressedReplayDetail(stalled: number): { detail?: string } {
-  return stalled > 0
-    ? {
-        detail: `${stalled} compressed Codex log${stalled === 1 ? ' is' : 's are'} too large to finish within one analytics pass; replaying the decoded prefix exhausted the read budget.`,
-      }
-    : {};
+function compressedReplayDetail(stalled: number, terminal = 0): { detail?: string } {
+  const parts: string[] = [];
+  if (terminal)
+    parts.push(
+      `${terminal} compressed Codex log${terminal === 1 ? ' is' : 's are'} too large to read here; earlier usage is kept and this measurement remains partial. Retrying when the file changes or after 24 hours.`
+    );
+  if (stalled > terminal)
+    parts.push(
+      `${stalled - terminal} compressed Codex log${stalled - terminal === 1 ? ' is' : 's are'} too large to finish within one analytics pass; replaying the decoded prefix exhausted the read budget. Retries rotate with bounded pass back-off.`
+    );
+  return parts.length ? { detail: parts.join(' ') } : {};
+}
+
+const COMPRESSED_ZERO_PROGRESS_LIMIT = 3;
+const COMPRESSED_RETRY_MS = 24 * 60 * 60 * 1000;
+
+function compressedReadOrder(a: Checkpoint, b: Checkpoint): number {
+  return (
+    Number(a.compressedReplayStalled === true) - Number(b.compressedReplayStalled === true) ||
+    (a.compressedReplay?.lastAttempt ?? 0) - (b.compressedReplay?.lastAttempt ?? 0)
+  );
+}
+
+/** Called once per pass, including passes whose budget another file exhausted. */
+function deferCompressedReplay(value: Checkpoint): boolean {
+  const replay = value.compressedReplay;
+  if (!replay || value.complete) return false;
+  if (replay.terminalUntil > Date.now()) return true;
+  if (replay.skipPasses > 0) {
+    replay.skipPasses--;
+    return true;
+  }
+  return false;
 }
 const MAX_FILES = 20_000;
 const MAX_DEPTH = 64;
@@ -530,6 +570,22 @@ function loadCheckpoint(
         (!Number.isSafeInteger(value.decodedOffset) || value.decodedOffset < 0)) ||
       (value.compressedReplayStalled !== undefined &&
         typeof value.compressedReplayStalled !== 'boolean') ||
+      (value.compressedFrame !== undefined &&
+        (!Number.isSafeInteger(value.compressedFrame.compressed) ||
+          value.compressedFrame.compressed < 0 ||
+          value.compressedFrame.compressed > stats.size ||
+          !Number.isSafeInteger(value.compressedFrame.decoded) ||
+          value.compressedFrame.decoded < 0 ||
+          value.compressedFrame.decoded > (value.decodedOffset ?? 0))) ||
+      (value.compressedReplay !== undefined &&
+        ![
+          value.compressedReplay.lastAttempt,
+          value.compressedReplay.zeroProgress,
+          value.compressedReplay.skipPasses,
+          value.compressedReplay.terminalUntil,
+        ].every((n) => Number.isSafeInteger(n) && n >= 0)) ||
+      // Compressed offsets name an immutable representation, not an appendable JSONL prefix.
+      (file.endsWith('.zst') && value.size !== stats.size) ||
       value.size > stats.size ||
       !Number.isFinite(value.minDate) ||
       value.minDate > minDate ||
@@ -1169,17 +1225,43 @@ async function readBatch(
     }
     if (entry) commit(entry);
   };
-  let decodedAt = 0;
+  let decodedAt = compressed ? (value.compressedFrame?.decoded ?? 0) : 0;
   let reachedEnd = true;
   let deadlineCut = false;
-  const chunks = compressed ? codexZstdChunks(file) : plainChunks(file, position, end);
+  let pendingFrame: CodexZstdBoundary | undefined;
+  const keepFrame = (): void => {
+    // Frames may split a JSONL record. Keep replaying that record's prefix until
+    // its newline is committed; parser state always belongs to decodedOffset.
+    if (pendingFrame && pendingFrame.decoded <= checkpointProgress(value)) {
+      value.compressedFrame = pendingFrame;
+      pendingFrame = undefined;
+    }
+  };
+  const chunks = compressed
+    ? codexZstdChunks(file, {
+        start: value.compressedFrame,
+        deadline,
+        onDeadline: () => {
+          reachedEnd = false;
+          deadlineCut = true;
+        },
+        onFrame: (boundary) => {
+          keepFrame();
+          pendingFrame = boundary;
+          keepFrame();
+        },
+      })
+    : plainChunks(file, position, end);
+  const frameBefore = value.compressedFrame?.compressed ?? 0;
+  const attemptedAt = compressed ? Date.now() : 0;
   for await (const buffer of chunks) {
-    if (Date.now() >= deadline) {
+    keepFrame();
+    if (Date.now() >= deadline || position >= end) {
       reachedEnd = false;
-      deadlineCut = true;
+      deadlineCut = Date.now() >= deadline;
       break;
     }
-    // zstd has no seekable decoded offset: replay the prefix without parsing it again.
+    // Resume at the last independent frame, replaying only its unparsed prefix.
     const skip = compressed ? Math.max(0, Math.min(buffer.length, resumeAt - decodedAt)) : 0;
     decodedAt += buffer.length;
     const chunk = buffer.subarray(skip, skip + Math.min(buffer.length - skip, end - position));
@@ -1222,8 +1304,9 @@ async function readBatch(
       }
       start = stop + (newline >= 0 ? 1 : 0);
     }
+    keepFrame();
     const pastDeadline = Date.now() >= deadline;
-    if (pastDeadline || position >= end) {
+    if (pastDeadline) {
       reachedEnd = false;
       deadlineCut = pastDeadline;
       break;
@@ -1249,9 +1332,26 @@ async function readBatch(
   // reported totals only (see collectAccountActivity).
   value.complete = atEnd && checkpointProgress(value) === position && !discarding;
   if (compressed) {
+    keepFrame();
     value.offset = value.complete ? stats.size : 0;
     value.compressedReplayStalled =
-      deadlineCut && resumeAt > 0 && !value.complete && checkpointProgress(value) === resumeAt;
+      deadlineCut && !value.complete && checkpointProgress(value) === resumeAt;
+    const previous = value.compressedReplay;
+    const zeroProgress =
+      value.compressedReplayStalled && (value.compressedFrame?.compressed ?? 0) === frameBefore
+        ? Math.min(COMPRESSED_ZERO_PROGRESS_LIMIT, (previous?.zeroProgress ?? 0) + 1)
+        : 0;
+    value.compressedReplay = {
+      lastAttempt: Math.max(attemptedAt, (previous?.lastAttempt ?? 0) + 1),
+      zeroProgress,
+      skipPasses: zeroProgress ? Math.min(8, 2 ** zeroProgress - 1) : 0,
+      terminalUntil:
+        zeroProgress >= COMPRESSED_ZERO_PROGRESS_LIMIT ? attemptedAt + COMPRESSED_RETRY_MS : 0,
+    };
+    // Terminal files deliberately stay incomplete: earlier usage is preserved,
+    // but unmeasured suffixes must never be presented as a complete measurement.
+    // The persisted terminal reason is reported even on passes that do not read.
+    if (value.compressedReplay.terminalUntil) value.compressedReplay.skipPasses = 0;
   }
   value.rows = [...rows.values()];
   if (keySet) value.keys = [...keySet];
@@ -2382,6 +2482,7 @@ export interface CodexPartitionFileResult {
   unfinishedTail: boolean;
   failed: boolean;
   compressedReplayStalled?: boolean;
+  compressedReplayTerminal?: boolean;
 }
 
 /**
@@ -2409,12 +2510,17 @@ export async function collectCodexPartition(
       const before = checkpointProgress(value);
       const beforeOffset = value.offset;
       const beforeStalled = value.compressedReplayStalled;
-      if (Date.now() < spec.deadline) {
+      const beforeAttempt = value.compressedReplay?.lastAttempt;
+      const deferred = deferCompressedReplay(value);
+      if (deferred && !value.compressedReplay?.terminalUntil)
+        saveCheckpoint(cache, file, value, stats);
+      if (!deferred && Date.now() < spec.deadline) {
         await readBatch(file, value, stats, 'codex', readerOptions, spec.deadline);
         if (
           checkpointProgress(value) !== before ||
           value.offset !== beforeOffset ||
           value.compressedReplayStalled !== beforeStalled ||
+          value.compressedReplay?.lastAttempt !== beforeAttempt ||
           value.file !== file ||
           !fs.existsSync(cache)
         )
@@ -2431,6 +2537,7 @@ export async function collectCodexPartition(
         unfinishedTail: value.unfinishedTail === true,
         failed: false,
         compressedReplayStalled: value.compressedReplayStalled,
+        compressedReplayTerminal: (value.compressedReplay?.terminalUntil ?? 0) > 0,
       });
     } catch {
       outcomes.push({
@@ -2470,6 +2577,7 @@ interface CodexFileTallies {
   readBytes: number;
   unfinishedTail: boolean;
   compressedReplayStalled?: boolean;
+  compressedReplayTerminal?: boolean;
 }
 
 interface CodexCounters {
@@ -2479,6 +2587,7 @@ interface CodexCounters {
   readBytes: number;
   unfinishedFiles: number;
   stalledCompressedFiles: number;
+  terminalCompressedFiles: number;
 }
 
 /**
@@ -2495,6 +2604,7 @@ function tallyCodexFile(
   if (tallies.complete) counters.completed++;
   if (tallies.unfinishedTail) counters.unfinishedFiles++;
   if (tallies.compressedReplayStalled) counters.stalledCompressedFiles++;
+  if (tallies.compressedReplayTerminal) counters.terminalCompressedFiles++;
   counters.skippedLines += tallies.skippedLines;
   const available = MAX_TOTAL_ROWS - rows.length;
   rows.push(...tallies.rows.slice(0, Math.max(0, available)));
@@ -2532,6 +2642,7 @@ async function readCodexFiles(
     readBytes: 0,
     unfinishedFiles: 0,
     stalledCompressedFiles: 0,
+    terminalCompressedFiles: 0,
   };
   const rows: CompactEntry[] = [];
   const loaded = scanned.map(({ file, stats, unresolved }) => {
@@ -2542,8 +2653,20 @@ async function readCodexFiles(
       cache,
       unresolved,
       value: loadCheckpoint(cache, file, stats, options.minDate, 'codex', undefined, unresolved),
+      deferred: false,
     };
   });
+  for (const item of loaded) {
+    if (item.unresolved) continue;
+    item.deferred = deferCompressedReplay(item.value);
+    if (item.deferred && !item.value.compressedReplay?.terminalUntil) {
+      try {
+        saveCheckpoint(item.cache, item.file, item.value, item.stats);
+      } catch {
+        counters.failed++;
+      }
+    }
+  }
   const unreadBytes = loaded.reduce(
     (sum, item) => sum + Math.max(0, item.stats.size - item.value.offset),
     0
@@ -2552,13 +2675,9 @@ async function readCodexFiles(
   // the just-loaded checkpoints, so no reader starts with nothing to read.
   // Fresh siblings get a turn before a replay can exhaust the entire deadline.
   // Keep `loaded` in global order for row-cap/aggregation parity with the fan-out path.
-  const readOrder = [...loaded].sort(
-    (a, b) =>
-      Number(a.value.compressedReplayStalled === true) -
-      Number(b.value.compressedReplayStalled === true)
-  );
+  const readOrder = [...loaded].sort((a, b) => compressedReadOrder(a.value, b.value));
   const needsRead = readOrder.filter(
-    (item) => !item.unresolved && item.stats.size - item.value.offset > 0
+    (item) => !item.unresolved && !item.deferred && item.stats.size - item.value.offset > 0
   );
   const readers = codexReaderCount(
     unreadBytes,
@@ -2573,12 +2692,14 @@ async function readCodexFiles(
         const before = checkpointProgress(item.value);
         const beforeOffset = item.value.offset;
         const beforeStalled = item.value.compressedReplayStalled;
-        if (!item.unresolved && Date.now() < deadline) {
+        const beforeAttempt = item.value.compressedReplay?.lastAttempt;
+        if (!item.unresolved && !item.deferred && Date.now() < deadline) {
           await readBatch(item.file, item.value, item.stats, 'codex', options, deadline);
           if (
             checkpointProgress(item.value) !== before ||
             item.value.offset !== beforeOffset ||
             item.value.compressedReplayStalled !== beforeStalled ||
+            item.value.compressedReplay?.lastAttempt !== beforeAttempt ||
             item.value.file !== item.file ||
             !fs.existsSync(item.cache)
           )
@@ -2593,6 +2714,7 @@ async function readCodexFiles(
           readBytes: Math.max(0, checkpointProgress(item.value) - before),
           unfinishedTail: item.value.unfinishedTail === true,
           compressedReplayStalled: item.value.compressedReplayStalled,
+          compressedReplayTerminal: (item.value.compressedReplay?.terminalUntil ?? 0) > 0,
         });
       } catch {
         counters.failed++;
@@ -2677,6 +2799,7 @@ async function readCodexFiles(
     readBytes: 0,
     unfinishedTail: item.value.unfinishedTail === true,
     compressedReplayStalled: item.value.compressedReplayStalled,
+    compressedReplayTerminal: (item.value.compressedReplay?.terminalUntil ?? 0) > 0,
   });
   for (const item of loaded) {
     const error = errors.get(item.file);
@@ -2921,26 +3044,51 @@ async function collectExperimentActivity(
   let readBytes = 0;
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
+  let terminalCompressedFiles = 0;
   const referenceKeys = new Set<string>();
   const keyedByFile: Array<{ file: string; entries: KeyedEntry[] }> = [];
+  const prepared = new Map<string, { cache: string; value: Checkpoint }>();
+  const prepare = (item: { file: string; stats: fs.Stats }, mode: ReadMode) => {
+    const key = `${mode}:${item.file}`;
+    let loaded = prepared.get(key);
+    if (!loaded) {
+      const cache = path.join(directory, `${hash(key)}.json`);
+      loaded = {
+        cache,
+        value: loadCheckpoint(cache, item.file, item.stats, options.minDate, kind, mode),
+      };
+      prepared.set(key, loaded);
+    }
+    return loaded;
+  };
+  const order = <T extends { file: string; stats: fs.Stats }>(items: T[], mode: ReadMode): T[] =>
+    kind === 'codex'
+      ? [...items].sort((a, b) =>
+          compressedReadOrder(prepare(a, mode).value, prepare(b, mode).value)
+        )
+      : items;
   /** The file's checkpoint after this pass, and whether this pass read it (budget left). */
   const visit = async (
     item: { file: string; stats: fs.Stats },
     mode: ReadMode
   ): Promise<{ value: Checkpoint; read: boolean } | undefined> => {
-    const cache = path.join(directory, `${hash(`${mode}:${item.file}`)}.json`);
+    const { cache, value } = prepare(item, mode);
     try {
-      const value = loadCheckpoint(cache, item.file, item.stats, options.minDate, kind, mode);
       const before = checkpointProgress(value);
       const beforeOffset = value.offset;
       const beforeStalled = value.compressedReplayStalled;
-      const read = Date.now() < deadline;
+      const beforeAttempt = value.compressedReplay?.lastAttempt;
+      const deferred = deferCompressedReplay(value);
+      if (deferred && !value.compressedReplay?.terminalUntil)
+        saveCheckpoint(cache, item.file, value, item.stats);
+      const read = !deferred && Date.now() < deadline;
       if (read) {
         await readBatch(item.file, value, item.stats, kind, options, deadline, undefined, mode);
         if (
           checkpointProgress(value) !== before ||
           value.offset !== beforeOffset ||
           value.compressedReplayStalled !== beforeStalled ||
+          value.compressedReplay?.lastAttempt !== beforeAttempt ||
           !fs.existsSync(cache)
         )
           saveCheckpoint(cache, item.file, value, item.stats);
@@ -2948,6 +3096,7 @@ async function collectExperimentActivity(
       readBytes += Math.max(0, checkpointProgress(value) - before);
       if (value.unfinishedTail) unfinishedFiles++;
       if (value.compressedReplayStalled) stalledCompressedFiles++;
+      if (value.compressedReplay?.terminalUntil) terminalCompressedFiles++;
       return { value, read };
     } catch {
       failed++;
@@ -2957,7 +3106,10 @@ async function collectExperimentActivity(
       };
     }
   };
-  for (const item of kind === 'codex' ? preferPlainCodexRollouts(referenceFiles) : referenceFiles) {
+  for (const item of order(
+    kind === 'codex' ? preferPlainCodexRollouts(referenceFiles) : referenceFiles,
+    'keys'
+  )) {
     const visited = await visit(item, 'keys');
     // Caught up: read to the end, or to a last line still being written (a default transcript in
     // use always has one; its response is not complete anywhere yet, so it has no copies).
@@ -2976,8 +3128,12 @@ async function collectExperimentActivity(
     if (value.pendingClaude)
       referenceKeys.add(experimentRecordKey(kind, value.pendingClaude.entry));
   }
+  const visitedFiles = new Map<string, Awaited<ReturnType<typeof visit>>>();
+  for (const item of order(scanned, 'keyed'))
+    visitedFiles.set(item.file, await visit(item, 'keyed'));
+  // Preserve aggregation/cap order independently of scheduling, as the native path does.
   for (const item of scanned) {
-    const visited = await visit(item, 'keyed');
+    const visited = visitedFiles.get(item.file);
     if (!visited) continue;
     const value = visited.value;
     if (value.complete) completed++;
@@ -2999,7 +3155,7 @@ async function collectExperimentActivity(
     failedFiles: failed,
     readBytes,
     unfinishedFiles,
-    ...compressedReplayDetail(stalledCompressedFiles),
+    ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles),
   });
   const source =
     kind === 'codex' ? 'codex-native' : kind === 'muse' ? 'muse-native' : 'custom-parser';
@@ -3234,6 +3390,7 @@ export async function collectAccountActivity(
   let readBytes = claude?.readBytes ?? 0;
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
+  let terminalCompressedFiles = 0;
   if (request.kind === 'codex') {
     // Codex alone fans out across partition readers above the unread threshold
     // (N14); below it this reads inline, exactly like the loop below.
@@ -3247,6 +3404,7 @@ export async function collectAccountActivity(
     readBytes = codex.readBytes;
     unfinishedFiles = codex.unfinishedFiles;
     stalledCompressedFiles = codex.stalledCompressedFiles;
+    terminalCompressedFiles = codex.terminalCompressedFiles;
   } else {
     for (const { file, stats, unresolved, frozen, mode, prepared } of scanned) {
       const cache = path.join(directory, `${hash(file)}.json`);
@@ -3430,7 +3588,7 @@ export async function collectAccountActivity(
       failedFiles: failed,
       readBytes,
       unfinishedFiles,
-      ...compressedReplayDetail(stalledCompressedFiles),
+      ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles),
     },
   };
 }
