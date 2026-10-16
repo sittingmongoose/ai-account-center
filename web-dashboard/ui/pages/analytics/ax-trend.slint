@@ -5,7 +5,7 @@
 import { Theme, Motion, Type, Breakpoints, Device } from "../../theme.slint";
 import { Caps } from "../../components/text.slint";
 import { AxData, AxBucket, AxYTick, AxXTick } from "ax-data.slint";
-import { AxColor, AxCard, AxCardHead, AxSwitch, AxLegendEntry, AxRoRow, AxRoTime, AxRoCard, AxRoBar, AxRoVal, AxScrub } from "ax-common.slint";
+import { AxColor, AxCard, AxCardHead, AxSwitch, AxLegendEntry, AxRoRow, AxRoTime, AxRoCard, AxRoBar, AxRoVal, AxScrub, AxPress } from "ax-common.slint";
 
 export global AxTrendPad {
     out property <length> l: 62px;
@@ -578,7 +578,8 @@ export component AxTrendCard inherits AxCard {
                 HorizontalLayout {
                     spacing: 8px;
                     min-height: 17px;
-                    Text { text: chart.b.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; }
+                    // the bucket's time gives way first, so the readings and Close always fit a phone
+                    Text { text: chart.b.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; min-width: 0px; AxPress { tip: chart.b.time; long-tip: chart.b.time; } }
                     AxRoVal { c: AxColor.of("tok"); value: "All " + chart.b.all; }
                     AxRoVal { c: AxColor.of("cost"); shape: "line"; value: chart.b.cost; }
                 }

@@ -453,7 +453,9 @@ export component AxSwitch inherits Rectangle {
     property <length> track-w: Breakpoints.tier-d ? 30px : Breakpoints.tier-t ? 36px : 40px;
     property <length> track-h: Breakpoints.tier-d ? 18px : Breakpoints.tier-t ? 22px : 24px;
     height: Breakpoints.tier-d ? 26px : 44px;
-    min-width: row.preferred-width;
+    // a long label (the quota focus compare switch) elides rather than widening its row: the track and
+    // the start of the label always show, and the tip carries the whole label
+    min-width: min(row.preferred-width, root.track-w + 18px + 64px);
     preferred-width: row.preferred-width;
     border-radius: 8px;
     background: ta.has-hover ? Theme.paper-3 : Theme.paper-3.with-alpha(0);
@@ -486,7 +488,7 @@ export component AxSwitch inherits Rectangle {
                 }
             }
         }
-        Text { text: root.label; font-size: Breakpoints.tier-d ? 12.5px : Type.control; font-weight: 540; color: ta.has-hover ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
+        Text { text: root.label; font-size: Breakpoints.tier-d ? 12.5px : Type.control; font-weight: 540; color: ta.has-hover ? Theme.ink : Theme.ink-2; vertical-alignment: center; overflow: elide; }
     }
     ta := AxPress {
         tip: root.tip;

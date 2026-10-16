@@ -140,11 +140,15 @@ component IncludedLines inherits VerticalLayout {
 }
 
 // The quiet text button that opens it, collapsed by default like the scope disclosure beside it.
-// Below D it is a 44 tall text button (DESIGN-MOBILE 4.2.1).
+// Below D it is a 44 tall text button (DESIGN-MOBILE 4.2.1) no wider than `max-w`: a label with every flag
+// ("Included usage · 1 scanning, 1 cached, 1 unavailable") wraps there instead of widening the page.
 component IncludedButton inherits Rectangle {
     in property <bool> open;
+    in property <length> max-w: 100000px;
     callback clicked();
-    height: Breakpoints.tier-d ? 24px : 44px;
+    // the label's room beside the paddings, the gap and the chevron
+    property <length> label-max: max(48px, root.max-w - 7px - 5px - 4px - 13px);
+    height: Breakpoints.tier-d ? 24px : max(44px, label.preferred-height + 12px);
     min-width: row.preferred-width;
     preferred-width: row.preferred-width;
     border-radius: 7px;
@@ -154,7 +158,14 @@ component IncludedButton inherits Rectangle {
         padding-left: 7px;
         padding-right: 5px;
         spacing: 4px;
-        Text { text: AxData.included.label; font-size: Breakpoints.tier-d ? 13px : Type.control; color: ta.has-hover || root.open ? Theme.ink : Theme.ink-2; vertical-alignment: center; }
+        label := Text {
+            text: AxData.included.label;
+            width: Breakpoints.tier-d ? m-label.preferred-width : min(m-label.preferred-width, root.label-max);
+            font-size: m-label.font-size;
+            color: ta.has-hover || root.open ? Theme.ink : Theme.ink-2;
+            vertical-alignment: center;
+            wrap: Breakpoints.tier-d ? TextWrap.no-wrap : TextWrap.word-wrap;
+        }
         VerticalLayout {
             alignment: center;
             Icon {
@@ -167,6 +178,8 @@ component IncludedButton inherits Rectangle {
             }
         }
     }
+    // the label's one-line width, measured outside the row
+    m-label := Text { x: 0px; y: 0px; width: 0px; height: 0px; opacity: 0; text: AxData.included.label; font-size: Breakpoints.tier-d ? 13px : Type.control; }
     ta := AxPress { tip: Breakpoints.tier-d ? "" : AxData.included.line; long-tip: AxData.included.line; mouse-cursor: pointer; tapped => { Hover.clear(); root.clicked(); } }
     ProbeMark { x: 0px; y: 0px; width: root.width; height: root.height; id: "included-usage"; }
 }
@@ -431,7 +444,13 @@ component PickerButton inherits Rectangle {
 }
 
 export component AxHeader inherits Rectangle {
-    property <bool> wide: Breakpoints.width >= 1360px;
+    // The tools share the title's row from 1360 px only while both fit at their natural widths: the title's
+    // subline grows with the Updating note and the Included usage flags, and nothing on it elides. The two
+    // widths are reported by the title and by whichever tools row exists (both hold the same controls).
+    property <length> title-w: 0px;
+    property <length> tools-w: 0px;
+    property <bool> wide: Breakpoints.width >= 1360px
+        && root.title-w + 28px + root.tools-w <= min(Breakpoints.width, Breakpoints.max-content) - 2 * Breakpoints.gutter;
     property <[AxSegItem]> ranges: [{ value: "24h", label: "24H" }, { value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "month", label: "Month" }, { value: "all", label: "All" }];
     // the 3 + 2 wrap of the range control when a segment would be under 64 px (DESIGN-MOBILE 1.5)
     property <[AxSegItem]> ranges-a: [root.ranges[0], root.ranges[1], root.ranges[2]];
@@ -450,6 +469,9 @@ export component AxHeader inherits Rectangle {
                 alignment: end;
                 spacing: 7px;
                 horizontal-stretch: 0;
+                property <length> natural: self.preferred-width;
+                init => { root.title-w = self.natural; }
+                changed natural => { root.title-w = self.natural; }
                 Text { text: "Analytics"; font-size: 30px; font-weight: 620; color: Theme.ink; letter-spacing: -0.6px; }
                 HorizontalLayout {
                     spacing: 6px;
@@ -512,6 +534,9 @@ export component AxHeader inherits Rectangle {
                 alignment: end;
                 spacing: 14px;
                 horizontal-stretch: 0;
+                property <length> natural: self.preferred-width;
+                init => { root.tools-w = self.natural; }
+                changed natural => { root.tools-w = self.natural; }
                 VerticalLayout { alignment: end; HorizontalLayout { spacing: 8px; range-seg-w := AxSeg { mono: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } } date-w := DateButton { label: AxData.head.date; on: AxData.head.custom; open: dates-w.is-open; clicked => { dates-w.show(); } dates-w := PopupWindow { x: 0px; y: date-w.height + 8px; width: 336px; height: dw-body.preferred-height; close-policy: close-on-click-outside; dw-body := AxPopBody { width: 336px; height: self.preferred-height; DatesBody { lo: AxData.calendar.lo; hi: AxData.calendar.hi; apply(a, b) => { dates-w.close(); AxData.action("analytics-custom", AxData.days[a].day + "," + AxData.days[b].day); } cancel => { dates-w.close(); } } } } } } }
                 VerticalLayout {
                     alignment: end;
@@ -533,6 +558,10 @@ export component AxHeader inherits Rectangle {
         }
         if !root.wide: HorizontalLayout {
             spacing: 14px;
+            // the same controls as the wide row, less the spacer's extra 14 px
+            property <length> natural: self.preferred-width - 14px;
+            init => { root.tools-w = self.natural; }
+            changed natural => { root.tools-w = self.natural; }
             HorizontalLayout { spacing: 8px; horizontal-stretch: 0; AxSeg { mono: true; items: root.ranges; value: AxData.range; picked(v) => { AxData.action("analytics-range", v); } } date-n := DateButton { label: AxData.head.date; on: AxData.head.custom; open: dates-n.is-open; clicked => { dates-n.show(); } dates-n := PopupWindow { x: 0px; y: date-n.height + 8px; width: 336px; height: dn-body.preferred-height; close-policy: close-on-click-outside; dn-body := AxPopBody { width: 336px; height: self.preferred-height; DatesBody { lo: AxData.calendar.lo; hi: AxData.calendar.hi; apply(a, b) => { dates-n.close(); AxData.action("analytics-custom", AxData.days[a].day + "," + AxData.days[b].day); } cancel => { dates-n.close(); } } } } } }
             pick-n := PickerButton {
                 horizontal-stretch: 0;
@@ -573,8 +602,9 @@ export component AxHeader inherits Rectangle {
             // Capped at the subline's natural single-line width (same size, measured in the
             // spacer below), so the info icon sits right after the read time and only wraps with
             // the text when the line truly runs out (DESIGN-MOBILE 4.2.1).
+            // room left by the 44 px info button and the two 6 px gaps beside it (and the Updating note)
             sub := StyledText {
-                width: min(m-sub.preferred-width + 6px, max(48px, mlay.cw - 50px - (AxData.head.updating ? mlay.upd-w + 6px : 0px)));
+                width: min(m-sub.preferred-width + 6px, max(48px, mlay.cw - 56px - (AxData.head.updating ? mlay.upd-w + 6px : 0px)));
                 text: @markdown("<font color='\{Theme.ink-3}'>\{AxData.head.scope}</font><font color='\{Theme.ink-2}'>**\{AxData.head.read}**</font>");
                 default-color: Theme.ink-3;
                 default-font-size: Type.small;
@@ -601,6 +631,7 @@ export component AxHeader inherits Rectangle {
         }
         if AxData.included.shown: VerticalLayout {
             inc-m := IncludedButton {
+                max-w: mlay.cw;
                 open: inc-m-pop.is-open;
                 clicked => { inc-m-pop.show(); }
                 inc-m-pop := PopupWindow {

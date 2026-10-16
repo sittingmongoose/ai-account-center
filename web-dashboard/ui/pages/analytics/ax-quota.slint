@@ -15,7 +15,8 @@ export global AxQuotaCols {
     out property <bool> tight: Breakpoints.width <= 1360px;
     out property <length> gap: tight ? 12px : 16px;
     out property <length> used: tight ? 72px : 76px;
-    out property <length> next: tight ? 96px : 110px;
+    // the widest entry, "No reset reported", is about 102 px at 12.5 px: never narrower than that
+    out property <length> next: tight ? 106px : 110px;
     out property <length> chev: tight ? 22px : 26px;
     // the row width is the card width, which follows the page width (no layout loop): minmax(240px, 34%)
     out property <length> card-w: min(Breakpoints.width, Breakpoints.max-content) - 2 * Breakpoints.gutter;
@@ -308,6 +309,12 @@ component FocusChart inherits Rectangle {
 // The expanded part of a quota row: legend, compare switch, Details, the chart and its foot.
 component FocusPanel inherits VerticalLayout {
     in property <AxQuotaRow> qr;
+    // D: the legend, the compare switch and Details share one row only while they fit the card at their
+    // natural widths (a compare label for several Antigravity accounts is long); otherwise the switch and
+    // Details take a second row. The widths are reported by the rows that hold them.
+    property <length> legend-w: 0px;
+    property <length> tools-w: 0px;
+    property <bool> one-row: root.legend-w + 12px + root.tools-w <= AxQuotaCols.card-w - 68px;
     padding-left: Breakpoints.tier-d ? 48px : Breakpoints.tier-p ? 16px : 20px;
     padding-right: Breakpoints.tier-d ? 20px : Breakpoints.tier-p ? 16px : 20px;
     padding-top: 4px;
@@ -315,19 +322,43 @@ component FocusPanel inherits VerticalLayout {
     spacing: 0px;
     if Breakpoints.tier-d: HorizontalLayout {
         padding-top: 8px;
-        padding-bottom: 10px;
+        padding-bottom: root.one-row ? 10px : 4px;
         spacing: 12px;
         HorizontalLayout {
             spacing: 14px;
             alignment: start;
             horizontal-stretch: 1;
+            property <length> natural: self.preferred-width;
+            init => { root.legend-w = self.natural; }
+            changed natural => { root.legend-w = self.natural; }
             for l in root.qr.focus.legend: FocusLegend { name: l.name; kind: l.kind; provider: root.qr.focus.provider; shade: l.shade; dash: l.dash; lw: l.width; }
         }
+        if root.one-row: HorizontalLayout {
+            spacing: 12px;
+            horizontal-stretch: 0;
+            property <length> natural: self.preferred-width;
+            init => { root.tools-w = self.natural; }
+            changed natural => { root.tools-w = self.natural; }
+            if root.qr.focus.comparable: VerticalLayout {
+                alignment: center;
+                AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
+            }
+            VerticalLayout { alignment: center; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
+        }
+    }
+    if Breakpoints.tier-d && !root.one-row: HorizontalLayout {
+        padding-bottom: 10px;
+        spacing: 12px;
+        property <length> natural: self.preferred-width;
+        init => { root.tools-w = self.natural; }
+        changed natural => { root.tools-w = self.natural; }
         if root.qr.focus.comparable: VerticalLayout {
             alignment: center;
+            horizontal-stretch: 0;
             AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
         }
-        VerticalLayout { alignment: center; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
+        Rectangle { horizontal-stretch: 1; }
+        VerticalLayout { alignment: center; horizontal-stretch: 0; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
     }
     // below D the legend stacks on P/F; the switch and Details share a row except on narrow P
     if Breakpoints.below-d: VerticalLayout {
@@ -348,13 +379,13 @@ component FocusPanel inherits VerticalLayout {
         if !Breakpoints.tier-p: HorizontalLayout {
             spacing: 12px;
             alignment: start;
-            if root.qr.focus.comparable: AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
+            if root.qr.focus.comparable: AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; tip: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
             VerticalLayout { alignment: center; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
         }
         if Breakpoints.tier-p: VerticalLayout {
             spacing: 4px;
             alignment: start;
-            if root.qr.focus.comparable: AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
+            if root.qr.focus.comparable: AxSwitch { on: root.qr.focus.compare; label: root.qr.focus.cmp-label; tip: root.qr.focus.cmp-label; toggled(v) => { AxData.action("analytics-compare", root.qr.id); } }
             VerticalLayout { alignment: start; Button { text: "Details"; small: true; clicked => { AxData.action("details", root.qr.id); } } }
         }
     }
@@ -367,16 +398,19 @@ component FocusPanel inherits VerticalLayout {
             HorizontalLayout {
                 spacing: 8px;
                 min-height: 17px;
-                Text { text: chart.st.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; }
+                // the time and the series name give way before the value, so Close always fits a phone
+                Text { text: chart.st.time; font-family: Type.mono; font-size: 11px; color: Theme.ink-3; vertical-alignment: center; overflow: elide; min-width: 0px; }
                 if chart.st.rows.length > 0: HorizontalLayout {
                     spacing: 5px;
                     VerticalLayout { alignment: center; Rectangle { width: 14px; height: 6px; Rectangle { y: 2px; height: 2.4px; background: AxColor.series(root.qr.focus.provider, chart.st.rows[0].shade); } } }
-                    Text { text: chart.st.rows[0].name; font-size: Type.small; color: Theme.ink; vertical-alignment: center; }
+                    Text { text: chart.st.rows[0].name; font-size: Type.small; color: Theme.ink; vertical-alignment: center; overflow: elide; min-width: 0px; }
                     Text { text: chart.st.rows[0].value; font-family: Type.tab; font-size: Type.small; font-weight: 600; color: Theme.ink; vertical-alignment: center; }
                 }
             }
+            // the second line is cut at the bar's edge: its natural width never widens the bar
             Rectangle {
                 clip: true;
+                min-width: 0px;
                 HorizontalLayout {
                     spacing: 10px;
                     min-height: 17px;
