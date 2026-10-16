@@ -15,6 +15,11 @@ export const SNAPSHOT_LOCATIONS = 'locations.json';
 const MAX_DIRECTORY_LENGTH = 1024;
 const MAX_LOCATIONS = 8;
 const MAX_WHERE_LENGTH = 60;
+/**
+ * The read cap for the setting file. The longest valid setting (8 locations of 60 + 1024 three-byte
+ * characters and a 1024-character folder) is about 30 KB, so every setting `set` accepts reads back.
+ */
+const MAX_SETTINGS_BYTES = 64 * 1024;
 
 /**
  * Where one group of computers finds the snapshot folder, such as "the Mac" and
@@ -74,7 +79,7 @@ const copyLocations = (locations: readonly SnapshotLocation[]): SnapshotLocation
   locations.map(({ where, path: place }) => ({ where, path: place }));
 
 export async function readSnapshotSettings(ccsDir = getCcsDir()): Promise<SnapshotSettings | null> {
-  const read = await readPrivateJsonFile(snapshotSettingsPath(ccsDir), 16384);
+  const read = await readPrivateJsonFile(snapshotSettingsPath(ccsDir), MAX_SETTINGS_BYTES);
   if (read.state !== 'ok') return null;
   const value = read.value as Record<string, unknown> | null;
   if (!value || value.version !== 1 || !isSnapshotDirectory(value.directory)) return null;
@@ -100,11 +105,11 @@ export async function writeSnapshotSettings(
       `Give at most ${MAX_LOCATIONS} locations, each a name and a path without control characters.`
     );
   const list = copyLocations(locations);
-  await writePrivateJsonFile(file, {
-    version: 1,
-    directory,
-    ...(list.length ? { locations: list } : {}),
-  });
+  const setting = { version: 1, directory, ...(list.length ? { locations: list } : {}) };
+  // The same bytes writePrivateJsonFile writes: a setting that saves must also read back.
+  if (Buffer.byteLength(`${JSON.stringify(setting, null, 2)}\n`) > MAX_SETTINGS_BYTES)
+    throw new ValidationError('The usage snapshot setting is too large; use shorter locations.');
+  await writePrivateJsonFile(file, setting);
 }
 
 /** `locations.json` in the snapshot folder: where each group of computers finds that folder. */

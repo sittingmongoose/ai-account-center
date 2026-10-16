@@ -347,9 +347,10 @@ def cmd_history(args):
             print("  %s  %s" % (time, ", ".join(values)))
 
 
-def run_cmd():
-    """How an agent on this computer runs this command: the published reader beside its snapshot."""
-    folder = own_folder() or snapshot_folder()
+def run_cmd(explicit=None):
+    """How an agent on this computer runs this command: the published reader beside its snapshot
+    (the folder from --dir, else AAC_USAGE_DIR, else this reader's own folder)."""
+    folder = snapshot_folder(explicit)
     if folder is None:
         return ("python <folder>\\aac-usage`" if os.name == "nt" else "python3 <folder>/aac-usage`") + \
             " (<folder> is the shared folder the dashboard writes to)"
@@ -363,9 +364,9 @@ def run_cmd():
     return "python3 '%s'`" % str(reader).replace("'", "'\\''")
 
 
-def rules_text(kind="other"):
-    cmd = run_cmd()
-    places = locations(own_folder() or snapshot_folder())
+def rules_text(kind="other", explicit=None):
+    cmd = run_cmd(explicit)
+    places = locations(snapshot_folder(explicit))
     where = " (%s)" % ", ".join("`%s` on %s" % (path, name) for name, path in places) if places else ""
     lines = [
         "# AI account usage",
@@ -439,6 +440,7 @@ def rules_targets(home):
 
 def cmd_install_rules(args):
     home = Path.home()
+    explicit = getattr(args, "dir", None)
     for root, path, kind, create in rules_targets(home):
         if not (home / root).is_dir():
             print("skip      %s (no %s here)" % (path, root))
@@ -446,20 +448,20 @@ def cmd_install_rules(args):
         if not create and not path.is_file():
             continue
         try:
-            print("%-9s %s" % (install_block(path, rules_text(kind)), path))
+            print("%-9s %s" % (install_block(path, rules_text(kind, explicit)), path))
         except (OSError, ValueError) as error:
             print("error     %s (%s)" % (path, error))
     print("Cursor keeps user rules in its settings: paste `aac-usage rules` into Settings > Rules > User Rules.")
 
 
-def main():
+def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")  # a Windows console without UTF-8 never fails a print
         except (AttributeError, ValueError):
             pass
     parser = argparse.ArgumentParser(prog="aac-usage", description=__doc__.splitlines()[0])
-    parser.add_argument("--dir", help="the snapshot folder (default: this file's folder, else the share)")
+    parser.add_argument("--dir", help="the snapshot folder (default: AAC_USAGE_DIR, else this reader's own folder)")
     parser.add_argument("--provider", help="only this provider")
     parser.add_argument("--account", help="only accounts whose label, email or profile contains this")
     parser.add_argument("--all", action="store_true", help="include accounts hidden on the dashboard")
@@ -476,12 +478,14 @@ def main():
     history.add_argument("--all", action="store_true", default=argparse.SUPPRESS)
     rules = sub.add_parser("rules", help="print the rules block")
     rules.add_argument("kind", nargs="?", default="other", choices=["claude", "other"])
-    sub.add_parser("install-rules", help="write the rules block into this computer's agent rules files")
-    args = parser.parse_args()
+    rules.add_argument("--dir", default=argparse.SUPPRESS)
+    install = sub.add_parser("install-rules", help="write the rules block into this computer's agent rules files")
+    install.add_argument("--dir", default=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
     if args.cmd == "history":
         cmd_history(args)
     elif args.cmd == "rules":
-        print(rules_text(args.kind), end="")
+        print(rules_text(args.kind, args.dir), end="")
     elif args.cmd == "install-rules":
         cmd_install_rules(args)
     else:

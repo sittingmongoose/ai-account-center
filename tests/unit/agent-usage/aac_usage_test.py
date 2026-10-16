@@ -303,6 +303,30 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(aac.locations(folder), [])
         self.assertEqual(aac.locations(None), [])
 
+    def test_rules_and_install_rules_follow_dir(self):
+        folder = self.home / "snapshot"
+        folder.mkdir()
+        (folder / "locations.json").write_text(json.dumps(
+            {"version": 1, "locations": [{"where": "Linux", "path": "/mnt/share/aac-usage"}]}), encoding="utf-8")
+
+        def run(*argv):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                aac.main(list(argv))
+            return out.getvalue()
+
+        with mock.patch.object(aac, "own_folder", return_value=None), mock.patch.dict(os.environ, {"AAC_USAGE_DIR": ""}):
+            before = run("--dir", str(folder), "rules")
+            after = run("rules", "claude", "--dir", str(folder))
+            (self.home / ".claude").mkdir()
+            with mock.patch.object(aac.Path, "home", return_value=self.home):
+                run("install-rules", "--dir", str(folder))
+        installed = (self.home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
+        for text in (before, after, installed):
+            self.assertIn(str(folder / "aac-usage"), text)
+            self.assertIn("(`/mnt/share/aac-usage` on Linux)", text)
+            self.assertNotIn("<folder>", text)
+
     def test_a_reader_with_no_folder_says_how_to_find_one(self):
         with mock.patch.object(aac, "own_folder", return_value=None), mock.patch.dict(os.environ, {"AAC_USAGE_DIR": ""}):
             with self.assertRaises(SystemExit) as stopped:

@@ -42,7 +42,9 @@ readings that sample just recorded:
 - `history.json`: the measured readings of every window over the last 7 days;
 - `locations.json`: the saved locations, rewritten only when they change.
 
-`usage.json` is written last, so its `generatedAt` says the sample's files are all in place.
+Of the three data files `usage.json` is written last, so its `generatedAt` says that sample's
+`history.json` and `usage.md` are in place. `locations.json` follows when the locations changed; a
+failed write of it never fails the sample and is retried at the next one.
 Readers treat a snapshot older than `staleAfterSeconds` (three refreshes, at least 5 minutes) as
 stale. On the first write after a dashboard start, the dashboard also copies the packaged reader
 and guide into the folder when their bytes differ, so the reader always matches the format.

@@ -813,6 +813,21 @@ describe('agent usage snapshot publisher', () => {
     expect(read()).toEqual({ version: 1, locations: [mac] });
   });
 
+  it('reads back the largest setting it accepts', async () => {
+    // Three UTF-8 bytes per character and a backslash JSON doubles: the most bytes per character.
+    const folder = path.join(home, 's'.repeat(Math.max(1, 1000 - home.length)));
+    const longest = Array.from({ length: 8 }, (_, index) => ({
+      where: `${index}${'界'.repeat(59)}`,
+      path: `\\${'界'.repeat(1023)}`,
+    }));
+    await writeSnapshotSettings(folder, undefined, longest);
+    expect(await readSnapshotSettings()).toEqual({
+      version: 1,
+      directory: folder,
+      locations: longest,
+    });
+  });
+
   it('refuses bad locations and drops a damaged list without losing the folder', async () => {
     const folder = path.join(home, 'share');
     await expect(
