@@ -816,9 +816,14 @@ describe('claude response collapsing', () => {
     expect(recovered.scan?.complete).toBe(true);
   });
 
-  it.each(['parser', 'save', 'publish'] as const)(
-    'retains every Claude checkpoint and the prior selection after a group %s failure',
-    async (failure) => {
+  it.each(
+    (['parser', 'save', 'publish'] as const).flatMap((failure) => [
+      { failure, pending: false },
+      { failure, pending: true },
+    ])
+  )(
+    'retains every Claude checkpoint and the prior selection after a group $failure failure (pending=$pending)',
+    async ({ failure, pending }) => {
       const projects = path.join(root, 'claude', 'projects');
       const a = path.join(projects, 'a', 's.jsonl');
       const b = path.join(projects, 'b', 's.jsonl');
@@ -851,6 +856,31 @@ describe('claude response collapsing', () => {
       fs.appendFileSync(a, record('unique', 10));
       // Ensure a has already been parsed/staged when b fails.
       fs.utimesSync(a, new Date(), new Date(Date.now() + 2000));
+      if (pending) {
+        let clock = NOW;
+        const now = spyOn(Date, 'now').mockImplementation(() => clock);
+        const rename = fs.renameSync;
+        const cut = spyOn(fs, 'renameSync').mockImplementation(((source, target) => {
+          const result = rename(source, target);
+          if (String(source).endsWith('.tmp')) {
+            staged.add(path.basename(String(target)));
+            clock += 100;
+          }
+          return result;
+        }) as typeof fs.renameSync);
+        try {
+          const result = await collectAccountActivity(
+            { kind: 'claude', projectsDir: projects },
+            { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache'), budgetMs: 100 }
+          );
+          expect(sum(result, 'inputTokens')).toBe(150);
+          expect(result.scan).toMatchObject({ complete: false, failedFiles: 0 });
+          expect(result.scan?.readBytes).toBeGreaterThan(0);
+        } finally {
+          cut.mockRestore();
+          now.mockRestore();
+        }
+      }
       const open = fs.openSync;
       const read = fs.readSync;
       const rename = fs.renameSync;
@@ -906,6 +936,158 @@ describe('claude response collapsing', () => {
       expect(sum(await collectClaude(), 'inputTokens')).toBe(160);
     }
   );
+
+  it.each([2, 6])(
+    'resumes a deadline-cut Claude group of %s members without publishing pending checkpoints',
+    async (count) => {
+      const projects = path.join(root, 'claude', 'projects');
+      const record = (id: string, input: number) => {
+        const value = line(id, id, 1);
+        value.message.usage.input_tokens = input;
+        return JSON.stringify(value) + '\n';
+      };
+      const files = Array.from({ length: count }, (_, index) =>
+        path.join(projects, String(index), 's.jsonl')
+      );
+      for (const [index, file] of files.entries()) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, record('shared', 100) + record(`unique-${index}`, 125));
+        fs.utimesSync(file, new Date(), new Date(NOW - 2000 - index));
+      }
+      const baseline = 100 + count * 125;
+      expect(sum(await collectClaude(), 'inputTokens')).toBe(baseline);
+      const cacheRoot = path.join(root, 'cache', 'account-activity-v1');
+      const directory = path.join(cacheRoot, fs.readdirSync(cacheRoot)[0]);
+      const published = () =>
+        new Map(
+          fs
+            .readdirSync(directory, { withFileTypes: true })
+            .filter((entry) => entry.isFile())
+            .map((entry) => [entry.name, fs.readFileSync(path.join(directory, entry.name), 'utf8')])
+        );
+      const before = published();
+      // The regression: 350 plus one appended 10-token response. The longer
+      // group appends to every member so each deadline cut must advance again.
+      const changed = count === 2 ? files.slice(0, 1) : files;
+      const appended = changed.map((file, index) => {
+        const body = record(`fresh-${index}`, 10);
+        fs.appendFileSync(file, body);
+        fs.utimesSync(file, new Date(), new Date(NOW + 2000 - index));
+        return Buffer.byteLength(body);
+      });
+      let clock = NOW;
+      const now = spyOn(Date, 'now').mockImplementation(() => clock);
+      const rename = fs.renameSync;
+      const cut = spyOn(fs, 'renameSync').mockImplementation(((source, target) => {
+        const result = rename(source, target);
+        if (String(source).endsWith('.tmp') && String(target).includes('.claude-pending-'))
+          clock += 100;
+        return result;
+      }) as typeof fs.renameSync);
+      let bytes = 0;
+      let passes = 0;
+      try {
+        for (; passes <= count; passes++) {
+          clock = NOW;
+          const result = await collectAccountActivity(
+            { kind: 'claude', projectsDir: projects },
+            { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache'), budgetMs: 100 }
+          );
+          bytes += result.scan?.readBytes ?? 0;
+          expect(result.scan?.failedFiles).toBe(0);
+          if (result.scan?.complete) {
+            expect(sum(result, 'inputTokens')).toBe(baseline + changed.length * 10);
+            break;
+          }
+          expect(sum(result, 'inputTokens')).toBe(baseline);
+          expect(result.scan?.readBytes).toBeGreaterThan(0);
+          expect(published()).toEqual(before);
+          const pending = fs
+            .readdirSync(directory)
+            .filter((name) => name.startsWith('.claude-pending-'));
+          expect(pending).toHaveLength(1);
+          expect(
+            fs
+              .readdirSync(path.join(directory, pending[0]))
+              .filter((name) => name.endsWith('.json'))
+          ).toHaveLength(passes + 1);
+        }
+      } finally {
+        cut.mockRestore();
+        now.mockRestore();
+      }
+      expect(passes).toBe(count - 1);
+      expect(bytes).toBe(appended.reduce((total, size) => total + size, 0));
+      expect(fs.readdirSync(directory).some((name) => name.startsWith('.claude-pending-'))).toBe(
+        false
+      );
+      const warm = await collectClaude();
+      expect(sum(warm, 'inputTokens')).toBe(baseline + changed.length * 10);
+      expect(warm.scan).toMatchObject({ complete: true, readBytes: 0 });
+    }
+  );
+
+  it('resumes inside a long Claude member across repeated parser deadline cuts', async () => {
+    const projects = path.join(root, 'claude', 'projects');
+    const files = ['a', 'b'].map((name) => path.join(projects, name, 's.jsonl'));
+    for (const [index, file] of files.entries()) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify(line(`initial-${index}`, `initial-${index}`, 1)) + '\n'
+      );
+      fs.utimesSync(file, new Date(), new Date(NOW - 2000));
+    }
+    expect(sum(await collectClaude(), 'inputTokens')).toBe(200);
+    const padding =
+      JSON.stringify({ type: 'user', message: { content: 'x'.repeat(700_000) } }) + '\n';
+    const append = padding.repeat(5) + JSON.stringify(line('fresh', 'fresh', 10)) + '\n';
+    fs.appendFileSync(files[0], append);
+    fs.utimesSync(files[0], new Date(), new Date(NOW + 2000));
+    let clock = NOW;
+    let checks = 0;
+    const now = spyOn(Date, 'now').mockImplementation(() => {
+      if (checks && --checks === 0) clock += 100;
+      return clock;
+    });
+    const read = fs.readSync;
+    const cut = spyOn(fs, 'readSync').mockImplementation(((fd, buffer, ...args) => {
+      const result = read(fd, buffer, ...args);
+      // readBatch checks once before parsing this chunk and once after it.
+      // Fingerprint and prefix probes are smaller than a full parser chunk.
+      if (buffer.byteLength === 1024 * 1024) checks = 2;
+      return result;
+    }) as typeof fs.readSync);
+    let bytes = 0;
+    let passes = 0;
+    try {
+      for (; passes < 8; passes++) {
+        clock = NOW;
+        checks = 0;
+        const result = await collectAccountActivity(
+          { kind: 'claude', projectsDir: projects },
+          { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache'), budgetMs: 100 }
+        );
+        bytes += result.scan?.readBytes ?? 0;
+        expect(result.scan?.failedFiles).toBe(0);
+        if (result.scan?.complete) {
+          expect(sum(result, 'inputTokens')).toBe(300);
+          break;
+        }
+        expect(sum(result, 'inputTokens')).toBe(200);
+        expect(result.scan?.readBytes).toBeGreaterThan(0);
+      }
+    } finally {
+      cut.mockRestore();
+      now.mockRestore();
+    }
+    expect(passes).toBeGreaterThanOrEqual(3);
+    expect(passes).toBeLessThan(8);
+    expect(bytes).toBe(Buffer.byteLength(append));
+    const warm = await collectClaude();
+    expect(sum(warm, 'inputTokens')).toBe(300);
+    expect(warm.scan).toMatchObject({ complete: true, readBytes: 0 });
+  });
 
   it.each([
     { failure: 'open', legacySelection: false },

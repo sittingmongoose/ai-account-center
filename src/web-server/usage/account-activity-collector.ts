@@ -2140,6 +2140,9 @@ function claudeScanFiles(
  * selection together. Only one checkpoint is held in memory at a time. A read,
  * fingerprint, save or selection failure leaves every original cache intact;
  * promotion failures restore the backups before any contribution is loaded.
+ * Budget cuts retain pending checkpoints separately from the published caches:
+ * completed members then cost no parser work on the next pass. Nothing becomes
+ * visible until all members finish, including across per-file byte caps.
  */
 async function prepareClaudeGroups(
   files: ActivityFile[],
@@ -2147,7 +2150,7 @@ async function prepareClaudeGroups(
   directory: string,
   options: AccountActivityScanOptions,
   deadline: number
-): Promise<{ scanned: ActivityFile[]; failed: number; readBytes: number }> {
+): Promise<{ scanned: ActivityFile[]; failed: number; readBytes: number; pending: number }> {
   const groups = new Map<string, ActivityFile[]>();
   const members = new Map<string, ActivityFile[]>();
   for (const item of files) {
@@ -2170,29 +2173,51 @@ async function prepareClaudeGroups(
   const scanned: ActivityFile[] = [];
   let failed = scan.failed;
   let readBytes = 0;
+  let pending = 0;
   for (const [name, group] of groups) {
-    if (group.some((item) => item.frozen)) {
-      scanned.push(...group);
-      continue;
-    }
-    let staging: string | undefined;
+    const staging = path.join(directory, `.claude-pending-${hash(name)}`);
+    let retainPending = false;
     const changes: Array<{ cache: string; staged: string; backup?: string }> = [];
     const published: typeof changes = [];
     let groupBytes = 0;
     try {
+      if (group.some((item) => item.frozen)) {
+        scanned.push(...group);
+        continue;
+      }
+      let ready = true;
       for (const { file, stats, mode } of group) {
-        if (Date.now() >= deadline) throw new CCSError('Claude group read budget exhausted');
-        const cache = path.join(directory, `${hash(file)}.json`);
-        const value = loadCheckpoint(cache, file, stats, options.minDate, 'claude', mode);
-        const before = value.offset;
-        await readBatch(file, value, stats, 'claude', options, deadline, undefined, mode);
-        groupBytes += Math.max(0, value.offset - before);
-        if (value.offset !== before || value.file !== file || !fs.existsSync(cache)) {
-          staging ??= fs.mkdtempSync(path.join(directory, '.claude-stage-'));
-          const staged = path.join(staging, path.basename(cache));
-          saveCheckpoint(staged, file, value, stats);
-          changes.push({ cache, staged });
+        if (Date.now() >= deadline) {
+          ready = false;
+          break;
         }
+        const cache = path.join(directory, `${hash(file)}.json`);
+        const staged = path.join(staging, path.basename(cache));
+        const source = fs.existsSync(staged) ? staged : cache;
+        const value = loadCheckpoint(source, file, stats, options.minDate, 'claude', mode);
+        const before = value.offset;
+        if (!value.complete) {
+          await readBatch(file, value, stats, 'claude', options, deadline, undefined, mode);
+        }
+        groupBytes += Math.max(0, value.offset - before);
+        if (value.offset !== before || value.file !== file || !fs.existsSync(source)) {
+          fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+          saveCheckpoint(staged, file, value, stats);
+        }
+        if (fs.existsSync(staged)) changes.push({ cache, staged });
+        if (!value.complete) ready = false;
+      }
+      if (!ready) {
+        const prior = claudeScanFiles(
+          (members.get(name) ?? group).map((item) => ({ ...item, unresolved: true })),
+          directory,
+          deadline
+        );
+        scanned.push(...prior.scanned);
+        retainPending = true;
+        pending++;
+        readBytes += groupBytes;
+        continue;
       }
       const selection = scan.selections.get(name);
       if (selection) {
@@ -2200,7 +2225,7 @@ async function prepareClaudeGroups(
         const body = JSON.stringify(selection);
         if (!fs.existsSync(cache) || fs.readFileSync(cache, 'utf8') !== body) {
           if (Buffer.byteLength(body) > MAX_CACHE_BYTES) throw new CCSError('Group exceeds limit');
-          staging ??= fs.mkdtempSync(path.join(directory, '.claude-stage-'));
+          fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
           const staged = path.join(staging, path.basename(cache));
           fs.writeFileSync(staged, body, { mode: 0o600 });
           changes.push({ cache, staged });
@@ -2234,10 +2259,10 @@ async function prepareClaudeGroups(
       );
       scanned.push(...prior.scanned);
     } finally {
-      if (staging) fs.rmSync(staging, { recursive: true, force: true });
+      if (!retainPending) fs.rmSync(staging, { recursive: true, force: true });
     }
   }
-  return { scanned, failed, readBytes };
+  return { scanned, failed, readBytes, pending };
 }
 
 /**
@@ -3351,7 +3376,13 @@ export async function collectAccountActivity(
     if (rowMap.size > available) failed++;
     else for (const [name, groupMap] of groupMaps) coherentRows.set(name, [...groupMap.values()]);
   }
-  if (request.kind === 'claude' && !failed && !skippedLines && !options.discoveryTruncated) {
+  if (
+    request.kind === 'claude' &&
+    !claude?.pending &&
+    !failed &&
+    !skippedLines &&
+    !options.discoveryTruncated
+  ) {
     const groupFiles = new Map<string, string[]>();
     for (const { file } of files) {
       const name = path.basename(file);
@@ -3391,6 +3422,7 @@ export async function collectAccountActivity(
         files.length < MAX_FILES &&
         !skippedLines &&
         !failed &&
+        !claude?.pending &&
         !options.discoveryTruncated,
       completedFiles: completed,
       totalFiles: scanned.length + legacy.length,
