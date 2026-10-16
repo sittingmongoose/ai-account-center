@@ -40,16 +40,21 @@ export component Runs inherits HorizontalLayout {
     in property <int> weight: 400;
     in property <int> strong-weight: 600;
     in property <bool> tabular: false;
+    // the "good" run (the active account's name) may elide when the line is short of room
+    in property <bool> elide-good: false;
     spacing: 0px;
     alignment: start;
     for r in root.runs: Text {
+        property <bool> yields: root.elide-good && r.tone == "good";
         text: r.text;
         font-family: root.tabular ? Type.tab : Type.sans;
         font-size: root.size;
         font-weight: r.strong ? (r.tone == "good" ? 600 : root.strong-weight) : root.weight;
         color: r.tone == "good" ? Theme.good-text : r.tone == "warn" ? Theme.warn-text : r.strong ? root.strong-ink : root.ink;
         vertical-alignment: center;
-        horizontal-stretch: 0;
+        overflow: self.yields ? TextOverflow.elide : TextOverflow.clip;
+        horizontal-stretch: self.yields ? 1 : 0;
+        max-width: self.yields ? self.preferred-width : 100000px;
     }
 }
 
@@ -1164,6 +1169,9 @@ export component Stepper inherits Rectangle {
 
 export component AccountSection inherits Plate {
     in property <SectionView> section;
+    // D, side by side (HomePage's 7:5 or 4:3 pair): the plate's fixed width, else 0. The identity column
+    // gives way to the meter columns' 108 px minimum and the action slot instead of spilling past the plate.
+    in property <length> fit-w: 0px;
     in property <bool> played;
     in property <bool> busy;
     in property <string> selected-id;
@@ -1193,8 +1201,10 @@ export component AccountSection inherits Plate {
     // measured column widths (see the file comment); only ever grow while the section lives
     property <length> ident-max: 0px;
     property <length> slot-max: 0px;
-    property <length> ident-w: clamp(root.ident-max, root.touch ? 180px : 150px, 320px);
     property <length> slot-w: max(root.slot-max, root.section.switchable ? 80px : root.touch ? 84px : 62px);
+    property <length> ident-room: root.fit-w - 2 * root.pad-x - 2px - root.slot-w
+        - root.section.columns.length * 108px - root.col-gap * (root.section.columns.length + 1);
+    property <length> ident-w: clamp(root.fit-w > 0px ? min(root.ident-max, root.ident-room) : root.ident-max, root.touch ? 180px : 150px, 320px);
     // the stacked switchable meter grid caps each column at 260 px, extra space to the right (4.1.3)
     property <length> cell-w: max(0px, min(260px, (root.inner-w - 12px * max(0, root.section.columns.length - 1)) / max(1, root.section.columns.length)));
     // H3: switchable heads with more than two columns (Antigravity) use the short labels
@@ -1324,10 +1334,12 @@ export component AccountSection inherits Plate {
                     ProviderMark { provider: root.section.id; size: 28px; }
                 }
                 // O3: fills the title group below D, so no dead space wraps the meta early
+                // D: it may shrink (the meta's active name elides) so the auto-switch controls stay inside a
+                // paired plate; its content stays at the left, so the extra stretch shows nowhere
                 VerticalLayout {
                     alignment: center;
                     spacing: 1px;
-                    horizontal-stretch: root.touch ? 1 : 0;
+                    horizontal-stretch: 1;
                     Text {
                         min-height: 26px;
                         vertical-alignment: center;
@@ -1341,6 +1353,7 @@ export component AccountSection inherits Plate {
                     // below D the meta wraps instead of pushing the header buttons out (4.1.2)
                     if !root.touch: Runs {
                         min-height: 18px;
+                        elide-good: true;
                         runs: root.section.meta-runs;
                         size: 12.5px;
                         ink: Theme.ink-3;
@@ -2129,6 +2142,15 @@ export component HomePage inherits Rectangle {
         }
         return (root.width - root.gap) * (s == 0 ? 7 : 5) / 12;
     }
+    // the same widths from the window (the page's content width), for sizes inside the plates: deriving
+    // them from root.width would loop through the plates' minimum widths
+    pure function pair-fit(s: int) -> length {
+        let w = min(Breakpoints.width, Breakpoints.max-content) - 2 * Breakpoints.gutter - root.gap;
+        if Breakpoints.ultra {
+            return w * (s == 0 ? 4 : 3) / 7;
+        }
+        return w * (s == 0 ? 7 : 5) / 12;
+    }
     property <duration> reveal-base: root.first ? 180ms : 40ms;
     property <duration> meter-base: root.first ? 380ms : 220ms;
     // rows one and a half staggers apart across the whole page, in reading order
@@ -2179,6 +2201,7 @@ export component HomePage inherits Rectangle {
                 armed: root.ready;
                 AccountSection {
                     vertical-stretch: 1;
+                    fit-w: root.pair && s < 2 ? root.pair-fit(s) : 0px;
                     section: section;
                     played: root.ready;
                     busy: root.busy;
