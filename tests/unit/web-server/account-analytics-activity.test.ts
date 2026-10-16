@@ -1017,6 +1017,130 @@ describe('native local analytics activity', () => {
     expect(result.message).not.toContain('remaining files resume');
   });
 
+  it.each(['cold', 'upgrade', 'failed-pending'] as const)(
+    'converges capped Claude replacements with a real remote election (%s)',
+    async (scenario) => {
+      const scope = path.join(fixtureConfig, 'capped-claude');
+      fs.mkdirSync(scope);
+      let pass = 0;
+      let upgrade = scenario !== 'cold';
+      let input = 2;
+      const started: string[][] = [];
+      const cacheDir = path.join(scope, 'cache');
+      // A real remote row with output usage, source metadata, timestamps, and
+      // the production mirror reconciler. Its input is zero so all 54 input
+      // tokens in the completed answer must come from the 27 local requests.
+      const remote = () =>
+        loadAnalyticsRemoteSources(FROM, {
+          cacheDir,
+          now: () => NOW,
+          claudeLogNames: () => ({ originals: new Set(), complete: true }),
+          hosts: async () => ({ mac: 'fixture-mac', windows: null, nas1: null }),
+          runHelper: async (_alias, _host, request) =>
+            parseAnalyticsRemoteResponse(
+              JSON.stringify({
+                version: 1,
+                truncated: false,
+                kinds: Object.fromEntries(
+                  request.kinds.map((kind) => [
+                    kind,
+                    {
+                      state: kind === 'claude' ? 'ok' : 'not_installed',
+                      fingerprints:
+                        kind === 'claude' ? { ['11'.repeat(32)]: { size: 10, mtimeMs: 20 } } : {},
+                    },
+                  ])
+                ),
+                rows: request.kinds.includes('claude')
+                  ? [
+                      {
+                        k: 'claude',
+                        f: '11'.repeat(32),
+                        m: 'claude-sonnet-4-6',
+                        h: '2026-10-01 15:00',
+                        i: 0,
+                        o: 1,
+                        cr: 0,
+                        cw: 0,
+                        c: 0,
+                        n: 1,
+                      },
+                    ]
+                  : [],
+              })
+            ),
+        });
+      const deps = {
+        concurrency: 1,
+        now: () => NOW + pass * 1000,
+        scope: () => scope,
+        persistSnapshot: true,
+        remote,
+        remoteCached: () =>
+          loadAnalyticsRemoteCachedSources(FROM, {
+            cacheDir,
+            claudeLogNames: () => ({ originals: new Set(), complete: true }),
+          }),
+        requests: (): AccountAnalyticsActivityRequest[] =>
+          Array.from({ length: upgrade ? 1 : 27 }, (_, index) => ({
+            provider: 'claude',
+            request: { kind: 'claude', projectsDir: `/fixture/${index}` },
+          })),
+        loadWorker: async (request: UsageWorkerRequest) => {
+          if (request.kind !== 'claude') throw new Error('unexpected fixture request');
+          (started[pass] ??= []).push(request.projectsDir);
+          if (scenario === 'failed-pending' && pass === 2 && request.projectsDir === '/fixture/0')
+            throw new Error('fixture failure after a pending replacement');
+          return data('claude-sonnet-4-6', upgrade ? 27 : input, 0);
+        },
+      };
+      if (upgrade) {
+        const previous = new AccountAnalyticsActivityService(deps);
+        expect((await settled(previous)).totals?.inputTokens).toBe(27);
+        upgrade = false;
+        pass++;
+      }
+      const service = new AccountAnalyticsActivityService(deps);
+      const first = await settled(service);
+      expect(first.totals?.inputTokens).toBe(scenario === 'cold' ? 50 : 27);
+      expect(started[pass]).toHaveLength(25);
+      // All healthy requests have replacements within two passes, even though
+      // no pass can run all of them. The saved snapshot remains paired until then.
+      pass++;
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      const second = await settled(service);
+      expect(started[pass]).toHaveLength(25);
+      expect(started[pass].slice(0, 2)).toEqual(['/fixture/25', '/fixture/26']);
+      expect(second.totals?.inputTokens).toBe(scenario === 'failed-pending' ? 27 : 54);
+      if (scenario === 'failed-pending') {
+        expect(started[1]).toContain('/fixture/0');
+        expect(started[2]).toContain('/fixture/0');
+        expect(
+          second.sources.find((s) => s.tool === 'claude' && s.host === 'ubuntu')?.lastScanAt
+        ).toBe(new Date(NOW).toISOString());
+        pass++;
+        await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+        expect((await settled(service)).totals?.inputTokens).toBe(54);
+        expect(started[pass]).toContain('/fixture/0');
+      }
+      const answer = await settled(service);
+      expect(answer.sources.find((s) => s.tool === 'claude' && s.host === 'mac')).toMatchObject({
+        state: 'ok',
+        lastScanAt: new Date(NOW).toISOString(),
+        rowCount: 1,
+      });
+      expect(answer.totals?.inputTokens).toBe(54);
+      // A completed batch cannot supply stale coverage for the next batch.
+      input = 3;
+      pass++;
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      expect((await settled(service)).totals?.inputTokens).toBe(54);
+      pass++;
+      await service.get({ ...QUERY, refresh: true }, FROM, NOW);
+      expect((await settled(service)).totals?.inputTokens).toBe(81);
+    }
+  );
+
   it('rotates capped requests ahead of previously attempted roots and preserves a safe worker budget', async () => {
     let wall = Date.now();
     const clock = spyOn(Date, 'now').mockImplementation(() => wall);

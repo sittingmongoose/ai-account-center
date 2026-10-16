@@ -70,6 +70,8 @@ export { detectAccountAnalyticsAnomalies } from './account-analytics-anomalies';
 
 interface ActivityState {
   local: Map<string, SourceData>;
+  /** Unpublished Claude replacements survive capped passes, but never a later failed read. */
+  pendingClaude: Map<string, { source: SourceData; readAt?: string }>;
   identities: Map<string, LocalRequestIdentity>;
   requests: AccountAnalyticsActivityRequest[];
   attempts: Map<string, number>;
@@ -1141,7 +1143,9 @@ export class AccountAnalyticsActivityService {
     const attempted = new Set<AccountAnalyticsActivityProvider>();
     const localEvents = new Map<AccountAnalyticsActivityProvider, number>();
     const localReadAt = new Map<AccountAnalyticsActivityProvider, string>();
-    const replacedLocal = new Set<string>();
+    if (discoveryComplete)
+      for (const key of state.pendingClaude.keys())
+        if (!seenRequests.has(key)) state.pendingClaude.delete(key);
     // Stage replacements until we know whether their Claude mirror election can
     // advance. A successful sibling must not mutate the saved contribution early.
     const nextLocal = new Map(state.local);
@@ -1153,6 +1157,10 @@ export class AccountAnalyticsActivityService {
         if (!unfinished.has(provider)) unfinished.set(provider, 'skipped');
         return;
       }
+      const pendingClaude = state.pendingClaude.get(key);
+      // A later attempt supersedes the staged read even when it fails or cannot
+      // replace rows. Only skipped requests can carry a pending replacement.
+      if (provider === 'claude') state.pendingClaude.delete(key);
       attempted.add(provider);
       if (result.status === 'rejected') {
         unfinished.set(provider, 'failed');
@@ -1160,7 +1168,7 @@ export class AccountAnalyticsActivityService {
         return;
       }
       const data = result.value;
-      const prior = state.local.get(key) ?? predecessors.get(key);
+      const prior = pendingClaude?.source ?? state.local.get(key) ?? predecessors.get(key);
       const authoritativeEmpty =
         data.scan?.complete === true &&
         data.scan.failedFiles === 0 &&
@@ -1212,8 +1220,8 @@ export class AccountAnalyticsActivityService {
           data: [retained],
           fetchedAt: data.readAt ?? new Date((this.deps.now ?? Date.now)()).toISOString(),
         });
-        replacedLocal.add(key);
       }
+      let productiveReadAt: string | undefined;
       if (
         data.eventCount > 0 &&
         (data.readAt || !data.scan || data.scan.failedFiles === 0 || data.scan.readBytes > 0) &&
@@ -1224,19 +1232,27 @@ export class AccountAnalyticsActivityService {
           newRows)
       ) {
         const readAt = data.readAt ?? new Date((this.deps.now ?? Date.now)()).toISOString();
+        productiveReadAt = readAt;
         if (!localReadAt.has(provider) || readAt > (localReadAt.get(provider) ?? ''))
           localReadAt.set(provider, readAt);
       }
+      const replacement = nextLocal.get(key);
+      if (provider === 'claude' && replacement && replacement !== state.local.get(key))
+        state.pendingClaude.set(key, {
+          source: replacement,
+          readAt: productiveReadAt,
+        });
       succeeded.add(provider);
     });
     if (generation !== state.generation) return;
     // Mirror ownership covers all Claude requests. Keep that contribution and
-    // its election together if any request still carries rows from the old pass.
+    // its election together until every request has a replacement since the last
+    // publication. Healthy requests need not all fit into the same capped pass.
+    const claudeCovered = !requests.some(
+      (source) => source.provider === 'claude' && !state.pendingClaude.has(localRequestKey(source))
+    );
     const retainClaude =
-      ((hadClaude || previousRemote !== null) &&
-        requests.some(
-          (source) => source.provider === 'claude' && !replacedLocal.has(localRequestKey(source))
-        )) ||
+      ((hadClaude || previousRemote !== null) && !claudeCovered) ||
       (!discoveryComplete && hadClaude);
     const retainedClaudeRemote = retainClaude ? previousRemote : undefined;
     // A bare remote answer with no election metadata needs no paired local
@@ -1253,8 +1269,15 @@ export class AccountAnalyticsActivityService {
         if (source.provider === 'claude') nextLocal.delete(key);
       for (const [key, source] of state.local)
         if (source.provider === 'claude') nextLocal.set(key, source);
-      // Discarded reads cannot advance the date of the rows still being served.
+      // Unpublished reads cannot advance the date of the rows still being served.
       localReadAt.delete('claude');
+    } else if (!retainClaude) {
+      for (const [key, pending] of state.pendingClaude) {
+        nextLocal.set(key, pending.source);
+        if (pending.readAt && pending.readAt > (localReadAt.get('claude') ?? ''))
+          localReadAt.set('claude', pending.readAt);
+      }
+      if (claudeCovered && discoveryComplete) state.pendingClaude.clear();
     }
     state.local = nextLocal;
     for (const [key, source] of state.local) {
@@ -1772,6 +1795,7 @@ export class AccountAnalyticsActivityService {
     if (!state) {
       state = {
         local: new Map(),
+        pendingClaude: new Map(),
         identities: new Map(),
         requests: [],
         attempts: new Map(),
