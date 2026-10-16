@@ -386,7 +386,7 @@ See [Contributing](CONTRIBUTING.md) and the [test guide](tests/README.md). Never
 - **Agent-built, human-directed:** 529 of those commits are co-authored by AI coding agents (Claude, GPT, Qwen, GLM, Kimi and Muse models) working in parallel. Larger changes get independent reviews from a different model family before they ship.
 - **Dogfooded:** the agents that build it run on the accounts it manages, and read their own burn rate from it.
 
-<sub>Counted on October 16, 2026, from the fork point (`f45fa923`, the CCS 8.10.0 release) to commit `9be88e83`. Line counts are physical lines of tracked files (comments and blank lines included), excluding test files and anything in a `test`, `tests` or `__tests__` folder. Test files are `*.test.*`, `*.spec.*`, `test_*.py` and `*_test.py`.</sub>
+<sub>Counted on October 16, 2026, from the fork point (`f45fa923`, the CCS 8.10.0 release) to commit `7adad8c5`. Line counts are physical lines of tracked files (comments and blank lines included), excluding test files and anything in a `test`, `tests` or `__tests__` folder. Test files are `*.test.*`, `*.spec.*`, `test_*.py` and `*_test.py`.</sub>
 
 ---
 
