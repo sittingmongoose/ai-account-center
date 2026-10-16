@@ -36,7 +36,7 @@ Every account and number in this README is sample data (`example.com` accounts).
 
 | Feature | What you get |
 | --- | --- |
-| 📊 **Every quota on one screen** | 9 providers and as many accounts as you have: 5-hour, weekly and monthly limits, credits, packs and resets. |
+| 📊 **Every quota on one screen** | 9 providers, with multiple accounts for supported providers: 5-hour, weekly and monthly limits, credits, packs and resets. |
 | 🔁 **Automatic account switching** | Codex moves to an account with room when the active one reaches your limit (95% by default). Only while Codex is idle, with rollback. |
 | 🤖 **Usage your agents can read** | Every minute, usage, burn rate and projected run-out land in a shared folder. Agents check before a long run. |
 | ⬆️ **Update every AI app at once** | One button updates Claude Code, Codex, both desktop apps, T3 Code and more, on every computer, in parallel. |
@@ -118,14 +118,16 @@ Every account and number in this README is sample data (`example.com` accounts).
 | Provider | What you see | Switch accounts | How it signs in |
 | --- | --- | --- | --- |
 | **Claude** | 5-hour, weekly, Fable (Max plans), extra usage | Opens each account's own desktop profile on the Mac or Windows | Desktop profile |
-| **Codex** | 5-hour, weekly, credits, banked resets | ✅ Activate + automatic | Device code |
-| **Google Antigravity** | Gemini and Claude/GPT pools, 5-hour and weekly | ✅ Activate, automatic is opt-in | Supervised CLI login |
+| **Codex** | 5-hour, weekly, credits, banked resets | ✅ Activate + automatic (Linux) | Device code |
+| **Google Antigravity** | Gemini and Claude/GPT pools, 5-hour and weekly | ✅ Activate (Linux), automatic is opt-in | Supervised CLI login |
 | **Cursor** | Included usage, on-demand spend | — | Desktop app session |
-| **Muse Code** | 5-hour and weekly | — | Device code |
+| **Muse Code** | 5-hour and weekly | — | Existing `muse login` on the Mac (dashboard device-code sign-in is off by default) |
 | **Kimi Code** | 5-hour and weekly | — | API key |
 | **Qwen Token Plan** | Monthly credits, packs, plan expiry | — | Console session (browser extension) |
 | **Z.ai Coding Plan** | Token windows, monthly requests, reset packs | — | API key |
 | **OpenCode Go** | 5-hour, weekly, monthly, console wallet | — | API key |
+
+<sub>Cursor, Muse Code and Qwen hold one account each; the others take up to 16 accounts per provider.</sub>
 
 ---
 
@@ -248,7 +250,7 @@ flowchart LR
 | Collectors and helpers | Python usage collectors, analytics and update helpers over SSH; browser extensions for console sessions |
 | Packaging | Bun and npm (local tarball), Docker |
 
-The setup it was built for: an **Ubuntu server** runs the dashboard, and a **Mac** and a **Windows PC** are reached over SSH for Claude desktop profiles, the trays, Analytics and updates. On one computer you still get the dashboard, Codex switching, local Analytics and every API-key provider. Deeper reading: [system architecture](docs/system-architecture/index.md).
+The setup it was built for: a **Linux server** runs the dashboard, and a **Mac** and a **Windows PC** are reached over SSH for Claude desktop profiles, the trays, Analytics and updates. On a single Linux computer you still get the dashboard, Codex and Antigravity switching, local Analytics and every API-key provider. Codex and Antigravity switching need the dashboard on Linux. Deeper reading: [system architecture](docs/system-architecture/index.md).
 
 ---
 
@@ -259,8 +261,9 @@ The setup it was built for: an **Ubuntu server** runs the dashboard, and a **Mac
 | For | You need |
 | --- | --- |
 | The dashboard | Node.js 22, [Bun](https://bun.sh/docs/installation) 1.3.9, [Rust](https://rust-lang.org/tools/install/) 1.92+ with `wasm32-unknown-unknown` and [wasm-pack](https://github.com/wasm-bindgen/wasm-pack#installation) |
-| Usage readings | Your existing provider sign-ins on the computer that owns them |
-| Mac / Windows features | SSH access from the dashboard computer |
+| Usage readings | Your existing provider sign-ins on the computer that owns them, and Python 3 there (`/usr/bin/python3` on Linux and Mac, `python.exe` on Windows) |
+| Mac / Windows features | SSH access from the dashboard computer, and Python 3 on the remote computer |
+| Codex / Antigravity switching | The dashboard on Linux (activation refuses other platforms) |
 | Mac menu bar | macOS 26+, Xcode 26+ |
 | Windows tray | Windows x64, [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) |
 | Browser | WebGL2 with hardware acceleration |
@@ -378,10 +381,12 @@ See [Contributing](CONTRIBUTING.md) and the [test guide](tests/README.md). Never
 
 ### How it's built
 
-- **Fast:** forked from CCS on September 30, 2026. Since then: 730+ commits, ~287k lines added and ~380k removed, turning a CLI router into this product.
-- **Polyglot:** ~107k lines of TypeScript, 26k of Python, 21k of Slint, 16k of Swift and 13k of C#, plus 388 test files.
-- **Agent-built, human-directed:** most commits are co-authored by AI coding agents (Claude, GPT, Qwen, GLM and Muse models) working in parallel across four computers. Larger changes get independent reviews from a different model family before they ship.
+- **Fast:** forked from CCS on September 30, 2026. Since then: 740+ commits and a net ~288k lines added and ~380k removed against the fork point, turning a CLI router into this product.
+- **Polyglot:** ~100k lines of TypeScript, ~24k of Python, ~22k of Slint, ~16k of Swift and ~13k of C#, plus 426 test files.
+- **Agent-built, human-directed:** 529 of those commits are co-authored by AI coding agents (Claude, GPT, Qwen, GLM, Kimi and Muse models) working in parallel. Larger changes get independent reviews from a different model family before they ship.
 - **Dogfooded:** the agents that build it run on the accounts it manages, and read their own burn rate from it.
+
+<sub>Counted on October 16, 2026, from the fork point (`f45fa923`, the CCS 8.10.0 release) to commit `91e35c64`. Line counts are physical lines of tracked files (comments and blank lines included), excluding test files and anything in a `test`, `tests` or `__tests__` folder. Test files are `*.test.*`, `*.spec.*`, `test_*.py` and `*_test.py`.</sub>
 
 ---
 

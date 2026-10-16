@@ -4,11 +4,11 @@ The detailed reference behind the [README](../README.md): every page, control, s
 security setting and operating note, kept in one place. The README has the overview and
 quick start; come here when you need the exact behavior.
 
-AI Account Center reaches up to four computers: the Ubuntu computer that runs the dashboard,
-a Mac and a Windows computer (Claude desktop profiles, collectors, Analytics, app updates and
-the native trays), and optionally Nas1, a second Ubuntu computer reached over a fixed SSH alias
-for Update apps, Analytics and verified usage fallback only. Hosts and SSH aliases are fixed in
-source ([system architecture](system-architecture/index.md)).
+AI Account Center runs its dashboard on a Linux computer and can reach remote computers over
+SSH: a Mac and a Windows computer (Claude desktop profiles, collectors, Analytics, app updates
+and the native trays), and optionally a second Linux computer used only for Update apps,
+Analytics and verified usage fallback. The remote computers and their SSH aliases are fixed
+in source, not set in Settings ([system architecture](system-architecture/index.md)).
 
 ## Dashboard pages
 
@@ -26,21 +26,30 @@ sign-in page when its own login is configured.
   newer reading arrives. Clicking a row opens Details with every visible quota
   window, balance, reset and expiration.
 - **Analytics** keeps the Usage page: range presets (24H, 7D, 30D, Month, All)
-  and custom ranges, a Claude Code / Codex filter, KPI cards, the usage-trends
-  chart, cost by model, the model donut, sessions, token breakdown, cache
-  efficiency, a weekday x hour heatmap, daily cost by provider, quota history
-  and the resets agenda, all in local time. Ubuntu Claude Code and Codex CLI
-  logs provide token and activity charts with API-equivalent cost estimates;
-  those estimates are not subscription charges or billing attribution.
+  and custom ranges, a provider picker, KPI cards, tokens by provider, the
+  usage-trends chart, cost by model, the model donut, sessions, token
+  breakdown, cache efficiency, a weekday x hour heatmap, daily cost by
+  provider, quota history and the resets agenda, all in local time. CLI logs
+  on every computer provide token and activity charts with API-equivalent cost
+  estimates; those estimates are not subscription charges or billing
+  attribution.
+- **Providers in Analytics.** Usage counts under the dashboard provider whose
+  subscription or route served it, not under the tool that logged it. Claude
+  Code, Codex, the Muse Code CLI and Antigravity are their own provider's
+  usage. OMP and zcode log a route per call (for example a Z.ai coding plan or
+  Kimi Code), so their usage counts under that route's provider (Claude, Codex,
+  Antigravity, Muse Code, Cursor, Kimi Code, Qwen, Z.ai or OpenCode Go). A
+  route no provider claims (a local model server, OpenRouter) counts as
+  "Other", never a guess. The provider picker lists every provider with usage
+  in the range; picking one shows its usage by model, and the session rows and
+  daily cost chart follow the same split.
 - **Included usage** in the Analytics header lists every CLI log source behind
-  the Usage totals and each source's state and last scan, per computer
-  (Ubuntu, Mac, Windows and Nas1). Besides Claude Code and Codex on Ubuntu,
-  the totals count OMP, Muse Code and zcode logs from Ubuntu, Mac, Windows and
-  Nas1, merged by model only. They are sources, never a provider, filter or
-  legend; the per-provider session rows and daily chart stay Claude Code and
-  Codex. Cost with no logged amount and no listed rate reads "Not logged",
-  never $0.00, and totals that leave it out say "partial". Settings can add
-  extra usage-log roots per computer; Nas1 takes POSIX paths.
+  the Usage totals and each source's state and last scan, per computer.
+  Sources are tools on a computer (for example Claude Code, Codex, OMP, Muse
+  Code, zcode or Antigravity); they are not providers. Cost with no logged
+  amount and no listed rate reads "Not logged", never $0.00, and totals that
+  leave it out say "partial". Settings can add extra usage-log roots per
+  computer.
 - **Accounts & Settings** lists every provider with its accounts: status,
   last sample, how it signs in, and fixed action slots. Codex and Antigravity
   Activate, Claude Open on Mac or Windows, the Codex and Antigravity
@@ -94,15 +103,15 @@ ai-account-center antigravity signin <profile>
 ```
 
 Claude add, remove and restore need the server's Claude host steps
-(`CCS_CLAUDE_HOST_LIFECYCLE=on` for that server process). The live service
-keeps them off, so those controls read "coming" there. The default-profile
+(`CCS_CLAUDE_HOST_LIFECYCLE=on` for that server process). They are off by
+default, so those controls read "coming" until you turn them on. The default-profile
 refusal (409 `account_protected`) holds either way. A just-added pending
 Claude profile cannot be opened from its row; open "Claude (\<id\>)" from
 Applications or the Start menu.
 
 None of these controls, and no account switching, activation, key storage,
-sign-in or Claude desktop flow, targets Nas1: it holds no AI Account Center
-account state.
+sign-in or Claude desktop flow, targets the optional second Linux computer: it
+holds no AI Account Center account state.
 
 ## Dashboard sign-in, devices and pairing
 
@@ -302,69 +311,86 @@ rollback.
 ## Update apps and Cancel
 
 **Update apps** (the header button, with results in Accounts & Settings)
-starts one allowlisted, asynchronous job for the installed provider apps:
-Antigravity CLI, Muse Code, OMP, Codex CLI, Claude Code, Codex Desktop,
-Claude Desktop and T3 Code with its installed server runtime. Ubuntu runs
-locally; the remote targets are the fixed Mac, Windows and Nas1 SSH aliases
-in `APP_UPDATE_SSH_HOSTS`, so one run covers four computers x eight apps = 32
-result rows. Helper deployment and the
-existing Windows interactive task are required for remote updates. Absent
-apps are skipped; per-app readiness checks tell unknown from failure, and an
+starts one allowlisted, asynchronous job for ten installed apps: Antigravity
+CLI, Muse Code, OMP, Codex CLI, Codex Desktop, Claude Code, Claude Desktop,
+ZCode, the T3 ACP adapters and T3 Code with its installed server runtime. The
+dashboard computer runs its helper locally; each remote computer runs its own
+synced helper over SSH. Every run reports one result row per app on every
+computer (ten rows per computer). Helper deployment and, on Windows, the
+existing interactive task are required for remote updates. Absent apps are
+skipped; per-app readiness checks tell unknown from failure, and an
 unreachable computer reports Unknown rows. Only CLI instances running in a
 terminal are stopped and reopened idle; background sessions (T3's agents, a
 `claude -p` from a script, services) are never stopped and keep their version
-until they start again. No update runs merely by opening
-the dashboard or reading its status. See
+until they start again. The Antigravity CLI is held at the newest reviewed
+build, so switching never meets an unreviewed version. No update runs merely
+by opening the dashboard or reading its status. See
 [app update setup and behavior](../scripts/app-updates/README.md).
 
-**Cancel** is offered while a run is going. It is acknowledged at once: the
-running computer's batch always finishes (installers are never killed) and
-the queued computers are skipped ("Skipped: cancelled"). Cancel granularity
-is one computer's batch, and Cancel never promises an undo.
+**Computers run at the same time.** Each computer updates its own apps one at
+a time, with live progress per computer. A computer that does not finish
+within its time limit (18 minutes) reports its remaining apps as Unknown, so
+one stuck computer never holds the others back.
 
-## Nas1, the fourth computer
+**Cancel** is offered while a run is going. It is acknowledged at once and
+nothing running is killed: each computer finishes the app it is on now, then
+reports every app it has not started as skipped ("Skipped: cancelled"). A
+computer still preparing its helper skips all its apps. Cancel never promises
+an undo.
 
-Nas1 is a second Ubuntu computer. AI Account Center reaches it only over the
-fixed SSH alias `nas1-agent` and labels it "Nas1"; hosts and aliases are not
-configurable. The dashboard's user needs that alias (reachable without a
-prompt) and `/usr/bin/python3` on Nas1. AI Account Center is not installed on
-Nas1 and no dashboard runs there.
+## The optional second Linux computer
 
-- **Update apps.** Nas1 runs the same fixed helper as Ubuntu with
-  `--platform ubuntu`. The helpers are synced, checksum-gated, to
-  `~/.ccs/app-updates/` on Nas1 (a `sha256sum` hash query and a POSIX `tar`
+A second Linux computer can take part without AI Account Center installed on
+it and without running a dashboard there. The dashboard reaches it only over
+an SSH alias fixed in source; hosts and aliases are not configurable. The
+dashboard's user needs that alias (reachable without a prompt) and
+`/usr/bin/python3` on that computer.
+
+- **Update apps.** It runs the same fixed helper as the dashboard computer
+  with `--platform ubuntu`. The helpers are synced, checksum-gated, to
+  `~/.ccs/app-updates/` there (a `sha256sum` hash query and a POSIX `tar`
   extract). The sync also ships a self-contained Codex stop/start runtime, so
-  Codex Desktop and a Codex CLI daemon update on Nas1 without AI Account Center
-  installed there. A T3 update on Nas1 schedules its own deferred restart of
-  `t3code.service`.
-- **Analytics.** Nas1 is scanned with the same pinned, read-only helper that
+  Codex Desktop and a Codex CLI daemon update there without AI Account Center
+  installed. A T3 Code update there schedules its own deferred restart of the
+  T3 service.
+- **Analytics.** It is scanned with the same pinned, read-only helper that
   the dashboard streams over SSH to the Mac and Windows (Claude Code, Codex,
-  T3 shadow homes, OMP, Muse Code, zcode and Antigravity), and appears as a
-  fourth computer beside Ubuntu, Mac and Windows. Extra usage-log roots can be
-  set for Nas1 in Settings (POSIX paths).
-- **Accounts.** A quota source belongs to a provider account. Nas1 can supply a
-  fallback reading from its own existing sign-in when the verified account
-  identity matches, without adding a row or moving the primary source. An
-  explicit primary source there still uses `platform: "ubuntu"` with
-  `sshHost: "nas1-agent"`. The packaged usage helper runs in memory over SSH;
-  no helper installation or credential copying is required.
-- **Never on Nas1.** Account switching, Codex and Antigravity activation, key
+  T3 shadow homes, OMP, Muse Code, zcode and Antigravity), and appears as its
+  own computer in Analytics. Extra usage-log roots can be set for it in
+  Settings (POSIX paths).
+- **Accounts.** A quota source belongs to a provider account. This computer
+  can supply a fallback reading from its own existing sign-in when the
+  verified account identity matches, without adding a row or moving the
+  primary source. An explicit primary source there uses `platform: "ubuntu"`
+  with that computer's `sshHost`. The packaged usage helper runs in memory
+  over SSH; no helper installation or credential copying is required.
+- **Never there.** Account switching, Codex and Antigravity activation, key
   storage, sign-in and Claude desktop flows do not run there. The dashboard
-  computer runs exactly these fixed commands on Nas1: the helper hash query,
+  computer runs exactly these fixed commands on it: the helper hash query,
   the helper extract, the update helper, the read-only analytics helper and
   the read-only usage bundle.
 
 ## Antigravity switching
 
-Antigravity usage rows and saved-profile management are live, but account
-switching is not enabled in this tree. Four independent gates hold it
-closed: the dashboard release flag, the runtime release file, the runtime
-installation and adoption, and the auto-switch setting (off by default).
-`ai-account-center antigravity status` reports each gate read-only and names
-the next step. Switching is released only after the live test (idle Ubuntu
-`agy` switches to the party account and back); any other result keeps
-switching off. The exact release, verify, live-test and rollback steps are in
-[the Antigravity runtime guide](antigravity-runtime.md).
+Antigravity account switching is released: Activate and the
+`ai-account-center antigravity` commands switch the Antigravity CLI (`agy`)
+between saved profiles on the Linux dashboard computer, as a guarded
+transaction (prove the identity, swap the login, verify, roll back on any
+mismatch). When the CLI is running, a manual switch needs a one-use
+confirmation of the exact processes it will stop; busy or unmanaged sessions
+stay deferred. It needs:
+
+- the official Antigravity CLI at `~/.local/bin/agy`, at a reviewed build
+  (a newer, unreviewed build pauses switching until it is reviewed);
+- at least two saved profiles (`ai-account-center antigravity signin <profile>`);
+- the switching runtime installed and adopted, and its user service running.
+
+**Automatic switching is opt-in and off by default** (default threshold 95%
+used, checked every 60 seconds, no quota pool chosen). Turn it on in the
+Antigravity auto-switch policy and choose a quota pool that both accounts
+report; it stops only an idle CLI it can prove it owns. `ai-account-center antigravity status` reports every prerequisite
+read-only and names the next step. The install, adoption, verify and rollback
+steps are in [the Antigravity runtime guide](antigravity-runtime.md).
 
 ## Platforms
 
@@ -374,9 +400,10 @@ switching off. The exact release, verify, live-test and rollback steps are in
 | Browser dashboard | Mac or Windows browser with WebGL2 and hardware acceleration; served by the dashboard server |
 | Mac menu bar | macOS 26+, Xcode 26+ for source installation |
 | Windows tray | Native .NET 10 WPF, Windows x64; source builds require an existing .NET 10 SDK |
-| Shared Codex activation / auto-switch | Existing configured Ubuntu Codex runtime and saved logins |
-| Usage collectors / app updates | Existing credentials and installed apps on the configured owner host; Python and approved SSH transport where needed |
-| Nas1 (fourth computer) | A second Ubuntu computer with `/usr/bin/python3`, reached over its fixed SSH alias for app updates, Analytics and verified usage fallback; no AI Account Center install, dashboard or managed account state |
+| Shared Codex activation / auto-switch | Linux only (activation refuses any other platform: "In-place Codex activation currently requires Linux"); an existing configured Codex runtime and saved logins |
+| Antigravity activation / auto-switch | Linux dashboard computer with the official `agy` CLI at a reviewed build and the switching runtime (see [Antigravity switching](#antigravity-switching)) |
+| Usage collectors / app updates | Existing credentials and installed apps on the owner computer; Python 3 there (`/usr/bin/python3` on Linux and Mac, `python.exe` on Windows) and SSH from the dashboard computer for remote ones |
+| Optional second Linux computer | `/usr/bin/python3`, reached over its fixed SSH alias for app updates, Analytics and verified usage fallback; no AI Account Center install, dashboard or managed account state |
 
 Cross-platform source support does not make every account action available on
 every host. The dashboard reports available capabilities. A container does not
@@ -416,9 +443,9 @@ Additional provider collectors run on the host that owns the corresponding login
 Their source selection is the private `account-usage-sources.json` configuration,
 or the newer `account-usage-accounts.json` (registry v2, several accounts per
 provider) when that file exists; existing approved SSH aliases select remote
-Mac/Windows collectors, and a source saved as `platform: "ubuntu"` with
-`sshHost: "nas1-agent"` runs on Nas1 and reads "on Nas1" (see
-[Nas1](#nas1-the-fourth-computer)). If a primary source fails, the shared
+Mac/Windows collectors, and a source saved as `platform: "ubuntu"` with the
+second Linux computer's `sshHost` runs there (see
+[the optional second Linux computer](#the-optional-second-linux-computer)). If a primary source fails, the shared
 coordinator can use an existing sign-in for the exact provider account on another
 configured computer. Credentials stay on their owner host, and the packaged
 helper runs in memory over SSH. Verified readings keep their original timestamps
@@ -514,19 +541,18 @@ read safely" until its next full save, so save the visibility once from the
 rolled-back page if that matters. Local changes should be reviewed before pulling.
 `ai-account-center update` is retired and cannot update from the upstream package.
 
-Adding Nas1 touches no account data. A rollback to a build without it loses
-display data, and Settings only if a Nas1 extra usage-log root was saved. An
-older build never opens the new analytics cache
-`cache/analytics-remote-v1/nas1.json`. It does not restore a saved update job
-(`app-updates/dashboard-job.json`) with more than 24 result rows (a finished
-four-computer run has 32), so the last result is not shown and no update is
-replayed. It treats a `dashboard-preferences.json` that holds a Nas1 extra
-usage-log root as invalid as a whole: the defaults apply in memory, with a
-warning and without overwriting the file, until the next save of Settings. The
-usage source and registry files (`account-usage-sources.json`,
-`account-usage-accounts.json`) keep their format, because a Nas1 source is
-stored as `ubuntu` plus `sshHost`, which every earlier build reads and collects
-the same way.
+Rolling back to an older build touches no account data. An older build
+ignores newer per-computer analytics caches. It does not restore a saved
+update job (`app-updates/dashboard-job.json`) with more result rows than it
+expects (a build that knows fewer computers or apps expects fewer), so the
+last result is not shown there and no update is replayed. It may treat a
+`dashboard-preferences.json` that holds an extra usage-log root for a computer
+it does not know as invalid as a whole: the defaults apply in memory, with a
+warning and without overwriting the file, until the next save of Settings.
+The usage source and registry files (`account-usage-sources.json`,
+`account-usage-accounts.json`) keep their format, because a second Linux
+computer's source is stored as `ubuntu` plus `sshHost`, which earlier builds
+read and collect the same way.
 
 ## Existing CCS installations
 
@@ -540,8 +566,6 @@ longer prints shell exports. Use `codex-auth activate` for shared login selectio
 and a provider's own CLI for an AI session. Old routing/API-profile/proxy examples
 remain upstream history rather than current setup instructions.
 
-<!-- quickstart-snippet-start -->
-
 ## Known limits
 
 - Cursor usage is not available locally: it is server-side only, and reads as
@@ -551,19 +575,23 @@ remain upstream history rather than current setup instructions.
   databases keep it, and its model names are what Antigravity stored: a model
   with no listed rate (for example one known only by a numeric id) shows
   "Not logged" for cost, never a guessed price.
-- Update apps Cancel granularity is one computer's batch: the running
-  computer's apps finish and the queued computers are skipped.
-- Nas1 adds no quota rows by default and has no add, sign-in, key or switching
-  control. It can provide a verified fallback reading from an existing supported
+- Update apps Cancel granularity is one app per computer: each computer
+  finishes the app it is on (installers are never killed) and skips the rest.
+- The optional second Linux computer adds no quota rows by default and has no
+  add, sign-in, key or switching control. It can provide a verified fallback reading from an existing supported
   sign-in or capsule. A missing sign-in, unknown identity or mismatched workspace
   remains unavailable; usage logs do not supply account credentials. Shared
   usage collection streams its helper bundle in memory and needs no manually
   copied helper files.
 - Claude add, remove and restore read "coming" while the server's Claude host
-  steps are off (the live service keeps them off); the default-profile
+  steps are off (the default); the default-profile
   refusal holds either way.
 - Antigravity add and sign-in again run the supervised CLI login on the
   dashboard host, which needs Ubuntu there with the official `agy` CLI,
   bubblewrap and an unprivileged user namespace, plus a trusted connection
   for the pasted code; without them the dashboard shows the terminal command
-  instead. Muse Code sign-in reads "coming" (Re-check is live).
+  instead. Muse Code usage comes from the existing `muse login` on the Mac;
+  dashboard sign-in for Muse Code is off by default and reads "coming"
+  (Re-check is live).
+- Cursor, Muse Code and Qwen hold one account each. The other providers take
+  up to 16 accounts per provider.

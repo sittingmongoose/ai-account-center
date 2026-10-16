@@ -2,7 +2,10 @@
 
 Every image here shows the real, compiled product with **sample data**. No
 mockups, no image generation and no real accounts: every identity is an
-`example.com` address, and no credential, path or home-network address appears.
+`example.com` address, and no credential and no real or private path or
+network address appears. The few that do show are samples: the project path
+`~/projects/api` in `switch-review.png` and a truncated `10.0...` address
+under Paired tray apps in `accounts.png`.
 
 Captured 2026-10-16 from the build deployed that day (package 8.10.0, branch
 `fix/analytics-agent-usage`, UI bundle `dist/ui/pkg/aaca825cbf64`).
