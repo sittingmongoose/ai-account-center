@@ -340,7 +340,7 @@ describe('native local analytics activity', () => {
           runHelper: async (_alias, _host, request) =>
             parseAnalyticsRemoteResponse(
               JSON.stringify({
-                version: 1,
+                version: 2,
                 truncated: false,
                 kinds: Object.fromEntries(
                   request.kinds.map((kind) => [
@@ -355,9 +355,13 @@ describe('native local analytics activity', () => {
                                 mtimeMs: 20,
                                 claudeName: name,
                                 claudeMirror: true,
+                                claudeGroup: name,
                               },
                             }
                           : {},
+                      ...(kind === 'claude' && !request.fingerprints.claude?.[file]
+                        ? { replacedFiles: [file] }
+                        : {}),
                     },
                   ])
                 ),
@@ -497,7 +501,7 @@ describe('native local analytics activity', () => {
           runHelper: async (_alias, _host, request) =>
             parseAnalyticsRemoteResponse(
               JSON.stringify({
-                version: 1,
+                version: 2,
                 truncated: false,
                 kinds: Object.fromEntries(
                   request.kinds.map((kind) => [
@@ -512,9 +516,11 @@ describe('native local analytics activity', () => {
                                 mtimeMs: 20,
                                 claudeName: name,
                                 claudeMirror: true,
+                                claudeGroup: name,
                               },
                             }
                           : {},
+                      ...(kind === 'claude' ? { replacedFiles: [file] } : {}),
                     },
                   ])
                 ),
@@ -1219,7 +1225,7 @@ describe('native local analytics activity', () => {
           runHelper: async (_alias, _host, request) =>
             parseAnalyticsRemoteResponse(
               JSON.stringify({
-                version: 1,
+                version: 2,
                 truncated: false,
                 kinds: Object.fromEntries(
                   request.kinds.map((kind) => [
@@ -1227,7 +1233,16 @@ describe('native local analytics activity', () => {
                     {
                       state: kind === 'claude' ? 'ok' : 'not_installed',
                       fingerprints:
-                        kind === 'claude' ? { ['11'.repeat(32)]: { size: 10, mtimeMs: 20 } } : {},
+                        kind === 'claude'
+                          ? {
+                              ['11'.repeat(32)]: {
+                                size: 10,
+                                mtimeMs: 20,
+                                claudeGroup: '22'.repeat(32),
+                              },
+                            }
+                          : {},
+                      ...(kind === 'claude' ? { replacedFiles: ['11'.repeat(32)] } : {}),
                     },
                   ])
                 ),
