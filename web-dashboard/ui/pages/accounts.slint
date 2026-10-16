@@ -55,7 +55,10 @@ export component AccountsPage inherits Rectangle {
     callback act(string, string);
 
     property <duration> base: root.first ? 180ms : 40ms;
-    property <bool> show-src: Breakpoints.width < 1280px || Breakpoints.width >= 1440px;
+    // The source column folds into the identity line where the rows' fixed slots do not fit beside it:
+    // 1280-1439 (one provider column beside the settings) and the first 120 px of the two-column tier,
+    // where a Codex row needs about 890 px against about 820 px per column at 2200.
+    property <bool> show-src: Breakpoints.width < 1280px || (Breakpoints.width >= 1440px && !(Breakpoints.ultra && Breakpoints.width < 2320px));
     property <length> settings-w: Breakpoints.ultra ? 440px : Breakpoints.wide ? 420px : 380px;
     // the P/F page header (4.3.1); T and D keep the desktop arrangement without a title
     property <bool> page-head: Breakpoints.tier-p || Breakpoints.tier-f;
