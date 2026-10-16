@@ -32,6 +32,7 @@ import {
   writeSnapshotSettings,
 } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
 import { handleUsageSnapshotCommand } from '../../../src/commands/usage-snapshot-command';
+import { writePrivateJsonFile } from '../../../src/web-server/services/private-json-store';
 import {
   CLIENT_FILES,
   clientSourceFolder,
@@ -824,11 +825,12 @@ describe('agent usage snapshot publisher', () => {
         Array.from({ length: 9 }, (_, index) => ({ where: `w${index}`, path: '/p' }))
       )
     ).rejects.toThrow();
-    fs.mkdirSync(path.dirname(snapshotSettingsPath()), { recursive: true });
-    fs.writeFileSync(
-      snapshotSettingsPath(),
-      JSON.stringify({ version: 1, directory: folder, locations: [{ where: 1 }] })
-    );
+    // Written the way the setting is (private), so only the damaged list differs.
+    await writePrivateJsonFile(snapshotSettingsPath(), {
+      version: 1,
+      directory: folder,
+      locations: [{ where: 1 }],
+    });
     expect(await readSnapshotSettings()).toEqual({ version: 1, directory: folder });
   });
 
