@@ -1142,6 +1142,9 @@ export class AccountAnalyticsActivityService {
     const localEvents = new Map<AccountAnalyticsActivityProvider, number>();
     const localReadAt = new Map<AccountAnalyticsActivityProvider, string>();
     const replacedLocal = new Set<string>();
+    // Stage replacements until we know whether their Claude mirror election can
+    // advance. A successful sibling must not mutate the saved contribution early.
+    const nextLocal = new Map(state.local);
     requests.forEach((source, index) => {
       const key = localRequestKey(source);
       const result = settled[index];
@@ -1204,7 +1207,7 @@ export class AccountAnalyticsActivityService {
       // Collectors retain failed files' checkpoint rows alongside fresh files.
       // Only a complete empty scan can retire a previously measured share.
       if (data.eventCount > 0 || authoritativeEmpty || !state.local.has(key)) {
-        state.local.set(key, {
+        nextLocal.set(key, {
           provider,
           data: [retained],
           fetchedAt: data.readAt ?? new Date((this.deps.now ?? Date.now)()).toISOString(),
@@ -1236,8 +1239,26 @@ export class AccountAnalyticsActivityService {
         )) ||
       (!discoveryComplete && hadClaude);
     const retainedClaudeRemote = retainClaude ? previousRemote : undefined;
+    // A bare remote answer with no election metadata needs no paired local
+    // retention; ordinary per-request carry-forward can still converge past the cap.
+    const retainClaudeLocal =
+      retainClaude &&
+      (previousRemote === null ||
+        previousRemote.fetchedAt !== undefined ||
+        previousRemote.reconcileClaudeMirrors !== undefined ||
+        previousRemote.results.some((entry) => entry.tool === 'claude') ||
+        previousRemote.states.some((entry) => entry.tool === 'claude'));
+    if (retainClaudeLocal) {
+      for (const [key, source] of nextLocal)
+        if (source.provider === 'claude') nextLocal.delete(key);
+      for (const [key, source] of state.local)
+        if (source.provider === 'claude') nextLocal.set(key, source);
+      // Discarded reads cannot advance the date of the rows still being served.
+      localReadAt.delete('claude');
+    }
+    state.local = nextLocal;
     for (const [key, source] of state.local) {
-      if (!seenRequests.has(key)) {
+      if (!seenRequests.has(key) && !(retainClaudeLocal && source.provider === 'claude')) {
         const next = replacements.get(key) ?? [];
         if (
           next.some((replacement) => state.local.has(replacement)) ||

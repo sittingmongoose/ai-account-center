@@ -463,9 +463,21 @@ describe('native local analytics activity', () => {
     expect(started.map((entries) => entries.length)).toEqual([25, 25, 25]);
   });
 
-  it.each(['pruned', 'returned', 'unchanged', 'pruned-rejected', 'returned-rejected'] as const)(
-    'keeps a coherent saved Claude mirror election (%s)',
+  it.each([
+    'pruned',
+    'returned',
+    'unchanged',
+    'pruned-rejected',
+    'returned-rejected',
+    'pruned-sibling-rejected',
+    'returned-sibling-rejected',
+    'pruned-removed-sibling-rejected',
+  ] as const)(
+    'keeps a coherent saved Claude mirror election across refreshes and restarts (%s)',
     async (scenario) => {
+      const siblingFailure = scenario.includes('sibling');
+      const total = siblingFailure ? 125 : 100;
+      const siblingRows = siblingFailure ? 99 : 0;
       const rejectFirst = scenario.endsWith('-rejected');
       const change = scenario.split('-')[0];
       const scope = path.join(fixtureConfig, 'mirror-snapshot');
@@ -530,33 +542,47 @@ describe('native local analytics activity', () => {
         scope: () => scope,
         persistSnapshot: true,
         requests: (): AccountAnalyticsActivityRequest[] => [
-          {
-            provider: 'claude',
-            request: { kind: 'claude', projectsDir: '/fixture/original' },
-          },
-        ],
-        loadWorker: async (): Promise<UsageWorkerResult> =>
-          original
-            ? data('claude-sonnet-4-6', 100, 0)
-            : {
-                daily: [],
-                monthly: [],
-                hourly: [],
-                session: [],
-                eventCount: 0,
-                scan: {
-                  complete: true,
-                  totalFiles: 0,
-                  completedFiles: 0,
-                  failedFiles: 0,
-                  skippedLines: 0,
-                  readBytes: 0,
+          ...(scenario.includes('removed') && !original
+            ? []
+            : [
+                {
+                  provider: 'claude' as const,
+                  request: { kind: 'claude' as const, projectsDir: '/fixture/original' },
                 },
-              },
+              ]),
+          ...(siblingFailure
+            ? [
+                {
+                  provider: 'claude' as const,
+                  request: { kind: 'claude' as const, projectsDir: '/fixture/independent' },
+                },
+              ]
+            : []),
+        ],
+        loadWorker: async (request?: UsageWorkerRequest): Promise<UsageWorkerResult> =>
+          request?.kind === 'claude' && request.projectsDir === '/fixture/independent'
+            ? data('claude-sonnet-4-6', 25, 0)
+            : original
+              ? data('claude-sonnet-4-6', 100, 0)
+              : {
+                  daily: [],
+                  monthly: [],
+                  hourly: [],
+                  session: [],
+                  eventCount: 0,
+                  scan: {
+                    complete: true,
+                    totalFiles: 0,
+                    completedFiles: 0,
+                    failedFiles: 0,
+                    skippedLines: 0,
+                    readBytes: 0,
+                  },
+                },
         remoteCached: cached,
       };
       const first = new AccountAnalyticsActivityService({ ...deps, remote });
-      expect((await settled(first)).totals?.inputTokens).toBe(100);
+      expect((await settled(first)).totals?.inputTokens).toBe(total);
       const savedMirrorRows = original ? 0 : 1;
       if (change !== 'unchanged') original = !original;
       let finishLocal!: () => void;
@@ -572,38 +598,43 @@ describe('native local analytics activity', () => {
       const restarted = new AccountAnalyticsActivityService({
         ...deps,
         remote: () => (remoteCalls++ === 0 ? pendingRemote : remote()),
-        loadWorker: async () => {
+        loadWorker: async (request) => {
           await pendingLocal;
-          if (rejectLocal) throw new Error('fixture rejected Claude worker');
-          return deps.loadWorker();
+          if (
+            rejectLocal &&
+            (!siblingFailure ||
+              (request.kind === 'claude' && request.projectsDir === '/fixture/independent'))
+          )
+            throw new Error('fixture rejected Claude worker');
+          return deps.loadWorker(request);
         },
       });
       // Even a recent snapshot must refresh, but its saved local rows and mirror
       // election stay together until that local pass is ready to publish.
       const instant = await restarted.get(QUERY, FROM, NOW);
-      expect(instant.totals?.inputTokens).toBe(100);
+      expect(instant.totals?.inputTokens).toBe(total);
       expect(instant.status).toBe('cached');
       expect(instant.refreshing).toBe(true);
       expect(instant.sources?.find((s) => s.tool === 'claude' && s.host === 'mac')?.rowCount).toBe(
         savedMirrorRows
       );
-      expect((await restarted.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(100);
+      expect((await restarted.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(total);
       finishLocal();
       await new Promise((resolve) => setTimeout(resolve, 10));
       const localPublished = await restarted.get(QUERY, FROM, NOW);
-      expect(localPublished.totals?.inputTokens).toBe(100);
+      expect(localPublished.totals?.inputTokens).toBe(total);
       expect(localPublished.refreshing).toBe(true);
       expect(
         localPublished.sources?.find((s) => s.tool === 'claude' && s.host === 'mac')?.rowCount
       ).toBe(rejectFirst ? savedMirrorRows : original ? 0 : 1);
       expect(
         localPublished.sources?.find((s) => s.tool === 'claude' && s.host === 'ubuntu')?.rowCount
-      ).toBe(rejectFirst ? (savedMirrorRows ? 0 : 99) : original ? 99 : 0);
+      ).toBe(siblingRows + (rejectFirst ? (savedMirrorRows ? 0 : 99) : original ? 99 : 0));
       const lateRemote = cached();
       if (rejectFirst) lateRemote.results.push({ tool: 'codex', data: data('gpt-5.4', 7, 0) });
       finishRemote(lateRemote);
       const fresh = await settled(restarted);
-      expect(fresh.totals?.inputTokens).toBe(rejectFirst ? 107 : 100);
+      expect(fresh.totals?.inputTokens).toBe(total + (rejectFirst ? 7 : 0));
       expect(fresh.refreshing).toBe(false);
       if (rejectFirst) {
         // A late remote answer already elected against the changed inventory must
@@ -613,25 +644,35 @@ describe('native local analytics activity', () => {
         );
         // A second failed pass and its remote answer must keep the same pair too.
         await restarted.get({ ...QUERY, refresh: true }, FROM, NOW);
-        expect((await settled(restarted)).totals?.inputTokens).toBe(100);
+        expect((await settled(restarted)).totals?.inputTokens).toBe(total);
+        let rejectAfterRestart = true;
         const failedRestart = new AccountAnalyticsActivityService({
           ...deps,
           remote,
-          loadWorker: async () => {
-            throw new Error('fixture still rejected after another restart');
+          loadWorker: async (request) => {
+            if (
+              rejectAfterRestart &&
+              (!siblingFailure ||
+                (request.kind === 'claude' && request.projectsDir === '/fixture/independent'))
+            )
+              throw new Error('fixture still rejected after another restart');
+            return deps.loadWorker(request);
           },
         });
-        expect((await settled(failedRestart)).totals?.inputTokens).toBe(100);
+        expect((await settled(failedRestart)).totals?.inputTokens).toBe(total);
+        await failedRestart.get({ ...QUERY, refresh: true }, FROM, NOW);
+        expect((await settled(failedRestart)).totals?.inputTokens).toBe(total);
         rejectLocal = false;
-        await restarted.get({ ...QUERY, refresh: true }, FROM, NOW);
-        const recovered = await settled(restarted);
-        expect(recovered.totals?.inputTokens).toBe(100);
+        rejectAfterRestart = false;
+        await failedRestart.get({ ...QUERY, refresh: true }, FROM, NOW);
+        const recovered = await settled(failedRestart);
+        expect(recovered.totals?.inputTokens).toBe(total);
         expect(
           recovered.sources?.find((s) => s.tool === 'claude' && s.host === 'mac')?.rowCount
         ).toBe(original ? 0 : 1);
         expect(
           recovered.sources?.find((s) => s.tool === 'claude' && s.host === 'ubuntu')?.rowCount
-        ).toBe(original ? 99 : 0);
+        ).toBe(siblingRows + (original ? 99 : 0));
       }
 
       // A serialized answer has no callback. The raw cache has an equal timestamp,
@@ -646,11 +687,11 @@ describe('native local analytics activity', () => {
           return serialized;
         },
       });
-      expect((await settled(fallback)).totals?.inputTokens).toBe(100);
+      expect((await settled(fallback)).totals?.inputTokens).toBe(total);
       original = !original;
       offline = true;
       await fallback.get({ ...QUERY, refresh: true }, FROM, NOW);
-      expect((await settled(fallback)).totals?.inputTokens).toBe(100);
+      expect((await settled(fallback)).totals?.inputTokens).toBe(total);
     }
   );
 
