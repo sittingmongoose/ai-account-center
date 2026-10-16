@@ -656,7 +656,10 @@ describe('a read whose completion is lost', () => {
     const first = await rowFor('work', deps);
     mode = 'hang';
     clock.now += TTL_JUMP;
-    const kept = await rowFor('work', deps);
+    const pendingKept = rowFor('work', deps);
+    // The deadline passes while the read hangs, so the backoff must run from the failure.
+    clock.now += 45_000;
+    const kept = await pendingKept;
     expect(kept?.cached).toBe(true);
     expect(kept?.fetchedAt).toBe(first?.fetchedAt);
     // Failover recovery is no longer locked out by a pending read.
@@ -669,6 +672,10 @@ describe('a read whose completion is lost', () => {
     const [cached] = getCachedCodexProfileQuotaRows(['work']);
     expect(cached?.quota_percentage).toBe(first?.quota_percentage);
     expect(cached?.fetchedAt).toBe(first?.fetchedAt);
+
+    // An immediate forced refresh is still inside that backoff.
+    await rowFor('work', deps, true);
+    expect(deps.networkCount()).toBe(2);
 
     // After the transient backoff the profile reaches the network again.
     mode = 'ok';

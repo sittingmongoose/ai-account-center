@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:te
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { CodexQuotaResult } from '../quota-types';
 
 let tmpDir: string;
 let originalCcsHome: string | undefined;
@@ -746,36 +747,33 @@ describe('Codex Quota Fetcher', () => {
       expect(result.needsReauth).toBeUndefined();
     }, 500);
 
-    it('returns a retryable timeout when an error response body stalls on both attempts', async () => {
+    it('classifies an error response by its status when its body never arrives', async () => {
       const originalSetTimeout = global.setTimeout;
       spyOn(global, 'setTimeout').mockImplementation(((callback, delay, ...args) =>
         originalSetTimeout(callback, Math.min(delay ?? 0, 20), ...args)) as typeof setTimeout);
-      let calls = 0;
-      global.fetch = mock(async (_url: unknown, options?: RequestInit) => {
-        calls += 1;
-        return new Response(
-          new ReadableStream({
-            start(controller) {
-              options?.signal?.addEventListener(
-                'abort',
-                () => controller.error(new DOMException('Error body timed out', 'AbortError')),
-                { once: true }
-              );
-            },
-          }),
-          { status: 503 }
-        );
-      }) as unknown as typeof fetch;
+      const expected: Record<number, Partial<CodexQuotaResult>> = {
+        429: { errorCode: 'rate_limited', retryable: true },
+        401: { errorCode: 'reauth_required', needsReauth: true, retryable: false },
+        503: { errorCode: 'provider_unavailable', retryable: true },
+      };
+      for (const [status, classification] of Object.entries(expected)) {
+        let calls = 0;
+        // A body that ignores its abort and never settles.
+        global.fetch = mock(async () => {
+          calls += 1;
+          return new Response(new ReadableStream({ start() {} }), { status: Number(status) });
+        }) as unknown as typeof fetch;
 
-      const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
-      expect(calls).toBe(2);
-      expect(result).toMatchObject({
-        success: false,
-        errorCode: 'network_timeout',
-        retryable: true,
-      });
-      expect(result.needsReauth).toBeUndefined();
-    }, 500);
+        const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
+        // One request: a received 429 is not retried at once, and a 401 keeps its re-login.
+        expect(calls).toBe(1);
+        expect(result).toMatchObject({
+          success: false,
+          httpStatus: Number(status),
+          ...classification,
+        });
+      }
+    }, 1000);
 
     it('settles an attempt whose request ignores its abort signal', async () => {
       const originalSetTimeout = global.setTimeout;

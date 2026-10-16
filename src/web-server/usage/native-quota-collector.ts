@@ -632,8 +632,10 @@ async function collectCodexRowForProfile(
         // when the auth file is absent (parked profile).
         if (nativeAuth) {
           const quota = await settle(fetchNetwork(nativeAuth.accessToken, nativeAuth.accountId));
+          // Cooldowns run from the answer, not the start: a slow failure must not leave one
+          // that has already expired and lets the next refresh retry at once.
+          const responseNow = (deps.now ?? Date.now)();
           if (quota.httpStatus === 429 && nativeAuth.identity) {
-            const responseNow = (deps.now ?? Date.now)();
             const delay = parseRetryAfterMs(quota.errorDetail, responseNow, 86_400_000) ?? 60_000;
             // Persist even if the saved token changed while the request was in
             // flight: its account still received this provider-wide response.
@@ -707,31 +709,31 @@ async function collectCodexRowForProfile(
             };
             state.cachedRow = reauthRow;
             state.cachedAt = now;
-            state.cooldownUntil = now + REAUTH_COOLDOWN_MS;
+            state.cooldownUntil = responseNow + REAUTH_COOLDOWN_MS;
             return { ...reauthRow, cached: false };
           } else if (quota.httpStatus === 429) {
             // 429: apply breaker + backoff, then fall through to local.
             state.consecutive429 += 1;
             if (state.consecutive429 >= CB_TRIP_THRESHOLD) {
-              state.breakerOpenUntil = now + CB_COOLDOWN_MS;
+              state.breakerOpenUntil = responseNow + CB_COOLDOWN_MS;
             }
-            const retryAfter = parseRetryAfterMs(quota.errorDetail, now);
+            const retryAfter = parseRetryAfterMs(quota.errorDetail, responseNow);
             const backoff = retryAfter ?? computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
+            state.cooldownUntil = responseNow + backoff;
             state.rateLimitUntil = Math.max(state.rateLimitUntil, state.cooldownUntil);
             state.backoffAttempt += 1;
             void sleep; // retained as an injectable seam for future inline retry
           } else if (quota.retryable) {
             // Other transient failure: set cooldown, fall through to local.
             const backoff = computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
+            state.cooldownUntil = responseNow + backoff;
             state.backoffAttempt += 1;
           } else {
             // Terminal non-retryable failure (e.g. 403/404): back off so we
             // don't re-hit a dead endpoint every poll when no local data caches
             // a row to engage the TTL short-circuit. Then fall through to local.
             const backoff = computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
+            state.cooldownUntil = responseNow + backoff;
             state.backoffAttempt += 1;
           }
           // Fall through to LOCAL fallback below.
@@ -780,9 +782,10 @@ async function collectCodexRowForProfile(
       if (currentState !== state) {
         return currentState ? serveCached(currentState) : null;
       }
-      // Network/parse rejection or deadline -> treat as transient, serve stale.
+      // Network/parse rejection or deadline -> treat as transient, serve stale. The cooldown
+      // runs from the failure: after a 45 s deadline one dated from the start has expired.
       const backoff = computeBackoffMs(state.backoffAttempt);
-      state.cooldownUntil = now + backoff;
+      state.cooldownUntil = (deps.now ?? Date.now)() + backoff;
       state.backoffAttempt += 1;
       return serveCached(state);
     } finally {

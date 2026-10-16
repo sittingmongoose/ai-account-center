@@ -850,7 +850,9 @@ async function runCodexUsageFetch(
         });
 
       if (!response.ok) {
-        const bodyText = await settle(response.text());
+        // The status is already known. An error body that never arrives must not turn a 429
+        // or 401 into a timeout, which would retry at once and lose its cooldown or re-login.
+        const bodyText = await settle(response.text()).catch(() => '');
         return buildCodexHttpFailureResult(accountId, response.status, bodyText);
       }
 
