@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """aac-usage: read AI Account Center's account usage snapshot (quota left, resets, burn rate).
 
-The AI Account Center dashboard on the Ubuntu VM writes usage.json, usage.md and history.json into
-the aac-usage folder of the network share after every refresh (every minute by default). This
-command reads them; it never contacts a provider or the dashboard and changes nothing.
+The AI Account Center dashboard writes usage.json, usage.md and history.json into a shared folder
+every agent can read (`ai-account-center dashboard usage-snapshot set <folder>`) after every refresh
+(every minute by default). This command reads them; it never contacts a provider or the dashboard
+and changes nothing. Run the copy in that folder, or point --dir or AAC_USAGE_DIR at the folder.
 
   aac-usage                          every account, with each window's use, reset and burn rate
   aac-usage --provider codex         one provider (codex, claude, antigravity, muse, cursor,
@@ -15,7 +16,7 @@ command reads them; it never contacts a provider or the dashboard and changes no
   aac-usage rules [claude|other]     the short rules block for agent instruction files
   aac-usage install-rules            write that block into this computer's agent rules files
 
-Python 3.9+ standard library only, so the same file runs on the VM, Nas1, the Mac and Windows.
+Python 3.9+ standard library only, so the same file runs on Linux, macOS and Windows.
 """
 import argparse
 import datetime as dt
@@ -43,14 +44,6 @@ STATUS = {"ok": "current", "cached": "cached earlier reading", "unavailable": "n
           "error": "reading failed", "needs_sign_in": "needs sign-in"}
 
 
-def share_folder():
-    if os.name == "nt":
-        return Path("\\\\NAS\\share\\aac-usage")
-    if sys.platform == "darwin":
-        return Path("/Volumes/share/aac-usage")
-    return Path("/mnt/share/aac-usage")
-
-
 def own_folder():
     """This reader's folder when it lives beside a snapshot (the published copy), else None."""
     here = Path(os.path.realpath(__file__)).parent
@@ -58,11 +51,41 @@ def own_folder():
 
 
 def snapshot_folder(explicit=None):
+    """--dir, then AAC_USAGE_DIR, then this reader's own folder; None when none applies."""
     if explicit:
         return Path(explicit)
     if os.environ.get("AAC_USAGE_DIR"):
         return Path(os.environ["AAC_USAGE_DIR"])
-    return own_folder() or share_folder()
+    return own_folder()
+
+
+def require_folder(explicit=None):
+    folder = snapshot_folder(explicit)
+    if folder is None:
+        sys.exit("aac-usage: no snapshot folder. Run the copy in the folder the AI Account Center dashboard "
+                 "writes to, or pass --dir <folder> or set AAC_USAGE_DIR.")
+    return folder
+
+
+def locations(folder):
+    """[(where, path)] from locations.json beside the snapshot: where each group of computers finds
+    the folder, as the dashboard owner set it. Empty when absent or unreadable."""
+    if folder is None:
+        return []
+    try:
+        with open(folder / "locations.json", encoding="utf-8") as handle:
+            entries = json.load(handle).get("locations")
+    except (OSError, ValueError, AttributeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    found = []
+    for entry in entries[:8]:
+        if isinstance(entry, dict) and isinstance(entry.get("where"), str) and isinstance(entry.get("path"), str):
+            where, place = entry["where"].strip(), entry["path"].strip()
+            if where and place and all(ord(character) >= 32 for character in where + place):
+                found.append((where, place))
+    return found
 
 
 def now_utc():
@@ -114,7 +137,7 @@ def load(folder, name):
             return json.load(handle)
     except FileNotFoundError:
         sys.exit("aac-usage: %s not found. The AI Account Center dashboard writes it; "
-                 "check `ai-account-center dashboard usage-snapshot status` on the Ubuntu VM." % path)
+                 "check `ai-account-center dashboard usage-snapshot status` where it runs." % path)
     except (OSError, ValueError) as error:
         sys.exit("aac-usage: %s could not be read (%s)." % (path, error))
 
@@ -232,7 +255,7 @@ def window_line(window, now, account_sampled_at=None, stale_after=300):
 
 
 def cmd_show(args):
-    folder = snapshot_folder(args.dir)
+    folder = require_folder(args.dir)
     snapshot = load(folder, "usage.json")
     now = now_utc()
     provider = PROVIDERS.get(args.provider.lower()) if args.provider else None
@@ -285,7 +308,7 @@ def cmd_show(args):
 
 
 def cmd_history(args):
-    folder = snapshot_folder(args.dir)
+    folder = require_folder(args.dir)
     history = load(folder, "history.json")
     provider = PROVIDERS.get(args.provider.lower()) if args.provider else None
     if args.provider and not provider:
@@ -326,7 +349,11 @@ def cmd_history(args):
 
 def run_cmd():
     """How an agent on this computer runs this command: the published reader beside its snapshot."""
-    reader = (own_folder() or share_folder()) / "aac-usage"
+    folder = own_folder() or snapshot_folder()
+    if folder is None:
+        return ("python <folder>\\aac-usage`" if os.name == "nt" else "python3 <folder>/aac-usage`") + \
+            " (<folder> is the shared folder the dashboard writes to)"
+    reader = folder / "aac-usage"
     if os.name == "nt":
         # Single quotes are literal in PowerShell ('' escapes one) and in Git Bash ('\'' does).
         text = str(reader)
@@ -338,13 +365,14 @@ def run_cmd():
 
 def rules_text(kind="other"):
     cmd = run_cmd()
+    places = locations(own_folder() or snapshot_folder())
+    where = " (%s)" % ", ".join("`%s` on %s" % (path, name) for name, path in places) if places else ""
     lines = [
         "# AI account usage",
         "",
         "AI Account Center publishes how much quota is left on every AI account the dashboard tracks (Claude, Codex, "
-        "Antigravity, Muse, Cursor, Kimi Code, Qwen, Z.ai/GLM, OpenCode), refreshed every minute, in the `aac-usage` "
-        "folder of the network share (`/mnt/share/aac-usage` on the VM and Nas1, `/Volumes/share/aac-usage` on the Mac, "
-        "`\\\\NAS\\share\\aac-usage` on Windows). Run it here as `" + cmd + "; below, `aac-usage` means that command.",
+        "Antigravity, Muse, Cursor, Kimi Code, Qwen, Z.ai/GLM, OpenCode), refreshed every minute, in a shared "
+        "folder" + where + ". Run it here as `" + cmd + "; below, `aac-usage` means that command.",
         "",
         "- `aac-usage` lists every account (provider, label, email, AAC profile, computer, plan, ACTIVE flag) with each "
         "window's used %, reset time, burn rate (%/h over the last 5 and 15 minutes, 1, 6 and 24 hours) and when it will "

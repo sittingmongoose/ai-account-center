@@ -26,7 +26,9 @@ import {
   renderSnapshotMarkdown,
   SNAPSHOT_HISTORY,
   SNAPSHOT_JSON,
+  SNAPSHOT_LOCATIONS,
   SNAPSHOT_MARKDOWN,
+  snapshotSettingsPath,
   writeSnapshotSettings,
 } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
 import { handleUsageSnapshotCommand } from '../../../src/commands/usage-snapshot-command';
@@ -709,10 +711,15 @@ describe('agent usage snapshot publisher', () => {
       [
         SNAPSHOT_HISTORY,
         SNAPSHOT_JSON,
+        SNAPSHOT_LOCATIONS,
         SNAPSHOT_MARKDOWN,
         ...CLIENT_FILES.map((file) => file.name),
       ].sort()
     );
+    expect(JSON.parse(fs.readFileSync(path.join(folder, SNAPSHOT_LOCATIONS), 'utf8'))).toEqual({
+      version: 1,
+      locations: [],
+    });
     // The reader matches the package byte for byte; the Windows wrapper keeps CRLF.
     expect(fs.readFileSync(path.join(folder, 'aac-usage'), 'utf8')).toBe(
       fs.readFileSync(path.join(clientSourceFolder(), 'aac-usage'), 'utf8').replace(/\r\n/g, '\n')
@@ -778,6 +785,53 @@ describe('agent usage snapshot publisher', () => {
     await expect(writeSnapshotSettings(`${home}/../x`)).rejects.toThrow();
   });
 
+  it('publishes the saved locations and follows a change without a restart', async () => {
+    const folder = path.join(home, 'share');
+    fs.mkdirSync(folder);
+    const mac = { where: 'the Mac', path: '/Volumes/share/aac-usage' };
+    const windows = { where: 'Windows', path: '\\\\nas\\share\\aac-usage' };
+    await writeSnapshotSettings(folder, undefined, [mac, windows]);
+    expect((await readSnapshotSettings())?.locations).toEqual([mac, windows]);
+    const writes: string[] = [];
+    const publish = createSnapshotPublisher({
+      refreshSeconds: () => 60,
+      syncClient: async () => {},
+      write: async (directory, name, body) => {
+        writes.push(name);
+        await writeAtomically(directory, name, body);
+      },
+    });
+    const event = { accounts: [account()], history: null, sampledAt: NOW };
+    expect(await publish(event)).toBe(true);
+    const read = () => JSON.parse(fs.readFileSync(path.join(folder, SNAPSHOT_LOCATIONS), 'utf8'));
+    expect(read()).toEqual({ version: 1, locations: [mac, windows] });
+    expect(await publish({ ...event, sampledAt: NOW + MINUTE })).toBe(true);
+    expect(writes.filter((name) => name === SNAPSHOT_LOCATIONS)).toHaveLength(1);
+    await writeSnapshotSettings(folder, undefined, [mac]);
+    expect(await publish({ ...event, sampledAt: NOW + 2 * MINUTE })).toBe(true);
+    expect(read()).toEqual({ version: 1, locations: [mac] });
+  });
+
+  it('refuses bad locations and drops a damaged list without losing the folder', async () => {
+    const folder = path.join(home, 'share');
+    await expect(
+      writeSnapshotSettings(folder, undefined, [{ where: 'x', path: 'bad\npath' }])
+    ).rejects.toThrow();
+    await expect(
+      writeSnapshotSettings(
+        folder,
+        undefined,
+        Array.from({ length: 9 }, (_, index) => ({ where: `w${index}`, path: '/p' }))
+      )
+    ).rejects.toThrow();
+    fs.mkdirSync(path.dirname(snapshotSettingsPath()), { recursive: true });
+    fs.writeFileSync(
+      snapshotSettingsPath(),
+      JSON.stringify({ version: 1, directory: folder, locations: [{ where: 1 }] })
+    );
+    expect(await readSnapshotSettings()).toEqual({ version: 1, directory: folder });
+  });
+
   it('sets, reports and turns off the folder from the command line', async () => {
     const out: string[] = [];
     const err: string[] = [];
@@ -788,6 +842,33 @@ describe('agent usage snapshot publisher', () => {
     expect(await handleUsageSnapshotCommand(['status'], io)).toBe(0);
     expect(out.join('')).toContain(`Usage snapshot: on, folder ${folder}`);
     expect(await handleUsageSnapshotCommand(['set', 'relative/folder'], io)).toBe(1);
+    expect(
+      await handleUsageSnapshotCommand(
+        [
+          'set',
+          folder,
+          '--location',
+          'the Mac=/Volumes/share/aac-usage',
+          '--location=Linux=/mnt/s=x',
+        ],
+        io
+      )
+    ).toBe(0);
+    const saved = [
+      { where: 'the Mac', path: '/Volumes/share/aac-usage' },
+      { where: 'Linux', path: '/mnt/s=x' },
+    ];
+    expect((await readSnapshotSettings())?.locations).toEqual(saved);
+    // set without --location keeps the saved ones
+    expect(await handleUsageSnapshotCommand(['set', folder], io)).toBe(0);
+    expect((await readSnapshotSettings())?.locations).toEqual(saved);
+    expect(await handleUsageSnapshotCommand(['status'], io)).toBe(0);
+    expect(out.join('')).toContain('  the Mac: /Volumes/share/aac-usage\n');
+    expect(await handleUsageSnapshotCommand(['set', folder, '--location', 'no-equals'], io)).toBe(
+      1
+    );
+    expect(await handleUsageSnapshotCommand(['set', folder, '--location'], io)).toBe(1);
+    expect(await handleUsageSnapshotCommand(['set', folder, folder], io)).toBe(1);
     expect(await handleUsageSnapshotCommand(['off'], io)).toBe(0);
     expect(await readSnapshotSettings()).toBeNull();
     expect(await handleUsageSnapshotCommand(['bogus'], io)).toBe(1);

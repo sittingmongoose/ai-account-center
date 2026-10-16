@@ -282,8 +282,33 @@ class RulesTests(unittest.TestCase):
         folder = self.home / "custom-share" / "aac-usage"
         with mock.patch.object(aac, "own_folder", return_value=folder):
             self.assertIn(str(folder / "aac-usage"), aac.rules_text())
-        with mock.patch.object(aac, "own_folder", return_value=None):
-            self.assertIn(str(aac.share_folder() / "aac-usage"), aac.rules_text())
+        with mock.patch.object(aac, "own_folder", return_value=None), mock.patch.dict(os.environ, {"AAC_USAGE_DIR": ""}):
+            text = aac.rules_text()
+        self.assertIn("<folder>", text)
+        self.assertIn("in a shared folder.", text)
+
+    def test_rules_list_the_locations_the_dashboard_published(self):
+        folder = self.home / "custom-share" / "aac-usage"
+        folder.mkdir(parents=True)
+        entries = [{"where": "the Mac", "path": "/Volumes/share/aac-usage"},
+                   {"where": "Windows", "path": "\\\\nas\\share\\aac-usage"},
+                   {"where": "bad", "path": "line\nbreak"}, "junk"]
+        (folder / "locations.json").write_text(json.dumps({"version": 1, "locations": entries}), encoding="utf-8")
+        with mock.patch.object(aac, "own_folder", return_value=folder):
+            text = aac.rules_text()
+        self.assertIn("in a shared folder (`/Volumes/share/aac-usage` on the Mac, "
+                      "`\\\\nas\\share\\aac-usage` on Windows).", text)
+        self.assertNotIn("bad", text)
+        (folder / "locations.json").write_text("{broken", encoding="utf-8")
+        self.assertEqual(aac.locations(folder), [])
+        self.assertEqual(aac.locations(None), [])
+
+    def test_a_reader_with_no_folder_says_how_to_find_one(self):
+        with mock.patch.object(aac, "own_folder", return_value=None), mock.patch.dict(os.environ, {"AAC_USAGE_DIR": ""}):
+            with self.assertRaises(SystemExit) as stopped:
+                aac.require_folder()
+        self.assertIn("--dir", str(stopped.exception))
+        self.assertEqual(aac.require_folder(str(self.home)), self.home)
 
 
 if __name__ == "__main__":

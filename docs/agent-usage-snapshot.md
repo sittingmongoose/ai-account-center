@@ -1,10 +1,9 @@
 # Agent usage snapshot
 
-Coding agents on every computer (T3 or not: the Ubuntu VM, Nas1, the Mac and Windows) can see how
-much quota each AI account has left, how fast it is being used and when it resets. The dashboard
-writes its own readings into a shared folder after every refresh; agents read the files. There is
-no key, no network route and no client library: every agent can already read the network share,
-which is also how the thread mailbox reaches them.
+Coding agents on every computer (in T3 or not) can see how much quota each AI account has left, how
+fast it is being used and when it resets. The dashboard writes its own readings into a shared
+folder after every refresh; agents read the files. There is no key, no network route and no client
+library: any agent that can read the network share can read the snapshot.
 
 Source: `src/web-server/agent-usage/`. Command: `src/commands/usage-snapshot-command.ts`. Reader
 and folder guide: `scripts/agent-usage/` (`aac-usage`, `aac-usage.cmd`, `README.md`).
@@ -12,7 +11,10 @@ and folder guide: `scripts/agent-usage/` (`aac-usage`, `aac-usage.cmd`, `README.
 ## Turn it on
 
 ```
-ai-account-center dashboard usage-snapshot set /mnt/share/aac-usage
+ai-account-center dashboard usage-snapshot set /mnt/share/aac-usage \
+  --location "Linux=/mnt/share/aac-usage" \
+  --location "the Mac=/Volumes/share/aac-usage" \
+  --location "Windows=\\nas\share\aac-usage"
 ai-account-center dashboard usage-snapshot status
 ai-account-center dashboard usage-snapshot off
 ```
@@ -20,6 +22,12 @@ ai-account-center dashboard usage-snapshot off
 The folder (absolute, created when its parent exists) is saved in
 `~/.ccs/agent-usage-snapshot.json` (0600). The running dashboard reads it after each refresh, so no
 restart is needed. `off` stops writing; files already written stay.
+
+Each `--location <where>=<path>` (at most 8) says where a group of computers finds the same folder.
+They are saved with the folder, published as `locations.json`, and listed in the rules block that
+`aac-usage rules` prints, so an agent on any computer knows where to look. Your own share names and
+mount points stay in this private setting and the shared folder, never in the package. `set`
+without `--location` keeps the saved locations.
 
 ## What it writes
 
@@ -31,7 +39,8 @@ readings that sample just recorded:
   with its `burn` (percentage points per hour over the last 5 and 15 minutes, 1, 6 and 24 hours,
   the `pace` used for the projection, `projectedFullAt` and `runsOutBeforeReset`);
 - `usage.md`: the same in plain words;
-- `history.json`: the measured readings of every window over the last 7 days.
+- `history.json`: the measured readings of every window over the last 7 days;
+- `locations.json`: the saved locations, rewritten only when they change.
 
 `usage.json` is written last, so its `generatedAt` says the sample's files are all in place.
 Readers treat a snapshot older than `staleAfterSeconds` (three refreshes, at least 5 minutes) as
@@ -51,8 +60,8 @@ memory, so a burst is measured within a few minutes. A rate needs two real readi
 window in the same reset period: a fall in use or a moved reset time starts a new period, and
 nothing is extrapolated across a reset. `pace` is the shortest span with enough readings.
 
-One write runs at a time. The share is a hard NFS mount on the VM: if the file server stalls, one
-write waits and later samples are skipped; the dashboard itself is never blocked. A failed write is
+One write runs at a time. On a hard network mount, if the file server stalls, one write waits and
+later samples are skipped; the dashboard itself is never blocked. A failed write is
 logged once per folder (`agent_usage_snapshot.write_failed`).
 
 ## Telling agents about it

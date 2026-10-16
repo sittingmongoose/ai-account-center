@@ -1,15 +1,13 @@
 # AI account usage for agents
 
-The AI Account Center dashboard on the Ubuntu VM writes the quota left on every AI account it
-tracks into this folder after each refresh (every minute by default). Any agent on any computer can
-read it: no key, no network route, nothing to install. AI Account Center keeps every file here
-current; edits are overwritten.
+The AI Account Center dashboard writes the quota left on every AI account it tracks into this
+folder after each refresh (every minute by default). Any agent on any computer that can read the
+folder can use it: no key, no network route, nothing to install. AI Account Center keeps every file
+here current; edits are overwritten.
 
-| Computer | Folder | Run |
-| --- | --- | --- |
-| Ubuntu VM, Nas1 | `/mnt/share/aac-usage` | `python3 /mnt/share/aac-usage/aac-usage` |
-| Mac | `/Volumes/share/aac-usage` | `python3 /Volumes/share/aac-usage/aac-usage` |
-| Windows | `\\NAS\share\aac-usage` | `python \\NAS\share\aac-usage\aac-usage` |
+Run the reader from this folder: `python3 <this folder>/aac-usage` on Linux and macOS,
+`python <this folder>\aac-usage` on Windows. `locations.json` lists where each computer finds this
+folder, as the dashboard's owner set it, and `aac-usage rules` includes them.
 
 ## Files
 
@@ -20,6 +18,8 @@ current; edits are overwritten.
   in the last hour, 5-minute steps to a day, hourly beyond), each point
   `[time, used %, remaining, reset time]`. Never compute a rate across points whose reset times
   differ; the `burn` values in `usage.json` already respect resets.
+- `locations.json`: where each group of computers finds this folder (`where`, `path`), from
+  `usage-snapshot set <folder> --location "<where>=<path>"`; empty when none were given.
 - `aac-usage`, `aac-usage.cmd`: the reader below.
 
 ## Which account is which

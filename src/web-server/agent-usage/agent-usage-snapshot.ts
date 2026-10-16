@@ -1,6 +1,6 @@
 /**
  * The agent usage snapshot: AI Account Center writes its account usage to a folder every agent
- * can already read (the network share, mounted on the Ubuntu VM, Nas1, the Mac and Windows), so
+ * can already read (a network share every computer mounts), so
  * Claude, Codex, OMP, Muse, zcode, Cursor, Antigravity and any other agent can see how much quota
  * each provider and account has left, how fast it is being used and when it resets, with no key,
  * network route or client library.
@@ -9,7 +9,9 @@
  *   active flag), each window's reading, and burn rates with a projected run-out time;
  * - `usage.md`: the same in plain words;
  * - `history.json`: the rolling 7-day readings of every window, for agents that gauge burn rate
- *   themselves.
+ *   themselves;
+ * - `locations.json`: where each group of computers finds this folder (`--location`), for the
+ *   reader's rules block.
  *
  * Off until `ai-account-center dashboard usage-snapshot set <folder>` saves a folder in
  * `~/.ccs/agent-usage-snapshot.json`; the running dashboard reads that setting each time, so no
@@ -23,14 +25,18 @@ import { randomBytes } from 'crypto';
 import fs from 'fs';
 import { ValidationError } from '../../errors/error-types';
 import path from 'path';
-import { getCcsDir } from '../../utils/config-manager';
 import { createLogger } from '../../services/logging';
 import {
   onAccountAnalyticsSample,
   type AccountAnalyticsSampleEvent,
 } from '../services/account-analytics-service';
 import { getAccountRefreshIntervalSeconds } from '../services/account-refresh-settings';
-import { readPrivateJsonFile, writePrivateJsonFile } from '../services/private-json-store';
+import {
+  readSnapshotSettings,
+  renderSnapshotLocations,
+  SNAPSHOT_LOCATIONS,
+  type SnapshotSettings,
+} from './agent-usage-settings';
 import { readPackagedSource } from '../../utils/packaged-source';
 import {
   HISTORY_HOURS,
@@ -48,18 +54,13 @@ import {
 
 const logger = createLogger('agent-usage-snapshot');
 
-export const SNAPSHOT_SETTINGS_FILE = 'agent-usage-snapshot.json';
+export * from './agent-usage-settings';
+
 export const SNAPSHOT_JSON = 'usage.json';
 export const SNAPSHOT_MARKDOWN = 'usage.md';
 export const SNAPSHOT_HISTORY = 'history.json';
-const MAX_DIRECTORY_LENGTH = 1024;
 /** A write still running after this long is reported once in the dashboard log. */
 const STALL_LOG_MS = 5 * 60_000;
-
-export interface SnapshotSettings {
-  version: 1;
-  directory: string;
-}
 
 export interface SnapshotWindow extends AgentUsageWindow {
   burn: BurnRate | null;
@@ -86,44 +87,6 @@ export interface AgentUsageHistoryFile {
   hours: number;
   /** Each point is [time, used percent, remaining amount, reset time]; null when that reading had none. */
   series: HistorySeries[];
-}
-
-export function snapshotSettingsPath(ccsDir = getCcsDir()): string {
-  return path.join(ccsDir, SNAPSHOT_SETTINGS_FILE);
-}
-
-/** An absolute folder path without control characters or `..` segments. */
-export function isSnapshotDirectory(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length > 1 &&
-    value.length <= MAX_DIRECTORY_LENGTH &&
-    !/[\u0000-\u001f\u007f]/.test(value) &&
-    path.isAbsolute(value) &&
-    !value.split(/[\\/]+/).includes('..')
-  );
-}
-
-export async function readSnapshotSettings(ccsDir = getCcsDir()): Promise<SnapshotSettings | null> {
-  const read = await readPrivateJsonFile(snapshotSettingsPath(ccsDir), 4096);
-  if (read.state !== 'ok') return null;
-  const value = read.value as Record<string, unknown> | null;
-  if (!value || value.version !== 1 || !isSnapshotDirectory(value.directory)) return null;
-  return { version: 1, directory: value.directory };
-}
-
-export async function writeSnapshotSettings(
-  directory: string | null,
-  ccsDir = getCcsDir()
-): Promise<void> {
-  const file = snapshotSettingsPath(ccsDir);
-  if (directory === null) {
-    await fs.promises.rm(file, { force: true });
-    return;
-  }
-  if (!isSnapshotDirectory(directory))
-    throw new ValidationError('The usage snapshot folder must be an absolute path.');
-  await writePrivateJsonFile(file, { version: 1, directory });
 }
 
 /** The snapshot and history files for one sample. */
@@ -405,6 +368,7 @@ export function createSnapshotPublisher(
   let stallLogged = false;
   let warned: string | null = null;
   let clientSynced: string | null = null;
+  let locationsWritten: string | null = null;
   return async (event) => {
     // Every sample's readings count toward short-span pace, even one whose write is skipped.
     recent.add(event.accounts, event.sampledAt);
@@ -442,6 +406,16 @@ export function createSnapshotPublisher(
       // usage.json last: its time says every file of this sample is in place.
       await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
       warned = null;
+      // The setting can change without a restart, so this follows it; unchanged, it is not rewritten.
+      const locations = renderSnapshotLocations(chosen.locations);
+      if (locationsWritten !== `${directory}\n${locations}`) {
+        try {
+          await write(directory, SNAPSHOT_LOCATIONS, locations);
+          locationsWritten = `${directory}\n${locations}`;
+        } catch {
+          /* The snapshot itself was written; the next sample retries. */
+        }
+      }
       if (clientSynced !== directory) {
         // Once per folder and dashboard start; a failed copy is retried after the next sample.
         try {
