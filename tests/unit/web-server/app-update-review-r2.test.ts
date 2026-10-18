@@ -110,38 +110,41 @@ it('keeps streamed results on a helper protocol failure without calling the host
       .every((row) => row.message === MESSAGES.helper_invalid)
   ).toBe(true);
 });
-it('does not replace a completed streamed row with a coordinator timeout placeholder', async () => {
-  const service = new AppUpdateService({
-    persist: false,
-    runHost: async (platform, control) => {
-      control.onEvent({
-        event: 'result',
-        result: {
-          appId: 'omp',
-          status: 'updated',
-          messageCode: 'updated',
-          version: '2.0.0',
-          manager: 'native',
-        },
-      });
-      return JSON.stringify({
-        results: Object.keys(UPDATE_APP_LABELS).map((appId) => ({
-          appId,
-          status: 'unknown',
-          messageCode: 'host_timeout',
-        })),
-      });
-    },
-  });
-  service.start();
-  await finish(service);
-  expect(
-    service
-      .getStatus()
-      .job!.results.filter((row) => row.appId === 'omp')
-      .every((row) => row.status === 'updated')
-  ).toBe(true);
-});
+it.each(['host_timeout', 'task_failed'])(
+  'does not replace a completed streamed row with a %s placeholder',
+  async (messageCode) => {
+    const service = new AppUpdateService({
+      persist: false,
+      runHost: async (platform, control) => {
+        control.onEvent({
+          event: 'result',
+          result: {
+            appId: 'omp',
+            status: 'updated',
+            messageCode: 'updated',
+            version: '2.0.0',
+            manager: 'native',
+          },
+        });
+        return JSON.stringify({
+          results: Object.keys(UPDATE_APP_LABELS).map((appId) => ({
+            appId,
+            status: 'unknown',
+            messageCode,
+          })),
+        });
+      },
+    });
+    service.start();
+    await finish(service);
+    expect(
+      service
+        .getStatus()
+        .job!.results.filter((row) => row.appId === 'omp')
+        .every((row) => row.status === 'updated')
+    ).toBe(true);
+  }
+);
 
 it('classifies a helper exit without a final document as a protocol failure', async () => {
   await expect(

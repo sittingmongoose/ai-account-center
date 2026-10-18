@@ -855,7 +855,7 @@ class BoundedUpdateTests(unittest.TestCase):
             while not cancelled() and time.monotonic() < deadline:
                 time.sleep(.05)
             common.write_private_json(app_root / 'windows-task-result.json', {'nonce': nonce, 'results': [{'appId': 'codex-cli', 'status': 'current'}, {'appId': 'omp', 'status': 'skipped'}]})
-        with mock.patch.object(pathlib.Path, 'home', return_value=self.root), mock.patch.object(updater, 'powershell', return_value='') as shell:
+        with mock.patch.object(pathlib.Path, 'home', return_value=self.root), mock.patch.object(updater, 'powershell', return_value='0') as shell:
             worker = threading.Thread(target=task_child)
             worker.start()
             value = updater.windows_interactive_apply(events.append, lambda: state['cancel'])
@@ -2104,7 +2104,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
             if 'Start-ScheduledTask' in script:
                 seen['request'] = json.loads((app_root / 'windows-task-request.json').read_text())
                 common.write_private_json(app_root / 'windows-task-result.json', {'nonce': seen['request']['nonce'], 'results': []})
-            return ''
+            return '0'
         with mock.patch.object(pathlib.Path, 'home', return_value=self.root), mock.patch.object(updater, 'powershell', side_effect=shell):
             updater.windows_interactive_apply(agy_reviewed=frozenset({'1.3.0', '1.2.16'}))
         self.assertEqual(seen['request']['agyReviewed'], ['1.2.16', '1.3.0'])

@@ -901,8 +901,39 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
                 raise UpdateFailure("busy") from None
             raise
 
+    def final_result(nonce):
+        try:
+            value = json.loads(result_path.read_text(encoding="utf-8"))
+            if value.get("nonce") == nonce and isinstance(value.get("results"), list):
+                return {"results": value["results"]}
+        except (OSError, ValueError, AttributeError):
+            pass
+        return None
+
+    def relay_progress(nonce, relayed):
+        try:
+            value = json.loads(progress_path.read_text(encoding="utf-8"))
+            events = value.get("events") if value.get("nonce") == nonce else None
+            if isinstance(events, list):
+                for event in events[relayed:]:
+                    if isinstance(event, dict) and event.get("event") == "result":
+                        row = event.get("result")
+                        if isinstance(row, dict) and row.get("appId") in APP_LABELS:
+                            completed[row["appId"]] = row
+                    emit(event)
+                return max(relayed, len(events))
+        except (OSError, ValueError, AttributeError):
+            pass
+        return relayed
+
     with execution_lock("windows-coordinator.lock"):
-        task_command("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}")
+        previous_run = task_command("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; (Get-ScheduledTaskInfo -TaskName 'CCS App Updates').LastRunTime.Ticks")
+        try:
+            previous_run = int(previous_run.strip())
+            if previous_run < 0:
+                raise ValueError()
+        except (ValueError, AttributeError):
+            raise UpdateFailure("readiness_unknown") from None
         nonce = uuid.uuid4().hex
         for stale in (progress_path, cancel_path):
             stale.unlink(missing_ok=True)
@@ -911,34 +942,34 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
             request["agyReviewed"] = sorted(agy_reviewed)
         write_private_json(request_path, request)
         task_command("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; Start-ScheduledTask -TaskName 'CCS App Updates'")
-        deadline = time.monotonic() + 16 * 60
+        started = time.monotonic()
+        deadline, next_check = started + 16 * 60, started + 5
         relayed, cancel_sent = 0, False
-        while time.monotonic() < deadline:
+        while (now := time.monotonic()) < deadline:
             if not cancel_sent and cancelled():
                 try:
                     write_private_json(cancel_path, {"nonce": nonce})
                     cancel_sent = True
                 except OSError:
                     pass
-            try:
-                value = json.loads(progress_path.read_text(encoding="utf-8"))
-                events = value.get("events") if value.get("nonce") == nonce else None
-                if isinstance(events, list):
-                    for event in events[relayed:]:
-                        if isinstance(event, dict) and event.get("event") == "result":
-                            row = event.get("result")
-                            if isinstance(row, dict) and row.get("appId") in APP_LABELS:
-                                completed[row["appId"]] = row
-                        emit(event)
-                    relayed = max(relayed, len(events))
-            except (OSError, ValueError, AttributeError):
-                pass
-            try:
-                value = json.loads(result_path.read_text(encoding="utf-8"))
-                if value.get("nonce") == nonce and isinstance(value.get("results"), list):
-                    return {"results": value["results"]}
-            except (OSError, ValueError, AttributeError):
-                pass
+            relayed = relay_progress(nonce, relayed)
+            final = final_result(nonce)
+            if final is not None:
+                return final
+            if now >= next_check:
+                next_check = now + 5
+                try:
+                    state = task_command("$ErrorActionPreference='Stop'; $i=Get-ScheduledTaskInfo -TaskName 'CCS App Updates'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -notin 'Running','Queued' -and $i.LastRunTime.Ticks -ne " + str(previous_run) + "){ 'finished' }")
+                except UpdateFailure:
+                    state = ""
+                if state.strip() == "finished":
+                    # The final file can arrive between our read and this
+                    # task-state query. Prefer it, then preserve known rows.
+                    final = final_result(nonce)
+                    if final is not None:
+                        return final
+                    relay_progress(nonce, relayed)
+                    return {"results": [completed.get(app_id) or result(app_id, "windows", "unknown", code="task_failed") for app_id in APP_LABELS]}
             time.sleep(1)
         return {"results": [completed.get(app_id) or result(app_id, "windows", "unknown", code="host_timeout") for app_id in APP_LABELS]}
 

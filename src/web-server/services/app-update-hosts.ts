@@ -324,7 +324,7 @@ const SSH_SYNC_OPTIONS = [
 ];
 /** Stage a complete immutable generation, then atomically replace only its launcher. */
 export function helperPublishScript(checksums: Record<string, string>): string {
-  return `import hashlib, json, os, pathlib, re, runpy, shutil, sys, tarfile, tempfile, uuid
+  return `import hashlib, json, os, pathlib, re, runpy, shutil, subprocess, sys, tarfile, tempfile, uuid
 root = pathlib.Path.home() / '.ccs/app-updates'
 root.mkdir(parents=True, exist_ok=True, mode=0o700)
 expected = json.loads(${JSON.stringify(JSON.stringify(checksums))})
@@ -333,6 +333,15 @@ if set(expected) != set(${JSON.stringify(HELPER_FILES)}) or not all(re.fullmatch
 stage = pathlib.Path(tempfile.mkdtemp(prefix='.helpers-stage-', dir=root))
 launcher = root / ('.launcher-' + uuid.uuid4().hex)
 try:
+    if os.name == 'nt':
+        # Python 3.13 creates mode-0700 directories for the elevated token's
+        # owner (Administrators). The Limited interactive task needs the real
+        # user's SID on this directory and every extracted helper instead.
+        sid = subprocess.check_output(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value'], stdin=subprocess.DEVNULL, text=True, encoding='ascii', timeout=15, creationflags=0x08000000).strip()
+        if not re.fullmatch(r'S-1-\\d+(?:-\\d+)+', sid):
+            raise ValueError('Invalid helper user identity')
+        for folder in (root, stage):
+            subprocess.run(['icacls.exe', str(folder), '/grant:r', '*' + sid + ':(OI)(CI)F'], check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, creationflags=0x08000000)
     with tarfile.open(fileobj=sys.stdin.buffer, mode='r|') as archive:
         seen = set()
         for entry in archive:
@@ -345,7 +354,7 @@ try:
         raise ValueError('Helper checksum mismatch')
     generation = 'helpers-' + uuid.uuid4().hex
     os.rename(stage, root / generation)
-    launcher.write_text('# aac-helpers: ' + generation + '\\nimport pathlib, runpy, sys\\nroot = pathlib.Path(__file__).resolve().parent / ' + repr(generation) + '\\nsys.path.insert(0, str(root))\\nrunpy.run_path(str(root / "app_updates.py"), run_name="__main__")\\n', encoding='utf-8')
+    launcher.write_text('# aac-helpers: ' + generation + '\\n# aac-helpers-format: 2\\nimport pathlib, runpy, sys\\nroot = pathlib.Path(__file__).resolve().parent / ' + repr(generation) + '\\nsys.path.insert(0, str(root))\\nrunpy.run_path(str(root / "app_updates.py"), run_name="__main__")\\n', encoding='utf-8')
     launcher.chmod(0o600)
     os.replace(launcher, root / 'app_updates.py')
 finally:
@@ -471,7 +480,13 @@ export function helperHashQuery(platform: RemotePlatform): string {
     `import hashlib, pathlib, re
 root = pathlib.Path.home() / '.ccs/app-updates'
 try:
-    first = (root / 'app_updates.py').open(encoding='utf-8').readline(128).strip()
+    with (root / 'app_updates.py').open(encoding='utf-8') as launcher:
+        first = launcher.readline(128).strip()
+        format_marker = launcher.readline(128).strip()
+    # Identical helper bytes do not prove an old Windows generation is
+    # readable by the Limited task. Republish once with the explicit user ACL.
+    if ${HOST_OS[platform] === 'windows' ? 'True' : 'False'} and format_marker != '# aac-helpers-format: 2':
+        raise SystemExit(0)
     if re.fullmatch(r'# aac-helpers: helpers-[a-f0-9]{32}', first):
         root = root / first.split()[-1]
 except OSError:

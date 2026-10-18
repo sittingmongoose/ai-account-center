@@ -675,6 +675,16 @@ state directories, locks, results and restart markers stay in place. Existing
 runs keep their old generation. The hash query follows the selected generation.
 Failed staging is removed and the previous launcher remains usable.
 
+On Windows the helper root and staging directory explicitly grant the current user's SID
+inheritable access before helpers are extracted. Python 3.13's private-directory
+ACL under elevated SSH can otherwise allow Administrators but deny the Limited
+interactive task. A launcher format marker forces existing Windows generations
+to be republished once, even when their file checksums match. Identity or ACL
+setup failures leave the previous launcher selected. The coordinator also checks
+for a newly completed task every five seconds: if it stopped without a matching
+final result, completed rows are retained and missing rows report that the task
+stopped instead of waiting for the host timeout.
+
 Windows compresses the Python script before encoding the PowerShell command so
 the full checksum manifest fits OpenSSH's default `cmd.exe` 8191-character limit.
 The binary helper archive still travels unchanged on stdin.
