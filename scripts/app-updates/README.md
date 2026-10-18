@@ -675,6 +675,10 @@ state directories, locks, results and restart markers stay in place. Existing
 runs keep their old generation. The hash query follows the selected generation.
 Failed staging is removed and the previous launcher remains usable.
 
+Windows compresses the Python script before encoding the PowerShell command so
+the full checksum manifest fits OpenSSH's default `cmd.exe` 8191-character limit.
+The binary helper archive still travels unchanged on stdin.
+
 The dashboard lock records PID plus Linux boot ID and process start ticks, using
 the same identity as the detached Python writer. Reused PIDs are stale; malformed
 locks become stale after a five-second write grace. A live matching owner never

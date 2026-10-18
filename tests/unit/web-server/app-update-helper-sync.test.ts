@@ -9,9 +9,11 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { inflateSync } from 'zlib';
 import {
   HELPER_FILES,
   helperPublishScript,
+  helperExtract,
   helperArchiveArgs,
   localHelperChecksums,
 } from '../../../src/web-server/services/app-update-hosts';
@@ -88,6 +90,43 @@ describe('remote helper sync', () => {
     expect(fs.readdirSync(target).sort()).toEqual([...HELPER_FILES].sort());
     for (const name of HELPER_FILES)
       expect(fs.readFileSync(path.join(target, name), 'utf8')).toBe(`fixture ${name}\n`);
+  });
+
+  it('publishes a complete Windows manifest below the cmd.exe command limit', () => {
+    const root = fixtureRoot();
+    const hashes = localHelperChecksums(root);
+    const command = helperExtract('windows', hashes);
+    expect(command.length).toBeLessThan(8191);
+    const powershell = Buffer.from(command.split(' ').at(-1)!, 'base64').toString('utf16le');
+    const match = /^& python\.exe -c '([^']+)' ([A-Za-z0-9+/=]+); exit \$LASTEXITCODE$/.exec(
+      powershell
+    );
+    expect(match).not.toBeNull();
+    const [, bootstrap, encoded] = match!;
+    expect(inflateSync(Buffer.from(encoded, 'base64')).toString()).toBe(
+      helperPublishScript(hashes)
+    );
+
+    // Exercise the transmitted bootstrap with a binary archive in an isolated
+    // home. Quoting and compression must not consume or alter the tar on stdin.
+    const home = temporary('aac-windows-helper-home-');
+    const setup = `import pathlib; pathlib.Path.home = classmethod(lambda cls: pathlib.Path(${JSON.stringify(home)})); `;
+    const archive = spawnSync('tar', helperArchiveArgs(root));
+    expect(archive.status).toBe(0);
+    const run = spawnSync(
+      process.platform === 'win32' ? 'python' : 'python3',
+      ['-c', setup + bootstrap, encoded],
+      { input: archive.stdout }
+    );
+    expect(run.status).toBe(0);
+    const state = path.join(home, '.ccs', 'app-updates');
+    const generation = fs
+      .readFileSync(path.join(state, 'app_updates.py'), 'utf8')
+      .split(/\r?\n/)[0]
+      .split(' ')
+      .at(-1)!;
+    for (const name of HELPER_FILES)
+      expect(fs.readFileSync(path.join(state, generation, name), 'utf8')).toBe(`fixture ${name}\n`);
   });
 
   it('keeps the previous launcher and state on an incomplete or corrupt archive', () => {

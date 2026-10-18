@@ -107,6 +107,11 @@ key gives an unavailable result. A `browser-capsule` account reads only
 `qwen-console-session.json` (`default`) or `qwen-console-session-<id>.json`. Any other
 combination exits with status 2, which the dashboard reports as an outdated helper.
 
+OpenCode Go's usage endpoint reports rejected credentials with HTTP 401. HTTP 403
+does not establish a sign-in failure: denied plan access or an upstream access
+restriction leaves usage unavailable, or retains a dated verified sample through
+failover, without labeling the account signed out. Error response bodies stay private.
+
 Exit status 2 is reserved for usage errors: argparse, the account argument check above,
 or Python failing to open a missing helper file. A collection outcome always prints one
 JSON row and exits 0; any other failure exits 1. The dashboard reads exit status 2 after

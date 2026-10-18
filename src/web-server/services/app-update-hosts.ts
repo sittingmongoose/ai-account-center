@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { deflateSync } from 'zlib';
 import { BinaryError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
@@ -356,9 +357,16 @@ finally:
 function pythonCommand(platform: RemotePlatform, script: string): string {
   // The script travels as its own base64 argument: no quote inside the code, because Windows
   // PowerShell strips embedded double quotes when it calls a native program.
-  const encoded = Buffer.from(script).toString('base64');
-  const code = 'import base64,sys;exec(base64.b64decode(sys.argv[1]))';
-  if (HOST_OS[platform] !== 'windows') return `/usr/bin/python3 -c '${code}' ${encoded}`;
+  // Windows OpenSSH defaults to cmd.exe, whose 8191-character limit also covers
+  // the outer UTF-16 PowerShell encoding. Compress before either encoding so a
+  // complete checksum manifest fits; stdin stays available for the binary tar.
+  const windows = HOST_OS[platform] === 'windows';
+  const contents = Buffer.from(script);
+  const encoded = (windows ? deflateSync(contents) : contents).toString('base64');
+  const code = windows
+    ? 'import base64,zlib,sys;exec(zlib.decompress(base64.b64decode(sys.argv[1])))'
+    : 'import base64,sys;exec(base64.b64decode(sys.argv[1]))';
+  if (!windows) return `/usr/bin/python3 -c '${code}' ${encoded}`;
   const ps = `& python.exe -c '${code}' ${encoded}; exit $LASTEXITCODE`;
   return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(ps, 'utf16le').toString('base64')}`;
 }

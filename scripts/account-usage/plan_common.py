@@ -597,6 +597,13 @@ class HttpClient:
             if error.code == 401:
                 raise CollectionError("needs_sign_in", "The saved credential was rejected by the usage service.")
             if error.code == 403:
+                # Go can forbid quota access without rejecting the saved key
+                # (plan entitlement or an upstream access restriction). Only
+                # its 401 establishes a sign-in failure; retain honest cached
+                # usage or report unavailable for a forbidden usage request.
+                if url == "https://opencode.ai/zen/go/v1/usage":
+                    raise CollectionError("error", "OpenCode Go usage access is unavailable; the saved key's sign-in status could not be verified.",
+                                          failure_code="provider_error")
                 raise CollectionError("needs_sign_in", "The saved account cannot access this plan's usage.")
             if error.code == 429:
                 raise CollectionError("error", "The usage service asked to slow down; try again later.",
