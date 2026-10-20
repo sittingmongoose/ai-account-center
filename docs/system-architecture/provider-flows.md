@@ -36,6 +36,13 @@ credential; native quota does not identify a portal team and is not mixed with
 portal quota. Existing Analytics history has no Muse team binding, so a cold
 deployment cannot use it to authorize fallback. The configured primary must first
 establish a verified scope; later failures can retain that scope's dated reading.
+An explicit owner-private Muse peer grant can associate an exact native device
+credential on a named computer with that established account. This is user-owned
+configuration, never an inference from a matching email or plan. The coordinator
+then accepts the native subscription's complete reading, identifies its source,
+and preserves unknown native counters as unknown. Scope changes, credential
+changes and revocation cannot reuse that grant. See the
+[collector guide](../../scripts/account-usage/README.md) for its bounded format.
 
 The [transport](../../src/web-server/services/usage-failover-transport.ts) streams
 the packaged Python bundle over existing SSH aliases and imports it in memory.

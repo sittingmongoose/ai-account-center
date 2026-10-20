@@ -40,6 +40,31 @@ The sidecar separately records whether the latest attempt verified the native
 identity, so a throttled identity lookup cannot restore a browser reading that
 an earlier sign-in failure discarded.
 
+Muse native installations can also be explicitly linked to an established
+dashboard account. This is needed when the primary has a browser team binding
+but another computer has only the CLI sign-in. The private grant is
+`account-usage-failover/<source fingerprint>.muse-peers.json` under the selected
+CCS home, beside the account's existing `<source fingerprint>.json` observation.
+It has `version: 1`, the same `key` fingerprint, the primary `identity`, and a
+`peers` array of `{host, identity}` entries. Hosts are the fixed `ubuntu`, `mac`,
+`windows`, or `nas1` computers; peer identities must be exact
+`muse-native-credential` fingerprints from the packaged helper's inventory.
+Create this owner-only file only after the user explicitly associates those
+existing native sign-ins with that subscription and live collection verifies
+each account. Email or plan equality alone never creates a link. No credential
+or browser capsule is copied.
+
+A linked fallback replaces the complete quota reading with the native endpoint's
+actual percentages, reset times, and observation time. It never fills missing
+native counters or denominators from the portal cache. Source text identifies
+native subscription quota. The regular account cooldown and each native helper's
+five-minute budget still apply. Links survive restart, but changing the primary
+account/source/team or a peer credential invalidates its link; explicitly link a
+replacement credential again. Removing the grant revokes cached fallback quota
+on the next coordinator read, including an in-flight result and any plan-only
+metadata that peer supplied. Missing, malformed, symlinked or nonprivate grant
+files authorize nothing.
+
 Cursor reads the current subscription from its authenticated membership endpoint,
 so changing plans does not depend on the desktop application's cached plan name.
 Legacy Cursor plans retain their existing included, Cursor-model and other-model
