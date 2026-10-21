@@ -78,7 +78,9 @@ function buildFixtureUi(root: string): typeof manifest {
         ? 'rustc 1.98.0 (fixture)'
         : command.includes('rustup')
           ? 'wasm32-unknown-unknown\n'
-          : '',
+          : command.includes('wasm-pack')
+            ? 'wasm-pack 0.15.0\n'
+            : '',
     readCommit: () => '8fb5e3de',
   });
 }

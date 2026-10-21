@@ -88,7 +88,7 @@ jobs:
           components: rustfmt
 
       - name: Setup pinned wasm-pack
-        run: cargo install wasm-pack --version 0.13.1 --locked
+        run: cargo install wasm-pack --version 0.15.0 --locked
 
       - name: Build
         run: bun run build:all

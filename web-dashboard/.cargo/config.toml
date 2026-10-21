@@ -1,0 +1,4 @@
+# Apply browser code-generation features to the Wasm target only.
+# Keep deterministic SIMD semantics across the supported browser versions.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128,+tail-call"]

@@ -29,16 +29,31 @@ constraints; browser resize and fullscreen requests update both layout and canva
 
 ## Build
 
-Rust 1.92 or newer with `wasm32-unknown-unknown`, and wasm-pack:
+Rust **1.98.0** with `wasm32-unknown-unknown`, and wasm-pack **0.15.0**:
 
 ```sh
+cargo install wasm-pack --version 0.15.0 --locked
 wasm-pack build web-dashboard --release --target web --out-dir pkg --out-name ccs_account_dashboard -- --locked
 ```
 
 Both `slint` and `slint-build` are pinned to **=1.18.1** in Cargo.toml and locked
-in Cargo.lock. wasm-pack's old bundled optimizer cannot validate instructions
-produced by the installed Rust 1.98, so its optional wasm-opt pass is disabled.
+in Cargo.lock. The repository builder checks the wasm-pack version before replacing
+the packaged UI. wasm-pack 0.15.0 still downloads Binaryen v117, which cannot
+validate the installed Rust 1.98 output, so its optional wasm-opt pass is disabled.
 Rust release optimization and LTO remain enabled.
+The release profile uses `opt-level = 2` to favor interactive performance; the
+measured download-size tradeoff is recorded below.
+`web-dashboard/rust-toolchain.toml` pins the Rust compiler, target and formatter
+used by Cargo, matching CI and the container build.
+
+`web-dashboard/.cargo/config.toml` enables 128-bit SIMD and WebAssembly 3.0 tail
+calls for the browser target only. The browser must support both: Chrome 112+,
+Firefox 121+ or Safari/iOS 18.2+. The compiler configuration is included in the
+source fingerprint and source package. A browser without the required instructions
+gets a browser-update message before the runtime downloads. Relaxed SIMD stays
+disabled pending verified support across shipping Safari/iOS versions. Memory64,
+garbage collection and exception unwinding are not enabled; they do not supply a
+general speed optimization for this Rust/Slint application.
 
 The repository UI builder stages all `public/` files with `pkg/` at the same
 relative location directly into `dist/ui/`. The public entry
@@ -179,6 +194,27 @@ Every state push from `bridge.js` (`with_ui` and the other entry points in
 `src/lib.rs`) asks for a frame and wakes winit's event loop, so a change that
 arrives while the loop sleeps is painted at once instead of at the next pointer
 event.
+
+On 2026-10-21, six balanced fixture runs per configuration in hardware-accelerated
+Chrome on the Quadro P1000 (1440 x 900, DPR 1) compared the deployed UI with Rust
+1.98.0/wasm-pack 0.15.0 cross-builds. Medians, excluding warm-up runs:
+
+| Measurement | Deployed UI | SIMD + tail calls, `s` | SIMD + tail calls, `2` |
+| --- | ---: | ---: | ---: |
+| Hot model update | 0.697 ms | 0.694 ms | 0.530 ms |
+| Details animation CPU work/frame | 8.70 ms | 8.85 ms | 6.25 ms |
+| Scrolling CPU work/frame | 3.30 ms | 3.40 ms | 2.75 ms |
+| Authenticated startup, cache disabled | 1.323 s | 1.319 s | 1.292 s |
+| Brotli Wasm download | 3.094 MB | 3.087 MB | 3.672 MB |
+
+The speed profile cuts model-update time by 24%, Details frame work by 28% and
+scrolling frame work by 17%, at an 18.7% larger initial Wasm download. The
+content-addressed runtime remains immutable and cacheable. Startup ranges overlap,
+so these results do not establish a startup improvement. Feature flags alone
+showed no consistent CPU gain. Model timings use 2,000 warm-up pushes followed by
+seven batches of 100 alternating fixture models; frame work measures JavaScript
+and Wasm callback CPU time, not delivered FPS. These are local fixture
+measurements, not live-provider refresh or mobile Safari benchmarks.
 
 ## Validation
 

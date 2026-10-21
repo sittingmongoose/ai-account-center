@@ -100,6 +100,7 @@ function runner(calls: Array<[string, string[]]>, rust = 'rustc 1.98.0 (fixture)
     calls.push([command, args]);
     if (command.includes('rustc')) return rust;
     if (command.includes('rustup')) return 'wasm32-unknown-unknown\nx86_64-unknown-linux-gnu\n';
+    if (command.includes('wasm-pack') && args[0] === '--version') return 'wasm-pack 0.15.0\n';
     return '';
   };
 }
@@ -170,9 +171,59 @@ describe('Slint browser build integration', () => {
     fs.mkdirSync(oldUi, { recursive: true });
     fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
     expect(() => build({ repoRoot: root, run: runner(calls, 'rustc 1.91.0 (fixture)') })).toThrow(
-      '1.92'
+      '1.98'
     );
     expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
+  });
+
+  it('rejects an outdated wasm-pack before replacing the packaged dashboard', () => {
+    const root = fixture();
+    const calls: Array<[string, string[]]> = [];
+    const run = runner(calls);
+    const oldUi = path.join(root, 'dist', 'ui');
+    fs.mkdirSync(oldUi, { recursive: true });
+    fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
+    expect(() =>
+      build({
+        repoRoot: root,
+        run: (command: string, args: string[]) =>
+          command.includes('wasm-pack') && args[0] === '--version'
+            ? 'wasm-pack 0.13.1\n'
+            : run(command, args),
+      })
+    ).toThrow('requires wasm-pack 0.15.0');
+    expect(calls.some(([, args]) => args[0] === 'build')).toBe(false);
+    expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
+  });
+
+  it('uses the crate toolchain when the computer default compiler is older', () => {
+    const root = fixture();
+    const crate = path.join(root, 'web-dashboard');
+    const run = runner([]);
+    const pinnedRun = (command: string, args: string[], options: { cwd?: string }) => {
+      if (command.includes('rustc') && options.cwd !== crate) return 'rustc 1.93.0 (default)';
+      if (command.includes('cargo') && args[0] === 'fmt' && options.cwd !== crate)
+        throw new Error('Formatter did not use the crate toolchain');
+      return run(command, args);
+    };
+    expect(() => build({ repoRoot: root, run: pinnedRun })).not.toThrow();
+    expect(() => validateUi({ repoRoot: root, run: pinnedRun })).not.toThrow();
+  });
+
+  it('invalidates packaged output when Wasm compiler features change', () => {
+    const root = fixture();
+    const config = path.join(root, 'web-dashboard', '.cargo', 'config.toml');
+    fs.mkdirSync(path.dirname(config));
+    fs.writeFileSync(config, '[target.wasm32-unknown-unknown]\nrustflags = []\n');
+    build({ repoRoot: root, run: runner([]) });
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
+    fs.writeFileSync(
+      config,
+      '[target.wasm32-unknown-unknown]\nrustflags = ["-C", "target-feature=+simd128"]\n'
+    );
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow(
+      'Dashboard source changed after the build'
+    );
   });
 
   it('detects a mismatched packaged Wasm binary', () => {
@@ -255,7 +306,9 @@ describe('Slint browser build integration', () => {
     const oldUi = path.join(root, 'dist', 'ui');
     fs.mkdirSync(oldUi, { recursive: true });
     fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
-    expect(SW_BUILD_ID_ERROR).toBe('sw.js must name the __AAC_BUILD_ID__ placeholder exactly once.');
+    expect(SW_BUILD_ID_ERROR).toBe(
+      'sw.js must name the __AAC_BUILD_ID__ placeholder exactly once.'
+    );
     expect(() => buildUi({ repoRoot: root, run: runner([]) })).toThrow(SW_BUILD_ID_ERROR);
     expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
   });

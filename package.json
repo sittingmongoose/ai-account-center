@@ -55,6 +55,8 @@
     "windows-bar/LICENSE",
     "web-dashboard/Cargo.toml",
     "web-dashboard/Cargo.lock",
+    "web-dashboard/.cargo/config.toml",
+    "web-dashboard/rust-toolchain.toml",
     "web-dashboard/build.rs",
     "web-dashboard/src/",
     "web-dashboard/ui/",

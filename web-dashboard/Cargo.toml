@@ -25,11 +25,11 @@ slint-build = "=1.18.1"
 
 [profile.release]
 lto = true
-opt-level = "s"
+opt-level = 2
 strip = true
 
 [package.metadata.wasm-pack.profile.release]
-# Rust 1.98 emits instructions unsupported by wasm-pack 0.13.1's bundled wasm-opt.
+# wasm-pack 0.15.0 still downloads Binaryen v117, which cannot process Rust 1.98 output.
 # Rust release optimization and LTO remain enabled.
 # N9 (2026-10-05): binaryen v133 with explicit --enable-* flags does run, but the wire
 # bytes grow (br11 2.268 -> 2.359 MB, +4.0%; -Oz: +4.4%) while raw shrinks, so serving
