@@ -110,6 +110,7 @@ class ReviewTests(unittest.TestCase):
                     root = pathlib.Path(folder) / ".ccs/app-updates"
                     nonce = json.loads((root / "windows-task-request.json").read_text())["nonce"]
                     common.write_private_json(root / "windows-task-progress.json", {"nonce": nonce, "events": [{"event": "result", "result": common.result("omp", "windows", "updated")}]})
+                return "0"
             with mock.patch.object(updater, "powershell", side_effect=start), mock.patch.object(updater.time, "monotonic", side_effect=[0, 0, 1000]), mock.patch.object(updater.time, "sleep"):
                 rows = updater.windows_interactive_apply()["results"]
             self.assertEqual(next(row for row in rows if row["appId"] == "omp")["status"], "updated")
@@ -117,6 +118,67 @@ class ReviewTests(unittest.TestCase):
             with mock.patch.object(updater, "powershell", side_effect=common.UpdateFailure(exit_code=3)), self.assertRaises(common.UpdateFailure) as raised:
                 updater.windows_interactive_apply()
             self.assertEqual(raised.exception.code, "busy")
+
+    def test_windows_exited_task_reports_missing_results_without_waiting_for_timeout(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)), mock.patch.object(updater, "execution_lock", contextlib.nullcontext):
+            def shell(script, **kwargs):
+                if "Start-ScheduledTask" in script:
+                    root = pathlib.Path(folder) / ".ccs/app-updates"
+                    nonce = json.loads((root / "windows-task-request.json").read_text())["nonce"]
+                    common.write_private_json(root / "windows-task-progress.json", {"nonce": nonce, "events": [{"event": "result", "result": common.result("omp", "windows", "updated")}]})
+                return "finished" if "'finished'" in script else "638000000000000000"
+            with mock.patch.object(updater, "powershell", side_effect=shell) as command, mock.patch.object(updater.time, "monotonic", side_effect=[0, 5]), mock.patch.object(updater.time, "sleep") as sleep:
+                rows = updater.windows_interactive_apply()["results"]
+            self.assertEqual(next(row for row in rows if row["appId"] == "omp")["status"], "updated")
+            self.assertTrue(all(row["status"] == "unknown" and row["messageCode"] == "task_failed" for row in rows if row["appId"] != "omp"))
+            self.assertIn("LastRunTime.Ticks -ne 638000000000000000", command.call_args.args[0])
+            sleep.assert_not_called()
+
+    def test_windows_completed_task_final_file_wins_a_task_state_race(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)), mock.patch.object(updater, "execution_lock", contextlib.nullcontext):
+            def shell(script, **kwargs):
+                if "'finished'" in script:
+                    root = pathlib.Path(folder) / ".ccs/app-updates"
+                    nonce = json.loads((root / "windows-task-request.json").read_text())["nonce"]
+                    common.write_private_json(root / "windows-task-result.json", {"nonce": nonce, "results": [common.result("omp", "windows", "current")]})
+                    return "finished"
+                return "0"
+            with mock.patch.object(updater, "powershell", side_effect=shell), mock.patch.object(updater.time, "monotonic", side_effect=[0, 5]):
+                rows = updater.windows_interactive_apply()["results"]
+            self.assertEqual([(row["appId"], row["status"]) for row in rows], [("omp", "current")])
+
+    def test_windows_stale_task_result_does_not_end_a_new_run(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)), mock.patch.object(updater, "execution_lock", contextlib.nullcontext):
+            root = pathlib.Path(folder) / ".ccs/app-updates"
+            common.write_private_json(root / "windows-task-result.json", {"nonce": "old", "results": [common.result("omp", "windows", "current")]})
+            with mock.patch.object(updater, "powershell", side_effect=lambda script, **k: "" if "'finished'" in script else "0"), mock.patch.object(updater.time, "monotonic", side_effect=[0, 5, 1000]), mock.patch.object(updater.time, "sleep"):
+                rows = updater.windows_interactive_apply()["results"]
+            self.assertTrue(all(row["messageCode"] == "host_timeout" for row in rows))
+
+    def test_windows_exited_task_keeps_progress_written_during_the_state_query(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)), mock.patch.object(updater, "execution_lock", contextlib.nullcontext):
+            def shell(script, **kwargs):
+                if "'finished'" in script:
+                    root = pathlib.Path(folder) / ".ccs/app-updates"
+                    nonce = json.loads((root / "windows-task-request.json").read_text())["nonce"]
+                    common.write_private_json(root / "windows-task-progress.json", {"nonce": nonce, "events": [{"event": "result", "result": common.result("omp", "windows", "updated")}]})
+                    return "finished"
+                return "0"
+            events = []
+            with mock.patch.object(updater, "powershell", side_effect=shell), mock.patch.object(updater.time, "monotonic", side_effect=[0, 5]):
+                rows = updater.windows_interactive_apply(events.append)["results"]
+            self.assertEqual(next(row for row in rows if row["appId"] == "omp")["status"], "updated")
+            self.assertEqual([event["result"]["appId"] for event in events], ["omp"])
+            self.assertTrue(all(row["messageCode"] == "task_failed" for row in rows if row["appId"] != "omp"))
+
+    def test_windows_unreadable_run_baseline_never_queues_the_task(self):
+        for baseline in ("", "not-a-time", "-1", None):
+            with self.subTest(baseline=baseline), tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)), mock.patch.object(updater, "execution_lock", contextlib.nullcontext):
+                with mock.patch.object(updater, "powershell", return_value=baseline) as command, self.assertRaises(common.UpdateFailure) as raised:
+                    updater.windows_interactive_apply()
+                self.assertEqual(raised.exception.code, "readiness_unknown")
+                self.assertEqual(command.call_count, 1)
+                self.assertFalse((pathlib.Path(folder) / ".ccs/app-updates/windows-task-request.json").exists())
 
     def test_desktop_budget_reserves_recovery_and_never_starts_at_limit(self):
         with mock.patch.object(desktop.time, "monotonic", return_value=100):

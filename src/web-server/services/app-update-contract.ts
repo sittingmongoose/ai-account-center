@@ -126,6 +126,7 @@ export const MESSAGES = {
   codex_busy: 'Codex is busy with a task; run Update apps again when it is idle.',
   check_timeout: 'Check timed out: the app did not answer in time.',
   host_timeout: 'Timed out: this computer did not finish in time.',
+  task_failed: "The Windows updater task stopped before reporting this app's result.",
   held_for_review:
     'Update held: the newest Antigravity version is waiting for a switching review; the reviewed version stays installed.',
   held_unchecked:

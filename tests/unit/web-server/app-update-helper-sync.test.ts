@@ -9,9 +9,12 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { inflateSync } from 'zlib';
 import {
   HELPER_FILES,
   helperPublishScript,
+  helperExtract,
+  helperHashQuery,
   helperArchiveArgs,
   localHelperChecksums,
 } from '../../../src/web-server/services/app-update-hosts';
@@ -90,6 +93,43 @@ describe('remote helper sync', () => {
       expect(fs.readFileSync(path.join(target, name), 'utf8')).toBe(`fixture ${name}\n`);
   });
 
+  it('publishes a complete Windows manifest below the cmd.exe command limit', () => {
+    const root = fixtureRoot();
+    const hashes = localHelperChecksums(root);
+    const command = helperExtract('windows', hashes);
+    expect(command.length).toBeLessThan(8191);
+    const powershell = Buffer.from(command.split(' ').at(-1)!, 'base64').toString('utf16le');
+    const match = /^& python\.exe -c '([^']+)' ([A-Za-z0-9+/=]+); exit \$LASTEXITCODE$/.exec(
+      powershell
+    );
+    expect(match).not.toBeNull();
+    const [, bootstrap, encoded] = match!;
+    expect(inflateSync(Buffer.from(encoded, 'base64')).toString()).toBe(
+      helperPublishScript(hashes)
+    );
+
+    // Exercise the transmitted bootstrap with a binary archive in an isolated
+    // home. Quoting and compression must not consume or alter the tar on stdin.
+    const home = temporary('aac-windows-helper-home-');
+    const setup = `import pathlib; pathlib.Path.home = classmethod(lambda cls: pathlib.Path(${JSON.stringify(home)})); `;
+    const archive = spawnSync('tar', helperArchiveArgs(root));
+    expect(archive.status).toBe(0);
+    const run = spawnSync(
+      process.platform === 'win32' ? 'python' : 'python3',
+      ['-c', setup + bootstrap, encoded],
+      { input: archive.stdout }
+    );
+    expect(run.status).toBe(0);
+    const state = path.join(home, '.ccs', 'app-updates');
+    const generation = fs
+      .readFileSync(path.join(state, 'app_updates.py'), 'utf8')
+      .split(/\r?\n/)[0]
+      .split(' ')
+      .at(-1)!;
+    for (const name of HELPER_FILES)
+      expect(fs.readFileSync(path.join(state, generation, name), 'utf8')).toBe(`fixture ${name}\n`);
+  });
+
   it('keeps the previous launcher and state on an incomplete or corrupt archive', () => {
     const root = fixtureRoot();
     const home = temporary('aac-helper-publish-');
@@ -118,6 +158,113 @@ describe('remote helper sync', () => {
       'pending.json',
     ]);
   });
+
+  it('republishes an old Windows generation even when all helper bytes match', () => {
+    const root = fixtureRoot();
+    const home = temporary('aac-helper-access-migration-');
+    const state = path.join(home, '.ccs', 'app-updates');
+    const generation = 'helpers-' + '1'.repeat(32);
+    fs.mkdirSync(path.join(state, generation), { recursive: true });
+    for (const name of HELPER_FILES)
+      fs.writeFileSync(path.join(state, generation, name), `fixture ${name}\n`);
+    const powershell = Buffer.from(
+      helperHashQuery('windows').split(' ').at(-1)!,
+      'base64'
+    ).toString('utf16le');
+    const encoded = /^& python\.exe -c '[^']+' ([A-Za-z0-9+/=]+); exit \$LASTEXITCODE$/.exec(
+      powershell
+    )![1];
+    const script = inflateSync(Buffer.from(encoded, 'base64'))
+      .toString()
+      .replace('pathlib.Path.home()', `pathlib.Path(${JSON.stringify(home)})`);
+    const query = () =>
+      spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], {
+        encoding: 'utf8',
+      });
+    fs.writeFileSync(
+      path.join(state, 'app_updates.py'),
+      `# aac-helpers: ${generation}\nimport pathlib\n`
+    );
+    const old = query();
+    expect(old.status).toBe(0);
+    expect(old.stdout).toBe('');
+    fs.writeFileSync(
+      path.join(state, 'app_updates.py'),
+      `# aac-helpers: ${generation}\n# aac-helpers-format: 2\n`
+    );
+    const current = query();
+    expect(current.status).toBe(0);
+    expect(current.stdout.trim().split(/\r?\n/)).toHaveLength(HELPER_FILES.length);
+    for (const [name, hash] of Object.entries(localHelperChecksums(root)))
+      expect(current.stdout).toContain(`${hash}  ${name}`);
+  });
+
+  it('leaves the previous generation selected when Windows identity or ACL setup fails', () => {
+    const root = fixtureRoot();
+    const archive = spawnSync('tar', helperArchiveArgs(root));
+    expect(archive.status).toBe(0);
+    for (const failure of ['identity', 'acl']) {
+      const home = temporary('aac-helper-access-failure-');
+      const state = path.join(home, '.ccs', 'app-updates');
+      fs.mkdirSync(state, { recursive: true });
+      fs.writeFileSync(path.join(state, 'app_updates.py'), 'previous launcher');
+      const script = helperPublishScript(localHelperChecksums(root))
+        .replace('pathlib.Path.home()', `pathlib.Path(${JSON.stringify(home)})`)
+        .replace("if os.name == 'nt':", 'if True:');
+      const setup = `import subprocess\nsubprocess.check_output = lambda *a, **k: ${failure === 'identity' ? "'not-a-sid'" : "'S-1-5-21-1-2-3-1001'"}\ndef fail(*a, **k):\n raise OSError('fixture ACL failure')\nsubprocess.run = fail\n`;
+      const run = spawnSync(
+        process.platform === 'win32' ? 'python' : 'python3',
+        ['-c', setup + script],
+        { input: archive.stdout }
+      );
+      expect(run.status).not.toBe(0);
+      expect(fs.readdirSync(state)).toEqual(['app_updates.py']);
+      expect(fs.readFileSync(path.join(state, 'app_updates.py'), 'utf8')).toBe('previous launcher');
+    }
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'grants the Windows user inheritable access to the published helpers',
+    () => {
+      const root = fixtureRoot();
+      const home = temporary('aac-helper-user-acl-');
+      const archive = spawnSync('tar', helperArchiveArgs(root));
+      const script = helperPublishScript(localHelperChecksums(root)).replace(
+        'pathlib.Path.home()',
+        `pathlib.Path(${JSON.stringify(home)})`
+      );
+      const run = spawnSync('python', ['-c', script], { input: archive.stdout });
+      expect(run.status).toBe(0);
+      const state = path.join(home, '.ccs', 'app-updates');
+      const generation = fs
+        .readFileSync(path.join(state, 'app_updates.py'), 'utf8')
+        .split(/\r?\n/)[0]
+        .split(' ')
+        .at(-1)!;
+      const targets = [
+        state,
+        path.join(state, generation),
+        path.join(state, generation, 'app_updates.py'),
+      ]
+        .map((value) => `'${value.replace(/'/g, "''")}'`)
+        .join(',');
+      const inspect = `$ErrorActionPreference='Stop'; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; @(@(${targets}) | ForEach-Object { $item=Get-Item -LiteralPath $_; $acl=Get-Acl -LiteralPath $_; @($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference -eq $sid -and $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band 2032127) -eq 2032127 -and (($item.PSIsContainer -and ($_.InheritanceFlags -band 3) -eq 3) -or (-not $item.PSIsContainer -and $_.IsInherited)) }).Count }) | ConvertTo-Json -Compress`;
+      const acl = spawnSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-EncodedCommand',
+          Buffer.from(inspect, 'utf16le').toString('base64'),
+        ],
+        { encoding: 'utf8' }
+      );
+      expect(acl.status).toBe(0);
+      const granted = JSON.parse(acl.stdout.trim());
+      expect(granted).toHaveLength(3);
+      expect(granted.every((count: number) => count > 0)).toBe(true);
+    }
+  );
 
   it('hashes the runtime from the build output beside the source helpers', () => {
     const root = fixtureRoot();

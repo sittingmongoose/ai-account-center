@@ -394,7 +394,10 @@ export class AppUpdateService {
         if (index < 0) job.results.push(row);
         else if (
           row.message !== MESSAGES.helper_invalid &&
-          !(row.status === 'unknown' && row.message === MESSAGES.host_timeout)
+          !(
+            row.status === 'unknown' &&
+            (row.message === MESSAGES.host_timeout || row.message === MESSAGES.task_failed)
+          )
         )
           job.results[index] = row;
       }
