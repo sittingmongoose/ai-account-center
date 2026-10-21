@@ -11,7 +11,7 @@ SHELL ["/bin/bash", "-lc"]
 # Pin bun version for reproducible builds
 ARG BUN_VERSION=1.3.9
 ARG RUST_VERSION=1.98.0
-ARG WASM_PACK_VERSION=0.13.1
+ARG WASM_PACK_VERSION=0.15.0
 ENV BUN_INSTALL=/usr/local/bun
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup

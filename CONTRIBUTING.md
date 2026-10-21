@@ -7,9 +7,12 @@ authorship, copyright, license and repository history are retained.
 
 ## Source setup
 
-Use Node.js 22, matching CI, Bun, Rust 1.92 or newer with
-`wasm32-unknown-unknown`, and wasm-pack. Slint/runtime compiler are pinned to
+Use Node.js 22, matching CI, Bun, Rust 1.98.0 with
+`wasm32-unknown-unknown`, and wasm-pack **0.15.0**. Slint/runtime compiler are pinned to
 **1.18.1** in the dashboard manifest and lockfile.
+Install the build tool with `cargo install wasm-pack --version 0.15.0 --locked`.
+The dashboard's target-specific Cargo configuration enables SIMD and tail calls;
+see [browser requirements](web-dashboard/README.md#build).
 
 ```bash
 git clone --branch feat/activate-in-place https://github.com/sittingmongoose/ai-account-center.git

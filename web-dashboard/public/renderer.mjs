@@ -19,6 +19,25 @@ export function requireWebGL(createCanvas) {
   throw error;
 }
 
+// A module with one SIMD function and a tail call to it. Validation checks actual
+// engine support, including disabled features, without downloading the runtime.
+const WASM_FEATURE_PROBE = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 3, 2, 0, 0,
+  10, 27, 2, 20, 0, 253, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  11, 4, 0, 18, 0, 11,
+]);
+export const WASM_REQUIRED_MESSAGE = 'This dashboard needs a newer browser. Update Safari, Chrome, Edge or Firefox, then reload.';
+export function wasmFeaturesAvailable(engine = globalThis.WebAssembly) {
+  try { return engine?.validate?.(WASM_FEATURE_PROBE) === true; }
+  catch { return false; }
+}
+export function requireWasmFeatures(engine) {
+  if (wasmFeaturesAvailable(engine)) return;
+  const error = new Error(WASM_REQUIRED_MESSAGE);
+  error.code = 'wasm_features_required';
+  throw error;
+}
+
 // Provider marks in dark mode (MARKS-HIDPI). Slint 1.18.1 on the web hands every SVG image to the
 // browser as an <img> with an image/svg+xml blob URL, and femtovg 0.27 uploads that element with
 // texSubImage2D. Slint flags those textures as premultiplied (i-slint-renderer-femtovg 1.18.1

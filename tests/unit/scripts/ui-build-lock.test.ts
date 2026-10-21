@@ -368,6 +368,7 @@ describe('UI build defaults', () => {
     const run = (command: string, _args: string[], options: { env: Record<string, string> }) => {
       if (command.includes('rustc')) return 'rustc 1.98.0 (fixture)';
       if (command.includes('rustup')) return 'wasm32-unknown-unknown\n';
+      if (command.includes('wasm-pack') && _args[0] === '--version') return 'wasm-pack 0.15.0\n';
       if (command.includes('wasm-pack') && _args[0] === 'build')
         seen.push(options.env.CARGO_TARGET_DIR);
       // Stop right after the build call; the output steps are covered by build-ui tests.

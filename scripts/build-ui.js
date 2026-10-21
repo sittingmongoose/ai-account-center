@@ -11,7 +11,8 @@ const { parse } = require('smol-toml');
 const { runWithUiBuildLock, wasmTargetDir } = require('./ui-build-lock');
 
 const SLINT_VERSION = '1.18.1';
-const MINIMUM_RUST_MINOR = 92;
+const WASM_PACK_VERSION = '0.15.0';
+const MINIMUM_RUST_MINOR = 98;
 const WASM_NAME = 'ccs_account_dashboard';
 /** The one import of the wasm-bindgen glue that the packaged bridge.js rewrites. */
 const BRIDGE_IMPORT = `'./pkg/${WASM_NAME}.js'`;
@@ -69,24 +70,36 @@ function toolPath(name, cargoBin) {
   return fs.existsSync(candidate) ? candidate : name;
 }
 
-function assertToolchain(run, env, cargoBin) {
-  const rust = run(toolPath('rustc', cargoBin), ['--version'], { env, capture: true });
+function assertToolchain(run, env, cargoBin, crate) {
+  const rust = run(toolPath('rustc', cargoBin), ['--version'], { cwd: crate, env, capture: true });
   const version = /^rustc (\d+)\.(\d+)\./.exec(rust);
   if (
     !version ||
     Number(version[1]) < 1 ||
     (Number(version[1]) === 1 && Number(version[2]) < MINIMUM_RUST_MINOR)
   ) {
-    throw new Error('The Slint dashboard requires Rust 1.92 or newer. Run rustup update stable.');
+    throw new Error(
+      'The Slint dashboard requires Rust 1.98 or newer. Install the pinned browser toolchain with rustup toolchain install 1.98.0.'
+    );
   }
   const targets = run(toolPath('rustup', cargoBin), ['target', 'list', '--installed'], {
+    cwd: crate,
     env,
     capture: true,
   });
   if (!targets.split(/\s+/).includes('wasm32-unknown-unknown')) {
     throw new Error('Install the browser target with rustup target add wasm32-unknown-unknown.');
   }
-  run(toolPath('wasm-pack', cargoBin), ['--version'], { env, capture: true });
+  const wasmPack = run(toolPath('wasm-pack', cargoBin), ['--version'], {
+    cwd: crate,
+    env,
+    capture: true,
+  });
+  if (wasmPack.trim() !== `wasm-pack ${WASM_PACK_VERSION}`) {
+    throw new Error(
+      `The dashboard requires wasm-pack ${WASM_PACK_VERSION}. Run cargo install wasm-pack --version ${WASM_PACK_VERSION} --locked.`
+    );
+  }
 }
 
 function assertLockedSlint(lock) {
@@ -111,7 +124,16 @@ function sourceFingerprint(crate) {
       for (const entry of fs.readdirSync(absolute).sort()) collect(path.join(relative, entry));
     } else if (stat.isFile()) files.push(relative);
   }
-  for (const input of ['Cargo.toml', 'Cargo.lock', 'build.rs', 'src', 'ui', 'public'])
+  for (const input of [
+    '.cargo/config.toml',
+    'rust-toolchain.toml',
+    'Cargo.toml',
+    'Cargo.lock',
+    'build.rs',
+    'src',
+    'ui',
+    'public',
+  ])
     collect(input);
   const hash = crypto.createHash('sha256');
   for (const file of files.sort()) {
@@ -267,7 +289,7 @@ function buildUi(options = {}) {
 
   assertSlintPin(parse(fs.readFileSync(path.join(crate, 'Cargo.toml'), 'utf8')));
   assertLockedSlint(parse(fs.readFileSync(path.join(crate, 'Cargo.lock'), 'utf8')));
-  assertToolchain(run, env, cargoBin);
+  assertToolchain(run, env, cargoBin, crate);
   // wasm-pack writes into this worktree's own web-dashboard/pkg (--out-dir is crate-relative),
   // even though the cargo target folder is shared.
   // One release wasm build (a multi-GB fat-LTO link) at a time per computer.

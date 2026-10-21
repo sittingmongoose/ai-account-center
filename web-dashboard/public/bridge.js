@@ -11,6 +11,7 @@ import { analyticsView, analyticsChoiceId, analyticsSlintModel } from './analyti
 import { usageView, usageHead, apiRangeFor, trendPaths, mixGeo, parseIsoDay, addDays, RANGES, H, D } from './analytics-usage.mjs';
 import { quotaView, agendaView, QUOTA_PROVIDERS } from './analytics-quota.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
+import { requireWasmFeatures, WASM_REQUIRED_MESSAGE } from './renderer.mjs';
 import { premultiplySvgTextureUploads } from './renderer.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
@@ -1316,6 +1317,7 @@ function watchMedia(query, apply) {
 // ---------------------------------------------------------------- boot
 try {
   requireWebGL();
+  requireWasmFeatures();
   // Before Slint creates its first image: SVG marks must upload premultiplied (renderer.mjs).
   premultiplySvgTextureUploads();
   // The session answers while the wasm downloads and compiles; checkSession awaits both below.
@@ -1387,6 +1389,6 @@ try {
   setInterval(() => { if (authenticated && !refreshing && !busy) render(); }, 60_000);
 } catch (error) {
   const status = document.querySelector('#loading');
-  status.hidden = false; status.textContent = error?.code === 'webgl_required' ? WEBGL_REQUIRED_MESSAGE : 'Unable to start the Slint dashboard. Reload to try again.';
+  status.hidden = false; status.textContent = error?.code === 'webgl_required' ? WEBGL_REQUIRED_MESSAGE : error?.code === 'wasm_features_required' ? WASM_REQUIRED_MESSAGE : 'Unable to start the Slint dashboard. Reload to try again.';
   console.error('Slint dashboard failed to start.', error);
 }

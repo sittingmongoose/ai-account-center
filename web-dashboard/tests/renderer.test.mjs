@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webGlAvailable, requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from '../public/renderer.mjs';
+import { webGlAvailable, requireWebGL, WEBGL_REQUIRED_MESSAGE, wasmFeaturesAvailable, requireWasmFeatures, WASM_REQUIRED_MESSAGE, startSlintDashboard } from '../public/renderer.mjs';
+
+test('the SIMD and tail-call probe validates on a supporting WebAssembly engine', () => {
+  assert.equal(wasmFeaturesAvailable(), true);
+  assert.doesNotThrow(() => requireWasmFeatures());
+});
+
+test('missing or disabled Wasm features yield a browser update requirement', () => {
+  for (const engine of [null, {}, { validate: () => false }, { validate: () => { throw new Error('disabled'); } }]) {
+    assert.equal(wasmFeaturesAvailable(engine), false);
+    assert.throws(() => requireWasmFeatures(engine), error => error.code === 'wasm_features_required' && error.message === WASM_REQUIRED_MESSAGE);
+  }
+});
 
 test('denied or unavailable WebGL yields a readable startup requirement', () => {
   for (const createCanvas of [() => ({ getContext: () => null }), () => ({ getContext: () => { throw new Error('blocked'); } })]) {

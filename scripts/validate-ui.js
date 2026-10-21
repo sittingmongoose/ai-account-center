@@ -27,7 +27,7 @@ function validateUi(options = {}) {
     toolPath('cargo', cargoBin),
     ['fmt', '--manifest-path', path.join(crate, 'Cargo.toml'), '--check'],
     {
-      cwd: repoRoot,
+      cwd: crate,
       env,
     }
   );
