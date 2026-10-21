@@ -165,7 +165,7 @@ class PlanChangeTests(unittest.TestCase):
 
     def test_plan_transition_cannot_change_web_user_team_or_portal_tier(self):
         for mutation, code in ((lambda: setattr(self, "user", "other-user"), "account_mismatch"),
-                               (lambda: setattr(self, "teams", [43]), "identity_unavailable"),
+                               (lambda: setattr(self, "teams", [43]), "team_mismatch"),
                                (lambda: self.quota.update(tier=OLD_PLAN), "plan_mismatch")):
             with self.subTest(code=code):
                 self.user, self.teams = "synthetic-user", [42]

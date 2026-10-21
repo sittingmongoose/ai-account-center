@@ -93,7 +93,7 @@ class CacheTests(unittest.TestCase):
             calls = []
 
             def portal(route):
-                # No usable email, and this session cannot read the capsule's verified team.
+                # No usable email, and this session no longer lists the capsule's verified team.
                 calls.append(route)
                 if route == "/api/portal/teams":
                     return {"teams": [{"team_id": 43, "team_name": "sk-private"}]}
@@ -106,10 +106,11 @@ class CacheTests(unittest.TestCase):
                 result = helpers.account("muse", "mac")
                 usage.fetch_muse(helpers.Credential(ACCESS, email=EMAIL), result, home)
             self.assertEqual(result["status"], "unavailable")
-            self.assertEqual(result["failureCode"], "identity_unavailable")
+            # A definite team loss resets the dashboard binding; it is not a transient lookup.
+            self.assertEqual(result["failureCode"], "team_mismatch")
             self.assertEqual(result["windows"], [])
             self.assertIsNone(result["sampledAt"])
-            self.assertEqual(result["message"], muse.ERROR_MESSAGES["identity_unavailable"])
+            self.assertEqual(result["message"], muse.ERROR_MESSAGES["team_mismatch"])
             self.assertNotIn("sk-private", json.dumps(result))
             request.assert_not_called()
             self.assertEqual(calls, ["/api/auth/me", "/api/portal/teams"])
