@@ -25,7 +25,7 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 
 ## 🎬 Demo
 
-<img src="assets/screenshots/demo.webp" width="100%" alt="Demo: the Home overview, a guarded Codex account switch, Analytics, Accounts and Settings, and Update apps">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/demo.webp" width="100%" alt="Demo: the Home overview, a guarded Codex account switch, Analytics, Accounts and Settings, and Update apps">
 
 ---
 
@@ -54,53 +54,53 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 <table>
 <tr>
 <td width="50%" valign="top">
-<img src="assets/screenshots/home-light.png" width="100%" alt="Home dashboard, light theme">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/home-light.png" width="100%" alt="Home dashboard, light theme">
 <p><b>🏠 Home</b><br>Every account, every limit. Colors warn as a limit fills; the dark tick is the auto-switch point.</p>
 </td>
 <td width="50%" valign="top">
-<img src="assets/screenshots/home-dark.png" width="100%" alt="Home dashboard, dark theme">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/home-dark.png" width="100%" alt="Home dashboard, dark theme">
 <p><b>🌙 Dark theme</b><br>Light, dark or follow the system, everywhere: web, phone and both trays.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<img src="assets/screenshots/analytics-overview.png" width="100%" alt="Analytics overview with totals, usage trend and cost by model">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/analytics-overview.png" width="100%" alt="Analytics overview with totals, usage trend and cost by model">
 <p><b>📈 Analytics</b><br>Totals, the usage trend and cost by model and token type.</p>
 </td>
 <td width="50%" valign="top">
-<img src="assets/screenshots/analytics-activity.png" width="100%" alt="Analytics sessions, cache efficiency and weekday by hour heatmap">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/analytics-activity.png" width="100%" alt="Analytics sessions, cache efficiency and weekday by hour heatmap">
 <p><b>🕒 Sessions and habits</b><br>Sessions, cache savings and when you actually use the CLIs.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<img src="assets/screenshots/analytics-quota-history.png" width="100%" alt="Quota history for every account and the upcoming resets agenda">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/analytics-quota-history.png" width="100%" alt="Quota history for every account and the upcoming resets agenda">
 <p><b>📉 Quota history</b><br>Each account's limit over the week, plus every upcoming reset.</p>
 </td>
 <td width="50%" valign="top">
-<img src="assets/screenshots/switch-review.png" width="100%" alt="Guarded Codex switch review listing the processes that will stop">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/switch-review.png" width="100%" alt="Guarded Codex switch review listing the processes that will stop">
 <p><b>🛡️ Guarded switching</b><br>A manual switch while Codex is busy lists exactly what will stop first.</p>
 </td>
 </tr>
 <tr>
 <td colspan="2">
-<img src="assets/screenshots/accounts.png" width="100%" alt="Accounts and Settings page">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/accounts.png" width="100%" alt="Accounts and Settings page">
 <p><b>⚙️ Accounts & Settings</b><br>Add or remove accounts, choose what shows where, sign-in and device security, auto-switch policies and update results.</p>
 </td>
 </tr>
 <tr>
 <td colspan="2">
-<img src="assets/screenshots/pwa-phones.png" width="100%" alt="The installed phone app: Home, Codex auto-switch, Analytics and dark Home">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/pwa-phones.png" width="100%" alt="The installed phone app: Home, Codex auto-switch, Analytics and dark Home">
 <p><b>📱 Phone app (PWA)</b><br>Install it from Safari or Chrome. The same live data, laid out for one hand.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
-<img src="assets/screenshots/tray-mac-light.png" width="100%" alt="Mac menu-bar app panel">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/tray-mac-light.png" width="100%" alt="Mac menu-bar app panel">
 <p><b>🍎 Mac menu bar</b> (<a href="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/tray-mac-dark.png">dark</a>)<br>SwiftUI. Opens from the menu bar or ⌥⌘A.</p>
 </td>
 <td width="50%" valign="top">
-<img src="assets/screenshots/tray-win-dark.png" width="100%" alt="Windows tray app panel">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/tray-win-dark.png" width="100%" alt="Windows tray app panel">
 <p><b>🪟 Windows tray</b> (<a href="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/tray-win-light.png">light</a>)<br>WPF on .NET 10. Opens from the tray or Ctrl+Alt+A.</p>
 </td>
 </tr>
