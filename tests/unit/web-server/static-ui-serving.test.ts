@@ -73,14 +73,21 @@ function buildFixtureUi(root: string): typeof manifest {
   fs.writeFileSync(path.join(crate, 'pkg', 'ccs_account_dashboard_bg.wasm'), WASM);
   return buildUi({
     repoRoot: root,
-    run: (command: string) =>
+    run: (command: string, args: string[]) =>
       command.includes('rustc')
         ? 'rustc 1.98.0 (fixture)'
         : command.includes('rustup')
           ? 'wasm32-unknown-unknown\n'
           : command.includes('wasm-pack')
             ? 'wasm-pack 0.15.0\n'
-            : '',
+            : args[0]?.endsWith('tail-call-compat.mjs')
+              ? JSON.stringify({
+                  policy: 'webkit-ipint-boundaries-v1',
+                  imported: 0,
+                  indirect: 0,
+                  internal: 0,
+                })
+              : '',
     readCommit: () => '8fb5e3de',
   });
 }

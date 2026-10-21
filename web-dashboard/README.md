@@ -40,7 +40,9 @@ Both `slint` and `slint-build` are pinned to **=1.18.1** in Cargo.toml and locke
 in Cargo.lock. The repository builder checks the wasm-pack version before replacing
 the packaged UI. wasm-pack 0.15.0 still downloads Binaryen v117, which cannot
 validate the installed Rust 1.98 output, so its optional wasm-opt pass is disabled.
-Rust release optimization and LTO remain enabled.
+Rust release optimization and LTO remain enabled. The repository builder uses
+the pinned Binaryen 132 JavaScript API for a final compatibility transform;
+it does not run Binaryen's general optimizer.
 The release profile uses `opt-level = 2` to favor interactive performance; the
 measured download-size tradeoff is recorded below.
 `web-dashboard/rust-toolchain.toml` pins the Rust compiler, target and formatter
@@ -54,6 +56,18 @@ gets a browser-update message before the runtime downloads. Relaxed SIMD stays
 disabled pending verified support across shipping Safari/iOS versions. Memory64,
 garbage collection and exception unwinding are not enabled; they do not supply a
 general speed optimization for this Rust/Slint application.
+
+The final build replaces tail calls to imports and indirect tail calls with
+ordinary calls followed by explicit returns. This avoids the boundary path in
+[WebKit bug 325447](https://bugs.webkit.org/show_bug.cgi?id=325447), which can
+crash iOS 27 WebContent with `EXC_ARM_PAC_FAIL` while authenticating a Wasm return
+address. Rust 1.98, release optimization, SIMD, and direct internal tail calls
+remain enabled. Indirect calls can use additional stack frames, so the transform
+is specific to this dashboard; it is not a general tail-call polyfill. The
+builder validates both modules, records transformed/retained counts in the build
+manifest, and hashes/compresses the result. Wasm exception handlers and new
+unsupported instructions fail the build until reviewed. The build tool is part
+of the source fingerprint and source package.
 
 The repository UI builder stages all `public/` files with `pkg/` at the same
 relative location directly into `dist/ui/`. The public entry
@@ -214,7 +228,9 @@ so these results do not establish a startup improvement. Feature flags alone
 showed no consistent CPU gain. Model timings use 2,000 warm-up pushes followed by
 seven batches of 100 alternating fixture models; frame work measures JavaScript
 and Wasm callback CPU time, not delivered FPS. These are local fixture
-measurements, not live-provider refresh or mobile Safari benchmarks.
+measurements, not live-provider refresh or mobile Safari benchmarks. They predate
+the iOS tail-call boundary compatibility pass; they do not establish performance
+for that final module or a speed improvement on iOS.
 
 ## Validation
 
