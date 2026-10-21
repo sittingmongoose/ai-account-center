@@ -57,8 +57,12 @@ fi
 node scripts/deploy-lineage.js check
 
 # The build above is complete; do not invoke prepack a second time.
-PACK_RESULT=$(npm pack --ignore-scripts --json)
-TARBALL=$(node -e 'const p=JSON.parse(process.argv[1]); if(p.length!==1 || !p[0].filename.endsWith(".tgz")) process.exit(1); process.stdout.write(p[0].filename)' "$PACK_RESULT")
+# npm's JSON lists every packed file (about 290 KB), past Linux's 128 KB limit for
+# one argument, so node reads it from a file instead of argv.
+PACK_RESULT=$(mktemp)
+trap 'rm -f "$PACK_RESULT"' EXIT
+npm pack --ignore-scripts --json > "$PACK_RESULT"
+TARBALL=$(node -e 'const p=JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); if(p.length!==1 || !p[0].filename.endsWith(".tgz")) process.exit(1); process.stdout.write(p[0].filename)' "$PACK_RESULT")
 if [ ! -f "$TARBALL" ]; then
   echo "[X] Local package tarball was not created." >&2
   exit 1
