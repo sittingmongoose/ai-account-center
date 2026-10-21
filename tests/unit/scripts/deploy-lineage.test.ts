@@ -24,6 +24,7 @@ const lineage = require(path.join(SCRIPTS, 'deploy-lineage.js')) as {
     commit: string;
     branch: string | null;
     dirty: boolean;
+    onMain: boolean;
     lineage: string[];
   } | null;
   recordBuild: (root: string, outDir?: string) => { commit: string | null };
@@ -55,7 +56,13 @@ function packaged(info: Record<string, unknown> | null): void {
   else
     fs.writeFileSync(
       file,
-      JSON.stringify({ version: 1, branch: 'main', builtAt: '2026-10-21T00:00:00.000Z', ...info })
+      JSON.stringify({
+        version: 1,
+        branch: 'main',
+        onMain: true,
+        builtAt: '2026-10-21T00:00:00.000Z',
+        ...info,
+      })
     );
 }
 
@@ -98,6 +105,30 @@ describe('deployment lineage guard', () => {
     expect(result.message).toContain('does not contain bbbbbbbb (fix/muse-usage-refresh)');
     expect(result.message).toContain('Merge fix/muse-usage-refresh into main');
     expect(result.message).toContain('AAC_ALLOW_DEPLOY_REGRESSION=1');
+  });
+
+  it('refuses a committed build that was never merged into origin/main', () => {
+    packaged({
+      commit: C,
+      branch: 'fix/muse-usage-refresh',
+      dirty: false,
+      onMain: false,
+      lineage: [C, A],
+    });
+    const result = check();
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(
+      'cccccccc (fix/muse-usage-refresh), which is not on origin/main'
+    );
+    expect(result.message).toContain('Merge it into main, push, then rebuild');
+    deployed(A);
+    expect(check().ok).toBe(false);
+    const file = path.join(packageRoot, 'dist', 'build-info.json');
+    const legacy = JSON.parse(fs.readFileSync(file, 'utf8'));
+    legacy.onMain = undefined;
+    fs.writeFileSync(file, JSON.stringify(legacy));
+    expect(check().ok).toBe(false);
+    expect(check({ AAC_ALLOW_DEPLOY_REGRESSION: '1' }).ok).toBe(true);
   });
 
   it('allows an intentional rollback only with the override and still explains it', () => {
@@ -160,14 +191,20 @@ describe('deployment lineage guard', () => {
     expect(lineage.isSourceCheckout(packageRoot)).toBe(false);
   });
 
-  it('records the full lineage and uncommitted package inputs of a checkout', () => {
+  it('records the full lineage, origin/main membership and uncommitted inputs of a checkout', () => {
+    const origin = path.join(scope, 'origin.git');
     const repo = path.join(scope, 'repo');
+    const other = path.join(scope, 'other');
+    git(scope, 'init', '-q', '--bare', '-b', 'main', origin);
     fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
     git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'remote', 'add', 'origin', origin);
     fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'export const a = 1;\n');
     git(repo, 'add', '.');
     git(repo, 'commit', '-q', '-m', 'first');
     const first = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'push', '-q', 'origin', 'main');
+    expect(lineage.readSourceBuild(repo)?.onMain).toBe(true);
     git(repo, 'checkout', '-q', '-b', 'fix/branch');
     fs.writeFileSync(path.join(repo, 'src', 'b.ts'), 'export const b = 2;\n');
     git(repo, 'add', '.');
@@ -178,8 +215,15 @@ describe('deployment lineage guard', () => {
       commit: second,
       branch: 'fix/branch',
       dirty: false,
+      onMain: false,
       lineage: [second, first],
     });
+    // Merged and pushed from another clone: the stale origin/main ref is refreshed once.
+    git(scope, 'clone', '-q', origin, other);
+    git(other, 'fetch', '-q', repo, 'fix/branch');
+    git(other, 'merge', '-q', '--ff-only', 'FETCH_HEAD');
+    git(other, 'push', '-q', 'origin', 'main');
+    expect(lineage.readSourceBuild(repo)?.onMain).toBe(true);
     fs.writeFileSync(path.join(repo, 'src', 'c.ts'), 'export const c = 3;\n');
     expect(lineage.readSourceBuild(repo)?.dirty).toBe(true);
     expect(lineage.readSourceBuild(path.join(repo, 'src'))).toBeNull();

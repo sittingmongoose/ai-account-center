@@ -28,15 +28,18 @@ into the prefix that already holds `ai-account-center`.
 
 ### Deployment lineage
 
-Install only committed builds of merged `main`. Each build records the commits
-it contains in `dist/build-info.json`; an installed dashboard records the build
-it runs in `~/.ccs/deployed-build.json` and reports that commit. The package
-`postinstall` refuses a package that does not contain the running build, or
-that was built with uncommitted changes, and npm then keeps the previous
-installation. Merge the running branch into `main` and rebuild; set
-`AAC_ALLOW_DEPLOY_REGRESSION=1` only for an intentional rollback. Fixes
-installed from unmerged branches were otherwise removed by the next build of
-`main` (Oct 16 usage deadlines, Oct 20 Muse fallback).
+Install only committed builds of `main` that are pushed to `origin/main`.
+Order: commit, merge into `main`, push, build, install, restart. Each build
+records in `dist/build-info.json` whether `origin/main` contains its commit and
+every commit it contains; an installed dashboard records the build it runs in
+`~/.ccs/deployed-build.json` and reports that commit. The package `postinstall`
+refuses a package that is not on `origin/main`, has uncommitted changes, or
+does not contain the running build, and npm then keeps the previous
+installation. `scripts/dev-install.sh` checks the checkout before building.
+`AAC_ALLOW_DEPLOY_REGRESSION=1` is only for an intentional rollback or an
+emergency. Fixes installed from unmerged branches were otherwise removed by the
+next build of `main` (Oct 16 usage deadlines, Oct 18 OpenCode Go access errors,
+Oct 20 Muse fallback).
 
 ## Source map
 

@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
- * Deployment lineage. A build records every commit it contains in `dist/build-info.json`, the
- * installed dashboard records the build it runs in `<CCS dir>/deployed-build.json`, and
- * installation refuses a package that does not contain that running build.
+ * Deployment lineage. A build records every commit it contains in `dist/build-info.json` and
+ * whether its commit is on origin/main; the installed dashboard records the build it runs in
+ * `<CCS dir>/deployed-build.json`. Installation refuses a package that is not on origin/main,
+ * has uncommitted changes, or does not contain that running build.
  *
  * Fixes installed from unmerged branches were removed by the next package built from main:
  * the Oct 16 usage deadlines by the Oct 20 Muse install, and the Oct 20 Muse fallback by the
  * Oct 21 updater install. A failed postinstall makes npm keep the previous installation.
- * `AAC_ALLOW_DEPLOY_REGRESSION=1` permits an intentional rollback.
+ * `AAC_ALLOW_DEPLOY_REGRESSION=1` permits an intentional rollback or emergency install.
  *
  * Usage: node scripts/deploy-lineage.js record-build   (writes dist/build-info.json)
+ *        node scripts/deploy-lineage.js preflight      (checkout committed and on origin/main)
  *        node scripts/deploy-lineage.js check          (checks this checkout's dist/ build)
  */
 'use strict';
@@ -61,6 +63,24 @@ function short(commit) {
   return commit.slice(0, 8);
 }
 
+function containedIn(repoRoot, commit, ref) {
+  return (
+    spawnSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', commit, ref], {
+      stdio: 'ignore',
+      timeout: 30000,
+      windowsHide: true,
+    }).status === 0
+  );
+}
+
+/** Whether origin/main contains the commit, refreshing a stale origin/main ref once. */
+function isOnMain(repoRoot, commit) {
+  const ref = 'refs/remotes/origin/main';
+  if (containedIn(repoRoot, commit, ref)) return true;
+  git(repoRoot, ['fetch', '--quiet', 'origin', 'main']);
+  return containedIn(repoRoot, commit, ref);
+}
+
 /** The commits a checkout contains, or null outside the top of a git checkout. */
 function readSourceBuild(repoRoot, now = new Date()) {
   const top = git(repoRoot, ['rev-parse', '--show-toplevel']);
@@ -89,6 +109,7 @@ function readSourceBuild(repoRoot, now = new Date()) {
     commit,
     branch: branch === 'HEAD' ? null : safeBranch(branch),
     dirty: status.trim() !== '',
+    onMain: isOnMain(repoRoot, commit),
     builtAt: now.toISOString(),
     lineage,
   };
@@ -100,6 +121,7 @@ function recordBuild(repoRoot, outDir = path.join(repoRoot, 'dist')) {
     commit: null,
     branch: null,
     dirty: null,
+    onMain: null,
     builtAt: new Date().toISOString(),
     lineage: [],
   };
@@ -120,7 +142,8 @@ function readJson(file) {
 
 function parseBuildInfo(value) {
   if (!value || typeof value !== 'object' || value.version !== 1) return null;
-  if (value.commit === null) return { commit: null, branch: null, dirty: null, lineage: [] };
+  if (value.commit === null)
+    return { commit: null, branch: null, dirty: null, onMain: null, lineage: [] };
   if (
     !COMMIT.test(value.commit) ||
     typeof value.dirty !== 'boolean' ||
@@ -133,6 +156,7 @@ function parseBuildInfo(value) {
     commit: value.commit,
     branch: safeBranch(value.branch),
     dirty: value.dirty,
+    onMain: value.onMain === true,
     lineage: value.lineage,
   };
 }
@@ -162,39 +186,63 @@ function describe(commit, branch) {
 }
 
 /**
- * Whether installing the package at `packageRoot` keeps the build this computer's dashboard
- * last ran. Returns `{ ok, message }`; a message with ok=true is a notice.
+ * Whether the package at `packageRoot` is a committed build of origin/main that keeps the
+ * build this computer's dashboard runs. Returns `{ ok, message }`; ok=true with a message is
+ * a notice.
  */
 function checkDeployLineage({ packageRoot, env = process.env }) {
-  const override = env[OVERRIDE] === '1';
   const info = parseBuildInfo(readJson(path.join(packageRoot, 'dist', BUILD_INFO)));
   const ledger = parseLedger(readJson(path.join(ccsDirFrom(env), LEDGER)));
-  let problem = null;
-  if (info?.dirty === true) {
-    problem =
-      `This package was built from ${describe(info.commit, info.branch)} with uncommitted ` +
-      'changes. A later build could not keep them. Commit, merge into main and rebuild.';
-  } else if (ledger?.dirty) {
-    problem =
-      `The dashboard on this computer runs ${describe(ledger.commit, ledger.branch)} with ` +
-      'uncommitted changes, which this package cannot prove it keeps.';
-  } else if (ledger && !info?.commit) {
-    problem =
+  return verdict(buildProblem(info) ?? runningBuildProblem(info, ledger), env);
+}
+
+/** Whether the package keeps the build this computer's dashboard runs. */
+function runningBuildProblem(info, ledger) {
+  if (!ledger) return null;
+  const running = describe(ledger.commit, ledger.branch);
+  if (ledger.dirty)
+    return (
+      `The dashboard on this computer runs ${running} with uncommitted changes, which this ` +
+      'package cannot prove it keeps.'
+    );
+  if (!info?.commit)
+    return (
       'This package does not record the commits it was built from, so it cannot prove it keeps ' +
-      `${describe(ledger.commit, ledger.branch)}, which the dashboard on this computer runs. ` +
-      'Build it from a git checkout.';
-  } else if (ledger && !info.lineage.includes(ledger.commit)) {
-    problem =
-      `This package (${describe(info.commit, info.branch)}) does not contain ` +
-      `${describe(ledger.commit, ledger.branch)}, which the dashboard on this computer runs. ` +
-      `Installing it would remove deployed fixes. Merge ${ledger.branch ?? short(ledger.commit)} ` +
-      'into main, rebuild from main and install that package.';
-  }
+      `${running}, which the dashboard on this computer runs. Build it from a git checkout.`
+    );
+  if (!info.lineage.includes(ledger.commit))
+    return (
+      `This package (${describe(info.commit, info.branch)}) does not contain ${running}, which ` +
+      'the dashboard on this computer runs. Installing it would remove deployed fixes. ' +
+      `Merge ${ledger.branch ?? short(ledger.commit)} into main, rebuild from main and install ` +
+      'that package.'
+    );
+  return null;
+}
+
+/** A build's own problem: uncommitted changes, or a commit that origin/main does not contain. */
+function buildProblem(info) {
+  if (info?.dirty === true)
+    return (
+      `This package was built from ${describe(info.commit, info.branch)} with uncommitted ` +
+      'changes. A later build could not keep them. Commit, merge into main and rebuild.'
+    );
+  if (info?.commit && !info.onMain)
+    return (
+      `This package was built from ${describe(info.commit, info.branch)}, which is not on ` +
+      'origin/main. A fix installed before it is merged is removed by the next build of main. ' +
+      'Merge it into main, push, then rebuild and install.'
+    );
+  return null;
+}
+
+function verdict(problem, env) {
+  const override = env[OVERRIDE] === '1';
   if (!problem) return { ok: true, message: null };
   if (override) return { ok: true, message: `${problem} Installing anyway because ${OVERRIDE}=1.` };
   return {
     ok: false,
-    message: `${problem} For an intentional rollback, set ${OVERRIDE}=1.`,
+    message: `${problem} Only for an intentional rollback or emergency, set ${OVERRIDE}=1.`,
   };
 }
 
@@ -203,6 +251,7 @@ module.exports = {
   LEDGER,
   OVERRIDE,
   ccsDirFrom,
+  buildProblem,
   checkDeployLineage,
   isSourceCheckout,
   parseBuildInfo,
@@ -219,18 +268,31 @@ if (require.main === module) {
     if (info.commit) {
       console.log(
         `[OK] Build lineage: ${describe(info.commit, info.branch)}, ${info.lineage.length} commits` +
-          (info.dirty ? ', with uncommitted changes' : '')
+          (info.onMain
+            ? ', on origin/main'
+            : ', NOT on origin/main (installation will refuse it)') +
+          (info.dirty ? ', with uncommitted changes (installation will refuse it)' : '')
       );
     } else {
       console.log('[!] Build lineage: not a git checkout; installation cannot verify this build.');
     }
+  } else if (command === 'preflight') {
+    // Before a long build: the checkout itself must be committed and on origin/main.
+    const info = readSourceBuild(repoRoot);
+    const result = verdict(
+      info ? buildProblem(info) : 'The checkout commits could not be read with git.',
+      process.env
+    );
+    if (result.message)
+      console[result.ok ? 'log' : 'error'](`[${result.ok ? '!' : 'X'}] ${result.message}`);
+    process.exitCode = result.ok ? 0 : 1;
   } else if (command === 'check') {
     const result = checkDeployLineage({ packageRoot: repoRoot });
     if (result.message)
       console[result.ok ? 'log' : 'error'](`[${result.ok ? '!' : 'X'}] ${result.message}`);
     process.exitCode = result.ok ? 0 : 1;
   } else {
-    console.error('Usage: node scripts/deploy-lineage.js record-build|check');
+    console.error('Usage: node scripts/deploy-lineage.js record-build|preflight|check');
     process.exitCode = 2;
   }
 }
