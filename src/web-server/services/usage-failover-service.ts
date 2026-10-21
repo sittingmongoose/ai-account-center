@@ -15,6 +15,11 @@ import {
 } from './usage-failover-claude-extras';
 import { readUsageCache, writeUsageCache } from './usage-failover-cache';
 import {
+  isBoundMusePeer,
+  parseMuseUsagePeer,
+  type MuseUsagePeer,
+} from './muse-usage-peer-bindings';
+import {
   hasUsage,
   isRecord,
   parseUsageCandidate,
@@ -50,6 +55,7 @@ interface State {
   primaryFailure: string | null;
   observedPlan: string | null;
   observedPlanAt: string | null;
+  observedPlanPeer: MuseUsagePeer | null;
 }
 export interface UsageFailoverDeps {
   transport?: (host: UsageHost, request: UsageHelperRequest) => Promise<UsageHelperResponse>;
@@ -110,10 +116,47 @@ export class UsageFailoverService {
   private file(target: UsageFailoverTarget): string {
     return path.join(target.ccsDir, 'account-usage-failover', `${this.key(target)}.json`);
   }
+  private matchesIdentity(
+    target: UsageFailoverTarget,
+    identity: UsageIdentity | null,
+    candidate: Pick<UsageCandidate, 'identity'>,
+    host: UsageHost['host']
+  ): boolean {
+    return (
+      sameUsageIdentity(identity, candidate.identity) ||
+      (target.provider === 'muse' &&
+        isBoundMusePeer(target.ccsDir, this.key(target), identity, candidate.identity, host))
+    );
+  }
+  private validateSaved(target: UsageFailoverTarget, state: State): void {
+    if (
+      state.observedPlanPeer &&
+      !this.matchesIdentity(
+        target,
+        state.identity,
+        state.observedPlanPeer,
+        state.observedPlanPeer.host
+      )
+    ) {
+      state.observedPlan = null;
+      state.observedPlanAt = null;
+      state.observedPlanPeer = null;
+    }
+    if (
+      state.saved &&
+      !this.matchesIdentity(target, state.identity, state.saved.candidate, state.saved.host)
+    ) {
+      state.saved = null;
+    }
+  }
   private state(target: UsageFailoverTarget): State {
     const key = this.key(target);
     const existing = this.states.get(key);
-    if (existing) return existing;
+    if (existing) {
+      // Revoking a link also revokes an in-memory observation, even during cooldown.
+      this.validateSaved(target, existing);
+      return existing;
+    }
     const state: State = {
       identity: target.expectedIdentity ?? null,
       primary: null,
@@ -125,6 +168,7 @@ export class UsageFailoverService {
       primaryFailure: null,
       observedPlan: null,
       observedPlanAt: null,
+      observedPlanPeer: null,
     };
     try {
       const file = this.file(target);
@@ -152,6 +196,14 @@ export class UsageFailoverService {
             : null;
           state.observedPlanAt = usageTimestamp(value.observedPlanAt, this.now());
           if (!state.observedPlanAt) state.observedPlan = null;
+          if (value.observedPlanPeer !== undefined && value.observedPlanPeer !== null) {
+            state.observedPlanPeer =
+              target.provider === 'muse' ? parseMuseUsagePeer(value.observedPlanPeer) : null;
+            if (!state.observedPlanPeer) {
+              state.observedPlan = null;
+              state.observedPlanAt = null;
+            }
+          }
           state.primary = parseUsageCandidate(value.primary);
           if (
             isRecord(value.saved) &&
@@ -159,12 +211,7 @@ export class UsageFailoverService {
           ) {
             const reading = parseUsageReading(value.saved.reading, this.now());
             const candidate = parseUsageCandidate(value.saved.candidate);
-            if (
-              candidate &&
-              sameUsageIdentity(identity, candidate.identity) &&
-              hasUsage(reading) &&
-              emailMatches(target.expectedEmail, reading.email)
-            )
+            if (candidate && hasUsage(reading) && emailMatches(target.expectedEmail, reading.email))
               state.saved = {
                 reading,
                 candidate,
@@ -179,6 +226,7 @@ export class UsageFailoverService {
     } catch {
       /* Missing or damaged cache is not quota. */
     }
+    this.validateSaved(target, state);
     this.states.set(key, state);
     if (this.states.size > 256) {
       for (const [old, entry] of this.states) {
@@ -191,6 +239,8 @@ export class UsageFailoverService {
     return state;
   }
   private persist(target: UsageFailoverTarget, state: State): void {
+    // A remote attempt may outlive a grant, including when that attempt fails.
+    this.validateSaved(target, state);
     writeUsageCache(this.file(target), {
       version: 1,
       key: this.key(target),
@@ -202,6 +252,7 @@ export class UsageFailoverService {
       primarySignIn: [...state.primarySignIn],
       observedPlan: state.observedPlan,
       observedPlanAt: state.observedPlanAt,
+      observedPlanPeer: state.observedPlanPeer,
     });
   }
   private async request(
@@ -286,6 +337,7 @@ export class UsageFailoverService {
     state: State,
     cached: boolean
   ): DashboardAccount {
+    this.validateSaved(target, state);
     if (!state.saved || template.statusReason === 'identity_unbound') {
       if (
         target.provider === 'cursor' &&
@@ -299,6 +351,9 @@ export class UsageFailoverService {
     const { reading, host, fallback } = state.saved;
     if (!emailMatches(target.expectedEmail, reading.email)) return this.withSignIn(template, state);
     const stale = cached || reading.status === 'cached';
+    const nativeMusePeer =
+      target.provider === 'muse' &&
+      !sameUsageIdentity(state.identity, state.saved.candidate.identity);
     const result: DashboardAccount = {
       ...template,
       email: template.email ?? reading.email,
@@ -310,7 +365,7 @@ export class UsageFailoverService {
         ? { antigravityPlan: structuredClone(reading.antigravityPlan) }
         : {}),
       status: stale ? 'cached' : 'ok',
-      source: `Verified quota on ${HOST_LABELS[host]}${fallback ? ' (fallback)' : ''}`,
+      source: `Verified ${nativeMusePeer ? 'native subscription ' : ''}quota on ${HOST_LABELS[host]}${fallback ? ' (fallback)' : ''}`,
       message: stale ? 'Showing the last successful reading; live usage is unavailable.' : null,
       capabilities: {
         ...template.capabilities,
@@ -486,6 +541,7 @@ export class UsageFailoverService {
         state.saved = null;
         state.observedPlan = null;
         state.observedPlanAt = null;
+        state.observedPlanPeer = null;
         return;
       }
       if (!candidate) {
@@ -497,6 +553,7 @@ export class UsageFailoverService {
         state.saved = null;
         state.observedPlan = null;
         state.observedPlanAt = null;
+        state.observedPlanPeer = null;
         state.primary = candidate;
       } else if (
         state.primary &&
@@ -518,6 +575,7 @@ export class UsageFailoverService {
       state.saved = null;
       state.observedPlan = null;
       state.observedPlanAt = null;
+      state.observedPlanPeer = null;
       return;
     }
     let lists: Array<{ host: UsageHost; candidates: UsageCandidate[] | null }> | null = null;
@@ -600,7 +658,7 @@ export class UsageFailoverService {
       fallback: boolean
     ): Promise<'done' | 'next'> => {
       if (
-        !sameUsageIdentity(state.identity, candidate.identity) ||
+        !this.matchesIdentity(target, state.identity, candidate, host.host) ||
         !walletMatches(target, candidate) ||
         (candidate.email && !emailMatches(target.expectedEmail, candidate.email))
       )
@@ -682,6 +740,7 @@ export class UsageFailoverService {
         state.saved = null;
         state.observedPlan = null;
         state.observedPlanAt = null;
+        state.observedPlanPeer = null;
         return 'done';
       }
       if (
@@ -691,6 +750,8 @@ export class UsageFailoverService {
         !sameUsageIdentity(candidate.identity, response.candidate.identity)
       )
         return blocked ? 'done' : 'next';
+      // A link can be removed while a remote request is in flight.
+      if (!this.matchesIdentity(target, state.identity, candidate, host.host)) return 'next';
       const observedPlan = safeUsageText(response.observedPlan);
       const observedPlanAt = usageTimestamp(response.observedPlanAt, this.now());
       if (
@@ -705,6 +766,9 @@ export class UsageFailoverService {
       ) {
         state.observedPlan = observedPlan;
         state.observedPlanAt = observedPlanAt;
+        state.observedPlanPeer = sameUsageIdentity(state.identity, candidate.identity)
+          ? null
+          : { host: host.host, identity: candidate.identity };
         if (state.saved && state.saved.reading.plan !== state.observedPlan) state.saved = null;
       }
       const reading = parseUsageReading(response.sample, this.now());
@@ -720,6 +784,9 @@ export class UsageFailoverService {
         ) {
           state.observedPlan = reading.plan;
           state.observedPlanAt = reading.sampledAt;
+          state.observedPlanPeer = sameUsageIdentity(state.identity, candidate.identity)
+            ? null
+            : { host: host.host, identity: candidate.identity };
         } else if (state.observedPlan && reading.plan !== state.observedPlan)
           return blocked ? 'done' : 'next';
       }

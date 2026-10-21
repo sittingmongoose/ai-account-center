@@ -90,6 +90,7 @@ function observation(value: unknown, key: string): boolean {
         'primarySignIn',
         'observedPlan',
         'observedPlanAt',
+        'observedPlanPeer',
       ].includes(field)
     )
   );

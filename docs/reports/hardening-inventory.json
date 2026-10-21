@@ -625,8 +625,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 41,
-      "totalSourceFiles": 446,
-      "coverageRatio": 0.0919,
+      "totalSourceFiles": 447,
+      "coverageRatio": 0.0917,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -653,7 +653,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 177,
+          "count": 178,
           "withLogger": 25
         },
         {
@@ -816,12 +816,12 @@
           "loc": 871
         },
         {
-          "file": "src/web-server/usage/native-quota-collector.ts",
-          "loc": 820
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 843
         },
         {
-          "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 776
+          "file": "src/web-server/usage/native-quota-collector.ts",
+          "loc": 820
         },
         {
           "file": "src/auth/profile-detector.ts",

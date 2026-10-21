@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { UsageFailoverService } from '../../../src/web-server/services/usage-failover-service';
+import { musePeerBindingFile } from '../../../src/web-server/services/muse-usage-peer-bindings';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 import type {
   UsageCandidate,
@@ -137,6 +138,320 @@ async function harness() {
 }
 
 describe('identity-bound usage source failover', () => {
+  async function bindMusePeers(
+    h: Awaited<ReturnType<typeof harness>>,
+    peers: Array<{ host: UsageHost['host']; identity: UsageCandidate['identity'] }>
+  ) {
+    const names = await fs.readdir(path.join(h.target.ccsDir, 'account-usage-failover'));
+    const key = names.find((name) => /^[a-f0-9]{64}\.json$/.test(name))!.slice(0, -5);
+    const file = musePeerBindingFile(h.target.ccsDir, key);
+    const grant = { version: 1, key, identity: candidate().identity, peers };
+    await fs.writeFile(file, JSON.stringify(grant), { mode: 0o600 });
+    return { file, grant };
+  }
+
+  it.each(['ubuntu', 'windows', 'nas1'] as const)(
+    'uses an explicitly linked native Muse credential on %s with the Mac offline, including after restart',
+    async (host) => {
+      const h = await harness();
+      await h.service.collect(h.target, template());
+      const native = candidate({
+        identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+      });
+      await bindMusePeers(h, [{ host, identity: native.identity }]);
+      h.advance();
+      h.inventories.set('mac', new Error('offline'));
+      h.inventories.set('ubuntu', []);
+      h.inventories.set('windows', []);
+      h.inventories.set(host, [native]);
+      h.collections.set(host, {
+        sample: reading(h.now(), {
+          windows: [{ key: 'weekly', label: 'Weekly limit', usedPercent: 33, resetAt: null }],
+        }),
+        failureCode: null,
+        refreshAfterSeconds: 300,
+      });
+      h.deps.hosts = async () => [
+        MAC,
+        UBUNTU,
+        WINDOWS,
+        { host: 'nas1', platform: 'ubuntu', sshHost: 'fixture-nas1' },
+      ];
+      const service = new UsageFailoverService(h.deps);
+      const row = await service.collect(h.target, template());
+      expect(row.status).toBe('ok');
+      expect(row.source).toContain('fallback');
+      expect(row.source).toContain('native subscription');
+      expect(row.windows).toEqual([
+        {
+          key: 'weekly',
+          label: 'Weekly limit',
+          usedPercent: 33,
+          resetAt: null,
+          remainingPercent: null,
+          windowMinutes: null,
+          used: null,
+          limit: null,
+          remaining: null,
+          expiresAt: null,
+          unit: null,
+        },
+      ]);
+      expect(row.sampledAt).toBe(new Date(h.now()).toISOString());
+      const restarted = new UsageFailoverService(h.deps);
+      const cached = restarted.peek(h.target, template());
+      expect(cached.sampledAt).toBe(row.sampledAt);
+      expect(cached.windows).toEqual(row.windows);
+      expect(cached.status).toBe('cached');
+      const before = h.collected().length;
+      await service.collect(h.target, template());
+      expect(h.collected()).toHaveLength(before);
+    }
+  );
+
+  it('does not accept same-email native Muse peers without an explicit link', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [
+      candidate({ identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) } }),
+    ]);
+    const before = h.collected().length;
+    const row = await h.service.collect(h.target, template());
+    expect(row.status).toBe('cached');
+    expect(h.collected()).toHaveLength(before);
+  });
+
+  it('revokes linked in-memory and persisted quota when the link is removed', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({ identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) } });
+    const { file } = await bindMusePeers(h, [{ host: 'windows', identity: native.identity }]);
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [native]);
+    h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+    expect((await h.service.collect(h.target, template())).status).toBe('ok');
+    await fs.unlink(file);
+    expect(h.service.peek(h.target, template()).windows).toHaveLength(0);
+    expect(new UsageFailoverService(h.deps).peek(h.target, template()).windows).toHaveLength(0);
+  });
+
+  it('rejects a linked result if the link is revoked while collection is in flight', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({ identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) } });
+    const { file } = await bindMusePeers(h, [{ host: 'windows', identity: native.identity }]);
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [native]);
+    const service = new UsageFailoverService({
+      ...h.deps,
+      transport: async (host, request) => {
+        const response = await h.deps.transport(host, request);
+        if (host.host === 'windows' && request.action === 'collect') await fs.unlink(file);
+        return response;
+      },
+    });
+    const row = await service.collect(h.target, template());
+    expect(row.status).toBe('cached');
+    expect(row.platform).toBe('mac');
+  });
+
+  it('shares a linked native Muse 429 cooldown across all other peers and restarts', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({ identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) } });
+    await bindMusePeers(h, [
+      { host: 'ubuntu', identity: native.identity },
+      { host: 'windows', identity: native.identity },
+    ]);
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('ubuntu', [native]);
+    h.inventories.set('windows', [native]);
+    h.collections.set('ubuntu', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 1200,
+    });
+    const before = h.collected().length;
+    await h.service.collect(h.target, template());
+    expect(
+      h
+        .collected()
+        .slice(before)
+        .map((call) => call.host)
+    ).toEqual(['ubuntu']);
+    h.advance();
+    await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(h.collected()).toHaveLength(before + 1);
+  });
+
+  it.each(['success', 'throw', 'changed-response'])(
+    'revokes an older saved native Muse reading when a grant disappears during a %s refresh',
+    async (outcome) => {
+      const h = await harness();
+      await h.service.collect(h.target, template());
+      const native = candidate({
+        identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+      });
+      const { file, grant } = await bindMusePeers(h, [
+        { host: 'windows', identity: native.identity },
+      ]);
+      h.advance();
+      h.inventories.set('mac', new Error('offline'));
+      h.inventories.set('windows', [native]);
+      h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+      expect((await h.service.collect(h.target, template())).platform).toBe('windows');
+      h.advance();
+      const service = new UsageFailoverService({
+        ...h.deps,
+        transport: async (host, request) => {
+          const response = await h.deps.transport(host, request);
+          if (host.host === 'windows' && request.action === 'collect') {
+            await fs.unlink(file);
+            if (outcome === 'throw') throw new Error('offline');
+            if (
+              outcome === 'changed-response' &&
+              response.action === 'collect' &&
+              response.candidate
+            )
+              response.candidate.revision = 'e'.repeat(64);
+          }
+          return response;
+        },
+      });
+      expect((await service.collect(h.target, template())).windows).toHaveLength(0);
+      const saved = JSON.parse(
+        await fs.readFile(
+          path.join(h.target.ccsDir, 'account-usage-failover', `${grant.key}.json`),
+          'utf8'
+        )
+      );
+      expect(saved.saved).toBeNull();
+      expect(service.peek(h.target, template()).windows).toHaveLength(0);
+    }
+  );
+
+  it.each(['host', 'identity', 'key', 'malformed', 'permissions', 'symlink', 'rotated'])(
+    'rejects a Muse peer link with mismatched or unsafe %s',
+    async (change) => {
+      if (change === 'permissions' && process.platform === 'win32') return;
+      const h = await harness();
+      await h.service.collect(h.target, template());
+      const native = candidate({
+        identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+      });
+      const { file, grant } = await bindMusePeers(h, [
+        { host: 'windows', identity: native.identity },
+      ]);
+      if (change === 'host') grant.peers[0].host = 'ubuntu';
+      if (change === 'identity') grant.identity = { kind: 'muse-team', key: 'f'.repeat(64) };
+      if (change === 'key') grant.key = 'f'.repeat(64);
+      if (change === 'malformed')
+        grant.peers.push({
+          host: 'windows',
+          identity: { kind: 'muse-email', key: 'c'.repeat(64) },
+        });
+      await fs.writeFile(file, JSON.stringify(grant));
+      if (change === 'permissions' && process.platform !== 'win32') await fs.chmod(file, 0o644);
+      if (change === 'symlink') {
+        await fs.rename(file, `${file}.saved`);
+        await fs.symlink(`${file}.saved`, file);
+      }
+      h.advance();
+      h.inventories.set('mac', new Error('offline'));
+      h.inventories.set('windows', [
+        change === 'rotated'
+          ? { ...native, identity: { kind: 'muse-native-credential', key: 'e'.repeat(64) } }
+          : native,
+      ]);
+      const before = h.collected().length;
+      const row = await new UsageFailoverService(h.deps).collect(h.target, template());
+      expect(row.platform).toBe('mac');
+      expect(h.collected()).toHaveLength(before);
+    }
+  );
+
+  it.each(['warm', 'cold'])(
+    'revokes plan-only native Muse metadata across a %s coordinator read',
+    async (mode) => {
+      const h = await harness();
+      await h.service.collect(h.target, template());
+      const native = candidate({
+        identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+      });
+      const { file, grant } = await bindMusePeers(h, [
+        { host: 'windows', identity: native.identity },
+      ]);
+      h.advance();
+      h.inventories.set('mac', new Error('offline'));
+      h.inventories.set('windows', [native]);
+      h.collections.set('windows', {
+        sample: null,
+        failureCode: 'network_error',
+        observedPlan: 'New plan',
+        observedPlanAt: new Date(h.now()).toISOString(),
+      });
+      expect((await h.service.collect(h.target, template())).windows).toHaveLength(0);
+      const cacheFile = path.join(h.target.ccsDir, 'account-usage-failover', `${grant.key}.json`);
+      const before = JSON.parse(await fs.readFile(cacheFile, 'utf8'));
+      expect(before.observedPlanPeer).toEqual({ host: 'windows', identity: native.identity });
+      expect(before.observedPlan).toBe('New plan');
+      await fs.unlink(file);
+      h.advance();
+      h.inventories.set('mac', [candidate()]);
+      h.collections.set('mac', {
+        sample: reading(BASE_TIME, { status: 'cached' }),
+        failureCode: null,
+      });
+      const service = mode === 'cold' ? new UsageFailoverService(h.deps) : h.service;
+      const row = await service.collect(h.target, template());
+      expect(row.windows).toHaveLength(1);
+      expect(row.plan).toBe('Pro');
+      expect(row.sampledAt).toBe(new Date(BASE_TIME).toISOString());
+      const after = JSON.parse(await fs.readFile(cacheFile, 'utf8'));
+      expect(after.observedPlanPeer).toBeNull();
+      expect(after.observedPlan).toBeNull();
+    }
+  );
+
+  it('cannot bootstrap a missing primary identity from a native Muse peer link', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({ identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) } });
+    const { grant } = await bindMusePeers(h, [{ host: 'windows', identity: native.identity }]);
+    await fs.unlink(path.join(h.target.ccsDir, 'account-usage-failover', `${grant.key}.json`));
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [native]);
+    const before = h.collected().length;
+    expect(
+      (await new UsageFailoverService(h.deps).collect(h.target, template())).windows
+    ).toHaveLength(0);
+    expect(h.collected()).toHaveLength(before);
+  });
+
+  it('invalidates native Muse peer links when the primary changes account or team', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({ identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) } });
+    await bindMusePeers(h, [{ host: 'windows', identity: native.identity }]);
+    h.advance();
+    h.inventories.set('mac', [candidate({ identity: { kind: 'muse-team', key: 'f'.repeat(64) } })]);
+    h.collections.set('mac', { sample: null, failureCode: 'network_error' });
+    h.inventories.set('windows', [native]);
+    const before = h.collected().length;
+    expect((await h.service.collect(h.target, template())).windows).toHaveLength(0);
+    expect(
+      h
+        .collected()
+        .slice(before)
+        .map((call) => call.host)
+    ).toEqual(['mac']);
+  });
+
   it('falls back to the verified account and never calls a peer with the same email but another identity', async () => {
     const h = await harness();
     h.collections.set('mac', new Error('offline'));
