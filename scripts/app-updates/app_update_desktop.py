@@ -33,16 +33,28 @@ DOWNLOAD_BLOCKED_RETRIES = 3
 # the old claude.ai redirect answers 403 to every non-browser client.
 CLAUDE_DARWIN_FEED = "https://downloads.claude.ai/releases/darwin/universal/RELEASES.json"
 CLAUDE_DARWIN_PREFIX = "https://downloads.claude.ai/releases/darwin/"
-# Windows Codex now ships through the Microsoft Store; the direct ChatGPT-x64.msix
-# stopped moving at 26.930.7945.0. The app itself reads this feed for updates.
+# Windows Codex now ships through the Microsoft Store. The app itself reads this
+# feed to learn that a newer Store build exists.
 CODEX_STORE_FEED = "https://persistent.oaistatic.com/codex-app-prod/windows-store-update.json"
 CODEX_STORE_ID = "9PLM9XGG6VKS"
-# winget exit codes (read unsigned) for a Store package with nothing newer to install here:
-# 0x8A15002B UPDATE_NOT_APPLICABLE ("No applicable update found") and 0x8A150061 PACKAGE_ALREADY_INSTALLED.
-WINGET_NO_NEWER = {0x8A15002B, 0x8A150061}
-# winget's "nothing newer" answer is trusted this long for the same feed build and installed version.
-STORE_NO_NEWER_SECONDS = 6 * 60 * 60
-STORE_MEMORY_BYTES = 4096
+# OpenAI's release feed names each version's own package per architecture. That
+# package is the Store-signed MSIX itself (Microsoft Marketplace CA, the installed
+# OpenAI.Codex identity and publisher), and the app's own updater falls back to it.
+# winget cannot install it: its msstore source never matches the installed package
+# ("No installed package found"), so its install always answered "nothing newer"
+# and Update all called an outdated Codex current. winget is not used.
+CODEX_RELEASE_FEED = "https://persistent.oaistatic.com/codex-app-prod/windows-release.json"
+CODEX_RELEASE_PREFIX = "https://persistent.oaistatic.com/codex-app-prod/releases/"
+# Closing a running Windows desktop app needs this much time left for the close
+# (15 s), the install (about four minutes for the 976 MB Codex MSIX on 2026-10-21)
+# and the reopen (45 s); with less, nothing closes.
+WINDOWS_REPLACE_SECONDS = 300
+
+
+def require_replace_time(deadline):
+    """Never close an app the remaining time cannot install and reopen."""
+    if deadline is not None and deadline - time.monotonic() < 90 + WINDOWS_REPLACE_SECONDS:
+        raise UpdateFailure("timeout")
 
 
 def desktop_budget(deadline, maximum):
@@ -445,6 +457,38 @@ def codex_store_version(install):
     return version_text(value.get("buildVersion"))
 
 
+def codex_release_package(architecture):
+    """(version, package URL) from OpenAI's release feed for this architecture, or None.
+
+    Read-only. Only a URL under that version's own release folder counts, so the
+    feed cannot point anywhere else. Installing still verifies the package
+    manifest (identity, publisher, architecture, newer version) and Add-AppxPackage
+    its signature.
+    """
+    try:
+        with private_temporary() as temporary:
+            target = temporary / "windows-release.json"
+            download(CODEX_RELEASE_FEED, target, maximum=65536, timeout=30)
+            value = json.loads(target.read_text(encoding="utf-8"))
+    except (UpdateFailure, OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(value, dict) or value.get("schemaVersion") != 1 or not isinstance(value.get("packages"), list):
+        return None
+    version = value.get("packageVersion")
+    if not isinstance(version, str) or not re.fullmatch(r"\d{1,9}(?:\.\d{1,9}){3}", version):
+        return None
+    folder = CODEX_RELEASE_PREFIX + version + "/"
+    for package in value["packages"]:
+        if not isinstance(package, dict):
+            continue
+        url = package.get("downloadUrl")
+        named = package.get("architecture")
+        if (("x64" if named == "x86_64" else named) == architecture and isinstance(url, str) and url.startswith(folder)
+                and re.fullmatch(r"[A-Za-z0-9._-]+\.msix", url[len(folder):])):
+            return version, url
+    return None
+
+
 def process_package(item):
     """The package full name of a running process, or None when it has no package identity.
 
@@ -540,7 +584,7 @@ def reopen_windows(install, plans):
         time.sleep(.5)
 
 
-def windows_replace(install, before, deploy, accepted, current_codes=()):
+def windows_replace(install, before, deploy, accepted, deadline=None):
     """Install a newer package; a running app is closed first and reopened as each instance was started.
 
     The instances are captured right before closing (the app may have been
@@ -549,8 +593,8 @@ def windows_replace(install, before, deploy, accepted, current_codes=()):
     a stop of only identity-checked family survivors (forcedStops). A failed
     close or install reopens what was closed from the old package, which is
     still registered; a failed reopen after a good install is restart_failed.
-    A failure code in current_codes means nothing newer was installed: once
-    reopened the row is current, not failed.
+    The remaining time is checked again after the last process scan, right
+    before the first close request (require_replace_time).
     """
     app_id, manager = install.app_id, install.manager
     try:
@@ -562,7 +606,7 @@ def windows_replace(install, before, deploy, accepted, current_codes=()):
     forced = 0
     if contexts:
         try:
-            forced = terminate_desktops(install, contexts)
+            forced = terminate_desktops(install, contexts, ready=lambda: require_replace_time(deadline))
         except Exception as error:
             # Never leave a closed instance closed: reopen what already ended from the untouched package.
             with contextlib.suppress(Exception):
@@ -577,18 +621,12 @@ def windows_replace(install, before, deploy, accepted, current_codes=()):
             raise UpdateFailure("version_unknown")
     except Exception as error:
         # Reopen from whatever package is registered now: the old one when the install failed.
-        reopened = 0
         with contextlib.suppress(Exception):
-            reopened = reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
+            reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
         code = error.code if isinstance(error, UpdateFailure) else "update_failed"
         # A needs-closing rejection even after the close still asks the user to quit.
         if code == "quit_first":
             return quit_first(install, before)
-        if code in current_codes:
-            # Nothing newer was installed, so the app is current; a reopen that failed is still reported.
-            if reopened != len(plans):
-                return result(app_id, "windows", "restart_failed", before, before, manager, "restart_failed", True)
-            return result(app_id, "windows", "current", before, before, manager, code, True, reopened)
         return result(app_id, "windows", "failed", before, before, manager, code, True)
     try:
         restarted = reopen_windows(refreshed, plans)
@@ -599,85 +637,6 @@ def windows_replace(install, before, deploy, accepted, current_codes=()):
     if plans:
         value["restartTargets"] = [{"kind": "desktop"}]
     return value
-
-
-def store_memory(install):
-    """Where winget's last "nothing newer" answer for Codex is remembered, beside the Mac package memory."""
-    return pathlib.Path.home() / ".ccs/app-updates" / (install.app_id + "-windows-store.json")
-
-
-def remembered_store_answer(install, feed):
-    """True while winget's "nothing newer" answer holds for this feed build and installed version.
-
-    The answer holds for STORE_NO_NEWER_SECONDS from when it was given. A memory
-    for another installed version is dropped. A missing, unreadable, oversized,
-    malformed, expired or future-dated (the clock went backwards) memory is not
-    trusted, so the install decides.
-    """
-    try:
-        with store_memory(install).open("rb") as handle:
-            raw = handle.read(STORE_MEMORY_BYTES + 1)
-        if len(raw) > STORE_MEMORY_BYTES:
-            return False
-        value = json.loads(raw.decode("utf-8"))
-    except (OSError, ValueError, RecursionError):  # Some JSON parsers recurse: a deeply nested file exhausts them.
-        return False
-    if not isinstance(value, dict):
-        return False
-    remembered_feed, remembered_installed, checked = value.get("feedBuild"), value.get("installedVersion"), value.get("checkedAt")
-    if not isinstance(remembered_feed, str) or not isinstance(remembered_installed, str) or type(checked) is not int:
-        return False
-    if remembered_installed != install.version:
-        forget_store_answer(install)
-        return False
-    return remembered_feed == feed and 0 <= time.time() - checked < STORE_NO_NEWER_SECONDS
-
-
-def remember_store_answer(install, feed):
-    """Remember that winget found nothing newer than the installed version for this feed build."""
-    try:
-        write_private_json(store_memory(install), {"feedBuild": feed, "installedVersion": install.version, "checkedAt": int(time.time())})
-    except (OSError, ValueError):
-        pass
-
-
-def forget_store_answer(install):
-    with contextlib.suppress(OSError):
-        store_memory(install).unlink(missing_ok=True)
-
-
-def update_windows_store(install, phase, feed, deadline=None):
-    """Install the newer Codex Store build through winget's msstore source, reopening a running Codex.
-
-    Only winget's install can say whether the Store offers a newer build here: its
-    listings never name this product. So its "nothing newer" answer is remembered
-    for STORE_NO_NEWER_SECONDS, and while that holds a running Codex is not closed
-    again. Otherwise the install decides: when it reports nothing newer, the closed
-    Codex is reopened and the row is current; any other failure stays failed.
-    """
-    if remembered_store_answer(install, feed):
-        return result(install.app_id, "windows", "current", install.version, install.version, install.manager, "store_no_newer")
-    winget = shutil.which("winget.exe") or shutil.which("winget")
-    if not winget:
-        return result(install.app_id, "windows", "failed", install.version, install.version, install.manager, "unsupported")
-    phase("updating")
-
-    def deploy():
-        # The Store verifies the package and upgrades the same OpenAI.Codex family in place.
-        try:
-            command([winget, "install", "--id", CODEX_STORE_ID, "--source", "msstore", "--exact", "--silent",
-                     "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"], timeout=desktop_budget(deadline, 900))
-        except UpdateFailure as error:
-            if error.exit_code is not None and (error.exit_code & 0xFFFFFFFF) in WINGET_NO_NEWER:
-                remember_store_answer(install, feed)
-                raise UpdateFailure("store_no_newer") from None
-            raise
-        forget_store_answer(install)
-
-    def accepted(refreshed):
-        return refreshed.publisher == install.publisher and bool(refreshed.version) and version_tuple(refreshed.version) > version_tuple(install.version)
-    desktop_budget(deadline, 1)
-    return windows_replace(install, install.version, deploy, accepted, current_codes=("store_no_newer",))
 
 
 def update_windows(install, phase=None, deadline=None):
@@ -701,18 +660,30 @@ def update_windows(install, phase=None, deadline=None):
             return None
         return version_text(info.get("Version"))
 
+    # The version the package must name: only Codex's release feed pins one.
+    expected = None
     if install.app_id == "codex-desktop":
         store = codex_store_version(install)
-        if store is None:
+        release = codex_release_package(architecture)
+        if release is not None and version_tuple(release[0]) > version_tuple(before):
+            # The newer version's own Store-signed package: downloaded while
+            # Codex runs, then closed, installed and reopened like any MSIX.
+            expected, url = release
+        elif store is None and release is None:
             return result(install.app_id, "windows", "unknown", before, before, install.manager, "readiness_unknown")
-        if store and version_tuple(store) > version_tuple(before):
-            try:
-                return update_windows_store(install, phase, store, deadline)
-            except UpdateFailure as error:
-                return result(install.app_id, "windows", "failed", before, before, install.manager, error.code)
+        elif store and version_tuple(store) > version_tuple(before):
+            # The Store offers a newer build that no release-feed package names
+            # yet. Only the app can install it; nothing closes.
+            return result(install.app_id, "windows", "action_required", before, before, install.manager, "store_update_in_app", False)
+        else:
+            # Neither feed the app reads names a newer build: the app says the same.
+            return result(install.app_id, "windows", "current", before, before, install.manager)
     try:
         remote = remote_msix_identity(url, timeout=desktop_budget(deadline, REMOTE_MANIFEST_SECONDS))
         available = published(remote) if remote is not None else None
+        if expected and available and available != expected:
+            # A package that contradicts its own release feed is never installed or called current.
+            return result(install.app_id, "windows", "failed", before, before, install.manager, "package_mismatch")
         if available and version_tuple(available) <= version_tuple(before):
             return result(install.app_id, "windows", "current", before, before, install.manager)
         if available:
@@ -731,6 +702,8 @@ def update_windows(install, phase=None, deadline=None):
             after = published(msix_info(package))
             if not after:
                 raise UpdateFailure("signature_failed")
+            if expected and after != expected:
+                raise UpdateFailure("package_mismatch")
             if version_tuple(after) <= version_tuple(before):
                 return result(install.app_id, "windows", "current", before, before, install.manager)
         except UpdateFailure as error:
@@ -741,8 +714,11 @@ def update_windows(install, phase=None, deadline=None):
         # upgrades the same per-user package, preserving LocalState. A
         # rejection for a running app (0x80073D02) reports quit_first.
         try:
+            # Never close an app the remaining time cannot install and reopen.
             desktop_budget(deadline, 1)
-            return windows_replace(install, before, lambda: add_appx_package(package, timeout=desktop_budget(deadline, 600)), lambda refreshed: refreshed.version == after)
+            require_replace_time(deadline)
+            return windows_replace(install, before, lambda: add_appx_package(package, timeout=desktop_budget(deadline, 600)),
+                                   lambda refreshed: refreshed.version == after, deadline=deadline)
         except UpdateFailure as error:
             return result(install.app_id, "windows", "failed", before, before, install.manager, error.code)
 

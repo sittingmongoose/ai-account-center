@@ -137,22 +137,81 @@ def mac_processes():
     return values
 
 
+def windows_owned_pids(pids):
+    """The pids among these that run under this user's SID, read from each process token.
+
+    A process this user cannot open or query (another user's, or an elevated
+    one) is not counted, as before: the scan could not read an elevated
+    process's start time either. WMI's GetOwnerSid took about 0.4 s per
+    process, so a busy PC (60 agent node.exe processes on 2026-10-21) ran
+    past the scan's 20 s limit and every running app read as timeout; one
+    token read takes microseconds.
+    """
+    from ctypes import wintypes
+    kernel, advapi = ctypes.windll.kernel32, ctypes.windll.advapi32
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi.OpenProcessToken.restype = wintypes.BOOL
+    advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    advapi.GetTokenInformation.restype = wintypes.BOOL
+    advapi.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    advapi.EqualSid.restype = wintypes.BOOL
+
+    def token_user(process):
+        """TOKEN_USER of this process: its first field points at the SID inside the same buffer."""
+        token = wintypes.HANDLE()
+        if not advapi.OpenProcessToken(process, 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+            return None
+        try:
+            needed = wintypes.DWORD(256)
+            for _ in range(2):
+                buffer = ctypes.create_string_buffer(needed.value)
+                if advapi.GetTokenInformation(token, 1, buffer, len(buffer), ctypes.byref(needed)):  # TokenUser
+                    return buffer
+                if needed.value <= len(buffer) or needed.value > 4096:
+                    return None
+            return None
+        finally:
+            kernel.CloseHandle(token)
+
+    def sid(buffer):
+        return ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p))[0]
+
+    mine = token_user(kernel.GetCurrentProcess())
+    if mine is None:
+        raise UpdateFailure("restart_context")
+    owned = set()
+    for pid in pids:
+        process = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not process:
+            continue
+        try:
+            theirs = token_user(process)
+            if theirs is not None and advapi.EqualSid(sid(theirs), sid(mine)):
+                owned.add(pid)
+        finally:
+            kernel.CloseHandle(process)
+    return owned
+
+
 def windows_processes():
     # CIM returns arguments privately to this local helper, never to CCS.
     # Anything running from the npm global tree counts whatever its name (a Muse native
     # helper, zcode-acp-martty's martty.exe): npm cannot replace those files either.
     # `tree` is every process as "pid,parent,start;": no name, path or arguments. It
     # keeps T3 a visible ancestor through any unlisted process (see ancestors).
+    # Each listed row's owner is checked here afterwards (windows_owned_pids).
     script = """$ErrorActionPreference='Stop';
-$me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
 $npm=[IO.Path]::Combine($env:APPDATA,'npm','node_modules');
 $rows=@(); $lineage=New-Object Text.StringBuilder; foreach($p in Get-CimInstance Win32_Process){
  $born=0; if($p.CreationDate){$born=$p.CreationDate.ToFileTimeUtc()};
  [void]$lineage.Append([string]$p.ProcessId+','+[string]$p.ParentProcessId+','+[string]$born+';');
  $tree=[bool]($p.ExecutablePath -and $p.ExecutablePath.StartsWith($npm,[StringComparison]::OrdinalIgnoreCase));
  if($p.Name -notin @('ChatGPT.exe','Claude.exe','codex.exe','claude.exe','agy.exe','omp.exe','node.exe','muse.exe','muse-bin.exe','T3 Code (Nightly).exe','t3-resource-monitor.exe','cursorsandbox.exe','rg.exe','OpenConsole.exe','elevate.exe','ZCode.exe','muse-acp.exe') -and -not $tree){continue};
- $o=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue;
- if($o.Sid -ne $me -or -not $p.ExecutablePath){continue};
+ if(-not $p.ExecutablePath){continue};
  try{$started=[Diagnostics.Process]::GetProcessById($p.ProcessId).StartTime.ToFileTimeUtc().ToString()}catch{continue};
  $rows+=@{pid=[int]$p.ProcessId;ppid=[int]$p.ParentProcessId;exe=$p.ExecutablePath;args=$p.CommandLine;identity=$started;session=[int]$p.SessionId}
 }; ConvertTo-Json -InputObject @{rows=@($rows);tree=$lineage.ToString()} -Compress -Depth 4"""
@@ -162,8 +221,10 @@ $rows=@(); $lineage=New-Object Text.StringBuilder; foreach($p in Get-CimInstance
         # under 64 KiB and excludes every argv/environment field.
         data = json.loads(powershell(script, timeout=20, capture_limit=2 * 1024 * 1024))
         rows = data["rows"] if isinstance(data["rows"], list) else [data["rows"]]
+        # Owners first, then the cap: other users' processes never crowd out this user's.
+        owned = windows_owned_pids([int(row["pid"]) for row in rows])
         values = ProcessTable()
-        for row in rows[:2048]:
+        for row in [row for row in rows if int(row["pid"]) in owned][:2048]:
             args = windows_arguments(row.get("args") or "")
             values.append(Process(int(row["pid"]), int(row["ppid"]), 0, row["exe"], row["identity"], args, session=int(row["session"])))
         values.lineage = {}
@@ -711,7 +772,13 @@ def desktop_arguments(context, platform):
     return found
 
 
-def terminate_desktops(install, contexts, grace=15):
+def terminate_desktops(install, contexts, grace=15, ready=None):
+    """Close the app gracefully, then stop survivors of its captured family.
+
+    ready() runs after the last process scan and right before the first close
+    request; when it raises, nothing has been closed.
+    """
+    ready = ready or (lambda: None)
     targets = family(install, scan(install.platform))
     if install.platform == "mac":
         ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
@@ -722,7 +789,9 @@ def terminate_desktops(install, contexts, grace=15):
         objc.sel_registerName.restype = ctypes.c_void_p
         lookup = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int)(("objc_msgSend", objc))
         terminate = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(("objc_msgSend", objc))
-        for item in live_contexts(install.platform, contexts):
+        live = live_contexts(install.platform, contexts)
+        ready()
+        for item in live:
             instance = lookup(objc.objc_getClass(b"NSRunningApplication"), objc.sel_registerName(b"runningApplicationWithProcessIdentifier:"), item.pid)
             if not instance or not terminate(instance, objc.sel_registerName(b"terminate")):
                 raise UpdateFailure("restart_context")
@@ -741,9 +810,12 @@ def terminate_desktops(install, contexts, grace=15):
                 user32.PostMessageW(hwnd, 0x0010, 0, 0)
             return True
         callback = callback_type(close_window)
+        ready()
         user32.EnumWindows(callback, None)
     else:
-        for item in live_contexts(install.platform, contexts):
+        live = live_contexts(install.platform, contexts)
+        ready()
+        for item in live:
             safe_signal(item, 15)
     deadline = time.monotonic() + grace
     while live_contexts(install.platform, targets) and time.monotonic() < deadline:

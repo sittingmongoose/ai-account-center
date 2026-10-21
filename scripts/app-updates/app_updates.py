@@ -37,11 +37,13 @@ CODEX_BRIDGE_SECONDS = 420
 # Antigravity switching works only with native CLI builds that passed a
 # switching review (scripts/antigravity/runtime/release.json, reviewedNatives).
 # `agy update` always installs the newest build, so for managed switching
-# installations Update all reads the official release manifest first
-# (the same fixed URL the CLI's own updater and
-# installer use) and holds the installed build when the newest one is not
-# reviewed. Ordinary CLI installations have no switching runtime to preserve
-# and use the native updater independently of that review.
+# installations Update all reads the official release manifest first (the
+# same fixed URL the CLI's own updater and installer use). A reviewed newest
+# build may stop and reopen idle managed sessions around the update. An
+# unreviewed one still installs, but only while no Antigravity process runs,
+# and switching pauses until it is reviewed. Ordinary CLI installations have no
+# switching runtime to preserve and use the native updater independently of
+# that review.
 AGY_MANIFEST_BASE = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/"
 AGY_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[A-Za-z0-9_.-]+)?$")
 AGY_MAX_REVIEWED = 16
@@ -168,33 +170,27 @@ def antigravity_runtime_present(custom_only=False):
         return True
 
 
-def antigravity_hold(install, reviewed, latest=None):
-    """None when the update may run; otherwise the finished row for this app.
+def antigravity_plan(install, reviewed, latest=None):
+    """(finished row or None, whether managed sessions may stop and reopen) for the update.
 
     Ordinary native installs do not need a switching review. For an existing
-    managed runtime, a newest build outside the reviewed set is never installed:
-    the row is `held` and names that build. When the reviewed set or the newest version
-    cannot be read, nothing is installed either (fail closed). An installed
-    build that already is the newest one reports current without running the
-    official updater, so no later publication can slip in.
+    managed runtime, an installed build that already is the newest one reports
+    current without running the official updater. Otherwise the update runs.
+    Only a reviewed newest build may stop and reopen managed sessions: the
+    runtime cannot restart them on an unreviewed one. So an unreviewed newest
+    build, or one the review set or manifest cannot name, installs only while
+    no Antigravity process runs (a running one reports in_use and nothing
+    stops), and switching then pauses until that build is reviewed.
     """
     if not antigravity_runtime_present():
-        return None
+        return None, True
     before = install.version
     if not before:
-        return None
-    newest = None if reviewed is None else (latest or latest_agy_version)(install.platform)
-    if newest is None:
-        row = result(install.app_id, install.platform, "held", before, before, install.manager, "held_unchecked")
-        row["heldVersion"] = None
-        return row
-    if newest == before:
-        return result(install.app_id, install.platform, "current", before, before, install.manager)
-    if newest in reviewed:
-        return None
-    row = result(install.app_id, install.platform, "held", before, before, install.manager, "held_for_review")
-    row["heldVersion"] = newest
-    return row
+        return None, False
+    newest = (latest or latest_agy_version)(install.platform)
+    if newest is not None and newest == before:
+        return result(install.app_id, install.platform, "current", before, before, install.manager), False
+    return None, reviewed is not None and newest is not None and newest in reviewed
 
 
 def mark_unreviewed(row, reviewed):
@@ -604,7 +600,7 @@ def perform_cli_update(install, deadline=None):
     command([path, "update"], timeout=180, env={"PATH": str(path.parent) + os.pathsep + os.environ.get("PATH", "")})
 
 
-def update_cli(install, deadline):
+def update_cli(install, deadline, restart_managed=False):
     before = install.version
     attempted = False
     changed = False
@@ -619,14 +615,18 @@ def update_cli(install, deadline):
                 raise UpdateFailure('unsupported')
             # The same account lock and proved resident PTY coordinator owns
             # managed updates. Never move this session into a replacement tmux.
+            # Without a reviewed target it runs idle-only: it never stops a
+            # session it could not restart on the new build.
             bridge = pathlib.Path(__file__).parents[2] / 'dist/antigravity/managed-update-command.js'
             if not bridge.is_file(): raise UpdateFailure('unsupported')
             seconds = max(30, min(300, int(deadline - time.monotonic())))
-            payload = json.loads(command([shutil.which('node') or '/usr/bin/node', bridge],
-                timeout=seconds, capture=True))
+            argv = [shutil.which('node') or '/usr/bin/node', bridge, *([] if restart_managed else ['--idle-only'])]
+            payload = json.loads(command(argv, timeout=seconds, capture=True))
             if (type(payload) is not dict or payload.get('appId') != 'antigravity-cli' or
                     payload.get('platform') != 'ubuntu' or payload.get('status') not in
-                    {'current', 'updated', 'failed', 'restart_failed'}): raise UpdateFailure()
+                    {'current', 'updated', 'failed', 'restart_failed', 'action_required'} or
+                    (payload.get('status') == 'action_required') != (payload.get('messageCode') == 'in_use')):
+                raise UpdateFailure()
             return payload
         processes = scan(install.platform)
         # Linux Codex's shared daemon needs the existing startup-lock and idle
@@ -804,8 +804,8 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     update, and {"event": "result", ...} as soon as its row is known, so the
     dashboard can show live progress. cancelled() is polled between apps: once
     true, every app not yet started is reported as skipped. agy_reviewed is the
-    Antigravity CLI's reviewed version set (None: unknown, so managed switching
-    installations are held).
+    Antigravity CLI's reviewed version set (None: unknown, so a managed
+    switching installation updates idle-only).
     """
     emit = emit or (lambda event: None)
     cancelled = cancelled or (lambda: False)
@@ -841,13 +841,15 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                 report(result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout"))
             else:
                 emit({"event": "app", "appId": app_id, "phase": "checking"})
+                restart_managed = False
                 if app_id == "antigravity-cli" and install.manager != "unsupported":
                     try:
-                        held = antigravity_hold(install, agy_reviewed)
+                        finished, restart_managed = antigravity_plan(install, agy_reviewed)
                     except Exception:
-                        held = result(app_id, platform, "held", install.version, install.version, install.manager, "held_unchecked")
-                    if held is not None:
-                        report(held)
+                        # Unknown target: still update, idle-only.
+                        finished, restart_managed = None, False
+                    if finished is not None:
+                        report(finished)
                         continue
                 if app_id == "claude-code":
                     try:
@@ -872,7 +874,7 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                     try: report(update(install, deadline, phase))
                     except Exception: report(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
                 elif app_id == "antigravity-cli":
-                    report(mark_unreviewed(update_cli(install, deadline), agy_reviewed))
+                    report(mark_unreviewed(update_cli(install, deadline, restart_managed=restart_managed), agy_reviewed))
                 else:
                     report(update_cli(install, deadline))
     return {"results": results}
@@ -1039,7 +1041,7 @@ def read_task_request(request_path):
     """(nonce, Antigravity reviewed set) from the coordinator's request file.
 
     The scheduled task starts with fixed arguments, so the reviewed set comes
-    only from a request carrying a valid nonce; anything else is None (held).
+    only from a request carrying a valid nonce; anything else is None (unknown).
     """
     try:
         request = json.loads(pathlib.Path(request_path).read_text(encoding="utf-8"))
@@ -1065,7 +1067,7 @@ def main():
     parser.add_argument("--dashboard-job", action="store_true")
     # The dashboard passes the Antigravity CLI's reviewed versions (from its
     # packaged release file); without it a packaged release file next to this
-    # helper is read, and without either the Antigravity update is held.
+    # helper is read, and without either a managed Antigravity update runs idle-only.
     parser.add_argument("--agy-reviewed")
     args = parser.parse_args()
     native = "windows" if os.name == "nt" else "mac" if sys.platform == "darwin" else "ubuntu"

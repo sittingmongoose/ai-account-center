@@ -58,7 +58,7 @@ modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
 | --- | --- |
-| Antigravity CLI | Active native `agy update`; managed switching installations require a reviewed build (see below) |
+| Antigravity CLI | Active native `agy update`; on a managed switching installation an unreviewed newest build installs only while no Antigravity process runs (see below) |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
@@ -255,20 +255,27 @@ scheduled the restart of Nas1's own `t3code.service`, that
 has no AI Account Center package, command or service and no `~/.ccs` content
 beyond `app-updates/`.
 
-**Antigravity CLI review hold (managed switching installations).** Account switching works only
+**Antigravity CLI on managed switching installations.** Account switching works only
 with native builds listed in `scripts/antigravity/runtime/release.json`
-(`reviewedNatives`), and `agy update` always installs the newest build. An ordinary
-CLI installation uses its native updater without waiting for a switching review.
-Saved usage profiles alone cannot activate accounts and do not require this hold.
+(`reviewedNatives`), and `agy update` always installs the newest build. Update all
+never holds a new build for that review: Antigravity updates on every computer.
+On a managed runtime an unreviewed build only pauses switching until it is
+reviewed, the same as the CLI's own background update. An ordinary CLI
+installation uses its native updater without any review. Saved usage profiles
+alone cannot activate accounts.
+
+Until 2026-10-21 a managed runtime held every unreviewed newest build
+(`held_for_review`), so each Antigravity release (1.3.0, 1.3.2, 1.3.5, 1.4.4)
+stayed uninstalled on the Ubuntu VM until someone reviewed it by hand. The
+dashboard still reads `held` rows from older helpers and saved jobs.
 
 When `antigravity-switching/runtime-installation.json` is present in any relevant
-AAC configuration directory, the helper preserves the managed runtime's review
-gate. It checks the default `~/.ccs`, `CCS_DIR`, `CCS_HOME/.ccs`, and the parent of
+AAC configuration directory, the helper treats the installation as managed. It checks the default `~/.ccs`, `CCS_DIR`, `CCS_HOME/.ccs`, and the parent of
 the explicit update state directory (`--state-dir`/`AAC_UPDATE_STATE_DIR`, which
 carries the dashboard's resolved `--config-dir` scope). These checks are additive;
 an override cannot hide a default-scope runtime. Malformed descriptors, symlinks
 (including dangling ancestors), Windows junctions, unreadable paths and unexpected
-file types also keep that gate; only certainly absent runtime paths allow the
+file types also count as managed; only certainly absent runtime paths allow the
 ordinary updater.
 Before a managed update runs, the helper reads the official release manifest for
 this computer (the fixed `.../manifests/<os>_<arch>.json` the CLI's own updater and installer use, 16 KB at
@@ -276,24 +283,33 @@ most) and compares its version with the reviewed versions the dashboard passes a
 `--agy-reviewed` (on Windows they travel in the task request file; a manual Ubuntu
 run reads the packaged release file):
 
-- newest build reviewed: the normal update runs;
 - newest build already installed: `current`, and `agy update` is not run;
-- newest build not reviewed: nothing is installed, the row is `held` with
-  `held_for_review` and names that build (`heldVersion`), and the dashboard shows
-  "Update held: Antigravity X is waiting for a switching review";
-- review list or manifest unreadable: nothing is installed either
-  (`held`/`held_unchecked`);
-- an update that still lands outside the list (a release published between the
-  check and `agy update`) reports `updated_unreviewed`, never silently.
+- newest build reviewed: the managed update runs and may stop idle managed
+  sessions and reopen them on the new build;
+- newest build not reviewed, or the review list or manifest unreadable: the
+  managed update runs idle-only (`managed-update-command.js --idle-only`). With
+  no Antigravity process running it installs the build and reports
+  `updated_unreviewed` ("Updated, but this Antigravity version has no switching
+  review yet; Antigravity switching is paused until it is reviewed."). A running
+  Antigravity process is never stopped: the runtime could not restart a managed
+  session on an unreviewed build, so the row is `action_required` / `in_use` and
+  nothing changes until Antigravity is closed;
+- an update that lands outside the list in any other way (a release published
+  between the check and `agy update`) also reports `updated_unreviewed` when no
+  managed session was running. With managed sessions running, that race (the
+  manifest named a reviewed build, `agy update` installed a newer unreviewed one)
+  still ends as before: the sessions cannot restart on it, so the row is
+  `restart_failed` and the runtime keeps its recovery record.
 
-The hold covers Update all for managed runtimes on any host. Managed execution
-uses the existing default-scope Ubuntu account lock and resident PTY coordinator.
-A custom-scope managed marker or one on another platform reports unsupported
-instead of falling through to the ordinary updater; the installed bridge cannot
-safely manage those scopes.
-The CLI also updates itself in the background during ordinary runs, which no
-dashboard button can hold; switching then pauses
-until a review, as before.
+`agy` keeps working on an unreviewed build: the managed launcher runs the native
+CLI directly when its hash does not match the reviewed pin. Switching resumes
+after that build's review, runtime refresh and bundle rebuild
+(`docs/antigravity-runtime.md`). Managed execution uses the existing
+default-scope Ubuntu account lock and resident PTY coordinator. A custom-scope
+managed marker or one on another platform reports unsupported instead of
+falling through to the ordinary updater; the installed bridge cannot safely
+manage those scopes. The CLI also updates itself in the background during
+ordinary runs; switching then pauses until a review in the same way.
 
 Inventory disables background CLI updates (`MUSE_NO_AUTO_UPDATE=1`,
 `AGY_CLI_DISABLE_AUTO_UPDATE=true`, `DISABLE_AUTOUPDATER=1`). This matters because
@@ -319,31 +335,46 @@ On **Windows**, Update all closes a running Codex or Claude desktop app
 gracefully, installs the update and reopens it by itself (`desktop_reopened`:
 "Updated: it closed, installed the update and reopened."). The version decision
 is unchanged and cheap: Windows reads only the published MSIX manifest over HTTP
-ranges (three requests, under 1 MB); Windows Codex first reads the app's own
-Microsoft Store feed (`codex-app-prod/windows-store-update.json`, product
-`9PLM9XGG6VKS`), because the direct MSIX stopped at 26.930.7945.0, and installs a
-newer Store build with `winget install --source msstore`. Nothing read before the
-install says whether the Store offers that build here: winget's listings cannot
-answer it (this product shows `Version: Unknown`, has no available-version column,
-and the upgrade listing never names it), so only the install's own exit code
-counts. `0x8A15002B` (no applicable update) and `0x8A150061` (package already
-installed) mean nothing newer was installed. A running Codex is then closed,
-reopened as it was started, and the row is `current` with `store_no_newer`
-("Already current from the Microsoft Store: the Store offers no newer build to
-this computer yet."), or `restart_failed` when it cannot reopen. Any other winget
-exit is `failed` with `update_failed`, and Codex reopens from the old package.
-`store_no_newer` reports what winget and the Store say, not a comparison of
-versions. That answer is remembered for 6 hours in
-`~/.ccs/app-updates/codex-desktop-windows-store.json` (the feed build, the
-installed version and the check time; 4 KiB at most). While the feed build and the
-installed version are unchanged and the memory is fresh, Update all reports
-`current` with `store_no_newer` at once: winget is not asked and a running Codex
-stays open. The memory is ignored when it is unreadable, malformed, older than 6
-hours or dated in the future (the clock went backwards). It is dropped when the
-installed version changes or an install succeeds. So while the Store keeps
-answering nothing newer, a running Codex is closed at most once every 6 hours. A
-current app keeps running, and an app that is not running installs without
-opening anything. The MSIX download and its verification finish while the app
+ranges (three requests, under 1 MB). Windows Codex ships through the Microsoft
+Store (product `9PLM9XGG6VKS`) and reads two OpenAI feeds first:
+`codex-app-prod/windows-store-update.json`, which tells the app itself that a
+newer Store build exists, and `codex-app-prod/windows-release.json`, which names
+each version's own package per architecture
+(`codex-app-prod/releases/<version>/ChatGPT-x64.msix`). That package is the
+Store-signed MSIX itself (Microsoft Marketplace CA, the installed `OpenAI.Codex`
+identity and publisher), and the app's own updater falls back to it. When the
+release feed names a version newer than the installed one, Update all installs
+that package like any other MSIX: its manifest must name the installed identity,
+publisher and this architecture and exactly the version the feed names (otherwise
+`failed` / `package_mismatch`, before anything closes). The download finishes
+while Codex keeps running, and Codex then closes, installs through
+`Add-AppxPackage` (which checks the signature) and reopens. Only a URL inside
+that version's own release folder is accepted. When neither feed names a newer
+version the row is `current`, and nothing is downloaded or closed; Codex never
+uses the unversioned `ChatGPT-x64.msix`. When both feeds are unreadable it is
+`unknown` / `readiness_unknown`. When only the Store feed names a newer build (the
+release feed is behind or unreadable), the row is `action_required` /
+`store_update_in_app` ("The Microsoft Store has a newer build that Update all
+cannot install yet; nothing changed. Use the update button in the app.") and
+Codex is not closed.
+
+winget is not used. Its msstore source never matches the installed package
+(`winget list --id 9PLM9XGG6VKS --source msstore` answers "No installed package
+found", and `winget show` says `Version: Unknown`), so its install answered
+nothing newer even while the app offered the update. Until 2026-10-21 Update all
+then closed and reopened Codex and reported it `current` / `store_no_newer`,
+remembered for 6 hours, which made it call Windows Codex 26.1013.4894.0 current
+while the app offered 26.1016.6573.0. The dashboard still reads `store_no_newer`
+rows from older helpers and saved jobs.
+
+A current app keeps running, and an app that is not running installs without
+opening anything. A running app is closed only while at least 6.5 minutes of the
+helper budget remain (90 s of recovery reserve plus 300 s for the close, the
+install and the reopen; the Codex MSIX alone took about four minutes to install
+on 2026-10-21). That is checked after the download and again after the last
+process scan, right before the first close request, so slow scans cannot spend
+the install time; with less time left the row is `failed` / `timeout` and nothing
+closes. The MSIX download and its verification finish while the app
 keeps running. Right before closing, the updater captures the running main
 instances again (the app may have been opened or closed meanwhile) and plans how
 to reopen each the way it was started:
@@ -660,7 +691,7 @@ Existing CCS Bar tasks are untouched.
 
 The task runs `pythonw.exe` from the same Python install (registration stops with
 an error if it is missing) and is registered hidden. Helper children, such as
-PowerShell, winget, CLI probes and the Muse installer, start with
+PowerShell, CLI probes and the Muse installer, start with
 `CREATE_NO_WINDOW`, so none opens a console window of its own. Relaunched apps and
 the Windows Terminal tab that reopens a CLI still appear normally. Re-running
 `install-windows-task.ps1` applies the hidden setting to a task that is already
@@ -726,8 +757,9 @@ Windows npm updates first ask the registry whether anything is newer, then run
 paths) after stopping mapped instances first, since Windows cannot replace a
 running npm tree.
 
-An unreadable Windows Codex Store feed returns `unknown` / `readiness_unknown`
-before consulting the stale direct MSIX manifest. Claude's direct MSIX path is
+Windows Codex returns `unknown` / `readiness_unknown` only when both its Store
+feed and its release feed are unreadable, before consulting the direct MSIX
+manifest. Claude's direct MSIX path is
 unchanged. T3 download refusals use `update_failed`, an existing result code.
 
 ## Nas1, the fourth computer

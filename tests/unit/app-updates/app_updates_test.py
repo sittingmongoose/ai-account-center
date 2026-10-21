@@ -1,5 +1,6 @@
 """Fixture-only app updater verification; never updates a real installed app."""
 import contextlib
+import ctypes
 import io
 import json
 import os
@@ -122,7 +123,9 @@ class UpdaterTests(unittest.TestCase):
             install = common.Install('codex-desktop', 'windows', root / 'ChatGPT.exe', '1.0.0.0', 'msix', 'OpenAI.Codex', 'Expected')
             with mock.patch.object(desktop, 'private_temporary', return_value=contextlib.nullcontext(root)), mock.patch.object(desktop, 'download'), \
                     mock.patch.object(desktop, 'scan', return_value=[]), mock.patch.object(desktop, 'remote_msix_identity', return_value=None), \
-                    mock.patch.object(desktop, 'codex_store_version', side_effect=lambda install: install.version), mock.patch.object(desktop, 'terminate_desktops') as stop:
+                    mock.patch.object(desktop, 'codex_store_version', side_effect=lambda install: install.version), \
+                    mock.patch.object(desktop, 'codex_release_package', return_value=('2.0.0.0', desktop.CODEX_RELEASE_PREFIX + '2.0.0.0/ChatGPT-x64.msix')), \
+                    mock.patch.object(desktop, 'terminate_desktops') as stop:
                 value = desktop.update_windows(install)
             self.assertEqual(value['messageCode'], 'signature_failed')
             stop.assert_not_called()
@@ -221,9 +224,9 @@ class UpdaterTests(unittest.TestCase):
         installations = {key: common.Install(key, 'ubuntu', pathlib.Path('/fixture/app'), '1.0.0') for key in common.APP_LABELS}
         def gate(install):
             return ('failed', 'unsupported') if install.app_id == 'muse-code' else None
-        def cli(install, deadline, phase=None):
+        def cli(install, deadline, phase=None, **_kwargs):
             return common.result(install.app_id, 'ubuntu', 'current', '1.0.0', '1.0.0', 'native', attempted=True)
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update, mock.patch.object(updater, 'update_t3', side_effect=cli) as t3_update, mock.patch.object(updater, 'antigravity_hold', return_value=None), \
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update, mock.patch.object(updater, 'update_t3', side_effect=cli) as t3_update, mock.patch.object(updater, 'antigravity_plan', return_value=(None, True)), \
                 mock.patch.object(updater, 'latest_claude_version', return_value=None), mock.patch.object(updater, 'update_zcode', side_effect=cli) as zcode_update, mock.patch.object(updater, 'update_adapters', side_effect=cli) as adapters_update:
             value = updater.run_apply('ubuntu')
         rows = {item['appId']: item for item in value['results']}
@@ -779,7 +782,7 @@ class BoundedUpdateTests(unittest.TestCase):
     def test_cancel_skips_every_app_not_yet_started(self):
         installations = {key: common.Install(key, 'ubuntu', pathlib.Path('/fixture/app'), '1.0.0') for key in common.APP_LABELS}
         state = {'cancelled': False}
-        def cli(install, deadline):
+        def cli(install, deadline, **_kwargs):
             state['cancelled'] = True  # the cancel lands while this first app runs
             return common.result(install.app_id, 'ubuntu', 'current', '1.0.0', '1.0.0', 'native', attempted=True)
         with mock.patch.object(pathlib.Path, 'home', return_value=self.root), \
@@ -787,7 +790,7 @@ class BoundedUpdateTests(unittest.TestCase):
                 mock.patch.object(updater, 'check_readiness', return_value=None), \
                 mock.patch.object(updater, 'update_desktop') as desktop_update, \
                 mock.patch.object(updater, 'update_cli', side_effect=cli) as update, \
-                mock.patch.object(updater, 'antigravity_hold', return_value=None):
+                mock.patch.object(updater, 'antigravity_plan', return_value=(None, True)):
             value = updater.run_apply('ubuntu', cancelled=lambda: state['cancelled'])
         self.assertEqual(update.call_count, 1)
         desktop_update.assert_not_called()
@@ -978,6 +981,7 @@ def _fake_msix(version, name='OpenAI.Codex', publisher='CN=fixture', filler=3 * 
 
 REAL_REMOTE_MSIX_IDENTITY = desktop.remote_msix_identity
 REAL_CODEX_STORE_VERSION = desktop.codex_store_version
+REAL_CODEX_RELEASE_PACKAGE = desktop.codex_release_package
 REAL_WINDOWS_PACKAGE = desktop.windows_package
 REAL_PROCESS_PACKAGE = desktop.process_package
 
@@ -1001,6 +1005,8 @@ class DesktopWaitTests(unittest.TestCase):
             mock.patch.object(desktop, 'remote_fingerprint', return_value=None),
             mock.patch.object(desktop, 'remote_msix_identity', return_value=None),
             mock.patch.object(desktop, 'codex_store_version', side_effect=lambda install: install.version),
+            # Windows Codex packages come from the release feed; these name 26.930.7945.0.
+            mock.patch.object(desktop, 'codex_release_package', return_value=('26.930.7945.0', desktop.CODEX_RELEASE_PREFIX + '26.930.7945.0/ChatGPT-x64.msix')),
             # Any attempt to stop, close or relaunch a desktop app fails the test.
             mock.patch.object(desktop, 'terminate_desktops', side_effect=AssertionError('desktop app stopped')),
             mock.patch.object(desktop, 'restart_desktops', side_effect=AssertionError('desktop app relaunched')),
@@ -1045,25 +1051,65 @@ class DesktopWaitTests(unittest.TestCase):
         with mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure()):
             self.assertIsNone(REAL_CODEX_STORE_VERSION(install))
 
-    def test_windows_closed_codex_store_build_installs_through_winget_without_reopening(self):
-        install = self._windows_codex()
-        refreshed = common.Install('codex-desktop', 'windows', pathlib.Path('/fixture/ChatGPT.exe'), '26.1002.7124.0', 'msix', 'OpenAI.Codex', 'CN=fixture', pathlib.Path('/fixture'))
-        with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
-                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
-                mock.patch.object(desktop, 'command') as run, mock.patch.object(desktop, 'windows_package', return_value=refreshed), \
-                mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('stale MSIX downloaded')):
-            value = desktop.update_windows(install)
-        self.assertEqual((value['status'], value['version'], value['forcedStops']), ('updated', '26.1002.7124.0', 0))
-        argv = run.call_args.args[0]
-        self.assertEqual(argv[:6], ['C:/winget.exe', 'install', '--id', '9PLM9XGG6VKS', '--source', 'msstore'])
+    def test_codex_release_feed_names_only_that_versions_own_package(self):
+        def feed(value):
+            def write(url, target, **_kwargs):
+                self.assertEqual(url, desktop.CODEX_RELEASE_FEED)
+                pathlib.Path(target).write_text(value if isinstance(value, str) else json.dumps(value), encoding='utf-8')
+            return write
+        folder = desktop.CODEX_RELEASE_PREFIX + '26.1016.6573.0/'
+        good = {'schemaVersion': 1, 'releaseDate': '2026-10-21T08:00:20Z', 'packageVersion': '26.1016.6573.0', 'packages': [
+            {'architecture': 'x64', 'downloadUrl': folder + 'ChatGPT-x64.msix'},
+            {'architecture': 'arm64', 'downloadUrl': folder + 'ChatGPT-arm64.msix'}]}
+        with mock.patch.object(desktop, 'download', side_effect=feed(good)):
+            self.assertEqual(REAL_CODEX_RELEASE_PACKAGE('x64'), ('26.1016.6573.0', folder + 'ChatGPT-x64.msix'))
+            self.assertEqual(REAL_CODEX_RELEASE_PACKAGE('arm64'), ('26.1016.6573.0', folder + 'ChatGPT-arm64.msix'))
+        renamed = {**good, 'packages': [{'architecture': 'x86_64', 'downloadUrl': folder + 'ChatGPT-x64.msix'}]}
+        with mock.patch.object(desktop, 'download', side_effect=feed(renamed)):
+            self.assertEqual(REAL_CODEX_RELEASE_PACKAGE('x64'), ('26.1016.6573.0', folder + 'ChatGPT-x64.msix'))
+        broken = {
+            'another host': {**good, 'packages': [{'architecture': 'x64', 'downloadUrl': 'https://elsewhere.invalid/codex-app-prod/releases/26.1016.6573.0/ChatGPT-x64.msix'}]},
+            "another version's folder": {**good, 'packages': [{'architecture': 'x64', 'downloadUrl': desktop.CODEX_RELEASE_PREFIX + '99.0.0.0/ChatGPT-x64.msix'}]},
+            'a nested path': {**good, 'packages': [{'architecture': 'x64', 'downloadUrl': folder + '../ChatGPT-x64.msix'}]},
+            'a query': {**good, 'packages': [{'architecture': 'x64', 'downloadUrl': folder + 'ChatGPT-x64.msix?x=1'}]},
+            'not an MSIX': {**good, 'packages': [{'architecture': 'x64', 'downloadUrl': folder + 'ChatGPT-x64.exe'}]},
+            'no package for this architecture': {**good, 'packages': [{'architecture': 'arm64', 'downloadUrl': folder + 'ChatGPT-arm64.msix'}]},
+            'a three-part version': {**good, 'packageVersion': '26.1016.6573'},
+            'another schema': {**good, 'schemaVersion': 2},
+            'packages not a list': {**good, 'packages': {}},
+            'a list instead of an object': [good],
+            'not JSON': '{"schemaVersion": ',
+        }
+        for name, value in broken.items():
+            with self.subTest(name), mock.patch.object(desktop, 'download', side_effect=feed(value)):
+                self.assertIsNone(REAL_CODEX_RELEASE_PACKAGE('x64'))
+        with mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure()):
+            self.assertIsNone(REAL_CODEX_RELEASE_PACKAGE('x64'))
 
-    def test_windows_codex_store_install_that_changes_nothing_is_not_updated(self):
+    def test_windows_codex_store_build_without_a_release_package_is_left_to_the_app(self):
+        # winget's msstore source never matches the installed package, so it is never asked.
         install = self._windows_codex()
-        with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
-                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
-                mock.patch.object(desktop, 'command'), mock.patch.object(desktop, 'windows_package', return_value=install):
-            value = desktop.update_windows(install)
-        self.assertEqual((value['status'], value['messageCode']), ('failed', 'version_unknown'))
+        for release in (None, ('26.930.3748.0', desktop.CODEX_RELEASE_PREFIX + '26.930.3748.0/ChatGPT-x64.msix')):
+            with self.subTest(release=release), \
+                    mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
+                    mock.patch.object(desktop, 'codex_release_package', return_value=release), \
+                    mock.patch.object(desktop, 'command', side_effect=AssertionError('winget was asked')), \
+                    mock.patch.object(desktop, 'remote_msix_identity', side_effect=AssertionError('a package manifest was read')), \
+                    mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('a package was downloaded')):
+                value = desktop.update_windows(install)
+            self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
+                             ('action_required', 'store_update_in_app', '26.930.3748.0', False))
+        self.assertFalse(hasattr(desktop, 'update_windows_store'))
+
+    def test_windows_codex_with_no_newer_build_in_either_feed_is_current_without_the_direct_package(self):
+        install = self._windows_codex()
+        for release in (None, ('26.930.3748.0', desktop.CODEX_RELEASE_PREFIX + '26.930.3748.0/ChatGPT-x64.msix')):
+            with self.subTest(release=release), \
+                    mock.patch.object(desktop, 'codex_release_package', return_value=release), \
+                    mock.patch.object(desktop, 'remote_msix_identity', side_effect=AssertionError('a package manifest was read')), \
+                    mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('a package was downloaded')):
+                value = desktop.update_windows(install)
+            self.assertEqual((value['status'], value['messageCode']), ('current', 'current'))
 
     # ---------------------------------------------------------------- the Mac quit request is gone
     def test_mac_flow_has_no_way_to_ask_a_desktop_app_to_quit(self):
@@ -1075,7 +1121,7 @@ class DesktopWaitTests(unittest.TestCase):
         mac = inspect.getsource(desktop.update_mac)
         for name in ('terminate_desktops', 'restart_desktops', 'windows_replace', 'reopen_windows'):
             self.assertNotIn(name, mac)
-        self.assertIn('terminate_desktops(install, contexts)', inspect.getsource(desktop.windows_replace))
+        self.assertIn('terminate_desktops(install, contexts, ready=', inspect.getsource(desktop.windows_replace))
 
     def test_running_is_any_process_of_the_app_family(self):
         install = self._windows_codex()
@@ -1356,6 +1402,7 @@ class WindowsDesktopReopenTests(unittest.TestCase):
     """
 
     OLD, NEW = '26.930.3748.0', '26.1002.7124.0'
+    RELEASE_URL = desktop.CODEX_RELEASE_PREFIX + '26.1002.7124.0/ChatGPT-x64.msix'
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='ccs-desktop-reopen-')
@@ -1382,6 +1429,7 @@ class WindowsDesktopReopenTests(unittest.TestCase):
             mock.patch.object(desktop, 'msix_info', side_effect=lambda path: self.manifest()),
             mock.patch.object(desktop, 'remote_msix_identity', side_effect=lambda url, **kwargs: self.manifest()),
             mock.patch.object(desktop, 'codex_store_version', side_effect=lambda install: install.version),
+            mock.patch.object(desktop, 'codex_release_package', side_effect=lambda architecture: (self.NEW, self.RELEASE_URL)),
             mock.patch.object(desktop.time, 'sleep'),
         ]
         for patch in patches:
@@ -1412,7 +1460,9 @@ class WindowsDesktopReopenTests(unittest.TestCase):
             self.packages[pid] = '%s_%s_x64__%s' % (self.identity, self.OLD, self.publisher_id)
         return pid
 
-    def close(self, install, contexts):
+    def close(self, install, contexts, ready=None):
+        # The real close scans first, then checks the time left, then closes.
+        (ready or (lambda: None))()
         self.events.append('close')
         mains = {item.pid for item in contexts}
         self.processes = [item for item in self.processes if item.pid not in mains and item.ppid not in mains]
@@ -1460,170 +1510,137 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.assertEqual(self.launches(), [self.aumid_launch()])
         self.assert_reopened(value, 1, forced=1)
 
-    # Winget's own install is the only answer about the Store: its listings never name this product.
-    # The "nothing newer" answer is remembered in a private file, beside the Mac package memory.
-    def store_memory(self):
-        return self.root / '.ccs/app-updates/codex-desktop-windows-store.json'
-
-    def remember_store(self, feed=None, installed=None, checked=None, raw=None):
-        """Write winget's remembered "nothing newer" answer, or raw bytes in its place."""
-        path = self.store_memory()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if raw is not None:
-            path.write_bytes(raw)
-            return
-        now = int(time.time())
-        value = {'feedBuild': feed or self.NEW, 'installedVersion': installed or self.OLD, 'checkedAt': now if checked is None else checked}
-        path.write_text(json.dumps(value), encoding='utf-8')
-
-    def remembered(self):
-        return json.loads(self.store_memory().read_text(encoding='utf-8'))
-
-    def assert_remembered_now(self):
-        """The memory holds this run's answer: the feed build, the installed version and the time in whole seconds."""
-        value = self.remembered()
-        self.assertEqual(sorted(value), ['checkedAt', 'feedBuild', 'installedVersion'])
-        self.assertEqual((value['feedBuild'], value['installedVersion']), (self.NEW, self.OLD))
-        self.assertIs(type(value['checkedAt']), int)
-        self.assertLessEqual(abs(value['checkedAt'] - time.time()), 60)
-
     def fresh_run(self):
         """Forget the last run's events and processes, so the next run_main() starts from the old package."""
         self.events, self.launched, self.processes, self.packages = [], [], [], {}
         self.registered, self.registered_version = self.old_root, self.OLD
 
-    def store_run(self, command):
-        """Update the running Codex while its feed is ahead; `command` answers each winget call (a function, or an exception to raise)."""
-        with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
-                mock.patch.object(desktop.shutil, 'which', return_value='C:/winget.exe'), \
-                mock.patch.object(desktop, 'command', side_effect=command) as run:
+    def release_run(self, release, store=None):
+        """Update the running Codex with OpenAI's release feed naming `release`; winget may never be asked."""
+        fetched = []
+        def fetch(url, target, *args):
+            fetched.append(url)
+            self.events.append('download')
+        with mock.patch.object(desktop, 'codex_store_version', return_value=store or self.NEW), \
+                mock.patch.object(desktop, 'codex_release_package', return_value=release), \
+                mock.patch.object(desktop, 'download_desktop', side_effect=fetch), \
+                mock.patch.object(desktop, 'command', side_effect=AssertionError('winget was asked')), \
+                mock.patch.object(desktop.shutil, 'which', side_effect=AssertionError('winget was looked up')):
             value = desktop.update_desktop(self.package(self.old_root, self.OLD))
-        return value, run
+        return value, fetched
 
-    def installs_nothing_newer(self, argv, **kwargs):
-        """winget install finds no applicable update for this Store product."""
-        raise common.UpdateFailure(exit_code=0x8A15002B)
-
-    def installs(self, argv, **kwargs):
-        self.assertEqual(argv[:6], ['C:/winget.exe', 'install', '--id', '9PLM9XGG6VKS', '--source', 'msstore'])
-        self.install(None)
-
-    def test_running_codex_store_build_closes_installs_through_winget_and_reopens(self):
+    def test_running_codex_installs_the_release_feed_package_the_app_offers(self):
+        # The 2026-10-21 Windows state: the app showed an update while winget said
+        # nothing newer, and Update all called Codex current.
         self.run_main()
-        value, run = self.store_run(self.installs)
-        self.assertEqual(self.events, ['close', 'install', 'launch'])
+        phases = []
+        with mock.patch.object(desktop, 'codex_store_version', return_value=self.NEW), \
+                mock.patch.object(desktop, 'codex_release_package', return_value=(self.NEW, self.RELEASE_URL)), \
+                mock.patch.object(desktop, 'command', side_effect=AssertionError('winget was asked')):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD), phase=phases.append)
+        self.assertEqual(self.events, ['download', 'close', 'install', 'launch'])
+        self.assertEqual(phases, ['downloading', 'updating'])
         self.assertEqual(self.launches(), [self.aumid_launch()])
         self.assert_reopened(value, 1)
-        self.assertEqual([call.args[0][1] for call in run.call_args_list], ['install'])
-        self.assertFalse(self.store_memory().exists())
 
-    def test_nothing_newer_from_winget_closes_codex_once_reopens_it_as_current_and_remembers_it(self):
+    def test_the_release_package_is_read_and_downloaded_from_its_own_versioned_url(self):
         self.run_main()
-        value, run = self.store_run(self.installs_nothing_newer)
-        self.assertEqual(self.events, ['close', 'launch'])
-        self.assertEqual(self.launches(), [self.aumid_launch()])
-        self.assertEqual((value['status'], value['messageCode'], value['version'], value['previousVersion']), ('current', 'store_no_newer', self.OLD, self.OLD))
-        self.assertEqual((value['updateAttempted'], value['restartedProcesses']), (True, 1))
-        self.assertEqual(len(run.call_args_list), 1)
-        self.assert_remembered_now()
-
-    def test_a_fresh_remembered_answer_keeps_running_codex_open_and_does_not_ask_winget(self):
-        self.run_main()
-        self.remember_store()
-        value, run = self.store_run(AssertionError('winget was asked'))
-        self.assertEqual((self.events, self.launched, run.call_args_list), ([], [], []))
-        self.assertEqual((value['status'], value['messageCode'], value['version'], value['previousVersion']), ('current', 'store_no_newer', self.OLD, self.OLD))
-        self.assertEqual((value['updateAttempted'], value['restartedProcesses']), (False, 0))
-        self.assertTrue(self.store_memory().exists())
-
-    def test_an_expired_answer_another_feed_build_or_a_clock_set_back_takes_the_normal_path(self):
-        now = int(time.time())
-        cases = {
-            'expired': {'checked': now - desktop.STORE_NO_NEWER_SECONDS - 60},
-            'feed build moved': {'feed': '26.1007.2314.0'},
-            'clock went backwards': {'checked': now + 3600},
-        }
-        for name, change in cases.items():
-            with self.subTest(name):
-                self.fresh_run()
-                self.run_main()
-                self.remember_store(**change)
-                value, run = self.store_run(self.installs_nothing_newer)
-                self.assertEqual(self.events, ['close', 'launch'])
-                self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('current', 'store_no_newer', True))
-                self.assertEqual(len(run.call_args_list), 1)
-                self.assert_remembered_now()
-
-    def test_a_malformed_unreadable_or_oversized_answer_is_ignored_and_the_normal_path_runs(self):
-        now = int(time.time())
-        valid = {'feedBuild': self.NEW, 'installedVersion': self.OLD, 'checkedAt': now}
-        cases = {
-            'not JSON': b'{"feedBuild": ',
-            'not UTF-8': b'\xff\xfe\x00',
-            'a list instead of an object': json.dumps([valid]).encode(),
-            'nested 2000 levels deep': b'[' * 2000 + b']' * 2000,
-            'no checkedAt': json.dumps({key: value for key, value in valid.items() if key != 'checkedAt'}).encode(),
-            'checkedAt as text': json.dumps({**valid, 'checkedAt': str(now)}).encode(),
-            'checkedAt as a boolean': json.dumps({**valid, 'checkedAt': True}).encode(),
-            'checkedAt as a float': json.dumps({**valid, 'checkedAt': float(now)}).encode(),
-            'feedBuild as a number': json.dumps({**valid, 'feedBuild': 2610}).encode(),
-            'installedVersion as null': json.dumps({**valid, 'installedVersion': None}).encode(),
-            'larger than 4 KiB': json.dumps({**valid, 'padding': 'x' * desktop.STORE_MEMORY_BYTES}).encode(),
-        }
-        for name, raw in cases.items():
-            with self.subTest(name):
-                self.fresh_run()
-                self.run_main()
-                self.remember_store(raw=raw)
-                value, run = self.store_run(self.installs_nothing_newer)
-                self.assertEqual(self.events, ['close', 'launch'])
-                self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('current', 'store_no_newer', True))
-                self.assertEqual(len(run.call_args_list), 1)
-                self.assert_remembered_now()
-
-    def test_a_remembered_answer_for_another_installed_version_is_dropped(self):
-        self.run_main()
-        self.remember_store(installed='26.1001.1.0')
-        value, run = self.store_run(common.UpdateFailure(exit_code=1))
-        self.assertEqual(self.events, ['close', 'launch'])
-        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('failed', 'update_failed', self.OLD, True))
-        self.assertEqual(len(run.call_args_list), 1)
-        self.assertFalse(self.store_memory().exists())
-
-    def test_a_successful_store_install_clears_the_remembered_answer(self):
-        self.run_main()
-        self.remember_store(checked=int(time.time()) - desktop.STORE_NO_NEWER_SECONDS - 60)
-        self.assertTrue(self.store_memory().exists())
-        value, run = self.store_run(self.installs)
-        self.assertEqual(self.events, ['close', 'install', 'launch'])
+        read = []
+        with mock.patch.object(desktop, 'remote_msix_identity', side_effect=lambda url, **kwargs: read.append(url) or self.manifest()):
+            value, fetched = self.release_run((self.NEW, self.RELEASE_URL))
+        self.assertEqual((read, fetched), ([self.RELEASE_URL], [self.RELEASE_URL]))
         self.assert_reopened(value, 1)
-        self.assertFalse(self.store_memory().exists())
 
-    def test_any_other_winget_failure_stays_failed_reopens_codex_and_remembers_nothing(self):
-        for code in (1, 0x8A150014, 0x80070005):
-            with self.subTest(exit_code=hex(code)):
+    def test_a_release_feed_at_the_installed_version_is_current_and_nothing_closes(self):
+        self.run_main()
+        with mock.patch.object(desktop, 'remote_msix_identity', side_effect=AssertionError('a package manifest was read')):
+            value, fetched = self.release_run((self.OLD, desktop.CODEX_RELEASE_PREFIX + self.OLD + '/ChatGPT-x64.msix'), store=self.OLD)
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('current', 'current', self.OLD, False))
+        self.assertEqual((self.events, fetched, self.launched), ([], [], []))
+
+    def test_an_unreadable_store_feed_still_updates_from_the_release_feed(self):
+        self.run_main()
+        with mock.patch.object(desktop, 'codex_store_version', return_value=None), \
+                mock.patch.object(desktop, 'codex_release_package', return_value=(self.NEW, self.RELEASE_URL)):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD))
+        self.assertEqual(self.events, ['download', 'close', 'install', 'launch'])
+        self.assert_reopened(value, 1)
+
+    def test_a_downloaded_package_that_is_not_the_feed_version_is_never_installed_or_current(self):
+        for version in (self.OLD, '26.1003.1.0'):
+            with self.subTest(version=version):
                 self.fresh_run()
                 self.run_main()
-                value, run = self.store_run(common.UpdateFailure(exit_code=code))
-                self.assertEqual(self.events, ['close', 'launch'])
-                self.assertEqual(self.launches(), [self.aumid_launch()])
-                self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('failed', 'update_failed', self.OLD, True))
-                self.assertFalse(self.store_memory().exists())
+                with mock.patch.object(desktop, 'msix_info', return_value={**self.manifest(), 'Version': version}), \
+                        mock.patch.object(desktop, 'remote_msix_identity', return_value=None):
+                    value, fetched = self.release_run((self.NEW, self.RELEASE_URL))
+                self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']), ('failed', 'package_mismatch', self.OLD, False))
+                self.assertEqual((self.events, self.launched), (['download'], []))
 
-    def test_nothing_newer_that_cannot_reopen_codex_reports_restart_failed_and_still_remembers_it(self):
+    def test_a_remote_manifest_that_is_not_the_feed_version_stops_before_any_download(self):
         self.run_main()
-        with mock.patch.object(desktop, 'reopen_windows', side_effect=common.UpdateFailure('restart_failed')):
-            value, run = self.store_run(common.UpdateFailure(exit_code=0x8A150061))
-        self.assertEqual(self.events, ['close'])
-        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('restart_failed', 'restart_failed', True))
-        self.assert_remembered_now()
+        with mock.patch.object(desktop, 'remote_msix_identity', return_value={**self.manifest(), 'Version': self.OLD}):
+            value, fetched = self.release_run((self.NEW, self.RELEASE_URL))
+        self.assertEqual((value['status'], value['messageCode'], value['version']), ('failed', 'package_mismatch', self.OLD))
+        self.assertEqual((self.events, fetched), ([], []))
 
-    def test_a_memory_that_cannot_be_written_does_not_change_the_nothing_newer_answer(self):
+    def test_a_store_build_no_release_package_names_is_left_to_the_app_and_nothing_closes(self):
         self.run_main()
-        with mock.patch.object(desktop, 'write_private_json', side_effect=OSError('read-only')):
-            value, run = self.store_run(self.installs_nothing_newer)
-        self.assertEqual((value['status'], value['messageCode'], value['restartedProcesses']), ('current', 'store_no_newer', 1))
-        self.assertFalse(self.store_memory().exists())
+        value, fetched = self.release_run((self.OLD, desktop.CODEX_RELEASE_PREFIX + self.OLD + '/ChatGPT-x64.msix'))
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('action_required', 'store_update_in_app', False))
+        self.assertEqual((self.events, fetched, self.launched), ([], [], []))
+
+    def test_too_little_time_left_after_the_download_never_closes_the_app(self):
+        self.run_main()
+        deadline = time.monotonic() + 90 + desktop.WINDOWS_REPLACE_SECONDS - 30
+        value = desktop.update_desktop(self.package(self.old_root, self.OLD), deadline=deadline)
+        self.assertEqual((value['status'], value['messageCode'], value['version']), ('failed', 'timeout', self.OLD))
+        self.assertEqual((self.events, self.launched), (['download'], []))
+
+    def test_slow_scans_before_the_close_cannot_spend_the_install_time(self):
+        # The time left passes the check after the download, then the capture and
+        # the real close's own scan use it up: the check right before WM_CLOSE refuses.
+        # Only the OS calls are fixtures; terminate_desktops itself runs.
+        self.run_main()
+        clock = {'now': 1000.0, 'spend': False}
+        reserve = 90 + desktop.WINDOWS_REPLACE_SECONDS
+        def slow_scan(platform):
+            if clock['spend']:
+                clock['now'] += 20
+            return list(self.processes)
+        def fetch(url, target, *args):
+            self.events.append('download')
+            clock['spend'] = True  # From here on every scan costs 20 s.
+        # A close request fails at once (its grace loop would never end on this frozen clock).
+        user32 = mock.Mock()
+        user32.EnumWindows.side_effect = AssertionError('WM_CLOSE was sent')
+        windll = types.SimpleNamespace(kernel32=desktop.ctypes.windll.kernel32, user32=user32)
+        with mock.patch.object(desktop.time, 'monotonic', side_effect=lambda: clock['now']), \
+                mock.patch.object(desktop, 'download_desktop', side_effect=fetch), \
+                mock.patch.object(desktop, 'scan', side_effect=slow_scan), \
+                mock.patch.object(processes, 'scan', side_effect=slow_scan), \
+                mock.patch.object(desktop, 'terminate_desktops', processes.terminate_desktops), \
+                mock.patch.object(processes, 'live_contexts', side_effect=lambda platform, contexts: list(contexts)), \
+                mock.patch.object(desktop, 'live_contexts', side_effect=lambda platform, contexts: list(contexts)), \
+                mock.patch.object(processes, 'terminate_cli', side_effect=AssertionError('a survivor was stopped')), \
+                mock.patch.object(processes.ctypes, 'windll', windll, create=True), \
+                mock.patch.object(processes.ctypes, 'WINFUNCTYPE', lambda *types: (lambda function: function), create=True):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD), deadline=clock['now'] + reserve + 25)
+        self.assertEqual((value['status'], value['messageCode'], value['version']), ('failed', 'timeout', self.OLD))
+        # Two 20 s scans ran after the download check: the capture and the close's own.
+        self.assertEqual(clock['now'], 1040.0)
+        user32.EnumWindows.assert_not_called()
+        user32.PostMessageW.assert_not_called()
+        self.assertEqual((self.events, self.launched), (['download'], []))
+        # With time to spare the same slow scans still close, install and reopen.
+        self.fresh_run()
+        self.run_main()
+        clock['spend'] = True
+        with mock.patch.object(desktop.time, 'monotonic', side_effect=lambda: clock['now']), \
+                mock.patch.object(desktop, 'scan', side_effect=slow_scan):
+            value = desktop.update_desktop(self.package(self.old_root, self.OLD), deadline=clock['now'] + reserve + 600)
+        self.assertEqual(self.events, ['download', 'close', 'install', 'launch'])
+        self.assert_reopened(value, 1)
 
     def test_a_failed_command_keeps_the_exit_code_it_returned(self):
         with mock.patch.object(common, '_run_bounded', return_value=(0x8A15002B, b'')):
@@ -1710,7 +1727,7 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.use('claude-desktop')
         stuck = self.run_main()
         self.run_main(['--user-data-dir=/fixture/Roaming/Claude-work'], packaged=False)
-        def close(install, contexts):
+        def close(install, contexts, ready=None):
             self.events.append('close')
             self.processes = [item for item in self.processes if item.pid == stuck or item.ppid == stuck]
             raise common.UpdateFailure('restart_failed')
@@ -1800,7 +1817,7 @@ class _Manifest:
 
 
 class AntigravityReviewHoldTests(unittest.TestCase):
-    """Switching reviews protect managed runtimes without freezing ordinary CLIs."""
+    """Switching reviews protect managed runtimes without freezing any CLI: an unreviewed build installs idle-only."""
 
     REVIEWED = frozenset({'1.2.14', '1.2.16'})
 
@@ -1868,30 +1885,32 @@ class AntigravityReviewHoldTests(unittest.TestCase):
         with mock.patch('urllib.request.urlopen', side_effect=urllib.error.URLError('offline')):
             self.assertIsNone(updater.latest_agy_version('mac'))
 
-    def test_unreviewed_newest_build_is_held_and_named(self):
-        row = updater.antigravity_hold(self.install(), self.REVIEWED, latest=lambda platform: '1.3.0')
-        self.assertEqual((row['status'], row['messageCode'], row['heldVersion']), ('held', 'held_for_review', '1.3.0'))
-        self.assertEqual((row['previousVersion'], row['version'], row['updateAttempted']), ('1.2.16', '1.2.16', False))
+    def test_unreviewed_newest_build_is_never_held_and_updates_idle_only(self):
+        # Every new release used to be held here until a review (1.3.0, 1.3.2, 1.3.5, 1.4.4).
+        self.assertEqual(updater.antigravity_plan(self.install(), self.REVIEWED, latest=lambda platform: '1.3.0'), (None, False))
 
-    def test_reviewed_newest_build_may_update_and_current_never_runs_the_updater(self):
-        self.assertIsNone(updater.antigravity_hold(self.install('1.2.14'), self.REVIEWED, latest=lambda platform: '1.2.16'))
-        row = updater.antigravity_hold(self.install('1.3.0'), self.REVIEWED, latest=lambda platform: '1.3.0')
-        self.assertEqual((row['status'], row['messageCode'], row['updateAttempted']), ('current', 'current', False))
+    def test_reviewed_newest_build_may_restart_sessions_and_current_never_runs_the_updater(self):
+        self.assertEqual(updater.antigravity_plan(self.install('1.2.14'), self.REVIEWED, latest=lambda platform: '1.2.16'), (None, True))
+        row, restart = updater.antigravity_plan(self.install('1.3.0'), self.REVIEWED, latest=lambda platform: '1.3.0')
+        self.assertEqual((row['status'], row['messageCode'], row['updateAttempted'], restart), ('current', 'current', False, False))
+        # An unreviewed installed build that is already the newest one is current too.
+        row, _ = updater.antigravity_plan(self.install('1.4.4'), None, latest=lambda platform: '1.4.4')
+        self.assertEqual(row['status'], 'current')
 
-    def test_unknown_review_or_manifest_holds_without_installing(self):
+    def test_unknown_review_or_manifest_still_updates_idle_only(self):
+        # Without the review list even a build that is reviewed elsewhere cannot restart sessions.
+        self.assertEqual(updater.antigravity_plan(self.install('1.2.14'), None, latest=lambda platform: '1.2.16'), (None, False))
+        self.assertEqual(updater.antigravity_plan(self.install(), None, latest=lambda platform: '1.3.0'), (None, False))
+        self.assertEqual(updater.antigravity_plan(self.install(), self.REVIEWED, latest=lambda platform: None), (None, False))
         probe = mock.Mock(return_value='1.2.16')
-        row = updater.antigravity_hold(self.install(), None, latest=probe)
-        self.assertEqual((row['status'], row['messageCode'], row['heldVersion']), ('held', 'held_unchecked', None))
+        self.assertEqual(updater.antigravity_plan(self.install(None), self.REVIEWED, latest=probe), (None, False))
         probe.assert_not_called()
-        row = updater.antigravity_hold(self.install(), self.REVIEWED, latest=lambda platform: None)
-        self.assertEqual((row['status'], row['messageCode']), ('held', 'held_unchecked'))
-        self.assertIsNone(updater.antigravity_hold(self.install(None), self.REVIEWED, latest=probe))
 
     def run_apply(self, install, reviewed, newest, update=None):
         installs = {key: None for key in common.APP_LABELS}
         installs['antigravity-cli'] = install
         installs['omp'] = common.Install('omp', install.platform, pathlib.Path('/fixture/omp'), '1.0.0')
-        update = update or (lambda item, deadline: common.result(item.app_id, item.platform, 'current', item.version, item.version, 'native', attempted=True))
+        update = update or (lambda item, deadline, **_kwargs: common.result(item.app_id, item.platform, 'current', item.version, item.version, 'native', attempted=True))
         with mock.patch.object(pathlib.Path, 'home', return_value=self.root), \
                 mock.patch.object(updater, 'detect', return_value=installs), \
                 mock.patch.object(updater, 'latest_agy_version', side_effect=lambda platform: newest), \
@@ -1900,20 +1919,32 @@ class AntigravityReviewHoldTests(unittest.TestCase):
             value = updater.run_apply(install.platform, agy_reviewed=reviewed)
         return {row['appId']: row for row in value['results']}, ready, run
 
-    def test_run_apply_holds_managed_antigravity_on_every_host_and_still_updates_the_rest(self):
-        for platform in ('ubuntu', 'mac', 'windows'):
-            rows, ready, run = self.run_apply(self.install(platform=platform), self.REVIEWED, '1.3.0')
-            self.assertEqual(rows['antigravity-cli']['status'], 'held', platform)
-            self.assertEqual(rows['antigravity-cli']['heldVersion'], '1.3.0')
-            self.assertEqual([call.args[0].app_id for call in run.call_args_list], ['omp'], 'agy update never ran on ' + platform)
-            self.assertEqual([call.args[0].app_id for call in ready.call_args_list], ['omp'])
-            self.assertEqual(rows['omp']['status'], 'current')
+    def test_run_apply_updates_managed_antigravity_to_an_unreviewed_build_idle_only(self):
+        moved = lambda item, deadline, **_kwargs: common.result(item.app_id, item.platform, 'updated', item.version, '1.3.0', 'native', attempted=True)
+        rows, ready, run = self.run_apply(self.install(), self.REVIEWED, '1.3.0', update=moved)
+        row = rows['antigravity-cli']
+        self.assertEqual((row['status'], row['messageCode'], row['version']), ('updated', 'updated_unreviewed', '1.3.0'))
+        self.assertNotIn('heldVersion', row)
+        calls = {call.args[0].app_id: call.kwargs for call in run.call_args_list}
+        self.assertEqual(calls['antigravity-cli'], {'restart_managed': False})
+        self.assertEqual(sorted(call.args[0].app_id for call in ready.call_args_list), ['antigravity-cli', 'omp'])
+        self.assertEqual(calls['omp'], {})
+
+    def test_run_apply_lets_a_reviewed_target_restart_managed_sessions(self):
+        rows, _, run = self.run_apply(self.install('1.2.14'), self.REVIEWED, '1.2.16')
+        calls = {call.args[0].app_id: call.kwargs for call in run.call_args_list}
+        self.assertEqual(calls['antigravity-cli'], {'restart_managed': True})
+
+    def test_run_apply_reports_a_running_antigravity_as_in_use_not_held(self):
+        busy = lambda item, deadline, **_kwargs: common.result(item.app_id, item.platform, 'action_required', item.version, item.version, 'native', 'in_use')
+        rows, _, _ = self.run_apply(self.install(), self.REVIEWED, '1.3.0', update=busy)
+        self.assertEqual((rows['antigravity-cli']['status'], rows['antigravity-cli']['messageCode']), ('action_required', 'in_use'))
 
     def test_run_apply_reports_an_update_that_landed_outside_the_review(self):
-        moved = lambda item, deadline: common.result(item.app_id, item.platform, 'updated', item.version, '1.3.1', 'native', attempted=True)
+        moved = lambda item, deadline, **_kwargs: common.result(item.app_id, item.platform, 'updated', item.version, '1.3.1', 'native', attempted=True)
         rows, _, _ = self.run_apply(self.install('1.2.14'), self.REVIEWED, '1.2.16', update=moved)
         self.assertEqual((rows['antigravity-cli']['status'], rows['antigravity-cli']['messageCode']), ('updated', 'updated_unreviewed'))
-        reviewed = lambda item, deadline: common.result(item.app_id, item.platform, 'updated', item.version, '1.2.16', 'native', attempted=True)
+        reviewed = lambda item, deadline, **_kwargs: common.result(item.app_id, item.platform, 'updated', item.version, '1.2.16', 'native', attempted=True)
         rows, _, _ = self.run_apply(self.install('1.2.14'), self.REVIEWED, '1.2.16', update=reviewed)
         self.assertEqual(rows['antigravity-cli']['messageCode'], 'updated')
 
@@ -1921,7 +1952,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
         self.descriptor.unlink()
         # Saved profiles supply usage, but cannot enable native activation.
         (self.root / '.ccs/antigravity-profiles').mkdir()
-        moved = lambda item, deadline: common.result(item.app_id, item.platform, 'updated', item.version, '1.3.4', 'native', 'background_sessions_kept', attempted=True)
+        moved = lambda item, deadline, **_kwargs: common.result(item.app_id, item.platform, 'updated', item.version, '1.3.4', 'native', 'background_sessions_kept', attempted=True)
         for platform in ('ubuntu', 'mac', 'windows'):
             for review in (None, self.REVIEWED):
                 rows, ready, run = self.run_apply(self.install(platform=platform), review, '1.3.4', update=moved)
@@ -1931,7 +1962,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
                 self.assertIn('antigravity-cli', [call.args[0].app_id for call in ready.call_args_list])
                 self.assertIn('antigravity-cli', [call.args[0].app_id for call in run.call_args_list])
         probe = mock.Mock(side_effect=AssertionError('Ordinary updates need no switching manifest check'))
-        self.assertIsNone(updater.antigravity_hold(self.install(), None, latest=probe))
+        self.assertEqual(updater.antigravity_plan(self.install(), None, latest=probe), (None, True))
         probe.assert_not_called()
 
     def test_unsafe_or_unreadable_runtime_paths_keep_the_review_gate(self):
@@ -1945,8 +1976,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
                 return original(path, *args, **kwargs)
             with mock.patch.object(pathlib.Path, 'lstat', unreadable):
                 self.assertTrue(updater.antigravity_runtime_present())
-                row = updater.antigravity_hold(self.install(), self.REVIEWED, latest=lambda platform: '1.3.4')
-                self.assertEqual(row['status'], 'held')
+                self.assertEqual(updater.antigravity_plan(self.install(), self.REVIEWED, latest=lambda platform: '1.3.4'), (None, False))
         # A dangling marker or ancestor cannot be mistaken for absence.
         self.descriptor.symlink_to(self.root / 'missing-descriptor')
         self.assertTrue(updater.antigravity_runtime_present())
@@ -1954,6 +1984,40 @@ class AntigravityReviewHoldTests(unittest.TestCase):
         self.descriptor.parent.rmdir()
         self.descriptor.parent.symlink_to(self.root / 'missing-runtime', target_is_directory=True)
         self.assertTrue(updater.antigravity_runtime_present())
+
+    BRIDGE_UPDATED = {'appId': 'antigravity-cli', 'platform': 'ubuntu', 'manager': 'native', 'status': 'updated', 'messageCode': 'updated',
+                      'previousVersion': '1.2.16', 'version': '1.4.4', 'updateAttempted': True, 'restartedProcesses': 0}
+
+    def bridge_run(self, payload, restart_managed):
+        """update_cli's managed branch with a fixture bridge answer; returns (row, bridge argv)."""
+        original = pathlib.Path.is_file
+        def is_file(path):
+            return True if path.name == 'managed-update-command.js' else original(path)
+        with mock.patch.object(pathlib.Path, 'is_file', is_file), \
+                mock.patch.object(updater, 'command', return_value=json.dumps(payload)) as bridge, \
+                mock.patch.object(updater, 'perform_cli_update', side_effect=AssertionError('the ordinary updater ran')), \
+                mock.patch.object(updater, 'scan', side_effect=AssertionError('processes were scanned outside the bridge')):
+            row = updater.update_cli(self.install(), time.monotonic() + 60, restart_managed=restart_managed)
+        return row, bridge.call_args.args[0]
+
+    def test_managed_bridge_runs_idle_only_unless_the_target_is_reviewed(self):
+        row, argv = self.bridge_run(self.BRIDGE_UPDATED, False)
+        self.assertEqual((pathlib.Path(argv[1]).name, argv[2:]), ('managed-update-command.js', ['--idle-only']))
+        self.assertEqual((row['status'], row['version']), ('updated', '1.4.4'))
+        row, argv = self.bridge_run(self.BRIDGE_UPDATED, True)
+        self.assertEqual((pathlib.Path(argv[1]).name, argv[2:]), ('managed-update-command.js', []))
+        # The default never restarts managed sessions.
+        import inspect
+        self.assertEqual(inspect.signature(updater.update_cli).parameters['restart_managed'].default, False)
+
+    def test_managed_bridge_in_use_answer_is_kept_and_odd_answers_fail(self):
+        busy = {**self.BRIDGE_UPDATED, 'status': 'action_required', 'messageCode': 'in_use', 'version': '1.2.16', 'updateAttempted': False}
+        row, _ = self.bridge_run(busy, False)
+        self.assertEqual((row['status'], row['messageCode'], row['version'], row['updateAttempted']), ('action_required', 'in_use', '1.2.16', False))
+        for odd in ({**busy, 'messageCode': 'quit_first'}, {**self.BRIDGE_UPDATED, 'messageCode': 'in_use'}, {**busy, 'status': 'held'}):
+            with self.subTest(odd=odd):
+                row, _ = self.bridge_run(odd, False)
+                self.assertEqual((row['status'], row['messageCode']), ('failed', 'update_failed'))
 
     def test_managed_marker_never_falls_through_to_ordinary_update(self):
         for platform in ('ubuntu', 'mac', 'windows'):
@@ -1983,8 +2047,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
             with mock.patch.dict(os.environ, scopes):
                 self.assertTrue(updater.antigravity_runtime_present(), variable)
                 self.assertTrue(updater.antigravity_runtime_present(custom_only=True), variable)
-                row = updater.antigravity_hold(self.install(), self.REVIEWED, latest=lambda platform: '1.3.4')
-                self.assertEqual(row['messageCode'], 'held_for_review')
+                self.assertEqual(updater.antigravity_plan(self.install(), self.REVIEWED, latest=lambda platform: '1.3.4'), (None, False))
                 with mock.patch.object(updater, 'perform_cli_update') as native, \
                         mock.patch.object(updater, 'command') as bridge, \
                         mock.patch.object(updater, 'scan') as scan:
@@ -2117,6 +2180,73 @@ class AntigravityReviewHoldTests(unittest.TestCase):
             request.write_text(json.dumps(body))
             self.assertEqual(updater.read_task_request(request), expected, body)
         self.assertEqual(updater.read_task_request(self.root / 'missing.json'), (None, None))
+
+
+class WindowsTokenOwnerTests(unittest.TestCase):
+    """windows_owned_pids reads each process token through fixture Win32 calls and real ctypes buffers."""
+
+    ME, OTHER = b'S-1-5-21-ME-', b'S-1-5-21-OT-'
+    CURRENT = 99
+
+    def fixture(self, tokens, current_token=True):
+        """tokens maps a pid to None (OpenProcess fails), 'no-token', or (sid, bytes the token answer needs)."""
+        opened, closed = [], []
+
+        def open_process(access, inherit, pid):
+            self.assertEqual((access, inherit), (0x1000, False))
+            if tokens.get(pid) is None:
+                return 0
+            opened.append(pid)
+            return pid
+
+        def open_token(process, access, token):
+            self.assertEqual(access, 0x0008)
+            if process == self.CURRENT and not current_token or tokens.get(process) == 'no-token':
+                return False
+            token._obj.value = 5000 + process
+            opened.append(5000 + process)
+            return True
+
+        def token_information(token, kind, buffer, size, needed):
+            self.assertEqual(kind, 1)
+            token = token.value  # The code passes the HANDLE its OpenProcessToken filled.
+            sid, required = (self.ME, 64) if token == 5000 + self.CURRENT else tokens[token - 5000]
+            if size < required:
+                needed._obj.value = required
+                return False
+            if required == 0:
+                return False
+            address = ctypes.addressof(buffer)
+            ctypes.memmove(address + 16, sid, len(sid))
+            pointer = ctypes.c_void_p(address + 16)
+            ctypes.memmove(address, ctypes.addressof(pointer), ctypes.sizeof(pointer))
+            return True
+
+        def equal(left, right):
+            return ctypes.string_at(left, 12) == ctypes.string_at(right, 12)
+
+        def close(handle):
+            closed.append(getattr(handle, 'value', handle))
+            return True
+
+        kernel = types.SimpleNamespace(OpenProcess=open_process, GetCurrentProcess=lambda: self.CURRENT, CloseHandle=close)
+        advapi = types.SimpleNamespace(OpenProcessToken=open_token, GetTokenInformation=token_information, EqualSid=equal)
+        return mock.patch.object(processes.ctypes, 'windll', types.SimpleNamespace(kernel32=kernel, advapi32=advapi), create=True), opened, closed
+
+    def test_only_processes_whose_token_names_this_user_count_and_every_handle_closes(self):
+        tokens = {1: (self.ME, 64), 2: (self.OTHER, 64), 3: None, 4: 'no-token', 5: (self.ME, 300), 6: (self.ME, 5000), 7: (self.ME, 0)}
+        patch, opened, closed = self.fixture(tokens)
+        with patch:
+            owned = processes.windows_owned_pids([1, 2, 3, 4, 5, 6, 7])
+        # 5 needed a second, larger buffer; 6 asked for more than 4 KiB and 7 answered nothing.
+        self.assertEqual(owned, {1, 5})
+        self.assertEqual(sorted(closed), sorted(opened))
+        self.assertNotIn(self.CURRENT, closed, 'the current-process pseudo handle is never closed')
+
+    def test_an_unreadable_own_token_fails_the_scan_instead_of_owning_nothing(self):
+        patch, _, _ = self.fixture({1: (self.ME, 64)}, current_token=False)
+        with patch, self.assertRaisesRegex(common.UpdateFailure, 'restart_context'):
+            processes.windows_owned_pids([1])
 
 
 class _Pointer:
@@ -2263,6 +2393,7 @@ class T3SessionTests(_SessionTables):
         # bash.exe (50000) is not listed in full: only its pid, parent and start reach the helper.
         tree = '48880,23628,110;50002,48880,120;50000,50002,130;50001,50000,140;0,0,0;bad,row;'
         with mock.patch.object(processes, 'powershell', return_value=json.dumps({'rows': rows, 'tree': tree})) as run, \
+                mock.patch.object(processes, 'windows_owned_pids', side_effect=lambda pids: set(pids)) as owners, \
                 mock.patch.object(processes, 'windows_arguments', return_value=[]):
             table = processes.windows_processes()
         script = run.call_args.args[0]
@@ -2270,10 +2401,20 @@ class T3SessionTests(_SessionTables):
             self.assertIn(name, script)
         self.assertNotIn("'cmd.exe'", script, 'no shell needs to be listed any more')
         self.assertIn('CreationDate.ToFileTimeUtc()', script)
+        # One WMI call per process ran a busy PC past the 20 s limit: owners come from the process tokens.
+        self.assertNotIn('GetOwnerSid', script)
+        self.assertNotIn('Invoke-CimMethod', script)
+        self.assertEqual(owners.call_args.args[0], [48880, 50001])
         self.assertEqual([item.pid for item in table], [48880, 50001])
         self.assertEqual(table.lineage, {48880: (23628, 110), 50002: (48880, 120), 50000: (50002, 130), 50001: (50000, 140), 0: (0, None)})
         self.assertEqual(processes.ancestors(table, table[1]), [50000, 50002, 48880])
         self.assertEqual([item.pid for item in processes.t3_owned(self.claude('windows'), table)], [50001])
+        # Another user's (or an unreadable) process is left out; the ancestry tree still names it.
+        with mock.patch.object(processes, 'powershell', return_value=json.dumps({'rows': rows, 'tree': tree})), \
+                mock.patch.object(processes, 'windows_owned_pids', return_value={50001}), \
+                mock.patch.object(processes, 'windows_arguments', return_value=[]):
+            table = processes.windows_processes()
+        self.assertEqual(([item.pid for item in table], table.lineage[48880]), ([50001], (23628, 110)))
         # Without its tree the scan cannot be trusted at all.
         with mock.patch.object(processes, 'powershell', return_value=json.dumps(rows)), self.assertRaises(common.UpdateFailure):
             processes.windows_processes()

@@ -171,7 +171,7 @@ Details: [agent usage snapshot](docs/agent-usage-snapshot.md).
 - **Parallel:** each computer updates its own apps while the others run, with live progress per computer.
 - **Safe restarts:** only CLI sessions running in a terminal are stopped and reopened. Background agents are never killed.
 - **Nothing automatic:** updates run only when you press the button. Cancel skips whatever hasn't started.
-- **Reviewed builds only** for the Antigravity CLI, so account switching never meets an unreviewed version.
+- **Antigravity always updates.** Account switching pauses on a build it has not reviewed yet, and a running Antigravity session is never stopped for one.
 
 ### 📈 Analytics
 

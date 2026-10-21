@@ -5,6 +5,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import {
   createManagedNativeUpdate,
+  managedUpdateArguments,
   runManagedAntigravityUpdateCommand,
   type ManagedNativeCommand,
 } from '../../../src/antigravity/managed-update-command';
@@ -541,6 +542,96 @@ describe('managed Antigravity native updater: public files and injected commands
       { binary: value.nativeBinary, args: ['--version'], capture: true },
     ]);
     expect(fs.existsSync(backupPath(value))).toBe(false);
+  });
+
+  test('idle-only answers in_use for a running process before any gate, backup, stop or update', async () => {
+    const value = fixture();
+    const { driver, actions } = driverFixture([residentPlan()]);
+    const result = await updateManagedAntigravity({
+      registry: new AntigravityProfileRegistry(value.ccsDirectory),
+      driver,
+      native: value.native,
+      idleOnly: true,
+    });
+    expect(result).toEqual({
+      status: 'in_use',
+      previousVersion: '0.4.1',
+      version: '0.4.1',
+      restartedProcesses: 0,
+      updateAttempted: false,
+    });
+    expect(actions).toEqual(['inspect']);
+    expect(value.calls).toEqual([
+      { binary: value.nativeBinary, args: ['--version'], capture: true },
+    ]);
+    expect(fs.existsSync(backupPath(value))).toBe(false);
+  });
+
+  test('idle-only still installs an unreviewed build while nothing runs', async () => {
+    const value = fixture();
+    const { driver, actions } = driverFixture();
+    value.setUpdate(async () => {
+      value.replaceBinary();
+      value.setVersion('0.4.2');
+      return '';
+    });
+    const result = await updateManagedAntigravity({
+      registry: new AntigravityProfileRegistry(value.ccsDirectory),
+      driver,
+      native: value.native,
+      idleOnly: true,
+    });
+    expect(result).toEqual({
+      status: 'updated',
+      previousVersion: '0.4.1',
+      version: '0.4.2',
+      restartedProcesses: 0,
+      updateAttempted: true,
+    });
+    expect(actions).toEqual(['inspect', 'inspect']);
+    expect(fs.readFileSync(backupPath(value))).toEqual(ORIGINAL);
+  });
+
+  test('the command accepts only no argument or exactly --idle-only', () => {
+    expect(managedUpdateArguments([])).toEqual({ idleOnly: false });
+    expect(managedUpdateArguments(['--idle-only'])).toEqual({ idleOnly: true });
+    for (const args of [
+      ['--idle-only', '--idle-only'],
+      ['--idle-only=false'],
+      ['--restart'],
+      ['--idle-only', 'x'],
+      [''],
+    ])
+      expect(managedUpdateArguments(args)).toBeNull();
+  });
+
+  test('the public result for idle-only in_use is action_required with nothing attempted', async () => {
+    const value = fixture();
+    const { driver } = driverFixture([residentPlan()]);
+    const result = await runManagedAntigravityUpdateCommand({
+      nativeBinary: value.nativeBinary,
+      ccsDirectory: value.ccsDirectory,
+      runCommand: value.runCommand,
+      execute: (native) =>
+        updateManagedAntigravity({
+          registry: new AntigravityProfileRegistry(value.ccsDirectory),
+          driver,
+          native,
+          idleOnly: true,
+        }),
+    });
+    expect(result).toEqual({
+      appId: 'antigravity-cli',
+      platform: 'ubuntu',
+      manager: 'native',
+      status: 'action_required',
+      messageCode: 'in_use',
+      previousVersion: '0.4.1',
+      version: '0.4.1',
+      updateAttempted: false,
+      restartedProcesses: 0,
+    });
+    expect(value.calls.map((call) => call.args)).toEqual([['--version']]);
   });
 
   test('an incomplete census prevents an update attempt without touching credentials or processes', async () => {
