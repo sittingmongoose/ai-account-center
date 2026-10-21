@@ -93,15 +93,61 @@ class AdditionalFailoverTests(unittest.TestCase):
     def test_unreadable_capsule_skips_the_login_instead_of_changing_its_identity(self):
         import desktop_helpers
         self.native_muse()
+        capsule = self.ccs / "account-usage" / muse_console.CAPSULE_NAME
+        capsule.parent.mkdir(parents=True, exist_ok=True)
+        capsule.write_text("{damaged", encoding="utf-8")
         desktop_helpers.READ_FAILURES = 0
         with patch.object(muse_console, "read_capsule", side_effect=muse_console.MuseError("local_storage_error")):
             self.assertEqual(self.read("muse"), [])
         self.assertGreater(desktop_helpers.READ_FAILURES, 0)
+        # Without a capsule the login is honestly a native credential.
+        capsule.unlink()
         desktop_helpers.READ_FAILURES = 0
         with patch.object(muse_console, "read_capsule", side_effect=muse_console.MuseError("no_browser_cookie")):
             found = self.read("muse")
         self.assertEqual([item["identity"]["kind"] for item in found], ["muse-native-credential"])
         self.assertEqual(desktop_helpers.READ_FAILURES, 0)
+
+    def test_unreadable_store_is_attributed_to_its_own_selector(self):
+        import desktop_helpers
+        self.native_muse()
+        self.native_muse(relative="scope/muse-homes/1234abcd/muse/auth.json").write_text("{damaged", encoding="utf-8")
+        desktop_helpers.READ_FAILURES = plan_common.READ_FAILURES = 0
+        adapter.INCOMPLETE_SELECTORS = set()
+        adapter.ATTRIBUTED_FAILURES = 0
+        found = self.read("muse")
+        self.assertEqual([item["selectors"] for item in found], [["discover"]])
+        self.assertEqual(adapter.INCOMPLETE_SELECTORS, {"config-home:1234abcd"})
+        self.assertEqual(adapter.ATTRIBUTED_FAILURES, desktop_helpers.READ_FAILURES + plan_common.READ_FAILURES)
+
+    def test_empty_or_damaged_present_capsule_never_turns_the_login_native(self):
+        import desktop_helpers
+        self.native_muse()
+        capsule = self.ccs / "account-usage" / muse_console.CAPSULE_NAME
+        capsule.parent.mkdir(parents=True, exist_ok=True)
+        capsule.write_text(json.dumps({"cookies": []}), encoding="utf-8")
+        desktop_helpers.READ_FAILURES = 0
+        with patch.object(muse_console, "read_capsule", side_effect=muse_console.MuseError("no_browser_cookie")):
+            self.assertEqual(self.read("muse"), [])
+        self.assertGreater(desktop_helpers.READ_FAILURES, 0)
+
+    def test_undecodable_omp_rows_and_key_files_are_counted_not_removed(self):
+        import desktop_helpers
+        self.omp([(1, "zai", "api_key", {"key": "zai-synthetic"}, None)])
+        with closing(sqlite3.connect(self.home / ".omp/agent/agent.db")) as connection:
+            connection.execute("INSERT INTO auth_credentials VALUES (2, 'zai', 'api_key', '{not json', NULL)")
+            connection.commit()
+        desktop_helpers.READ_FAILURES = plan_common.READ_FAILURES = 0
+        self.read("zai")
+        self.assertGreater(desktop_helpers.READ_FAILURES + plan_common.READ_FAILURES, 0)
+        desktop_helpers.READ_FAILURES = plan_common.READ_FAILURES = 0
+        self.assertIsNone(plan_common.aac_key_credential("zai", "1234abcd", self.home, windows=False, ccs_dir=self.ccs))
+        self.assertEqual(plan_common.READ_FAILURES, 0)
+        self.key("zai", "1234abcd", "zai-synthetic-key")
+        path = self.ccs / "account-usage/keys/zai-1234abcd.json"
+        path.write_text('{"version": 1', encoding="utf-8")
+        self.assertIsNone(plan_common.aac_key_credential("zai", "1234abcd", self.home, windows=False, ccs_dir=self.ccs))
+        self.assertGreater(plan_common.READ_FAILURES, 0)
 
     def test_inventory_is_network_free_and_contains_every_muse_slot(self):
         self.native_muse()

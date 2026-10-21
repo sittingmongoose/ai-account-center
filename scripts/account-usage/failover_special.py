@@ -285,6 +285,7 @@ def _antigravity(home, ccs_dir):
                 if identity and credential:
                     result.append(_candidate("omp:" + str(row_id), ["discover"], identity, _digest(raw), credential))
             except (ValueError, TypeError):
+                helpers.read_failed()
                 continue
     except (FileNotFoundError, NotADirectoryError):
         pass
@@ -431,12 +432,24 @@ def collect(candidate, home: Path, platform: str, ccs_dir=None):
         result = (_collect_antigravity(candidate, Path(home), platform) if provider == "antigravity"
                   else _collect_wallet(candidate, platform))
         if result["sample"] is not None:
+            failures = helpers.READ_FAILURES
             try:
                 unchanged = any(
                     all(current.get(key) == candidate.get(key) for key in ("locator", "identity", "revision"))
                     for current in inventory(provider, home, platform, ccs_dir))
+                unreadable = helpers.READ_FAILURES > failures
             except Exception:
-                unchanged = False
+                unchanged, unreadable = False, True
+            if not unchanged and unreadable:
+                # A re-check that could not read the sign-in is not a changed sign-in: drop the
+                # quota, keep a provider 429 hold, and let other computers answer.
+                failed = {"sample": None, "failureCode": "unavailable"}
+                if result.get("failureCode") == "rate_limited":
+                    failed["failureCode"] = "rate_limited"
+                    retry = result.get("retryAfterSeconds")
+                    if isinstance(retry, (int, float)) and not isinstance(retry, bool) and math.isfinite(retry):
+                        failed["retryAfterSeconds"] = min(86400, max(0, retry))
+                return failed
             if not unchanged:
                 failed = {"sample": None, "failureCode": "source_changed"}
                 # A provider throttled the original request even when a later

@@ -131,6 +131,19 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
     if (candidates.some((candidate) => !candidate))
       throw new ValidationError('Invalid usage inventory.');
     const signedOut = value.signInNeededSelectors;
+    const unread = value.incompleteSelectors;
+    if (
+      unread !== undefined &&
+      (!Array.isArray(unread) ||
+        unread.length > 128 ||
+        unread.some(
+          (selector) =>
+            typeof selector !== 'string' ||
+            (selector !== '*' && !/^[A-Za-z0-9][A-Za-z0-9:_.@-]{0,159}$/.test(selector))
+        ))
+    )
+      throw new ValidationError('Invalid usage inventory.');
+    const incomplete = Array.isArray(unread) ? [...new Set(unread as string[])] : [];
     if (
       signedOut !== undefined &&
       (!Array.isArray(signedOut) ||
@@ -149,7 +162,7 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
       ...(Array.isArray(signedOut)
         ? { signInNeededSelectors: [...new Set(signedOut as string[])] }
         : {}),
-      ...(value.incomplete === true ? { incomplete: true as const } : {}),
+      ...(incomplete.length ? { incompleteSelectors: incomplete } : {}),
     };
   }
   if (value.action !== 'collect') throw new ValidationError('Invalid usage response.');

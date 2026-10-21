@@ -253,7 +253,15 @@ def _qwen_console_capsule(home, capsule_id="default", ccs_dir=None):
         return None
     name = "qwen-console-session.json" if capsule_id == "default" else "qwen-console-session-{}.json".format(capsule_id)
     root = Path(ccs_dir) if ccs_dir is not None else home / ".ccs"
-    capsule = load_json(root / "account-usage" / name)
+    value = _read_qwen_console_capsule(root / "account-usage" / name)
+    if value is None and os.path.lexists(root / "account-usage" / name):
+        # A present capsule that cannot be used is not a removed one.
+        read_failed()
+    return value
+
+
+def _read_qwen_console_capsule(path):
+    capsule = load_json(path)
     if not isinstance(capsule, dict) or capsule.get("region") not in ("intl", "cn"):
         return None
     version2 = capsule.get("version") == 2
@@ -392,20 +400,32 @@ def _safari_qwen_candidates(home):
 
 
 def _private_file_bytes(path, limit):
-    """A regular file, not a symlink, no group/other access (POSIX), at most `limit` bytes."""
+    """A regular file, not a symlink, no group/other access (POSIX), at most `limit` bytes.
+
+    A present file that is refused or unreadable is counted; only absence is silent.
+    """
     try:
         if stat.S_ISLNK(os.lstat(str(path)).st_mode):
+            read_failed()
             return None
         descriptor = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+    except (FileNotFoundError, NotADirectoryError):
+        return None
     except OSError:
+        read_failed()
         return None
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_size > limit or (os.name != "nt" and info.st_mode & 0o077):
+            read_failed()
             return None
         contents = os.read(descriptor, limit + 1)
-        return contents if len(contents) <= limit else None
+        if len(contents) <= limit:
+            return contents
+        read_failed()
+        return None
     except OSError:
+        read_failed()
         return None
     finally:
         os.close(descriptor)
@@ -445,22 +465,29 @@ def aac_key_credential(provider, key_id, home=None, windows=None, ccs_dir=None):
     directory = (Path(ccs_dir) if ccs_dir is not None else home / ".ccs") / "account-usage" / "keys"
     try:
         info = os.lstat(str(directory))
+    except (FileNotFoundError, NotADirectoryError):
+        return None
     except OSError:
+        read_failed()
         return None
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or (os.name != "nt" and info.st_mode & 0o077):
+        read_failed()
         return None
+    windows_store = os.name == "nt" if windows is None else windows
+    key_file = directory / "{}-{}.{}".format(provider, key_id, "dpapi" if windows_store else "json")
     text = _key_record_text(directory, provider, key_id, windows)
     try:
         record = json.loads(text) if isinstance(text, str) and len(text) <= MAX_KEY_FILE_BYTES else None
     except ValueError:
-        return None
-    if not isinstance(record, dict) or not set(record) <= KEY_FILE_FIELDS:
-        return None
-    secret = record.get("secret")
-    if (record.get("version") != 1 or record.get("provider") != provider or record.get("keyId") != key_id
-            or not isinstance(secret, str) or not KEY_SECRET.match(secret)):
-        return None
-    if "fingerprint" in record and record["fingerprint"] != key_fingerprint(secret):
+        record = None
+    secret = record.get("secret") if isinstance(record, dict) else None
+    if (not isinstance(record, dict) or not set(record) <= KEY_FILE_FIELDS
+            or record.get("version") != 1 or record.get("provider") != provider or record.get("keyId") != key_id
+            or not isinstance(secret, str) or not KEY_SECRET.match(secret)
+            or "fingerprint" in record and record["fingerprint"] != key_fingerprint(secret)):
+        # A key file that exists but cannot be used is not a removed key.
+        if os.path.lexists(key_file):
+            read_failed()
         return None
     return {"secret": secret, "source": "Dashboard key", "email": None, "expires": None}
 
@@ -520,8 +547,9 @@ def credentials(provider, home=None, credential=None):
                     try:
                         data = json.loads(contents)
                     except ValueError:
-                        continue
+                        data = None
                     if not isinstance(data, dict):
+                        read_failed()
                         continue
                     secret = _string(data.get("key")) or _string(data.get("access"))
                     if secret:

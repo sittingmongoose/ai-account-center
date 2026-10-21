@@ -218,7 +218,7 @@ class ProtocolTests(unittest.TestCase):
             return []
         adapter.inventory = unreadable
         result, _ = self.run_helper(self.request("inventory"), adapter)
-        self.assertEqual(result, {"version": 1, "action": "inventory", "candidates": [], "incomplete": True})
+        self.assertEqual(result, {"version": 1, "action": "inventory", "candidates": [], "incompleteSelectors": ["*"]})
         result, _ = self.run_helper(self.request(), adapter)
         self.assertEqual(result["failureCode"], "unavailable")
         # The same missing sign-in on a fully readable store is a changed source.
@@ -237,6 +237,27 @@ class ProtocolTests(unittest.TestCase):
         adapter.inventory = later_unreadable
         result, _ = self.run_helper(self.request(), adapter)
         self.assertEqual((result["failureCode"], result["sample"]), ("unavailable", None))
+
+    def test_unverified_recheck_keeps_identity_failures_and_holds(self):
+        import desktop_helpers
+        for collected, expected in (
+                ({"sample": None, "failureCode": "team_mismatch"}, ("team_mismatch", None)),
+                ({"sample": None, "failureCode": "account_mismatch"}, ("account_mismatch", None)),
+                ({"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 900}, ("rate_limited", 900)),
+                ({"sample": sample(), "failureCode": None}, ("unavailable", None))):
+            with self.subTest(code=collected["failureCode"]):
+                adapter = FakeAdapter(result=collected)
+                first = adapter.inventory
+                def later_unreadable(*args, _adapter=adapter, _first=first, **kwargs):
+                    if _adapter.inventory_calls:
+                        _adapter.inventory_calls.append((args, kwargs))
+                        desktop_helpers.read_failed()
+                        return []
+                    return _first(*args, **kwargs)
+                adapter.inventory = later_unreadable
+                result, _ = self.run_helper(self.request(), adapter)
+                self.assertEqual((result["failureCode"], result.get("retryAfterSeconds")), expected)
+                self.assertIsNone(result["sample"])
 
     def test_adapter_binding_rejection_preserves_its_original_rate_limit(self):
         for after in (None, []):

@@ -134,8 +134,8 @@ export type UsageHelperResponse =
       candidates: UsageCandidate[];
       /** Claude desktop signed-out slots have no credential candidate to collect. */
       signInNeededSelectors?: string[];
-      /** A present store could not be read: a missing candidate is not a removed sign-in. */
-      incomplete?: true;
+      /** Selectors ("*" = all) whose store could not be read; missing there is not removal. */
+      incompleteSelectors?: string[];
     }
   | ({ version: 1; action: 'collect'; candidate: UsageCandidate | null } & UsageCollection);
 

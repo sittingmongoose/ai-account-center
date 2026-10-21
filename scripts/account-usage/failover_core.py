@@ -97,13 +97,17 @@ def _local_path(home, value):
             current = current / part
             try:
                 info = current.lstat()
+            except (FileNotFoundError, NotADirectoryError):
+                return None
             except OSError:
+                read_failed()
                 return None
             reparse = getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 1024)
             if stat.S_ISLNK(info.st_mode) or reparse:
                 try:
                     target = os.readlink(current)
                 except OSError:
+                    read_failed()
                     return None
                 if target.startswith("\\\\?\\UNC\\") or target.startswith("//"):
                     return None

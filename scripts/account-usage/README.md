@@ -28,10 +28,13 @@ other computers continue to supply quota. A Muse web session that no longer
 lists the bound team, or lists no team, reports `team_mismatch`, which resets
 the identity and its links. A helper that cannot read its sign-ins marks the
 inventory `failed`; one that found a present but unreadable store (permissions,
-partial JSON, a locked database, a damaged Muse capsule) marks it `incomplete`.
-The coordinator treats a missing primary login in either as an unavailable
-computer, never as a removed login, and a collection whose sign-in cannot be
-read again reports `unavailable` instead of `source_changed`.
+partial JSON, a locked database, a damaged Muse capsule) lists the selectors it
+serves in `incompleteSelectors`, or `*` when the store is not tied to one. The
+coordinator treats a missing primary login whose selector is unreadable as an
+unavailable computer, never as a removed login, while an unreadable store for
+another selector cannot hide a removal. A collection whose sign-in cannot be
+read again reports `unavailable` instead of `source_changed`, but keeps a 429
+hold and every identity failure the collection itself proved.
 A linked peer's 429 holds that native credential's own account too. Renewal of a credential for
 the same verified account can retain dated core quota; Claude browser extras
 still require the original credential and capsule binding. Primary sign-in

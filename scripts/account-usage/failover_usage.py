@@ -297,10 +297,19 @@ def _changed_after_collection(result):
 
 
 def _unverified_after_collection(result):
-    """A sign-in that could not be read again is unverified, not changed: keep a provider hold."""
-    if isinstance(result, dict) and (result.get("failureCode") == "rate_limited" or
-            result.get("failureCode") == "source_changed" and result.get("rateLimited") is True):
+    """A sign-in that could not be read again is unverified, not changed.
+
+    The quota is discarded, but what the collection itself proved is kept: a provider 429
+    hold, a sign-in change the adapter detected, and every identity failure (team_mismatch,
+    account_mismatch and the rest), which must still invalidate the binding.
+    """
+    code = result.get("failureCode") if isinstance(result, dict) else None
+    if code == "rate_limited":
         return _failure("rate_limited", retry=result.get("retryAfterSeconds"))
+    if code == "source_changed":
+        return _changed_after_collection(result)
+    if isinstance(code, str) and code in FAILURES:
+        return _failure(code, retry=result.get("retryAfterSeconds"))
     return _failure("unavailable")
 
 
@@ -313,10 +322,30 @@ def _reset_read_failures():
         module = sys.modules.get(name)
         if module is not None and hasattr(module, "READ_FAILURES"):
             module.READ_FAILURES = 0
+    module = sys.modules.get("failover_additional")
+    if module is not None and hasattr(module, "INCOMPLETE_SELECTORS"):
+        module.INCOMPLETE_SELECTORS = set()
+        module.ATTRIBUTED_FAILURES = 0
 
 
 def _read_failures():
     return sum(getattr(sys.modules.get(name), "READ_FAILURES", 0) or 0 for name in _READ_MODULES)
+
+
+def _incomplete_selectors():
+    """Selectors whose store could not be read; "*" when a failure is not attributed."""
+    module = sys.modules.get("failover_additional")
+    selectors = set(getattr(module, "INCOMPLETE_SELECTORS", ()) or ())
+    attributed = getattr(module, "ATTRIBUTED_FAILURES", 0) or 0
+    if _read_failures() > attributed:
+        selectors.add("*")
+    valid = sorted(selector for selector in selectors if isinstance(selector, str) and
+                   (selector == "*" or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:_.@-]{0,159}", selector)))
+    return ["*"] if len(valid) > MAX_CANDIDATES else valid
+
+
+def _unread(selectors, candidate_selectors):
+    return "*" in selectors or any(selector in selectors for selector in candidate_selectors)
 
 
 def _claude_profile(value):
@@ -365,15 +394,15 @@ def _run(request):
     adapter = _adapter(provider)
     _reset_read_failures()
     before, sign_in_needed = _inventory(adapter, provider, home, platform, ccs, claude_profile)
-    # A present store that could not be read: a missing sign-in is not proof of removal.
-    incomplete = _read_failures() > 0
+    # A present store that could not be read: a missing sign-in there is not proof of removal.
+    incomplete = _incomplete_selectors()
     if action == "inventory":
         return {"version": 1, "action": "inventory", "candidates": [public for public, _ in before],
                 **({"signInNeededSelectors": sign_in_needed} if sign_in_needed else {}),
-                **({"incomplete": True} if incomplete else {})}
+                **({"incompleteSelectors": incomplete} if incomplete else {})}
     selected = next(((public, private) for public, private in before if _same(public, wanted)), None)
     if selected is None:
-        return _failure("unavailable" if incomplete else "source_changed")
+        return _failure("unavailable" if _unread(incomplete, wanted["selectors"]) else "source_changed")
     public, private = selected
     # Caller display metadata must not substitute for current source identity.
     # It remains only selection data; collection always receives the private row.
@@ -385,7 +414,7 @@ def _run(request):
     except Exception:
         return _unverified_after_collection(result)
     if not any(_same(current, public) for current, _ in after):
-        if _read_failures():
+        if _unread(_incomplete_selectors(), public["selectors"]):
             return _unverified_after_collection(result)
         return _changed_after_collection(result)
     if not isinstance(result, dict):

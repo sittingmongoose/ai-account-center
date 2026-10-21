@@ -226,9 +226,25 @@ describe('packaged usage failover transport', () => {
     ).toEqual({ version: 1, action: 'inventory', candidates: [] });
     expect(
       parseUsageHelperResponse(
-        JSON.stringify({ version: 1, action: 'inventory', candidates: [], incomplete: true })
+        JSON.stringify({
+          version: 1,
+          action: 'inventory',
+          candidates: [],
+          incompleteSelectors: ['*', 'config-home:1234abcd'],
+        })
       )
-    ).toEqual({ version: 1, action: 'inventory', candidates: [], incomplete: true });
+    ).toEqual({
+      version: 1,
+      action: 'inventory',
+      candidates: [],
+      incompleteSelectors: ['*', 'config-home:1234abcd'],
+    });
+    for (const incompleteSelectors of [['bad selector'], 'discover', Array(129).fill('*')])
+      expect(() =>
+        parseUsageHelperResponse(
+          JSON.stringify({ version: 1, action: 'inventory', candidates: [], incompleteSelectors })
+        )
+      ).toThrow();
   });
 
   it('drops unrelated helper fields and bounds provider retry metadata', () => {

@@ -595,5 +595,25 @@ class TransportTests(unittest.TestCase):
         opened.assert_not_called()
 
 
+class UnreadableStoreTests(unittest.TestCase):
+    def test_path_check_permission_failure_is_counted_not_absent(self):
+        import desktop_helpers
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            (home / ".codex").mkdir()
+            (home / ".codex/auth.json").write_text("{}", encoding="utf-8")
+            desktop_helpers.READ_FAILURES = 0
+            self.assertIsNone(core._local_path(home, home / ".codex/missing.json"))
+            self.assertEqual(desktop_helpers.READ_FAILURES, 0)
+            original = Path.lstat
+            def denied(path, *args, **kwargs):
+                if path.name == ".codex":
+                    raise PermissionError("private")
+                return original(path, *args, **kwargs)
+            with mock.patch.object(Path, "lstat", denied):
+                self.assertIsNone(core._local_path(home, home / ".codex/auth.json"))
+            self.assertGreater(desktop_helpers.READ_FAILURES, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

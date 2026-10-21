@@ -102,7 +102,7 @@ export class UsageFailoverService {
   >();
   private readonly cooldowns = new Map<string, number>();
   private readonly signInSelectors = new Map<string, string[]>();
-  private readonly incompleteInventories = new Set<string>();
+  private readonly unreadSelectors = new Map<string, Set<string>>();
   private active = 0;
   private readonly waiting: Array<() => void> = [];
   constructor(private readonly deps: UsageFailoverDeps = {}) {}
@@ -312,8 +312,9 @@ export class UsageFailoverService {
         if (value?.action !== 'inventory') return null;
         if (target.provider === 'claude')
           this.signInSelectors.set(key, value.signInNeededSelectors ?? []);
-        if (value.incomplete) this.incompleteInventories.add(key);
-        else this.incompleteInventories.delete(key);
+        if (value.incompleteSelectors?.length)
+          this.unreadSelectors.set(key, new Set(value.incompleteSelectors));
+        else this.unreadSelectors.delete(key);
         return value.candidates;
       })
       .catch(() => null);
@@ -323,7 +324,7 @@ export class UsageFailoverService {
         if (entry.expires <= this.now()) {
           this.inventories.delete(old);
           this.signInSelectors.delete(old);
-          this.incompleteInventories.delete(old);
+          this.unreadSelectors.delete(old);
         }
     }
     return pending;
@@ -565,11 +566,10 @@ export class UsageFailoverService {
         return;
       }
       if (!candidate) {
-        // A store that could not be read is an unavailable source, not a removed sign-in.
-        if (
-          candidates !== null &&
-          !this.incompleteInventories.has(this.inventoryKey(target, source))
-        )
+        // A store that could not be read is an unavailable source, not a removed sign-in;
+        // an unreadable store for another selector does not hide this one's removal.
+        const unread = this.unreadSelectors.get(this.inventoryKey(target, source));
+        if (candidates !== null && !unread?.has('*') && !unread?.has(source.selector))
           missingPrimary = true;
         continue;
       }

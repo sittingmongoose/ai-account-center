@@ -276,7 +276,7 @@ describe('identity-bound usage source failover', () => {
       transport: async (host, request) => {
         const response = await inner(host, request);
         return host.host === 'mac' && response.action === 'inventory'
-          ? { ...response, incomplete: true }
+          ? { ...response, incompleteSelectors: ['*'] }
           : response;
       },
     });
@@ -290,6 +290,34 @@ describe('identity-bound usage source failover', () => {
     const row = await new UsageFailoverService(h.deps).collect(h.target, template());
     expect(row.status).toBe('ok');
     expect(row.source).toBe('Verified quota on Windows (fallback)');
+  });
+
+  it('still treats a removed primary login as removed when only another slot is unreadable', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.inventories.set('mac', []);
+    h.inventories.set('windows', []);
+    const inner = h.deps.transport;
+    const otherSlot = new UsageFailoverService({
+      ...h.deps,
+      transport: async (host, request) => {
+        const response = await inner(host, request);
+        return host.host === 'mac' && response.action === 'inventory'
+          ? { ...response, incompleteSelectors: ['config-home:1234abcd'] }
+          : response;
+      },
+    });
+    await otherSlot.collect(h.target, template());
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [
+      candidate({ locator: '3'.repeat(64), revision: '4'.repeat(64) }),
+    ]);
+    const before = h.collected().length;
+    const row = await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(row.windows).toHaveLength(0);
+    expect(h.collected()).toHaveLength(before);
   });
 
   it('does not start a queued linked-peer request after that peer receives a 429', async () => {

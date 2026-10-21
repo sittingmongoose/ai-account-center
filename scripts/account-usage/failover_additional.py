@@ -63,14 +63,15 @@ def _omp(provider, home):
             "AND disabled_cause IS NULL ORDER BY rowid DESC LIMIT ?", (provider, MAX_CANDIDATES)).fetchall()
         result = []
         for identifier, kind, raw in rows:
-            if not isinstance(raw, str) or len(raw) > plans.MAX_BYTES:
-                continue
             try:
-                value = json.loads(raw)
+                value = json.loads(raw) if isinstance(raw, str) and len(raw) <= plans.MAX_BYTES else None
             except (ValueError, TypeError):
-                continue
+                value = None
             if isinstance(value, dict):
                 result.append((str(identifier), kind, value))
+            else:
+                # A stored credential that cannot be decoded is not a removed sign-in.
+                desktop.read_failed()
         return result
     except (OSError, sqlite3.Error):
         desktop.read_failed()
@@ -95,6 +96,28 @@ def _cookie_header(value):
 
 
 UNREADABLE = object()
+# Selectors whose own store could not be read in this process, and how many counted read
+# failures they explain. failover_usage reports any unexplained failure as "*" (every
+# selector), so an unrelated unreadable store cannot hide a removed sign-in.
+INCOMPLETE_SELECTORS = set()
+ATTRIBUTED_FAILURES = 0
+
+
+def _failures():
+    return desktop.READ_FAILURES + plans.READ_FAILURES
+
+
+def _for(selectors, read):
+    """Run one store read and attribute any read failure to the selectors it serves."""
+    global ATTRIBUTED_FAILURES
+    before = _failures()
+    try:
+        return read()
+    finally:
+        added = _failures() - before
+        if added > 0:
+            INCOMPLETE_SELECTORS.update(selectors)
+            ATTRIBUTED_FAILURES += added
 
 
 def _muse_context(ccs_dir, credential):
@@ -107,18 +130,18 @@ def _muse_context(ccs_dir, credential):
     address = desktop.email(credential.email)
     if not address:
         return None
+    capsule = ccs_dir / "account-usage" / muse.CAPSULE_NAME
     try:
         cookies, team, bound_email, plan = muse.read_capsule(ccs_dir / "account-usage", allow_expired=True)
         if bound_email.lower() != address.lower():
             return None
         return {"email": address.lower(), "team": team, "plan": plan,
                 "session": muse.session_values(cookies)}
-    except muse.MuseError as error:
-        if error.code == "no_browser_cookie":
+    except (muse.MuseError, OSError, ValueError, TypeError):
+        # Only a capsule that does not exist is absent; one that exists but is unusable
+        # (unreadable, damaged, or holding no cookies) proves nothing about the account.
+        if not os.path.lexists(capsule):
             return None
-        desktop.read_failed()
-        return UNREADABLE
-    except (OSError, ValueError, TypeError):
         desktop.read_failed()
         return UNREADABLE
 
@@ -170,26 +193,27 @@ def _desktop_candidates(provider, home, platform, ccs_dir):
         paths += [(ccs_dir / "muse-homes" / slot / "muse/auth.json", "config-home:" + slot,
                    ["config-home:" + slot]) for slot in _slots(ccs_dir / "muse-homes", r"([a-f0-9]{8})")]
         for path, locator, selectors in paths:
-            providers = _json(path).get("providers")
+            providers = _for(selectors, lambda: _json(path)).get("providers")
             meta = providers.get("meta") if isinstance(providers, dict) else None
             token = desktop.secret(meta.get("access_token")) if isinstance(meta, dict) else None
             if token and token.startswith("dca:"):
                 found.append((locator, selectors, desktop.Credential(token, "Muse CLI", email=desktop.email(meta.get("user_email")))))
     else:
         root = desktop_usage.cursor_root(home, platform)
-        rows = desktop.sqlite_rows(root / "User/globalStorage/state.vscdb",
+        rows = _for(["discover"], lambda: desktop.sqlite_rows(root / "User/globalStorage/state.vscdb",
             "SELECT key,value FROM ItemTable WHERE key IN "
-            "('cursorAuth/accessToken','cursorAuth/cachedEmail','cursorAuth/stripeMembershipType')")
+            "('cursorAuth/accessToken','cursorAuth/cachedEmail','cursorAuth/stripeMembershipType')"))
         fields = dict(rows)
+        auth = _for(["discover"], lambda: _json(root / "auth.json"))
         for locator, token, address, plan in (
             ("cursor:sqlite", fields.get("cursorAuth/accessToken"), fields.get("cursorAuth/cachedEmail"), fields.get("cursorAuth/stripeMembershipType")),
-            ("cursor:auth-json", _json(root / "auth.json").get("accessToken"), None, None)):
+            ("cursor:auth-json", auth.get("accessToken"), None, None)):
             token = desktop.secret(token)
             if token:
                 claims = desktop.jwt_claims(token)
                 found.append((locator, ["discover"], desktop.Credential(token, "Cursor desktop",
                     email=desktop.email(claims.get("email")) or desktop.email(address), plan=desktop.safe_text(plan))))
-    for rowid, kind, data in _omp("muse-code" if provider == "muse" else provider, home):
+    for rowid, kind, data in _for(["discover"], lambda: _omp("muse-code" if provider == "muse" else provider, home)):
         if kind != "oauth":
             continue
         credential = desktop_usage.credential_from_omp(provider, data)
@@ -202,12 +226,12 @@ def _plan_candidates(provider, home, ccs_dir):
     found = []
     aliases = {"kimi-code": ("kimi-for-coding", "kimi-code"), "qwen": ("alibaba-token-plan",),
                "zai": ("zai", "zai-coding-plan"), "opencode-go": ("opencode-go",)}
-    opencode = _json(home / ".local/share/opencode/auth.json")
+    opencode = _for(["discover"], lambda: _json(home / ".local/share/opencode/auth.json"))
     for alias in aliases[provider]:
         item = opencode.get(alias)
         if isinstance(item, dict) and item.get("type") == "api" and plans._string(item.get("key")):
             found.append(("opencode:" + alias, ["discover"], {"secret": item["key"], "source": "OpenCode", "email": None, "expires": None}))
-    for rowid, kind, data in _omp("alibaba-token-plan" if provider == "qwen" else provider, home):
+    for rowid, kind, data in _for(["discover"], lambda: _omp("alibaba-token-plan" if provider == "qwen" else provider, home)):
         secret = plans._string(data.get("key")) or plans._string(data.get("access"))
         if secret and kind in ("api_key", "oauth"):
             found.append(("omp:" + rowid, ["discover"], {"secret": secret, "source": "OMP",
@@ -222,12 +246,12 @@ def _plan_candidates(provider, home, ccs_dir):
     if provider in plans.KEY_PROVIDERS:
         pattern = re.escape(provider) + r"-([a-f0-9]{8})\.(?:json|dpapi)"
         for slot in sorted(set(_slots(ccs_dir / "account-usage/keys", pattern))):
-            item = plans.aac_key_credential(provider, slot, home, ccs_dir=ccs_dir)
+            item = _for(["aac-key:" + slot], lambda: plans.aac_key_credential(provider, slot, home, ccs_dir=ccs_dir))
             if item:
                 found.append(("aac-key:" + slot, ["aac-key:" + slot], item))
     if provider == "qwen":
         browser = []
-        for item in plans._safari_qwen_candidates(home):
+        for item in _for(["discover"], lambda: plans._safari_qwen_candidates(home)):
             try:
                 _, region = plan_usage._qwen_credential(item["secret"])
                 browser.append(("safari:" + region, ["discover"], item))
@@ -235,9 +259,10 @@ def _plan_candidates(provider, home, ccs_dir):
                 pass
         slots = ["default"] + _slots(ccs_dir / "account-usage", r"qwen-console-session-([a-f0-9]{8})\.json")
         for slot in slots:
-            items = plans._selected_credentials(provider, home, {"kind": "browser-capsule", "capsuleId": slot}, ccs_dir=ccs_dir)
+            selectors = ["browser-capsule:" + slot] + (["discover"] if slot == "default" else [])
+            items = _for(selectors, lambda: plans._selected_credentials(
+                provider, home, {"kind": "browser-capsule", "capsuleId": slot}, ccs_dir=ccs_dir))
             for item in items:
-                selectors = ["browser-capsule:" + slot] + (["discover"] if slot == "default" else [])
                 browser.insert(0, ("browser-capsule:" + slot, selectors, item))
         found = browser + found
     if provider == "kimi-code":
@@ -258,7 +283,7 @@ def inventory(provider, home, platform, ccs_dir=None):
     found = _desktop_candidates(provider, home, platform, ccs_dir) if provider in {"muse", "cursor"} else _plan_candidates(provider, home, ccs_dir)
     result = []
     for locator, selectors, credential in found[:MAX_CANDIDATES]:
-        context = _muse_context(ccs_dir, credential) if provider == "muse" else None
+        context = _for(selectors, lambda: _muse_context(ccs_dir, credential)) if provider == "muse" else None
         if context is UNREADABLE:
             continue
         item = _candidate(provider, locator, selectors, credential, context)

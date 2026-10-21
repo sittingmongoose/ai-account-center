@@ -206,6 +206,18 @@ class SpecialFailoverTests(unittest.TestCase):
             result = special.collect(candidate, self.home, "ubuntu")
         self.assertEqual(result, {"sample": None, "failureCode": "source_changed"})
 
+    def test_unreadable_signin_after_query_is_unavailable_not_changed(self):
+        self.native_file()
+        candidate = special.inventory("antigravity", self.home, "ubuntu")[0]
+        path = self.home / ".gemini/antigravity-cli/antigravity-oauth-token"
+        def damaged(credential, sample):
+            quota(credential, sample)
+            path.write_text('{"access_token": ', encoding="utf-8")
+        with patch.object(special.HttpClient, "request_json", return_value={"email": EMAIL, "id": SUBJECT, "verified_email": True}), \
+                patch.object(special, "_quota", side_effect=damaged):
+            result = special.collect(candidate, self.home, "ubuntu")
+        self.assertEqual(result, {"sample": None, "failureCode": "unavailable"})
+
     def test_provider_omission_is_unavailable_without_invented_zero(self):
         self.native_file()
         candidate = special.inventory("antigravity", self.home, "ubuntu")[0]
@@ -365,8 +377,8 @@ class SpecialFailoverTests(unittest.TestCase):
         with patch.object(console, "collect", side_effect=lambda cookies, requested: real_collect(cookies, requested, Client())), \
                 patch.object(special, "inventory", side_effect=OSError("PRIVATE-READ-FAILURE")):
             changed = special.collect(candidate, self.home, "mac")
-        self.assertEqual(changed, {"sample": None, "failureCode": "source_changed", "rateLimited": True,
-                                   "retryAfterSeconds": 123})
+        # An unreadable re-check is not a changed sign-in: the 429 hold stays, the quota does not.
+        self.assertEqual(changed, {"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 123})
         scope = {"version": 1, "provider": "opencode-wallet", "homeDir": str(self.home), "ccsDir": str(self.ccs)}
         inventory = protocol.run({**scope, "action": "inventory"})
         with patch.object(console, "collect", side_effect=rotated):

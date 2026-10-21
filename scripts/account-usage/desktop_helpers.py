@@ -224,12 +224,13 @@ def omp_credentials(provider, home):
     values = []
     for row in rows:
         try:
-            if isinstance(row[0], str) and len(row[0]) <= MAX_RESPONSE_BYTES:
-                value = json.loads(row[0])
-                if isinstance(value, dict):
-                    values.append(value)
+            value = json.loads(row[0]) if isinstance(row[0], str) and len(row[0]) <= MAX_RESPONSE_BYTES else None
         except (ValueError, TypeError):
-            pass
+            value = None
+        if isinstance(value, dict):
+            values.append(value)
+        else:
+            read_failed()
     return values
 
 
