@@ -26,12 +26,21 @@ if [ "$PACKAGE_NAME" != "@sittingmongoose/ai-account-center" ]; then
   exit 1
 fi
 
+PRODUCT_PATH=$(command -v ai-account-center 2>/dev/null || true)
 if [ -z "$PKG_MANAGER" ]; then
-  PRODUCT_PATH=$(command -v ai-account-center 2>/dev/null || true)
   case "$PRODUCT_PATH" in
     *"/.bun/"*) PKG_MANAGER=bun ;;
     *) PKG_MANAGER=npm ;;
   esac
+fi
+# Replace the installation the dashboard runs, even when npm's default prefix differs
+# (the VM runs ~/.local while `npm prefix -g` is /usr/local).
+NPM_PREFIX_ARGS=()
+if [ "$PKG_MANAGER" = npm ] && [ -n "$PRODUCT_PATH" ]; then
+  PRODUCT_PREFIX=$(dirname "$(dirname "$PRODUCT_PATH")")
+  if [ -d "$PRODUCT_PREFIX/lib/node_modules/$PACKAGE_NAME" ]; then
+    NPM_PREFIX_ARGS=(--prefix "$PRODUCT_PREFIX")
+  fi
 fi
 
 echo "[i] Building AI Account Center and the pinned Slint dashboard..."
@@ -40,6 +49,9 @@ if [ "$SKIP_VALIDATE" = false ]; then
   bun run validate
   bun run ui:validate
 fi
+
+# The installed postinstall repeats this check; bun may not run it for a global add.
+node scripts/deploy-lineage.js check
 
 # The build above is complete; do not invoke prepack a second time.
 PACK_RESULT=$(npm pack --ignore-scripts --json)
@@ -53,7 +65,7 @@ echo "[i] Installing the local $PACKAGE_NAME package with $PKG_MANAGER..."
 if [ "$PKG_MANAGER" = bun ]; then
   bun add -g "file:$(pwd)/$TARBALL"
 else
-  npm install -g "./$TARBALL"
+  npm install -g ${NPM_PREFIX_ARGS[@]+"${NPM_PREFIX_ARGS[@]}"} "./$TARBALL"
 fi
 
 # Keep this local package for reinstall/rollback; never touch private ~/.ccs state.

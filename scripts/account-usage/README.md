@@ -21,7 +21,10 @@ Antigravity OAuth application metadata, still apply on each source computer.
 Verified readings and original sample times persist under the dashboard's private
 `account-usage-failover/` directory. A temporary failure can show the last
 successful reading as cached across dashboard restarts; changed identities and
-hard identity failures cannot inherit that reading. Renewal of a credential for
+hard identity failures cannot inherit that reading. `identity_unavailable` (the
+provider did not name the signed-in account this time) discards the primary's
+reading but keeps the verified identity, so its exact or linked logins on the
+other computers continue to supply quota. Renewal of a credential for
 the same verified account can retain dated core quota; Claude browser extras
 still require the original credential and capsule binding. Primary sign-in
 warnings remain visible when a fallback supplies quota. Observation storage

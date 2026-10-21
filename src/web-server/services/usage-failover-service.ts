@@ -740,12 +740,13 @@ export class UsageFailoverService {
       )
         state.saved = null;
       const blocked = responseIsRateLimited(response);
+      // identity_unavailable means the provider did not name the signed-in account this time.
+      // It proves no change of account, so the verified identity keeps its other computers.
       if (
         primarySource &&
         [
           'identity_mismatch',
           'account_mismatch',
-          'identity_unavailable',
           'source_changed',
           'plan_mismatch',
           'team_mismatch',

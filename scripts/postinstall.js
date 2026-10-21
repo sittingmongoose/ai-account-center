@@ -34,14 +34,32 @@ function initializeAccountDirectory(env = process.env) {
   return directory;
 }
 
+/**
+ * Refuse a package that would remove the build this computer's dashboard runs. The failed
+ * lifecycle script makes npm keep the previous installation (see deploy-lineage.js).
+ */
+function checkInstalledLineage(packageRoot = path.resolve(__dirname, '..'), env = process.env) {
+  const { checkDeployLineage, isSourceCheckout } = require('./deploy-lineage');
+  if (isSourceCheckout(packageRoot)) return true;
+  const result = checkDeployLineage({ packageRoot, env });
+  if (result.message) {
+    console[result.ok ? 'log' : 'error'](`[${result.ok ? '!' : 'X'}] ${result.message}`);
+  }
+  return result.ok;
+}
+
 if (require.main === module) {
-  try {
-    initializeAccountDirectory();
-    console.log('[OK] AI Account Center storage is ready.');
-  } catch (error) {
-    console.error(`[X] AI Account Center storage could not be prepared: ${error.message}`);
+  if (!checkInstalledLineage()) {
     process.exitCode = 1;
+  } else {
+    try {
+      initializeAccountDirectory();
+      console.log('[OK] AI Account Center storage is ready.');
+    } catch (error) {
+      console.error(`[X] AI Account Center storage could not be prepared: ${error.message}`);
+      process.exitCode = 1;
+    }
   }
 }
 
-module.exports = { initializeAccountDirectory };
+module.exports = { initializeAccountDirectory, checkInstalledLineage };

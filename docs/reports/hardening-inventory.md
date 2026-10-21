@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1335 |
-| Sync fs files affected (all) | 132 |
-| Sync fs occurrences (runtime hotpaths) | 690 |
-| Sync fs files affected (runtime hotpaths) | 77 |
+| Sync fs occurrences (all) | 1343 |
+| Sync fs files affected (all) | 134 |
+| Sync fs occurrences (runtime hotpaths) | 698 |
+| Sync fs files affected (runtime hotpaths) | 79 |
 | Legacy shim markers | 225 |
 | Legacy shim files affected | 78 |
 
@@ -18,8 +18,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | File | Sync Calls | API Names |
 |---|---:|---|
 | `src/web-server/usage/account-activity-collector.ts` | 108 | chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, opendirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync |
-| `src/web-server/services/account-analytics-activity.ts` | 36 | chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync |
 | `src/management/shared-manager/diverged-file-adopter.ts` | 29 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync |
+| `src/web-server/usage/analytics-request-plan.ts` | 28 | existsSync, realpathSync, statSync |
 | `src/management/shared-manager/migrations.ts` | 25 | copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, writeFileSync |
 | `src/web-server/services/usage-failover-cache.ts` | 19 | closeSync, fstatSync, lstatSync, mkdirSync, opendirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
@@ -53,13 +53,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 27.7% (194/701) |
+| typed-error adoption (typed/total throws) | 27.8% (195/702) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 41/447 |
+| files with createLogger | 42/452 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
-| files > 400 LOC | 58 |
+| files > 400 LOC | 60 |
 | files > 600 LOC | 21 |
 
 ### Top Hotpath console.error/warn Files
@@ -87,18 +87,18 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | File | LOC |
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 3724 |
-| `src/web-server/services/account-analytics-activity.ts` | 2058 |
+| `src/web-server/services/account-analytics-activity.ts` | 1734 |
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1104 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1066 |
-| `src/cliproxy/quota/quota-fetcher-codex.ts` | 962 |
+| `src/cliproxy/quota/quota-fetcher-codex.ts` | 995 |
 | `src/web-server/services/account-dashboard-service.ts` | 931 |
 | `src/web-server/services/analytics-remote-sources.ts` | 918 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
-| `src/web-server/services/usage-failover-service.ts` | 843 |
-| `src/web-server/usage/native-quota-collector.ts` | 820 |
+| `src/web-server/services/usage-failover-service.ts` | 860 |
+| `src/web-server/usage/native-quota-collector.ts` | 848 |
 | `src/auth/profile-detector.ts` | 767 |
 | `src/web-server/usage/aggregator.ts` | 767 |
-| `src/web-server/services/additional-account-service.ts` | 751 |
+| `src/web-server/services/additional-account-service.ts` | 760 |
 

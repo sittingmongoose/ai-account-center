@@ -68,6 +68,11 @@ their offline checks. Report precisely what ran and any limits.
 
 ## Release and documentation
 
+Install only committed builds of merged `main`, never a branch that is not in
+`main`: the next install from `main` removes it. The package `postinstall`
+refuses a build missing the commit the dashboard runs (`deployed-build.json`);
+merge that branch instead of overriding. See CONTRIBUTING.md, Deployment lineage.
+
 The repository URL is `sittingmongoose/ai-account-center`. Do not publish to
 upstream npm packages, GHCR images, Cloudflare routes, webhooks or project boards.
 Local source packaging is the development path; external publication requires

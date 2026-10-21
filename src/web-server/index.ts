@@ -49,6 +49,8 @@ import {
 import { apiCompression } from './api-compression';
 import { DASHBOARD_PROVIDER_IDS } from './services/dashboard-provider-table';
 import { setDashboardBuildCommit } from './services/dashboard-server-info';
+import { readPackagedBuild, recordDeployedBuild } from './services/deployed-build';
+import { getCcsDir } from '../utils/config-manager';
 import { attachDashboardEventServer } from './dashboard-events';
 import { isSecureTransport } from './middleware/secure-transport';
 import {
@@ -163,7 +165,16 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // the static handlers further down.
   const staticDir = options.staticDir || path.join(__dirname, '../ui');
   const staticUi = loadStaticUi(staticDir);
-  setDashboardBuildCommit(staticUi.commit);
+  // A reused UI bundle names the commit it was built at, not the running server's.
+  const packagedBuild = readPackagedBuild();
+  setDashboardBuildCommit(packagedBuild?.commit.slice(0, 8) ?? staticUi.commit);
+  try {
+    recordDeployedBuild(getCcsDir(), packagedBuild);
+  } catch (error) {
+    logger.warn('web.deployed_build.unrecorded', 'Running build could not be recorded', {
+      kind: requestErrorKind(error),
+    });
+  }
 
   // A static-asset GET/HEAD carries no session state and its log line is
   // noise: one stat (express.static stats again anyway) skips both. Page and

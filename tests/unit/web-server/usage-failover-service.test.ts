@@ -209,6 +209,43 @@ describe('identity-bound usage source failover', () => {
     }
   );
 
+  it('keeps linked native Muse fallback after the Mac cannot name its web account, then goes offline', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({
+      locator: '5'.repeat(64),
+      identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+    });
+    await bindMusePeers(h, [{ host: 'windows', identity: native.identity }]);
+    h.advance();
+    h.collections.set('mac', { sample: null, failureCode: 'identity_unavailable' });
+    h.inventories.set('windows', [native]);
+    h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+    const row = await h.service.collect(h.target, template());
+    expect(row.status).toBe('ok');
+    expect(row.source).toBe('Verified native subscription quota on Windows (fallback)');
+    expect(row.sampledAt).toBe(new Date(h.now()).toISOString());
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+    const restarted = await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(restarted.status).toBe('ok');
+    expect(restarted.source).toBe('Verified native subscription quota on Windows (fallback)');
+    expect(restarted.sampledAt).toBe(new Date(h.now()).toISOString());
+  });
+
+  it('reads an exact-identity peer when the primary cannot name its account', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.collections.set('mac', { sample: null, failureCode: 'identity_unavailable' });
+    h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+    const row = await h.service.collect(h.target, template());
+    expect(row.status).toBe('ok');
+    expect(row.source).toBe('Verified quota on Windows (fallback)');
+    expect(h.collected().map((call) => call.host)).toEqual(['mac', 'mac', 'windows']);
+  });
+
   it('does not accept same-email native Muse peers without an explicit link', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());
