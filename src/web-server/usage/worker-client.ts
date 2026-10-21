@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../config/config-loader-facade';
 import { CCSError } from '../../errors/error-types';
+import { withDeadline } from '../../utils/settle-deadline';
 import type { DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
 import type {
   AccountActivityScanOptions,
@@ -55,6 +56,14 @@ export function codexFileRevision(stats: fs.Stats): string {
 }
 
 export const LARGE_CODEX_READ_TIMEOUT_MS = 15 * 60 * 1000;
+/** How long a stopped large reader may take to exit before its disk is treated as hung. */
+const LARGE_CODEX_STOP_DEADLINE_MS = 5_000;
+
+/**
+ * A large reader a hung disk call still holds after it was given up on; resolves when it exits.
+ * No other large read starts meanwhile, so a long outage never piles up stuck threads.
+ */
+let lingeringLargeReader: Promise<void> | null = null;
 const LARGE_CODEX_RETRY_MS = 24 * 60 * 60 * 1000;
 
 export type UsageWorkerRequest =
@@ -157,7 +166,8 @@ export function spawnLargeCodexReader(
   spec: LargeCodexReadSpec,
   signal: AbortSignal,
   timeoutMs = LARGE_CODEX_READ_TIMEOUT_MS,
-  workerPath = getUsageWorkerPath()
+  workerPath = getUsageWorkerPath(),
+  stopDeadlineMs = LARGE_CODEX_STOP_DEADLINE_MS
 ): Promise<LargeCodexCompletion | undefined> {
   if (signal.aborted) return Promise.resolve(undefined);
   return new Promise((resolve) => {
@@ -177,10 +187,19 @@ export function spawnLargeCodexReader(
       clearTimeout(timer);
       signal.removeEventListener('abort', abort);
       worker.removeAllListeners();
-      void worker
-        .terminate()
-        .catch(() => 0)
-        .then(() => resolve(result));
+      void withDeadline(worker.terminate(), stopDeadlineMs).then(
+        () => resolve(result),
+        () => {
+          worker.on('error', () => undefined);
+          lingeringLargeReader = new Promise((exited) =>
+            worker.once('exit', () => {
+              lingeringLargeReader = null;
+              exited();
+            })
+          );
+          resolve(undefined);
+        }
+      );
     };
     const abort = (): void => finish();
     const timer = setTimeout(abort, boundedMs);
@@ -231,6 +250,8 @@ export class LargeCodexReadQueue {
 
   private async drain(): Promise<void> {
     while (!this.closed && this.queued.size) {
+      if (lingeringLargeReader) await lingeringLargeReader;
+      if (this.closed) break;
       const spec = this.queued.values().next().value as LargeCodexReadSpec;
       this.queued.delete(spec.checkpoint);
       const attemptPath = `${spec.checkpoint}.large-attempt`;
@@ -287,7 +308,10 @@ export class LargeCodexReadQueue {
     this.closed = true;
     this.queued.clear();
     this.active?.controller.abort();
-    await this.pending;
+    // A read held by a hung disk must not hold the dashboard's shutdown.
+    await withDeadline(this.pending ?? Promise.resolve(), LARGE_CODEX_STOP_DEADLINE_MS * 2).catch(
+      () => undefined
+    );
   }
 }
 

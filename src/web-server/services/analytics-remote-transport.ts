@@ -1,6 +1,12 @@
 import { execFile } from 'child_process';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
+import { getCcsDir } from '../../utils/config-manager';
+import {
+  DeadlineExceededError,
+  LOCAL_FILE_DEADLINE_MS,
+  withDeadline,
+} from '../../utils/settle-deadline';
 import { readAnalyticsHelper } from './analytics-remote-helper';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
@@ -529,16 +535,31 @@ export function fixedAnalyticsRemoteAliases(): AnalyticsRemoteAliases {
   return { mac: null, windows: null, nas1: NAS1_SSH_ALIAS };
 }
 
+/** The aliases the last answered profile read found, for a read that does not answer. */
+let lastResolvedAliases: { scope: string; aliases: AnalyticsRemoteAliases } | null = null;
+
 /**
  * The same ssh host aliases the server already uses for the Mac and Windows:
  * the first Claude desktop launcher on each host that carries one. Null when
- * no launcher configures that host. Nas1 is always its fixed alias.
+ * no launcher configures that host. Nas1 is always its fixed alias. A profile
+ * read past `deadlineMs` (a hung disk) keeps the last aliases found, so the
+ * backup reader and remote Analytics are not held by it.
  */
-export async function resolveAnalyticsRemoteHosts(): Promise<AnalyticsRemoteAliases> {
+export async function resolveAnalyticsRemoteHosts(
+  deadlineMs = LOCAL_FILE_DEADLINE_MS
+): Promise<AnalyticsRemoteAliases> {
+  const scope = getCcsDir();
   let profiles: Array<{ mac?: { sshHost?: string }; windows?: { sshHost?: string } }> = [];
   try {
-    profiles = await listClaudeDesktopProfiles();
-  } catch {
+    profiles = await withDeadline(
+      listClaudeDesktopProfiles(),
+      deadlineMs,
+      undefined,
+      'Claude Desktop profile list read'
+    );
+  } catch (error) {
+    if (error instanceof DeadlineExceededError && lastResolvedAliases?.scope === scope)
+      return lastResolvedAliases.aliases;
     return fixedAnalyticsRemoteAliases();
   }
   let mac: string | null = null;
@@ -550,5 +571,7 @@ export async function resolveAnalyticsRemoteHosts(): Promise<AnalyticsRemoteAlia
       windows = profile.windows.sshHost;
     if (mac && windows) break;
   }
-  return { ...fixedAnalyticsRemoteAliases(), mac, windows };
+  const aliases = { ...fixedAnalyticsRemoteAliases(), mac, windows };
+  lastResolvedAliases = { scope, aliases };
+  return aliases;
 }

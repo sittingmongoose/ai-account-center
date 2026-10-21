@@ -1,6 +1,7 @@
-import { execFile } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import path from 'path';
 import { NetworkError } from '../../errors/error-types';
+import { withProcessDeadline } from '../../utils/settle-deadline';
 import type { DashboardPlatform } from './account-dashboard-types';
 
 export const ADDITIONAL_PROVIDERS = [
@@ -264,8 +265,9 @@ export async function runAdditionalUsageSource(source: AdditionalUsageSource): P
         source.platform,
         ...accountArguments,
       ];
-  return new Promise((resolve, reject) => {
-    execFile(
+  let child: ChildProcess | undefined;
+  const run = new Promise<string>((resolve, reject) => {
+    child = execFile(
       binary,
       args,
       {
@@ -290,4 +292,10 @@ export async function runAdditionalUsageSource(source: AdditionalUsageSource): P
       }
     );
   });
+  return withProcessDeadline(
+    run,
+    () => child,
+    PROCESS_TIMEOUT_MS,
+    () => new AdditionalUsageTransportError(true, false)
+  );
 }

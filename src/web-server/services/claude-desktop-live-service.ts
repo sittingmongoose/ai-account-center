@@ -1,7 +1,12 @@
-import { execFile } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import { createHash } from 'crypto';
 import { NetworkError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
+import {
+  LOCAL_FILE_DEADLINE_MS,
+  withDeadline,
+  withProcessDeadline,
+} from '../../utils/settle-deadline';
 import {
   CLAUDE_PROFILE_ID_PATTERN,
   listClaudeDesktopProfiles,
@@ -56,6 +61,13 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
+/** Snapshot writes still in flight; a hung disk holds one per profile, never a growing pile. */
+const snapshotWrites = new Set<string>();
+
+/** Small private files only: a hung disk must not hold a live read or its cache entry. */
+function boundedFile<T>(work: Promise<T>): Promise<T> {
+  return withDeadline(work, LOCAL_FILE_DEADLINE_MS, undefined, 'Claude Desktop profile file');
+}
 
 export function invalidateClaudeDesktopLiveUsageCache(): void {
   cache.clear();
@@ -454,9 +466,10 @@ async function runWindowsHelper(
     ].join('; ');
     return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
   };
-  const execute = (command: string): Promise<string> =>
-    new Promise((resolve, reject) => {
-      execFile(
+  const execute = (command: string): Promise<string> => {
+    let child: ChildProcess | undefined;
+    const run = new Promise<string>((resolve, reject) => {
+      child = execFile(
         'ssh',
         [
           '-T',
@@ -498,6 +511,13 @@ async function runWindowsHelper(
         }
       );
     });
+    return withProcessDeadline(
+      run,
+      () => child,
+      PROCESS_TIMEOUT_MS,
+      () => new ClaudeDesktopLiveUsageError()
+    );
+  };
   try {
     return await execute(scriptFor(helperCall));
   } catch (error) {
@@ -539,7 +559,7 @@ export async function getLiveClaudeDesktopUsage(
 ): Promise<ClaudeDesktopLiveUsage | null> {
   if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId)) return null;
   try {
-    const profiles = await listClaudeDesktopProfiles();
+    const profiles = await boundedFile(listClaudeDesktopProfiles());
     const profile = profiles.find((candidate) => candidate.id === profileId);
     const sshHost = profile?.windows?.sshHost;
     if (!profile || !sshHost || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sshHost)) {
@@ -574,7 +594,9 @@ export async function getLiveClaudeDesktopUsage(
         }
         if (usage && cache.get(key) === entry && scope === getCcsDir()) {
           const [retained, memory] = await Promise.all([
-            readClaudeDesktopLiveSnapshot(scope, profileId, manifestHash),
+            boundedFile(readClaudeDesktopLiveSnapshot(scope, profileId, manifestHash)).catch(
+              () => null
+            ),
             previousInMemory,
           ]);
           const disk =
@@ -589,16 +611,22 @@ export async function getLiveClaudeDesktopUsage(
               ? inMemory
               : disk;
           usage = retainUnavailableExtras(usage, previous);
-          const current = (await listClaudeDesktopProfiles().catch(() => [])).find(
+          const current = (await boundedFile(listClaudeDesktopProfiles()).catch(() => [])).find(
             (candidate) => candidate.id === profileId
           );
           // An old in-flight source must not overwrite a newer manifest's snapshot.
           if (
             current &&
             createHash('sha256').update(JSON.stringify(current)).digest('hex') === manifestHash &&
-            cache.get(key) === entry
+            cache.get(key) === entry &&
+            !snapshotWrites.has(key)
           ) {
-            await writeClaudeDesktopLiveSnapshot(scope, profileId, manifestHash, usage);
+            // Retaining the sample is optional: past the deadline the reading is returned
+            // and the write finishes, or not, on its own.
+            snapshotWrites.add(key);
+            const write = writeClaudeDesktopLiveSnapshot(scope, profileId, manifestHash, usage);
+            void write.finally(() => snapshotWrites.delete(key)).catch(() => undefined);
+            await boundedFile(write).catch(() => undefined);
           }
         }
         return usage;
@@ -637,11 +665,13 @@ export async function getCachedClaudeDesktopLiveUsage(
 ): Promise<ClaudeDesktopLiveUsage | null> {
   if (!CLAUDE_PROFILE_ID_PATTERN.test(profileId)) return null;
   try {
-    const profiles = await listClaudeDesktopProfiles();
+    const profiles = await boundedFile(listClaudeDesktopProfiles());
     const profile = profiles.find((candidate) => candidate.id === profileId);
     if (!profile?.windows?.sshHost) return null;
     const manifestHash = createHash('sha256').update(JSON.stringify(profile)).digest('hex');
-    const sample = await readClaudeDesktopLiveSnapshot(getCcsDir(), profileId, manifestHash);
+    const sample = await boundedFile(
+      readClaudeDesktopLiveSnapshot(getCcsDir(), profileId, manifestHash)
+    );
     if (!isRecord(sample) || sample.source !== SOURCE) return null;
     return normalizeSample(sample, profileId, profile.email, RETAINED_SAMPLE_MAX_AGE_MS);
   } catch {

@@ -44,6 +44,10 @@ import {
   readIdentityUsageCooldown,
   holdIdentityUsageCooldown,
 } from '../services/usage-failover-cooldown';
+import { DeadlineExceededError, withDeadline } from '../../utils/settle-deadline';
+import { createLogger } from '../../services/logging';
+
+const logger = createLogger('web-server:usage:codex');
 
 // ============================================================================
 // Safety constants (concrete, named, module-level)
@@ -77,6 +81,14 @@ const CB_TRIP_THRESHOLD = 3;
 /** How long the breaker stays open (zero network) once tripped. */
 const CB_COOLDOWN_MS = 900_000; // 15 minutes
 
+/**
+ * Hard limit for one profile's in-flight read. Two bounded network attempts
+ * plus optional reset metadata fit well inside it. Past it the shared pending
+ * read is released as a transient failure, so a lost completion cannot freeze
+ * the profile, its failover recovery and Codex auto-switch.
+ */
+const COLLECTION_DEADLINE_MS = 45_000;
+
 // Surface identifier
 const SURFACE_CODEX = 'ccsx';
 
@@ -108,6 +120,8 @@ export interface NativeQuotaDeps {
   now?: () => number;
   /** Sleep seam (no real delay in tests). */
   sleep?: (ms: number) => Promise<void>;
+  /** Overrides COLLECTION_DEADLINE_MS so tests need not wait for a real hang. */
+  collectionDeadlineMs?: number;
 }
 
 interface NativeCodexAuth {
@@ -598,6 +612,11 @@ async function collectCodexRowForProfile(
       // any synchronous return below runs the finally that nulls it (otherwise a
       // sync return leaves a stale resolved promise the next call would reuse).
       await Promise.resolve();
+      // State is committed only after each settled await, so a read that
+      // finishes after its deadline is discarded instead of overwriting newer state.
+      const settleBy = Date.now() + (deps.collectionDeadlineMs ?? COLLECTION_DEADLINE_MS);
+      const settle = <T>(work: Promise<T>) =>
+        withDeadline(work, settleBy - Date.now(), undefined, 'Codex profile quota read');
       // A peer collector or another profile alias may have received a 429 since
       // this collection began. Check the same durable account gate at the fetch.
       const requestNow = (deps.now ?? Date.now)();
@@ -612,9 +631,11 @@ async function collectCodexRowForProfile(
         // Use the on-disk accountId for the network call; fall through to local
         // when the auth file is absent (parked profile).
         if (nativeAuth) {
-          const quota = await fetchNetwork(nativeAuth.accessToken, nativeAuth.accountId);
+          const quota = await settle(fetchNetwork(nativeAuth.accessToken, nativeAuth.accountId));
+          // Cooldowns run from the answer, not the start: a slow failure must not leave one
+          // that has already expired and lets the next refresh retry at once.
+          const responseNow = (deps.now ?? Date.now)();
           if (quota.httpStatus === 429 && nativeAuth.identity) {
-            const responseNow = (deps.now ?? Date.now)();
             const delay = parseRetryAfterMs(quota.errorDetail, responseNow, 86_400_000) ?? 60_000;
             // Persist even if the saved token changed while the request was in
             // flight: its account still received this provider-wide response.
@@ -688,31 +709,31 @@ async function collectCodexRowForProfile(
             };
             state.cachedRow = reauthRow;
             state.cachedAt = now;
-            state.cooldownUntil = now + REAUTH_COOLDOWN_MS;
+            state.cooldownUntil = responseNow + REAUTH_COOLDOWN_MS;
             return { ...reauthRow, cached: false };
           } else if (quota.httpStatus === 429) {
             // 429: apply breaker + backoff, then fall through to local.
             state.consecutive429 += 1;
             if (state.consecutive429 >= CB_TRIP_THRESHOLD) {
-              state.breakerOpenUntil = now + CB_COOLDOWN_MS;
+              state.breakerOpenUntil = responseNow + CB_COOLDOWN_MS;
             }
-            const retryAfter = parseRetryAfterMs(quota.errorDetail, now);
+            const retryAfter = parseRetryAfterMs(quota.errorDetail, responseNow);
             const backoff = retryAfter ?? computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
+            state.cooldownUntil = responseNow + backoff;
             state.rateLimitUntil = Math.max(state.rateLimitUntil, state.cooldownUntil);
             state.backoffAttempt += 1;
             void sleep; // retained as an injectable seam for future inline retry
           } else if (quota.retryable) {
             // Other transient failure: set cooldown, fall through to local.
             const backoff = computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
+            state.cooldownUntil = responseNow + backoff;
             state.backoffAttempt += 1;
           } else {
             // Terminal non-retryable failure (e.g. 403/404): back off so we
             // don't re-hit a dead endpoint every poll when no local data caches
             // a row to engage the TTL short-circuit. Then fall through to local.
             const backoff = computeBackoffMs(state.backoffAttempt);
-            state.cooldownUntil = now + backoff;
+            state.cooldownUntil = responseNow + backoff;
             state.backoffAttempt += 1;
           }
           // Fall through to LOCAL fallback below.
@@ -728,7 +749,7 @@ async function collectCodexRowForProfile(
       // local; named profiles park instead.
       // ----------------------------------------------------------------
       if (profile === DEFAULT_PROFILE) {
-        const localQuota = await getCodex();
+        const localQuota = await settle(getCodex());
         const currentState = getProfileState(profile);
         if (currentState !== state) {
           return currentState ? serveCached(currentState) : null;
@@ -750,14 +771,21 @@ async function collectCodexRowForProfile(
       state.cachedRow = parkedRow;
       state.cachedAt = now;
       return parkedRow;
-    } catch {
+    } catch (error) {
+      if (error instanceof DeadlineExceededError)
+        logger.warn(
+          'quota.collect.deadline',
+          'A Codex profile quota read did not finish in time; its last reading is kept.',
+          { profile }
+        );
       const currentState = getProfileState(profile);
       if (currentState !== state) {
         return currentState ? serveCached(currentState) : null;
       }
-      // Network/parse rejection -> treat as transient, serve stale.
+      // Network/parse rejection or deadline -> treat as transient, serve stale. The cooldown
+      // runs from the failure: after a 45 s deadline one dated from the start has expired.
       const backoff = computeBackoffMs(state.backoffAttempt);
-      state.cooldownUntil = now + backoff;
+      state.cooldownUntil = (deps.now ?? Date.now)() + backoff;
       state.backoffAttempt += 1;
       return serveCached(state);
     } finally {

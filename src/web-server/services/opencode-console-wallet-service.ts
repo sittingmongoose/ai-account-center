@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { createHash, randomUUID } from 'crypto';
@@ -13,9 +13,11 @@ import {
   type UsageFailoverTarget,
 } from './usage-failover-contract';
 import { runUsageHelper } from './usage-failover-transport';
+import { withProcessDeadline } from '../../utils/settle-deadline';
 
 const SOURCE = 'Authenticated OpenCode console workspace on Mac';
 const MAX_BYTES = 64 * 1024;
+const SOURCE_TIMEOUT_MS = 25_000;
 const TTL_MS = 120_000;
 const BACKOFF_MS = 30_000;
 const DEBOUNCE_MS = 5_000;
@@ -293,8 +295,9 @@ export async function deleteOpencodeWalletSource(ccsDir: string): Promise<boolea
 
 /** The command can only read the installed bridge's verified safe sample. */
 async function runSource(sshHost: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
+  let child: ChildProcess | undefined;
+  const run = new Promise<string>((resolve, reject) => {
+    child = execFile(
       'ssh',
       [
         '-T',
@@ -312,13 +315,19 @@ async function runSource(sshHost: string): Promise<string> {
         sshHost,
         'exec "$HOME/.ccs/opencode-usage-bridge/native-host/launch-host.sh" --collect',
       ],
-      { encoding: 'utf8', timeout: 25_000, maxBuffer: MAX_BYTES, windowsHide: true },
+      { encoding: 'utf8', timeout: SOURCE_TIMEOUT_MS, maxBuffer: MAX_BYTES, windowsHide: true },
       (error, stdout) => {
         if (error) reject(new Error('Optional console wallet unavailable.'));
         else resolve(stdout);
       }
     );
   });
+  return withProcessDeadline(
+    run,
+    () => child,
+    SOURCE_TIMEOUT_MS,
+    () => new Error('Optional console wallet unavailable.')
+  );
 }
 
 async function inventorySource(sshHost: string): Promise<UsageCandidate[]> {

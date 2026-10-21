@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:te
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { CodexQuotaResult } from '../quota-types';
 
 let tmpDir: string;
 let originalCcsHome: string | undefined;
@@ -746,25 +747,43 @@ describe('Codex Quota Fetcher', () => {
       expect(result.needsReauth).toBeUndefined();
     }, 500);
 
-    it('returns a retryable timeout when an error response body stalls on both attempts', async () => {
+    it('classifies an error response by its status when its body never arrives', async () => {
+      const originalSetTimeout = global.setTimeout;
+      spyOn(global, 'setTimeout').mockImplementation(((callback, delay, ...args) =>
+        originalSetTimeout(callback, Math.min(delay ?? 0, 20), ...args)) as typeof setTimeout);
+      const expected: Record<number, Partial<CodexQuotaResult>> = {
+        429: { errorCode: 'rate_limited', retryable: true },
+        401: { errorCode: 'reauth_required', needsReauth: true, retryable: false },
+        503: { errorCode: 'provider_unavailable', retryable: true },
+      };
+      for (const [status, classification] of Object.entries(expected)) {
+        let calls = 0;
+        // A body that ignores its abort and never settles.
+        global.fetch = mock(async () => {
+          calls += 1;
+          return new Response(new ReadableStream({ start() {} }), { status: Number(status) });
+        }) as unknown as typeof fetch;
+
+        const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
+        // One request: a received 429 is not retried at once, and a 401 keeps its re-login.
+        expect(calls).toBe(1);
+        expect(result).toMatchObject({
+          success: false,
+          httpStatus: Number(status),
+          ...classification,
+        });
+      }
+    }, 1000);
+
+    it('settles an attempt whose request ignores its abort signal', async () => {
       const originalSetTimeout = global.setTimeout;
       spyOn(global, 'setTimeout').mockImplementation(((callback, delay, ...args) =>
         originalSetTimeout(callback, Math.min(delay ?? 0, 20), ...args)) as typeof setTimeout);
       let calls = 0;
-      global.fetch = mock(async (_url: unknown, options?: RequestInit) => {
+      // A lost completion: no abort listener, no body, never settles.
+      global.fetch = mock(() => {
         calls += 1;
-        return new Response(
-          new ReadableStream({
-            start(controller) {
-              options?.signal?.addEventListener(
-                'abort',
-                () => controller.error(new DOMException('Error body timed out', 'AbortError')),
-                { once: true }
-              );
-            },
-          }),
-          { status: 503 }
-        );
+        return new Promise<Response>(() => undefined);
       }) as unknown as typeof fetch;
 
       const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
@@ -774,7 +793,33 @@ describe('Codex Quota Fetcher', () => {
         errorCode: 'network_timeout',
         retryable: true,
       });
-      expect(result.needsReauth).toBeUndefined();
+    }, 500);
+
+    it('keeps the usage reading when the optional reset-credit request never settles', async () => {
+      const originalSetTimeout = global.setTimeout;
+      spyOn(global, 'setTimeout').mockImplementation(((callback, delay, ...args) =>
+        originalSetTimeout(callback, Math.min(delay ?? 0, 20), ...args)) as typeof setTimeout);
+      const urls: string[] = [];
+      global.fetch = mock(async (url: unknown) => {
+        urls.push(String(url));
+        if (String(url).endsWith('/wham/rate-limit-reset-credits'))
+          return new Promise<Response>(() => undefined);
+        return Response.json({
+          plan_type: 'plus',
+          rate_limit: { primary_window: { used_percent: 12, limit_window_seconds: 18000 } },
+          rate_limit_reset_credits: { available_count: 2, applicable_available_count: 2 },
+        });
+      }) as unknown as typeof fetch;
+
+      const result = await fetchCodexQuotaWithToken('native-token', 'native-workspace');
+      expect(urls).toEqual([
+        'https://chatgpt.com/backend-api/wham/usage',
+        'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits',
+      ]);
+      expect(result.success).toBe(true);
+      expect(result.coreUsage?.fiveHour?.remainingPercent).toBe(88);
+      expect(result.resetCredits?.available).toBe(2);
+      expect(result.resetCredits?.credits).toBeUndefined();
     }, 500);
 
     it('uses supplied native headers without looking up CLIProxy auth', async () => {

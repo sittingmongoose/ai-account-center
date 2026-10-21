@@ -2,7 +2,12 @@ import { createHash } from 'crypto';
 import * as path from 'path';
 import type { DashboardAccount } from './account-dashboard-types';
 import { HOST_LABELS, DASHBOARD_HOSTS } from './dashboard-hosts';
-import { configuredUsageHosts, runUsageHelper } from './usage-failover-transport';
+import {
+  configuredUsageHosts,
+  runUsageHelper,
+  usageHelperDeadlineMs,
+} from './usage-failover-transport';
+import { withDeadline } from '../../utils/settle-deadline';
 import {
   holdUsageCooldown,
   identityUsageCooldownKey,
@@ -61,6 +66,8 @@ export interface UsageFailoverDeps {
   transport?: (host: UsageHost, request: UsageHelperRequest) => Promise<UsageHelperResponse>;
   hosts?: () => Promise<UsageHost[]>;
   now?: () => number;
+  /** Overrides usageHelperDeadlineMs so tests need not wait for a real hang. */
+  requestDeadlineMs?: (action: UsageHelperRequest['action']) => number;
 }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const hostKey = (host: UsageHost) => JSON.stringify([host.platform, host.sshHost]);
@@ -265,7 +272,16 @@ export class UsageFailoverService {
     else this.active++;
     try {
       if (beforeStart && !beforeStart()) return null;
-      const response = await (this.deps.transport ?? runUsageHelper)(host, request);
+      // Every provider shares these three slots: a request whose completion is
+      // lost must release its slot, or recovery stops for all of them.
+      const response = await withDeadline(
+        (this.deps.transport ?? runUsageHelper)(host, request),
+        // Slightly after the transport's own deadline, so it can kill its process first.
+        this.deps.requestDeadlineMs?.(request.action) ??
+          usageHelperDeadlineMs(request.action) + 1_000,
+        undefined,
+        'Usage helper request'
+      );
       // Publish identity cooldowns before a queued request receives this slot.
       observe?.(response);
       return response;

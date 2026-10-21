@@ -1,11 +1,16 @@
 import { ValidationError, NetworkError } from '../../errors/error-types';
-import { execFile } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { resolveAnalyticsRemoteHosts } from './analytics-remote-transport';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
 import { helperPlatform } from './dashboard-hosts';
+import {
+  DeadlineExceededError,
+  PROCESS_SETTLE_GRACE_MS,
+  withDeadline,
+} from '../../utils/settle-deadline';
 import {
   isRecord,
   parseUsageCandidate,
@@ -176,6 +181,15 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
   };
 }
 
+function usageHelperProcessTimeoutMs(action: UsageHelperRequest['action']): number {
+  return action === 'inventory' ? 12_000 : 35_000;
+}
+
+/** The process timeout plus time for its SIGTERM to land; past it the request is settled anyway. */
+export function usageHelperDeadlineMs(action: UsageHelperRequest['action']): number {
+  return usageHelperProcessTimeoutMs(action) + PROCESS_SETTLE_GRACE_MS;
+}
+
 export async function runUsageHelper(
   host: UsageHost,
   request: UsageHelperRequest
@@ -184,45 +198,60 @@ export async function runUsageHelper(
     throw new ValidationError('Invalid usage host.');
   if (host.sshHost === null && host.platform !== localUsageHost().platform)
     throw new ValidationError('Usage source is not local.');
-  const helperSource = await usageHelperBundle();
-  const input = JSON.stringify({ helperSource, request });
-  const executable = host.sshHost ? 'ssh' : localUsagePython(request);
-  const args = host.sshHost
-    ? [
-        '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'ServerAliveInterval=5',
-        '-o',
-        'ServerAliveCountMax=3',
-        '--',
-        host.sshHost,
-        usageHelperCommand(host.platform),
-      ]
-    : ['-c', BOOTSTRAP];
-  const stdout = await new Promise<string>((resolve, reject) => {
-    const child = execFile(
-      executable,
-      args,
-      {
-        encoding: 'utf8',
-        timeout: request.action === 'inventory' ? 12_000 : 35_000,
-        maxBuffer: MAX_BYTES,
-        windowsHide: true,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
-      },
-      (error, result) =>
-        error ? reject(new NetworkError('Usage source unavailable.')) : resolve(result)
-    );
-    child.stdin?.on('error', () => {
-      /* Only the sanitized process result is exposed. */
+  let child: ChildProcess | undefined;
+  let expired = false;
+  const run = async (): Promise<string> => {
+    const helperSource = await usageHelperBundle();
+    if (expired) throw new NetworkError('Usage source unavailable.');
+    const input = JSON.stringify({ helperSource, request });
+    const executable = host.sshHost ? 'ssh' : localUsagePython(request);
+    const args = host.sshHost
+      ? [
+          '-T',
+          '-o',
+          'BatchMode=yes',
+          '-o',
+          'ConnectTimeout=5',
+          '-o',
+          'ConnectionAttempts=1',
+          '-o',
+          'ServerAliveInterval=5',
+          '-o',
+          'ServerAliveCountMax=3',
+          '--',
+          host.sshHost,
+          usageHelperCommand(host.platform),
+        ]
+      : ['-c', BOOTSTRAP];
+    return new Promise<string>((resolve, reject) => {
+      child = execFile(
+        executable,
+        args,
+        {
+          encoding: 'utf8',
+          timeout: usageHelperProcessTimeoutMs(request.action),
+          maxBuffer: MAX_BYTES,
+          windowsHide: true,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+        },
+        (error, result) =>
+          error ? reject(new NetworkError('Usage source unavailable.')) : resolve(result)
+      );
+      child.stdin?.on('error', () => {
+        /* Only the sanitized process result is exposed. */
+      });
+      child.stdin?.end(input);
     });
-    child.stdin?.end(input);
+  };
+  // execFile's timeout sends SIGTERM and still waits for the exit callback. A
+  // helper that ignores it, or a lost callback, must not hold the request open.
+  const stdout = await withDeadline(run(), usageHelperDeadlineMs(request.action), () => {
+    expired = true;
+    child?.kill('SIGKILL');
+  }).catch((error: unknown) => {
+    throw error instanceof DeadlineExceededError
+      ? new NetworkError('Usage source unavailable.')
+      : error;
   });
   const response = parseUsageHelperResponse(stdout);
   if (response.action !== request.action) throw new ValidationError('Invalid usage response.');

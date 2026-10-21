@@ -14,6 +14,7 @@ import * as path from 'path';
 import {
   getCodexProfileQuotaRows,
   getCachedCodexProfileQuotaRows,
+  getCodexProfileRetryBlocked,
   resetNativeQuotaState,
   type NativeQuotaDeps,
 } from '../../../src/web-server/usage/native-quota-collector';
@@ -632,6 +633,56 @@ describe('stale-on-fail', () => {
 
     expect(await getCodexProfileQuotaRows(['work'], deps)).toEqual([]);
   });
+});
+
+describe('a read whose completion is lost', () => {
+  it('releases the shared read at its deadline, keeps the last reading and ignores the late result', async () => {
+    const clock = { now: 1_000_000 };
+    let mode: 'ok' | 'hang' = 'ok';
+    let completeLate: (quota: CodexQuotaResult) => void = () => {};
+    const deps: NativeQuotaDeps & { networkCount: () => number } = {
+      ...makeDeps({
+        clock,
+        fetch: async () =>
+          mode === 'ok'
+            ? codexSuccessQuota()
+            : new Promise<CodexQuotaResult>((resolve) => {
+                completeLate = resolve;
+              }),
+      }),
+      collectionDeadlineMs: 20,
+    };
+
+    const first = await rowFor('work', deps);
+    mode = 'hang';
+    clock.now += TTL_JUMP;
+    const pendingKept = rowFor('work', deps);
+    // The deadline passes while the read hangs, so the backoff must run from the failure.
+    clock.now += 45_000;
+    const kept = await pendingKept;
+    expect(kept?.cached).toBe(true);
+    expect(kept?.fetchedAt).toBe(first?.fetchedAt);
+    // Failover recovery is no longer locked out by a pending read.
+    expect(getCodexProfileRetryBlocked('work')).toBe(false);
+
+    const late = codexSuccessQuota();
+    late.coreUsage!.fiveHour!.remainingPercent = 5;
+    completeLate(late);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const [cached] = getCachedCodexProfileQuotaRows(['work']);
+    expect(cached?.quota_percentage).toBe(first?.quota_percentage);
+    expect(cached?.fetchedAt).toBe(first?.fetchedAt);
+
+    // An immediate forced refresh is still inside that backoff.
+    await rowFor('work', deps, true);
+    expect(deps.networkCount()).toBe(2);
+
+    // After the transient backoff the profile reaches the network again.
+    mode = 'ok';
+    clock.now += MAX_COOLDOWN_JUMP;
+    await rowFor('work', deps, true);
+    expect(deps.networkCount()).toBe(3);
+  }, 1000);
 });
 
 describe('wire fields, default marking and ordering', () => {
