@@ -215,6 +215,17 @@ describe('packaged usage failover transport', () => {
     }
   });
 
+  it('treats a failed helper inventory as unavailable, never as removed sign-ins', () => {
+    expect(() =>
+      parseUsageHelperResponse(
+        JSON.stringify({ version: 1, action: 'inventory', candidates: [], failed: true })
+      )
+    ).toThrow('Usage inventory unavailable.');
+    expect(
+      parseUsageHelperResponse(JSON.stringify({ version: 1, action: 'inventory', candidates: [] }))
+    ).toEqual({ version: 1, action: 'inventory', candidates: [] });
+  });
+
   it('drops unrelated helper fields and bounds provider retry metadata', () => {
     const parsed = parseUsageHelperResponse(
       JSON.stringify({

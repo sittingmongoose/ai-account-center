@@ -119,6 +119,9 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
   if (Buffer.byteLength(text) > MAX_BYTES) throw new ValidationError('Invalid usage response.');
   const value: unknown = JSON.parse(text);
   if (!isRecord(value) || value.version !== 1) throw new ValidationError('Invalid usage response.');
+  // A helper that could not read its sign-ins says so; an empty list would mean removal.
+  if (value.action === 'inventory' && value.failed === true)
+    throw new ValidationError('Usage inventory unavailable.');
   if (
     value.action === 'inventory' &&
     Array.isArray(value.candidates) &&

@@ -679,6 +679,18 @@ export class UsageFailoverService {
         (candidate.email && !emailMatches(target.expectedEmail, candidate.email))
       )
         return 'next';
+      // A linked peer is its own provider account too: honor and extend its own 429 hold.
+      const peerKey = sameUsageIdentity(state.identity, candidate.identity)
+        ? null
+        : identityUsageCooldownKey(target.ccsDir, target.provider, candidate.identity);
+      if (
+        peerKey &&
+        Math.max(
+          this.cooldowns.get(peerKey) ?? 0,
+          readUsageCooldown(target.ccsDir, peerKey, this.now())
+        ) > this.now()
+      )
+        return 'next';
       const key = JSON.stringify([hostKey(host), candidate.locator]);
       if (tried.has(key)) return 'next';
       tried.add(key);
@@ -699,13 +711,15 @@ export class UsageFailoverService {
           () => !applyCooldown(),
           (value) => {
             if (value.action !== 'collect' || !responseIsRateLimited(value)) return;
-            state.nextAttempt = holdUsageCooldown(
-              target.ccsDir,
-              cooldownKey,
-              this.now() + Math.max(60, Math.min(86400, value.retryAfterSeconds ?? 60)) * 1000,
-              this.now()
-            );
+            const until =
+              this.now() + Math.max(60, Math.min(86400, value.retryAfterSeconds ?? 60)) * 1000;
+            state.nextAttempt = holdUsageCooldown(target.ccsDir, cooldownKey, until, this.now());
             this.cooldowns.set(cooldownKey, state.nextAttempt);
+            if (peerKey)
+              this.cooldowns.set(
+                peerKey,
+                holdUsageCooldown(target.ccsDir, peerKey, until, this.now())
+              );
           }
         );
       } catch {

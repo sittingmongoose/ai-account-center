@@ -184,6 +184,16 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("rateLimited", result)
         self.assertNotIn("retryAfterSeconds", result)
 
+    def test_failed_inventory_is_marked_failed_not_reported_as_no_sign_ins(self):
+        adapter = FakeAdapter()
+        def broken(*args, **kwargs):
+            raise OSError("private store unreadable " + TOKEN)
+        adapter.inventory = broken
+        result, _ = self.run_helper(self.request("inventory"), adapter)
+        self.assertEqual(result, {"version": 1, "action": "inventory", "candidates": [], "failed": True})
+        result, _ = self.run_helper(self.request("inventory"), FakeAdapter(before=Inventory()))
+        self.assertEqual(result, {"version": 1, "action": "inventory", "candidates": []})
+
     def test_failed_post_collection_inventory_preserves_original_rate_limit(self):
         adapter = FakeAdapter(result={"sample": None, "failureCode": "rate_limited", "retryAfterSeconds": 1800})
         inventory = adapter.inventory

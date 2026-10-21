@@ -4,8 +4,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
+  deployedBuildDirs,
   readPackagedBuild,
   recordDeployedBuild,
+  recordRunningBuild,
 } from '../../../src/web-server/services/deployed-build';
 
 interface LineageCheck {
@@ -154,6 +156,27 @@ describe('deployment lineage guard', () => {
     expect(check().message).toContain('with uncommitted changes');
   });
 
+  it('refuses when an existing running build record cannot be read', () => {
+    packaged({ commit: C, dirty: false, lineage: [C] });
+    const file = path.join(ccsHome, '.ccs', 'deployed-build.json');
+    for (const contents of ['{not json', JSON.stringify({ version: 1, commit: 'short' })]) {
+      fs.writeFileSync(file, contents);
+      const result = check();
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain('cannot be read');
+    }
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+    expect(check().ok).toBe(false);
+    expect(check({ AAC_ALLOW_DEPLOY_REGRESSION: '1' }).ok).toBe(true);
+  });
+
+  it('explains a shallow-clone build that lacks the running commit', () => {
+    packaged({ commit: C, dirty: false, shallow: true, lineage: [C] });
+    deployed(B);
+    expect(check().message).toContain('shallow clone');
+  });
+
   it('honors CCS_DIR for the running build record', () => {
     const custom = path.join(scope, 'custom');
     fs.mkdirSync(custom);
@@ -237,6 +260,31 @@ describe('running build record', () => {
     expect(readPackagedBuild(path.resolve(__dirname, '../../..'))).toBeNull();
     packaged({ commit: null, dirty: null, lineage: [] });
     expect(readPackagedBuild(packageRoot)).toBeNull();
+  });
+
+  it('records the running build where an installer looks, even under --config-dir', () => {
+    const home = path.join(scope, 'user');
+    const custom = path.join(scope, 'custom-config');
+    fs.mkdirSync(path.join(home, '.ccs'), { recursive: true });
+    fs.mkdirSync(custom);
+    expect(deployedBuildDirs(custom, {}, home)).toEqual([
+      path.resolve(custom),
+      path.resolve(home, '.ccs'),
+    ]);
+    // A missing named directory is not created.
+    expect(deployedBuildDirs(custom, { CCS_HOME: path.join(scope, 'absent') }, home)).toEqual([
+      path.resolve(custom),
+      path.resolve(home, '.ccs'),
+    ]);
+    const build = { commit: B, branch: 'main', dirty: false };
+    expect(recordRunningBuild(custom, build, { CCS_HOME: home })).toBe(0);
+    for (const dir of [custom, path.join(home, '.ccs')])
+      expect(
+        lineage.parseLedger(
+          JSON.parse(fs.readFileSync(path.join(dir, 'deployed-build.json'), 'utf8'))
+        )
+      ).toEqual({ commit: B, branch: 'main', dirty: false });
+    expect(recordRunningBuild(custom, null, { CCS_HOME: home })).toBe(0);
   });
 
   it('writes a private record the install guard reads, and leaves an unchanged one alone', () => {

@@ -393,7 +393,9 @@ def run(request):
             raise ValueError()
         return response
     except Exception:
-        return ({"version": 1, "action": "inventory", "candidates": []}
+        # A failed read is not an empty sign-in list: the dashboard would take it as a removed
+        # credential, forget the verified account and stop using its other computers.
+        return ({"version": 1, "action": "inventory", "candidates": [], "failed": True}
                 if isinstance(request, dict) and request.get("action") == "inventory" else _failure())
 
 

@@ -157,12 +157,14 @@ class IdentityTests(unittest.TestCase):
         team, _ = muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", capsule_session=True,
                                    observed=observed)
         self.assertEqual((team, observed), ("42", {"mode": "session", "userHash": USER_HASH}))
-        for teams in ([{"team_id": 42}, {"team_id": 43}], [{"team_id": 43}]):
+        # Two teams cannot bind an unpinned session; one other team means the bound team is gone.
+        for teams, code in (([{"team_id": 42}, {"team_id": 43}], "identity_unavailable"),
+                            ([{"team_id": 43}], "team_mismatch")):
             with self.subTest(teams=teams):
                 client = FakeClient(email="", teams=teams)
                 with self.assertRaises(muse.MuseError) as error:
                     muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", capsule_session=True)
-                self.assertEqual(error.exception.code, "identity_unavailable")
+                self.assertEqual(error.exception.code, code)
                 self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams"])
         # Any other browser session, or an unreadable or foreign pin, stops after auth/me.
         for bound_user, session in ((None, False), (None, 1), (False, True), ("not-a-hash", True), ("A" * 64, True)):
@@ -180,7 +182,8 @@ class IdentityTests(unittest.TestCase):
                 client = FakeClient(email="", teams=teams)
                 with self.assertRaises(muse.MuseError) as error:
                     muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", bound_user=USER_HASH)
-                self.assertEqual(error.exception.code, "identity_unavailable")
+                # The pinned user's bound team is gone: a hard team loss, not a transient lookup.
+                self.assertEqual(error.exception.code, "team_mismatch")
                 self.assertEqual(client.calls, ["/api/auth/me", "/api/portal/teams"])
 
     def test_a_binding_never_reads_another_team_and_stops_before_any_request(self):

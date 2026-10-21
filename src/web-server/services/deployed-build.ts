@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 /**
@@ -48,6 +49,29 @@ export function readPackagedBuild(packageRoot = PACKAGE_ROOT): PackagedBuild | n
   }
 }
 
+/**
+ * Every existing directory an installer may read the record from: the active CCS directory
+ * (which `--config-dir` can move), the one CCS_DIR or CCS_HOME names, and the default ~/.ccs.
+ */
+export function deployedBuildDirs(
+  active: string,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir()
+): string[] {
+  const named = env.CCS_DIR
+    ? path.resolve(env.CCS_DIR)
+    : path.join(path.resolve(env.CCS_HOME || home), '.ccs');
+  return [
+    ...new Set([active, named, path.join(home, '.ccs')].map((dir) => path.resolve(dir))),
+  ].filter((dir) => {
+    try {
+      return fs.statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** Write `<ccsDir>/deployed-build.json` atomically; an unchanged record is left alone. */
 export function recordDeployedBuild(
   ccsDir: string,
@@ -68,7 +92,6 @@ export function recordDeployedBuild(
   } catch {
     // Missing or unreadable records are replaced below.
   }
-  fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.tmp`;
   const record = {
     version: 1,
@@ -78,10 +101,31 @@ export function recordDeployedBuild(
     recordedAt: now.toISOString(),
   };
   try {
-    fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, {
+      mode: 0o600,
+      flag: 'wx',
+    });
     fs.renameSync(temporary, file);
   } finally {
     fs.rmSync(temporary, { force: true });
   }
   return true;
+}
+
+/** Record the running build everywhere an installer may look; returns the failed directories. */
+export function recordRunningBuild(
+  active: string,
+  build: PackagedBuild | null,
+  env: NodeJS.ProcessEnv = process.env
+): number {
+  if (!build) return 0;
+  let failed = 0;
+  for (const dir of deployedBuildDirs(active, env)) {
+    try {
+      recordDeployedBuild(dir, build);
+    } catch {
+      failed++;
+    }
+  }
+  return failed;
 }

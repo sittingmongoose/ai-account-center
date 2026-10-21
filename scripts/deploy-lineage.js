@@ -104,12 +104,14 @@ function readSourceBuild(repoRoot, now = new Date()) {
   ]);
   if (status === null) return null;
   const branch = (git(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) ?? '').trim();
+  const shallow = (git(repoRoot, ['rev-parse', '--is-shallow-repository']) ?? '').trim() === 'true';
   return {
     version: 1,
     commit,
     branch: branch === 'HEAD' ? null : safeBranch(branch),
     dirty: status.trim() !== '',
     onMain: isOnMain(repoRoot, commit),
+    shallow,
     builtAt: now.toISOString(),
     lineage,
   };
@@ -157,8 +159,20 @@ function parseBuildInfo(value) {
     branch: safeBranch(value.branch),
     dirty: value.dirty,
     onMain: value.onMain === true,
+    shallow: value.shallow === true,
     lineage: value.lineage,
   };
+}
+
+/** The running build record: absent (first install), unreadable, or valid. */
+function readLedger(file) {
+  try {
+    fs.lstatSync(file);
+  } catch (error) {
+    return error && error.code === 'ENOENT' ? { ledger: null } : { unreadable: true };
+  }
+  const ledger = parseLedger(readJson(file));
+  return ledger ? { ledger } : { unreadable: true };
 }
 
 function parseLedger(value) {
@@ -192,8 +206,13 @@ function describe(commit, branch) {
  */
 function checkDeployLineage({ packageRoot, env = process.env }) {
   const info = parseBuildInfo(readJson(path.join(packageRoot, 'dist', BUILD_INFO)));
-  const ledger = parseLedger(readJson(path.join(ccsDirFrom(env), LEDGER)));
-  return verdict(buildProblem(info) ?? runningBuildProblem(info, ledger), env);
+  const file = path.join(ccsDirFrom(env), LEDGER);
+  const record = readLedger(file);
+  const unreadable = record.unreadable
+    ? `The running build record ${file} cannot be read, so this package cannot be checked ` +
+      'against it. Restart the dashboard to rewrite it.'
+    : null;
+  return verdict(buildProblem(info) ?? unreadable ?? runningBuildProblem(info, record.ledger), env);
 }
 
 /** Whether the package keeps the build this computer's dashboard runs. */
@@ -215,7 +234,10 @@ function runningBuildProblem(info, ledger) {
       `This package (${describe(info.commit, info.branch)}) does not contain ${running}, which ` +
       'the dashboard on this computer runs. Installing it would remove deployed fixes. ' +
       `Merge ${ledger.branch ?? short(ledger.commit)} into main, rebuild from main and install ` +
-      'that package.'
+      'that package.' +
+      (info.shallow
+        ? ' It was built from a shallow clone with incomplete history; build from a full clone.'
+        : '')
     );
   return null;
 }

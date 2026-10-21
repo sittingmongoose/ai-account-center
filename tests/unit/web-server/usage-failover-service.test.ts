@@ -234,6 +234,97 @@ describe('identity-bound usage source failover', () => {
     expect(restarted.sampledAt).toBe(new Date(h.now()).toISOString());
   });
 
+  it('holds a linked native Muse credential for its own account rows after its 429', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({
+      locator: '5'.repeat(64),
+      identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+    });
+    await bindMusePeers(h, [{ host: 'windows', identity: native.identity }]);
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [native]);
+    h.collections.set('windows', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 900,
+    });
+    await h.service.collect(h.target, template());
+    const before = h.collected().length;
+    expect(h.collected().at(-1)?.host).toBe('windows');
+    const nativeRow: UsageFailoverTarget = {
+      ...h.target,
+      accountId: 'muse:acct:1234abcd',
+      binding: 'native-credential-row',
+      expectedIdentity: native.identity,
+      primarySources: [{ ...WINDOWS, selector: 'discover' }],
+    };
+    await new UsageFailoverService(h.deps).collect(nativeRow, template());
+    expect(h.collected()).toHaveLength(before);
+  });
+
+  it('skips a linked native Muse peer that its own account row already holds after a 429', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({
+      locator: '5'.repeat(64),
+      identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+    });
+    await bindMusePeers(h, [{ host: 'windows', identity: native.identity }]);
+    const nativeRow: UsageFailoverTarget = {
+      ...h.target,
+      accountId: 'muse:acct:1234abcd',
+      binding: 'native-credential-row',
+      expectedIdentity: native.identity,
+      primarySources: [{ ...WINDOWS, selector: 'discover' }],
+    };
+    h.inventories.set('windows', [native]);
+    h.collections.set('windows', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 900,
+    });
+    await h.service.collect(nativeRow, template());
+    const before = h.collected().length;
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(h.collected()).toHaveLength(before);
+  });
+
+  it('stops linked native Muse fallback when the Mac reports the bound team is gone', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    const native = candidate({
+      locator: '5'.repeat(64),
+      identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+    });
+    await bindMusePeers(h, [{ host: 'windows', identity: native.identity }]);
+    h.advance();
+    h.collections.set('mac', { sample: null, failureCode: 'team_mismatch' });
+    h.inventories.set('windows', [native]);
+    const before = h.collected().length;
+    const row = await h.service.collect(h.target, template());
+    expect(row.windows).toHaveLength(0);
+    expect(
+      h
+        .collected()
+        .slice(before)
+        .map((call) => call.host)
+    ).toEqual(['mac']);
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    const restarted = await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(restarted.windows).toHaveLength(0);
+    expect(
+      h
+        .collected()
+        .slice(before)
+        .map((call) => call.host)
+    ).toEqual(['mac']);
+  });
+
   it('reads an exact-identity peer when the primary cannot name its account', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());

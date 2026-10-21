@@ -288,8 +288,10 @@ def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=N
         selected = teams[0]["id"]
     else:
         if not isinstance(requested, str) or requested not in {row["id"] for row in teams}:
-            # Without an email, losing the verified team leaves the session unbound.
-            raise MuseError("team_mismatch" if mode == "email" else "identity_unavailable")
+            # The same verified web user (or the capsule's own session) no longer lists the
+            # bound team: a definite team loss, never the transient identity_unavailable that
+            # lets the dashboard keep this account's other computers.
+            raise MuseError("team_mismatch")
         selected = requested
     try:
         response = client.get("/api/portal/teams/" + selected + "/subscription-quota")
