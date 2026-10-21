@@ -95,13 +95,13 @@ function readSourceBuild(repoRoot, now = new Date()) {
     .split(/\r?\n/)
     .filter((line) => COMMIT.test(line));
   if (!COMMIT.test(commit) || lineage[0] !== commit) return null;
-  const inputs = PACKAGE_INPUTS.filter((input) => fs.existsSync(path.join(repoRoot, input)));
+  // Missing inputs stay in the pathspec: a deleted tracked directory is an uncommitted change.
   const status = git(repoRoot, [
     'status',
     '--porcelain',
     '--untracked-files=normal',
     '--',
-    ...inputs,
+    ...PACKAGE_INPUTS,
   ]);
   if (status === null) return null;
   const branch = (git(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']) ?? '').trim();

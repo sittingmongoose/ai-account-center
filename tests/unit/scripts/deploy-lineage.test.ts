@@ -226,6 +226,9 @@ describe('deployment lineage guard', () => {
     git(repo, 'init', '-q', '-b', 'main');
     git(repo, 'remote', 'add', 'origin', origin);
     fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'export const a = 1;\n');
+    // A second input directory keeps the dirty check's pathspec non-empty when src is deleted.
+    fs.mkdirSync(path.join(repo, 'scripts'));
+    fs.writeFileSync(path.join(repo, 'scripts', 'build.js'), 'module.exports = 1;\n');
     git(repo, 'add', '.');
     git(repo, 'commit', '-q', '-m', 'first');
     const first = git(repo, 'rev-parse', 'HEAD');
@@ -255,6 +258,11 @@ describe('deployment lineage guard', () => {
     fs.writeFileSync(path.join(repo, 'src', 'c.ts'), 'export const c = 3;\n');
     expect(lineage.readSourceBuild(repo)?.dirty).toBe(true);
     expect(lineage.readSourceBuild(path.join(repo, 'src'))).toBeNull();
+    // Deleting a whole tracked input directory is an uncommitted change too.
+    fs.rmSync(path.join(repo, 'src', 'c.ts'));
+    expect(lineage.readSourceBuild(repo)?.dirty).toBe(false);
+    fs.rmSync(path.join(repo, 'src'), { recursive: true });
+    expect(lineage.readSourceBuild(repo)?.dirty).toBe(true);
   });
 });
 

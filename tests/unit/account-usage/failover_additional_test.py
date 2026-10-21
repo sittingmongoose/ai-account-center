@@ -120,6 +120,26 @@ class AdditionalFailoverTests(unittest.TestCase):
         self.assertEqual(desktop_helpers.INCOMPLETE_SELECTORS, {"config-home:1234abcd"})
         self.assertEqual(desktop_helpers.ATTRIBUTED_FAILURES, desktop_helpers.total_read_failures())
 
+    def test_unlistable_slot_folder_marks_only_its_family(self):
+        import desktop_helpers
+        import failover_usage
+        (self.ccs / "muse-homes").mkdir(parents=True)
+        real_iterdir = Path.iterdir
+        def denied(path):
+            if path.name == "muse-homes":
+                raise PermissionError("private")
+            return real_iterdir(path)
+        desktop_helpers.READ_FAILURES = plan_common.READ_FAILURES = 0
+        desktop_helpers.INCOMPLETE_SELECTORS = set()
+        desktop_helpers.ATTRIBUTED_FAILURES = 0
+        with patch.object(Path, "iterdir", denied):
+            self.assertEqual(self.read("muse"), [])
+        self.assertEqual(desktop_helpers.INCOMPLETE_SELECTORS, {"config-home:*"})
+        self.assertEqual(failover_usage._incomplete_selectors(), ["config-home:*"])
+        # The removed default login is still a removal; only config-home slots are unknown.
+        self.assertFalse(failover_usage._unread(["config-home:*"], ["discover"]))
+        self.assertTrue(failover_usage._unread(["config-home:*"], ["config-home:1234abcd"]))
+
     def test_capsule_behind_an_unsearchable_folder_is_not_absent(self):
         import desktop_helpers
         self.native_muse()

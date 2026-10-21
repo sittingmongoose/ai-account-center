@@ -181,7 +181,8 @@ def _desktop_candidates(provider, home, platform, ccs_dir):
     if provider == "muse":
         paths = [(desktop.config_home(home) / "muse/auth.json", "native:muse", ["discover"])]
         paths += [(ccs_dir / "muse-homes" / slot / "muse/auth.json", "config-home:" + slot,
-                   ["config-home:" + slot]) for slot in _slots(ccs_dir / "muse-homes", r"([a-f0-9]{8})")]
+                   ["config-home:" + slot]) for slot in
+                  _for(["config-home:*"], lambda: _slots(ccs_dir / "muse-homes", r"([a-f0-9]{8})"))]
         for path, locator, selectors in paths:
             providers = _for(selectors, lambda: _json(path)).get("providers")
             meta = providers.get("meta") if isinstance(providers, dict) else None
@@ -235,7 +236,7 @@ def _plan_candidates(provider, home, ccs_dir):
             found.append(("environment:" + name, ["discover"], {"secret": secret, "source": "User environment", "email": None, "expires": None}))
     if provider in plans.KEY_PROVIDERS:
         pattern = re.escape(provider) + r"-([a-f0-9]{8})\.(?:json|dpapi)"
-        for slot in sorted(set(_slots(ccs_dir / "account-usage/keys", pattern))):
+        for slot in sorted(set(_for(["aac-key:*"], lambda: _slots(ccs_dir / "account-usage/keys", pattern)))):
             item = _for(["aac-key:" + slot], lambda: plans.aac_key_credential(provider, slot, home, ccs_dir=ccs_dir))
             if item:
                 found.append(("aac-key:" + slot, ["aac-key:" + slot], item))
@@ -247,7 +248,8 @@ def _plan_candidates(provider, home, ccs_dir):
                 browser.append(("safari:" + region, ["discover"], item))
             except plans.CollectionError:
                 pass
-        slots = ["default"] + _slots(ccs_dir / "account-usage", r"qwen-console-session-([a-f0-9]{8})\.json")
+        slots = ["default"] + _for(["browser-capsule:*"], lambda: _slots(
+            ccs_dir / "account-usage", r"qwen-console-session-([a-f0-9]{8})\.json"))
         for slot in slots:
             selectors = ["browser-capsule:" + slot] + (["discover"] if slot == "default" else [])
             items = _for(selectors, lambda: plans._selected_credentials(
