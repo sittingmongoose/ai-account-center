@@ -13,6 +13,7 @@ import os
 import pathlib
 import re
 import sqlite3
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -177,6 +178,40 @@ READ_FAILURES = 0
 def read_failed():
     global READ_FAILURES
     READ_FAILURES += 1
+
+
+# Selectors whose own store could not be read, and how many counted failures they explain.
+# A failover inventory reports any unexplained failure as "*" (every selector), so a store
+# that is not tied to one selector cannot hide a removed sign-in, and one that is cannot
+# hide another selector's removal. "<family>:*" covers a listing of unknown slot names.
+INCOMPLETE_SELECTORS = set()
+ATTRIBUTED_FAILURES = 0
+_EXPLAINED = []
+
+
+def total_read_failures():
+    total = READ_FAILURES
+    for name in ("plan_common", "claude_usage"):
+        total += getattr(sys.modules.get(name), "READ_FAILURES", 0) or 0
+    return total
+
+
+def attribute_reads(selectors, read):
+    """Run one store read; attribute failures that no nested, narrower read explained."""
+    global ATTRIBUTED_FAILURES
+    before = total_read_failures()
+    _EXPLAINED.append(0)
+    try:
+        return read()
+    finally:
+        explained = _EXPLAINED.pop()
+        added = total_read_failures() - before
+        if added > explained:
+            INCOMPLETE_SELECTORS.update(selectors)
+        if _EXPLAINED:
+            _EXPLAINED[-1] += added
+        else:
+            ATTRIBUTED_FAILURES += added
 
 
 def read_json(path):

@@ -238,6 +238,23 @@ class ProtocolTests(unittest.TestCase):
         result, _ = self.run_helper(self.request(), adapter)
         self.assertEqual((result["failureCode"], result["sample"]), ("unavailable", None))
 
+    def test_family_markers_cover_unknown_slots_and_unattributed_reads_cover_all(self):
+        import desktop_helpers
+        desktop_helpers.READ_FAILURES = 0
+        desktop_helpers.INCOMPLETE_SELECTORS = set()
+        desktop_helpers.ATTRIBUTED_FAILURES = 0
+        desktop_helpers.attribute_reads(["claude-profile:*"], desktop_helpers.read_failed)
+        self.assertEqual(usage._incomplete_selectors(), ["claude-profile:*"])
+        self.assertTrue(usage._unread(["claude-profile:*"], ["claude-profile:work"]))
+        self.assertFalse(usage._unread(["claude-profile:*"], ["discover"]))
+        # Nested narrower reads explain their own failures; the family is added only for the rest.
+        desktop_helpers.INCOMPLETE_SELECTORS = set()
+        desktop_helpers.attribute_reads(["antigravity-profile:*"], lambda: desktop_helpers.attribute_reads(
+            ["antigravity-profile:one"], desktop_helpers.read_failed))
+        self.assertEqual(desktop_helpers.INCOMPLETE_SELECTORS, {"antigravity-profile:one"})
+        desktop_helpers.read_failed()
+        self.assertIn("*", usage._incomplete_selectors())
+
     def test_unverified_recheck_keeps_identity_failures_and_holds(self):
         import desktop_helpers
         for collected, expected in (

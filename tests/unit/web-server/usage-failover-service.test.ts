@@ -292,6 +292,38 @@ describe('identity-bound usage source failover', () => {
     expect(row.source).toBe('Verified quota on Windows (fallback)');
   });
 
+  it('keeps a slot account whose family listing could not be read', async () => {
+    const h = await harness();
+    const slot = candidate({ selectors: ['config-home:1234abcd'] });
+    const target = {
+      ...h.target,
+      primarySources: [{ ...MAC, selector: 'config-home:1234abcd' }],
+    };
+    h.inventories.set('mac', [slot]);
+    await h.service.collect(target, template());
+    h.advance();
+    h.inventories.set('mac', []);
+    h.inventories.set('windows', []);
+    const inner = h.deps.transport;
+    await new UsageFailoverService({
+      ...h.deps,
+      transport: async (host, request) => {
+        const response = await inner(host, request);
+        return host.host === 'mac' && response.action === 'inventory'
+          ? { ...response, incompleteSelectors: ['config-home:*'] }
+          : response;
+      },
+    }).collect(target, template());
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [
+      candidate({ locator: '3'.repeat(64), revision: '4'.repeat(64) }),
+    ]);
+    h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+    const row = await new UsageFailoverService(h.deps).collect(target, template());
+    expect(row.source).toBe('Verified quota on Windows (fallback)');
+  });
+
   it('still treats a removed primary login as removed when only another slot is unreadable', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());

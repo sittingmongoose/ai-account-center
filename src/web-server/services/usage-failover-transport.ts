@@ -139,7 +139,9 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
         unread.some(
           (selector) =>
             typeof selector !== 'string' ||
-            (selector !== '*' && !/^[A-Za-z0-9][A-Za-z0-9:_.@-]{0,159}$/.test(selector))
+            (selector !== '*' &&
+              !/^[A-Za-z0-9][A-Za-z0-9_.@-]{0,62}:\*$/.test(selector) &&
+              !/^[A-Za-z0-9][A-Za-z0-9:_.@-]{0,159}$/.test(selector))
         ))
     )
       throw new ValidationError('Invalid usage inventory.');

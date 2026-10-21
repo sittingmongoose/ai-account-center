@@ -96,28 +96,10 @@ def _cookie_header(value):
 
 
 UNREADABLE = object()
-# Selectors whose own store could not be read in this process, and how many counted read
-# failures they explain. failover_usage reports any unexplained failure as "*" (every
-# selector), so an unrelated unreadable store cannot hide a removed sign-in.
-INCOMPLETE_SELECTORS = set()
-ATTRIBUTED_FAILURES = 0
-
-
-def _failures():
-    return desktop.READ_FAILURES + plans.READ_FAILURES
 
 
 def _for(selectors, read):
-    """Run one store read and attribute any read failure to the selectors it serves."""
-    global ATTRIBUTED_FAILURES
-    before = _failures()
-    try:
-        return read()
-    finally:
-        added = _failures() - before
-        if added > 0:
-            INCOMPLETE_SELECTORS.update(selectors)
-            ATTRIBUTED_FAILURES += added
+    return desktop.attribute_reads(selectors, read)
 
 
 def _muse_context(ccs_dir, credential):
@@ -132,6 +114,14 @@ def _muse_context(ccs_dir, credential):
         return None
     capsule = ccs_dir / "account-usage" / muse.CAPSULE_NAME
     try:
+        os.lstat(capsule)
+        present = True
+    except (FileNotFoundError, NotADirectoryError):
+        present = False
+    except OSError:
+        # The capsule exists or its folder cannot be searched: neither proves absence.
+        present = True
+    try:
         cookies, team, bound_email, plan = muse.read_capsule(ccs_dir / "account-usage", allow_expired=True)
         if bound_email.lower() != address.lower():
             return None
@@ -140,7 +130,7 @@ def _muse_context(ccs_dir, credential):
     except (muse.MuseError, OSError, ValueError, TypeError):
         # Only a capsule that does not exist is absent; one that exists but is unusable
         # (unreadable, damaged, or holding no cookies) proves nothing about the account.
-        if not os.path.lexists(capsule):
+        if not present:
             return None
         desktop.read_failed()
         return UNREADABLE

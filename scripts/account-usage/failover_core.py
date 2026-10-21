@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 
 import claude_usage
-from desktop_helpers import email, read_failed, safe_text, secret, quota_window
+from desktop_helpers import attribute_reads, email, read_failed, safe_text, secret, quota_window
 
 MAX_BYTES = 1024 * 1024
 MAX_SOURCES = 64
@@ -216,12 +216,14 @@ def _roots(home, provider, ccs_dir):
     default = home / (".codex" if provider == "codex" else ".claude")
     result = [(default, ["discover", provider + "-profile:default"])]
     saved = ccs_dir / ("codex-instances" if provider == "codex" else "instances")
-    result.extend((root, [provider + "-profile:" + root.name]) for root in _children(ccs_dir, saved))
-    t3 = _children(home, home / (".codex-t3" if provider == "codex" else ".claude-t3"))
-    if provider == "codex":
-        t3.extend(root / "shadow" for root in _children(home, home / ".t3/userdata/providers/codex"))
-    t3.extend(_settings_homes(home, provider))
-    result.extend((root, ["t3"]) for root in t3)
+    profiles = attribute_reads([provider + "-profile:*"], lambda: _children(ccs_dir, saved))
+    result.extend((root, [provider + "-profile:" + root.name]) for root in profiles)
+    def t3_roots():
+        found = _children(home, home / (".codex-t3" if provider == "codex" else ".claude-t3"))
+        if provider == "codex":
+            found.extend(root / "shadow" for root in _children(home, home / ".t3/userdata/providers/codex"))
+        return found + _settings_homes(home, provider)
+    result.extend((root, ["t3"]) for root in attribute_reads(["t3"], t3_roots))
     return result[:MAX_FILES]
 
 
@@ -283,7 +285,7 @@ def _codex_candidates(home, ccs_dir):
     result = []
     for root, selectors in _roots(home, "codex", ccs_dir):
         storage = root / "auth.json"
-        raw = _read(home if _within(home, storage) else ccs_dir, storage) or {}
+        raw = attribute_reads(selectors, lambda: _read(home if _within(home, storage) else ccs_dir, storage)) or {}
         tokens = _object(raw.get("tokens"))
         identity = _codex_identity(tokens)
         token = secret(tokens.get("access_token"))
@@ -335,15 +337,17 @@ def _claude_cli_candidates(home, platform, ccs_dir):
     for root, selectors in _roots(home, "claude", ccs_dir):
         default = root == home / ".claude"
         anchor = home if _within(home, root) else ccs_dir
-        metadata = _read(anchor, home / ".claude.json" if default else root / ".claude.json") or {}
+        metadata = attribute_reads(selectors, lambda: _read(
+            anchor, home / ".claude.json" if default else root / ".claude.json")) or {}
         account = _object(metadata.get("oauthAccount"))
         account_id, org_id = _uuid(account.get("accountUuid")), _uuid(account.get("organizationUuid"))
         address = email(account.get("emailAddress"))
         if not account_id or not org_id or not address:
             continue
-        sources = [(root / ".credentials.json", _read(anchor, root / ".credentials.json"))]
+        sources = [(root / ".credentials.json",
+                    attribute_reads(selectors, lambda: _read(anchor, root / ".credentials.json")))]
         if default and platform == "mac":
-            sources.append((root / "keychain-default", _mac_default_keychain()))
+            sources.append((root / "keychain-default", attribute_reads(selectors, _mac_default_keychain)))
         for storage, credentials in sources:
             oauth = _object(_object(credentials).get("claudeAiOauth"))
             token = secret(oauth.get("accessToken"))
@@ -381,7 +385,8 @@ def _configured_windows_profile_root(value):
 def _claude_desktop_candidates(home, platform, ccs_dir, claude_profile=None):
     if platform != "windows" or sys.platform != "win32":
         return []
-    manifest = _read(ccs_dir, ccs_dir / "claude-desktop-profiles.json") or {}
+    families = ["claude-profile:*", "claude-desktop-profile:*"]
+    manifest = attribute_reads(families, lambda: _read(ccs_dir, ccs_dir / "claude-desktop-profiles.json")) or {}
     profiles = manifest.get("profiles") if manifest.get("version") == 1 else None
     profiles = profiles if isinstance(profiles, list) else []
     if claude_profile is not None:
@@ -395,7 +400,7 @@ def _claude_desktop_candidates(home, platform, ccs_dir, claude_profile=None):
     for root in (claude_usage.windows_profile_path("default", home, True),
                  home / "AppData/Roaming/Claude"):
         roots[str(root)] = (root, ["discover", "claude-profile:default", "claude-desktop-profile:default"], None, "default")
-    for root in _children(home, home / "AppData/Roaming"):
+    for root in attribute_reads(families, lambda: _children(home, home / "AppData/Roaming")):
         if root.name.startswith("Claude-") and SAFE_NAME.fullmatch(root.name[7:]):
             identifier = root.name[7:]
             roots[str(root)] = (root, ["claude-profile:" + identifier, "claude-desktop-profile:" + identifier], None, identifier)
@@ -421,33 +426,39 @@ def _claude_desktop_candidates(home, platform, ccs_dir, claude_profile=None):
             selectors = sorted(set(selectors + ["claude-profile:default", "claude-desktop-profile:default"]))
         roots[str(root)] = (root, selectors, address, identifier)
     for root, selectors, address, identifier in list(roots.values())[:MAX_SOURCES]:
-        # Validate both files before the existing DPAPI reader opens them.
-        if str(root) in configured_roots:
-            root = _configured_windows_profile_root(root)
-            if root is None:
-                continue
-        elif _local_path(home, root / "config.json") is None or _local_path(home, root / "Local State") is None:
-            continue
-        try:
-            account_id, cache = claude_usage.decrypt_cache(root)
-            entries = claude_usage.eligible_entries(account_id, cache, allow_expired=True)[:4]
-            if not entries:
-                result.sign_in_needed_selectors.extend(selector for selector in selectors if selector != "discover")
-            for expires, identities, token in entries:
-                account_id, org_id = _uuid(account_id), _uuid(identities[2])
-                if not account_id or not org_id:
-                    continue
-                result.append(_candidate("claude", home, root / ("oauth-" + digest(identities)),
-                                         selectors, [account_id, org_id],
-                                         [token, identities, address, expires], address, None, token=token,
-                                         account=account_id, organization=org_id, profile=identifier,
-                                         mode="desktop", expires=expires))
-        except claude_usage.UsageUnavailable as error:
-            if error.status == "needs_sign_in":
-                result.sign_in_needed_selectors.extend(selector for selector in selectors if selector != "discover")
-        except Exception:
-            continue
+        attribute_reads(selectors, lambda: _desktop_root(
+            home, root, selectors, address, identifier, configured_roots, result))
     return result
+
+
+def _desktop_root(home, root, selectors, address, identifier, configured_roots, result):
+    # Validate both files before the existing DPAPI reader opens them.
+    if str(root) in configured_roots:
+        root = _configured_windows_profile_root(root)
+        if root is None:
+            return
+    elif _local_path(home, root / "config.json") is None or _local_path(home, root / "Local State") is None:
+        return
+    try:
+        account_id, cache = claude_usage.decrypt_cache(root)
+        entries = claude_usage.eligible_entries(account_id, cache, allow_expired=True)[:4]
+        if not entries:
+            result.sign_in_needed_selectors.extend(selector for selector in selectors if selector != "discover")
+        for expires, identities, token in entries:
+            account_id, org_id = _uuid(account_id), _uuid(identities[2])
+            if not account_id or not org_id:
+                continue
+            result.append(_candidate("claude", home, root / ("oauth-" + digest(identities)),
+                                     selectors, [account_id, org_id],
+                                     [token, identities, address, expires], address, None, token=token,
+                                     account=account_id, organization=org_id, profile=identifier,
+                                     mode="desktop", expires=expires))
+    except claude_usage.UsageUnavailable as error:
+        if error.status == "needs_sign_in":
+            result.sign_in_needed_selectors.extend(selector for selector in selectors if selector != "discover")
+    except Exception:
+        # Present but unreadable (DPAPI, cache format): not a removed sign-in.
+        read_failed()
 
 
 def inventory(provider, home, platform, ccs_dir=None, claude_profile=None):

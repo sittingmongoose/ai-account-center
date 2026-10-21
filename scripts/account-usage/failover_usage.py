@@ -322,7 +322,7 @@ def _reset_read_failures():
         module = sys.modules.get(name)
         if module is not None and hasattr(module, "READ_FAILURES"):
             module.READ_FAILURES = 0
-    module = sys.modules.get("failover_additional")
+    module = sys.modules.get("desktop_helpers")
     if module is not None and hasattr(module, "INCOMPLETE_SELECTORS"):
         module.INCOMPLETE_SELECTORS = set()
         module.ATTRIBUTED_FAILURES = 0
@@ -334,18 +334,21 @@ def _read_failures():
 
 def _incomplete_selectors():
     """Selectors whose store could not be read; "*" when a failure is not attributed."""
-    module = sys.modules.get("failover_additional")
+    module = sys.modules.get("desktop_helpers")
     selectors = set(getattr(module, "INCOMPLETE_SELECTORS", ()) or ())
     attributed = getattr(module, "ATTRIBUTED_FAILURES", 0) or 0
     if _read_failures() > attributed:
         selectors.add("*")
     valid = sorted(selector for selector in selectors if isinstance(selector, str) and
-                   (selector == "*" or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:_.@-]{0,159}", selector)))
+                   (selector == "*" or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,62}:\*", selector)
+                    or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:_.@-]{0,159}", selector)))
     return ["*"] if len(valid) > MAX_CANDIDATES else valid
 
 
 def _unread(selectors, candidate_selectors):
-    return "*" in selectors or any(selector in selectors for selector in candidate_selectors)
+    return "*" in selectors or any(
+        selector in selectors or ":" in selector and selector.split(":", 1)[0] + ":*" in selectors
+        for selector in candidate_selectors)
 
 
 def _claude_profile(value):

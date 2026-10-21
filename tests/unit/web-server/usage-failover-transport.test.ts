@@ -230,14 +230,14 @@ describe('packaged usage failover transport', () => {
           version: 1,
           action: 'inventory',
           candidates: [],
-          incompleteSelectors: ['*', 'config-home:1234abcd'],
+          incompleteSelectors: ['*', 'config-home:1234abcd', 'claude-profile:*'],
         })
       )
     ).toEqual({
       version: 1,
       action: 'inventory',
       candidates: [],
-      incompleteSelectors: ['*', 'config-home:1234abcd'],
+      incompleteSelectors: ['*', 'config-home:1234abcd', 'claude-profile:*'],
     });
     for (const incompleteSelectors of [['bad selector'], 'discover', Array(129).fill('*')])
       expect(() =>

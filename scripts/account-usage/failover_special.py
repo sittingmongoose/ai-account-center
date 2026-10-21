@@ -216,13 +216,17 @@ def _saved(ccs_dir):
         if (type(value.get("version")) is not int or value["version"] != 1
                 or type(value.get("revision")) is not int or value["revision"] != int(REGISTRY.fullmatch(names[-1])[1])
                 or not isinstance(profiles, list) or len(profiles) > 16):
+            # A present registry that cannot be used is not a removed set of profiles.
+            helpers.read_failed()
             return []
         result, seen = [], set()
         for profile in profiles:
             if not isinstance(profile, dict):
+                helpers.read_failed()
                 return []
             name, saved = profile.get("id"), profile.get("credential")
             if not isinstance(name, str) or not PROFILE.fullmatch(name) or name in seen or not isinstance(saved, dict):
+                helpers.read_failed()
                 return []
             seen.add(name)
             verified = saved.get("identity")
@@ -236,18 +240,19 @@ def _saved(ccs_dir):
                     or not isinstance(verified.get("verifiedAt"), str) or not helpers.reset_at(verified["verifiedAt"])
                     or not isinstance(revision, str) or not HASH.fullmatch(revision)):
                 continue
-            try:
-                raw = _read(ccs_dir, Path("antigravity-instances") / name / "ubuntu" / ("credential-" + revision + ".bin"), 16384)
-                credential = _native(_decode(raw))
-                if credential and _digest(raw) == revision:
-                    credential.email = identity[0]
-                    result.append(_candidate("saved:" + name, ["antigravity-profile:" + name],
-                                             identity, revision, credential, profile.get("plan")))
-            except (FileNotFoundError, NotADirectoryError):
-                continue
-            except (OSError, ValueError, TypeError):
-                helpers.read_failed()
-                continue
+            def saved_credential(name=name, revision=revision, identity=identity, profile=profile):
+                try:
+                    raw = _read(ccs_dir, Path("antigravity-instances") / name / "ubuntu" / ("credential-" + revision + ".bin"), 16384)
+                    credential = _native(_decode(raw))
+                    if credential and _digest(raw) == revision:
+                        credential.email = identity[0]
+                        result.append(_candidate("saved:" + name, ["antigravity-profile:" + name],
+                                                 identity, revision, credential, profile.get("plan")))
+                except (FileNotFoundError, NotADirectoryError):
+                    pass
+                except (OSError, ValueError, TypeError):
+                    helpers.read_failed()
+            helpers.attribute_reads(["antigravity-profile:" + name], saved_credential)
         return result
     except (FileNotFoundError, NotADirectoryError):
         return []
@@ -257,7 +262,12 @@ def _saved(ccs_dir):
 
 
 def _antigravity(home, ccs_dir):
-    result = _saved(ccs_dir)
+    result = helpers.attribute_reads(["antigravity-profile:*"], lambda: _saved(ccs_dir))
+    return result + helpers.attribute_reads(["discover"], lambda: _discover(home))
+
+
+def _discover(home):
+    result = []
     try:
         raw = _read(home, ".gemini/antigravity-cli/antigravity-oauth-token", 16384)
         value = _decode(raw)
@@ -277,6 +287,8 @@ def _antigravity(home, ccs_dir):
             "AND disabled_cause IS NULL ORDER BY rowid DESC LIMIT 16", ("google-antigravity",))
         for row_id, raw in rows:
             if not isinstance(row_id, int) or not isinstance(raw, str) or len(raw.encode()) > 65536:
+                # A stored credential that cannot be used is not a removed sign-in.
+                helpers.read_failed()
                 continue
             try:
                 value = _decode(raw)
@@ -312,13 +324,26 @@ def _wallet(ccs_dir, platform):
         root = _path(ccs_dir, "account-usage")
         cookies, workspace = console.read_capsule(root)
         if _read(ccs_dir, relative) != raw:
+            # Changed while being read: unverified this time, not removed.
+            helpers.read_failed()
             return []
         return [{"locator": _digest("opencode-wallet:browser-capsule"), "selectors": ["wallet"],
                  "identity": {"kind": WALLET_KIND, "key": _digest(workspace)}, "revision": _digest(raw),
                  "email": None, "plan": None, "_provider": "opencode-wallet",
                  "_cookies": cookies, "_workspace": workspace}]
+    except ImportError:
+        # Missing bridge modules are an unsupported source, not an unreadable one.
+        return []
     except Exception:
-        # Missing bridge modules/capsules or unsupported storage are unavailable.
+        # A missing capsule is absent; one that exists but cannot be read is not removed.
+        try:
+            import opencode_console as console
+            os.lstat(Path(ccs_dir) / "account-usage" / console.CAPSULE_NAME)
+        except (ImportError, FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError:
+            pass
+        helpers.read_failed()
         return []
 
 
@@ -331,7 +356,7 @@ def inventory(provider, home: Path, platform: str, ccs_dir=None):
     if provider == "antigravity":
         return _antigravity(home, ccs_dir)
     if provider == "opencode-wallet":
-        return _wallet(ccs_dir, platform)
+        return helpers.attribute_reads(["wallet"], lambda: _wallet(ccs_dir, platform))
     return []
 
 

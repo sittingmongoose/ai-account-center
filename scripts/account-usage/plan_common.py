@@ -367,7 +367,10 @@ def _safari_qwen_candidates(home):
     try:
         with path.open("rb") as handle:
             contents = handle.read(16 * MAX_BYTES + 1)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
     except OSError:
+        read_failed()
         return []
     domains = {"intl": {"qwencloud.com", "home.qwencloud.com", "cs-data.qwencloud.com"},
                "cn": {"aliyun.com", "console.aliyun.com", "bailian.console.aliyun.com", "bailian-cs.console.aliyun.com"}}

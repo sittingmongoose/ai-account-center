@@ -569,7 +569,15 @@ export class UsageFailoverService {
         // A store that could not be read is an unavailable source, not a removed sign-in;
         // an unreadable store for another selector does not hide this one's removal.
         const unread = this.unreadSelectors.get(this.inventoryKey(target, source));
-        if (candidates !== null && !unread?.has('*') && !unread?.has(source.selector))
+        const family = source.selector.includes(':')
+          ? `${source.selector.slice(0, source.selector.indexOf(':'))}:*`
+          : null;
+        if (
+          candidates !== null &&
+          !unread?.has('*') &&
+          !unread?.has(source.selector) &&
+          !(family && unread?.has(family))
+        )
           missingPrimary = true;
         continue;
       }

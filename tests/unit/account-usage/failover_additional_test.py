@@ -113,12 +113,26 @@ class AdditionalFailoverTests(unittest.TestCase):
         self.native_muse()
         self.native_muse(relative="scope/muse-homes/1234abcd/muse/auth.json").write_text("{damaged", encoding="utf-8")
         desktop_helpers.READ_FAILURES = plan_common.READ_FAILURES = 0
-        adapter.INCOMPLETE_SELECTORS = set()
-        adapter.ATTRIBUTED_FAILURES = 0
+        desktop_helpers.INCOMPLETE_SELECTORS = set()
+        desktop_helpers.ATTRIBUTED_FAILURES = 0
         found = self.read("muse")
         self.assertEqual([item["selectors"] for item in found], [["discover"]])
-        self.assertEqual(adapter.INCOMPLETE_SELECTORS, {"config-home:1234abcd"})
-        self.assertEqual(adapter.ATTRIBUTED_FAILURES, desktop_helpers.READ_FAILURES + plan_common.READ_FAILURES)
+        self.assertEqual(desktop_helpers.INCOMPLETE_SELECTORS, {"config-home:1234abcd"})
+        self.assertEqual(desktop_helpers.ATTRIBUTED_FAILURES, desktop_helpers.total_read_failures())
+
+    def test_capsule_behind_an_unsearchable_folder_is_not_absent(self):
+        import desktop_helpers
+        self.native_muse()
+        real_lstat = os.lstat
+        def denied(path, *args, **kwargs):
+            if str(path).endswith(muse_console.CAPSULE_NAME):
+                raise PermissionError("private")
+            return real_lstat(path, *args, **kwargs)
+        desktop_helpers.READ_FAILURES = 0
+        with patch.object(muse_console, "read_capsule", side_effect=muse_console.MuseError("no_browser_cookie")), \
+                patch.object(adapter.os, "lstat", side_effect=denied):
+            self.assertEqual(self.read("muse"), [])
+        self.assertGreater(desktop_helpers.READ_FAILURES, 0)
 
     def test_empty_or_damaged_present_capsule_never_turns_the_login_native(self):
         import desktop_helpers

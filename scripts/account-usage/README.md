@@ -29,7 +29,9 @@ lists the bound team, or lists no team, reports `team_mismatch`, which resets
 the identity and its links. A helper that cannot read its sign-ins marks the
 inventory `failed`; one that found a present but unreadable store (permissions,
 partial JSON, a locked database, a damaged Muse capsule) lists the selectors it
-serves in `incompleteSelectors`, or `*` when the store is not tied to one. The
+serves in `incompleteSelectors`, `<family>:*` (such as `claude-profile:*`) for a
+listing of slots whose names cannot be read, or `*` when the store is not tied
+to any selector. A narrower nested read explains its own failure. The
 coordinator treats a missing primary login whose selector is unreadable as an
 unavailable computer, never as a removed login, while an unreadable store for
 another selector cannot hide a removal. A collection whose sign-in cannot be

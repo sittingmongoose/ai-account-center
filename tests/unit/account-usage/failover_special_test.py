@@ -86,6 +86,59 @@ class SpecialFailoverTests(unittest.TestCase):
             "version": 1, "revision": 1, "profiles": [record], "active": None, "transaction": None}, ccs)
         return registry, record
 
+    def reset_reads(self):
+        helpers_module = sys.modules["desktop_helpers"]
+        helpers_module.READ_FAILURES = 0
+        helpers_module.INCOMPLETE_SELECTORS = set()
+        helpers_module.ATTRIBUTED_FAILURES = 0
+        return helpers_module
+
+    def test_one_unreadable_saved_profile_marks_only_that_profile(self):
+        registry, record = self.saved("first")
+        fingerprint = record["credential"]["fingerprint"]
+        credential = self.ccs / "antigravity-instances/first/ubuntu" / ("credential-" + fingerprint + ".bin")
+        credential.write_bytes(b"{damaged")
+        helpers_module = self.reset_reads()
+        special.inventory("antigravity", self.home, "ubuntu", self.ccs)
+        self.assertEqual(helpers_module.INCOMPLETE_SELECTORS, {"antigravity-profile:first"})
+        self.assertEqual(helpers_module.ATTRIBUTED_FAILURES, helpers_module.total_read_failures())
+
+    def test_malformed_profile_registry_marks_the_profile_family(self):
+        self.write("antigravity-profiles/registry-000000000001.json", {"version": 1, "revision": 1,
+                   "profiles": "damaged", "active": None, "transaction": None}, self.ccs)
+        helpers_module = self.reset_reads()
+        special.inventory("antigravity", self.home, "ubuntu", self.ccs)
+        self.assertEqual(helpers_module.INCOMPLETE_SELECTORS, {"antigravity-profile:*"})
+
+    def test_unreadable_wallet_capsule_is_not_a_removed_wallet(self):
+        self.write(".ccs/account-usage/opencode-console-session.json", {"schemaVersion": 1})
+        helpers_module = self.reset_reads()
+        with patch.object(special, "_wallet_supported", return_value=True), \
+                patch.object(console, "read_capsule", side_effect=console.Unavailable("local_storage_error")):
+            self.assertEqual(special.inventory("opencode-wallet", self.home, "mac"), [])
+        self.assertEqual(helpers_module.INCOMPLETE_SELECTORS, {"wallet"})
+        (self.ccs / "account-usage/opencode-console-session.json").unlink()
+        helpers_module = self.reset_reads()
+        with patch.object(special, "_wallet_supported", return_value=True), \
+                patch.object(console, "read_capsule", side_effect=console.Unavailable("no_browser_cookie")):
+            self.assertEqual(special.inventory("opencode-wallet", self.home, "mac"), [])
+        self.assertEqual(helpers_module.INCOMPLETE_SELECTORS, set())
+        self.assertEqual(helpers_module.READ_FAILURES, 0)
+
+    def test_unusable_omp_rows_are_counted_as_unreadable_discover(self):
+        path = self.home / ".omp/agent/agent.db"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute("CREATE TABLE auth_credentials (id INTEGER PRIMARY KEY, provider TEXT, "
+                               "credential_type TEXT, data, disabled_cause TEXT)")
+            connection.execute("INSERT INTO auth_credentials VALUES (1, 'google-antigravity', 'oauth', NULL, NULL)")
+            connection.execute("INSERT INTO auth_credentials VALUES (2, 'google-antigravity', 'oauth', ?, NULL)",
+                               ("x" * 70000,))
+            connection.commit()
+        helpers_module = self.reset_reads()
+        self.assertEqual(special.inventory("antigravity", self.home, "ubuntu"), [])
+        self.assertEqual(helpers_module.INCOMPLETE_SELECTORS, {"discover"})
+
     def test_missing_sources_and_native_without_strong_identity_are_excluded_without_network(self):
         self.assertEqual(special.inventory("antigravity", self.home, "ubuntu"), [])
         self.assertEqual(special.inventory("opencode-wallet", self.home, "ubuntu"), [])
