@@ -130,6 +130,7 @@ function sourceFingerprint(crate) {
     'Cargo.toml',
     'Cargo.lock',
     'build.rs',
+    'build-tools',
     'src',
     'ui',
     'public',
@@ -322,10 +323,29 @@ function buildUi(options = {}) {
     if (!fs.existsSync(file))
       throw new Error(`Missing Slint browser artifact: ${path.relative(repoRoot, file)}.`);
   }
-  const wasm = fs.readFileSync(path.join(pkg, `${WASM_NAME}_bg.wasm`));
+  const wasmPath = path.join(pkg, `${WASM_NAME}_bg.wasm`);
+  let wasm = fs.readFileSync(wasmPath);
   if (!wasm.subarray(0, 8).equals(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]))) {
     throw new Error('Slint browser output is not a valid WebAssembly module.');
   }
+  // The final code transform precedes content addressing and compression. It
+  // keeps SIMD/internal tail calls while avoiding WebKit's IPInt boundary bug.
+  const compatibility = JSON.parse(
+    run(process.execPath, [path.join(crate, 'build-tools', 'tail-call-compat.mjs'), wasmPath], {
+      cwd: repoRoot,
+      env,
+      capture: true,
+    })
+  );
+  if (
+    compatibility.policy !== 'webkit-ipint-boundaries-v1' ||
+    !['imported', 'indirect', 'internal'].every(
+      (key) => Number.isSafeInteger(compatibility[key]) && compatibility[key] >= 0
+    )
+  ) {
+    throw new Error('Invalid tail-call compatibility build receipt.');
+  }
+  wasm = fs.readFileSync(wasmPath);
   const wasmSha256 = sha256(wasm);
   // The pkg folder is named after the wasm content, so pkg/<buildId>/** can be cached forever.
   const buildId = wasmSha256.slice(0, 12);
@@ -364,6 +384,7 @@ function buildUi(options = {}) {
       path: `pkg/${buildId}/${WASM_NAME}_bg.wasm`,
       bytes: wasm.length,
       sha256: wasmSha256,
+      compatibility,
     },
     precompressed,
   };

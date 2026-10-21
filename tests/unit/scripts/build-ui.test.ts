@@ -101,6 +101,13 @@ function runner(calls: Array<[string, string[]]>, rust = 'rustc 1.98.0 (fixture)
     if (command.includes('rustc')) return rust;
     if (command.includes('rustup')) return 'wasm32-unknown-unknown\nx86_64-unknown-linux-gnu\n';
     if (command.includes('wasm-pack') && args[0] === '--version') return 'wasm-pack 0.15.0\n';
+    if (args[0]?.endsWith('tail-call-compat.mjs'))
+      return JSON.stringify({
+        policy: 'webkit-ipint-boundaries-v1',
+        imported: 1,
+        indirect: 1,
+        internal: 10,
+      });
     return '';
   };
 }
@@ -144,7 +151,7 @@ describe('Slint browser build integration', () => {
     const calls: Array<[string, string[]]> = [];
     const manifest = build({ repoRoot: root, run: runner(calls) });
     expect(manifest.version).toBe('1.18.1');
-    expect(calls.at(-1)?.[1]).toEqual([
+    expect(calls.find(([, args]) => args[0] === 'build')?.[1]).toEqual([
       'build',
       path.join(root, 'web-dashboard'),
       '--release',
@@ -157,6 +164,16 @@ describe('Slint browser build integration', () => {
       '--',
       '--locked',
     ]);
+    expect(calls.at(-1)?.[1]).toEqual([
+      path.join(root, 'web-dashboard', 'build-tools', 'tail-call-compat.mjs'),
+      path.join(root, 'web-dashboard', 'pkg', 'ccs_account_dashboard_bg.wasm'),
+    ]);
+    expect(manifest.wasm.compatibility).toEqual({
+      policy: 'webkit-ipint-boundaries-v1',
+      imported: 1,
+      indirect: 1,
+      internal: 10,
+    });
     const output = path.join(root, 'dist', 'ui');
     expect(verifyBundle(output).manifest).toEqual(manifest);
     expect(fs.readFileSync(path.join(output, 'index.html'), 'utf8')).not.toContain('react');
@@ -276,6 +293,12 @@ describe('Slint browser build integration', () => {
       path: `pkg/${buildId}/ccs_account_dashboard_bg.wasm`,
       bytes: WASM.length,
       sha256: sha256(WASM),
+      compatibility: {
+        policy: 'webkit-ipint-boundaries-v1',
+        imported: 1,
+        indirect: 1,
+        internal: 10,
+      },
     });
     expect(fs.readdirSync(path.join(output, 'pkg'))).toEqual([buildId]);
     expect(fs.existsSync(path.join(output, 'pkg', 'ccs_account_dashboard_bg.wasm'))).toBe(false);
@@ -283,6 +306,50 @@ describe('Slint browser build integration', () => {
     expect(fs.existsSync(path.join(output, 'pkg', buildId, '.gitignore'))).toBe(false);
     expect(fs.readFileSync(path.join(output, manifest.wasm.path)).equals(WASM)).toBe(true);
     expect(manifest).not.toHaveProperty('commit');
+  });
+
+  it('hashes and compresses the final compatibility output', () => {
+    const root = fixture();
+    const finalWasm = Buffer.concat([WASM, Buffer.from('compatibility-output')]);
+    const run = runner([]);
+    const manifest = build({
+      repoRoot: root,
+      run: (command: string, args: string[]) => {
+        if (args[0]?.endsWith('tail-call-compat.mjs')) fs.writeFileSync(args[1], finalWasm);
+        return run(command, args);
+      },
+    });
+    expect(manifest.buildId).toBe(sha256(finalWasm).slice(0, 12));
+    expect(manifest.wasm.sha256).toBe(sha256(finalWasm));
+    expect(verifyBundle(path.join(root, 'dist', 'ui')).manifest).toEqual(manifest);
+  });
+
+  it('invalidates the UI when the compatibility build tool changes', () => {
+    const root = fixture();
+    const helper = path.join(root, 'web-dashboard', 'build-tools', 'tail-call-compat.mjs');
+    fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(helper, '// compatibility build fixture');
+    build({ repoRoot: root, run: runner([]) });
+    fs.appendFileSync(helper, '\n// policy changed');
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow('source changed');
+  });
+
+  it('rejects an invalid compatibility receipt before replacing the packaged UI', () => {
+    const root = fixture();
+    const output = path.join(root, 'dist', 'ui');
+    fs.mkdirSync(output, { recursive: true });
+    fs.writeFileSync(path.join(output, 'index.html'), 'existing');
+    const run = runner([]);
+    expect(() =>
+      build({
+        repoRoot: root,
+        run: (command: string, args: string[]) =>
+          args[0]?.endsWith('tail-call-compat.mjs')
+            ? JSON.stringify({ policy: 'unknown', imported: -1, indirect: 0, internal: 0 })
+            : run(command, args),
+      })
+    ).toThrow('Invalid tail-call compatibility');
+    expect(fs.readFileSync(path.join(output, 'index.html'), 'utf8')).toBe('existing');
   });
 
   it('stamps the build id into the packaged sw.js and leaves the source worker unchanged', () => {
