@@ -169,15 +169,32 @@ def account(provider, platform):
     }
 
 
+# Present files that could not be read in this process. A failover inventory that hit one
+# reports itself incomplete, so a read failure is never mistaken for a removed sign-in.
+READ_FAILURES = 0
+
+
+def read_failed():
+    global READ_FAILURES
+    READ_FAILURES += 1
+
+
 def read_json(path):
     try:
         with pathlib.Path(path).open("rb") as handle:
             raw = handle.read(MAX_RESPONSE_BYTES + 1)
         if len(raw) > MAX_RESPONSE_BYTES:
+            read_failed()
             return None
         payload = json.loads(raw)
-        return payload if isinstance(payload, dict) else None
+        if isinstance(payload, dict):
+            return payload
+        read_failed()
+        return None
+    except (FileNotFoundError, NotADirectoryError):
+        return None
     except (OSError, ValueError, UnicodeError):
+        read_failed()
         return None
 
 
@@ -193,6 +210,7 @@ def sqlite_rows(path, query, params=()):
         connection.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
         return connection.execute(query, params).fetchmany(16)
     except (OSError, sqlite3.Error):
+        read_failed()
         return []
     finally:
         if connection is not None:

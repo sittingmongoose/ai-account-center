@@ -157,9 +157,11 @@ class IdentityTests(unittest.TestCase):
         team, _ = muse.fetch_quota([COOKIE], EMAIL, PLAN, client=client, bound_team="42", capsule_session=True,
                                    observed=observed)
         self.assertEqual((team, observed), ("42", {"mode": "session", "userHash": USER_HASH}))
-        # Two teams cannot bind an unpinned session; one other team means the bound team is gone.
+        # Two teams cannot bind an unpinned session; a list without the bound team means it is gone.
         for teams, code in (([{"team_id": 42}, {"team_id": 43}], "identity_unavailable"),
-                            ([{"team_id": 43}], "team_mismatch")):
+                            ([{"team_id": 43}], "team_mismatch"),
+                            ([{"team_id": 43}, {"team_id": 44}], "team_mismatch"),
+                            ([], "team_mismatch")):
             with self.subTest(teams=teams):
                 client = FakeClient(email="", teams=teams)
                 with self.assertRaises(muse.MuseError) as error:
@@ -177,7 +179,7 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(client.calls, ["/api/auth/me"])
 
     def test_blank_identity_never_chooses_or_switches_to_another_team(self):
-        for teams in ([{"team_id": 43}], [{"team_id": 43}, {"team_id": 44}]):
+        for teams in ([{"team_id": 43}], [{"team_id": 43}, {"team_id": 44}], []):
             with self.subTest(teams=teams):
                 client = FakeClient(email="", teams=teams)
                 with self.assertRaises(muse.MuseError) as error:

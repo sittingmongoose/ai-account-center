@@ -77,7 +77,8 @@ function containedIn(repoRoot, commit, ref) {
 function isOnMain(repoRoot, commit) {
   const ref = 'refs/remotes/origin/main';
   if (containedIn(repoRoot, commit, ref)) return true;
-  git(repoRoot, ['fetch', '--quiet', 'origin', 'main']);
+  // An explicit destination: a narrowed remote.origin.fetch would update only FETCH_HEAD.
+  git(repoRoot, ['fetch', '--quiet', 'origin', `+refs/heads/main:${ref}`]);
   return containedIn(repoRoot, commit, ref);
 }
 
@@ -224,11 +225,6 @@ function runningBuildProblem(info, ledger) {
       `The dashboard on this computer runs ${running} with uncommitted changes, which this ` +
       'package cannot prove it keeps.'
     );
-  if (!info?.commit)
-    return (
-      'This package does not record the commits it was built from, so it cannot prove it keeps ' +
-      `${running}, which the dashboard on this computer runs. Build it from a git checkout.`
-    );
   if (!info.lineage.includes(ledger.commit))
     return (
       `This package (${describe(info.commit, info.branch)}) does not contain ${running}, which ` +
@@ -242,14 +238,22 @@ function runningBuildProblem(info, ledger) {
   return null;
 }
 
-/** A build's own problem: uncommitted changes, or a commit that origin/main does not contain. */
+/**
+ * A build's own problem: no recorded commit, uncommitted changes, or a commit that
+ * origin/main does not contain. Every installed package must prove it is merged main.
+ */
 function buildProblem(info) {
-  if (info?.dirty === true)
+  if (!info?.commit)
+    return (
+      'This package does not record the commit it was built from, so it cannot be shown to be ' +
+      'a committed build of origin/main. Build it from a git checkout of main.'
+    );
+  if (info.dirty === true)
     return (
       `This package was built from ${describe(info.commit, info.branch)} with uncommitted ` +
       'changes. A later build could not keep them. Commit, merge into main and rebuild.'
     );
-  if (info?.commit && !info.onMain)
+  if (!info.onMain)
     return (
       `This package was built from ${describe(info.commit, info.branch)}, which is not on ` +
       'origin/main. A fix installed before it is merged is removed by the next build of main. ' +

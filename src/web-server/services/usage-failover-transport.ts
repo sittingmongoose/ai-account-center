@@ -149,6 +149,7 @@ export function parseUsageHelperResponse(text: string): UsageHelperResponse {
       ...(Array.isArray(signedOut)
         ? { signInNeededSelectors: [...new Set(signedOut as string[])] }
         : {}),
+      ...(value.incomplete === true ? { incomplete: true as const } : {}),
     };
   }
   if (value.action !== 'collect') throw new ValidationError('Invalid usage response.');

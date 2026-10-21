@@ -33,9 +33,9 @@ Order: commit, merge into `main`, push, build, install, restart. Each build
 records in `dist/build-info.json` whether `origin/main` contains its commit and
 every commit it contains; an installed dashboard records the build it runs in
 `~/.ccs/deployed-build.json` and reports that commit. The package `postinstall`
-refuses a package that is not on `origin/main`, has uncommitted changes, or
-does not contain the running build, and npm then keeps the previous
-installation. `scripts/dev-install.sh` checks the checkout before building.
+refuses a package that does not record its commit, is not on `origin/main`,
+has uncommitted changes, or does not contain the running build, and npm then
+keeps the previous installation. `scripts/dev-install.sh` checks the checkout before building.
 `AAC_ALLOW_DEPLOY_REGRESSION=1` is only for an intentional rollback or an
 emergency. Fixes installed from unmerged branches were otherwise removed by the
 next build of `main` (Oct 16 usage deadlines, Oct 18 OpenCode Go access errors,

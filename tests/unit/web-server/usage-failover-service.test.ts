@@ -264,6 +264,122 @@ describe('identity-bound usage source failover', () => {
     expect(h.collected()).toHaveLength(before);
   });
 
+  it('keeps the verified account when the primary could not read its sign-ins', async () => {
+    const h = await harness();
+    await h.service.collect(h.target, template());
+    h.advance();
+    h.inventories.set('mac', []);
+    h.inventories.set('windows', []);
+    const inner = h.deps.transport;
+    const unreadable = new UsageFailoverService({
+      ...h.deps,
+      transport: async (host, request) => {
+        const response = await inner(host, request);
+        return host.host === 'mac' && response.action === 'inventory'
+          ? { ...response, incomplete: true }
+          : response;
+      },
+    });
+    await unreadable.collect(h.target, template());
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [
+      candidate({ locator: '3'.repeat(64), revision: '4'.repeat(64) }),
+    ]);
+    h.collections.set('windows', { sample: reading(h.now()), failureCode: null });
+    const row = await new UsageFailoverService(h.deps).collect(h.target, template());
+    expect(row.status).toBe('ok');
+    expect(row.source).toBe('Verified quota on Windows (fallback)');
+  });
+
+  it('does not start a queued linked-peer request after that peer receives a 429', async () => {
+    const h = await harness();
+    const teamB = candidate({
+      locator: '6'.repeat(64),
+      selectors: ['config-home:1234abcd'],
+      identity: { kind: 'muse-team', key: 'b'.repeat(64) },
+    });
+    h.inventories.set('mac', [candidate(), teamB]);
+    const rowB: UsageFailoverTarget = {
+      ...h.target,
+      accountId: 'muse:acct:1234abcd',
+      binding: 'second-team-row',
+      primarySources: [{ ...MAC, selector: 'config-home:1234abcd' }],
+    };
+    const failoverDir = path.join(h.target.ccsDir, 'account-usage-failover');
+    await h.service.collect(h.target, template());
+    const [keyA] = (await fs.readdir(failoverDir)).map((name) => name.slice(0, -5));
+    await h.service.collect(rowB, template());
+    const keyB = (await fs.readdir(failoverDir))
+      .map((name) => name.slice(0, -5))
+      .find((name) => /^[a-f0-9]{64}$/.test(name) && name !== keyA)!;
+    const native = candidate({
+      locator: '5'.repeat(64),
+      identity: { kind: 'muse-native-credential', key: 'c'.repeat(64) },
+    });
+    for (const [key, identity] of [
+      [keyA, candidate().identity],
+      [keyB, teamB.identity],
+    ] as const)
+      await fs.writeFile(
+        musePeerBindingFile(h.target.ccsDir, key),
+        JSON.stringify({
+          version: 1,
+          key,
+          identity,
+          peers: [{ host: 'windows', identity: native.identity }],
+        }),
+        { mode: 0o600 }
+      );
+    h.advance();
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [native]);
+    h.collections.set('windows', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 900,
+    });
+    // Two unrelated reads keep two of the three request slots busy.
+    const gates: Array<() => void> = [];
+    const gated = (resolve: () => void) => gates.push(resolve);
+    let releaseWindows!: () => void;
+    const windowsGate = new Promise<void>((resolve) => (releaseWindows = resolve));
+    let windowsStarted = 0;
+    const inner = h.deps.transport;
+    const service = new UsageFailoverService({
+      ...h.deps,
+      transport: async (host, request) => {
+        if (host.host === 'nas1') await new Promise<void>(gated);
+        if (host.host === 'windows' && request.action === 'collect' && windowsStarted++ === 0)
+          await windowsGate;
+        return inner(host, request);
+      },
+    });
+    const nas1 = { host: 'nas1' as const, platform: 'ubuntu' as const, sshHost: 'fixture-nas1' };
+    const busy = (['cursor', 'zai'] as const).map((provider) =>
+      service.collect(
+        {
+          ...h.target,
+          provider,
+          accountId: `${provider}:usage`,
+          binding: provider,
+          primarySources: [{ ...nas1, selector: 'discover' }],
+        },
+        template()
+      )
+    );
+    const rowA = service.collect(h.target, template());
+    while (windowsStarted === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    const queuedB = service.collect(rowB, template());
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    releaseWindows();
+    await rowA;
+    await queuedB;
+    gates.forEach((release) => release());
+    await Promise.all(busy);
+    expect(h.collected().filter((call) => call.host === 'windows')).toHaveLength(1);
+  });
+
   it('skips a linked native Muse peer that its own account row already holds after a 429', async () => {
     const h = await harness();
     await h.service.collect(h.target, template());

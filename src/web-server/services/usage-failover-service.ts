@@ -102,6 +102,7 @@ export class UsageFailoverService {
   >();
   private readonly cooldowns = new Map<string, number>();
   private readonly signInSelectors = new Map<string, string[]>();
+  private readonly incompleteInventories = new Set<string>();
   private active = 0;
   private readonly waiting: Array<() => void> = [];
   constructor(private readonly deps: UsageFailoverDeps = {}) {}
@@ -311,6 +312,8 @@ export class UsageFailoverService {
         if (value?.action !== 'inventory') return null;
         if (target.provider === 'claude')
           this.signInSelectors.set(key, value.signInNeededSelectors ?? []);
+        if (value.incomplete) this.incompleteInventories.add(key);
+        else this.incompleteInventories.delete(key);
         return value.candidates;
       })
       .catch(() => null);
@@ -320,6 +323,7 @@ export class UsageFailoverService {
         if (entry.expires <= this.now()) {
           this.inventories.delete(old);
           this.signInSelectors.delete(old);
+          this.incompleteInventories.delete(old);
         }
     }
     return pending;
@@ -561,7 +565,12 @@ export class UsageFailoverService {
         return;
       }
       if (!candidate) {
-        if (candidates !== null) missingPrimary = true;
+        // A store that could not be read is an unavailable source, not a removed sign-in.
+        if (
+          candidates !== null &&
+          !this.incompleteInventories.has(this.inventoryKey(target, source))
+        )
+          missingPrimary = true;
         continue;
       }
       if (!state.identity || !sameUsageIdentity(state.identity, candidate.identity)) {
@@ -683,14 +692,13 @@ export class UsageFailoverService {
       const peerKey = sameUsageIdentity(state.identity, candidate.identity)
         ? null
         : identityUsageCooldownKey(target.ccsDir, target.provider, candidate.identity);
-      if (
-        peerKey &&
+      const peerHeld = (): boolean =>
+        !!peerKey &&
         Math.max(
           this.cooldowns.get(peerKey) ?? 0,
           readUsageCooldown(target.ccsDir, peerKey, this.now())
-        ) > this.now()
-      )
-        return 'next';
+        ) > this.now();
+      if (peerHeld()) return 'next';
       const key = JSON.stringify([hostKey(host), candidate.locator]);
       if (tried.has(key)) return 'next';
       tried.add(key);
@@ -708,7 +716,8 @@ export class UsageFailoverService {
               : {}),
             ...(host.sshHost === null ? { ccsDir: target.ccsDir } : {}),
           },
-          () => !applyCooldown(),
+          // Recheck both holds when a queued request finally starts.
+          () => !applyCooldown() && !peerHeld(),
           (value) => {
             if (value.action !== 'collect' || !responseIsRateLimited(value)) return;
             const until =
@@ -725,7 +734,8 @@ export class UsageFailoverService {
       } catch {
         return 'next';
       }
-      if (response === null) return 'done';
+      // Held account: stop. Held linked peer only: other computers may still answer.
+      if (response === null) return applyCooldown() ? 'done' : 'next';
       if (response.action !== 'collect') return 'next';
       const primarySource = target.primarySources.some(
         (source) =>

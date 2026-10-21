@@ -182,12 +182,28 @@ def account(provider, platform):
     }
 
 
+# Present files that could not be read in this process. A failover inventory that hit one
+# reports itself incomplete, so a read failure is never mistaken for a removed sign-in.
+READ_FAILURES = 0
+
+
+def read_failed():
+    global READ_FAILURES
+    READ_FAILURES += 1
+
+
 def load_json(path):
     try:
         with path.open("rb") as handle:
             contents = handle.read(MAX_BYTES + 1)
-        return json.loads(contents) if len(contents) <= MAX_BYTES else None
+        if len(contents) > MAX_BYTES:
+            read_failed()
+            return None
+        return json.loads(contents)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
     except (OSError, ValueError, UnicodeError):
+        read_failed()
         return None
 
 
@@ -514,7 +530,7 @@ def credentials(provider, home=None, credential=None):
                             "expires": number(data.get("expires")) if provider == "kimi-code" and credential_type == "oauth" else None,
                         })
         except (OSError, sqlite3.Error):
-            pass
+            read_failed()
 
     if provider == "qwen":
         qwen = load_json(home / ".qwen" / "settings.json")

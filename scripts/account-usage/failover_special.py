@@ -243,10 +243,16 @@ def _saved(ccs_dir):
                     credential.email = identity[0]
                     result.append(_candidate("saved:" + name, ["antigravity-profile:" + name],
                                              identity, revision, credential, profile.get("plan")))
+            except (FileNotFoundError, NotADirectoryError):
+                continue
             except (OSError, ValueError, TypeError):
+                helpers.read_failed()
                 continue
         return result
+    except (FileNotFoundError, NotADirectoryError):
+        return []
     except (OSError, ValueError, TypeError):
+        helpers.read_failed()
         return []
 
 
@@ -258,8 +264,10 @@ def _antigravity(home, ccs_dir):
         credential, identity = _native(value), _hint(value)
         if credential and identity:
             result.append(_candidate("native", ["discover"], identity, _digest(raw), credential))
-    except (OSError, ValueError, TypeError):
+    except (FileNotFoundError, NotADirectoryError):
         pass
+    except (OSError, ValueError, TypeError):
+        helpers.read_failed()
     try:
         database = _path(home, ".omp/agent/agent.db")
         if not stat.S_ISREG(database.lstat().st_mode):
@@ -278,8 +286,10 @@ def _antigravity(home, ccs_dir):
                     result.append(_candidate("omp:" + str(row_id), ["discover"], identity, _digest(raw), credential))
             except (ValueError, TypeError):
                 continue
-    except (OSError, ValueError, TypeError):
+    except (FileNotFoundError, NotADirectoryError):
         pass
+    except (OSError, ValueError, TypeError):
+        helpers.read_failed()
     return result
 
 

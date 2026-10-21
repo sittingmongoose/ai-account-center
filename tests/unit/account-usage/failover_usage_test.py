@@ -203,10 +203,40 @@ class ProtocolTests(unittest.TestCase):
             return inventory(*args, **kwargs)
         adapter.inventory = changed_inventory
         result, _ = self.run_helper(self.request(), adapter)
-        self.assertEqual(result["failureCode"], "source_changed")
-        self.assertIs(result["rateLimited"], True)
+        # An unreadable re-check is not a changed sign-in: keep the hold, drop the quota.
+        self.assertEqual(result["failureCode"], "rate_limited")
+        self.assertNotIn("rateLimited", result)
         self.assertEqual(result["retryAfterSeconds"], 1800)
         self.assertIsNone(result["sample"])
+
+    def test_unreadable_store_marks_inventory_incomplete_and_collection_unavailable(self):
+        import desktop_helpers
+        adapter = FakeAdapter()
+        inventory = adapter.inventory
+        def unreadable(*args, **kwargs):
+            desktop_helpers.read_failed()
+            return []
+        adapter.inventory = unreadable
+        result, _ = self.run_helper(self.request("inventory"), adapter)
+        self.assertEqual(result, {"version": 1, "action": "inventory", "candidates": [], "incomplete": True})
+        result, _ = self.run_helper(self.request(), adapter)
+        self.assertEqual(result["failureCode"], "unavailable")
+        # The same missing sign-in on a fully readable store is a changed source.
+        adapter.inventory = lambda *args, **kwargs: []
+        result, _ = self.run_helper(self.request(), adapter)
+        self.assertEqual(result["failureCode"], "source_changed")
+        # A sign-in that disappears on an unreadable re-check after collection is unverified.
+        adapter = FakeAdapter()
+        first = adapter.inventory
+        def later_unreadable(*args, **kwargs):
+            if adapter.inventory_calls:
+                adapter.inventory_calls.append((args, kwargs))
+                desktop_helpers.read_failed()
+                return []
+            return first(*args, **kwargs)
+        adapter.inventory = later_unreadable
+        result, _ = self.run_helper(self.request(), adapter)
+        self.assertEqual((result["failureCode"], result["sample"]), ("unavailable", None))
 
     def test_adapter_binding_rejection_preserves_its_original_rate_limit(self):
         for after in (None, []):

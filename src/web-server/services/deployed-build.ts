@@ -50,8 +50,8 @@ export function readPackagedBuild(packageRoot = PACKAGE_ROOT): PackagedBuild | n
 }
 
 /**
- * Every existing directory an installer may read the record from: the active CCS directory
- * (which `--config-dir` can move), the one CCS_DIR or CCS_HOME names, and the default ~/.ccs.
+ * Every directory an installer may read the record from: the active CCS directory (which
+ * `--config-dir` can move), the one CCS_DIR or CCS_HOME names, and the default ~/.ccs.
  */
 export function deployedBuildDirs(
   active: string,
@@ -61,15 +61,7 @@ export function deployedBuildDirs(
   const named = env.CCS_DIR
     ? path.resolve(env.CCS_DIR)
     : path.join(path.resolve(env.CCS_HOME || home), '.ccs');
-  return [
-    ...new Set([active, named, path.join(home, '.ccs')].map((dir) => path.resolve(dir))),
-  ].filter((dir) => {
-    try {
-      return fs.statSync(dir).isDirectory();
-    } catch {
-      return false;
-    }
-  });
+  return [...new Set([active, named, path.join(home, '.ccs')].map((dir) => path.resolve(dir)))];
 }
 
 /** Write `<ccsDir>/deployed-build.json` atomically; an unchanged record is left alone. */
@@ -116,12 +108,15 @@ export function recordDeployedBuild(
 export function recordRunningBuild(
   active: string,
   build: PackagedBuild | null,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir()
 ): number {
   if (!build) return 0;
   let failed = 0;
-  for (const dir of deployedBuildDirs(active, env)) {
+  for (const dir of deployedBuildDirs(active, env, home)) {
     try {
+      // The installer reads these even before anything else created them.
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       recordDeployedBuild(dir, build);
     } catch {
       failed++;

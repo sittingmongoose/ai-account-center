@@ -95,7 +95,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/account-dashboard-service.ts` | 931 |
 | `src/web-server/services/analytics-remote-sources.ts` | 918 |
 | `src/cliproxy/model-catalog.ts` | 895 |
-| `src/web-server/services/usage-failover-service.ts` | 874 |
+| `src/web-server/services/usage-failover-service.ts` | 884 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
 | `src/web-server/usage/native-quota-collector.ts` | 848 |
 | `src/auth/profile-detector.ts` | 767 |

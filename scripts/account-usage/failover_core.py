@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 
 import claude_usage
-from desktop_helpers import email, safe_text, secret, quota_window
+from desktop_helpers import email, read_failed, safe_text, secret, quota_window
 
 MAX_BYTES = 1024 * 1024
 MAX_SOURCES = 64
@@ -124,22 +124,30 @@ def _read_bytes(home, value, max_bytes=MAX_BYTES):
     if path is None:
         return None
     try:
-        info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
-            return None
-        if hasattr(os, "getuid") and info.st_uid != os.getuid():
-            return None
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
-        with os.fdopen(descriptor, "rb") as handle:
-            actual = os.fstat(handle.fileno())
-            if (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
-                return None
-            raw = handle.read(max_bytes + 1)
-        if len(raw) > max_bytes:
-            return None
-        return raw
-    except (OSError, ValueError, UnicodeError):
+        raw = _read_present(path, max_bytes)
+    except (FileNotFoundError, NotADirectoryError):
         return None
+    except (OSError, ValueError, UnicodeError):
+        raw = None
+    if raw is None:
+        # Present but refused or unreadable: not proof that the sign-in was removed.
+        read_failed()
+    return raw
+
+
+def _read_present(path, max_bytes):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
+        return None
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        return None
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+    with os.fdopen(descriptor, "rb") as handle:
+        actual = os.fstat(handle.fileno())
+        if (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
+            return None
+        raw = handle.read(max_bytes + 1)
+    return raw if len(raw) <= max_bytes else None
 
 
 def _read(home, value):
@@ -148,9 +156,12 @@ def _read(home, value):
         return None
     try:
         value = json.loads(raw.decode("utf-8-sig"))
-        return value if isinstance(value, dict) else None
+        if isinstance(value, dict):
+            return value
     except (ValueError, UnicodeError):
-        return None
+        pass
+    read_failed()
+    return None
 
 
 def _children(home, value):
@@ -166,7 +177,10 @@ def _children(home, value):
                     break
                 entries.append(entry.name)
         return [root / name for name in sorted(entries) if SAFE_NAME.fullmatch(name)][:MAX_SOURCES]
+    except (FileNotFoundError, NotADirectoryError):
+        return []
     except OSError:
+        read_failed()
         return []
 
 

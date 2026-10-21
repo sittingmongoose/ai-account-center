@@ -93,18 +93,25 @@ def reset_at(value):
         return None
 
 
+# Present files that could not be read in this process; failover inventories report them.
+READ_FAILURES = 0
+
+
 def read_json(path):
+    global READ_FAILURES
     try:
         with path.open("rb") as handle:
             contents = handle.read(MAX_BYTES + 1)
-        if len(contents) > MAX_BYTES:
-            raise UsageUnavailable()
-        result = json.loads(contents.decode("utf-8-sig"))
-        if not isinstance(result, dict):
-            raise UsageUnavailable()
-        return result
-    except (OSError, ValueError, UnicodeError):
+        if len(contents) <= MAX_BYTES:
+            result = json.loads(contents.decode("utf-8-sig"))
+            if isinstance(result, dict):
+                return result
+    except (FileNotFoundError, NotADirectoryError):
         raise UsageUnavailable()
+    except (OSError, ValueError, UnicodeError):
+        pass
+    READ_FAILURES += 1
+    raise UsageUnavailable()
 
 
 def decode_base64(value):

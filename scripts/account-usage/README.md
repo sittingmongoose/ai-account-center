@@ -25,9 +25,13 @@ hard identity failures cannot inherit that reading. `identity_unavailable` (the
 provider did not name the signed-in account this time) discards the primary's
 reading but keeps the verified identity, so its exact or linked logins on the
 other computers continue to supply quota. A Muse web session that no longer
-lists the bound team reports `team_mismatch`, which resets the identity and its
-links. A helper that cannot read its sign-ins marks the inventory `failed`; the
-coordinator treats that as an unavailable computer, never as a removed login.
+lists the bound team, or lists no team, reports `team_mismatch`, which resets
+the identity and its links. A helper that cannot read its sign-ins marks the
+inventory `failed`; one that found a present but unreadable store (permissions,
+partial JSON, a locked database, a damaged Muse capsule) marks it `incomplete`.
+The coordinator treats a missing primary login in either as an unavailable
+computer, never as a removed login, and a collection whose sign-in cannot be
+read again reports `unavailable` instead of `source_changed`.
 A linked peer's 429 holds that native credential's own account too. Renewal of a credential for
 the same verified account can retain dated core quota; Claude browser extras
 still require the original credential and capsule binding. Primary sign-in

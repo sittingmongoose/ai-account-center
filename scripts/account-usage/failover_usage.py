@@ -296,6 +296,29 @@ def _changed_after_collection(result):
     return response
 
 
+def _unverified_after_collection(result):
+    """A sign-in that could not be read again is unverified, not changed: keep a provider hold."""
+    if isinstance(result, dict) and (result.get("failureCode") == "rate_limited" or
+            result.get("failureCode") == "source_changed" and result.get("rateLimited") is True):
+        return _failure("rate_limited", retry=result.get("retryAfterSeconds"))
+    return _failure("unavailable")
+
+
+# Modules whose readers count present files they could not read (see desktop_helpers).
+_READ_MODULES = ("desktop_helpers", "plan_common", "claude_usage")
+
+
+def _reset_read_failures():
+    for name in _READ_MODULES:
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "READ_FAILURES"):
+            module.READ_FAILURES = 0
+
+
+def _read_failures():
+    return sum(getattr(sys.modules.get(name), "READ_FAILURES", 0) or 0 for name in _READ_MODULES)
+
+
 def _claude_profile(value):
     """Private server-owned launcher context; never a provider identity proof."""
     if (not isinstance(value, dict) or not {"id", "email"}.issubset(value) or
@@ -340,23 +363,30 @@ def _run(request):
     ccs = _scope(request.get("ccsDir"), home / ".ccs")
     platform = "windows" if sys.platform == "win32" else "mac" if sys.platform == "darwin" else "ubuntu"
     adapter = _adapter(provider)
+    _reset_read_failures()
     before, sign_in_needed = _inventory(adapter, provider, home, platform, ccs, claude_profile)
+    # A present store that could not be read: a missing sign-in is not proof of removal.
+    incomplete = _read_failures() > 0
     if action == "inventory":
         return {"version": 1, "action": "inventory", "candidates": [public for public, _ in before],
-                **({"signInNeededSelectors": sign_in_needed} if sign_in_needed else {})}
+                **({"signInNeededSelectors": sign_in_needed} if sign_in_needed else {}),
+                **({"incomplete": True} if incomplete else {})}
     selected = next(((public, private) for public, private in before if _same(public, wanted)), None)
     if selected is None:
-        return _failure("source_changed")
+        return _failure("unavailable" if incomplete else "source_changed")
     public, private = selected
     # Caller display metadata must not substitute for current source identity.
     # It remains only selection data; collection always receives the private row.
     context = {"claude_profile": claude_profile} if claude_profile is not None else {}
     result = adapter.collect(private, home, platform, ccs_dir=ccs, **context)
+    _reset_read_failures()
     try:
         after, _ = _inventory(adapter, provider, home, platform, ccs, claude_profile)
     except Exception:
-        return _changed_after_collection(result)
+        return _unverified_after_collection(result)
     if not any(_same(current, public) for current, _ in after):
+        if _read_failures():
+            return _unverified_after_collection(result)
         return _changed_after_collection(result)
     if not isinstance(result, dict):
         return _failure("invalid_response", public)

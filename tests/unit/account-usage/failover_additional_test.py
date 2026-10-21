@@ -80,6 +80,29 @@ class AdditionalFailoverTests(unittest.TestCase):
         patch.object(plan_common, "aac_key_credential", side_effect=lambda provider, key_id, home=None, ccs_dir=None:
                      original(provider, key_id, home, windows=False, ccs_dir=ccs_dir)).start()
 
+    def test_unreadable_muse_sign_in_is_counted_never_reported_as_removed(self):
+        import desktop_helpers
+        desktop_helpers.READ_FAILURES = 0
+        self.assertEqual(self.read("muse"), [])
+        self.assertEqual(desktop_helpers.READ_FAILURES, 0)
+        path = self.native_muse()
+        path.write_text('{"providers": {"meta": ', encoding="utf-8")
+        self.assertEqual(self.read("muse"), [])
+        self.assertGreater(desktop_helpers.READ_FAILURES, 0)
+
+    def test_unreadable_capsule_skips_the_login_instead_of_changing_its_identity(self):
+        import desktop_helpers
+        self.native_muse()
+        desktop_helpers.READ_FAILURES = 0
+        with patch.object(muse_console, "read_capsule", side_effect=muse_console.MuseError("local_storage_error")):
+            self.assertEqual(self.read("muse"), [])
+        self.assertGreater(desktop_helpers.READ_FAILURES, 0)
+        desktop_helpers.READ_FAILURES = 0
+        with patch.object(muse_console, "read_capsule", side_effect=muse_console.MuseError("no_browser_cookie")):
+            found = self.read("muse")
+        self.assertEqual([item["identity"]["kind"] for item in found], ["muse-native-credential"])
+        self.assertEqual(desktop_helpers.READ_FAILURES, 0)
+
     def test_inventory_is_network_free_and_contains_every_muse_slot(self):
         self.native_muse()
         self.native_muse("dca:isolated", "two@example.test", "scope/muse-homes/1234abcd/muse/auth.json")

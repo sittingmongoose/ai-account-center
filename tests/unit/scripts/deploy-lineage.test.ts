@@ -145,11 +145,14 @@ describe('deployment lineage guard', () => {
     packaged({ commit: C, dirty: true, lineage: [C] });
     expect(check().ok).toBe(false);
     expect(check().message).toContain('uncommitted changes');
+    // A package without provenance cannot prove it is merged main, even on a first install.
     packaged(null);
-    expect(check()).toEqual({ ok: true, message: null });
+    expect(check().ok).toBe(false);
+    expect(check().message).toContain('does not record the commit');
+    packaged({ commit: null, dirty: null, lineage: [] });
+    expect(check().ok).toBe(false);
     deployed(B);
     expect(check().ok).toBe(false);
-    expect(check().message).toContain('does not record the commits');
     packaged({ commit: C, dirty: false, lineage: [C, B] });
     deployed(B, { dirty: true });
     expect(check().ok).toBe(false);
@@ -241,7 +244,9 @@ describe('deployment lineage guard', () => {
       onMain: false,
       lineage: [second, first],
     });
-    // Merged and pushed from another clone: the stale origin/main ref is refreshed once.
+    // Merged and pushed from another clone: the stale origin/main ref is refreshed once, even
+    // when this clone's fetch mapping does not include main.
+    git(repo, 'config', 'remote.origin.fetch', '+refs/heads/other:refs/remotes/origin/other');
     git(scope, 'clone', '-q', origin, other);
     git(other, 'fetch', '-q', repo, 'fix/branch');
     git(other, 'merge', '-q', '--ff-only', 'FETCH_HEAD');
@@ -265,26 +270,27 @@ describe('running build record', () => {
   it('records the running build where an installer looks, even under --config-dir', () => {
     const home = path.join(scope, 'user');
     const custom = path.join(scope, 'custom-config');
-    fs.mkdirSync(path.join(home, '.ccs'), { recursive: true });
     fs.mkdirSync(custom);
     expect(deployedBuildDirs(custom, {}, home)).toEqual([
       path.resolve(custom),
       path.resolve(home, '.ccs'),
     ]);
-    // A missing named directory is not created.
-    expect(deployedBuildDirs(custom, { CCS_HOME: path.join(scope, 'absent') }, home)).toEqual([
+    const named = path.join(scope, 'named');
+    expect(deployedBuildDirs(custom, { CCS_HOME: named }, home)).toEqual([
       path.resolve(custom),
+      path.resolve(named, '.ccs'),
       path.resolve(home, '.ccs'),
     ]);
     const build = { commit: B, branch: 'main', dirty: false };
-    expect(recordRunningBuild(custom, build, { CCS_HOME: home })).toBe(0);
-    for (const dir of [custom, path.join(home, '.ccs')])
+    // Neither the named nor the default directory exists yet; the installer reads both.
+    expect(recordRunningBuild(custom, build, { CCS_HOME: named }, home)).toBe(0);
+    for (const dir of [custom, path.join(named, '.ccs'), path.join(home, '.ccs')])
       expect(
         lineage.parseLedger(
           JSON.parse(fs.readFileSync(path.join(dir, 'deployed-build.json'), 'utf8'))
         )
       ).toEqual({ commit: B, branch: 'main', dirty: false });
-    expect(recordRunningBuild(custom, null, { CCS_HOME: home })).toBe(0);
+    expect(recordRunningBuild(custom, null, { CCS_HOME: named }, home)).toBe(0);
   });
 
   it('writes a private record the install guard reads, and leaves an unchanged one alone', () => {

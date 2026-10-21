@@ -44,6 +44,7 @@ def _slots(directory, pattern):
         return [match.group(1) for entry in entries[:512]
                 if not entry.is_symlink() and (match := re.fullmatch(pattern, entry.name))][:MAX_CANDIDATES]
     except OSError:
+        desktop.read_failed()
         return []
 
 
@@ -72,6 +73,7 @@ def _omp(provider, home):
                 result.append((str(identifier), kind, value))
         return result
     except (OSError, sqlite3.Error):
+        desktop.read_failed()
         return []
     finally:
         if connection is not None:
@@ -92,8 +94,15 @@ def _cookie_header(value):
     return sorted(pairs)
 
 
+UNREADABLE = object()
+
+
 def _muse_context(ccs_dir, credential):
-    """Only a verified, private local capsule names the quota's selected team."""
+    """Only a verified, private local capsule names the quota's selected team.
+
+    A present capsule that cannot be read is UNREADABLE, never None: None makes this login a
+    native credential, a different identity that would replace the verified team account.
+    """
     import muse_console as muse
     address = desktop.email(credential.email)
     if not address:
@@ -104,8 +113,14 @@ def _muse_context(ccs_dir, credential):
             return None
         return {"email": address.lower(), "team": team, "plan": plan,
                 "session": muse.session_values(cookies)}
-    except (muse.MuseError, OSError, ValueError, TypeError):
-        return None
+    except muse.MuseError as error:
+        if error.code == "no_browser_cookie":
+            return None
+        desktop.read_failed()
+        return UNREADABLE
+    except (OSError, ValueError, TypeError):
+        desktop.read_failed()
+        return UNREADABLE
 
 
 def _candidate(provider, locator, selectors, credential, muse_context=None):
@@ -244,6 +259,8 @@ def inventory(provider, home, platform, ccs_dir=None):
     result = []
     for locator, selectors, credential in found[:MAX_CANDIDATES]:
         context = _muse_context(ccs_dir, credential) if provider == "muse" else None
+        if context is UNREADABLE:
+            continue
         item = _candidate(provider, locator, selectors, credential, context)
         if item is not None:
             result.append(item)
@@ -274,6 +291,8 @@ def _muse_identity(credential, client):
 
 def _muse(credential, result, ccs_dir, client, context):
     current = _muse_context(ccs_dir, credential)
+    if current is UNREADABLE:
+        return _failure("unavailable")
     if current != context:
         return _failure("source_changed")
     if context is None:

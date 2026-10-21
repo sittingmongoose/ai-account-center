@@ -279,7 +279,16 @@ def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=N
         requested, mode = bound_team, "user"
     else:
         raise MuseError("identity_unavailable")
-    teams = team_rows(client.get("/api/portal/teams"))
+    listed = client.get("/api/portal/teams")
+    if requested is not None and isinstance(listed, dict) and listed.get("teams") == []:
+        # A well-formed empty list: the verified account belongs to no team any more.
+        raise MuseError("team_mismatch")
+    teams = team_rows(listed)
+    if requested is not None and (not isinstance(requested, str) or requested not in {row["id"] for row in teams}):
+        # The same verified web user (or the capsule's own session) no longer lists the bound
+        # team: a definite team loss, never the transient identity_unavailable that lets the
+        # dashboard keep this account's other computers. Checked before the one-team rule.
+        raise MuseError("team_mismatch")
     if mode == "session" and len(teams) != 1:
         raise MuseError("identity_unavailable")
     if requested is None:
@@ -287,11 +296,6 @@ def fetch_quota(cookies, expected_email, expected_plan, requested=None, client=N
             raise MuseError("choose_team", teams)
         selected = teams[0]["id"]
     else:
-        if not isinstance(requested, str) or requested not in {row["id"] for row in teams}:
-            # The same verified web user (or the capsule's own session) no longer lists the
-            # bound team: a definite team loss, never the transient identity_unavailable that
-            # lets the dashboard keep this account's other computers.
-            raise MuseError("team_mismatch")
         selected = requested
     try:
         response = client.get("/api/portal/teams/" + selected + "/subscription-quota")

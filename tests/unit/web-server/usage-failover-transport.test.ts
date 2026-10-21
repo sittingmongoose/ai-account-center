@@ -224,6 +224,11 @@ describe('packaged usage failover transport', () => {
     expect(
       parseUsageHelperResponse(JSON.stringify({ version: 1, action: 'inventory', candidates: [] }))
     ).toEqual({ version: 1, action: 'inventory', candidates: [] });
+    expect(
+      parseUsageHelperResponse(
+        JSON.stringify({ version: 1, action: 'inventory', candidates: [], incomplete: true })
+      )
+    ).toEqual({ version: 1, action: 'inventory', candidates: [], incomplete: true });
   });
 
   it('drops unrelated helper fields and bounds provider retry metadata', () => {
