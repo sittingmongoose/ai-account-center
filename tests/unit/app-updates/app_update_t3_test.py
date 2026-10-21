@@ -481,11 +481,11 @@ class T3Fixtures(unittest.TestCase):
     def test_t3_is_last_and_each_host_installer_stays_sequential(self):
         installations = {key: common.Install(key, "ubuntu", self.root / key, "1.0.0") for key in common.APP_LABELS}
         seen = []
-        def update(install, deadline, phase=None):
+        def update(install, deadline, phase=None, **_kwargs):
             seen.append(install.app_id)
             return common.result(install.app_id, "ubuntu", "current", "1.0.0", "1.0.0", "native")
         with mock.patch.object(updater, "detect", return_value=installations), mock.patch.object(updater, "check_readiness", return_value=None), \
-                mock.patch.object(updater, "antigravity_hold", return_value=None), mock.patch.object(updater, "update_cli", side_effect=update), \
+                mock.patch.object(updater, "antigravity_plan", return_value=(None, True)), mock.patch.object(updater, "update_cli", side_effect=update), \
                 mock.patch.object(updater, "latest_claude_version", return_value=None), \
                 mock.patch.object(updater, "update_desktop", side_effect=update), mock.patch.object(updater, "update_t3", side_effect=update), \
                 mock.patch.object(updater, "update_zcode", side_effect=update), mock.patch.object(updater, "update_adapters", side_effect=update):
@@ -629,7 +629,9 @@ class T3Fixtures(unittest.TestCase):
         def inventory(script, **kwargs):
             allowed = re.search(r"\$p\.Name -notin @\((.*?)\) -and -not \$tree\)\{continue\}", script).group(1)
             names = re.findall(r"'([^']+)'", allowed)
-            self.assertIn("$o.Sid -ne $me -or -not $p.ExecutablePath", script)
+            # The owner check reads each listed process token (windows_owned_pids), never WMI per process.
+            self.assertIn("if(-not $p.ExecutablePath){continue}", script)
+            self.assertNotIn("GetOwnerSid", script)
             self.assertIn("StartTime.ToFileTimeUtc()", script)
             self.assertIn("session=[int]$p.SessionId", script)
             return json.dumps({"rows": [row for row in rows if pathlib.Path(row["exe"]).name in names], "tree": ""})
@@ -644,6 +646,7 @@ class T3Fixtures(unittest.TestCase):
             self.assertEqual(len(stopped), 1)
             asar(executable, NEW)
         with mock.patch.object(processes, "powershell", side_effect=inventory), \
+                mock.patch.object(processes, "windows_owned_pids", side_effect=lambda pids: set(pids)), \
                 mock.patch.object(processes, "windows_arguments", side_effect=lambda value: [value]), \
                 mock.patch.object(t3, "verified_download", return_value=self.root / "installer.exe"), mock.patch.object(t3, "verify_windows"), \
                 mock.patch.object(t3, "powershell", side_effect=installer), mock.patch.object(t3, "terminate_desktops", side_effect=stop), \
@@ -686,6 +689,25 @@ class T3Fixtures(unittest.TestCase):
                 mock.patch.object(processes.ctypes, "windll", types.SimpleNamespace(kernel32=kernel), create=True):
             with self.assertRaisesRegex(common.UpdateFailure, "restart_context"):
                 processes.terminate_desktops(install, [context])
+
+    def test_a_refusing_ready_check_closes_nothing_on_any_platform(self):
+        executable = self.root / t3.WINDOWS_NAME
+        context = processes.Process(1, 0, 0, str(executable), "start", [str(executable)], session=10)
+        kernel = mock.Mock()
+        kernel.ProcessIdToSessionId.side_effect = lambda pid, session: setattr(session._obj, "value", 10)
+        user32 = mock.Mock()
+        def refuse():
+            raise common.UpdateFailure("timeout")
+        for platform in ("windows", "ubuntu"):
+            install = t3.T3Install("t3-code", platform, executable, OLD, package_root=self.root, desktop=True)
+            with self.subTest(platform=platform), mock.patch.object(processes, "scan", return_value=[context]), \
+                    mock.patch.object(processes, "live_contexts", return_value=[context]), \
+                    mock.patch.object(processes, "safe_signal") as signal, \
+                    mock.patch.object(processes.ctypes, "windll", types.SimpleNamespace(kernel32=kernel, user32=user32), create=True),                     mock.patch.object(processes.ctypes, "WINFUNCTYPE", lambda *types: (lambda function: function), create=True):
+                with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
+                    processes.terminate_desktops(install, [context], ready=refuse)
+                signal.assert_not_called()
+        user32.EnumWindows.assert_not_called()
 
     def test_windows_installer_failure_restores_previous_bundle(self):
         executable = self.root / "install" / t3.WINDOWS_NAME; asar(executable, OLD)

@@ -142,8 +142,13 @@ export const MESSAGES = {
     'Updated and restarted running terminal instances. Running T3 sessions were left alone and keep the previous version until T3 starts them again.',
   background_sessions_kept:
     'Updated; running terminal instances reopened idle. Background sessions (T3 and other runs without a terminal) were left running and keep the previous version until they are started again.',
+  // Older helpers and saved rows: winget's answer, which never saw this package.
   store_no_newer:
     'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',
+  store_update_in_app:
+    'The Microsoft Store has a newer build that Update all cannot install yet; nothing changed. Use the update button in the app.',
+  package_mismatch:
+    'The published package is not the version its release feed names, so nothing was installed.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = [...DASHBOARD_HOSTS];
@@ -400,6 +405,11 @@ export function normalizeAppUpdateRow(
     (code === 'desktop_reopened' && (!reopensDesktop || row.status !== 'updated')) ||
     (code === 'store_no_newer' &&
       (appId !== 'codex-desktop' || row.status !== 'current' || HOST_OS[platform] !== 'windows')) ||
+    (code === 'store_update_in_app' &&
+      (appId !== 'codex-desktop' ||
+        row.status !== 'action_required' ||
+        HOST_OS[platform] !== 'windows')) ||
+    (code === 'package_mismatch' && (appId !== 'codex-desktop' || row.status !== 'failed')) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated')) ||

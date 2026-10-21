@@ -696,17 +696,20 @@ class ZCodeFixtures(unittest.TestCase):
     def test_windows_process_inventory_lists_zcode_for_this_user_only(self):
         executable = self.windows_app()
         install = zcode.detect_zcode("windows")
-        rows = [{"pid": 1, "ppid": 0, "exe": str(executable), "args": str(executable), "identity": "start", "session": 1}]
+        rows = [{"pid": 1, "ppid": 0, "exe": str(executable), "args": str(executable), "identity": "start", "session": 1},
+                {"pid": 2, "ppid": 0, "exe": str(executable), "args": str(executable), "identity": "start", "session": 1}]
         def inventory(script, **kwargs):
             names = re.findall(r"'([^']+)'", re.search(r"\$p\.Name -notin @\((.*?)\) -and -not \$tree\)\{continue\}", script).group(1))
             self.assertIn("ZCode.exe", names)
             self.assertIn("node.exe", names)
-            self.assertIn("$o.Sid -ne $me -or -not $p.ExecutablePath", script)
+            self.assertIn("if(-not $p.ExecutablePath){continue}", script)
             # Anything running from the npm global tree is listed whatever its name (martty.exe, Muse's native exe).
             self.assertIn("$npm=[IO.Path]::Combine($env:APPDATA,'npm','node_modules');", script)
             self.assertIn("$p.ExecutablePath.StartsWith($npm,[StringComparison]::OrdinalIgnoreCase)", script)
             return json.dumps({"rows": [row for row in rows if pathlib.Path(row["exe"]).name in names], "tree": ""})
+        # pid 2 runs under another user: its token owner is not this user, so it is left out.
         with mock.patch.object(processes, "powershell", side_effect=inventory), \
+                mock.patch.object(processes, "windows_owned_pids", side_effect=lambda pids: set(pids) - {2}), \
                 mock.patch.object(processes, "windows_arguments", side_effect=lambda value: [value]):
             self.assertEqual([item.pid for item in processes.main_contexts(install, processes.scan("windows"))], [1])
 

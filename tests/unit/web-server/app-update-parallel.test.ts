@@ -475,9 +475,9 @@ describe('the real Python helper with fake apps', () => {
           'import app_updates as u, app_update_common as c',
           "u.detect = lambda platform: {k: c.Install(k, platform, pathlib.Path('/fixture/' + k), '1.0.0') for k in c.APP_LABELS}",
           'u.check_readiness = lambda install: None',
-          // The Antigravity review hold reads an official manifest; keep it offline here.
-          'u.antigravity_hold = lambda install, reviewed: None',
-          'def fake(install, deadline):',
+          // The Antigravity update plan reads an official manifest; keep it offline here.
+          'u.antigravity_plan = lambda install, reviewed: (None, True)',
+          'def fake(install, deadline, **_kwargs):',
           '    time.sleep(0.3)',
           "    return c.result(install.app_id, install.platform, 'current', '1.0.0', '1.0.0', 'native', attempted=True)",
           'u.update_cli = fake',

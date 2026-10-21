@@ -11,14 +11,21 @@ export interface ManagedNativeUpdate {
   rollback(): Promise<boolean>;
 }
 
-/** Uses the account lock and the same proved resident PTY as account switching. */
+/**
+ * Uses the account lock and the same proved resident PTY as account switching.
+ * idleOnly never stops a running Antigravity process: the caller sets it when
+ * the build `agy update` installs is not reviewed, because the runtime cannot
+ * restart a managed session on an unreviewed build. A running process then
+ * answers in_use and nothing changes.
+ */
 export async function updateManagedAntigravity(deps: {
   registry: AntigravityProfileRegistry;
   driver: AntigravitySwitchDriver;
   native: ManagedNativeUpdate;
+  idleOnly?: boolean;
   now?: () => number;
 }): Promise<{
-  status: 'current' | 'updated' | 'failed' | 'restart_failed';
+  status: 'current' | 'updated' | 'failed' | 'restart_failed' | 'in_use';
   previousVersion: string;
   version: string;
   restartedProcesses: number;
@@ -64,6 +71,7 @@ export async function updateManagedAntigravity(deps: {
         return { ...failed, updateAttempted: attempted };
       }
     }
+    if (deps.idleOnly) return { ...failed, status: 'in_use' as const };
     if (
       !(await driver.canProveRuntimeIdentity()) ||
       !driver.approveOwnedIdlePlan ||

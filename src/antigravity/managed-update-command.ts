@@ -35,7 +35,7 @@ export interface ManagedUpdateCommandResult {
   appId: 'antigravity-cli';
   platform: 'ubuntu';
   manager: 'native';
-  status: ManagedCoordinatorResult['status'];
+  status: Exclude<ManagedCoordinatorResult['status'], 'in_use'> | 'action_required';
   messageCode: ManagedCoordinatorResult['status'] | 'update_failed';
   updateAttempted: boolean;
   restartedProcesses: number;
@@ -256,7 +256,7 @@ export async function runManagedAntigravityUpdateCommand(
     const value = await options.execute(native);
     if (
       !value ||
-      !['current', 'updated', 'failed', 'restart_failed'].includes(value.status) ||
+      !['current', 'updated', 'failed', 'restart_failed', 'in_use'].includes(value.status) ||
       !safeVersion(value.previousVersion) ||
       !safeVersion(value.version) ||
       !Number.isSafeInteger(value.restartedProcesses) ||
@@ -270,7 +270,8 @@ export async function runManagedAntigravityUpdateCommand(
       appId: 'antigravity-cli',
       platform: 'ubuntu',
       manager: 'native',
-      status: value.status,
+      // A running Antigravity kept an idle-only update from starting: nothing changed.
+      status: value.status === 'in_use' ? 'action_required' : value.status,
       messageCode: value.status,
       previousVersion: value.previousVersion,
       version: value.version,
@@ -282,7 +283,10 @@ export async function runManagedAntigravityUpdateCommand(
   }
 }
 
-export async function runInstalledManagedAntigravityUpdate(home = os.homedir()) {
+export async function runInstalledManagedAntigravityUpdate(
+  home = os.homedir(),
+  { idleOnly = true }: { idleOnly?: boolean } = {}
+) {
   try {
     const ccs = path.join(home, '.ccs');
     const components = createInstalledAntigravityComponents(ccs, home);
@@ -295,6 +299,7 @@ export async function runInstalledManagedAntigravityUpdate(home = os.homedir()) 
           registry: new AntigravityProfileRegistry(ccs),
           driver: components.driver,
           native,
+          idleOnly,
         }),
     });
   } catch {
@@ -303,8 +308,22 @@ export async function runInstalledManagedAntigravityUpdate(home = os.homedir()) 
   }
 }
 
+/**
+ * The helper passes --idle-only unless the build `agy update` installs is reviewed.
+ * Anything else is refused (null) before anything runs.
+ */
+export function managedUpdateArguments(args: string[]): { idleOnly: boolean } | null {
+  if (args.length === 0) return { idleOnly: false };
+  return args.length === 1 && args[0] === '--idle-only' ? { idleOnly: true } : null;
+}
+
 if (require.main === module) {
-  void runInstalledManagedAntigravityUpdate()
+  const parsed = managedUpdateArguments(process.argv.slice(2));
+  void (
+    parsed
+      ? runInstalledManagedAntigravityUpdate(os.homedir(), parsed)
+      : Promise.resolve(failedCommandResult(false))
+  )
     .then((result) => process.stdout.write(JSON.stringify(result) + '\n'))
     .catch(() => {
       process.stdout.write(JSON.stringify(failedCommandResult(false)) + '\n');

@@ -149,6 +149,42 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       ).toBe(MESSAGES.helper_invalid);
   });
 
+  it('accepts the Store-only and package-mismatch answers only for Windows Codex', () => {
+    const storeOnly = {
+      appId: 'codex-desktop',
+      status: 'action_required',
+      messageCode: 'store_update_in_app',
+      previousVersion: '26.1013.4894.0',
+      version: '26.1013.4894.0',
+      manager: 'msix',
+      updateAttempted: false,
+      restartedProcesses: 0,
+    };
+    expect(normalizeAppUpdateRow(storeOnly, 'codex-desktop', 'windows')).toMatchObject({
+      status: 'action_required',
+      message: MESSAGES.store_update_in_app,
+    });
+    for (const platform of PLATFORMS.filter((value) => value !== 'windows'))
+      expect(normalizeAppUpdateRow(storeOnly, 'codex-desktop', platform).message).toBe(
+        MESSAGES.helper_invalid
+      );
+    for (const status of ['current', 'updated', 'failed'])
+      expect(
+        normalizeAppUpdateRow({ ...storeOnly, status }, 'codex-desktop', 'windows').message
+      ).toBe(MESSAGES.helper_invalid);
+    const mismatch = { ...storeOnly, status: 'failed', messageCode: 'package_mismatch' };
+    expect(normalizeAppUpdateRow(mismatch, 'codex-desktop', 'windows')).toMatchObject({
+      status: 'failed',
+      message: MESSAGES.package_mismatch,
+    });
+    expect(normalizeAppUpdateRow(mismatch, 'claude-desktop', 'windows').message).toBe(
+      MESSAGES.helper_invalid
+    );
+    expect(
+      normalizeAppUpdateRow({ ...mismatch, status: 'current' }, 'codex-desktop', 'windows').message
+    ).toBe(MESSAGES.helper_invalid);
+  });
+
   it('keeps parts only on the adapters row, one per known name, with safe versions', () => {
     const adapters = {
       appId: 't3-acp-adapters',

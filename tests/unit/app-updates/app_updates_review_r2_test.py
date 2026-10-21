@@ -62,7 +62,8 @@ class ReviewTests(unittest.TestCase):
 
     def test_codex_store_unknown_never_trusts_old_direct_manifest(self):
         install = common.Install("codex-desktop", "windows", pathlib.Path("/fixture"), "26.1.0.0", "msix")
-        with mock.patch.object(desktop, "codex_store_version", return_value=None), mock.patch.object(desktop, "remote_msix_identity") as direct:
+        with mock.patch.object(desktop, "codex_store_version", return_value=None), mock.patch.object(desktop, "codex_release_package", return_value=None), \
+                mock.patch.object(desktop, "remote_msix_identity") as direct:
             value = desktop.update_windows(install)
         self.assertEqual((value["status"], value["messageCode"]), ("unknown", "readiness_unknown"))
         direct.assert_not_called()

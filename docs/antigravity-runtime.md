@@ -410,14 +410,16 @@ different bytes under that name (a bundle rebuild keeps the pin), this one is
 kept beside it as `<old pin>-<sha16>.json`, the name the rebuild uses. Existing
 backups are never overwritten.
 
-### Update all preserves managed switching runtimes
+### Update all on managed switching runtimes
 
 The dashboard's Update all updates ordinary Antigravity CLI installations through
 the native updater. A new release does not need a switching review when no managed
 runtime is installed. Saved usage profiles alone cannot enable native activation.
 
 An installation with `antigravity-switching/runtime-installation.json` in any
-relevant AAC configuration directory keeps the reviewed-build requirement. The
+relevant AAC configuration directory is managed. Update all still installs a new
+release there, reviewed or not: holding every release until a hand review kept
+the Ubuntu VM behind on each one (1.3.0, 1.3.2, 1.3.5, 1.4.4). The
 helper checks `~/.ccs`, `CCS_DIR`, `CCS_HOME/.ccs`, and the explicit update state
 directory's parent (the dashboard passes its resolved `--config-dir` scope there).
 Overrides cannot hide the default scope. Malformed descriptors, symlinks,
@@ -428,21 +430,24 @@ account lock and resident PTY coordinator. A custom-scope managed marker or one
 on another platform reports unsupported if an update is needed; it cannot fall
 through to a native update or use the default-scope bridge.
 For a managed installation, the helper reads the
-official release manifest first; when its newest version is not reviewed, the
-row reads "Update held: Antigravity X is waiting for a switching review" and
-the installed build stays. When the review list or the manifest cannot be read,
-nothing is installed either. A version check is the right gate here: the
-manifest names a version and a hash of the download archive, not the hash of
-the installed binary the review pins, and the official updater cannot install a
-chosen version, so the only safe choices are "update to a reviewed version" or
-"hold" for a managed runtime. The switching gate itself
-stays hash-based: a held or skipped update changes nothing, and a binary that
-somehow differs from its reviewed hash still pauses switching. No automatic
-compatibility check replaces the review: several reviewed surfaces (token
-renewal, the signed-in header, live status frames) need a real login, which an
-unattended updater must not exercise. The CLI's own background self-update
-during ordinary runs is outside Update all and still pauses switching until a
-review (`scripts/app-updates/README.md`).
+official release manifest first. An installed build that already is the newest
+one is current and `agy update` does not run. When the newest version is
+reviewed, the managed update may stop idle managed sessions and reopen them on
+it. When it is not reviewed, or the review list or the manifest cannot be read,
+the update runs idle-only: it installs only while no Antigravity process runs,
+because the runtime cannot restart a managed session on an unreviewed build. A
+running process makes the row `action_required` / `in_use` and nothing stops.
+After an unreviewed install the row reads "Updated, but this Antigravity version
+has no switching review yet; Antigravity switching is paused until it is
+reviewed." `agy` itself keeps working: the managed launcher runs the native CLI
+directly when the hash does not match the pin. The switching gate stays
+hash-based, so activation answers `unsupported-runtime-probe` until that build
+has its review, receipt and release commit, followed by the runtime refresh and
+bundle rebuild above. No automatic compatibility check replaces the review:
+several reviewed surfaces (token renewal, the signed-in header, live status
+frames) need a real login, which an unattended updater must not exercise. The
+CLI's own background self-update during ordinary runs pauses switching in the
+same way (`scripts/app-updates/README.md`).
 
 ### Rollback
 

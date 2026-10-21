@@ -32,7 +32,7 @@ class UpdateFailure(Exception):
         self.code = code
         # Diagnostic text for in-memory classification only; it is never emitted.
         self.output = output
-        # The exit code of a command that ran to completion and failed (a winget HRESULT, for example).
+        # The exit code of a command that ran to completion and failed (an installer's HRESULT, for example).
         self.exit_code = exit_code
 
 
