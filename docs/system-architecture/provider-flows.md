@@ -20,6 +20,20 @@ owner host. Existing approved SSH aliases are transport configuration, not an
 invitation to create new grants or move raw credentials to the dashboard.
 Browser/native messaging host IDs remain compatible with current installations.
 
+Claude Desktop on Windows now keeps its Store default profile under
+`AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc`. Both the live reader and verified
+fallback inventory resolve the former Store default path to that directory when
+it exists, so existing manifests survive the relocation. The current directory
+remains authoritative even when signed out or unreadable; an older login is not
+retried. Named and custom profile paths stay bound to their configured folders.
+The server-selected profile keeps its binding when a stale remote manifest points
+another profile at the same folder. Access failures remain unavailable for the
+affected selectors. Readers recheck the effective folder before provider reads
+and publication, discarding superseded credentials if relocation occurs during
+collection. Live email, account UUID and organization verification still precede
+quota reads. Canonical path aliases share the selected binding, and a provider's
+rate-limit cooldown survives a folder change even when its quota is discarded.
+
 All quota providers share [verified usage fallback](../../src/web-server/services/usage-failover-service.ts).
 The configured primary source is tried first. A failed or unreachable source can
 use an existing sign-in on another configured Mac, Windows, Ubuntu or Nas1

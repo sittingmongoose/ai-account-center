@@ -19,6 +19,7 @@ import ntpath
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import time
 import urllib.error
@@ -142,13 +143,57 @@ def resolve_expected_email(expected_email=None):
     return candidate if valid_expected_email(candidate) else None
 
 
+def resolve_windows_profile_root(profile_path, home=None):
+    """Follow the Store default's relocation, never another named profile.
+
+    The new directory is authoritative as soon as it exists, including while
+    signed out or partially written. Do not revive a superseded login from the
+    old directory when the current one cannot supply usage.
+    """
+    home = Path.home() if home is None else Path(home)
+    legacy = home / "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude"
+    current = home / "AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc"
+    if ntpath.normcase(ntpath.normpath(str(profile_path))) != ntpath.normcase(ntpath.normpath(str(legacy))):
+        return profile_path
+    try:
+        current.lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        return profile_path
+    except OSError:
+        # An inaccessible current profile is not proof it was never migrated.
+        return current
+    return current
+
+
 def windows_profile_path(profile_id, home=None, is_default=False):
     """Caller-selected profile directory; the default Store profile is flagged,
     never guessed from the ID."""
     home = Path.home() if home is None else Path(home)
     if is_default:
-        return home / "AppData" / "Local" / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache" / "Roaming" / "Claude"
+        legacy = home / "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude"
+        return resolve_windows_profile_root(legacy, home)
     return home / "AppData" / "Roaming" / ("Claude-" + profile_id)
+
+
+def _canonical_profile_directory(value):
+    """Resolve native aliases only after rejecting shares and linked directories."""
+    if str(value).startswith(("\\\\", "//")):
+        raise UsageUnavailable()
+    # Windows path-only callers on POSIX cannot inspect a Windows filesystem.
+    if not value.is_absolute():
+        return value
+    root = Path(os.path.abspath(value))
+    try:
+        for directory in [*reversed(root.parents), root]:
+            info = directory.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or
+                    getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 1024)):
+                raise UsageUnavailable()
+        return root.resolve(strict=True)
+    except (FileNotFoundError, NotADirectoryError):
+        return value
+    except (OSError, ValueError):
+        raise UsageUnavailable()
 
 
 def resolve_profile_path(profile_id, profile_dir, home=None, is_default=False):
@@ -158,10 +203,12 @@ def resolve_profile_path(profile_id, profile_dir, home=None, is_default=False):
         if (not isinstance(profile_dir, str) or not profile_dir or len(profile_dir) > 4096
                 or "\x00" in profile_dir or not ntpath.isabs(profile_dir)):
             raise UsageUnavailable()
-        return Path(profile_dir)
+        root = _canonical_profile_directory(Path(profile_dir))
+        resolved = resolve_windows_profile_root(root, home)
+        return _canonical_profile_directory(resolved) if resolved != root else root
     if not valid_profile_id(profile_id):
         raise UsageUnavailable()
-    return windows_profile_path(profile_id, home, is_default)
+    return _canonical_profile_directory(windows_profile_path(profile_id, home, is_default))
 
 
 def unprotect(blob, expected_length=32):
@@ -602,13 +649,21 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
     expected = resolve_expected_email(expected_email)
     if not valid_profile_id(profile_id) or expected is None or platform != "windows" or sys.platform != "win32":
         return result
+    cooldown = {}
     try:
-        account_uuid, cache = decrypt_cache(resolve_profile_path(profile_id, profile_dir, home, is_default))
+        profile_root = resolve_profile_path(profile_id, profile_dir, home, is_default)
+
+        def verify_root():
+            if resolve_profile_path(profile_id, profile_dir, home, is_default) != profile_root:
+                raise UsageUnavailable()
+
+        account_uuid, cache = decrypt_cache(profile_root)
         candidates = eligible_entries(account_uuid, cache)
         if not candidates:
             raise UsageUnavailable("needs_sign_in")
         client = Client()
         for _, identities, token in candidates:
+            verify_root()
             try:
                 profile = client.get("/api/oauth/profile", token)
             except UsageUnavailable as error:
@@ -625,13 +680,15 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 or organization["uuid"] != identities[2]
             ):
                 continue
+            verify_root()
             usage = client.get("/api/oauth/usage", token)
+            verify_root()
             windows = normalize_windows(usage)
             if not windows:
                 raise UsageUnavailable()
             optional_extras = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
-            cooldown = {}
             windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown))
+            verify_root()
             result.update(
                 status="ok", email=expected,
                 plan="max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
@@ -651,6 +708,7 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
         # Includes missing optional cryptography module and native decode errors.
         # No native exception text, paths or decrypted data are printed.
         result["status"] = "unavailable"
+    result.update(cooldown)
     return result
 
 

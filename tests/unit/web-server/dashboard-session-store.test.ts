@@ -9,6 +9,7 @@ import {
   sessionsFile,
 } from '../../../src/web-server/middleware/dashboard-session-store';
 import { DEFAULT_SESSION_LIFETIME_DAYS } from '../../../src/config/schemas/auth';
+import { setAuthClockForTests } from '../../../src/web-server/services/dashboard-auth-files';
 import {
   countOtherSessions,
   resetDashboardAuthStateForTests,
@@ -33,6 +34,7 @@ beforeEach(() => {
   // The dashboard creates its CCS folder at startup; the store never creates it.
   fs.mkdirSync(path.join(home, '.ccs'));
   resetDashboardAuthStateForTests();
+  setAuthClockForTests(() => NOW);
 });
 
 afterEach(async () => {
@@ -43,6 +45,7 @@ afterEach(async () => {
   }
   fs.rmSync(home, { recursive: true, force: true });
   resetDashboardAuthStateForTests();
+  setAuthClockForTests(null);
 });
 
 function store(options: Partial<ConstructorParameters<typeof DashboardSessionStore>[0]> = {}) {

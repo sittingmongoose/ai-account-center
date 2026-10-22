@@ -1,6 +1,7 @@
 """Offline identity and transport regressions for cross-machine core quotas."""
 
 import base64
+from contextlib import nullcontext
 from email.message import Message
 import io
 import json
@@ -367,6 +368,380 @@ class InventoryTests(unittest.TestCase):
             except OSError:
                 self.skipTest("OS does not permit fixture symlinks")
             self.assertEqual(core.inventory("codex", self.home, "ubuntu"), [])
+
+
+class WindowsProfileRelocationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name)
+        self.legacy = self.home / "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude"
+        self.current = self.home / "AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc"
+        self.selected = {"id": "work", "email": EMAIL, "profilePath": str(self.legacy), "isDefault": True}
+
+    def inventory(self, selected=None, failure=None):
+        with mock.patch.object(core.sys, "platform", "win32"), \
+                mock.patch.object(core.claude_usage, "decrypt_cache", return_value=(ACCOUNT, {}), side_effect=failure) as decrypt, \
+                mock.patch.object(core.claude_usage, "eligible_entries", return_value=[
+                    (time.time() * 1000 + 3600000, [ACCOUNT, CLIENT, ORG], TOKEN)]):
+            rows = core.inventory("claude", self.home, "windows", claude_profile=selected)
+        return rows, decrypt
+
+    def filesystem_alias(self, root):
+        if os.name == "nt":
+            import ctypes.wintypes as wt
+            api = core.ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+            api.argtypes = [wt.LPCWSTR, wt.LPWSTR, wt.DWORD]
+            api.restype = wt.DWORD
+            buffer = core.ctypes.create_unicode_buffer(32768)
+            if not api(str(root), buffer, len(buffer)) or Path(buffer.value) == root:
+                self.skipTest("Fixture volume does not provide distinct Windows short names")
+            return Path(buffer.value), nullcontext()
+        # Model only filesystem alias resolution on POSIX; all validation,
+        # ownership, decryption selection and protocol code remain real.
+        alias = root.parent / ("ALIAS-" + root.name)
+        alias.mkdir(exist_ok=True)
+        original = Path.resolve
+
+        def resolve(path, *args, **kwargs):
+            return original(root, *args, **kwargs) if path == alias else original(path, *args, **kwargs)
+
+        return alias, mock.patch.object(Path, "resolve", new=resolve)
+
+    def test_selected_legacy_default_recovers_new_login_without_rewriting_manifest(self):
+        for root in (self.legacy, self.current):
+            write(root / "config.json", {})
+            write(root / "Local State", {})
+        rows, decrypt = self.inventory(self.selected)
+        self.assertEqual(len(rows), 1)
+        decrypt.assert_called_once_with(self.current.resolve())
+        self.assertEqual(rows[0]["email"], EMAIL)
+        self.assertEqual(rows[0]["_profile"], "work")
+        self.assertTrue({"discover", "claude-desktop-profile:default", "claude-desktop-profile:work"}.issubset(rows[0]["selectors"]))
+        self.assertFalse((self.home / ".ccs/claude-desktop-profiles.json").exists())
+        client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+        with mock.patch.object(core, "Client", return_value=client), \
+                mock.patch.object(core, "_claude_optional_windows", return_value=([], {})):
+            result = core.collect(rows[0], self.home, "windows")
+        self.assertIsNone(result["failureCode"])
+        self.assertEqual(result["sample"]["email"], EMAIL)
+        self.assertEqual(result["sample"]["windows"][0]["usedPercent"], 7)
+
+    def test_new_default_is_discovered_without_manifest_or_server_context(self):
+        write(self.current / "config.json", {})
+        write(self.current / "Local State", {})
+        rows, decrypt = self.inventory()
+        self.assertEqual(len(rows), 1)
+        decrypt.assert_called_once_with(self.current)
+        self.assertIn("claude-desktop-profile:default", rows[0]["selectors"])
+
+    def test_old_default_still_works_when_current_directory_absent(self):
+        write(self.legacy / "config.json", {})
+        write(self.legacy / "Local State", {})
+        rows, decrypt = self.inventory(self.selected)
+        self.assertEqual(len(rows), 1)
+        decrypt.assert_called_once_with(self.legacy.resolve())
+
+    def test_empty_signed_out_and_unreadable_current_default_never_retry_old_login(self):
+        write(self.legacy / "config.json", {})
+        write(self.legacy / "Local State", {})
+        self.current.mkdir(parents=True)
+        rows, decrypt = self.inventory(self.selected)
+        self.assertEqual(rows, [])
+        decrypt.assert_not_called()
+        write(self.current / "config.json", {})
+        write(self.current / "Local State", {})
+        for failure in [core.claude_usage.UsageUnavailable("needs_sign_in"), RuntimeError("private-fixture-error")]:
+            with self.subTest(failure=type(failure).__name__):
+                rows, decrypt = self.inventory(self.selected, failure)
+                self.assertEqual(rows, [])
+                decrypt.assert_called_once_with(self.current.resolve())
+
+    def test_named_profile_does_not_inherit_default_selectors_or_expected_email(self):
+        named = self.home / "AppData/Roaming/Claude-named"
+        for root in (self.current, named):
+            write(root / "config.json", {})
+            write(root / "Local State", {})
+        selected = {"id": "named", "email": EMAIL, "profilePath": str(named)}
+        rows, decrypt = self.inventory(selected)
+        self.assertEqual(len(rows), 2)
+        named_row = next(row for row in rows if row["_profile"] == "named")
+        default_row = next(row for row in rows if row["_profile"] == "default")
+        self.assertEqual(set(named_row["selectors"]), {"claude-profile:named", "claude-desktop-profile:named"})
+        self.assertIsNone(default_row["email"])
+        self.assertEqual(named_row["email"], EMAIL)
+        self.assertEqual({call.args[0] for call in decrypt.call_args_list}, {self.current, named.resolve()})
+
+    def test_relocated_login_still_rejects_email_account_and_organization_mismatch(self):
+        write(self.current / "config.json", {})
+        write(self.current / "Local State", {})
+        rows, _ = self.inventory(self.selected)
+        for live in [profile(account={"uuid": ACCOUNT, "email": "other@example.com"}),
+                     profile(account={"uuid": OTHER, "email": EMAIL}), profile(organization={"uuid": OTHER})]:
+            client = FakeClient(live)
+            with mock.patch.object(core, "Client", return_value=client):
+                result = core.collect(rows[0], self.home, "windows")
+            self.assertEqual(result["failureCode"], "identity_mismatch")
+            self.assertIsNone(result["sample"])
+            self.assertEqual([call[0] for call in client.calls], [core.CLAUDE_PROFILE_URL])
+
+    def test_unreadable_relocated_profile_is_incomplete_while_named_profile_still_works(self):
+        import failover_usage
+        named = self.home / "AppData/Roaming/Claude-named"
+        for root in (self.current, named):
+            write(root / "config.json", {})
+            write(root / "Local State", {})
+        original = Path.lstat
+
+        def denied(path, *args, **kwargs):
+            if path == self.current:
+                raise PermissionError("fixture-private-error")
+            return original(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "lstat", denied), \
+                mock.patch.object(core.sys, "platform", "win32"), \
+                mock.patch.object(core.claude_usage, "decrypt_cache", return_value=(ACCOUNT, {})) as decrypt, \
+                mock.patch.object(core.claude_usage, "eligible_entries", return_value=[
+                    (time.time() * 1000 + 3600000, [ACCOUNT, CLIENT, ORG], TOKEN)]):
+            result = failover_usage.run({"version": 1, "action": "inventory", "provider": "claude",
+                                        "homeDir": str(self.home), "claudeProfile": self.selected})
+        decrypt.assert_called_once_with(named)
+        self.assertEqual(len(result["candidates"]), 1)
+        incomplete = set(result["incompleteSelectors"])
+        self.assertTrue({"claude-desktop-profile:work", "claude-desktop-profile:default"}.issubset(incomplete))
+        self.assertFalse({"*", "claude-profile:*", "claude-desktop-profile:named"} & incomplete)
+
+    def test_absent_current_login_is_not_reported_as_an_unreadable_profile(self):
+        import failover_usage
+        self.current.mkdir(parents=True)
+        with mock.patch.object(core.sys, "platform", "win32"):
+            result = failover_usage.run({"version": 1, "action": "inventory", "provider": "claude",
+                                        "homeDir": str(self.home), "claudeProfile": self.selected})
+        self.assertEqual(result["candidates"], [])
+        self.assertNotIn("incompleteSelectors", result)
+
+    def test_server_selected_binding_wins_relocated_remote_manifest_alias_collision(self):
+        for root in (self.legacy, self.current):
+            write(root / "config.json", {})
+            write(root / "Local State", {})
+        alias = self.current.parent / ".." / self.current.parent.name / self.current.name
+        paths = [str(self.current), str(alias)]
+        if os.name == "nt":
+            paths.append(str(self.current).upper())
+        for path in paths:
+            with self.subTest(path=path):
+                write(self.home / ".ccs/claude-desktop-profiles.json", {"version": 1, "profiles": [
+                    {"id": "other", "email": "other@example.com", "windows": {"profilePath": path}}]})
+                rows, decrypt = self.inventory(self.selected)
+                self.assertEqual(len(rows), 1)
+                decrypt.assert_called_once_with(self.current.resolve())
+                self.assertEqual(rows[0]["email"], EMAIL)
+                self.assertEqual(rows[0]["_profile"], "work")
+                self.assertNotIn("claude-desktop-profile:other", rows[0]["selectors"])
+                self.assertNotIn("claude-profile:other", rows[0]["selectors"])
+                client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+                with mock.patch.object(core, "Client", return_value=client), \
+                        mock.patch.object(core, "_claude_optional_windows", return_value=([], {})):
+                    result = core.collect(rows[0], self.home, "windows")
+                self.assertIsNone(result["failureCode"])
+                self.assertEqual(result["sample"]["email"], EMAIL)
+
+    def test_selected_canonical_alias_keeps_expected_email_through_public_protocol(self):
+        import failover_usage
+        write(self.current / "config.json", {})
+        write(self.current / "Local State", {})
+        alias = self.current.parent / ".." / self.current.parent.name / self.current.name
+        selected = {**self.selected, "profilePath": str(alias)}
+        request = {"version": 1, "action": "inventory", "provider": "claude",
+                   "homeDir": str(self.home), "claudeProfile": selected}
+        client = FakeClient(profile(account={"uuid": ACCOUNT, "email": "other@example.com"}))
+        with mock.patch.object(core.sys, "platform", "win32"), \
+                mock.patch.object(core.claude_usage, "decrypt_cache", return_value=(ACCOUNT, {})), \
+                mock.patch.object(core.claude_usage, "eligible_entries", return_value=[
+                    (time.time() * 1000 + 3600000, [ACCOUNT, CLIENT, ORG], TOKEN)]), \
+                mock.patch.object(core, "Client", return_value=client):
+            inventory = failover_usage.run(request)
+            self.assertEqual(len(inventory["candidates"]), 1)
+            self.assertEqual(inventory["candidates"][0]["email"], EMAIL)
+            result = failover_usage.run({**request, "action": "collect", "candidate": inventory["candidates"][0]})
+        self.assertEqual(result["failureCode"], "identity_mismatch")
+        self.assertIsNone(result["sample"])
+        self.assertEqual([call[0] for call in client.calls], [core.CLAUDE_PROFILE_URL])
+        self.assertNotIn(str(self.home), json.dumps(result))
+
+    def test_selected_short_current_or_empty_legacy_alias_keeps_binding_before_quota(self):
+        import failover_usage
+        self.legacy.mkdir(parents=True)
+        write(self.current / "config.json", {})
+        write(self.current / "Local State", {})
+        for root in [self.current, self.legacy]:
+            alias, resolution = self.filesystem_alias(root)
+            selected = {**self.selected, "profilePath": str(alias)}
+            request = {"version": 1, "action": "inventory", "provider": "claude",
+                       "homeDir": str(self.home), "claudeProfile": selected}
+            client = FakeClient(profile(account={"uuid": ACCOUNT, "email": "other@example.com"}))
+            with self.subTest(root=root), resolution, \
+                    mock.patch.object(core.sys, "platform", "win32"), \
+                    mock.patch.object(core.claude_usage, "decrypt_cache", return_value=(ACCOUNT, {})) as decrypt, \
+                    mock.patch.object(core.claude_usage, "eligible_entries", return_value=[
+                        (time.time() * 1000 + 3600000, [ACCOUNT, CLIENT, ORG], TOKEN)]), \
+                    mock.patch.object(core, "Client", return_value=client):
+                inventory = failover_usage.run(request)
+                self.assertEqual(len(inventory["candidates"]), 1)
+                candidate = inventory["candidates"][0]
+                self.assertEqual(candidate["email"], EMAIL)
+                self.assertIn("claude-desktop-profile:work", candidate["selectors"])
+                result = failover_usage.run({**request, "action": "collect", "candidate": candidate})
+                self.assertTrue(all(call.args[0] == self.current.resolve() for call in decrypt.call_args_list))
+            self.assertEqual(result["failureCode"], "identity_mismatch")
+            self.assertIsNone(result["sample"])
+            self.assertEqual([call[0] for call in client.calls], [core.CLAUDE_PROFILE_URL])
+
+    def test_remote_short_alias_cannot_inherit_selected_profile_selectors(self):
+        write(self.current / "config.json", {})
+        write(self.current / "Local State", {})
+        alias, resolution = self.filesystem_alias(self.current)
+        write(self.home / ".ccs/claude-desktop-profiles.json", {"version": 1, "profiles": [
+            {"id": "other", "email": "other@example.com", "windows": {"profilePath": str(alias)}}]})
+        with resolution:
+            rows, decrypt = self.inventory(self.selected)
+        self.assertEqual(len(rows), 1)
+        decrypt.assert_called_once_with(self.current.resolve())
+        self.assertEqual(rows[0]["email"], EMAIL)
+        self.assertEqual(rows[0]["_profile"], "work")
+        self.assertFalse({"claude-profile:other", "claude-desktop-profile:other"} & set(rows[0]["selectors"]))
+
+    def test_public_protocol_keeps_optional_429_hold_when_profile_relocates(self):
+        import failover_usage
+        write(self.legacy / "config.json", {})
+        write(self.legacy / "Local State", {})
+        capsule = self.home / ".ccs/claude-session-migration/work-source.dpapi"
+        capsule.parent.mkdir(parents=True)
+        capsule.write_bytes(b"fixture-private-capsule")
+        web_account = {"uuid": ACCOUNT, "email_address": EMAIL,
+                       "memberships": [{"organization": {"uuid": ORG}}]}
+        request = {"version": 1, "action": "inventory", "provider": "claude",
+                   "homeDir": str(self.home), "claudeProfile": self.selected}
+        for position in range(3):
+            for retry in [1800, None]:
+                with self.subTest(position=position, retry=retry):
+                    native = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+                    web = mock.Mock()
+                    responses = [web_account, {}][:position]
+
+                    def get(route):
+                        if responses:
+                            return responses.pop(0)
+                        self.current.mkdir(parents=True)
+                        raise core.claude_usage.UsageUnavailable("rate_limited", retry)
+
+                    web.get.side_effect = get
+                    with mock.patch.object(core.sys, "platform", "win32"), \
+                            mock.patch.object(core.claude_usage, "decrypt_cache", return_value=(ACCOUNT, {})), \
+                            mock.patch.object(core.claude_usage, "eligible_entries", return_value=[
+                                (time.time() * 1000 + 3600000, [ACCOUNT, CLIENT, ORG], TOKEN)]), \
+                            mock.patch.object(core, "Client", return_value=native), \
+                            mock.patch.object(core.claude_usage, "capsule_cookies", return_value=[]), \
+                            mock.patch.object(core.claude_usage, "WebClient", return_value=web):
+                        inventory = failover_usage.run(request)
+                        result = failover_usage.run({**request, "action": "collect", "candidate": inventory["candidates"][0]})
+                    self.assertEqual(result["failureCode"], "source_changed")
+                    self.assertTrue(result["rateLimited"])
+                    self.assertIsNone(result["sample"])
+                    if retry is None:
+                        self.assertNotIn("retryAfterSeconds", result)
+                    else:
+                        self.assertEqual(result["retryAfterSeconds"], retry)
+                    self.assertEqual(web.get.call_count, position + 1)
+                    for private in [TOKEN, ACCOUNT, ORG, str(self.home), "fixture-private-capsule"]:
+                        self.assertNotIn(private, json.dumps(result))
+                    self.current.rmdir()
+
+    def test_relocation_between_discovery_and_manifest_resolution_removes_legacy_candidate(self):
+        write(self.legacy / "config.json", {})
+        write(self.legacy / "Local State", {})
+        original = core.claude_usage.resolve_windows_profile_root
+        calls = 0
+
+        def relocate(path, home=None):
+            nonlocal calls
+            if path == self.legacy:
+                calls += 1
+                if calls == 2:
+                    write(self.current / "config.json", {})
+                    write(self.current / "Local State", {})
+            return original(path, home)
+
+        with mock.patch.object(core.claude_usage, "resolve_windows_profile_root", side_effect=relocate):
+            rows, decrypt = self.inventory(self.selected)
+        self.assertEqual(len(rows), 1)
+        decrypt.assert_called_once_with(self.current.resolve())
+
+    def test_relocation_during_inventory_decryption_discards_legacy_candidate(self):
+        write(self.legacy / "config.json", {})
+        write(self.legacy / "Local State", {})
+
+        def relocate(path):
+            self.current.mkdir(parents=True)
+            return ACCOUNT, {}
+
+        rows, decrypt = self.inventory(self.selected, relocate)
+        self.assertEqual(rows, [])
+        decrypt.assert_called_once_with(self.legacy.resolve())
+
+    def test_relocation_during_later_named_inventory_discards_already_built_legacy_row(self):
+        named = self.home / "AppData/Roaming/Claude-named"
+        for root in (self.legacy, named):
+            write(root / "config.json", {})
+            write(root / "Local State", {})
+
+        def relocate(path):
+            if path == named:
+                self.current.mkdir(parents=True)
+            return ACCOUNT, {}
+
+        rows, _ = self.inventory(self.selected, relocate)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["_profile_root"], named)
+        self.assertNotIn("claude-desktop-profile:default", rows[0]["selectors"])
+
+    def test_relocation_before_or_during_provider_read_discards_superseded_candidate(self):
+        write(self.legacy / "config.json", {})
+        write(self.legacy / "Local State", {})
+        for phase in ["before", "profile", "usage", "extras"]:
+            with self.subTest(phase=phase):
+                rows, _ = self.inventory(self.selected)
+                client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+                original_get = client.get
+
+                def get(route, token):
+                    if route.endswith("/" + phase):
+                        self.current.mkdir(parents=True)
+                    return original_get(route, token)
+
+                def extras(*args):
+                    if phase == "extras":
+                        self.current.mkdir(parents=True)
+                    return [], {}
+
+                if phase == "before":
+                    self.current.mkdir(parents=True)
+                client.get = get
+                with mock.patch.object(core, "Client", return_value=client), \
+                        mock.patch.object(core, "_claude_optional_windows", side_effect=extras):
+                    result = core.collect(rows[0], self.home, "windows")
+                self.assertEqual(result["failureCode"], "source_changed")
+                self.assertIsNone(result["sample"])
+                self.assertEqual(len(client.calls), {"before": 0, "profile": 1, "usage": 2, "extras": 2}[phase])
+                self.current.rmdir()
+
+    def test_other_providers_and_platforms_do_not_resolve_windows_desktop_paths(self):
+        write(self.home / ".codex/auth.json", codex_auth())
+        with mock.patch.object(core.claude_usage, "resolve_windows_profile_root", side_effect=AssertionError):
+            self.assertEqual(len(core.inventory("codex", self.home, "windows")), 1)
+            self.assertEqual(core.inventory("claude", self.home, "ubuntu"), [])
+            with mock.patch.object(core, "_mac_default_keychain", return_value=None):
+                self.assertEqual(core.inventory("claude", self.home, "mac"), [])
 
 
 class CollectTests(unittest.TestCase):
