@@ -1,4 +1,4 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_theme_ready, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
 import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView, rememberSessionHours, rememberedSessionHours } from './auth-view.mjs';
@@ -1326,7 +1326,9 @@ try {
   earlyCheck.catch(() => {});
   await init();
   const initialVp = currentViewport();
-  startSlintDashboard(() => start_dashboard(initialVp.width, initialVp.height, devicePixelRatio));
+  // The stored theme and the system scheme go in with the start: the first frame is drawn in them.
+  const startDark = typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches === true;
+  startSlintDashboard(() => start_dashboard(initialVp.width, initialVp.height, devicePixelRatio, THEMES[storedTheme()], startDark));
   // The login form's real HTML inputs lie over the Slint fields (login-bridge.mjs): what is typed or filled lands
   // in the Slint fields too, their focus and hover reach the Slint boxes, and a submit runs the same login as Sign in.
   try {
@@ -1368,8 +1370,29 @@ try {
   });
   themeModeName = storedTheme();
   set_theme_mode(THEMES[themeModeName]);
-  // Auto follows the browser: the scheme is pushed now and on every change.
-  watchMedia('(prefers-color-scheme: dark)', dark => { themeSystemDark = dark; set_system_dark(dark); syncThemeColor(); });
+  // Auto follows the browser: the scheme is pushed now and whenever it changes. iOS flips the scheme for
+  // a moment while it snapshots a backgrounded web app (its light and dark previews), and following that
+  // flip left a light screen to show on return. So a change is followed once it has held for a second,
+  // and a hidden page keeps its theme until it is shown again and the scheme has held.
+  const schemeQuery = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
+  const schemeDark = () => schemeQuery?.matches === true;
+  const applySystemDark = dark => {
+    if (dark === themeSystemDark) return;
+    themeSystemDark = dark; set_system_dark(dark); syncThemeColor();
+  };
+  themeSystemDark = startDark;
+  applySystemDark(schemeDark());
+  let schemeHold = 0;
+  const followScheme = () => {
+    clearTimeout(schemeHold);
+    schemeHold = setTimeout(() => { if (document.visibilityState !== 'hidden') applySystemDark(schemeDark()); }, 1000);
+  };
+  schemeQuery?.addEventListener?.('change', followScheme);
+  try {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') followScheme(); });
+  } catch {}
+  // The first theme lands without the cross-fade (a dark launch must not flash its light first frame).
+  set_theme_ready();
   setupDevice();
   setupInstall();
   syncThemeColor();
