@@ -2,6 +2,7 @@
 
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 import re
 import sys
@@ -213,6 +214,280 @@ class IdentityTests(unittest.TestCase):
         self.assertNotIn("PROFILE_EMAILS", source)
         remaining = "\n".join(line for line in source.splitlines() if "EXPECTED_EMAIL = " not in line)
         self.assertEqual(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", remaining), [])
+
+
+class WindowsProfileRelocationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name)
+        self.legacy = self.home / "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude"
+        self.current = self.home / "AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc"
+        # Python 3.13+ ntpath rejects POSIX fixture roots as drive-relative.
+        # Accept only this temporary root in addition to real Windows paths.
+        is_absolute = usage.ntpath.isabs
+        fixture_paths = mock.patch.object(usage.ntpath, "isabs", side_effect=lambda value:
+                                         is_absolute(value) or str(value).startswith(str(self.home) + os.sep))
+        fixture_paths.start()
+        self.addCleanup(fixture_paths.stop)
+
+    def test_legacy_default_still_works_before_relocation(self):
+        self.legacy.mkdir(parents=True)
+        self.assertEqual(usage.windows_profile_path("work", self.home, True), self.legacy)
+        self.assertEqual(usage.resolve_profile_path("work", str(self.legacy), self.home), self.legacy)
+
+    def test_existing_manifest_and_default_flag_follow_current_store_profile(self):
+        self.legacy.mkdir(parents=True)
+        self.current.mkdir(parents=True)
+        self.assertEqual(usage.resolve_profile_path("work", str(self.legacy), self.home), self.current)
+        self.assertEqual(usage.resolve_profile_path("work", None, self.home, True), self.current)
+        self.assertEqual(usage.resolve_profile_path("work", str(self.current), self.home), self.current)
+        self.assertEqual(usage.resolve_windows_profile_root(Path(str(self.legacy).upper()), self.home), self.current)
+
+    def test_named_custom_and_other_users_paths_never_adopt_default_login(self):
+        self.current.mkdir(parents=True)
+        for path in [self.home / "AppData/Roaming/Claude-work", self.home / "custom/Claude",
+                     self.home / "other-user" / self.legacy.relative_to(self.home),
+                     self.legacy.parent / "Claude-lookalike"]:
+            with self.subTest(path=path):
+                self.assertEqual(usage.resolve_profile_path("work", str(path), self.home, True), path)
+        self.assertEqual(usage.resolve_profile_path("work", None, self.home),
+                         self.home / "AppData/Roaming/Claude-work")
+
+    def test_unreadable_current_location_does_not_revive_legacy_login(self):
+        self.legacy.mkdir(parents=True)
+        self.current.mkdir(parents=True)
+        original = Path.lstat
+
+        def lstat(path, *args, **kwargs):
+            if path == self.current:
+                raise PermissionError()
+            return original(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "lstat", new=lstat), \
+                mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache") as decrypt, \
+                mock.patch.object(usage, "Client") as client:
+            result = usage.collect("work", "windows", home=self.home, expected_email=EMAIL,
+                                   profile_dir=str(self.legacy))
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["windows"], [])
+        decrypt.assert_not_called()
+        client.assert_not_called()
+
+    def filesystem_alias(self, root):
+        if os.name == "nt":
+            import ctypes
+            import ctypes.wintypes as wt
+            api = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+            api.argtypes = [wt.LPCWSTR, wt.LPWSTR, wt.DWORD]
+            api.restype = wt.DWORD
+            buffer = ctypes.create_unicode_buffer(32768)
+            if not api(str(root), buffer, len(buffer)) or Path(buffer.value) == root:
+                self.skipTest("Fixture volume does not provide distinct Windows short names")
+            return Path(buffer.value), nullcontext()
+        alias = root.parent / ("ALIAS-" + root.name)
+        alias.mkdir(exist_ok=True)
+        original = Path.resolve
+
+        def resolve(path, *args, **kwargs):
+            return original(root, *args, **kwargs) if path == alias else original(path, *args, **kwargs)
+
+        return alias, mock.patch.object(Path, "resolve", new=resolve)
+
+    def test_short_legacy_alias_follows_current_root_before_decryption(self):
+        self.legacy.mkdir(parents=True)
+        alias, resolution = self.filesystem_alias(self.legacy)
+        with resolution:
+            for relocated in [False, True]:
+                if relocated:
+                    self.current.mkdir(parents=True)
+                client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+                with self.subTest(relocated=relocated), \
+                        mock.patch.object(usage.sys, "platform", "win32"), \
+                        mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())) as decrypt, \
+                        mock.patch.object(usage, "Client", return_value=client), \
+                        mock.patch.object(usage, "optional_web_windows", return_value=[]):
+                    result = usage.collect("work", "windows", home=self.home, expected_email=EMAIL,
+                                           profile_dir=str(alias))
+                decrypt.assert_called_once_with(self.current if relocated else self.legacy)
+                self.assertEqual(result["status"], "ok")
+                self.assertEqual(result["email"], EMAIL)
+
+    def test_empty_modern_directory_blocks_old_credentials_through_short_legacy_alias(self):
+        self.legacy.mkdir(parents=True)
+        self.current.mkdir(parents=True)
+        alias, resolution = self.filesystem_alias(self.legacy)
+        client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+
+        def decrypt(path):
+            if path == self.current:
+                raise usage.UsageUnavailable("needs_sign_in")
+            return ACCOUNT, cache()
+
+        with resolution, mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", side_effect=decrypt) as reader, \
+                mock.patch.object(usage, "Client", return_value=client):
+            result = usage.collect("work", "windows", home=self.home, expected_email=EMAIL,
+                                   profile_dir=str(alias))
+        reader.assert_called_once_with(self.current)
+        self.assertEqual(result["status"], "needs_sign_in")
+        self.assertEqual(result["windows"], [])
+        self.assertIsNone(result["email"])
+        self.assertEqual(client.calls, [])
+
+    def test_short_legacy_alias_rechecks_migration_after_decryption(self):
+        self.legacy.mkdir(parents=True)
+        alias, resolution = self.filesystem_alias(self.legacy)
+        client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+
+        def decrypt(path):
+            self.current.mkdir(parents=True)
+            return ACCOUNT, cache()
+
+        with resolution, mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", side_effect=decrypt) as reader, \
+                mock.patch.object(usage, "Client", return_value=client):
+            result = usage.collect("work", "windows", home=self.home, expected_email=EMAIL,
+                                   profile_dir=str(alias))
+        reader.assert_called_once_with(self.legacy)
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["windows"], [])
+        self.assertIsNone(result["email"])
+        self.assertEqual(client.calls, [])
+
+    def test_native_alias_resolution_rejects_shares_and_linked_directories(self):
+        root = self.home / "custom-profile"
+        root.mkdir()
+        real_lstat = Path.lstat
+
+        def reparse_lstat(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            return mock.Mock(st_mode=info.st_mode, st_file_attributes=1024) if path == root else info
+
+        with self.assertRaises(usage.UsageUnavailable):
+            usage.resolve_profile_path("work", r"\\server\share\Claude", self.home)
+        with mock.patch.object(Path, "lstat", new=reparse_lstat), \
+                mock.patch.object(Path, "resolve") as resolve, \
+                self.assertRaises(usage.UsageUnavailable):
+            usage.resolve_profile_path("work", str(root), self.home)
+        resolve.assert_not_called()
+
+    def collect(self, client, decrypt):
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", side_effect=decrypt) as reader, \
+                mock.patch.object(usage, "Client", return_value=client), \
+                mock.patch.object(usage, "optional_web_windows", return_value=[]):
+            result = usage.collect("work", "windows", home=self.home, expected_email=EMAIL,
+                                   profile_dir=str(self.legacy))
+        reader.assert_called_once_with(self.current)
+        return result
+
+    def test_fresh_login_is_verified_at_relocated_path_before_reading_usage(self):
+        self.current.mkdir(parents=True)
+        client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+        result = self.collect(client, lambda path: (ACCOUNT, cache()))
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["email"], EMAIL)
+        self.assertEqual(result["windows"][0]["usedPercent"], 7)
+        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile", "/api/oauth/usage"])
+
+    def test_current_signed_out_corrupt_or_expired_login_never_retries_legacy(self):
+        self.legacy.mkdir(parents=True)
+        self.current.mkdir(parents=True)
+        for error in [usage.UsageUnavailable("needs_sign_in"), usage.UsageUnavailable(),
+                      RuntimeError("fixture-private-error"), None]:
+            with self.subTest(error=type(error).__name__):
+                def decrypt(path):
+                    if error is not None:
+                        raise error
+                    return ACCOUNT, cache(expiresAt=0)
+                client = FakeClient()
+                result = self.collect(client, decrypt)
+                self.assertNotEqual(result["status"], "ok")
+                self.assertEqual(result["windows"], [])
+                self.assertEqual(client.calls, [])
+                self.assertNotIn("fixture-private", json.dumps(result))
+
+    def test_different_account_in_current_default_cannot_supply_requested_usage(self):
+        self.current.mkdir(parents=True)
+        client = FakeClient(profile(account={"uuid": ACCOUNT, "email": OTHER_EMAIL}))
+        result = self.collect(client, lambda path: (ACCOUNT, cache()))
+        self.assertEqual(result["status"], "needs_sign_in")
+        self.assertEqual(result["windows"], [])
+        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile"])
+
+    def test_relocation_during_decryption_requests_or_extras_discards_superseded_login(self):
+        self.legacy.mkdir(parents=True)
+        for phase in ["decrypt", "profile", "usage", "extras"]:
+            with self.subTest(phase=phase):
+                client = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+                original_get = client.get
+
+                def get(route, token):
+                    if route.endswith("/" + phase):
+                        self.current.mkdir(parents=True)
+                    return original_get(route, token)
+
+                def decrypt(path):
+                    if phase == "decrypt":
+                        self.current.mkdir(parents=True)
+                    return ACCOUNT, cache()
+
+                def extras(*args):
+                    if phase == "extras":
+                        self.current.mkdir(parents=True)
+                    return []
+
+                client.get = get
+                with mock.patch.object(usage.sys, "platform", "win32"), \
+                        mock.patch.object(usage, "decrypt_cache", side_effect=decrypt) as reader, \
+                        mock.patch.object(usage, "Client", return_value=client), \
+                        mock.patch.object(usage, "optional_web_windows", side_effect=extras):
+                    result = usage.collect("work", "windows", home=self.home, expected_email=EMAIL,
+                                           profile_dir=str(self.legacy))
+                reader.assert_called_once_with(self.legacy)
+                self.assertEqual(result["status"], "unavailable")
+                self.assertEqual(result["windows"], [])
+                self.assertIsNone(result["email"])
+                self.assertEqual(len(client.calls), {"decrypt": 0, "profile": 1, "usage": 2, "extras": 2}[phase])
+                self.current.rmdir()
+
+    def test_relocation_during_optional_429_discards_quota_but_keeps_provider_hold(self):
+        self.legacy.mkdir(parents=True)
+        web_account = {"uuid": ACCOUNT, "email_address": EMAIL,
+                       "memberships": [{"organization": {"uuid": ORG}}]}
+        for position in range(3):
+            for retry in [1800, None]:
+                with self.subTest(position=position, retry=retry):
+                    native = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+                    web = mock.Mock()
+                    responses = [web_account, {}][:position]
+
+                    def get(route):
+                        if responses:
+                            return responses.pop(0)
+                        self.current.mkdir(parents=True)
+                        raise usage.UsageUnavailable("rate_limited", retry)
+
+                    web.get.side_effect = get
+                    with mock.patch.object(usage.sys, "platform", "win32"), \
+                            mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), \
+                            mock.patch.object(usage, "Client", return_value=native), \
+                            mock.patch.object(usage, "capsule_cookies", return_value=[]), \
+                            mock.patch.object(usage, "WebClient", return_value=web):
+                        result = usage.collect("work", "windows", home=self.home, expected_email=EMAIL,
+                                               profile_dir=str(self.legacy))
+                    self.assertEqual(result["status"], "unavailable")
+                    self.assertEqual(result["failureCode"], "rate_limited")
+                    self.assertEqual(result["windows"], [])
+                    self.assertIsNone(result["email"])
+                    if retry is None:
+                        self.assertNotIn("retryAfterSeconds", result)
+                    else:
+                        self.assertEqual(result["retryAfterSeconds"], retry)
+                    self.assertEqual(web.get.call_count, position + 1)
+                    self.current.rmdir()
 
 
 class WindowTests(unittest.TestCase):

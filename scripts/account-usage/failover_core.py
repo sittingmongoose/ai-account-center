@@ -361,24 +361,30 @@ def _claude_cli_candidates(home, platform, ccs_dir):
     return result
 
 
-def _configured_windows_profile_root(value):
+def _configured_windows_profile_root(value, require_files=True):
     """An explicit private manifest may select another local drive, never a link or share."""
     try:
         if not value.is_absolute() or str(value).startswith(("\\\\", "//")):
+            read_failed()
             return None
         root = Path(os.path.abspath(value))
         for current in [*reversed(root.parents), root]:
             info = current.lstat()
             if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or
                     getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 1024)):
+                read_failed()
                 return None
-        for name in ("config.json", "Local State"):
+        for name in (("config.json", "Local State") if require_files else ()):
             info = (root / name).lstat()
             if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or
                     getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 1024)):
+                read_failed()
                 return None
         return root.resolve(strict=True)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
     except (OSError, ValueError):
+        read_failed()
         return None
 
 
@@ -396,14 +402,14 @@ def _claude_desktop_candidates(home, platform, ccs_dir, claude_profile=None):
         # Only this selected server-owned entry overrides a remote copy. The
         # request is not written to the host's manifest or login storage.
         profiles = [selected] + [item for item in profiles if _object(item).get("id") != selected["id"]]
-    roots, configured_roots = {}, set()
+    roots, configured_roots, assigned_roots = {}, set(), set()
     for root in (claude_usage.windows_profile_path("default", home, True),
                  home / "AppData/Roaming/Claude"):
-        roots[str(root)] = (root, ["discover", "claude-profile:default", "claude-desktop-profile:default"], None, "default")
+        roots[root] = (root, ["discover", "claude-profile:default", "claude-desktop-profile:default"], None, "default")
     for root in attribute_reads(families, lambda: _children(home, home / "AppData/Roaming")):
         if root.name.startswith("Claude-") and SAFE_NAME.fullmatch(root.name[7:]):
             identifier = root.name[7:]
-            roots[str(root)] = (root, ["claude-profile:" + identifier, "claude-desktop-profile:" + identifier], None, identifier)
+            roots[root] = (root, ["claude-profile:" + identifier, "claude-desktop-profile:" + identifier], None, identifier)
     result = SourceInventory()
     for profile in profiles[:MAX_SOURCES]:
         profile = _object(profile)
@@ -415,25 +421,54 @@ def _claude_desktop_candidates(home, platform, ccs_dir, claude_profile=None):
         if supplied is None:
             root = claude_usage.windows_profile_path(identifier, home, launcher.get("isDefault") is True)
         elif isinstance(supplied, str) and len(supplied) <= 4096 and Path(supplied).is_absolute():
-            root = Path(supplied)
-            configured_roots.add(str(root))
+            root = claude_usage.resolve_windows_profile_root(Path(supplied), home)
         else:
             continue
-        native = roots.get(str(root))
+        # Match discovery before assigning ownership, without following links.
+        root = Path(os.path.abspath(root))
+        bound_selectors = ["claude-profile:" + identifier, "claude-desktop-profile:" + identifier]
+        if launcher.get("isDefault") is True or root.name.lower() == "claude":
+            bound_selectors += ["claude-profile:default", "claude-desktop-profile:default"]
+        if supplied is not None:
+            # Validate the directory before resolving filesystem aliases (8.3
+            # names included). Missing token files must not prevent resolving
+            # an empty legacy directory to the relocated default.
+            canonical = attribute_reads(bound_selectors, lambda: _configured_windows_profile_root(root, False))
+            if canonical is not None:
+                root = claude_usage.resolve_windows_profile_root(canonical, home)
+                if root != canonical:
+                    current = attribute_reads(bound_selectors, lambda: _configured_windows_profile_root(root, False))
+                    root = current if current is not None else root
+        # The server-selected entry is first. A stale remote alias must not
+        # replace its email/capsule binding or inherit its selectors.
+        if root in assigned_roots:
+            continue
+        assigned_roots.add(root)
+        if supplied is not None:
+            configured_roots.add(root)
+        native = roots.get(root)
         selectors = sorted(set((native[1] if native else []) +
                                ["claude-profile:" + identifier, "claude-desktop-profile:" + identifier]))
         if launcher.get("isDefault") is True or root.name.lower() == "claude":
             selectors = sorted(set(selectors + ["claude-profile:default", "claude-desktop-profile:default"]))
-        roots[str(root)] = (root, selectors, address, identifier)
+        roots[root] = (root, selectors, address, identifier)
     for root, selectors, address, identifier in list(roots.values())[:MAX_SOURCES]:
         attribute_reads(selectors, lambda: _desktop_root(
             home, root, selectors, address, identifier, configured_roots, result))
+    # A later root read may observe migration after the legacy row was built.
+    for root, selectors, _, _ in list(roots.values())[:MAX_SOURCES]:
+        if claude_usage.resolve_windows_profile_root(root, home) != root:
+            result[:] = [row for row in result if row.get("_profile_root") != root]
+            result.sign_in_needed_selectors[:] = [
+                selector for selector in result.sign_in_needed_selectors if selector not in selectors]
     return result
 
 
 def _desktop_root(home, root, selectors, address, identifier, configured_roots, result):
+    if claude_usage.resolve_windows_profile_root(root, home) != root:
+        return
     # Validate both files before the existing DPAPI reader opens them.
-    if str(root) in configured_roots:
+    if root in configured_roots:
         root = _configured_windows_profile_root(root)
         if root is None:
             return
@@ -442,6 +477,8 @@ def _desktop_root(home, root, selectors, address, identifier, configured_roots, 
     try:
         account_id, cache = claude_usage.decrypt_cache(root)
         entries = claude_usage.eligible_entries(account_id, cache, allow_expired=True)[:4]
+        if claude_usage.resolve_windows_profile_root(root, home) != root:
+            return
         if not entries:
             result.sign_in_needed_selectors.extend(selector for selector in selectors if selector != "discover")
         for expires, identities, token in entries:
@@ -452,7 +489,7 @@ def _desktop_root(home, root, selectors, address, identifier, configured_roots, 
                                      selectors, [account_id, org_id],
                                      [token, identities, address, expires], address, None, token=token,
                                      account=account_id, organization=org_id, profile=identifier,
-                                     mode="desktop", expires=expires))
+                                     mode="desktop", expires=expires, profile_root=root))
     except claude_usage.UsageUnavailable as error:
         if error.status == "needs_sign_in":
             result.sign_in_needed_selectors.extend(selector for selector in selectors if selector != "discover")
@@ -655,21 +692,27 @@ def _claude_optional_windows(candidate, home, cooldown=None):
 
 def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
     """Collect only a revalidated candidate; provider rejection never becomes zero."""
+    cooldown = {}
     try:
         if platform not in ("ubuntu", "mac", "windows"):
             raise Failure()
         provider = candidate.get("_provider")
         client = Client()
         extras = {}
-        cooldown = {}
         if provider == "codex":
             payload = client.get(CODEX_URL, candidate["_token"], candidate["_account"])
             windows = _codex_windows(payload, time.time())
             plan = safe_text(payload.get("plan_type", payload.get("planType")), 64) or candidate["plan"]
         elif provider == "claude":
+            def verify_root():
+                root = candidate.get("_profile_root")
+                if root is not None and claude_usage.resolve_windows_profile_root(root, home) != root:
+                    raise Failure("source_changed")
+
             expires = _number(candidate.get("_expires"))
             if expires is not None and expires <= time.time() * 1000 + 30000:
                 raise Failure("needs_sign_in")
+            verify_root()
             payload = client.get(CLAUDE_PROFILE_URL, candidate["_token"])
             account, org = _object(payload.get("account")), _object(payload.get("organization"))
             live_email = email(account.get("email"))
@@ -678,7 +721,9 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
                     _uuid(org.get("uuid")) != candidate["_organization"]):
                 raise Failure("identity_mismatch")
             candidate = {**candidate, "email": live_email}
+            verify_root()
             payload = client.get(CLAUDE_USAGE_URL, candidate["_token"])
+            verify_root()
             windows = claude_usage.normalize_windows(payload)
             if not windows:
                 raise Failure("invalid_response")
@@ -686,13 +731,17 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
             if platform == "windows" and candidate.get("_mode") == "desktop":
                 optional_windows, extras = _claude_optional_windows(candidate, home, cooldown)
                 windows.extend(optional_windows)
+            verify_root()
         else:
             raise Failure()
         if not windows:
             raise Failure("invalid_response")
         return {"sample": {**_sample(candidate, platform, windows, plan), **extras}, "failureCode": None, **cooldown}
     except Failure as error:
+        hold = dict(cooldown)
+        if hold.get("failureCode") == "rate_limited" and error.code == "source_changed":
+            hold.update(failureCode="source_changed", rateLimited=True)
         return {"sample": None, "failureCode": error.code,
-                **({"retryAfterSeconds": error.retry_after} if error.retry_after is not None else {})}
+                **({"retryAfterSeconds": error.retry_after} if error.retry_after is not None else {}), **hold}
     except Exception:
-        return {"sample": None, "failureCode": "unavailable"}
+        return {"sample": None, "failureCode": "unavailable", **cooldown}
