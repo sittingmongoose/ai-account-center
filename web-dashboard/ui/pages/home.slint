@@ -73,6 +73,7 @@ component RunsFlow inherits FlexboxLayout {
     in property <color> warn-ink: Theme.warn-text;
     in property <color> good-ink: Theme.good-text;
     in property <int> strong-weight: 640;
+    in property <bool> tabular: false;
     spacing-horizontal: 0px;
     spacing-vertical: 0px;
     alignment: start;
@@ -80,6 +81,7 @@ component RunsFlow inherits FlexboxLayout {
     // single-line flows early (O3). D keeps its exact spacing.
     for w[i] in root.words: Text {
         text: w.text + (i < root.words.length - 1 || !Breakpoints.below-d ? " " : "");
+        font-family: root.tabular ? Type.tab : Type.sans;
         font-size: root.size;
         font-weight: w.strong ? root.strong-weight : 400;
         color: w.tone == "warn" ? root.warn-ink : w.tone == "good" ? root.good-ink : w.strong ? root.strong-ink : root.ink;
@@ -567,6 +569,8 @@ export component AccountRow inherits Rectangle {
     callback cancel-confirm();
     callback go-accounts();
     property <string> tap-reason;
+    // always empty: the table's one-line amounts below D, where the wrapping line replaces it
+    property <[RunView]> no-runs;
     out property <bool> hovered: ta.has-hover;
     out property <length> line-height: line.height;
     // The widths this row needs: the account column (mark, gap, widest text in the active weight, slack)
@@ -649,6 +653,23 @@ export component AccountRow inherits Rectangle {
         can-switch: root.section.can-switch;
         touch: Breakpoints.below-d;
     }
+    // The wrapping amounts line's height (below D). Slint 1.18 measured a flex in these columns one
+    // line short (its second line ran into the meters) and an empty one at zero width, so the line sits
+    // in a holder whose height comes from this plain Text: the same words at the identity column's
+    // width, a little narrower and all in the bold weight, so it never wraps later than the flex. The
+    // width is tier-fed, like the stacked/table switch.
+    property <length> amounts-w: root.table
+        ? root.ident-w - 22px - 12px
+        : root.grid-w - 2px - 2 * root.pad-x - 20px - 2 * 10px - root.slot-natural;
+    amounts-wrap := Text {
+        visible: false;
+        width: max(1px, root.amounts-w - 4px);
+        text: root.account.amounts-line;
+        font-family: Type.tab;
+        font-size: Type.small;
+        font-weight: 600;
+        wrap: word-wrap;
+    }
 
     body := VerticalLayout {
         spacing: 0px;
@@ -707,14 +728,30 @@ export component AccountRow inherits Rectangle {
                                 overflow: elide;
                             }
                             Runs {
-                                padding-top: root.account.amounts-runs.length > 0 ? 2px : 0px;
-                                min-height: root.account.amounts-runs.length > 0 ? 19.5px : 0px;
-                                runs: root.account.amounts-runs;
+                                padding-top: !root.touch && root.account.amounts-runs.length > 0 ? 2px : 0px;
+                                min-height: !root.touch && root.account.amounts-runs.length > 0 ? 19.5px : 0px;
+                                runs: root.touch ? root.no-runs : root.account.amounts-runs;
                                 size: Type.small;
                                 ink: Theme.ink-3;
                                 strong-ink: Theme.ink-2;
                                 strong-weight: 560;
                                 tabular: true;
+                            }
+                            // below D the table's identity column is capped, so the line wraps there too
+                            if root.touch && root.account.amounts-words.length > 0: Rectangle {
+                                height: amounts-wrap.preferred-height + 2px;
+                                RunsFlow {
+                                    x: 0px;
+                                    y: 2px;
+                                    width: parent.width;
+                                    height: parent.height - 2px;
+                                    words: root.account.amounts-words;
+                                    size: Type.small;
+                                    ink: Theme.ink-3;
+                                    strong-ink: Theme.ink-2;
+                                    strong-weight: 560;
+                                    tabular: true;
+                                }
                             }
                         }
                     }
@@ -835,13 +872,24 @@ export component AccountRow inherits Rectangle {
                                 wrap: word-wrap;
                                 overflow: elide;
                             }
-                            if root.account.amounts-runs.length > 0: Runs {
-                                runs: root.account.amounts-runs;
-                                size: Type.small;
-                                ink: Theme.ink-3;
-                                strong-ink: Theme.ink-2;
-                                strong-weight: 600;
-                                tabular: true;
+                            // Wraps word by word: a one-line Runs cannot shrink below its full text, so
+                            // a long line ("Credits off · 2 banked · cached, sampled 1m ago") widened
+                            // the identity column and pushed the action slot past the card's edge.
+                            // The holder takes its height from `amounts-wrap`.
+                            if root.account.amounts-words.length > 0: Rectangle {
+                                height: amounts-wrap.preferred-height;
+                                RunsFlow {
+                                    x: 0px;
+                                    y: 0px;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    words: root.account.amounts-words;
+                                    size: Type.small;
+                                    ink: Theme.ink-3;
+                                    strong-ink: Theme.ink-2;
+                                    strong-weight: 600;
+                                    tabular: true;
+                                }
                             }
                         }
                         // the launch buttons (Claude) or the action slot (switchable), centred on Line A

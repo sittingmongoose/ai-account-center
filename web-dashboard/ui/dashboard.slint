@@ -386,16 +386,38 @@ export component Dashboard inherits Window {
     callback login-overlay(LoginOverlay);
 
     // ---------- theme cross-fade (globals cannot animate) ----------
-    property <float> theme-mix: Theme.dark ? 1 : 0;
-    animate theme-mix { duration: Motion.on ? Motion.theme : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
+    // The window would start light: start_dashboard (lib.rs) applies the stored and system theme before
+    // the first frame (settle-theme), bridge.js confirms them and then calls set_theme_ready, which
+    // settles `theme-mix` while the cross-fade is still closed. So the first theme lands at once (a
+    // cross-fade there drew light first frames on a dark launch) and later changes cross-fade.
+    // `theme-shift` keeps every element's own colour animation at 0 ms until the first themed frames are
+    // drawn, so no control tints its way from light to dark either.
+    in-out property <bool> theme-ready: false;
+    property <bool> theme-held: true;
+    theme-release := Timer {
+        interval: 500ms;
+        running: root.theme-ready && root.theme-held;
+        triggered => {
+            root.theme-held = false;
+            Motion.theme-shift = root.theme-mix > 0.001 && root.theme-mix < 0.999;
+        }
+    }
+    out property <float> theme-mix: Theme.dark ? 1 : 0;
+    animate theme-mix { duration: Motion.on && root.theme-ready ? Motion.theme : 0ms; easing: cubic-bezier(0.65, 0, 0.35, 1); }
     changed theme-mix => {
-        Motion.theme-shift = self.theme-mix > 0.001 && self.theme-mix < 0.999;
+        Motion.theme-shift = root.theme-held || (self.theme-mix > 0.001 && self.theme-mix < 0.999);
         Theme.mix = self.theme-mix;
+    }
+    // lib.rs start_dashboard: the stored and system theme it was given land before the first frame
+    public function settle-theme() {
+        Theme.mix = Theme.dark ? 1 : 0;
+        Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light;
     }
     property <bool> dark: Theme.dark;
     changed dark => { Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light; }
     init => {
         Theme.mix = self.theme-mix;
+        Motion.theme-shift = true;
         Breakpoints.width = self.width;
         Breakpoints.height = self.height;
         Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light;

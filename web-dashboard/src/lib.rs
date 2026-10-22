@@ -232,6 +232,7 @@ struct RowDto {
     can_windows: bool,
     amounts_line: String,
     amounts_runs: Vec<RunDto>,
+    amounts_words: Vec<RunDto>,
     confirm: bool,
     confirm_runs: Vec<RunDto>,
     confirm_words: Vec<RunDto>,
@@ -538,6 +539,12 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 row.amounts_runs,
                 &mut live_runs,
             );
+            let amounts_words = sync_runs(
+                m,
+                &format!("amounts-words|{owner}"),
+                row.amounts_words,
+                &mut live_runs,
+            );
             let confirm_runs = sync_runs(
                 m,
                 &format!("confirm|{owner}"),
@@ -570,6 +577,7 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
                 can_windows: row.can_windows,
                 amounts_line: row.amounts_line.into(),
                 amounts_runs,
+                amounts_words,
                 confirm: row.confirm,
                 confirm_runs,
                 confirm_words,
@@ -714,9 +722,20 @@ fn apply_dashboard(ui: &Dashboard, m: &mut Models, v: DashboardDto) {
 // ---------------------------------------------------------------- entry points
 
 #[wasm_bindgen]
-pub fn start_dashboard(width: f32, height: f32, scale_factor: f32) -> Result<(), JsValue> {
+pub fn start_dashboard(
+    width: f32,
+    height: f32,
+    scale_factor: f32,
+    theme_mode: i32,
+    system_dark: bool,
+) -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
     let ui = Dashboard::new().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    // The stored theme and the system scheme before the first frame: winit draws one while the
+    // event loop starts, and a light first frame flashed on dark launches.
+    ui.set_theme_mode(theme_mode.clamp(0, 2));
+    ui.set_system_dark(system_dark);
+    ui.invoke_settle_theme();
     // Seed the browser's logical size and scale before the first show/render.
     // winit reports the initial browser size asynchronously; the scene and
     // renderer must already agree on physical dimensions on Retina displays.
@@ -1001,6 +1020,16 @@ pub fn set_theme_mode(mode: i32) {
 #[wasm_bindgen]
 pub fn set_system_dark(dark: bool) {
     with_ui(|ui| ui.set_system_dark(dark));
+}
+
+/// bridge.js has applied the stored theme and the system scheme: settle the theme mix while the
+/// cross-fade is still closed (reading it evaluates the 0 ms step), then let later changes fade.
+#[wasm_bindgen]
+pub fn set_theme_ready() {
+    with_ui(|ui| {
+        let _ = ui.get_theme_mix();
+        ui.set_theme_ready(true);
+    });
 }
 
 /// prefers-reduced-motion, and the headless screenshot guard: every duration collapses.

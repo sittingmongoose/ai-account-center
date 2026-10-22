@@ -73,6 +73,8 @@ export struct AccountRowView {
     can-windows: bool,
     amounts-line: string,
     amounts-runs: [RunView],
+    // the amounts line as wrap units for the stacked touch rows (Slint cannot split strings)
+    amounts-words: [RunView],
     // Activating this account asks first: it is already past the section's switch point.
     confirm: bool,
     confirm-runs: [RunView],

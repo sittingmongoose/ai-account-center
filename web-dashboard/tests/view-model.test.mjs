@@ -497,6 +497,35 @@ test('codex rows summarise credits and banked resets of that account only', () =
   assert.equal(row.amountsLine, '62.5K credits · 1 banked');
 });
 
+test('a long Codex amounts line also arrives as words so phone rows can wrap it', () => {
+  const row = section(
+    dashboardViewModel(
+      data([
+        account({
+          isActive: true,
+          windows: [
+            window(),
+            { key: 'credits_balance', kind: 'balance', unit: 'credits', enabled: false, status: 'cached', sampledAt: at(-1) },
+            { key: 'banked_resets_0', kind: 'balance', unit: 'resets', remaining: 2, status: 'cached', sampledAt: at(-1) },
+          ],
+        }),
+      ]),
+      { now }
+    ),
+    'codex'
+  ).rows[0];
+  assert.equal(row.amountsLine, 'Credits off · 2 banked · cached, sampled 1m ago');
+  // every word of the one-line runs, in order, with its weight: nothing dropped, nothing invented
+  assert.deepEqual(
+    row.amountsWords.map((w) => w.text).join(' '),
+    row.amountsLine.split(/\s+/).join(' ')
+  );
+  assert.ok(row.amountsWords.every((w) => !/\s/.test(w.text)));
+  assert.deepEqual(row.amountsWords.filter((w) => w.strong).map((w) => w.text), ['2']);
+  const claude = section(dashboardViewModel(data([account({ provider: 'claude', id: 'claude:one' })]), { now }), 'claude');
+  assert.deepEqual(claude.rows[0].amountsWords, []);
+});
+
 test('Codex banked totals include every expiration group and stay bound to each account', () => {
   const banked = (key, remaining, expiresAt = null) => ({
     key,
