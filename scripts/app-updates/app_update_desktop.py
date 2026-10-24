@@ -27,7 +27,7 @@ from app_update_processes import (
 # Desktop packages are hundreds of megabytes (the Codex MSIX is over 900 MB)
 # and its host links need minutes, not seconds. Still bounded, still verified.
 DESKTOP_DOWNLOAD_MAXIMUM = 2 * 1024 * 1024 * 1024
-DESKTOP_DOWNLOAD_TIMEOUT = 600
+DESKTOP_DOWNLOAD_TIMEOUT = 900
 DOWNLOAD_BLOCKED_RETRIES = 3
 # Claude's darwin packages live on the publisher's plain-CDN release feed;
 # the old claude.ai redirect answers 403 to every non-browser client.
@@ -57,16 +57,16 @@ def require_replace_time(deadline):
         raise UpdateFailure("timeout")
 
 
-def desktop_budget(deadline, maximum):
+def desktop_budget(deadline, maximum, reserve=90):
     if deadline is None:
         return maximum
-    remaining = int(deadline - time.monotonic()) - 90
+    remaining = int(deadline - time.monotonic()) - reserve
     if remaining <= 0:
         raise UpdateFailure("timeout")
     return min(maximum, remaining)
 
 
-def download_desktop(url, destination, deadline=None):
+def download_desktop(url, destination, deadline=None, reserve=90):
     """Fetch a desktop package, tolerating flaky bot-challenge refusals.
 
     Raises UpdateFailure('download_blocked') when every attempt is refused so
@@ -74,7 +74,7 @@ def download_desktop(url, destination, deadline=None):
     """
     for attempt in range(DOWNLOAD_BLOCKED_RETRIES):
         try:
-            download(url, destination, maximum=DESKTOP_DOWNLOAD_MAXIMUM, timeout=desktop_budget(deadline, DESKTOP_DOWNLOAD_TIMEOUT))
+            download(url, destination, maximum=DESKTOP_DOWNLOAD_MAXIMUM, timeout=desktop_budget(deadline, DESKTOP_DOWNLOAD_TIMEOUT, reserve))
             return
         except UpdateFailure as error:
             if error.code != "download_blocked" or attempt + 1 == DOWNLOAD_BLOCKED_RETRIES:
@@ -432,7 +432,10 @@ def add_appx_package(package, timeout=600):
     is never emitted: a rejection for running apps maps to quit_first, while
     any other deployment failure stays update_failed.
     """
-    script = ("$ErrorActionPreference='Stop'; try { Add-AppxPackage -Path " + ps_quote(package)
+    # Windows can retain a package resource or start an app-owned process after
+    # our close scan. The target-only shutdown closes that race without stopping
+    # other packages that merely share a framework dependency.
+    script = ("$ErrorActionPreference='Stop'; try { Add-AppxPackage -ForceTargetApplicationShutdown -Path " + ps_quote(package)
               + "; Write-Output 'CCS_ADDAPPX_OK' } catch { Write-Output ('CCS_ADDAPPX_FAILED: ' + $_.Exception.ToString()) }")
     text = powershell(script, timeout=timeout)
     if "CCS_ADDAPPX_OK" in text.split():
@@ -621,13 +624,16 @@ def windows_replace(install, before, deploy, accepted, deadline=None):
             raise UpdateFailure("version_unknown")
     except Exception as error:
         # Reopen from whatever package is registered now: the old one when the install failed.
+        reopened = 0
         with contextlib.suppress(Exception):
-            reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
+            reopened = reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
         code = error.code if isinstance(error, UpdateFailure) else "update_failed"
-        # A needs-closing rejection even after the close still asks the user to quit.
-        if code == "quit_first":
-            return quit_first(install, before)
-        return result(app_id, "windows", "failed", before, before, manager, code, True)
+        # Distinguish a real deployment hold from a preflight that closed
+        # nothing. Keep verified recovery and force counts on failures too.
+        value = result(app_id, "windows", "action_required" if code == "quit_first" else "failed", before, before,
+                       manager, "package_in_use" if code == "quit_first" else code, True, reopened)
+        value["forcedStops"] = forced
+        return value
     try:
         restarted = reopen_windows(refreshed, plans)
     except Exception:
@@ -686,9 +692,10 @@ def update_windows(install, phase=None, deadline=None):
             return result(install.app_id, "windows", "failed", before, before, install.manager, "package_mismatch")
         if available and version_tuple(available) <= version_tuple(before):
             return result(install.app_id, "windows", "current", before, before, install.manager)
-        if available:
-            # Read-only: an instance that could not be reopened answers before any download.
-            windows_capture(install)
+        # Capture even if the optional range-manifest probe failed: the newer
+        # release feed already warrants the download. An unreopenable instance
+        # must answer before spending minutes downloading the whole package.
+        windows_capture(install)
     except UpdateFailure as error:
         if error.code == "quit_first":
             return quit_first(install, before)
@@ -697,7 +704,7 @@ def update_windows(install, phase=None, deadline=None):
         package = temporary / "update.msix"
         try:
             phase("downloading")
-            download_desktop(url, package, deadline)
+            download_desktop(url, package, deadline, 90 + WINDOWS_REPLACE_SECONDS)
             phase("updating")
             after = published(msix_info(package))
             if not after:

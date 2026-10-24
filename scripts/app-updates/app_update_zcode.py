@@ -18,6 +18,8 @@ import platform
 import plistlib
 import re
 import shutil
+import sys
+import time
 import urllib.request
 import uuid
 
@@ -43,6 +45,7 @@ MAC_TEAM = "8A5X4JJ39T"
 WINDOWS_SIGNER = "SERIALNUMBER=91110108MA01KP2T5U"
 MAX_PACKAGE = 800 * 1024 * 1024
 PAGE_LIMIT = 4 * 1024 * 1024
+PAGE_ATTEMPTS = 3
 # The asar header lists ZCode's whole node_modules (about 7 MB in 3.14.5).
 ASAR_HEADER_LIMIT = 16 * 1024 * 1024
 # The owner's own updaters: the Ubuntu oneshot unit (adapters and ZCode, with its
@@ -178,30 +181,74 @@ def feed_key(host):
     return ("macos-" if host == "mac" else "linux-") + architecture
 
 
-def read_bounded(url, prefix, limit):
-    """One fixed official URL, read within a size limit; anything unexpected raises UpdateFailure."""
+def _read_metadata_file(url, prefix, limit, destination, timeout):
+    """The read-only child operation; its parent bounds DNS, HTTP framing and body reads together."""
     request = urllib.request.Request(url, headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=min(20, timeout)) as response:
             if not response.geturl().startswith(prefix):
                 raise UpdateFailure()
             raw = response.read(limit + 1)
+        if len(raw) > limit:
+            raise UpdateFailure()
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(raw)
     except UpdateFailure:
         raise
+    except TimeoutError:
+        raise UpdateFailure("timeout") from None
     except Exception:
         raise UpdateFailure() from None
-    if len(raw) > limit:
-        raise UpdateFailure()
-    return raw
+
+def _metadata_command(url, prefix, limit, destination, timeout):
+    try:
+        command([sys.executable, pathlib.Path(__file__).resolve(), "--read-metadata", url, prefix, str(limit), str(destination), str(timeout)], timeout=timeout)
+    except UpdateFailure as error:
+        if error.exit_code == 2:
+            raise UpdateFailure("timeout") from None
+        raise
 
 
-def latest_zcode(key):
+def read_bounded(url, prefix, limit, deadline=None):
+    """A fixed publisher lookup, with a hard deadline even during DNS and HTTP parsing."""
+    deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 20)
+    with private_temporary() as temporary:
+        destination = temporary / "metadata"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise UpdateFailure("timeout")
+        # Killing this read-only child closes sockets blocked in DNS, response
+        # headers, chunk extensions or trailers. Socket inactivity timeouts
+        # alone cannot bound a peer that keeps sending another byte.
+        _metadata_command(url, prefix, limit, destination, remaining)
+        if time.monotonic() >= deadline:
+            raise UpdateFailure("timeout")
+        if destination.stat().st_size > limit:
+            raise UpdateFailure()
+        return destination.read_bytes()
+
+
+def latest_zcode(key, deadline=None):
     """The newest version the official page lists for this platform, compared numerically like t3-acp-update."""
-    listed = re.findall(rb"releases/(\d{1,6}\.\d{1,6}\.\d{1,6})/" + re.escape(key.encode("ascii")) + rb"/latest\.yml",
-                        read_bounded(PAGE, "https://zcode.z.ai/", PAGE_LIMIT))
-    if not listed:
-        raise UpdateFailure()
-    return max((item.decode("ascii") for item in listed), key=version_tuple)
+    # A page/connection failure can fail Nas1 before its updater even runs.
+    # Retry only this bounded official lookup; never call an old
+    # installed version current when every lookup fails.
+    deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 60)
+    for attempt in range(PAGE_ATTEMPTS):
+        try:
+            listed = re.findall(rb"releases/(\d{1,6}\.\d{1,6}\.\d{1,6})/" + re.escape(key.encode("ascii")) + rb"/latest\.yml",
+                                read_bounded(PAGE, "https://zcode.z.ai/", PAGE_LIMIT, deadline=deadline))
+            if listed:
+                return max((item.decode("ascii") for item in listed), key=version_tuple)
+            raise UpdateFailure()
+        except UpdateFailure as error:
+            if attempt + 1 == PAGE_ATTEMPTS:
+                raise UpdateFailure("timeout" if error.code == "timeout" else "zcode_release_unavailable") from None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise UpdateFailure("timeout") from None
+            time.sleep(min(attempt + 1, remaining))
 
 
 def registry_version(name):
@@ -385,12 +432,30 @@ def run_unit(deadline):
             UBUNTU_RUN["code"] = None
         except UpdateFailure as error:
             UBUNTU_RUN["code"] = error.code
+            # Stopping systemctl's wait does not stop the oneshot's installer.
+            # Keep its shared npm resources reserved until a terminal state
+            # is verified; an unreadable state remains busy.
+            UBUNTU_RUN["unsettled"] = True
     return UBUNTU_RUN["code"]
+
+
+def ubuntu_unit_busy():
+    """An interrupted wait never grants another installer ownership of the prefix."""
+    if not UBUNTU_RUN.get("unsettled"):
+        return False
+    try:
+        state = command(["/usr/bin/systemctl", "--user", "show", ACP_UNIT, "--property=SubState", "--value"], timeout=15, capture=True).strip()
+        if state in ("dead", "failed", "exited"):
+            UBUNTU_RUN["unsettled"] = False
+            return False
+    except UpdateFailure:
+        pass
+    return True
 
 
 def zcode_ubuntu(install, deadline, phase, state):
     before = install.version
-    if version_tuple(latest_zcode(feed_key("ubuntu"))) <= version_tuple(before):
+    if version_tuple(latest_zcode(feed_key("ubuntu"), deadline=deadline)) <= version_tuple(before):
         return result("zcode", "ubuntu", "current", before, before, install.manager)
     if not acp_unit_present():
         raise UpdateFailure("unsupported")
@@ -413,7 +478,7 @@ def zcode_ubuntu(install, deadline, phase, state):
 def zcode_mac(install, deadline, phase, state):
     before = install.version
     key = feed_key("mac")
-    newest = latest_zcode(key)
+    newest = latest_zcode(key, deadline=deadline)
     if version_tuple(newest) <= version_tuple(before):
         return result("zcode", "mac", "current", before, before, install.manager)
     # Answered before any download: the Mac never quits ZCode and a T3 session is never stopped.
@@ -464,7 +529,7 @@ def swap_mac(install, staged, version, deadline, state):
 def zcode_windows(install, deadline, phase, state):
     before = install.version
     key = feed_key("windows")
-    newest = latest_zcode(key)
+    newest = latest_zcode(key, deadline=deadline)
     if version_tuple(newest) <= version_tuple(before):
         return result("zcode", "windows", "current", before, before, install.manager)
     if t3_sessions(scan("windows")):
@@ -668,3 +733,16 @@ def update_adapters(install, deadline, phase=None):
         if code in ACTIONS:
             return adapters_row(install, "action_required", code=code, attempted=state["attempted"], held=behind if code == "in_use" else ())
         return adapters_row(install, "failed", read_parts(install.path) if state["attempted"] else None, code, state["attempted"])
+
+
+if __name__ == "__main__":
+    # Only the parent's fixed read-only metadata operation is executable here.
+    # This helper never starts an installer or touches account state in a child.
+    try:
+        if len(sys.argv) != 7 or sys.argv[1] != "--read-metadata":
+            raise UpdateFailure()
+        _read_metadata_file(sys.argv[2], sys.argv[3], int(sys.argv[4]), pathlib.Path(sys.argv[5]), float(sys.argv[6]))
+    except UpdateFailure as error:
+        raise SystemExit(2 if error.code == "timeout" else 1)
+    except Exception:
+        raise SystemExit(1)

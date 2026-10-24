@@ -478,7 +478,7 @@ class T3Fixtures(unittest.TestCase):
         self.assertEqual(command.call_count, 2)  # The unit query, then the one restart.
         self.assertFalse((root / "t3-code-pending-restart.json").exists())
 
-    def test_t3_is_last_and_each_host_installer_stays_sequential(self):
+    def test_t3_is_last_after_independent_updates_and_shared_dependencies(self):
         installations = {key: common.Install(key, "ubuntu", self.root / key, "1.0.0") for key in common.APP_LABELS}
         seen = []
         def update(install, deadline, phase=None, **_kwargs):
@@ -490,8 +490,9 @@ class T3Fixtures(unittest.TestCase):
                 mock.patch.object(updater, "update_desktop", side_effect=update), mock.patch.object(updater, "update_t3", side_effect=update), \
                 mock.patch.object(updater, "update_zcode", side_effect=update), mock.patch.object(updater, "update_adapters", side_effect=update):
             updater.run_apply("ubuntu")
-        # ZCode and the ACP adapters update before the Codex daemon wait and T3's restart.
-        self.assertEqual(seen[-4:], ["zcode", "t3-acp-adapters", "codex-cli", "t3-code"])
+        self.assertEqual(seen[-1], "t3-code")
+        self.assertLess(seen.index("zcode"), seen.index("t3-acp-adapters"))
+        self.assertLess(seen.index("codex-cli"), seen.index("codex-desktop"))
         self.assertEqual(len(seen), len(common.APP_LABELS))
 
     def test_mac_archive_rejects_escape_paths_and_symlinks_before_extracting(self):

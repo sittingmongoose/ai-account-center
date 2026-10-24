@@ -497,7 +497,84 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     expect(job.results).toEqual([kept, legacy]);
   });
 
-  it('names the CLI when a T3 session keeps Windows npm Codex from updating', () => {
+  it('limits forced-session messages to Windows Codex and truthful outcomes', () => {
+    const row = (messageCode: string, status: string, appId: UpdateAppId = 'codex-cli') => ({
+      appId,
+      status,
+      messageCode,
+      previousVersion: '0.163.0',
+      version: '0.164.0',
+      manager: 'npm',
+      updateAttempted: true,
+      forcedStops: 2,
+    });
+    for (const status of ['updated', 'current']) {
+      const value = normalizeAppUpdateRow(
+        row('codex_sessions_stopped', status),
+        'codex-cli',
+        'windows'
+      );
+      expect(value.message).toBe(MESSAGES.codex_sessions_stopped);
+      expect(value.forcedStops).toBe(2);
+    }
+    for (const status of ['failed', 'restart_failed'])
+      expect(
+        normalizeAppUpdateRow(row('codex_force_failed', status), 'codex-cli', 'windows').message
+      ).toBe(MESSAGES.codex_force_failed);
+    expect(
+      normalizeAppUpdateRow(row('codex_sessions_stopped', 'failed'), 'codex-cli', 'windows').message
+    ).toBe(MESSAGES.helper_invalid);
+    expect(
+      normalizeAppUpdateRow(row('codex_force_failed', 'updated'), 'codex-cli', 'windows').message
+    ).toBe(MESSAGES.helper_invalid);
+    expect(
+      normalizeAppUpdateRow(row('codex_sessions_stopped', 'updated'), 'codex-cli', 'ubuntu').message
+    ).toBe(MESSAGES.helper_invalid);
+    expect(
+      normalizeAppUpdateRow(
+        row('codex_sessions_stopped', 'updated', 'claude-code'),
+        'claude-code',
+        'windows'
+      ).message
+    ).toBe(MESSAGES.helper_invalid);
+  });
+
+  it('distinguishes ZCode release discovery failure from an attempted install', () => {
+    const row = {
+      appId: 'zcode',
+      status: 'failed',
+      messageCode: 'zcode_release_unavailable',
+      updateAttempted: false,
+    };
+    expect(normalizeAppUpdateRow(row, 'zcode', 'nas1').message).toBe(
+      MESSAGES.zcode_release_unavailable
+    );
+    expect(normalizeAppUpdateRow({ ...row, updateAttempted: true }, 'zcode', 'nas1').message).toBe(
+      MESSAGES.helper_invalid
+    );
+  });
+
+  it('reports a Windows package hold only after an attempted MSIX deployment', () => {
+    const row = {
+      appId: 'codex-desktop',
+      status: 'action_required',
+      messageCode: 'package_in_use',
+      updateAttempted: true,
+      restartedProcesses: 1,
+      forcedStops: 2,
+    };
+    const value = normalizeAppUpdateRow(row, 'codex-desktop', 'windows');
+    expect(value.message).toBe(MESSAGES.package_in_use);
+    expect(value).toMatchObject({ updateAttempted: true, restartedProcesses: 1, forcedStops: 2 });
+    expect(
+      normalizeAppUpdateRow({ ...row, updateAttempted: false }, 'codex-desktop', 'windows').message
+    ).toBe(MESSAGES.helper_invalid);
+    expect(normalizeAppUpdateRow(row, 'codex-desktop', 'ubuntu').message).toBe(
+      MESSAGES.helper_invalid
+    );
+  });
+
+  it('restores a legacy held CLI message from an older helper', () => {
     const row = normalizeAppUpdateRow(
       {
         appId: 'codex-cli',

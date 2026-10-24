@@ -142,6 +142,12 @@ export const MESSAGES = {
     'Updated and restarted running terminal instances. Running T3 sessions were left alone and keep the previous version until T3 starts them again.',
   background_sessions_kept:
     'Updated; running terminal instances reopened idle. Background sessions (T3 and other runs without a terminal) were left running and keep the previous version until they are started again.',
+  codex_sessions_stopped:
+    'Running background Codex CLI sessions were stopped for the Windows update; start those sessions again.',
+  codex_force_failed:
+    'The forced Codex CLI update failed; background sessions may have stopped. Start any interrupted sessions again.',
+  zcode_release_unavailable:
+    'The official ZCode release could not be checked; no update was attempted. Try Update apps again.',
   // Older helpers and saved rows: winget's answer, which never saw this package.
   store_no_newer:
     'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',
@@ -149,6 +155,8 @@ export const MESSAGES = {
     'The Microsoft Store has a newer build that Update all cannot install yet; nothing changed. Use the update button in the app.',
   package_mismatch:
     'The published package is not the version its release feed names, so nothing was installed.',
+  package_in_use:
+    'Windows still reports the app package in use after the close; the update was attempted but did not install.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = [...DASHBOARD_HOSTS];
@@ -410,11 +418,24 @@ export function normalizeAppUpdateRow(
         row.status !== 'action_required' ||
         HOST_OS[platform] !== 'windows')) ||
     (code === 'package_mismatch' && (appId !== 'codex-desktop' || row.status !== 'failed')) ||
+    (code === 'package_in_use' &&
+      (platform !== 'windows' ||
+        !['codex-desktop', 'claude-desktop'].includes(appId) ||
+        row.status !== 'action_required' ||
+        row.updateAttempted !== true)) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated')) ||
     ((code === 't3_sessions_kept' || code === 'background_sessions_kept') &&
-      (!CLI_APPS.includes(appId) || row.status !== 'updated'))
+      (!CLI_APPS.includes(appId) || row.status !== 'updated')) ||
+    ((code === 'codex_sessions_stopped' || code === 'codex_force_failed') &&
+      (appId !== 'codex-cli' ||
+        platform !== 'windows' ||
+        (code === 'codex_sessions_stopped'
+          ? row.status !== 'updated' && row.status !== 'current'
+          : row.status !== 'failed' && row.status !== 'restart_failed'))) ||
+    (code === 'zcode_release_unavailable' &&
+      (appId !== 'zcode' || row.status !== 'failed' || row.updateAttempted === true))
   )
     return failure(platform, appId, 'helper_invalid');
   const heldVersion = held && code === 'held_for_review' ? safeVersion(row.heldVersion) : null;

@@ -53,11 +53,11 @@ export {
 export type { HostRunControl } from './app-update-hosts';
 /**
  * Hard bound for one computer's whole run (helper sync included). The helpers
- * stop starting apps after 15 minutes and the Windows coordinator gives up
- * after 16; past this the host process is stopped and every app without a
+ * stop starting apps after 30 minutes and the Windows coordinator gives up
+ * after 31; past this the host process is stopped and every app without a
  * result reads "Timed out" instead of the job waiting forever.
  */
-const HOST_DEADLINE_MS = 18 * 60 * 1000;
+const HOST_DEADLINE_MS = 33 * 60 * 1000;
 
 export class AppUpdateBusyError extends Error {
   constructor() {
@@ -199,7 +199,7 @@ export class AppUpdateService {
 
   /**
    * Acknowledges a cancel at once. Nothing running is killed: each computer
-   * finishes the app it is on now, then reports every app it has not started
+   * finishes its active apps, then reports every app it has not started
    * as skipped. Idempotent: a second cancel changes nothing. Never promises an undo.
    */
   cancel(): { job: AppUpdateJob | null; cancelling: boolean; notOwner?: true } {
@@ -230,8 +230,8 @@ export class AppUpdateService {
   }
 
   /**
-   * Every computer runs at the same time; each one still updates its own apps
-   * one at a time. The job ends when the slowest computer finishes or hits
+   * Every computer runs at the same time; each helper schedules independent
+   * apps concurrently. The job ends when the slowest computer finishes or hits
    * its hard deadline, so one stuck host never holds the others back.
    */
   private async execute(): Promise<void> {

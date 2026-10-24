@@ -14,13 +14,15 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
 import time
 
 from app_update_common import UpdateFailure, command, environment, powershell
 
 # T3's own server and desktop, by exact location. A CLI process started below
-# one of them belongs to a T3 session: Update all never stops, relaunches or
-# judges it. The standalone runtime is <versions>/<version>/t3 (Ubuntu, Nas1,
+# one of them belongs to a T3 session: normally Update all never stops,
+# relaunches or judges it. Explicit Windows npm Codex force updates are the
+# exception; T3 itself is never a Codex target. The standalone runtime is <versions>/<version>/t3 (Ubuntu, Nas1,
 # the Mac); the desktop apps run their server inside the app itself.
 T3_RUNTIME_VERSIONS = ".t3/runtime/versions"
 T3_MAC_BUNDLE = pathlib.Path("/Applications/T3 Code (Nightly).app")
@@ -30,6 +32,13 @@ T3_WINDOWS_FOLDER = "Programs/t3code"
 TTY_DEVICE = re.compile(r"/dev/(?:pts/[0-9]+|tty[A-Za-z0-9]*|console)")
 # Windows keeps the whole process table, at most this many entries, for ancestry only.
 LINEAGE_LIMIT = 16384
+# Console attachment belongs to this process, not to an update worker thread.
+WINDOWS_CONSOLE_LOCK = threading.Lock()
+
+
+class WindowsFileTime(ctypes.Structure):
+    """One stable Win32 ABI type for concurrent identity checks and forced stops."""
+    _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
 
 
 @dataclasses.dataclass
@@ -264,7 +273,7 @@ def is_under(exe, root):
         return False
 
 
-def family(install, processes):
+def family(install, processes, include_descendants=True):
     active = os.path.normcase(os.path.realpath(install.path))
     root = install.package_root
     entrypoints = set()
@@ -289,7 +298,7 @@ def family(install, processes):
         muse_binary = install.app_id == "muse-code" and os.path.normcase(pathlib.Path(process.exe).name).startswith("muse-bin-") and pathlib.Path(process.exe).parent == install.path.parent
         if exact or owned_package or node_module or muse_binary:
             values.append(process)
-    if install.manager == "npm":
+    if install.manager == "npm" and include_descendants:
         pids = {item.pid for item in values}
         while True:
             children = [item for item in processes if item.pid not in pids and item.ppid in pids]
@@ -612,10 +621,11 @@ def cli_instances(install, processes):
     terminal instance: it is stopped and reopened idle in a new terminal. Every
     other family process is a background session -- T3's own, a `claude -p` from
     a script or cron, another harness's, a service's -- and has no terminal to
-    come back to: it is never read, stopped or relaunched and never fails the
+    come back to: it is never read or relaunched and never fails the
     readiness check. A terminal instance that exits between the scan and its
     context read is dropped with its descendants; one that still runs but cannot
-    be read, or whose working directory is gone, fails closed.
+    be read, or whose working directory is gone, fails closed. The caller may
+    explicitly force Windows Codex package holders to stop, without replay.
     """
     selected = family(install, processes)
     owned = {item.pid for item in t3_owned(install, processes)}
@@ -647,18 +657,24 @@ def cli_contexts(install, processes):
     return tuple(cli_instances(install, processes)[:2])
 
 
-def terminate_cli(install, targets, grace=5):
+def terminate_cli(install, targets, grace=5, graceful=True):
     live = live_contexts(install.platform, targets)
     if install.platform == "windows":
         # CTRL_BREAK is attempted only for each selected process group; unlike
         # console-wide CTRL_C it cannot target the parent PowerShell/Terminal.
         kernel = ctypes.windll.kernel32
-        kernel.FreeConsole()
-        for item in live:
-            if kernel.AttachConsole(item.pid):
-                kernel.SetConsoleCtrlHandler(None, True)
-                kernel.GenerateConsoleCtrlEvent(1, item.pid)
+        if graceful:
+            with WINDOWS_CONSOLE_LOCK:
                 kernel.FreeConsole()
+                for item in live:
+                    if kernel.AttachConsole(item.pid):
+                        kernel.SetConsoleCtrlHandler(None, True)
+                        kernel.GenerateConsoleCtrlEvent(1, item.pid)
+                        kernel.FreeConsole()
+        else:
+            # A background Codex can share a console group with arbitrary
+            # child tools. Force only its checked handles, never the group.
+            grace = 0
     else:
         for item in live:
             safe_signal(item, 15)
@@ -678,10 +694,8 @@ def terminate_cli(install, targets, grace=5):
             if not handle:
                 raise UpdateFailure("restart_failed")
             try:
-                class FILETIME(ctypes.Structure):
-                    _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
-                created, exited, system, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
-                kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME)]
+                created, exited, system, user = WindowsFileTime(), WindowsFileTime(), WindowsFileTime(), WindowsFileTime()
+                kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(WindowsFileTime)] * 4
                 if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(system), ctypes.byref(user)) or str((created.high << 32) | created.low) != item.identity:
                     raise UpdateFailure("restart_failed")
                 if not ctypes.windll.kernel32.TerminateProcess(handle, 0):
@@ -710,16 +724,14 @@ def live_contexts(platform, contexts):
         kernel.OpenProcess.restype = wintypes.HANDLE
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        class FILETIME(ctypes.Structure):
-            _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
-        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME)]
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(WindowsFileTime)] * 4
         remaining = []
         for item in contexts:
             handle = kernel.OpenProcess(0x1000, False, item.pid)
             if not handle:
                 continue
             try:
-                created, exited, system, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+                created, exited, system, user = WindowsFileTime(), WindowsFileTime(), WindowsFileTime(), WindowsFileTime()
                 status = wintypes.DWORD()
                 if kernel.GetExitCodeProcess(handle, ctypes.byref(status)) and status.value == 259 and kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(system), ctypes.byref(user)) and str((created.high << 32) | created.low) == item.identity:
                     remaining.append(item)

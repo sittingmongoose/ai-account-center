@@ -72,7 +72,7 @@ def page(*entries):
 def response(body, url):
     value = mock.MagicMock()
     value.geturl.return_value = url
-    value.read.side_effect = lambda size=-1: body[:size] if size >= 0 else body
+    value.read.side_effect = io.BytesIO(body).read
     return contextlib.nullcontext(value)
 
 
@@ -82,6 +82,9 @@ class ZCodeFixtures(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = pathlib.Path(temporary.name)
         self.addCleanup(mock.patch.stopall)
+        # Network fixtures exercise the exact child reader in process; the
+        # separate HTTP deadline tests execute the real bounded subprocess.
+        mock.patch.object(zcode, "_metadata_command", side_effect=zcode._read_metadata_file).start()
         mock.patch.object(pathlib.Path, "home", return_value=self.root).start()
         mock.patch.dict(os.environ, {"LOCALAPPDATA": str(self.root / "local"), "APPDATA": str(self.root / "roaming"),
                                      "PROCESSOR_ARCHITECTURE": "AMD64"}).start()
@@ -208,7 +211,7 @@ class ZCodeFixtures(unittest.TestCase):
                 with self.assertRaises(common.UpdateFailure):
                     zcode.latest_zcode("linux-x64")
         with mock.patch.object(zcode.urllib.request, "urlopen", side_effect=OSError("offline")):
-            with self.assertRaisesRegex(common.UpdateFailure, "update_failed"):
+            with self.assertRaisesRegex(common.UpdateFailure, "zcode_release_unavailable"):
                 zcode.latest_zcode("linux-x64")
 
     def test_feed_folder_follows_this_computer(self):
@@ -401,12 +404,12 @@ class ZCodeFixtures(unittest.TestCase):
                 mock.patch.object(zcode, "scan", return_value=[]):
             zrow = zcode.update_zcode(zcode.detect_zcode("ubuntu"), self.deadline)
             arow = zcode.update_adapters(self.adapters(), self.deadline)
-        self.assertEqual((zrow["status"], zrow["messageCode"], zrow["version"], zrow["updateAttempted"]), ("failed", "update_failed", OLD, False))
+        self.assertEqual((zrow["status"], zrow["messageCode"], zrow["version"], zrow["updateAttempted"]), ("failed", "zcode_release_unavailable", OLD, False))
         self.assertEqual((arow["status"], arow["messageCode"], arow["updateAttempted"]), ("failed", "update_failed", False))
         self.assertEqual(self.parts(arow), [("muse-acp", "0.10.0", "0.10.0"), ("zcode-acp-server", "0.65.1", "0.65.1")])
         run.assert_not_called()
 
-    def test_run_apply_runs_zcode_rows_before_codex_and_t3_with_one_unit_run(self):
+    def test_run_apply_shares_one_zcode_unit_and_leaves_desktop_then_t3_last(self):
         self.unit()
         app = self.ubuntu_app()
         installs = {key: None for key in common.APP_LABELS}
@@ -425,7 +428,7 @@ class ZCodeFixtures(unittest.TestCase):
         phases = [(event["appId"], event["phase"]) for event in events if event.get("event") == "app" and event.get("appId") in ("zcode", "t3-acp-adapters")]
         self.assertEqual(phases, [("zcode", "checking"), ("zcode", "updating"), ("zcode", "updating"),
                                   ("t3-acp-adapters", "checking"), ("t3-acp-adapters", "updating"), ("t3-acp-adapters", "updating")])
-        self.assertEqual([row["appId"] for row in value["results"]][-4:], ["zcode", "t3-acp-adapters", "codex-cli", "t3-code"])
+        self.assertEqual([row["appId"] for row in value["results"]][-4:], ["zcode", "t3-acp-adapters", "codex-desktop", "t3-code"])
 
     # ------------------------------------------------------------ Mac
     def mac_run(self, install, gui=None, session=None, fail=None, served=None, entries=None, opened_later=False):

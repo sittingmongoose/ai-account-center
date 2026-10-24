@@ -431,8 +431,8 @@ def schedule_restart(version):
     write_private_json(marker, {"version": version})
     unit = "aac-t3-restart-" + uuid.uuid4().hex[:12]
     command(["/usr/bin/systemd-run", "--user", "--collect", "--unit=" + unit,
-             # The 18-minute wait for the job, the restart and UBUNTU_READY_SECONDS, with room to spare.
-             "--property=RuntimeMaxSec=4200", "/usr/bin/python3", pathlib.Path(__file__).resolve(),
+             # The 33-minute dashboard job, restart and UBUNTU_READY_SECONDS, with room to spare.
+             "--property=RuntimeMaxSec=5400", "/usr/bin/python3", pathlib.Path(__file__).resolve(),
              "--restart-service", str(os.getpid()), "--state-dir", str(root),
              *(["--dashboard-job"] if os.environ.get("AAC_UPDATE_DASHBOARD_JOB") == "1" else [])], timeout=15)
     return {"kind": "systemd", "service": "t3code.service", "delaySeconds": 30}
@@ -466,7 +466,7 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
     root = root or state_root()
     lock = root / "dashboard-update.lock"
     marker = root / "t3-code-pending-restart.json"
-    deadline = time.monotonic() + 18 * 60
+    deadline = time.monotonic() + 35 * 60
     quiet_since = None
     while time.monotonic() < deadline:
         if not marker.exists():
