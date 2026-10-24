@@ -20,8 +20,9 @@ import time
 from app_update_common import UpdateFailure, command, environment, powershell
 
 # T3's own server and desktop, by exact location. A CLI process started below
-# one of them belongs to a T3 session: Update all never stops, relaunches or
-# judges it. The standalone runtime is <versions>/<version>/t3 (Ubuntu, Nas1,
+# one of them belongs to a T3 session: normally Update all never stops,
+# relaunches or judges it. Explicit Windows npm Codex force updates are the
+# exception; T3 itself is never a Codex target. The standalone runtime is <versions>/<version>/t3 (Ubuntu, Nas1,
 # the Mac); the desktop apps run their server inside the app itself.
 T3_RUNTIME_VERSIONS = ".t3/runtime/versions"
 T3_MAC_BUNDLE = pathlib.Path("/Applications/T3 Code (Nightly).app")
@@ -620,10 +621,11 @@ def cli_instances(install, processes):
     terminal instance: it is stopped and reopened idle in a new terminal. Every
     other family process is a background session -- T3's own, a `claude -p` from
     a script or cron, another harness's, a service's -- and has no terminal to
-    come back to: it is never read, stopped or relaunched and never fails the
+    come back to: it is never read or relaunched and never fails the
     readiness check. A terminal instance that exits between the scan and its
     context read is dropped with its descendants; one that still runs but cannot
-    be read, or whose working directory is gone, fails closed.
+    be read, or whose working directory is gone, fails closed. The caller may
+    explicitly force Windows Codex package holders to stop, without replay.
     """
     selected = family(install, processes)
     owned = {item.pid for item in t3_owned(install, processes)}
@@ -655,19 +657,24 @@ def cli_contexts(install, processes):
     return tuple(cli_instances(install, processes)[:2])
 
 
-def terminate_cli(install, targets, grace=5):
+def terminate_cli(install, targets, grace=5, graceful=True):
     live = live_contexts(install.platform, targets)
     if install.platform == "windows":
         # CTRL_BREAK is attempted only for each selected process group; unlike
         # console-wide CTRL_C it cannot target the parent PowerShell/Terminal.
         kernel = ctypes.windll.kernel32
-        with WINDOWS_CONSOLE_LOCK:
-            kernel.FreeConsole()
-            for item in live:
-                if kernel.AttachConsole(item.pid):
-                    kernel.SetConsoleCtrlHandler(None, True)
-                    kernel.GenerateConsoleCtrlEvent(1, item.pid)
-                    kernel.FreeConsole()
+        if graceful:
+            with WINDOWS_CONSOLE_LOCK:
+                kernel.FreeConsole()
+                for item in live:
+                    if kernel.AttachConsole(item.pid):
+                        kernel.SetConsoleCtrlHandler(None, True)
+                        kernel.GenerateConsoleCtrlEvent(1, item.pid)
+                        kernel.FreeConsole()
+        else:
+            # A background Codex can share a console group with arbitrary
+            # child tools. Force only its checked handles, never the group.
+            grace = 0
     else:
         for item in live:
             safe_signal(item, 15)

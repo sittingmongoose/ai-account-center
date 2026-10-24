@@ -278,6 +278,20 @@ class UpdateRecoveryTests(unittest.TestCase):
         self.assertEqual(operations[0][1], operations[1][1])
         self.assertEqual(operations[2][1], operations[3][1])
 
+    def test_forced_background_stop_never_signals_its_console_group(self):
+        kernel = mock.Mock()
+        kernel.OpenProcess.return_value = 123
+        kernel.GetProcessTimes.side_effect = lambda handle, created, *args: (setattr(created._obj, "low", 1), 1)[-1]
+        kernel.TerminateProcess.return_value = 1
+        item = processes.Process(11, 0, 0, "/fixture/codex", "1")
+        install = common.Install("codex-cli", "windows", pathlib.Path(item.exe))
+        with mock.patch.object(processes.ctypes, "windll", types.SimpleNamespace(kernel32=kernel), create=True), \
+                mock.patch.object(processes, "live_contexts", side_effect=[[item], [item], [item], []]):
+            self.assertEqual(processes.terminate_cli(install, [item], graceful=False), 1)
+        kernel.GenerateConsoleCtrlEvent.assert_not_called()
+        kernel.AttachConsole.assert_not_called()
+        kernel.TerminateProcess.assert_called_once()
+
     def test_concurrent_windows_identity_read_and_forced_stop_share_a_stable_ctypes_signature(self):
         # Use real ctypes argument conversion, not a Mock that accepts pointers
         # to incompatible, newly-created local FILETIME classes.

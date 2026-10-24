@@ -713,7 +713,7 @@ def update_cli(install, deadline, restart_managed=False):
                     targets = [*targets, *forced]
                 write_private_json(pending, {"version": before})
                 try:
-                    pre_forced = terminate_cli(install, targets)
+                    pre_forced = terminate_cli(install, targets, graceful=False) if forced_background else terminate_cli(install, targets)
                 except UpdateFailure:
                     try:
                         restart_cli(install, contexts)

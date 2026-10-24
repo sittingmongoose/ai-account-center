@@ -2365,7 +2365,7 @@ class _SessionTables(unittest.TestCase):
 
 
 class T3SessionTests(_SessionTables):
-    """Update all never stops, relaunches or judges a CLI process that T3 started."""
+    """T3 sessions are preserved except explicit Windows Codex package-holder stops."""
 
     def test_t3_sessions_are_left_out_of_contexts_and_targets_on_every_host(self):
         for platform, table, t3, user in (('ubuntu', self.ubuntu_table(), {3873428}, 1925309),
@@ -2572,7 +2572,7 @@ class T3SessionTests(_SessionTables):
 
 class BackgroundSessionTests(_SessionTables):
     """A CLI process without a terminal (a script's `claude -p`, cron, another harness,
-    a service) is treated like a T3 session: never stopped, relaunched or judged."""
+    a service) is preserved; the explicit Windows Codex force path never replays its work."""
 
     def headless(self, platform):
         """A `claude -p` started by a script or cron with pipes, and its own child."""
