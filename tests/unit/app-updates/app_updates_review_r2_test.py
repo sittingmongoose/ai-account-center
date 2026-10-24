@@ -112,7 +112,7 @@ class ReviewTests(unittest.TestCase):
                     nonce = json.loads((root / "windows-task-request.json").read_text())["nonce"]
                     common.write_private_json(root / "windows-task-progress.json", {"nonce": nonce, "events": [{"event": "result", "result": common.result("omp", "windows", "updated")}]})
                 return "0"
-            with mock.patch.object(updater, "powershell", side_effect=start), mock.patch.object(updater.time, "monotonic", side_effect=[0, 0, 1000]), mock.patch.object(updater.time, "sleep"):
+            with mock.patch.object(updater, "powershell", side_effect=start), mock.patch.object(updater.time, "monotonic", side_effect=[0, 0, 2000]), mock.patch.object(updater.time, "sleep"):
                 rows = updater.windows_interactive_apply()["results"]
             self.assertEqual(next(row for row in rows if row["appId"] == "omp")["status"], "updated")
             self.assertTrue(all(row["messageCode"] == "host_timeout" for row in rows if row["appId"] != "omp"))
@@ -152,7 +152,7 @@ class ReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)), mock.patch.object(updater, "execution_lock", contextlib.nullcontext):
             root = pathlib.Path(folder) / ".ccs/app-updates"
             common.write_private_json(root / "windows-task-result.json", {"nonce": "old", "results": [common.result("omp", "windows", "current")]})
-            with mock.patch.object(updater, "powershell", side_effect=lambda script, **k: "" if "'finished'" in script else "0"), mock.patch.object(updater.time, "monotonic", side_effect=[0, 5, 1000]), mock.patch.object(updater.time, "sleep"):
+            with mock.patch.object(updater, "powershell", side_effect=lambda script, **k: "" if "'finished'" in script else "0"), mock.patch.object(updater.time, "monotonic", side_effect=[0, 5, 2000]), mock.patch.object(updater.time, "sleep"):
                 rows = updater.windows_interactive_apply()["results"]
             self.assertTrue(all(row["messageCode"] == "host_timeout" for row in rows))
 
@@ -191,7 +191,7 @@ class ReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)
             (root / "t3-code-pending-restart.json").write_text('{"version":"1.0.0"}')
-            with mock.patch.object(t3.time, "monotonic", side_effect=[0, 0, 2000]), mock.patch.object(t3.time, "sleep"), mock.patch.object(t3.os, "kill", side_effect=PermissionError()), mock.patch.object(t3, "execution_lock", contextlib.nullcontext), mock.patch.object(t3, "command") as command:
+            with mock.patch.object(t3.time, "monotonic", side_effect=[0, 0, 2200]), mock.patch.object(t3.time, "sleep"), mock.patch.object(t3.os, "kill", side_effect=PermissionError()), mock.patch.object(t3, "execution_lock", contextlib.nullcontext), mock.patch.object(t3, "command") as command:
                 with self.assertRaises(common.UpdateFailure):
                     t3.deferred_restart(123, root)
             command.assert_not_called()

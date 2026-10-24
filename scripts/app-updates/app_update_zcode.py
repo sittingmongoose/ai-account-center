@@ -18,6 +18,7 @@ import platform
 import plistlib
 import re
 import shutil
+import time
 import urllib.request
 import uuid
 
@@ -43,6 +44,7 @@ MAC_TEAM = "8A5X4JJ39T"
 WINDOWS_SIGNER = "SERIALNUMBER=91110108MA01KP2T5U"
 MAX_PACKAGE = 800 * 1024 * 1024
 PAGE_LIMIT = 4 * 1024 * 1024
+PAGE_ATTEMPTS = 3
 # The asar header lists ZCode's whole node_modules (about 7 MB in 3.14.5).
 ASAR_HEADER_LIMIT = 16 * 1024 * 1024
 # The owner's own updaters: the Ubuntu oneshot unit (adapters and ZCode, with its
@@ -178,14 +180,33 @@ def feed_key(host):
     return ("macos-" if host == "mac" else "linux-") + architecture
 
 
-def read_bounded(url, prefix, limit):
+def read_bounded(url, prefix, limit, deadline=None):
     """One fixed official URL, read within a size limit; anything unexpected raises UpdateFailure."""
     request = urllib.request.Request(url, headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
+    deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 20)
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise UpdateFailure("timeout")
+        with urllib.request.urlopen(request, timeout=min(20, remaining)) as response:
             if not response.geturl().startswith(prefix):
                 raise UpdateFailure()
-            raw = response.read(limit + 1)
+            chunks, total = [], 0
+            while total <= limit:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise UpdateFailure("timeout")
+                # Keep a slow/dripping response within the same total budget,
+                # rather than resetting a 20 s socket timeout for every read.
+                sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+                if sock is not None:
+                    sock.settimeout(min(20, remaining))
+                chunk = response.read(min(64 * 1024, limit + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            raw = b"".join(chunks)
     except UpdateFailure:
         raise
     except Exception:
@@ -197,11 +218,24 @@ def read_bounded(url, prefix, limit):
 
 def latest_zcode(key):
     """The newest version the official page lists for this platform, compared numerically like t3-acp-update."""
-    listed = re.findall(rb"releases/(\d{1,6}\.\d{1,6}\.\d{1,6})/" + re.escape(key.encode("ascii")) + rb"/latest\.yml",
-                        read_bounded(PAGE, "https://zcode.z.ai/", PAGE_LIMIT))
-    if not listed:
-        raise UpdateFailure()
-    return max((item.decode("ascii") for item in listed), key=version_tuple)
+    # A page/connection failure can fail Nas1 before its updater even runs.
+    # Retry only this bounded official lookup; never call an old
+    # installed version current when every lookup fails.
+    deadline = time.monotonic() + 60
+    for attempt in range(PAGE_ATTEMPTS):
+        try:
+            listed = re.findall(rb"releases/(\d{1,6}\.\d{1,6}\.\d{1,6})/" + re.escape(key.encode("ascii")) + rb"/latest\.yml",
+                                read_bounded(PAGE, "https://zcode.z.ai/", PAGE_LIMIT, deadline=deadline))
+            if listed:
+                return max((item.decode("ascii") for item in listed), key=version_tuple)
+            raise UpdateFailure()
+        except UpdateFailure as error:
+            if attempt + 1 == PAGE_ATTEMPTS:
+                raise UpdateFailure("timeout" if error.code == "timeout" else "zcode_release_unavailable") from None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise UpdateFailure("timeout") from None
+            time.sleep(min(attempt + 1, remaining))
 
 
 def registry_version(name):
@@ -385,7 +419,25 @@ def run_unit(deadline):
             UBUNTU_RUN["code"] = None
         except UpdateFailure as error:
             UBUNTU_RUN["code"] = error.code
+            # Stopping systemctl's wait does not stop the oneshot's installer.
+            # Keep its shared npm resources reserved until a terminal state
+            # is verified; an unreadable state remains busy.
+            UBUNTU_RUN["unsettled"] = True
     return UBUNTU_RUN["code"]
+
+
+def ubuntu_unit_busy():
+    """An interrupted wait never grants another installer ownership of the prefix."""
+    if not UBUNTU_RUN.get("unsettled"):
+        return False
+    try:
+        state = command(["/usr/bin/systemctl", "--user", "show", ACP_UNIT, "--property=SubState", "--value"], timeout=15, capture=True).strip()
+        if state in ("dead", "failed", "exited"):
+            UBUNTU_RUN["unsettled"] = False
+            return False
+    except UpdateFailure:
+        pass
+    return True
 
 
 def zcode_ubuntu(install, deadline, phase, state):

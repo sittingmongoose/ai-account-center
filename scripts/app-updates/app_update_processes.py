@@ -14,6 +14,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
 import time
 
 from app_update_common import UpdateFailure, command, environment, powershell
@@ -30,6 +31,8 @@ T3_WINDOWS_FOLDER = "Programs/t3code"
 TTY_DEVICE = re.compile(r"/dev/(?:pts/[0-9]+|tty[A-Za-z0-9]*|console)")
 # Windows keeps the whole process table, at most this many entries, for ancestry only.
 LINEAGE_LIMIT = 16384
+# Console attachment belongs to this process, not to an update worker thread.
+WINDOWS_CONSOLE_LOCK = threading.Lock()
 
 
 @dataclasses.dataclass
@@ -264,7 +267,7 @@ def is_under(exe, root):
         return False
 
 
-def family(install, processes):
+def family(install, processes, include_descendants=True):
     active = os.path.normcase(os.path.realpath(install.path))
     root = install.package_root
     entrypoints = set()
@@ -289,7 +292,7 @@ def family(install, processes):
         muse_binary = install.app_id == "muse-code" and os.path.normcase(pathlib.Path(process.exe).name).startswith("muse-bin-") and pathlib.Path(process.exe).parent == install.path.parent
         if exact or owned_package or node_module or muse_binary:
             values.append(process)
-    if install.manager == "npm":
+    if install.manager == "npm" and include_descendants:
         pids = {item.pid for item in values}
         while True:
             children = [item for item in processes if item.pid not in pids and item.ppid in pids]
@@ -653,12 +656,13 @@ def terminate_cli(install, targets, grace=5):
         # CTRL_BREAK is attempted only for each selected process group; unlike
         # console-wide CTRL_C it cannot target the parent PowerShell/Terminal.
         kernel = ctypes.windll.kernel32
-        kernel.FreeConsole()
-        for item in live:
-            if kernel.AttachConsole(item.pid):
-                kernel.SetConsoleCtrlHandler(None, True)
-                kernel.GenerateConsoleCtrlEvent(1, item.pid)
-                kernel.FreeConsole()
+        with WINDOWS_CONSOLE_LOCK:
+            kernel.FreeConsole()
+            for item in live:
+                if kernel.AttachConsole(item.pid):
+                    kernel.SetConsoleCtrlHandler(None, True)
+                    kernel.GenerateConsoleCtrlEvent(1, item.pid)
+                    kernel.FreeConsole()
     else:
         for item in live:
             safe_signal(item, 15)

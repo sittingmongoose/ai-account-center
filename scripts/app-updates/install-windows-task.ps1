@@ -11,6 +11,6 @@ $arguments = '"' + $helper + '" --apply --platform windows --task-child'
 $action = New-ScheduledTaskAction -Execute $python -Argument $arguments
 $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
 # -Hidden keeps the whole update flow out of the default Task Scheduler view.
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -Hidden
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 35) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -Hidden
 Register-ScheduledTask -TaskName 'CCS App Updates' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 Write-Output 'CCS App Updates task registered; no updates were run.'

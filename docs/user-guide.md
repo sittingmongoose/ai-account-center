@@ -322,18 +322,23 @@ skipped; per-app readiness checks tell unknown from failure, and an
 unreachable computer reports Unknown rows. Only CLI instances running in a
 terminal are stopped and reopened idle; background sessions (T3's agents, a
 `claude -p` from a script, services) are never stopped and keep their version
-until they start again. The Antigravity CLI is held at the newest reviewed
+until they start again, except Windows Codex CLI: when a newer npm version is
+verified, Update apps forces its package processes to stop so locked files can
+be replaced. Background work is not replayed; its result says to start those
+sessions again. The Antigravity CLI is held at the newest reviewed
 build, so switching never meets an unreviewed version. No update runs merely
 by opening the dashboard or reading its status. See
 [app update setup and behavior](../scripts/app-updates/README.md).
 
-**Computers run at the same time.** Each computer updates its own apps one at
-a time, with live progress per computer. A computer that does not finish
-within its time limit (18 minutes) reports its remaining apps as Unknown, so
+**Computers run at the same time.** Each computer runs up to four independent
+updates together, with live progress. Shared installers and Codex runtime work
+stay serialized; Codex Desktop follows its CLI, and T3 waits for every other
+app. A computer that does not finish within its time limit (33 minutes)
+reports its remaining apps as Unknown, so
 one stuck computer never holds the others back.
 
 **Cancel** is offered while a run is going. It is acknowledged at once and
-nothing running is killed: each computer finishes the app it is on now, then
+nothing running is killed: each computer finishes its active apps, then
 reports every app it has not started as skipped ("Skipped: cancelled"). A
 computer still preparing its helper skips all its apps. Cancel never promises
 an undo.

@@ -1147,7 +1147,8 @@ class DesktopWaitTests(unittest.TestCase):
                 mock.patch.object(desktop, 'msix_info', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.7945.0', 'ProcessorArchitecture': 'x64'}), \
                 mock.patch.object(desktop, 'add_appx_package', side_effect=common.UpdateFailure('quit_first')):
             value = desktop.update_desktop(install)
-        self._assert_quit_first(value, '26.930.3748.0')
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
+                         ('action_required', 'quit_first', '26.930.3748.0', True))
 
     def test_windows_not_running_installs_without_relaunching_anything(self):
         install = self._windows_codex()
@@ -1708,6 +1709,13 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         install.package_family = None
         self.assert_quit_first_untouched(desktop.update_desktop(install))
         self.assertNotIn('download', self.events)
+
+    def test_unreadable_instance_is_checked_before_download_when_range_manifest_is_unavailable(self):
+        self.run_main()
+        with mock.patch.object(desktop, 'remote_msix_identity', return_value=None), \
+                mock.patch.object(desktop, 'process_package', side_effect=common.UpdateFailure('restart_context')):
+            self.assert_quit_first_untouched(desktop.update_desktop(self.package(self.old_root, self.OLD)))
+        self.assertEqual(self.events, [])
 
     def test_install_failure_after_close_reopens_the_old_version_and_reports_failed(self):
         self.use('claude-desktop')
@@ -2530,24 +2538,33 @@ class T3SessionTests(_SessionTables):
         stop.assert_not_called(); restart.assert_not_called()
         self.assertEqual((value['status'], value['messageCode']), ('current', 'current'))
 
-    def test_windows_npm_codex_used_by_t3_is_in_use_and_nothing_changes(self):
+    def test_windows_npm_codex_forces_only_package_holders_and_never_t3(self):
         npm = self.home / 'AppData/Roaming/npm'
         install = common.Install('codex-cli', 'windows', npm / 'codex.cmd', '0.153.4', 'npm', package_root=npm / 'node_modules/@openai/codex')
         app = self.home / 'AppData/Local/Programs/t3code/T3 Code (Nightly).exe'
         script = str(npm / 'node_modules/@openai/codex/bin/codex.js')
         table = [_row(23628, 66232, app), _row(48880, 23628, app), _row(52000, 48880, '/fixture/nodejs/node.exe', ['node.exe', script, 'app-server'])]
-        value, installer, stop, restart = self.update(install, table, refreshed='0.160.0')
-        installer.assert_not_called(); stop.assert_not_called(); restart.assert_not_called()
-        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted'], value['version']), ('action_required', 'in_use', False, '0.153.4'))
+        table.append(_row(52001, 52000, '/fixture/python.exe', ['python.exe', 'user-work.py']))
+        value, installer, stop, restart = self.update(install, table, refreshed='0.160.0', registry='0.160.0')
+        installer.assert_called_once()
+        self.assertEqual({p.pid for call in stop.call_args_list for p in call.args[1]}, {52000})
+        self.assertEqual([call.args[1] for call in restart.call_args_list], [[]])
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted'], value['version']), ('updated', 'codex_sessions_stopped', True, '0.160.0'))
         # Already current on npm: nothing to replace, so it is simply current.
         value, installer, stop, _ = self.update(install, table, refreshed='0.153.4', registry='0.153.4')
         installer.assert_not_called(); stop.assert_not_called()
         self.assertEqual((value['status'], value['updateAttempted']), ('current', False))
-        # A user's own terminal Codex beside it is never stopped for an install that cannot run.
+        # A terminal reopens idle; neither T3 nor arbitrary background tools stop.
         user = _row(61000, 60000, '/fixture/nodejs/node.exe', ['node.exe', script])
-        value, installer, stop, _ = self.update(install, table + [user], refreshed='0.160.0')
-        installer.assert_not_called(); stop.assert_not_called()
-        self.assertEqual(value['messageCode'], 'in_use')
+        value, installer, stop, restart = self.update(install, table + [user], refreshed='0.160.0', registry='0.160.0')
+        installer.assert_called_once()
+        self.assertEqual({p.pid for call in stop.call_args_list for p in call.args[1]}, {52000, 61000})
+        self.assertEqual([p.pid for p in restart.call_args.args[1]], [61000])
+        self.assertEqual(value['messageCode'], 'codex_sessions_stopped')
+        # A registry outage must not interrupt a busy session for an unknown target.
+        value, installer, stop, restart = self.update(install, table, registry=None)
+        installer.assert_not_called(); stop.assert_not_called(); restart.assert_not_called()
+        self.assertEqual((value['status'], value['messageCode']), ('unknown', 'readiness_unknown'))
 
 
 class BackgroundSessionTests(_SessionTables):
@@ -2610,18 +2627,26 @@ class BackgroundSessionTests(_SessionTables):
             self.assertIsNone(updater.check_readiness(self.claude('ubuntu')))
         check.assert_called_once_with('ubuntu', [])
 
-    def test_windows_npm_codex_with_a_headless_session_is_in_use(self):
+    def test_windows_npm_codex_forces_headless_sessions_without_replaying_work(self):
         npm = self.home / 'AppData/Roaming/npm'
         install = common.Install('codex-cli', 'windows', npm / 'codex.cmd', '0.153.4', 'npm', package_root=npm / 'node_modules/@openai/codex')
         script = str(npm / 'node_modules/@openai/codex/bin/codex.js')
         table = [_row(53000, 52999, '/fixture/nodejs/node.exe', ['node.exe', script, 'exec', 'review'])]
-        value, installer, stop, restart = self.update(install, table, refreshed='0.160.0')
-        installer.assert_not_called(); stop.assert_not_called(); restart.assert_not_called()
-        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('action_required', 'in_use', False))
-        # With a terminal Codex beside it, still nothing is stopped or installed.
-        value, installer, stop, _ = self.update(install, table + [_row(61000, 60000, '/fixture/nodejs/node.exe', ['node.exe', script])], refreshed='0.160.0')
-        installer.assert_not_called(); stop.assert_not_called()
-        self.assertEqual(value['messageCode'], 'in_use')
+        value, installer, stop, restart = self.update(install, table, refreshed='0.160.0', registry='0.160.0')
+        installer.assert_called_once()
+        self.assertEqual({p.pid for call in stop.call_args_list for p in call.args[1]}, {53000})
+        self.assertEqual([call.args[1] for call in restart.call_args_list], [[]])
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('updated', 'codex_sessions_stopped', True))
+        # A terminal Codex beside it reopens independently of the headless work.
+        value, installer, stop, restart = self.update(install, table + [_row(61000, 60000, '/fixture/nodejs/node.exe', ['node.exe', script])], refreshed='0.160.0', registry='0.160.0')
+        installer.assert_called_once()
+        self.assertEqual({p.pid for call in stop.call_args_list for p in call.args[1]}, {53000, 61000})
+        self.assertEqual([p.pid for p in restart.call_args.args[1]], [61000])
+        self.assertEqual(value['messageCode'], 'codex_sessions_stopped')
+        value, installer, stop, restart = self.update(install, table, registry='0.160.0', perform={'side_effect': common.UpdateFailure()})
+        installer.assert_called_once()
+        self.assertEqual((value['status'], value['messageCode']), ('failed', 'codex_force_failed'))
+        self.assertTrue(all(not call.args[1] for call in restart.call_args_list))
 
     def test_windows_chain_through_unlisted_processes_resolves_to_t3(self):
         install = self.claude('windows')

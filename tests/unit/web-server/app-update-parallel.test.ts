@@ -477,7 +477,8 @@ describe('the real Python helper with fake apps', () => {
           'u.check_readiness = lambda install: None',
           // The Antigravity update plan reads an official manifest; keep it offline here.
           'u.antigravity_plan = lambda install, reviewed: (None, True)',
-          'def fake(install, deadline, **_kwargs):',
+          'u.claude_current = lambda install: None',
+          'def fake(install, deadline, *args, **_kwargs):',
           '    time.sleep(0.3)',
           "    return c.result(install.app_id, install.platform, 'current', '1.0.0', '1.0.0', 'native', attempted=True)",
           'u.update_cli = fake',
@@ -492,11 +493,14 @@ describe('the real Python helper with fake apps', () => {
       );
       const events: Array<Record<string, unknown>> = [];
       let cancel: () => void = () => {};
+      let cancelSent = false;
       const control: HostRunControl = {
         onEvent: (event) => {
           events.push(event);
-          if (event.event === 'result' && events.filter((e) => e.event === 'result').length === 1)
+          if (event.event === 'app' && event.phase === 'updating' && !cancelSent) {
+            cancelSent = true;
             cancel();
+          }
         },
         setCancel: (handler) => {
           cancel = handler;
@@ -514,8 +518,8 @@ describe('the real Python helper with fake apps', () => {
       expect(rows).toHaveLength(APPS.length);
       expect(rows[0].status).toBe('current');
       const skippedRows = rows.filter((value) => value.status === 'skipped');
-      // The app already started when the cancel landed may finish; nothing after it starts.
-      expect(skippedRows.length).toBeGreaterThanOrEqual(5);
+      // Up to four active apps finish; queued apps and T3 are skipped.
+      expect(skippedRows.length).toBeGreaterThanOrEqual(6);
       expect(skippedRows.every((value) => value.messageCode === 'skipped_cancelled')).toBe(true);
       expect(rows.every((value) => ['current', 'skipped'].includes(value.status))).toBe(true);
       expect(Date.now() - t0).toBeLessThan(2000);

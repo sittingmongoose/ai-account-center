@@ -14,18 +14,20 @@ import re
 import shutil
 import stat
 import sys
+import threading
 import time
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from app_update_common import (
     APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
-    powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, write_private_json,
+    powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, cli_instances, family, scan, terminate_cli
 from app_update_terminal import check_terminal, restart_cli
 from app_update_t3 import detect_t3, update_t3
-from app_update_zcode import detect_adapters, detect_zcode, update_adapters, update_zcode
+from app_update_zcode import detect_adapters, detect_zcode, update_adapters, update_zcode, ubuntu_unit_busy
 
 CLI_NAMES = {"antigravity-cli": "agy", "muse-code": "muse", "omp": "omp", "codex-cli": "codex", "claude-code": "claude"}
 # Apps with their own verified update flow; ZCode and the ACP adapters never stop a T3 session.
@@ -606,7 +608,16 @@ def update_cli(install, deadline, restart_managed=False):
     changed = False
     pre_stopped = False
     pre_forced = 0
+    forced_background = False
+    newest = None
     pending = pathlib.Path.home() / ".ccs/app-updates" / (install.app_id + "-pending-restart.json")
+
+    def outcome(row):
+        if forced_background:
+            row["messageCode"] = "codex_force_failed" if row["status"] in ("failed", "restart_failed") else "codex_sessions_stopped"
+            row["forcedStops"] = max(row.get("forcedStops", 0), pre_forced)
+        return row
+
     try:
         if not before:
             raise UpdateFailure("version_unknown")
@@ -658,28 +669,45 @@ def update_cli(install, deadline, restart_managed=False):
             # T3's muse-acp adapter hosts `muse serve` from this folder: never stop or restart it.
             contexts, targets, background = [], [], []
         else:
-            # Only terminal instances are stopped and reopened. Background sessions
-            # (T3's, scripts', services') are never stopped or relaunched and keep
-            # running their current files through the update.
+            # Terminal instances reopen idle. Background sessions keep running,
+            # except the explicitly forced Windows npm Codex update below.
             contexts, targets, background = cli_instances(install, processes)
         check_terminal(install.platform, contexts)
         if install.manager == "npm" and install.platform == "windows":
-            if (contexts or background) and npm_view_latest(install) == before:
+            newest = npm_view_latest(install) if contexts or background else None
+            if newest and npm_version_key(newest) <= npm_version_key(before):
                 # Already current: never stop running sessions for a no-op.
                 # Anything mapped is running, so no stale marker can matter.
                 if contexts:
                     pending.unlink(missing_ok=True)
                 return result(install.app_id, install.platform, "current", before, before, install.manager, attempted=False)
-            if background:
+            if background and install.app_id == "codex-cli" and not newest:
+                # Unknown registry metadata is no reason to interrupt work.
+                return result(install.app_id, install.platform, "unknown", before, before, install.manager, "readiness_unknown")
+            if background and install.app_id != "codex-cli":
                 # npm cannot replace files a running process holds open on
                 # Windows, and a background session is never stopped: change nothing.
                 return result(install.app_id, install.platform, "action_required", before, before, install.manager, "in_use")
-            if contexts:
+            if contexts or background:
                 # Windows cannot replace a running npm tree (locked files fail
                 # the install), so mapped instances stop before npm runs. The
                 # pending marker lets a later explicit click retry the restart
                 # if this one leaves processes down.
                 write_private_json(pending, {"version": before})
+                # Explicit Update apps forces only this installed Codex npm
+                # family off Windows' locked files, including T3's children.
+                # Never stop T3 itself or replay background work arguments.
+                if install.app_id == "codex-cli":
+                    latest_processes = scan(install.platform)
+                    contexts, targets, background = cli_instances(install, latest_processes)
+                    check_terminal(install.platform, contexts)
+                    # A Codex subprocess can run arbitrary user tools. Only
+                    # direct package file holders qualify for a forced stop;
+                    # ancestry alone never makes background work a target.
+                    holders = {item.pid for item in family(install, latest_processes, include_descendants=False)}
+                    forced = [item for item in background if item.pid in holders]
+                    forced_background = bool(forced)
+                    targets = [*targets, *forced]
                 try:
                     pre_forced = terminate_cli(install, targets)
                 except UpdateFailure:
@@ -688,12 +716,14 @@ def update_cli(install, deadline, restart_managed=False):
                         pending.unlink(missing_ok=True)
                     except (UpdateFailure, OSError):
                         pass
-                    return result(install.app_id, install.platform, "failed", before, before, install.manager, "restart_context", False)
+                    return outcome(result(install.app_id, install.platform, "failed", before, before, install.manager, "restart_context", False))
                 pre_stopped = True
         attempted = True
         perform_cli_update(install, deadline)
         refreshed = detect_cli(install.app_id, install.platform)
         if refreshed is None or not refreshed.version:
+            raise UpdateFailure("version_unknown")
+        if newest and npm_version_key(refreshed.version) < npm_version_key(newest):
             raise UpdateFailure("version_unknown")
         marker_version = None
         try:
@@ -715,10 +745,10 @@ def update_cli(install, deadline, restart_managed=False):
                     sessions = restart_cli(refreshed, contexts)
                 except (UpdateFailure, OSError):
                     write_private_json(pending, {"version": refreshed.version})
-                    return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", True)
+                    return outcome(result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", True))
                 value = result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True, restarted=len(contexts))
                 value.update(restartTargets=sessions, forcedStops=pre_forced)
-                return value
+                return outcome(value)
             if marker_version == before:
                 # Stale pre-stop bookkeeping from an earlier run. Dropping it
                 # keeps a later run from reporting "updated" for a version
@@ -731,26 +761,26 @@ def update_cli(install, deadline, restart_managed=False):
         try:
             sessions = restart_cli(refreshed, contexts)
         except (UpdateFailure, OSError):
-            return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", True)
+            return outcome(result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", True))
         # Background sessions keep the previous version until they are started again.
         code = "background_sessions_kept" if background else None
         value = result(install.app_id, install.platform, "updated", before, refreshed.version, install.manager, code, attempted=True, restarted=len(contexts))
         value.update(restartTargets=sessions, forcedStops=forced)
         pending.unlink(missing_ok=True)
-        return value
+        return outcome(value)
     except UpdateFailure as error:
         if changed:
-            return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", attempted)
+            return outcome(result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", attempted))
         if pre_stopped:
             relaunch_after_failed_install(install, contexts, pending)
         code = "update_failed" if error.code == "download_blocked" else error.code
-        return result(install.app_id, install.platform, "failed", before, before, install.manager, code, attempted)
+        return outcome(result(install.app_id, install.platform, "failed", before, before, install.manager, code, attempted))
     except Exception:
         if changed:
-            return result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", attempted)
+            return outcome(result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", attempted))
         if pre_stopped:
             relaunch_after_failed_install(install, contexts, pending)
-        return result(install.app_id, install.platform, "failed", before, before, install.manager, "update_failed", attempted)
+        return outcome(result(install.app_id, install.platform, "failed", before, before, install.manager, "update_failed", attempted))
 
 
 def relaunch_after_failed_install(install, contexts, pending):
@@ -794,53 +824,90 @@ def check_readiness(install):
 
 
 # One computer's whole run; apps not started by then report a timeout row.
-HOST_DEADLINE_SECONDS = 15 * 60
+HOST_DEADLINE_SECONDS = 30 * 60
+MAX_PARALLEL_UPDATES = 4
+
+
+def update_resources(install):
+    """Reserve shared installers and Codex's shared stop/start runtime per computer."""
+    if install is None:
+        return set()
+    resources = set()
+    if install.manager == "npm" or install.app_id == "t3-acp-adapters" or (install.app_id == "zcode" and install.platform == "ubuntu"):
+        resources.add("npm")
+    if install.app_id in ("codex-cli", "codex-desktop"):
+        resources.add("codex")
+    if install.manager in ("apt", "msix"):
+        resources.add(install.manager)
+    return resources
 
 
 def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
-    """Check and update every app on this computer, one installer at a time.
+    """Run independent updates together; serialize shared installers and restart T3 last.
 
     emit(event) receives {"event": "app", ...} before each app's check and
     update, and {"event": "result", ...} as soon as its row is known, so the
-    dashboard can show live progress. cancelled() is polled between apps: once
-    true, every app not yet started is reported as skipped. agy_reviewed is the
+    dashboard can show live progress. Events and Windows progress-file writes
+    are serialized. The displayed app returns to another active app when the
+    displayed one finishes. Cancellation skips work that has not started.
+    agy_reviewed is the
     Antigravity CLI's reviewed version set (None: unknown, so a managed
     switching installation updates idle-only).
     """
     emit = emit or (lambda event: None)
     cancelled = cancelled or (lambda: False)
-    results = []
+    results = {}
+    progress_lock = threading.RLock()
+    active = {}
+    visible = None
     deadline = time.monotonic() + HOST_DEADLINE_SECONDS
 
+    def phase(app_id, name):
+        nonlocal visible
+        with progress_lock:
+            active[app_id] = name
+            visible = app_id
+            emit({"event": "app", "appId": app_id, "phase": name})
+
     def report(row):
+        nonlocal visible
         # A Codex or Claude row names the stray copies beside its managed install.
         strays = getattr(installations.get(row.get("appId")), "strays", None)
         if strays:
             row["strays"] = strays
-        results.append(row)
-        emit({"event": "result", "result": row})
+        with progress_lock:
+            app_id = row["appId"]
+            results[app_id] = row
+            active.pop(app_id, None)
+            emit({"event": "result", "result": row})
+            if visible == app_id and active:
+                visible = next(reversed(active))
+                emit({"event": "app", "appId": visible, "phase": active[visible]})
 
     with execution_lock():
         emit({"event": "app", "appId": None, "phase": "checking"})
         installations = detect(platform)
-        # Update package apps first (ZCode and the ACP adapters among them),
-        # then the shared Codex daemon idle wait. T3 is last because its
-        # desktop/server replacement interrupts threads.
-        order = [app_id for app_id in APP_LABELS if app_id not in ("codex-cli", "t3-code")] + ["codex-cli", "t3-code"]
-        for app_id in order:
+        # Codex Desktop follows its CLI, and goes last when a shared installer
+        # requires serial work. ZCode and its adapters share one Ubuntu unit.
+        order = [app_id for app_id in APP_LABELS if app_id not in ("codex-desktop", "t3-code")] + ["codex-desktop", "t3-code"]
+        dependencies = {"codex-desktop": {"codex-cli"}, "t3-acp-adapters": {"zcode"}}
+
+        def update_one(app_id):
             install = installations[app_id]
             if cancelled():
-                report(result(app_id, platform, "skipped", code="skipped_cancelled"))
-            elif install is None:
-                report(result(app_id, platform, "not_installed"))
-            elif install.probe == "timeout":
-                report(result(app_id, platform, "unknown", None, None, install.manager, "check_timeout"))
-            elif install.probe is not None:
-                report(result(app_id, platform, "unknown", None, None, None, "readiness_unknown"))
-            elif time.monotonic() >= deadline:
-                report(result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout"))
-            else:
-                emit({"event": "app", "appId": app_id, "phase": "checking"})
+                return result(app_id, platform, "skipped", code="skipped_cancelled")
+            if install is None:
+                return result(app_id, platform, "not_installed")
+            if install.probe == "timeout":
+                return result(app_id, platform, "unknown", None, None, install.manager, "check_timeout")
+            if install.probe is not None:
+                return result(app_id, platform, "unknown", None, None, None, "readiness_unknown")
+            if time.monotonic() >= deadline:
+                return result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout")
+            if platform == "ubuntu" and ("npm" in update_resources(install) or app_id == "t3-code") and ubuntu_unit_busy():
+                return result(app_id, platform, "action_required", install.version, install.version, install.manager, "busy")
+            try:
+                phase(app_id, "checking")
                 restart_managed = False
                 if app_id == "antigravity-cli" and install.manager != "unsupported":
                     try:
@@ -849,35 +916,53 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                         # Unknown target: still update, idle-only.
                         finished, restart_managed = None, False
                     if finished is not None:
-                        report(finished)
-                        continue
+                        return finished
                 if app_id == "claude-code":
                     try:
                         newest = claude_current(install)
                     except Exception:
                         newest = None
                     if newest is not None:
-                        report(newest)
-                        continue
+                        return newest
                 gate = check_readiness(install)
                 if gate is not None:
                     status, code = gate
-                    report(result(app_id, platform, status, install.version, install.version, install.manager, code))
-                    continue
-                emit({"event": "app", "appId": app_id, "phase": "updating"})
+                    return result(app_id, platform, status, install.version, install.version, install.manager, code)
+                if cancelled():
+                    return result(app_id, platform, "skipped", code="skipped_cancelled")
+                phase(app_id, "updating")
                 if app_id.endswith("-desktop") or app_id in OWN_UPDATERS:
                     # A desktop app reports its long steps (a package download,
                     # then the install) so the page shows what it waits on.
-                    def phase(name, app_id=app_id):
-                        emit({"event": "app", "appId": app_id, "phase": name})
                     update = {"zcode": update_zcode, "t3-acp-adapters": update_adapters, "t3-code": update_t3}.get(app_id, update_desktop)
-                    try: report(update(install, deadline, phase))
-                    except Exception: report(result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed"))
-                elif app_id == "antigravity-cli":
-                    report(mark_unreviewed(update_cli(install, deadline, restart_managed=restart_managed), agy_reviewed))
-                else:
-                    report(update_cli(install, deadline))
-    return {"results": results}
+                    return update(install, deadline, lambda name: phase(app_id, name))
+                if app_id == "antigravity-cli":
+                    return mark_unreviewed(update_cli(install, deadline, restart_managed=restart_managed), agy_reviewed)
+                return update_cli(install, deadline)
+            except Exception:
+                return result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed")
+
+        pending, running = order[:-1].copy(), {}
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_UPDATES) as pool:
+            while pending or running:
+                reserved = set().union(*(resources for _, resources in running.values()))
+                for app_id in pending.copy():
+                    if len(running) >= MAX_PARALLEL_UPDATES:
+                        break
+                    resources = update_resources(installations[app_id])
+                    if dependencies.get(app_id, set()) - results.keys() or resources & reserved:
+                        continue
+                    pending.remove(app_id)
+                    running[pool.submit(update_one, app_id)] = (app_id, resources)
+                    reserved.update(resources)
+                if running:
+                    finished, _ = wait(running, return_when=FIRST_COMPLETED)
+                    for future in finished:
+                        running.pop(future)
+                        report(future.result())
+        # No T3 replacement or deferred restart can interrupt another worker.
+        report(update_one("t3-code"))
+    return {"results": [results[app_id] for app_id in order]}
 
 
 def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
@@ -943,9 +1028,9 @@ def windows_interactive_apply(emit=None, cancelled=None, agy_reviewed=None):
         if agy_reviewed is not None:
             request["agyReviewed"] = sorted(agy_reviewed)
         write_private_json(request_path, request)
-        task_command("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; Start-ScheduledTask -TaskName 'CCS App Updates'")
+        task_command("$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName 'CCS App Updates'; if($t.State -eq 'Running'){exit 3}; if($t.Settings.ExecutionTimeLimit -ne 'PT35M'){$t.Settings.ExecutionTimeLimit='PT35M'; $t | Set-ScheduledTask | Out-Null}; Start-ScheduledTask -TaskName 'CCS App Updates'")
         started = time.monotonic()
-        deadline, next_check = started + 16 * 60, started + 5
+        deadline, next_check = started + 31 * 60, started + 5
         relayed, cancel_sent = 0, False
         while (now := time.monotonic()) < deadline:
             if not cancel_sent and cancelled():

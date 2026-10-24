@@ -27,7 +27,7 @@ from app_update_processes import (
 # Desktop packages are hundreds of megabytes (the Codex MSIX is over 900 MB)
 # and its host links need minutes, not seconds. Still bounded, still verified.
 DESKTOP_DOWNLOAD_MAXIMUM = 2 * 1024 * 1024 * 1024
-DESKTOP_DOWNLOAD_TIMEOUT = 600
+DESKTOP_DOWNLOAD_TIMEOUT = 900
 DOWNLOAD_BLOCKED_RETRIES = 3
 # Claude's darwin packages live on the publisher's plain-CDN release feed;
 # the old claude.ai redirect answers 403 to every non-browser client.
@@ -432,7 +432,10 @@ def add_appx_package(package, timeout=600):
     is never emitted: a rejection for running apps maps to quit_first, while
     any other deployment failure stays update_failed.
     """
-    script = ("$ErrorActionPreference='Stop'; try { Add-AppxPackage -Path " + ps_quote(package)
+    # Windows can retain a package resource or start an app-owned process after
+    # our close scan. The target-only shutdown closes that race without stopping
+    # other packages that merely share a framework dependency.
+    script = ("$ErrorActionPreference='Stop'; try { Add-AppxPackage -ForceTargetApplicationShutdown -Path " + ps_quote(package)
               + "; Write-Output 'CCS_ADDAPPX_OK' } catch { Write-Output ('CCS_ADDAPPX_FAILED: ' + $_.Exception.ToString()) }")
     text = powershell(script, timeout=timeout)
     if "CCS_ADDAPPX_OK" in text.split():
@@ -626,7 +629,7 @@ def windows_replace(install, before, deploy, accepted, deadline=None):
         code = error.code if isinstance(error, UpdateFailure) else "update_failed"
         # A needs-closing rejection even after the close still asks the user to quit.
         if code == "quit_first":
-            return quit_first(install, before)
+            return result(app_id, "windows", "action_required", before, before, manager, code, True)
         return result(app_id, "windows", "failed", before, before, manager, code, True)
     try:
         restarted = reopen_windows(refreshed, plans)
@@ -686,9 +689,10 @@ def update_windows(install, phase=None, deadline=None):
             return result(install.app_id, "windows", "failed", before, before, install.manager, "package_mismatch")
         if available and version_tuple(available) <= version_tuple(before):
             return result(install.app_id, "windows", "current", before, before, install.manager)
-        if available:
-            # Read-only: an instance that could not be reopened answers before any download.
-            windows_capture(install)
+        # Capture even if the optional range-manifest probe failed: the newer
+        # release feed already warrants the download. An unreopenable instance
+        # must answer before spending minutes downloading the whole package.
+        windows_capture(install)
     except UpdateFailure as error:
         if error.code == "quit_first":
             return quit_first(install, before)

@@ -13,8 +13,11 @@ Nas1 is a second Ubuntu computer reached as `nas1-agent` (see [Nas1](#nas1-the-f
 
 ## Every computer at once, and never stuck
 
-Ubuntu, Mac, Windows and Nas1 run **at the same time**; each computer still
-updates its own apps one at a time (one installer per host). The job ends when
+Ubuntu, Mac, Windows and Nas1 run **at the same time**; each computer runs up to
+four independent app updates together. Shared npm, apt and MSIX installers are
+serialized, as are Codex CLI/Desktop runtime operations. ZCode finishes before
+its adapters; Codex CLI finishes before Codex Desktop, which goes last when an
+installer needs serial work. T3 waits for every other app to finish. The job ends when
 the slowest computer finishes, so a busy or unreachable host never holds the
 others back. Four computers x ten apps give 40 result rows. Per-computer
 progress is live: the helper prints one JSON line per event
@@ -24,7 +27,7 @@ progress is live: the helper prints one JSON line per event
 dashboard gets exactly one document. Windows relays its task child's progress
 through a nonce-bound private file. A cancel is a `cancel` line on the helper's
 stdin (forwarded over ssh; Windows forwards it to its task child through a
-nonce-bound cancel file): the app running at that moment finishes and every app
+nonce-bound cancel file): apps running at that moment finish and every app
 not yet started reports `skipped`.
 
 Nothing can wait forever:
@@ -39,15 +42,18 @@ Nothing can wait forever:
   stalled the whole job on a VM where Codex is always busy); a busy Codex reports
   `action_required` / `codex_busy` and, for the CLI, keeps its pending marker so
   the next click restarts the daemon on the new version once Codex is idle;
-- each helper stops starting apps after 15 minutes (`timeout` rows), and the
-  dashboard stops a computer after 18 minutes (helper sync included): every app
+- each helper stops starting apps after 30 minutes (`timeout` rows), and the
+  dashboard stops a computer after 33 minutes (helper sync included): every app
   without a result then reads `unknown` / `host_timeout` ("Timed out") while
   rows that did arrive keep their real results. The Windows coordinator waits
-  16 minutes and keeps completed rows when it times out; only unanswered apps
+  31 minutes and keeps completed rows when it times out; only unanswered apps
   become `unknown` / `host_timeout`. A still-running scheduled task reports `busy`.
   Desktop downloads and Windows installations share the remaining helper budget
-  with 90 seconds reserved for recovery. The Windows task limit is 20 minutes,
-  longer than the coordinator wait.
+  with 90 seconds reserved for recovery. Desktop downloads allow 15 minutes.
+  The Windows task limit is 35 minutes, longer than the coordinator wait;
+  an explicit update also migrates an existing task to that limit, preserving
+  its interactive principal. A timed-out wait for Ubuntu's adapter oneshot
+  keeps npm and T3 blocked until the unit is verified to have finished.
 
 The Python helper defaults to **read-only inventory**. Only `--apply` updates or
 restarts apps. It detects the active installation, skips absent apps, and returns
@@ -162,7 +168,7 @@ It holds both the per-user `helper-update.lock` and that dashboard lock through
 the final check, restart and health verification before releasing them. It
 restarts **only `t3code.service`**;
 `ccs-dashboard.service` is never stopped or restarted. A new update job delays
-the restart again. The detached worker has an 18-minute wait limit and verifies
+the restart again. The detached worker has a 35-minute wait limit and verifies
 HTTP health after restarting, then checks that the running server reports the
 installed version. T3 migrates its database before it listens, which took about
 11 minutes for one added index on a large install's 35 GB state, so the health wait lasts up
@@ -213,11 +219,10 @@ rows ran it in this job, `pending` until the worker starts it, then `started` or
 `failed`; `absent` without the unit), the pruned versions and whether a reload ran.
 The detached worker also writes one line to its journal.
 
-Hosts still run in parallel. Installers stay sequential within each host:
-T3's replacement closes its bundled server/process family, Windows installers
-can hold executable/package files, and Codex already shares a daemon with its
-desktop. Overlapping those operations would weaken stop/restart and rollback
-guarantees.
+Independent installers run concurrently within each host. Resource reservations
+keep shared package writers and Codex runtime operations sequential; T3's
+replacement waits for all workers. Progress writes and Windows console control
+are serialized too.
 
 Windows Muse is detected at `%LOCALAPPDATA%\Programs\muse\muse.cmd`. Meta's installer
 writes only that file; a hand-added extensionless `muse` shim beside it is not a
@@ -348,7 +353,10 @@ that package like any other MSIX: its manifest must name the installed identity,
 publisher and this architecture and exactly the version the feed names (otherwise
 `failed` / `package_mismatch`, before anything closes). The download finishes
 while Codex keeps running, and Codex then closes, installs through
-`Add-AppxPackage` (which checks the signature) and reopens. Only a URL inside
+`Add-AppxPackage -ForceTargetApplicationShutdown` (which checks the signature)
+and reopens. The target-only flag closes remaining processes belonging to that
+package without forcing other packages that share its dependencies to stop.
+Only a URL inside
 that version's own release folder is accepted. When neither feed names a newer
 version the row is `current`, and nothing is downloaded or closed; Codex never
 uses the unversioned `ChatGPT-x64.msix`. When both feeds are unreadable it is
@@ -436,9 +444,11 @@ Update all stops and reopens a CLI process only when it is a **terminal
 instance**: a main process of the app (one whose parent is not part of the app)
 that is attached to a terminal the user has, so an idle copy can be reopened in
 a terminal. Every other running CLI process is a **background session** and is
-**never stopped, relaunched or judged**: T3's agent sessions, a `claude -p` or
+normally **never stopped, relaunched or judged**: T3's agent sessions, a `claude -p` or
 `codex exec` from a script or cron job, another Agent SDK or ACP harness, a
-service. It has no terminal to come back to. Children of either kind go with it. npm launch selection requires node, bun or
+service. Windows npm Codex is the force-update exception described below; its
+background work is never replayed. Other sessions have no terminal to come back
+to. Children of either kind go with it. npm launch selection requires node, bun or
 the CLI executable plus a declared package bin/main entrypoint (or Codex's fixed
 `bin/codex.js`), or an executable inside that package. Editors merely opening a
 package file are excluded. Mac process inventory filters by this user at the
@@ -494,9 +504,14 @@ the Mac writes `~/.local/share/claude/versions/<version>` and re-points its
 link, and on Windows its updater moves the running `~/.local/bin/claude.exe`
 aside (`claude.exe.old.<ms>.<pid>`) before placing the new one, as it must for
 its own running copy. Windows npm cannot replace a tree a running process holds
-open, so Codex CLI on Windows with a background session reports
-`action_required` / `in_use`, installs nothing and stops nothing, not even the
-user's own terminal Codex. Windows Muse keeps its own rule (never stopped). The
+open. For Windows Codex CLI, Update apps first verifies a newer npm target,
+then forces only same-user processes executing files from the detected package
+or its known entrypoints to stop, rechecking creation identities. T3 itself and
+arbitrary child tools are excluded. Terminal instances reopen idle; background
+commands are never replayed. The result explicitly says background sessions were
+stopped, including when installation fails. A current/newer installed version
+stays running; an unknown target with background work reports Unknown and stops
+nothing. Windows Muse keeps its own rule (never stopped). The
 Ubuntu Codex bridge still decides on its own when a `codex app-server` runs.
 Background sessions never fail the readiness check, and a relaunch is verified
 by counting only main processes that were not already running before it.
@@ -738,14 +753,16 @@ never retry an interrupted job.
 
 `action_required` is never a failure: the job completes and the row tells the
 user exactly what to do. ZCode and the ACP adapters report `in_use` while a T3
-session uses them: nothing was changed, and Update apps finishes them later; so does
-Codex CLI on Windows (npm) while a background session (T3's or any other) runs it. Codex and Claude desktops on the Mac that are running report
+session uses them: nothing was changed, and Update apps finishes them later.
+ZCode's official release-page lookup retries up to three times within 60 seconds
+and a 4 MiB body limit; exhausted discovery reports `zcode_release_unavailable`
+without starting an installer. Codex and Claude desktops on the Mac that are running report
 `quit_first` (they are never asked to quit): nothing is swapped while anything
 runs, and the next click after the user quits updates cleanly. On Windows they
 report `quit_first` only when an instance's start cannot be reproduced (see
 above) or an MSIX deployment is still rejected for apps that need closing. Codex/Claude desktop downloads refused by a bot challenge (HTTP 403 or a
 challenge page) report `check_in_app` after bounded retries. Desktop downloads
-allow 2 GiB and 10-minute timeouts; Codex/Claude Mac desktops are never
+allow 2 GiB and 15-minute timeouts; Codex/Claude Mac desktops are never
 force-stopped, Windows ones only after the bounded WM_CLOSE wait (Ubuntu desktops
 keep the previous terminate-and-relaunch flow).
 Claude's Mac update reads the publisher's own `RELEASES.json` feed on
