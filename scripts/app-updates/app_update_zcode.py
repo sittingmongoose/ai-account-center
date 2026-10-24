@@ -191,6 +191,10 @@ def read_bounded(url, prefix, limit, deadline=None):
         with urllib.request.urlopen(request, timeout=min(20, remaining)) as response:
             if not response.geturl().startswith(prefix):
                 raise UpdateFailure()
+            # HTTPResponse.read(n) can receive repeatedly inside one call,
+            # resetting the socket timeout on every packet. read1 performs at
+            # most one underlying receive so we can check the total deadline.
+            read = response.read1 if callable(getattr(type(response), "read1", None)) else response.read
             chunks, total = [], 0
             while total <= limit:
                 remaining = deadline - time.monotonic()
@@ -201,7 +205,9 @@ def read_bounded(url, prefix, limit, deadline=None):
                 sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
                 if sock is not None:
                     sock.settimeout(min(20, remaining))
-                chunk = response.read(min(64 * 1024, limit + 1 - total))
+                chunk = read(min(64 * 1024, limit + 1 - total))
+                if time.monotonic() >= deadline:
+                    raise UpdateFailure("timeout")
                 if not chunk:
                     break
                 chunks.append(chunk)
@@ -209,6 +215,8 @@ def read_bounded(url, prefix, limit, deadline=None):
             raw = b"".join(chunks)
     except UpdateFailure:
         raise
+    except TimeoutError:
+        raise UpdateFailure("timeout") from None
     except Exception:
         raise UpdateFailure() from None
     if len(raw) > limit:
@@ -216,12 +224,12 @@ def read_bounded(url, prefix, limit, deadline=None):
     return raw
 
 
-def latest_zcode(key):
+def latest_zcode(key, deadline=None):
     """The newest version the official page lists for this platform, compared numerically like t3-acp-update."""
     # A page/connection failure can fail Nas1 before its updater even runs.
     # Retry only this bounded official lookup; never call an old
     # installed version current when every lookup fails.
-    deadline = time.monotonic() + 60
+    deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 60)
     for attempt in range(PAGE_ATTEMPTS):
         try:
             listed = re.findall(rb"releases/(\d{1,6}\.\d{1,6}\.\d{1,6})/" + re.escape(key.encode("ascii")) + rb"/latest\.yml",
@@ -442,7 +450,7 @@ def ubuntu_unit_busy():
 
 def zcode_ubuntu(install, deadline, phase, state):
     before = install.version
-    if version_tuple(latest_zcode(feed_key("ubuntu"))) <= version_tuple(before):
+    if version_tuple(latest_zcode(feed_key("ubuntu"), deadline=deadline)) <= version_tuple(before):
         return result("zcode", "ubuntu", "current", before, before, install.manager)
     if not acp_unit_present():
         raise UpdateFailure("unsupported")
@@ -465,7 +473,7 @@ def zcode_ubuntu(install, deadline, phase, state):
 def zcode_mac(install, deadline, phase, state):
     before = install.version
     key = feed_key("mac")
-    newest = latest_zcode(key)
+    newest = latest_zcode(key, deadline=deadline)
     if version_tuple(newest) <= version_tuple(before):
         return result("zcode", "mac", "current", before, before, install.manager)
     # Answered before any download: the Mac never quits ZCode and a T3 session is never stopped.
@@ -516,7 +524,7 @@ def swap_mac(install, staged, version, deadline, state):
 def zcode_windows(install, deadline, phase, state):
     before = install.version
     key = feed_key("windows")
-    newest = latest_zcode(key)
+    newest = latest_zcode(key, deadline=deadline)
     if version_tuple(newest) <= version_tuple(before):
         return result("zcode", "windows", "current", before, before, install.manager)
     if t3_sessions(scan("windows")):

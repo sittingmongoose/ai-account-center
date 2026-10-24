@@ -1141,14 +1141,14 @@ class DesktopWaitTests(unittest.TestCase):
         self.assertEqual(value['status'], 'current')
         fetch.assert_not_called()
 
-    def test_windows_closed_app_needing_close_at_deploy_reports_quit_first(self):
+    def test_windows_closed_app_still_in_use_reports_an_attempted_package_hold(self):
         install = self._windows_codex()
         with mock.patch.object(desktop, 'download'), \
                 mock.patch.object(desktop, 'msix_info', return_value={'Name': 'OpenAI.Codex', 'Publisher': 'CN=fixture', 'Version': '26.930.7945.0', 'ProcessorArchitecture': 'x64'}), \
                 mock.patch.object(desktop, 'add_appx_package', side_effect=common.UpdateFailure('quit_first')):
             value = desktop.update_desktop(install)
         self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
-                         ('action_required', 'quit_first', '26.930.3748.0', True))
+                         ('action_required', 'package_in_use', '26.930.3748.0', True))
 
     def test_windows_not_running_installs_without_relaunching_anything(self):
         install = self._windows_codex()
@@ -1726,7 +1726,10 @@ class WindowsDesktopReopenTests(unittest.TestCase):
                 self.run_main(['--user-data-dir=/fixture/Roaming/Claude-work'], packaged=False)
                 with mock.patch.object(desktop, 'add_appx_package', side_effect=common.UpdateFailure(code)):
                     value = desktop.update_desktop(self.package(self.old_root, self.OLD))
-                self.assertEqual((value['status'], value['messageCode'], value['version']), (status, code, self.OLD))
+                self.assertEqual((value['status'], value['messageCode'], value['version']), (status, 'package_in_use' if code == 'quit_first' else code, self.OLD))
+                self.assertTrue(value['updateAttempted'])
+                self.assertEqual(value['restartedProcesses'], 2)
+                self.assertEqual(value['forcedStops'], self.forced)
                 old_exe = str(self.old_root / self.executable)
                 self.assertEqual(self.launches(), sorted([self.aumid_launch(), ([old_exe, '--user-data-dir=/fixture/Roaming/Claude-work'], str(self.old_root / 'app'))]))
                 self.assertEqual(self.events, ['download', 'close', 'launch', 'launch'])

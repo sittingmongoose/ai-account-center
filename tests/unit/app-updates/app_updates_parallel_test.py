@@ -1,6 +1,9 @@
 """Offline updater scheduling, metadata recovery and package-deployment regressions."""
 import contextlib
+import ctypes
+import http.client
 import pathlib
+import socket
 import sys
 import tempfile
 import threading
@@ -174,6 +177,23 @@ class ParallelUpdateTests(unittest.TestCase):
 
 
 class UpdateRecoveryTests(unittest.TestCase):
+    def test_new_background_session_after_unknown_registry_check_is_never_stopped(self):
+        with tempfile.TemporaryDirectory(prefix="aac-force-race-") as folder:
+            root = pathlib.Path(folder)
+            install = common.Install("codex-cli", "windows", root / "npm/codex.cmd", "1.0.0", "npm", package_root=root / "npm/node_modules/@openai/codex")
+            terminal = processes.Process(11, 0, 0, "/fixture/codex", "11")
+            background = processes.Process(22, 0, 0, "/fixture/codex", "22")
+            with mock.patch.object(pathlib.Path, "home", return_value=root), mock.patch.object(updater, "scan", return_value=[]), \
+                    mock.patch.object(updater, "cli_instances", side_effect=[([terminal], [terminal], []), ([terminal], [terminal], [background])]), \
+                    mock.patch.object(updater, "check_terminal"), mock.patch.object(updater, "npm_view_latest", return_value=None), \
+                    mock.patch.object(updater, "write_private_json") as marker, mock.patch.object(updater, "terminate_cli") as stop, \
+                    mock.patch.object(updater, "perform_cli_update") as install_package:
+                row = updater.update_cli(install, time.monotonic() + 60)
+            self.assertEqual((row["status"], row["messageCode"]), ("unknown", "readiness_unknown"))
+            stop.assert_not_called()
+            marker.assert_not_called()
+            install_package.assert_not_called()
+
     def test_zcode_recovers_a_transient_lookup_and_never_claims_current_after_failure(self):
         body = b"releases/3.16.3/linux-x64/latest.yml"
         with mock.patch.object(zcode, "read_bounded", side_effect=[common.UpdateFailure(), body]) as read, mock.patch.object(zcode.time, "sleep"):
@@ -192,9 +212,41 @@ class UpdateRecoveryTests(unittest.TestCase):
         with mock.patch.object(zcode, "read_bounded", side_effect=read) as fetch, \
                 mock.patch.object(zcode.time, "monotonic", side_effect=lambda: clock["now"]), mock.patch.object(zcode.time, "sleep") as sleep:
             with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
-                zcode.latest_zcode("linux-x64")
+                zcode.latest_zcode("linux-x64", deadline=105)
         fetch.assert_called_once()
+        self.assertEqual(fetch.call_args.kwargs["deadline"], 105)
         sleep.assert_not_called()
+
+    def test_zcode_dripping_http_body_cannot_reset_the_total_deadline(self):
+        reader, writer = socket.socketpair()
+        stop = threading.Event()
+        def drip():
+            try:
+                writer.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n")
+                for _ in range(40):
+                    if stop.wait(.02):
+                        return
+                    writer.sendall(b"x")
+            except OSError:
+                pass
+        thread = threading.Thread(target=drip)
+        thread.start()
+        response = http.client.HTTPResponse(reader, url=zcode.PAGE)
+        response.url = zcode.PAGE  # urllib sets this after constructing HTTPResponse.
+        try:
+            response.begin()
+            started = time.monotonic()
+            with mock.patch.object(zcode.urllib.request, "urlopen", return_value=response):
+                with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
+                    zcode.read_bounded(zcode.PAGE, "https://zcode.z.ai/", 1024, deadline=started + .12)
+            self.assertLess(time.monotonic() - started, .4, "a buffered read would wait for the entire 800 ms body")
+        finally:
+            stop.set()
+            response.close()
+            reader.close()
+            writer.close()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
 
     def test_parallel_windows_stops_do_not_interleave_console_attachment(self):
         state, operations = threading.local(), []
@@ -225,6 +277,53 @@ class UpdateRecoveryTests(unittest.TestCase):
         self.assertEqual([kind for kind, _ in operations], ["attach", "signal", "attach", "signal"])
         self.assertEqual(operations[0][1], operations[1][1])
         self.assertEqual(operations[2][1], operations[3][1])
+
+    def test_concurrent_windows_identity_read_and_forced_stop_share_a_stable_ctypes_signature(self):
+        # Use real ctypes argument conversion, not a Mock that accepts pointers
+        # to incompatible, newly-created local FILETIME classes.
+        barrier = threading.Barrier(2)
+        callback_type = ctypes.CFUNCTYPE(ctypes.c_int, *([ctypes.c_void_p] * 5))
+        def times_callback(handle, created, exited, system, user):
+            ctypes.cast(created, ctypes.POINTER(processes.WindowsFileTime)).contents.low = 1
+            return 1
+        native_times = callback_type(times_callback)
+        class Times:
+            @property
+            def argtypes(self):
+                return native_times.argtypes
+            @argtypes.setter
+            def argtypes(self, values):
+                native_times.argtypes = values
+                barrier.wait(2)
+            def __call__(self, *args):
+                return native_times(*args)
+        kernel = mock.Mock()
+        kernel.OpenProcess.return_value = 123
+        kernel.GetProcessTimes = Times()
+        kernel.GetExitCodeProcess.side_effect = lambda handle, status: (setattr(status._obj, "value", 259), 1)[-1]
+        kernel.TerminateProcess.return_value = 1
+        item = processes.Process(11, 0, 0, "/fixture/codex", "1")
+        install = common.Install("codex-cli", "windows", pathlib.Path(item.exe))
+        real_live = processes.live_contexts
+        errors, answers = [], []
+        def run(call):
+            try:
+                answers.append(call())
+            except Exception as error:
+                errors.append(error)
+        with mock.patch.object(processes.ctypes, "windll", types.SimpleNamespace(kernel32=kernel), create=True), \
+                mock.patch.object(processes, "live_contexts", side_effect=[[item], [item], [item], []]):
+            threads = [threading.Thread(target=run, args=(lambda: real_live("windows", [item]),)),
+                       threading.Thread(target=run, args=(lambda: processes.terminate_cli(install, [item], grace=0),))]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(3)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertIn([item], answers)
+        self.assertIn(1, answers)
+        kernel.TerminateProcess.assert_called_once()
 
     def test_msix_quiesces_only_the_target_package(self):
         with mock.patch.object(desktop, "powershell", return_value="CCS_ADDAPPX_OK") as command:

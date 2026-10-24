@@ -35,6 +35,11 @@ LINEAGE_LIMIT = 16384
 WINDOWS_CONSOLE_LOCK = threading.Lock()
 
 
+class WindowsFileTime(ctypes.Structure):
+    """One stable Win32 ABI type for concurrent identity checks and forced stops."""
+    _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
+
+
 @dataclasses.dataclass
 class Process:
     pid: int
@@ -682,10 +687,8 @@ def terminate_cli(install, targets, grace=5):
             if not handle:
                 raise UpdateFailure("restart_failed")
             try:
-                class FILETIME(ctypes.Structure):
-                    _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
-                created, exited, system, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
-                kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME)]
+                created, exited, system, user = WindowsFileTime(), WindowsFileTime(), WindowsFileTime(), WindowsFileTime()
+                kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(WindowsFileTime)] * 4
                 if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(system), ctypes.byref(user)) or str((created.high << 32) | created.low) != item.identity:
                     raise UpdateFailure("restart_failed")
                 if not ctypes.windll.kernel32.TerminateProcess(handle, 0):
@@ -714,16 +717,14 @@ def live_contexts(platform, contexts):
         kernel.OpenProcess.restype = wintypes.HANDLE
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        class FILETIME(ctypes.Structure):
-            _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
-        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME)]
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(WindowsFileTime)] * 4
         remaining = []
         for item in contexts:
             handle = kernel.OpenProcess(0x1000, False, item.pid)
             if not handle:
                 continue
             try:
-                created, exited, system, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+                created, exited, system, user = WindowsFileTime(), WindowsFileTime(), WindowsFileTime(), WindowsFileTime()
                 status = wintypes.DWORD()
                 if kernel.GetExitCodeProcess(handle, ctypes.byref(status)) and status.value == 259 and kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(system), ctypes.byref(user)) and str((created.high << 32) | created.low) == item.identity:
                     remaining.append(item)

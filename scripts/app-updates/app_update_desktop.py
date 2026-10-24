@@ -624,13 +624,16 @@ def windows_replace(install, before, deploy, accepted, deadline=None):
             raise UpdateFailure("version_unknown")
     except Exception as error:
         # Reopen from whatever package is registered now: the old one when the install failed.
+        reopened = 0
         with contextlib.suppress(Exception):
-            reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
+            reopened = reopen_windows(refreshed if refreshed is not None and refreshed.path is not None else install, plans)
         code = error.code if isinstance(error, UpdateFailure) else "update_failed"
-        # A needs-closing rejection even after the close still asks the user to quit.
-        if code == "quit_first":
-            return result(app_id, "windows", "action_required", before, before, manager, code, True)
-        return result(app_id, "windows", "failed", before, before, manager, code, True)
+        # Distinguish a real deployment hold from a preflight that closed
+        # nothing. Keep verified recovery and force counts on failures too.
+        value = result(app_id, "windows", "action_required" if code == "quit_first" else "failed", before, before,
+                       manager, "package_in_use" if code == "quit_first" else code, True, reopened)
+        value["forcedStops"] = forced
+        return value
     try:
         restarted = reopen_windows(refreshed, plans)
     except Exception:

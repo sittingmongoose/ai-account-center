@@ -155,6 +155,8 @@ export const MESSAGES = {
     'The Microsoft Store has a newer build that Update all cannot install yet; nothing changed. Use the update button in the app.',
   package_mismatch:
     'The published package is not the version its release feed names, so nothing was installed.',
+  package_in_use:
+    'Windows still reports the app package in use after the close; the update was attempted but did not install.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 export const PLATFORMS: UpdatePlatform[] = [...DASHBOARD_HOSTS];
@@ -416,6 +418,11 @@ export function normalizeAppUpdateRow(
         row.status !== 'action_required' ||
         HOST_OS[platform] !== 'windows')) ||
     (code === 'package_mismatch' && (appId !== 'codex-desktop' || row.status !== 'failed')) ||
+    (code === 'package_in_use' &&
+      (platform !== 'windows' ||
+        !['codex-desktop', 'claude-desktop'].includes(appId) ||
+        row.status !== 'action_required' ||
+        row.updateAttempted !== true)) ||
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated')) ||

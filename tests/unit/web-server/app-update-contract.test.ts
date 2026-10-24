@@ -554,6 +554,26 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     );
   });
 
+  it('reports a Windows package hold only after an attempted MSIX deployment', () => {
+    const row = {
+      appId: 'codex-desktop',
+      status: 'action_required',
+      messageCode: 'package_in_use',
+      updateAttempted: true,
+      restartedProcesses: 1,
+      forcedStops: 2,
+    };
+    const value = normalizeAppUpdateRow(row, 'codex-desktop', 'windows');
+    expect(value.message).toBe(MESSAGES.package_in_use);
+    expect(value).toMatchObject({ updateAttempted: true, restartedProcesses: 1, forcedStops: 2 });
+    expect(
+      normalizeAppUpdateRow({ ...row, updateAttempted: false }, 'codex-desktop', 'windows').message
+    ).toBe(MESSAGES.helper_invalid);
+    expect(normalizeAppUpdateRow(row, 'codex-desktop', 'ubuntu').message).toBe(
+      MESSAGES.helper_invalid
+    );
+  });
+
   it('restores a legacy held CLI message from an older helper', () => {
     const row = normalizeAppUpdateRow(
       {

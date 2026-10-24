@@ -693,7 +693,6 @@ def update_cli(install, deadline, restart_managed=False):
                 # the install), so mapped instances stop before npm runs. The
                 # pending marker lets a later explicit click retry the restart
                 # if this one leaves processes down.
-                write_private_json(pending, {"version": before})
                 # Explicit Update apps forces only this installed Codex npm
                 # family off Windows' locked files, including T3's children.
                 # Never stop T3 itself or replay background work arguments.
@@ -701,6 +700,10 @@ def update_cli(install, deadline, restart_managed=False):
                     latest_processes = scan(install.platform)
                     contexts, targets, background = cli_instances(install, latest_processes)
                     check_terminal(install.platform, contexts)
+                    if background and not newest:
+                        # A background instance may have appeared since the
+                        # registry check. Never force it for an unknown target.
+                        return result(install.app_id, install.platform, "unknown", before, before, install.manager, "readiness_unknown")
                     # A Codex subprocess can run arbitrary user tools. Only
                     # direct package file holders qualify for a forced stop;
                     # ancestry alone never makes background work a target.
@@ -708,6 +711,7 @@ def update_cli(install, deadline, restart_managed=False):
                     forced = [item for item in background if item.pid in holders]
                     forced_background = bool(forced)
                     targets = [*targets, *forced]
+                write_private_json(pending, {"version": before})
                 try:
                     pre_forced = terminate_cli(install, targets)
                 except UpdateFailure:

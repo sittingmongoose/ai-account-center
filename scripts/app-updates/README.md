@@ -576,7 +576,7 @@ app, manager `official-download`) and `t3-acp-adapters` (the npm packages
 `@brokkai/muse-acp` and `zcode-acp-server`, manager `npm`). Neither ever stops a T3
 session: when an update would replace files a running session uses, the row is
 `action_required` / `in_use` and nothing changes; Update apps finishes it after the
-session ends. Both run before the Codex CLI and T3, so T3's restart stays last.
+session ends. ZCode finishes before its adapters, and T3's restart stays last.
 
 **ZCode versions and packages.** The installed version is read from files, never
 by running ZCode: the root `package.json` of `resources/app.asar` (`@zcode/desktop`;
@@ -755,12 +755,15 @@ never retry an interrupted job.
 user exactly what to do. ZCode and the ACP adapters report `in_use` while a T3
 session uses them: nothing was changed, and Update apps finishes them later.
 ZCode's official release-page lookup retries up to three times within 60 seconds
+or the remaining host budget, whichever is shorter,
 and a 4 MiB body limit; exhausted discovery reports `zcode_release_unavailable`
 without starting an installer. Codex and Claude desktops on the Mac that are running report
 `quit_first` (they are never asked to quit): nothing is swapped while anything
 runs, and the next click after the user quits updates cleanly. On Windows they
-report `quit_first` only when an instance's start cannot be reproduced (see
-above) or an MSIX deployment is still rejected for apps that need closing. Codex/Claude desktop downloads refused by a bot challenge (HTTP 403 or a
+report `quit_first` when an instance's start cannot be reproduced (see above).
+An MSIX deployment still rejected after the close reports `package_in_use`,
+with the actual attempted flag and verified recovery/forced-stop counts.
+Codex/Claude desktop downloads refused by a bot challenge (HTTP 403 or a
 challenge page) report `check_in_app` after bounded retries. Desktop downloads
 allow 2 GiB and 15-minute timeouts; Codex/Claude Mac desktops are never
 force-stopped, Windows ones only after the bounded WM_CLOSE wait (Ubuntu desktops
