@@ -57,16 +57,16 @@ def require_replace_time(deadline):
         raise UpdateFailure("timeout")
 
 
-def desktop_budget(deadline, maximum):
+def desktop_budget(deadline, maximum, reserve=90):
     if deadline is None:
         return maximum
-    remaining = int(deadline - time.monotonic()) - 90
+    remaining = int(deadline - time.monotonic()) - reserve
     if remaining <= 0:
         raise UpdateFailure("timeout")
     return min(maximum, remaining)
 
 
-def download_desktop(url, destination, deadline=None):
+def download_desktop(url, destination, deadline=None, reserve=90):
     """Fetch a desktop package, tolerating flaky bot-challenge refusals.
 
     Raises UpdateFailure('download_blocked') when every attempt is refused so
@@ -74,7 +74,7 @@ def download_desktop(url, destination, deadline=None):
     """
     for attempt in range(DOWNLOAD_BLOCKED_RETRIES):
         try:
-            download(url, destination, maximum=DESKTOP_DOWNLOAD_MAXIMUM, timeout=desktop_budget(deadline, DESKTOP_DOWNLOAD_TIMEOUT))
+            download(url, destination, maximum=DESKTOP_DOWNLOAD_MAXIMUM, timeout=desktop_budget(deadline, DESKTOP_DOWNLOAD_TIMEOUT, reserve))
             return
         except UpdateFailure as error:
             if error.code != "download_blocked" or attempt + 1 == DOWNLOAD_BLOCKED_RETRIES:
@@ -704,7 +704,7 @@ def update_windows(install, phase=None, deadline=None):
         package = temporary / "update.msix"
         try:
             phase("downloading")
-            download_desktop(url, package, deadline)
+            download_desktop(url, package, deadline, 90 + WINDOWS_REPLACE_SECONDS)
             phase("updating")
             after = published(msix_info(package))
             if not after:

@@ -7,6 +7,11 @@ from ctypes import wintypes
 PREFIX = r'\\.\pipe\ccs-update-terminal-'
 
 
+class SecurityAttributes(ctypes.Structure):
+    """A stable Win32 type shared by concurrent private-pipe constructors."""
+    _fields_ = [('length', wintypes.DWORD), ('descriptor', ctypes.c_void_p), ('inherit', wintypes.BOOL)]
+
+
 def valid_endpoint(value):
     return isinstance(value, str) and value.startswith(PREFIX) and re.fullmatch(r'[0-9a-f]{32}', value[len(PREFIX):]) is not None
 
@@ -38,10 +43,8 @@ class PrivatePipe:
         finally: kernel.CloseHandle(token)
         security = ctypes.c_void_p()
         if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(descriptor, 1, ctypes.byref(security), None): raise OSError('Pipe access setup failed.')
-        class ATTRIBUTES(ctypes.Structure):
-            _fields_ = [('length', wintypes.DWORD), ('descriptor', ctypes.c_void_p), ('inherit', wintypes.BOOL)]
-        attributes = ATTRIBUTES(ctypes.sizeof(ATTRIBUTES), security, False)
-        kernel.CreateNamedPipeW.argtypes = [ctypes.c_wchar_p, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ATTRIBUTES)]
+        attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), security, False)
+        kernel.CreateNamedPipeW.argtypes = [ctypes.c_wchar_p, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(SecurityAttributes)]
         kernel.CreateNamedPipeW.restype = wintypes.HANDLE
         try:
             # One writer, byte mode, first-instance-only, reject remote clients.

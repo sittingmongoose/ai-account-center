@@ -18,6 +18,7 @@ import platform
 import plistlib
 import re
 import shutil
+import sys
 import time
 import urllib.request
 import uuid
@@ -180,48 +181,52 @@ def feed_key(host):
     return ("macos-" if host == "mac" else "linux-") + architecture
 
 
-def read_bounded(url, prefix, limit, deadline=None):
-    """One fixed official URL, read within a size limit; anything unexpected raises UpdateFailure."""
+def _read_metadata_file(url, prefix, limit, destination, timeout):
+    """The read-only child operation; its parent bounds DNS, HTTP framing and body reads together."""
     request = urllib.request.Request(url, headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
-    deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 20)
     try:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise UpdateFailure("timeout")
-        with urllib.request.urlopen(request, timeout=min(20, remaining)) as response:
+        with urllib.request.urlopen(request, timeout=min(20, timeout)) as response:
             if not response.geturl().startswith(prefix):
                 raise UpdateFailure()
-            # HTTPResponse.read(n) can receive repeatedly inside one call,
-            # resetting the socket timeout on every packet. read1 performs at
-            # most one underlying receive so we can check the total deadline.
-            read = response.read1 if callable(getattr(type(response), "read1", None)) else response.read
-            chunks, total = [], 0
-            while total <= limit:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise UpdateFailure("timeout")
-                # Keep a slow/dripping response within the same total budget,
-                # rather than resetting a 20 s socket timeout for every read.
-                sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
-                if sock is not None:
-                    sock.settimeout(min(20, remaining))
-                chunk = read(min(64 * 1024, limit + 1 - total))
-                if time.monotonic() >= deadline:
-                    raise UpdateFailure("timeout")
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                total += len(chunk)
-            raw = b"".join(chunks)
+            raw = response.read(limit + 1)
+        if len(raw) > limit:
+            raise UpdateFailure()
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(raw)
     except UpdateFailure:
         raise
     except TimeoutError:
         raise UpdateFailure("timeout") from None
     except Exception:
         raise UpdateFailure() from None
-    if len(raw) > limit:
-        raise UpdateFailure()
-    return raw
+
+def _metadata_command(url, prefix, limit, destination, timeout):
+    try:
+        command([sys.executable, pathlib.Path(__file__).resolve(), "--read-metadata", url, prefix, str(limit), str(destination), str(timeout)], timeout=timeout)
+    except UpdateFailure as error:
+        if error.exit_code == 2:
+            raise UpdateFailure("timeout") from None
+        raise
+
+
+def read_bounded(url, prefix, limit, deadline=None):
+    """A fixed publisher lookup, with a hard deadline even during DNS and HTTP parsing."""
+    deadline = min(deadline if deadline is not None else float("inf"), time.monotonic() + 20)
+    with private_temporary() as temporary:
+        destination = temporary / "metadata"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise UpdateFailure("timeout")
+        # Killing this read-only child closes sockets blocked in DNS, response
+        # headers, chunk extensions or trailers. Socket inactivity timeouts
+        # alone cannot bound a peer that keeps sending another byte.
+        _metadata_command(url, prefix, limit, destination, remaining)
+        if time.monotonic() >= deadline:
+            raise UpdateFailure("timeout")
+        if destination.stat().st_size > limit:
+            raise UpdateFailure()
+        return destination.read_bytes()
 
 
 def latest_zcode(key, deadline=None):
@@ -728,3 +733,16 @@ def update_adapters(install, deadline, phase=None):
         if code in ACTIONS:
             return adapters_row(install, "action_required", code=code, attempted=state["attempted"], held=behind if code == "in_use" else ())
         return adapters_row(install, "failed", read_parts(install.path) if state["attempted"] else None, code, state["attempted"])
+
+
+if __name__ == "__main__":
+    # Only the parent's fixed read-only metadata operation is executable here.
+    # This helper never starts an installer or touches account state in a child.
+    try:
+        if len(sys.argv) != 7 or sys.argv[1] != "--read-metadata":
+            raise UpdateFailure()
+        _read_metadata_file(sys.argv[2], sys.argv[3], int(sys.argv[4]), pathlib.Path(sys.argv[5]), float(sys.argv[6]))
+    except UpdateFailure as error:
+        raise SystemExit(2 if error.code == "timeout" else 1)
+    except Exception:
+        raise SystemExit(1)

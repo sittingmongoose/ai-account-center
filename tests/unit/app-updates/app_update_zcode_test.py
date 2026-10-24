@@ -82,6 +82,9 @@ class ZCodeFixtures(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = pathlib.Path(temporary.name)
         self.addCleanup(mock.patch.stopall)
+        # Network fixtures exercise the exact child reader in process; the
+        # separate HTTP deadline tests execute the real bounded subprocess.
+        mock.patch.object(zcode, "_metadata_command", side_effect=zcode._read_metadata_file).start()
         mock.patch.object(pathlib.Path, "home", return_value=self.root).start()
         mock.patch.dict(os.environ, {"LOCALAPPDATA": str(self.root / "local"), "APPDATA": str(self.root / "roaming"),
                                      "PROCESSOR_ARCHITECTURE": "AMD64"}).start()

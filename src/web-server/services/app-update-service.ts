@@ -199,7 +199,7 @@ export class AppUpdateService {
 
   /**
    * Acknowledges a cancel at once. Nothing running is killed: each computer
-   * finishes the app it is on now, then reports every app it has not started
+   * finishes its active apps, then reports every app it has not started
    * as skipped. Idempotent: a second cancel changes nothing. Never promises an undo.
    */
   cancel(): { job: AppUpdateJob | null; cancelling: boolean; notOwner?: true } {

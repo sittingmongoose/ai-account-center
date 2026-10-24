@@ -1,7 +1,6 @@
 """Offline updater scheduling, metadata recovery and package-deployment regressions."""
 import contextlib
 import ctypes
-import http.client
 import pathlib
 import socket
 import sys
@@ -16,6 +15,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts/ap
 import app_update_common as common
 import app_update_desktop as desktop
 import app_update_processes as processes
+import app_update_pipe as pipes
 import app_update_zcode as zcode
 import app_updates as updater
 
@@ -217,36 +217,64 @@ class UpdateRecoveryTests(unittest.TestCase):
         self.assertEqual(fetch.call_args.kwargs["deadline"], 105)
         sleep.assert_not_called()
 
-    def test_zcode_dripping_http_body_cannot_reset_the_total_deadline(self):
-        reader, writer = socket.socketpair()
-        stop = threading.Event()
-        def drip():
-            try:
-                writer.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n")
-                for _ in range(40):
-                    if stop.wait(.02):
-                        return
-                    writer.sendall(b"x")
-            except OSError:
-                pass
-        thread = threading.Thread(target=drip)
-        thread.start()
-        response = http.client.HTTPResponse(reader, url=zcode.PAGE)
-        response.url = zcode.PAGE  # urllib sets this after constructing HTTPResponse.
-        try:
-            response.begin()
-            started = time.monotonic()
-            with mock.patch.object(zcode.urllib.request, "urlopen", return_value=response):
-                with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
-                    zcode.read_bounded(zcode.PAGE, "https://zcode.z.ai/", 1024, deadline=started + .12)
-            self.assertLess(time.monotonic() - started, .4, "a buffered read would wait for the entire 800 ms body")
-        finally:
-            stop.set()
-            response.close()
-            reader.close()
-            writer.close()
-            thread.join(2)
-        self.assertFalse(thread.is_alive())
+    def test_metadata_child_deadline_covers_http_headers_chunks_trailers_and_body(self):
+        for case in ("complete", "body", "headers", "chunk-extension", "trailer"):
+            with self.subTest(case=case):
+                server = socket.socket()
+                server.bind(("127.0.0.1", 0))
+                server.listen(1)
+                server.settimeout(2)
+                stop, received = threading.Event(), threading.Event()
+                children = []
+                real_popen = common.subprocess.Popen
+                def spawn(*args, **kwargs):
+                    child = real_popen(*args, **kwargs)
+                    children.append(child)
+                    return child
+                def serve():
+                    try:
+                        connection, _ = server.accept()
+                        with connection:
+                            connection.settimeout(2)
+                            connection.recv(8192)
+                            received.set()
+                            if case == "complete":
+                                connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc")
+                                return
+                            prefix = {
+                                "body": b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n",
+                                "headers": b"HTTP/1.1 200 OK\r\nX-Slow: ",
+                                "chunk-extension": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1;extension=",
+                                "trailer": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\nX-Trailer: ",
+                            }[case]
+                            connection.sendall(prefix)
+                            for _ in range(40):
+                                if stop.wait(.05):
+                                    return
+                                connection.sendall(b"x")
+                            connection.sendall(b"\r\n\r\n")
+                    except OSError:
+                        pass
+                thread = threading.Thread(target=serve)
+                thread.start()
+                url = "http://127.0.0.1:%d/metadata" % server.getsockname()[1]
+                try:
+                    started = time.monotonic()
+                    with mock.patch.object(common.subprocess, "Popen", side_effect=spawn):
+                        if case == "complete":
+                            self.assertEqual(zcode.read_bounded(url, "http://127.0.0.1:", 1024, deadline=started + .6), b"abc")
+                        else:
+                            with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
+                                zcode.read_bounded(url, "http://127.0.0.1:", 1024, deadline=started + .6)
+                    self.assertLess(time.monotonic() - started, 1.2, "the complete operation must stop before a two-second drip finishes")
+                    self.assertTrue(received.is_set())
+                    self.assertEqual(len(children), 1)
+                    self.assertIsNotNone(children[0].poll(), "the metadata child must be reaped")
+                finally:
+                    stop.set()
+                    server.close()
+                    thread.join(3)
+                self.assertFalse(thread.is_alive())
 
     def test_parallel_windows_stops_do_not_interleave_console_attachment(self):
         state, operations = threading.local(), []
@@ -339,6 +367,56 @@ class UpdateRecoveryTests(unittest.TestCase):
         self.assertIn(1, answers)
         kernel.TerminateProcess.assert_called_once()
 
+    def test_concurrent_private_pipe_creation_uses_a_stable_ctypes_security_type(self):
+        barrier = threading.Barrier(2)
+        errors, created, invalid = [], [], []
+        callback_type = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_wchar_p, *([pipes.wintypes.DWORD] * 6), ctypes.c_void_p)
+        def create(endpoint, mode, kind, instances, out_size, in_size, timeout, attributes):
+            value = ctypes.cast(attributes, ctypes.POINTER(pipes.SecurityAttributes)).contents
+            if value.descriptor != 789 or value.inherit or value.length != ctypes.sizeof(pipes.SecurityAttributes):
+                invalid.append("invalid security attributes")
+            return 123
+        native_create = callback_type(create)
+        class Create:
+            @property
+            def argtypes(self):
+                return native_create.argtypes
+            @argtypes.setter
+            def argtypes(self, value):
+                native_create.argtypes = value
+                barrier.wait(2)
+            def __call__(self, *args):
+                return native_create(*args)
+        kernel, advapi = mock.Mock(), mock.Mock()
+        kernel.GetCurrentProcess.return_value = 1
+        kernel.CreateNamedPipeW = Create()
+        advapi.OpenProcessToken.side_effect = lambda process, access, token: (setattr(token._obj, "value", 456), 1)[-1]
+        def token_info(token, kind, data, size, needed):
+            needed._obj.value = ctypes.sizeof(ctypes.c_void_p)
+            if data is not None:
+                ctypes.c_void_p.from_buffer(data).value = 555
+            return 1
+        advapi.GetTokenInformation.side_effect = token_info
+        advapi.ConvertSidToStringSidW.side_effect = lambda sid, text: (setattr(text._obj, "value", "S-1-5-21-123"), 1)[-1]
+        advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.side_effect = lambda descriptor, version, security, size: (setattr(security._obj, "value", 789), 1)[-1]
+        def run(nonce):
+            try:
+                created.append(pipes.PrivatePipe(nonce))
+            except Exception as error:
+                errors.append(error)
+        with mock.patch.object(pipes.ctypes, "windll", types.SimpleNamespace(kernel32=kernel, advapi32=advapi), create=True):
+            threads = [threading.Thread(target=run, args=(digit * 32,)) for digit in ("1", "2")]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(3)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            for pipe in created:
+                pipe.close()
+        self.assertEqual(errors, [])
+        self.assertEqual(invalid, [])
+        self.assertEqual(len(created), 2)
+
     def test_msix_quiesces_only_the_target_package(self):
         with mock.patch.object(desktop, "powershell", return_value="CCS_ADDAPPX_OK") as command:
             desktop.add_appx_package(pathlib.Path("/fixture/update.msix"), timeout=321)
@@ -346,6 +424,16 @@ class UpdateRecoveryTests(unittest.TestCase):
         self.assertIn("-ForceTargetApplicationShutdown", script)
         self.assertNotIn("-ForceApplicationShutdown", script)
         self.assertEqual(command.call_args.kwargs["timeout"], 321)
+
+    def test_windows_download_budget_keeps_time_for_install_and_reopen(self):
+        reserve = 90 + desktop.WINDOWS_REPLACE_SECONDS
+        with mock.patch.object(desktop.time, "monotonic", return_value=100), mock.patch.object(desktop, "download") as download:
+            desktop.download_desktop("https://fixture.invalid/update.msix", pathlib.Path("/fixture/package"), 100 + reserve + 120, reserve)
+            self.assertEqual(download.call_args.kwargs["timeout"], 120)
+            download.reset_mock()
+            with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
+                desktop.download_desktop("https://fixture.invalid/update.msix", pathlib.Path("/fixture/package"), 100 + reserve, reserve)
+            download.assert_not_called()
 
 
 if __name__ == "__main__":

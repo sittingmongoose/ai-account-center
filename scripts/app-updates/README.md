@@ -50,6 +50,8 @@ Nothing can wait forever:
   become `unknown` / `host_timeout`. A still-running scheduled task reports `busy`.
   Desktop downloads and Windows installations share the remaining helper budget
   with 90 seconds reserved for recovery. Desktop downloads allow 15 minutes.
+  Windows downloads also leave the full 390 seconds needed to close, install
+  and reopen, so a late download cannot spend that reserve.
   The Windows task limit is 35 minutes, longer than the coordinator wait;
   an explicit update also migrates an existing task to that limit, preserving
   its interactive principal. A timed-out wait for Ubuntu's adapter oneshot
@@ -754,9 +756,11 @@ never retry an interrupted job.
 `action_required` is never a failure: the job completes and the row tells the
 user exactly what to do. ZCode and the ACP adapters report `in_use` while a T3
 session uses them: nothing was changed, and Update apps finishes them later.
-ZCode's official release-page lookup retries up to three times within 60 seconds
-or the remaining host budget, whichever is shorter,
-and a 4 MiB body limit; exhausted discovery reports `zcode_release_unavailable`
+ZCode's official release-page lookup retries up to three times, within 60 seconds
+or the remaining host budget, whichever is shorter. Each read-only subprocess
+has at most 20 seconds, including DNS, connection, headers and body framing,
+and a 4 MiB body limit. The parent stops and reaps a timed-out subprocess;
+exhausted discovery reports `zcode_release_unavailable`
 without starting an installer. Codex and Claude desktops on the Mac that are running report
 `quit_first` (they are never asked to quit): nothing is swapped while anything
 runs, and the next click after the user quits updates cleanly. On Windows they
