@@ -65,6 +65,12 @@ def collect_snapshot(profile: SavedProfile, deps: QuotaDependencies) -> dict:
         stamp = deps.now().astimezone(dt.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
         base.update(status='fresh', email=identity.email, plan=data.get('plan'),
                     fetchedAt=stamp, sampledAt=stamp, windows=windows, pools=data.get('pools', []))
+        # A throttled optional per-model read still publishes this fresh
+        # sample; its cooldown travels with the sample, identity-bound by the
+        # caller's cache, so the endpoint is not retried before the deadline.
+        throttled = data.get('retryAfterSeconds')
+        if type(throttled) is int and 0 < throttled <= 86400:
+            base['retryAfterSeconds'] = throttled
         if isinstance(data.get('reportedPlan'), dict):
             reported = data['reportedPlan']
             bounded = lambda v: isinstance(v, str) and 0 < len(v) <= 80 and not re.search(r'[\x00-\x1f\x7f]', v)
@@ -96,6 +102,7 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
     Both modules are explicit trusted package imports. No file/keyring write,
     new login, inferred model mapping or app OAuth constant is introduced.
     """
+    clock = now or (lambda: dt.datetime.now(dt.timezone.utc))
     def userinfo(access):
         return helpers.request_json('https://www.googleapis.com/oauth2/v2/userinfo', {'Authorization': 'Bearer ' + access})
     def refresh(refresh_token):
@@ -105,6 +112,7 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
             'client_id': client_id, 'client_secret': client_secret,
         }, form=True)
     def quota(access, email):
+        started = clock()
         headers = {'Authorization': 'Bearer ' + access, 'User-Agent': 'antigravity/1.0.0'}
         load = helpers.request_json(desktop.AGY_BASE + 'loadCodeAssist', headers,
             {'metadata': {'ideType': 'ANTIGRAVITY', 'platform': 'PLATFORM_UNSPECIFIED', 'pluginType': 'GEMINI'}})
@@ -117,15 +125,28 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
         summary = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuotaSummary', headers, {'project': project})
         windows = desktop.normalize_antigravity(summary)
         pools = structural_pools(desktop.agy_groups(summary), windows)
-        try:
-            per_model = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuota', headers, {'project': project})
-        except helpers.UsageError:
-            per_model = None
-        windows += desktop.normalize_antigravity_gemini(per_model, windows)
+        throttled = None
+        # The worker dies at 25s and each call may hold its socket for 8s; the
+        # optional per-model read is skipped once the measured budget for it
+        # (plus the unmeasured identity call) no longer fits, so a slow optional
+        # endpoint can never cost the summary-only sample.
+        if (clock() - started).total_seconds() <= 8:
+            try:
+                per_model = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuota', headers, {'project': project})
+            except helpers.UsageError as error:
+                per_model = None
+                retry = getattr(error, 'retry_after', None)
+                if isinstance(retry, int) and 0 < retry <= 86400:
+                    throttled = retry
+            else:
+                windows += desktop.normalize_antigravity_gemini(per_model, windows)
         windows += desktop.normalize_antigravity_credits(load)
-        return {'email': email, 'plan': plan, 'windows': windows, 'pools': pools,
-                **({'reportedPlan': reported} if reported else {})}
-    return QuotaDependencies(userinfo, refresh, quota, now or (lambda: dt.datetime.now(dt.timezone.utc)))
+        result = {'email': email, 'plan': plan, 'windows': windows, 'pools': pools,
+                  **({'reportedPlan': reported} if reported else {})}
+        if throttled is not None:
+            result['retryAfterSeconds'] = throttled
+        return result
+    return QuotaDependencies(userinfo, refresh, quota, clock)
 
 
 def structural_pools(groups: list, windows: list) -> list:

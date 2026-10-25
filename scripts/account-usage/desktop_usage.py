@@ -294,6 +294,8 @@ def normalize_antigravity(payload):
 
 
 GEMINI_PERIOD_LABELS = {"5h": "5-hour", "weekly": "Weekly"}
+# Same shared window can straddle a second boundary between back-to-back calls.
+GEMINI_RESET_CLUSTER_SECONDS = 10
 
 
 def _antigravity_gemini_period(reset, anchors):
@@ -301,13 +303,14 @@ def _antigravity_gemini_period(reset, anchors):
 
     The per-model quota carries no window label; a reset matching a summary
     window's reset (both derive from the same plan anchors, seconds apart)
-    adopts that window's period. Anything unmatched keeps no period at all
-    rather than guessing one.
+    adopts that window's period. When distinct periods both match -- or none
+    does -- the period stays unknown rather than being guessed.
     """
     try:
         stamp = dt.datetime.fromisoformat(reset.replace("Z", "+00:00"))
     except ValueError:
         return None, None
+    matched = set()
     for anchor_reset, minutes in anchors:
         if anchor_reset is None or minutes not in (300, 10080):
             continue
@@ -316,8 +319,45 @@ def _antigravity_gemini_period(reset, anchors):
         except ValueError:
             continue
         if abs((stamp - anchor).total_seconds()) <= 600:
-            return ("5h", 300) if minutes == 300 else ("weekly", 10080)
-    return None, None
+            matched.add(("5h", 300) if minutes == 300 else ("weekly", 10080))
+    return next(iter(matched)) if len(matched) == 1 else (None, None)
+
+
+def _antigravity_gemini_groups(buckets):
+    """Cluster gemini buckets into shared windows by their resets.
+
+    Buckets missing a reset describe no window and are skipped. A bucket with
+    a reset but no remainingFraction is an exhausted window: proto3 JSON omits
+    zero-valued floats, so the fraction decodes as 0, never as unknown. An id
+    that fails display validation still counts toward the minimum; it is only
+    kept out of the published model list. Each cluster publishes the earliest
+    reset it contains.
+    """
+    collected = []
+    for bucket in (buckets if isinstance(buckets, list) else [])[:256]:
+        if not isinstance(bucket, dict):
+            continue
+        model_id = bucket.get("modelId")
+        reset = reset_at(bucket.get("resetTime"))
+        if reset is None:
+            continue
+        if not isinstance(model_id, str) or not model_id.startswith("gemini-") or not 0 < len(model_id) <= 160:
+            continue
+        fraction = number(bucket.get("remainingFraction"))
+        if fraction is None:
+            fraction = 0.0
+        if not 0 <= fraction <= 1:
+            continue
+        collected.append((dt.datetime.fromisoformat(reset.replace("Z", "+00:00")), reset,
+                          safe_text(model_id, 160), fraction))
+    collected.sort(key=lambda entry: entry[0])
+    groups = []
+    for stamp, reset, model_id, fraction in collected:
+        if groups and (stamp - groups[-1][0]).total_seconds() <= GEMINI_RESET_CLUSTER_SECONDS:
+            groups[-1][2].append((model_id, fraction))
+        else:
+            groups.append((stamp, reset, [(model_id, fraction)]))
+    return [(reset, members) for _stamp, reset, members in groups]
 
 
 def normalize_antigravity_gemini(payload, summary_windows):
@@ -326,37 +366,34 @@ def normalize_antigravity_gemini(payload, summary_windows):
     Google stopped listing the Gemini group in retrieveUserQuotaSummary
     (observed 2026-10-22); its shared windows survive only as per-model
     buckets in retrieveUserQuota, one reset per window. One derived window per
-    distinct shared reset: the remaining fraction is the minimum across the
+    clustered shared reset: the remaining fraction is the minimum across the
     models sharing it, and no window is derived without a provider reset or
-    when the summary reports Gemini keys again.
+    when the summary reports Gemini keys or labels again. A base key is only
+    suffixed when the same period repeats, so a lone weekly group stays
+    `gemini-weekly` even when a 5-hour group comes and goes.
     """
     if not isinstance(payload, dict):
         return []
-    if any(isinstance(window, dict) and str(window.get("key", "")).startswith("gemini")
+    if any(isinstance(window, dict) and (
+            str(window.get("key", "")).startswith("gemini")
+            or str(window.get("label", "")).lower().startswith("gemini"))
            for window in summary_windows):
         return []
     anchors = [(window.get("resetAt"), window.get("windowMinutes"))
                for window in summary_windows if isinstance(window, dict)]
-    groups = {}
-    buckets = payload.get("buckets")
-    for bucket in (buckets if isinstance(buckets, list) else [])[:256]:
-        if not isinstance(bucket, dict):
-            continue
-        model_id = safe_text(bucket.get("modelId"), 160)
-        fraction = number(bucket.get("remainingFraction"))
-        reset = reset_at(bucket.get("resetTime"))
-        if (model_id is None or not model_id.startswith("gemini-") or fraction is None
-                or not 0 <= fraction <= 1 or reset is None):
-            continue
-        groups.setdefault(reset, []).append((model_id, fraction))
+    seen_base_keys = {}
     windows = []
-    for index, (reset, members) in enumerate(sorted(groups.items())[:4]):
+    for reset, members in _antigravity_gemini_groups(payload.get("buckets"))[:4]:
         period, minutes = _antigravity_gemini_period(reset, anchors)
-        key = "gemini-" + (period or "window") + ("" if index == 0 else "-" + str(index + 1))
+        base = "gemini-" + (period or "window")
+        seen_base_keys[base] = seen_base_keys.get(base, 0) + 1
+        key = base if seen_base_keys[base] == 1 else base + "-" + str(seen_base_keys[base])
         label = "Gemini Models" + (" · " + GEMINI_PERIOD_LABELS[period] if period else "")
         window = quota_window(key, label, remaining_percent=min(f for _, f in members) * 100,
                               reset=reset, minutes=minutes)
-        window["modelIds"] = sorted(model for model, _ in members)[:64]
+        model_ids = sorted({model for model, _ in members if model is not None})
+        if model_ids:
+            window["modelIds"] = model_ids[:64]
         windows.append(window)
     return windows
 
@@ -531,8 +568,13 @@ def fetch_antigravity_quota(credential, result):
     windows = normalize_antigravity(payload)
     try:
         per_model = request_json(AGY_BASE + "retrieveUserQuota", headers, {"project": project})
-    except UsageError:
+    except UsageError as error:
+        # The optional read stays optional, but a provider throttle must not be:
+        # surface its cooldown so refreshes stop retrying the endpoint early.
         per_model = None
+        retry_after = getattr(error, "retry_after", None)
+        if retry_after is not None and retry_after > 0 and "retryAfterSeconds" not in result:
+            result["retryAfterSeconds"] = retry_after
     windows += normalize_antigravity_gemini(per_model, windows)
     result["windows"] = windows + normalize_antigravity_credits(load)
 

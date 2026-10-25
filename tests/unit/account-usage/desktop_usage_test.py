@@ -170,6 +170,68 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(unmatched[0]["label"], "Gemini Models")
         self.assertIsNone(unmatched[0]["windowMinutes"])
 
+    def test_antigravity_gemini_conflicting_anchor_periods_stay_unknown(self):
+        # A weekly and a 5-hour anchor resetting near the same instant match one
+        # Gemini reset; the period must stay unknown whichever order they come in.
+        anchors = [{"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-10-25T20:45:00Z"},
+            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:50:00Z"}]}]
+        payload = {"buckets": [
+            {"modelId": "gemini-3.8-flash", "remainingFraction": .5, "resetTime": "2026-10-25T20:50:06Z"}]}
+        for order in ({'groups': anchors}, {'groups': [{"displayName": "Claude and GPT models",
+                                                        "buckets": list(reversed(anchors[0]["buckets"]))}]}):
+            windows = usage.normalize_antigravity_gemini(payload, usage.normalize_antigravity(order))
+            self.assertEqual(windows[0]["key"], "gemini-window")
+            self.assertIsNone(windows[0]["windowMinutes"])
+            self.assertEqual(windows[0]["label"], "Gemini Models")
+
+    def test_antigravity_gemini_keys_are_stable_across_present_groups(self):
+        summary = usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-01T15:00:00Z"},
+            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:42:30Z"}]}]})
+        both = {"buckets": [
+            {"modelId": "gemini-3.8-flash", "remainingFraction": .5, "resetTime": "2026-10-25T20:42:36Z"},
+            {"modelId": "gemini-3.1-pro", "remainingFraction": .8, "resetTime": "2026-11-01T15:00:06Z"}]}
+        mixed = usage.normalize_antigravity_gemini(both, summary)
+        self.assertEqual([w["key"] for w in mixed], ["gemini-5h", "gemini-weekly"])
+        weekly_alone = usage.normalize_antigravity_gemini({"buckets": [both["buckets"][1]]}, summary)
+        self.assertEqual(weekly_alone[0]["key"], "gemini-weekly")
+        # Only a repeated same-period group is suffixed.
+        repeated = usage.normalize_antigravity_gemini({"buckets": [
+            {"modelId": "gemini-3.8-flash", "remainingFraction": .5, "resetTime": "2026-10-25T20:50:06Z"},
+            {"modelId": "gemini-3.1-pro", "remainingFraction": .7, "resetTime": "2026-10-25T20:53:00Z"}]},
+            usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:50:00Z"}]}]}))
+        self.assertEqual([w["key"] for w in repeated], ["gemini-5h", "gemini-5h-2"])
+
+    def test_antigravity_gemini_resets_across_a_second_boundary_share_one_window(self):
+        summary = usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:42:35Z"}]}]})
+        windows = usage.normalize_antigravity_gemini({"buckets": [
+            {"modelId": "gemini-3.8-flash", "remainingFraction": .5, "resetTime": "2026-10-25T20:42:34.900Z"},
+            {"modelId": "gemini-3.1-pro", "remainingFraction": .6, "resetTime": "2026-10-25T20:42:36.100Z"}]}, summary)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0]["key"], "gemini-5h")
+        self.assertEqual(windows[0]["resetAt"], "2026-10-25T20:42:34Z")
+        self.assertEqual(windows[0]["remainingPercent"], 50)
+
+    def test_antigravity_gemini_missing_fraction_is_an_exhausted_window(self):
+        # proto3 JSON omits zero-valued floats: a bucket with a reset and no
+        # remainingFraction has run out, so the shared minimum is 0, and a model
+        # whose id cannot be displayed still counts without being listed.
+        summary = usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:42:30Z"}]}]})
+        windows = usage.normalize_antigravity_gemini({"buckets": [
+            {"modelId": "gemini-3.8-flash", "remainingFraction": .55, "resetTime": "2026-10-25T20:42:36Z"},
+            {"modelId": "gemini-3.1-pro", "resetTime": "2026-10-25T20:42:36Z"},
+            {"modelId": "gemini-sk-task-1", "remainingFraction": .9, "resetTime": "2026-10-25T20:42:36Z"},
+            {"modelId": "gemini-3.8-flash", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:36Z"}]}, summary)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0]["key"], "gemini-5h")
+        self.assertEqual(windows[0]["remainingPercent"], 0)
+        self.assertEqual(windows[0]["usedPercent"], 100)
+        self.assertEqual(windows[0]["modelIds"], ["gemini-3.1-pro", "gemini-3.8-flash"])
+
     def test_antigravity_gemini_derivation_requires_provider_reset_and_summary_gap(self):
         summary = usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
             {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:42:30Z"}]}]})
@@ -180,6 +242,12 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(usage.normalize_antigravity_gemini({"buckets": [
             {"modelId": "gemini-3.8-flash-tiered", "remainingFraction": .5, "resetTime": "2026-10-25T20:42:36Z"}]},
             with_gemini_keys), [])
+        # A restored summary group without bucket ids must also stand the derivation down.
+        with_gemini_label = summary + [{"key": "group-0-0", "label": "Gemini Models · 5-hour",
+                                        "resetAt": "2026-10-25T20:42:30Z", "windowMinutes": 300}]
+        self.assertEqual(usage.normalize_antigravity_gemini({"buckets": [
+            {"modelId": "gemini-3.8-flash-tiered", "remainingFraction": .5, "resetTime": "2026-10-25T20:42:36Z"}]},
+            with_gemini_label), [])
 
     def test_cursor_does_not_infer_reset_from_start(self):
         windows = usage.normalize_cursor({"billingCycleStart": "2026-09-01T00:00:00Z",
@@ -234,6 +302,12 @@ class CredentialTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.home = pathlib.Path(self.temp.name)
+        # An absolute XDG_CONFIG_HOME on the host machine would make the
+        # collectors read the real ~/.config instead of this fixture home,
+        # failing assertions with the real credentials in the diff.
+        self._env = patch.dict("os.environ", {"XDG_CONFIG_HOME": str(self.home / ".config")})
+        self._env.start()
+        self.addCleanup(self._env.stop)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -398,7 +472,8 @@ class CollectionTests(unittest.TestCase):
         self.assertNotIn("never-export", json.dumps(result))
 
     def test_complete_contract_on_unavailable_account(self):
-        with tempfile.TemporaryDirectory() as home:
+        with tempfile.TemporaryDirectory() as home, \
+                patch.dict("os.environ", {"XDG_CONFIG_HOME": str(pathlib.Path(home) / ".config")}):
             result = usage.collect("muse", "ubuntu", home)
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["windows"], [])
@@ -461,6 +536,20 @@ class CollectionTests(unittest.TestCase):
         self.assertTrue(request.call_args_list[2].args[0].endswith("retrieveUserQuota"))
         self.assertEqual(request.call_args_list[2].args[2], {"project": "project-fixture"})
         self.assertEqual([window["key"] for window in result["windows"]], ["3p-5h", "gemini-5h"])
+
+    @patch("desktop_usage.request_json")
+    def test_antigravity_per_model_throttle_publishes_windows_and_keeps_cooldown(self, request):
+        request.side_effect = [
+            {"cloudaicompanionProject": "project-fixture", "planInfo": {"planType": "pro"}},
+            {"groups": [{"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:30Z"}]}]},
+            helpers.UsageError("rate_limited", "Throttled.", retry_after=1800),
+        ]
+        result = helpers.account("antigravity", "ubuntu")
+        usage.fetch_antigravity_quota(helpers.Credential("fixture-access"), result)
+        self.assertEqual([window["key"] for window in result["windows"]], ["3p-5h"])
+        self.assertEqual(result["retryAfterSeconds"], 1800)
+        self.assertNotIn("Throttled", json.dumps(result))
 
     @patch("desktop_usage.antigravity_oauth_client", return_value=("fixture-client.apps.googleusercontent.com", "synthetic-app-value"))
     @patch("desktop_usage.request_json")
