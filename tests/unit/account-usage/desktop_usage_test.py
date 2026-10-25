@@ -583,10 +583,11 @@ class CollectionTests(unittest.TestCase):
     @patch("desktop_usage.time")
     @patch("desktop_usage.request_json")
     def test_antigravity_budget_spans_the_token_refresh(self, request, clock):
-        # A 6s refresh plus 6s load and summary calls leaves 18s on the clock
-        # measured from before the refresh; the optional per-model read no
-        # longer fits and must be skipped so the summary still publishes.
-        clock.monotonic.side_effect = [100.0, 118.0]
+        # The budget starts at process start (module import), so a 6s refresh
+        # plus 6s load and summary calls -- 18s in all -- leaves no room for
+        # the optional per-model read; it must be skipped so the summary
+        # still publishes inside the transport deadline.
+        clock.monotonic.return_value = 118.0
         request.side_effect = [
             {"access_token": "renewed-access", "expires_in": 3600},
             {"cloudaicompanionProject": "project-fixture", "planInfo": {"planType": "pro"}},
@@ -596,7 +597,8 @@ class CollectionTests(unittest.TestCase):
         credential = helpers.Credential("expired-access", "OMP", "fixture-refresh", 1,
                                          "example@example.com", "project-fixture")
         result = helpers.account("antigravity", "ubuntu")
-        usage.fetch_antigravity(credential, result)
+        with patch.object(usage, "AGY_BUDGET_STARTED", 100.0):
+            usage.fetch_antigravity(credential, result)
         self.assertEqual(request.call_count, 3)
         self.assertEqual([window["key"] for window in result["windows"]], ["3p-5h"])
 

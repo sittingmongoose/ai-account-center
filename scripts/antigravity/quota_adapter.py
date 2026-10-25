@@ -134,7 +134,7 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
         # Gemini group and the worker budget still fits its socket timeout; a
         # slow or unneeded optional endpoint can never cost the summary sample.
         if (not desktop.antigravity_summary_has_gemini(windows)
-                and (clock() - budget_started).total_seconds() <= 16):
+                and (clock() - budget_started).total_seconds() <= desktop.AGY_OPTIONAL_BUDGET_SECONDS):
             try:
                 per_model = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuota', headers, {'project': project})
             except helpers.UsageError as error:

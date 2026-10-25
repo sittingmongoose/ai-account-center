@@ -31,6 +31,12 @@ AGY_BASE = "https://cloudcode-pa.googleapis.com/v1internal:"
 # version bump is a single change; the per-model retrieveUserQuota fallback in
 # normalize_antigravity_gemini covers any window the summary then omits.
 AGY_USER_AGENT = "antigravity/hub/2.24.0 (aidev_client; os_type=linux; arch=amd64)"
+# The transport's deadline spans the whole collector process -- interpreter
+# start-up, imports, credential reads and every quota call. The budget starts
+# at module import so all of it counts against the optional per-model read,
+# whose socket can still hold 8 of the 25 seconds.
+AGY_BUDGET_STARTED = time.monotonic()
+AGY_OPTIONAL_BUDGET_SECONDS = 15
 CURSOR_SUMMARY_URL = cursor_usage.SUMMARY_URL
 CURSOR_PROFILE_URL = cursor_usage.PROFILE_URL
 
@@ -347,11 +353,12 @@ def _antigravity_gemini_groups(buckets):
     """Cluster gemini buckets into shared windows by their resets.
 
     Buckets missing a reset describe no window and are skipped. A bucket with
-    a reset but no remainingFraction is an exhausted window: proto3 JSON omits
-    zero-valued floats, so the fraction decodes as 0, never as unknown. An id
-    that fails display validation still counts toward the minimum; it is only
-    kept out of the published model list. Each cluster publishes the earliest
-    reset it contains.
+    a reset but neither a remainingFraction nor a remainingAmount is an
+    exhausted window: proto3 JSON omits zero-valued floats, so the missing
+    fraction decodes as 0, never as unknown. A bucket carrying only an amount
+    has no denominator and stays unknown. An id that fails display validation
+    still counts toward the minimum; it is only kept out of the published
+    model list. Each cluster publishes the earliest reset it contains.
     """
     collected = []
     for bucket in (buckets if isinstance(buckets, list) else [])[:256]:
@@ -558,11 +565,11 @@ def refresh_antigravity(credential, home=None):
                       project=credential.project, plan=credential.plan, google_client=credential.google_client)
 
 
-def fetch_antigravity(credential, result, home=None):
-    # One monotonic budget spans the token refresh, the quota calls and any
-    # authentication retry, so the optional per-model read can never push the
-    # collection past its transport deadline.
-    budget = time.monotonic()
+def fetch_antigravity(credential, result, home=None, budget_started=None):
+    # One monotonic budget spans process start-up, the token refresh, the
+    # quota calls and the authentication retry, so the optional per-model
+    # read can never push the collection past its transport deadline.
+    budget = AGY_BUDGET_STARTED if budget_started is None else budget_started
     now = dt.datetime.now(dt.timezone.utc).timestamp() * 1000
     refreshed = False
     if credential.expires is not None and credential.expires <= now + 30000:
@@ -598,7 +605,7 @@ def fetch_antigravity_quota(credential, result, budget_started=None):
     # The optional per-model read runs only when the summary carries no Gemini
     # group, and only while the transport's remaining deadline still fits it:
     # each call may hold its socket for 8 of the transport's 25 seconds.
-    if not antigravity_summary_has_gemini(windows) and time.monotonic() - started <= 16:
+    if not antigravity_summary_has_gemini(windows) and time.monotonic() - started <= AGY_OPTIONAL_BUDGET_SECONDS:
         try:
             per_model = request_json(AGY_BASE + "retrieveUserQuota", headers, {"project": project})
         except UsageError as error:
