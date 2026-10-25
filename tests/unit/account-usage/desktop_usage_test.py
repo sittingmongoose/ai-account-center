@@ -225,12 +225,17 @@ class NormalizationTests(unittest.TestCase):
             {"modelId": "gemini-3.8-flash", "remainingFraction": .55, "resetTime": "2026-10-25T20:42:36Z"},
             {"modelId": "gemini-3.1-pro", "resetTime": "2026-10-25T20:42:36Z"},
             {"modelId": "gemini-sk-task-1", "remainingFraction": .9, "resetTime": "2026-10-25T20:42:36Z"},
-            {"modelId": "gemini-3.8-flash", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:36Z"}]}, summary)
+            {"modelId": "gemini-3.8-flash", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:36Z"},
+            {"modelId": "gemini-3.5-flash", "remainingAmount": "1200", "resetTime": "2026-10-25T20:42:36Z"}]}, summary)
         self.assertEqual(len(windows), 1)
         self.assertEqual(windows[0]["key"], "gemini-5h")
         self.assertEqual(windows[0]["remainingPercent"], 0)
         self.assertEqual(windows[0]["usedPercent"], 100)
         self.assertEqual(windows[0]["modelIds"], ["gemini-3.1-pro", "gemini-3.8-flash"])
+        # An amount without a fraction has no denominator: no window, not a
+        # fabricated 0%.
+        self.assertEqual(usage.normalize_antigravity_gemini({"buckets": [
+            {"modelId": "gemini-3.5-flash", "remainingAmount": "1200", "resetTime": "2026-10-25T20:42:36Z"}]}, summary), [])
 
     def test_antigravity_summary_with_version_gated_gemini_and_argon_groups(self):
         # The current-client User-Agent receives the Gemini and Argon groups the
@@ -483,7 +488,8 @@ class CollectionTests(unittest.TestCase):
     @patch("desktop_usage.request_json")
     def test_active_muse_with_omitted_usage_is_not_a_sign_in_failure(self, request, _credentials):
         request.return_value = {"user_email": "example@example.com", "subs_tier_name": "High Usage", "is_subs_active": True, "api_key": "sk-never-export"}
-        result = usage.collect("muse", "ubuntu")
+        with tempfile.TemporaryDirectory() as home:
+            result = usage.collect("muse", "ubuntu", home)
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["email"], "example@example.com")
         self.assertEqual(result["plan"], "High Usage")
@@ -506,7 +512,8 @@ class CollectionTests(unittest.TestCase):
     def test_successful_dto_cannot_leak_response_key(self, request, _credentials):
         request.return_value = {"api_key": "sk-never-export", "user_email": "example@example.com", "subs_tier_name": "High Usage",
                                 "subs_usage": {"weekly": {"used_percent": 6, "resets_at": 1790812800}}}
-        result = usage.collect("muse", "ubuntu")
+        with tempfile.TemporaryDirectory() as home:
+            result = usage.collect("muse", "ubuntu", home)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["email"], "example@example.com")
         encoded = json.dumps(result)
@@ -517,7 +524,8 @@ class CollectionTests(unittest.TestCase):
     @patch("desktop_usage.muse_credentials", return_value=helpers.Credential("dca:private-fixture"))
     @patch("desktop_usage.request_json", side_effect=Exception("sk-secret in a private upstream error"))
     def test_exception_details_are_never_emitted(self, _request, _credentials):
-        result = usage.collect("muse", "ubuntu")
+        with tempfile.TemporaryDirectory() as home:
+            result = usage.collect("muse", "ubuntu", home)
         self.assertEqual(result["status"], "error")
         self.assertNotIn("sk-secret", json.dumps(result))
         self.assertEqual(result["windows"], [])
@@ -556,6 +564,21 @@ class CollectionTests(unittest.TestCase):
         self.assertTrue(request.call_args_list[2].args[0].endswith("retrieveUserQuota"))
         self.assertEqual(request.call_args_list[2].args[2], {"project": "project-fixture"})
         self.assertEqual([window["key"] for window in result["windows"]], ["3p-5h", "gemini-5h"])
+
+    @patch("desktop_usage.request_json")
+    def test_antigravity_fetch_skips_per_model_read_when_summary_has_gemini(self, request):
+        request.side_effect = [
+            {"cloudaicompanionProject": "project-fixture", "planInfo": {"planType": "pro"}},
+            {"groups": [
+                {"displayName": "Gemini Models", "buckets": [
+                    {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": .4, "resetTime": "2026-10-25T20:42:30Z"}]},
+                {"displayName": "Claude and GPT models", "buckets": [
+                    {"bucketId": "3p-5h", "window": "5h", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:30Z"}]}]},
+        ]
+        result = helpers.account("antigravity", "ubuntu")
+        usage.fetch_antigravity_quota(helpers.Credential("fixture-access"), result)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual([window["key"] for window in result["windows"]], ["gemini-5h", "3p-5h"])
 
     @patch("desktop_usage.request_json")
     def test_antigravity_per_model_throttle_publishes_windows_and_keeps_cooldown(self, request):
@@ -629,6 +652,9 @@ class HttpSafetyTests(unittest.TestCase):
 
     @patch("desktop_helpers.urllib.request.build_opener")
     def test_http_429_date_and_invalid_retry_headers_are_bounded(self, opener):
+        # A fractional observation time makes the HTTP-date branch produce a
+        # fractional delay; the cooldown must ceil to whole int seconds so no
+        # consumer's integer gate can discard the provider's hold.
         for header, expected in (("Thu, 01 Jan 1970 00:46:40 GMT", 1800), ("0", 300),
                                  ("999999999999", 86400), (None, 600), ("malformed-private-value", 600),
                                  ("NaN", 600), ("-1", 600), ("x" * 129, 600)):
@@ -637,11 +663,12 @@ class HttpSafetyTests(unittest.TestCase):
                 error = urllib.error.HTTPError(usage.MUSE_URL, 429, "private", {"Retry-After": header}, body)
                 self.addCleanup(error.close)
                 opener.return_value.open.side_effect = error
-                with patch("desktop_helpers.time.time", return_value=1000), self.assertRaises(helpers.UsageError) as caught:
+                with patch("desktop_helpers.time.time", return_value=1000.25), self.assertRaises(helpers.UsageError) as caught:
                     helpers.request_json(usage.MUSE_URL)
                 self.assertEqual(caught.exception.status, "error")
                 self.assertEqual(caught.exception.failure_code, "rate_limited")
                 self.assertEqual(caught.exception.retry_after, expected)
+                self.assertIsInstance(caught.exception.retry_after, int)
                 body.read.assert_not_called()
 
     def test_legacy_usage_error_callers_need_no_structured_arguments(self):

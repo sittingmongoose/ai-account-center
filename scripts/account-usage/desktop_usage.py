@@ -14,6 +14,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 import cursor_usage
 
 from desktop_helpers import (
@@ -304,6 +305,19 @@ GEMINI_PERIOD_LABELS = {"5h": "5-hour", "weekly": "Weekly"}
 GEMINI_RESET_CLUSTER_SECONDS = 10
 
 
+def antigravity_summary_has_gemini(summary_windows):
+    """Whether the quota summary already reports a Gemini (or Argon) group.
+
+    Both collectors check this before the optional per-model read: when the
+    summary carries Gemini keys or labels, the derivation stands down and the
+    extra request is never made, so a throttle on it cannot hold the account.
+    """
+    return any(isinstance(window, dict) and (
+        str(window.get("key", "")).startswith("gemini")
+        or str(window.get("label", "")).lower().startswith("gemini"))
+        for window in summary_windows)
+
+
 def _antigravity_gemini_period(reset, anchors):
     """Classify a per-model Gemini reset against the summary's own windows.
 
@@ -351,6 +365,12 @@ def _antigravity_gemini_groups(buckets):
             continue
         fraction = number(bucket.get("remainingFraction"))
         if fraction is None:
+            if bucket.get("remainingAmount") is not None:
+                # An amount without a fraction has no denominator; the bucket
+                # stays unknown instead of being read as exhausted.
+                continue
+            # proto3 JSON omits zero-valued floats: no fraction and no amount
+            # is an exhausted window, which floors the shared minimum at 0.
             fraction = 0.0
         if not 0 <= fraction <= 1:
             continue
@@ -380,10 +400,7 @@ def normalize_antigravity_gemini(payload, summary_windows):
     """
     if not isinstance(payload, dict):
         return []
-    if any(isinstance(window, dict) and (
-            str(window.get("key", "")).startswith("gemini")
-            or str(window.get("label", "")).lower().startswith("gemini"))
-           for window in summary_windows):
+    if antigravity_summary_has_gemini(summary_windows):
         return []
     anchors = [(window.get("resetAt"), window.get("windowMinutes"))
                for window in summary_windows if isinstance(window, dict)]
@@ -558,6 +575,7 @@ def fetch_antigravity(credential, result, home=None):
 def fetch_antigravity_quota(credential, result):
     # The control plane selects Antigravity quota/project behavior by native
     # client User-Agent. A generic UA returns Gemini eligibility tiers instead.
+    started = time.monotonic()
     headers = {"Authorization": "Bearer " + credential.access, "User-Agent": AGY_USER_AGENT}
     load = request_json(AGY_BASE + "loadCodeAssist", headers,
                         {"metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
@@ -572,15 +590,19 @@ def fetch_antigravity_quota(credential, result):
         result["reportedPlan"] = reported
     payload = request_json(AGY_BASE + "retrieveUserQuotaSummary", headers, {"project": project})
     windows = normalize_antigravity(payload)
-    try:
-        per_model = request_json(AGY_BASE + "retrieveUserQuota", headers, {"project": project})
-    except UsageError as error:
-        # The optional read stays optional, but a provider throttle must not be:
-        # surface its cooldown so refreshes stop retrying the endpoint early.
-        per_model = None
-        retry_after = getattr(error, "retry_after", None)
-        if retry_after is not None and retry_after > 0 and "retryAfterSeconds" not in result:
-            result["retryAfterSeconds"] = retry_after
+    per_model = None
+    # The optional per-model read runs only when the summary carries no Gemini
+    # group, and only while the transport's remaining deadline still fits it:
+    # each call may hold its socket for 8 of the transport's 25 seconds.
+    if not antigravity_summary_has_gemini(windows) and time.monotonic() - started <= 16:
+        try:
+            per_model = request_json(AGY_BASE + "retrieveUserQuota", headers, {"project": project})
+        except UsageError as error:
+            # The optional read stays optional, but a provider throttle must not be:
+            # surface its cooldown so refreshes stop retrying the endpoint early.
+            retry_after = getattr(error, "retry_after", None)
+            if retry_after is not None and retry_after > 0 and "retryAfterSeconds" not in result:
+                result["retryAfterSeconds"] = retry_after
     windows += normalize_antigravity_gemini(per_model, windows)
     result["windows"] = windows + normalize_antigravity_credits(load)
 

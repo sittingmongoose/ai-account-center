@@ -103,6 +103,11 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
     new login, inferred model mapping or app OAuth constant is introduced.
     """
     clock = now or (lambda: dt.datetime.now(dt.timezone.utc))
+    # The worker dies at 25s and each call may hold its socket for 8s. The
+    # budget starts when the worker builds its dependencies, so the token
+    # refresh and identity verification count against it; the optional
+    # per-model read runs only while its 8s still fit with room to publish.
+    budget_started = clock()
     def userinfo(access):
         return helpers.request_json('https://www.googleapis.com/oauth2/v2/userinfo', {'Authorization': 'Bearer ' + access})
     def refresh(refresh_token):
@@ -112,7 +117,6 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
             'client_id': client_id, 'client_secret': client_secret,
         }, form=True)
     def quota(access, email):
-        started = clock()
         headers = {'Authorization': 'Bearer ' + access, 'User-Agent': desktop.AGY_USER_AGENT}
         load = helpers.request_json(desktop.AGY_BASE + 'loadCodeAssist', headers,
             {'metadata': {'ideType': 'ANTIGRAVITY', 'platform': 'PLATFORM_UNSPECIFIED', 'pluginType': 'GEMINI'}})
@@ -126,11 +130,11 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
         windows = desktop.normalize_antigravity(summary)
         pools = structural_pools(desktop.agy_groups(summary), windows)
         throttled = None
-        # The worker dies at 25s and each call may hold its socket for 8s; the
-        # optional per-model read is skipped once the measured budget for it
-        # (plus the unmeasured identity call) no longer fits, so a slow optional
-        # endpoint can never cost the summary-only sample.
-        if (clock() - started).total_seconds() <= 8:
+        # The optional per-model read runs only when the summary carries no
+        # Gemini group and the worker budget still fits its socket timeout; a
+        # slow or unneeded optional endpoint can never cost the summary sample.
+        if (not desktop.antigravity_summary_has_gemini(windows)
+                and (clock() - budget_started).total_seconds() <= 16):
             try:
                 per_model = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuota', headers, {'project': project})
             except helpers.UsageError as error:
