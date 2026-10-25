@@ -33,10 +33,11 @@ AGY_BASE = "https://cloudcode-pa.googleapis.com/v1internal:"
 AGY_USER_AGENT = "antigravity/hub/2.24.0 (aidev_client; os_type=linux; arch=amd64)"
 # The transport's deadline spans the whole collector process. This budget
 # starts when the module is imported, so credential reads and every quota
-# call count against the optional per-model read; the gap before this import
-# (interpreter start-up) is covered by the deadline's remaining allowance.
+# call count against the optional per-model read; the interpreter start-up
+# and imports before it load, and the SSH handshake outside it, fit in the
+# deadline's remaining allowance (13 + 8s socket = 21 of 25s).
 AGY_BUDGET_STARTED = time.monotonic()
-AGY_OPTIONAL_BUDGET_SECONDS = 15
+AGY_OPTIONAL_BUDGET_SECONDS = 13
 CURSOR_SUMMARY_URL = cursor_usage.SUMMARY_URL
 CURSOR_PROFILE_URL = cursor_usage.PROFILE_URL
 
