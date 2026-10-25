@@ -58,7 +58,8 @@ class AntigravityPlanMetadataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='aac-plan-fixture-') as root:
             dependencies = existing_collector_dependencies(desktop, helpers, Path(root), now=lambda: NOW)
             with patch.object(helpers, 'request_json', side_effect=[
-                {'email': identity.email, 'id': identity.subject, 'verified_email': True}, load, summary()]):
+                {'email': identity.email, 'id': identity.subject, 'verified_email': True}, load, summary(),
+                helpers.UsageError('unavailable', 'Per-model quota is unavailable.')]):
                 result = collect_snapshot(profile, dependencies)
         self.assertEqual(result['status'], 'fresh')
         self.assertEqual(result['plan'], 'ultra')
@@ -81,6 +82,38 @@ class AntigravityPlanMetadataTests(unittest.TestCase):
         self.assertEqual(desktop.antigravity_reported_plan({}), (None, {}))
         self.assertEqual(desktop.normalize_antigravity_credits({}), [])
         self.assertEqual(desktop.normalize_antigravity_credits({'paidTier': {'availableCredits': []}}), [])
+
+    def test_collector_derives_gemini_window_when_summary_omits_the_group(self):
+        raw = json.dumps({'auth_method': 'consumer', 'token': {
+            'access_token': 'invented-access', 'refresh_token': 'invented-refresh',
+            'token_type': 'Bearer', 'expiry': '2030-01-01T00:00:00Z'}}).encode()
+        credential = PrivateCredential(raw, revision(raw))
+        identity = VerifiedIdentity('fixture@example.com', '123456789', '2026-10-07T00:00:00Z')
+        profile = SavedProfile('fixture', identity.email, identity.identity_key, credential.revision, credential)
+        load = {'cloudaicompanionProject': 'invented-project', 'planInfo': {'planType': 'pro'}}
+        # The summary shape Google has served since 2026-10-22: no Gemini group.
+        without_gemini = {'groups': [{'displayName': 'Claude and GPT models', 'buckets': [
+            {'bucketId': '3p-5h', 'window': '5h', 'remainingFraction': .9, 'resetTime': '2026-10-07T05:00:06Z'},
+            {'bucketId': '3p-weekly', 'window': 'weekly', 'remainingFraction': .9, 'resetTime': '2026-10-14T00:00:06Z'}]}]}
+        per_model = {'buckets': [
+            {'modelId': 'gemini-3.8-flash-tiered', 'tokenType': 'WTUS', 'remainingFraction': .55, 'resetTime': '2026-10-07T05:00:00Z'},
+            {'modelId': 'gemini-3.1-pro', 'tokenType': 'WTUS', 'remainingFraction': .4, 'resetTime': '2026-10-07T05:00:00Z'}]}
+        with tempfile.TemporaryDirectory(prefix='aac-gemini-fixture-') as root:
+            dependencies = existing_collector_dependencies(desktop, helpers, Path(root), now=lambda: NOW)
+            with patch.object(helpers, 'request_json', side_effect=[
+                    {'email': identity.email, 'id': identity.subject, 'verified_email': True},
+                    load, without_gemini, per_model]):
+                result = collect_snapshot(profile, dependencies)
+        self.assertEqual(result['status'], 'fresh')
+        derived = [window for window in result['windows'] if window['key'].startswith('gemini')]
+        self.assertEqual(len(derived), 1)
+        self.assertEqual(derived[0]['key'], 'gemini-5h')
+        self.assertEqual(derived[0]['label'], 'Gemini Models · 5-hour')
+        self.assertEqual(derived[0]['remainingPercent'], 40)
+        self.assertEqual(derived[0]['modelIds'], ['gemini-3.1-pro', 'gemini-3.8-flash-tiered'])
+        # A derived window carries no provider bucket membership and no pool.
+        self.assertNotIn('poolId', derived[0])
+        self.assertNotIn('private', json.dumps(result))
 
 
 if __name__ == '__main__':

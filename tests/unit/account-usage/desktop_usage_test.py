@@ -133,6 +133,54 @@ class NormalizationTests(unittest.TestCase):
         self.assertIsNone(windows[0]["resetAt"])
         self.assertIsNone(windows[0]["unit"])
 
+    def test_antigravity_gemini_window_derives_from_per_model_buckets(self):
+        summary = usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-01T15:27:22Z"},
+            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:42:30Z"}]}]})
+        payload = {"buckets": [
+            {"modelId": "gemini-3.8-flash-tiered", "tokenType": "WTUS", "remainingFraction": .55, "resetTime": "2026-10-25T20:42:36Z"},
+            {"modelId": "gemini-3.1-pro", "tokenType": "WTUS", "remainingFraction": .4, "resetTime": "2026-10-25T20:42:36Z"},
+            {"modelId": "claude-opus-5-5-high", "tokenType": "WTUS", "remainingFraction": .9, "resetTime": "2026-10-25T20:42:36Z"},
+            {"modelId": "gemini-2.5-pro", "tokenType": "WTUS", "remainingFraction": .8},
+        ]}
+        windows = usage.normalize_antigravity_gemini(payload, summary)
+        self.assertEqual(len(windows), 1)
+        window = windows[0]
+        self.assertEqual(window["key"], "gemini-5h")
+        self.assertEqual(window["label"], "Gemini Models · 5-hour")
+        self.assertEqual(window["remainingPercent"], 40)
+        self.assertEqual(window["usedPercent"], 60)
+        self.assertEqual(window["resetAt"], "2026-10-25T20:42:36Z")
+        self.assertEqual(window["windowMinutes"], 300)
+        self.assertEqual(window["modelIds"], ["gemini-3.1-pro", "gemini-3.8-flash-tiered"])
+        self.assertNotIn("WTUS", json.dumps(windows))
+
+    def test_antigravity_gemini_period_is_adopted_only_from_matching_summary_resets(self):
+        summary = usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-01T15:51:10Z"},
+            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:51:00Z"}]}]})
+        weekly = usage.normalize_antigravity_gemini({"buckets": [
+            {"modelId": "gemini-3.8-flash-tiered", "remainingFraction": .35, "resetTime": "2026-11-01T15:51:22Z"}]}, summary)
+        self.assertEqual(weekly[0]["key"], "gemini-weekly")
+        self.assertEqual(weekly[0]["label"], "Gemini Models · Weekly")
+        self.assertEqual(weekly[0]["windowMinutes"], 10080)
+        unmatched = usage.normalize_antigravity_gemini({"buckets": [
+            {"modelId": "gemini-3.1-pro", "remainingFraction": .5, "resetTime": "2026-10-26T09:00:00Z"}]}, summary)
+        self.assertEqual(unmatched[0]["key"], "gemini-window")
+        self.assertEqual(unmatched[0]["label"], "Gemini Models")
+        self.assertIsNone(unmatched[0]["windowMinutes"])
+
+    def test_antigravity_gemini_derivation_requires_provider_reset_and_summary_gap(self):
+        summary = usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
+            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:42:30Z"}]}]})
+        buckets_without_reset = {"buckets": [{"modelId": "gemini-3.8-flash-tiered", "remainingFraction": .5}]}
+        self.assertEqual(usage.normalize_antigravity_gemini(buckets_without_reset, summary), [])
+        self.assertEqual(usage.normalize_antigravity_gemini(None, summary), [])
+        with_gemini_keys = summary + [{"key": "gemini-5h", "label": "Gemini Models · 5-hour"}]
+        self.assertEqual(usage.normalize_antigravity_gemini({"buckets": [
+            {"modelId": "gemini-3.8-flash-tiered", "remainingFraction": .5, "resetTime": "2026-10-25T20:42:36Z"}]},
+            with_gemini_keys), [])
+
     def test_cursor_does_not_infer_reset_from_start(self):
         windows = usage.normalize_cursor({"billingCycleStart": "2026-09-01T00:00:00Z",
                                           "individualUsage": {"plan": {"used": 10, "limit": 100}}})
@@ -387,6 +435,7 @@ class CollectionTests(unittest.TestCase):
             {"access_token": "renewed-access", "expires_in": 3600},
             {"cloudaicompanionProject": "project-fixture", "planInfo": {"planType": "pro"}},
             {"groups": [{"buckets": [{"bucketId": "limit", "remainingFraction": .25}]}]},
+            helpers.UsageError("unavailable", "Per-model quota is unavailable."),
         ]
         result = helpers.account("antigravity", "mac")
         usage.fetch_antigravity(credential, result)
@@ -397,6 +446,21 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(request.call_args_list[1].args[1]["Authorization"], "Bearer renewed-access")
         self.assertEqual(result["windows"][0]["remainingPercent"], 25)
         self.assertNotIn("renewed-access", json.dumps(result))
+
+    @patch("desktop_usage.request_json")
+    def test_antigravity_fetch_reads_per_model_quota_for_gemini_windows(self, request):
+        request.side_effect = [
+            {"cloudaicompanionProject": "project-fixture", "planInfo": {"planType": "pro"}},
+            {"groups": [{"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:30Z"}]}]},
+            {"buckets": [{"modelId": "gemini-3.8-flash-tiered", "remainingFraction": .55, "resetTime": "2026-10-25T20:42:36Z"}]},
+        ]
+        result = helpers.account("antigravity", "ubuntu")
+        usage.fetch_antigravity_quota(helpers.Credential("fixture-access"), result)
+        self.assertEqual(request.call_count, 3)
+        self.assertTrue(request.call_args_list[2].args[0].endswith("retrieveUserQuota"))
+        self.assertEqual(request.call_args_list[2].args[2], {"project": "project-fixture"})
+        self.assertEqual([window["key"] for window in result["windows"]], ["3p-5h", "gemini-5h"])
 
     @patch("desktop_usage.antigravity_oauth_client", return_value=("fixture-client.apps.googleusercontent.com", "synthetic-app-value"))
     @patch("desktop_usage.request_json")
