@@ -31,10 +31,10 @@ AGY_BASE = "https://cloudcode-pa.googleapis.com/v1internal:"
 # version bump is a single change; the per-model retrieveUserQuota fallback in
 # normalize_antigravity_gemini covers any window the summary then omits.
 AGY_USER_AGENT = "antigravity/hub/2.24.0 (aidev_client; os_type=linux; arch=amd64)"
-# The transport's deadline spans the whole collector process -- interpreter
-# start-up, imports, credential reads and every quota call. The budget starts
-# at module import so all of it counts against the optional per-model read,
-# whose socket can still hold 8 of the 25 seconds.
+# The transport's deadline spans the whole collector process. This budget
+# starts when the module is imported, so credential reads and every quota
+# call count against the optional per-model read; the gap before this import
+# (interpreter start-up) is covered by the deadline's remaining allowance.
 AGY_BUDGET_STARTED = time.monotonic()
 AGY_OPTIONAL_BUDGET_SECONDS = 15
 CURSOR_SUMMARY_URL = cursor_usage.SUMMARY_URL

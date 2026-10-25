@@ -581,8 +581,10 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual([window["key"] for window in result["windows"]], ["gemini-5h", "3p-5h"])
 
     @patch("desktop_usage.time")
+    @patch("desktop_usage.antigravity_oauth_client",
+           return_value=("fixture-client.apps.googleusercontent.com", "synthetic-app-value"))
     @patch("desktop_usage.request_json")
-    def test_antigravity_budget_spans_the_token_refresh(self, request, clock):
+    def test_antigravity_budget_spans_the_token_refresh(self, request, _client, clock):
         # The budget starts at process start (module import), so a 6s refresh
         # plus 6s load and summary calls -- 18s in all -- leaves no room for
         # the optional per-model read; it must be skipped so the summary
