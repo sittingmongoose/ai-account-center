@@ -113,7 +113,7 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
         }, form=True)
     def quota(access, email):
         started = clock()
-        headers = {'Authorization': 'Bearer ' + access, 'User-Agent': 'antigravity/1.0.0'}
+        headers = {'Authorization': 'Bearer ' + access, 'User-Agent': desktop.AGY_USER_AGENT}
         load = helpers.request_json(desktop.AGY_BASE + 'loadCodeAssist', headers,
             {'metadata': {'ideType': 'ANTIGRAVITY', 'platform': 'PLATFORM_UNSPECIFIED', 'pluginType': 'GEMINI'}})
         project = load.get('cloudaicompanionProject')

@@ -383,7 +383,7 @@ def _refresh(credential, home):
 
 
 def _quota(credential, sample):
-    headers = {"Authorization": "Bearer " + credential.access, "User-Agent": "antigravity/1.0.0"}
+    headers = {"Authorization": "Bearer " + credential.access, "User-Agent": desktop.AGY_USER_AGENT}
     load = HttpClient.request_json(desktop.AGY_BASE + "loadCodeAssist", headers, {
         "metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
     project = load.get("cloudaicompanionProject")

@@ -24,6 +24,12 @@ from desktop_helpers import (
 
 MUSE_URL = "https://api.meta.ai/muse-code/key"
 AGY_BASE = "https://cloudcode-pa.googleapis.com/v1internal:"
+# The quota summary gates its Gemini (and Argon) groups on the client version
+# in the User-Agent: 1.0.0-era clients stopped receiving them on 2026-10-22,
+# while current Antigravity client versions still do. One constant, so a future
+# version bump is a single change; the per-model retrieveUserQuota fallback in
+# normalize_antigravity_gemini covers any window the summary then omits.
+AGY_USER_AGENT = "antigravity/hub/2.24.0 (aidev_client; os_type=linux; arch=amd64)"
 CURSOR_SUMMARY_URL = cursor_usage.SUMMARY_URL
 CURSOR_PROFILE_URL = cursor_usage.PROFILE_URL
 
@@ -552,7 +558,7 @@ def fetch_antigravity(credential, result, home=None):
 def fetch_antigravity_quota(credential, result):
     # The control plane selects Antigravity quota/project behavior by native
     # client User-Agent. A generic UA returns Gemini eligibility tiers instead.
-    headers = {"Authorization": "Bearer " + credential.access, "User-Agent": "antigravity/1.0.0"}
+    headers = {"Authorization": "Bearer " + credential.access, "User-Agent": AGY_USER_AGENT}
     load = request_json(AGY_BASE + "loadCodeAssist", headers,
                         {"metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
     project = load.get("cloudaicompanionProject")

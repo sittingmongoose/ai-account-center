@@ -232,6 +232,26 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(windows[0]["usedPercent"], 100)
         self.assertEqual(windows[0]["modelIds"], ["gemini-3.1-pro", "gemini-3.8-flash"])
 
+    def test_antigravity_summary_with_version_gated_gemini_and_argon_groups(self):
+        # The current-client User-Agent receives the Gemini and Argon groups the
+        # 1.0.0-era User-Agent stopped seeing on 2026-10-22; the plain summary
+        # normalizer already carries them, keyed by Google's own bucket ids.
+        windows = usage.normalize_antigravity({"groups": [
+            {"displayName": "Gemini Models", "buckets": [
+                {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-01T18:36:00Z"},
+                {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T23:36:00Z"}]},
+            {"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-01T18:36:00Z"},
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T23:36:00Z"}]},
+            {"displayName": "Gemini 4 Argon", "buckets": [
+                {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": .93, "resetTime": "2026-11-01T11:10:00Z"}]},
+        ]})
+        self.assertEqual([window["key"] for window in windows],
+                         ["gemini-weekly", "gemini-5h", "3p-weekly", "3p-5h", "gemini-argon-wtu-weekly"])
+        argon = windows[-1]
+        self.assertEqual(argon["label"], "Gemini 4 Argon · Weekly")
+        self.assertEqual(argon["remainingPercent"], 93)
+
     def test_antigravity_gemini_derivation_requires_provider_reset_and_summary_gap(self):
         summary = usage.normalize_antigravity({"groups": [{"displayName": "Claude and GPT models", "buckets": [
             {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-10-25T20:42:30Z"}]}]})
@@ -571,9 +591,11 @@ class HttpSafetyTests(unittest.TestCase):
         response = opener.return_value.open.return_value.__enter__.return_value
         response.read.return_value = b'{"groups":[]}'
         helpers.request_json("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
-                             {"User-Agent": "antigravity/1.0.0", "Authorization": "Bearer private-fixture"}, {})
+                             {"User-Agent": usage.AGY_USER_AGENT, "Authorization": "Bearer private-fixture"}, {})
         request = opener.return_value.open.call_args.args[0]
-        self.assertEqual(request.get_header("User-agent"), "antigravity/1.0.0")
+        self.assertEqual(request.get_header("User-agent"), usage.AGY_USER_AGENT)
+        # The summary gates its Gemini groups on this version prefix.
+        self.assertTrue(usage.AGY_USER_AGENT.startswith("antigravity/hub/2."))
         self.assertEqual(opener.return_value.open.call_args.kwargs["timeout"], 8)
         self.assertEqual(response.read.call_args.args, (65537,))
 
