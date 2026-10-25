@@ -117,6 +117,11 @@ def existing_collector_dependencies(desktop, helpers, home, now=None) -> QuotaDe
         summary = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuotaSummary', headers, {'project': project})
         windows = desktop.normalize_antigravity(summary)
         pools = structural_pools(desktop.agy_groups(summary), windows)
+        try:
+            per_model = helpers.request_json(desktop.AGY_BASE + 'retrieveUserQuota', headers, {'project': project})
+        except helpers.UsageError:
+            per_model = None
+        windows += desktop.normalize_antigravity_gemini(per_model, windows)
         windows += desktop.normalize_antigravity_credits(load)
         return {'email': email, 'plan': plan, 'windows': windows, 'pools': pools,
                 **({'reportedPlan': reported} if reported else {})}

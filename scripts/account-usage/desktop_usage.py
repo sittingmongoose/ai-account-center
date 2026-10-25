@@ -293,6 +293,74 @@ def normalize_antigravity(payload):
     return windows
 
 
+GEMINI_PERIOD_LABELS = {"5h": "5-hour", "weekly": "Weekly"}
+
+
+def _antigravity_gemini_period(reset, anchors):
+    """Classify a per-model Gemini reset against the summary's own windows.
+
+    The per-model quota carries no window label; a reset matching a summary
+    window's reset (both derive from the same plan anchors, seconds apart)
+    adopts that window's period. Anything unmatched keeps no period at all
+    rather than guessing one.
+    """
+    try:
+        stamp = dt.datetime.fromisoformat(reset.replace("Z", "+00:00"))
+    except ValueError:
+        return None, None
+    for anchor_reset, minutes in anchors:
+        if anchor_reset is None or minutes not in (300, 10080):
+            continue
+        try:
+            anchor = dt.datetime.fromisoformat(anchor_reset.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if abs((stamp - anchor).total_seconds()) <= 600:
+            return ("5h", 300) if minutes == 300 else ("weekly", 10080)
+    return None, None
+
+
+def normalize_antigravity_gemini(payload, summary_windows):
+    """Derive the Gemini windows from the per-model quota buckets.
+
+    Google stopped listing the Gemini group in retrieveUserQuotaSummary
+    (observed 2026-10-22); its shared windows survive only as per-model
+    buckets in retrieveUserQuota, one reset per window. One derived window per
+    distinct shared reset: the remaining fraction is the minimum across the
+    models sharing it, and no window is derived without a provider reset or
+    when the summary reports Gemini keys again.
+    """
+    if not isinstance(payload, dict):
+        return []
+    if any(isinstance(window, dict) and str(window.get("key", "")).startswith("gemini")
+           for window in summary_windows):
+        return []
+    anchors = [(window.get("resetAt"), window.get("windowMinutes"))
+               for window in summary_windows if isinstance(window, dict)]
+    groups = {}
+    buckets = payload.get("buckets")
+    for bucket in (buckets if isinstance(buckets, list) else [])[:256]:
+        if not isinstance(bucket, dict):
+            continue
+        model_id = safe_text(bucket.get("modelId"), 160)
+        fraction = number(bucket.get("remainingFraction"))
+        reset = reset_at(bucket.get("resetTime"))
+        if (model_id is None or not model_id.startswith("gemini-") or fraction is None
+                or not 0 <= fraction <= 1 or reset is None):
+            continue
+        groups.setdefault(reset, []).append((model_id, fraction))
+    windows = []
+    for index, (reset, members) in enumerate(sorted(groups.items())[:4]):
+        period, minutes = _antigravity_gemini_period(reset, anchors)
+        key = "gemini-" + (period or "window") + ("" if index == 0 else "-" + str(index + 1))
+        label = "Gemini Models" + (" · " + GEMINI_PERIOD_LABELS[period] if period else "")
+        window = quota_window(key, label, remaining_percent=min(f for _, f in members) * 100,
+                              reset=reset, minutes=minutes)
+        window["modelIds"] = sorted(model for model, _ in members)[:64]
+        windows.append(window)
+    return windows
+
+
 def antigravity_reported_plan(load):
     """Retain only plan/tier display fields, for the single TypeScript plan table."""
     reported = {}
@@ -460,7 +528,13 @@ def fetch_antigravity_quota(credential, result):
     if reported:
         result["reportedPlan"] = reported
     payload = request_json(AGY_BASE + "retrieveUserQuotaSummary", headers, {"project": project})
-    result["windows"] = normalize_antigravity(payload) + normalize_antigravity_credits(load)
+    windows = normalize_antigravity(payload)
+    try:
+        per_model = request_json(AGY_BASE + "retrieveUserQuota", headers, {"project": project})
+    except UsageError:
+        per_model = None
+    windows += normalize_antigravity_gemini(per_model, windows)
+    result["windows"] = windows + normalize_antigravity_credits(load)
 
 
 def cursor_cookie(credential):
