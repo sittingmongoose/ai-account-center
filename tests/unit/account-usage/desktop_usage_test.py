@@ -580,6 +580,26 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertEqual([window["key"] for window in result["windows"]], ["gemini-5h", "3p-5h"])
 
+    @patch("desktop_usage.time")
+    @patch("desktop_usage.request_json")
+    def test_antigravity_budget_spans_the_token_refresh(self, request, clock):
+        # A 6s refresh plus 6s load and summary calls leaves 18s on the clock
+        # measured from before the refresh; the optional per-model read no
+        # longer fits and must be skipped so the summary still publishes.
+        clock.monotonic.side_effect = [100.0, 118.0]
+        request.side_effect = [
+            {"access_token": "renewed-access", "expires_in": 3600},
+            {"cloudaicompanionProject": "project-fixture", "planInfo": {"planType": "pro"}},
+            {"groups": [{"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:30Z"}]}]},
+        ]
+        credential = helpers.Credential("expired-access", "OMP", "fixture-refresh", 1,
+                                         "example@example.com", "project-fixture")
+        result = helpers.account("antigravity", "ubuntu")
+        usage.fetch_antigravity(credential, result)
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual([window["key"] for window in result["windows"]], ["3p-5h"])
+
     @patch("desktop_usage.request_json")
     def test_antigravity_per_model_throttle_publishes_windows_and_keeps_cooldown(self, request):
         request.side_effect = [

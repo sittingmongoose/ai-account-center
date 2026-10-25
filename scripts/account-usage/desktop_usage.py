@@ -559,23 +559,27 @@ def refresh_antigravity(credential, home=None):
 
 
 def fetch_antigravity(credential, result, home=None):
+    # One monotonic budget spans the token refresh, the quota calls and any
+    # authentication retry, so the optional per-model read can never push the
+    # collection past its transport deadline.
+    budget = time.monotonic()
     now = dt.datetime.now(dt.timezone.utc).timestamp() * 1000
     refreshed = False
     if credential.expires is not None and credential.expires <= now + 30000:
         credential = refresh_antigravity(credential, home)
         refreshed = True
     try:
-        fetch_antigravity_quota(credential, result)
+        fetch_antigravity_quota(credential, result, budget)
     except UsageError as error:
         if error.status != "needs_sign_in" or refreshed or not credential.refresh:
             raise
-        fetch_antigravity_quota(refresh_antigravity(credential, home), result)
+        fetch_antigravity_quota(refresh_antigravity(credential, home), result, budget)
 
 
-def fetch_antigravity_quota(credential, result):
+def fetch_antigravity_quota(credential, result, budget_started=None):
     # The control plane selects Antigravity quota/project behavior by native
     # client User-Agent. A generic UA returns Gemini eligibility tiers instead.
-    started = time.monotonic()
+    started = budget_started if budget_started is not None else time.monotonic()
     headers = {"Authorization": "Bearer " + credential.access, "User-Agent": AGY_USER_AGENT}
     load = request_json(AGY_BASE + "loadCodeAssist", headers,
                         {"metadata": {"ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}})
