@@ -309,7 +309,7 @@ def retry_after_seconds(value, now=None):
                     seconds = instant.timestamp() - now
             except (ValueError, TypeError, OverflowError, OSError):
                 pass
-    return min(86400, max(300, seconds)) if number(seconds) is not None else 600
+    return min(86400, max(300, math.ceil(seconds))) if number(seconds) is not None else 600
 
 
 def request_json(url, headers=None, body=None, form=False):

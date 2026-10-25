@@ -251,6 +251,26 @@ describe('native and alternate Antigravity identity cooldown', () => {
     expect(h.quotaCalls).toEqual(['alice', 'bob', 'bob']);
   });
 
+  it('publishes a fresh sample whose optional Gemini read was throttled and holds its cooldown', async () => {
+    const h = fixture();
+    h.setCollect(async (request) =>
+      request.profileId === 'alice'
+        ? { ...h.sample(request), status: 'fresh', retryAfterSeconds: 1800 }
+        : h.sample(request)
+    );
+    const [result] = await h.construct().getAccounts({ refresh: true });
+    // The summary windows publish; only the next collections wait out the hold.
+    expect(result.status).toBe('ok');
+    expect(result.windows).toHaveLength(1);
+    expect(readIdentityUsageCooldown(h.scope, 'antigravity', h.candidate.identity, h.now())).toBe(
+      h.now() + 1800_000
+    );
+    expect(JSON.stringify(result)).not.toContain('retryAfterSeconds');
+    h.advance(1799_000);
+    await h.construct().getAccounts({ refresh: true });
+    expect(h.quotaCalls).toEqual(['alice', 'bob', 'bob']);
+  });
+
   it('does not publish a cooldown for a response that does not bind the original request', async () => {
     const invalid: Array<Partial<SavedQuotaSnapshot>> = [
       { profileId: 'bob' },

@@ -115,6 +115,118 @@ class AntigravityPlanMetadataTests(unittest.TestCase):
         self.assertNotIn('poolId', derived[0])
         self.assertNotIn('private', json.dumps(result))
 
+    def _gemini_fixture(self):
+        raw = json.dumps({'auth_method': 'consumer', 'token': {
+            'access_token': 'invented-access', 'refresh_token': 'invented-refresh',
+            'token_type': 'Bearer', 'expiry': '2030-01-01T00:00:00Z'}}).encode()
+        credential = PrivateCredential(raw, revision(raw))
+        identity = VerifiedIdentity('fixture@example.com', '123456789', '2026-10-07T00:00:00Z')
+        profile = SavedProfile('fixture', identity.email, identity.identity_key, credential.revision, credential)
+        load = {'cloudaicompanionProject': 'invented-project', 'planInfo': {'planType': 'pro'}}
+        without_gemini = {'groups': [{'displayName': 'Claude and GPT models', 'buckets': [
+            {'bucketId': '3p-5h', 'window': '5h', 'remainingFraction': .9, 'resetTime': '2026-10-07T05:00:06Z'}]}]}
+        userinfo = {'email': identity.email, 'id': identity.subject, 'verified_email': True}
+        return profile, userinfo, load, without_gemini
+
+    def test_collector_makes_no_per_model_read_when_summary_has_gemini(self):
+        profile, userinfo, load, _ = self._gemini_fixture()
+        restored = {'groups': [
+            {'displayName': 'Gemini Models', 'buckets': [
+                {'bucketId': 'gemini-5h', 'window': '5h', 'remainingFraction': .4, 'resetTime': '2026-10-07T05:00:00Z'}]},
+            {'displayName': 'Claude and GPT models', 'buckets': [
+                {'bucketId': '3p-5h', 'window': '5h', 'remainingFraction': .9, 'resetTime': '2026-10-07T05:00:06Z'}]}]}
+        with tempfile.TemporaryDirectory(prefix='aac-gemini-restored-') as root:
+            dependencies = existing_collector_dependencies(desktop, helpers, Path(root), now=lambda: NOW)
+            with patch.object(helpers, 'request_json', side_effect=[userinfo, load, restored]) as request:
+                result = collect_snapshot(profile, dependencies)
+        self.assertEqual(result['status'], 'fresh')
+        self.assertEqual([window['key'] for window in result['windows']], ['gemini-5h', '3p-5h'])
+        self.assertEqual(request.call_count, 3)
+        self.assertNotIn('retrieveUserQuota', [call.args[0] for call in request.call_args_list])
+        self.assertNotIn('retryAfterSeconds', result)
+
+    def test_collector_publishes_cooldown_when_the_optional_read_is_throttled(self):
+        profile, userinfo, load, without_gemini = self._gemini_fixture()
+        with tempfile.TemporaryDirectory(prefix='aac-gemini-throttle-') as root:
+            dependencies = existing_collector_dependencies(desktop, helpers, Path(root), now=lambda: NOW)
+            with patch.object(helpers, 'request_json', side_effect=[
+                    userinfo, load, without_gemini,
+                    helpers.UsageError('rate_limited', 'Throttled.', retry_after=1800)]):
+                result = collect_snapshot(profile, dependencies)
+        self.assertEqual(result['status'], 'fresh')
+        self.assertEqual([window['key'] for window in result['windows']], ['3p-5h'])
+        self.assertEqual(result['retryAfterSeconds'], 1800)
+
+    def test_collector_skips_the_optional_read_once_the_time_budget_is_spent(self):
+        profile, userinfo, load, without_gemini = self._gemini_fixture()
+        clock = [NOW]
+        per_model = {'buckets': [
+            {'modelId': 'gemini-3.8-flash-tiered', 'remainingFraction': .55, 'resetTime': '2026-10-07T05:00:00Z'}]}
+        requested = []
+
+        def slow_request(url, *args, **kwargs):
+            requested.append(url)
+            # Each HTTPS call consumes 6s of the worker's budget, from the
+            # dependencies' construction (worker start) onward.
+            clock[0] += dt.timedelta(seconds=6)
+            for suffix, payload in (('loadCodeAssist', load),
+                                    ('retrieveUserQuotaSummary', without_gemini),
+                                    ('userinfo', userinfo),
+                                    ('token', {'access_token': 'renewed-fixture', 'expires_in': 3600}),
+                                    ('retrieveUserQuota', per_model)):
+                if url.endswith(suffix):
+                    return payload
+            raise AssertionError('unexpected url ' + url)
+
+        with tempfile.TemporaryDirectory(prefix='aac-gemini-budget-') as root:
+            dependencies = existing_collector_dependencies(desktop, helpers, Path(root), now=lambda: clock[0])
+            with patch.object(helpers, 'request_json', side_effect=slow_request):
+                result = collect_snapshot(profile, dependencies)
+        # userinfo + load + summary consume 18s of the 25s worker budget; the
+        # optional endpoint is never contacted and the summary still publishes.
+        self.assertEqual(result['status'], 'fresh')
+        self.assertEqual([window['key'] for window in result['windows']], ['3p-5h'])
+        self.assertFalse([url for url in requested if url.endswith('retrieveUserQuota')])
+        self.assertNotIn('retryAfterSeconds', result)
+
+    def test_collector_budget_includes_token_refresh_and_identity(self):
+        raw = json.dumps({'auth_method': 'consumer', 'token': {
+            'access_token': 'invented-access', 'refresh_token': 'invented-refresh',
+            'token_type': 'Bearer', 'expiry': '2026-10-06T00:00:00Z'}}).encode()
+        credential = PrivateCredential(raw, revision(raw))
+        identity = VerifiedIdentity('fixture@example.com', '123456789', '2026-10-07T00:00:00Z')
+        profile = SavedProfile('fixture', identity.email, identity.identity_key, credential.revision, credential)
+        _p, userinfo, load, without_gemini = self._gemini_fixture()
+        clock = [NOW]
+        requested = []
+
+        def slow_request(url, *args, **kwargs):
+            requested.append(url)
+            clock[0] += dt.timedelta(seconds=6)
+            for suffix, payload in (('token', {'access_token': 'renewed-fixture', 'expires_in': 3600}),
+                                    ('userinfo', userinfo),
+                                    ('loadCodeAssist', load),
+                                    ('retrieveUserQuotaSummary', without_gemini),
+                                    ('retrieveUserQuota', AssertionError('optional call forbidden'))):
+                if url.endswith(suffix):
+                    if isinstance(payload, Exception):
+                        raise payload
+                    return payload
+            raise AssertionError('unexpected url ' + url)
+
+        with tempfile.TemporaryDirectory(prefix='aac-gemini-refresh-budget-') as root:
+            dependencies = existing_collector_dependencies(desktop, helpers, Path(root), now=lambda: clock[0])
+            with patch.object(desktop, 'antigravity_oauth_client',
+                              return_value=('fixture-client.apps.googleusercontent.com', 'synthetic-app-value')), \
+                    patch.object(helpers, 'request_json', side_effect=slow_request):
+                result = collect_snapshot(profile, dependencies)
+        # The expired-token refresh and identity verification consume the
+        # budget before the summary completes, so the optional read cannot
+        # push the worker past its deadline and lose the usable summary.
+        self.assertEqual(result['status'], 'fresh')
+        self.assertEqual([window['key'] for window in result['windows']], ['3p-5h'])
+        self.assertFalse([url for url in requested if url.endswith('retrieveUserQuota')])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -498,8 +498,9 @@ class HttpClientTests(unittest.TestCase):
         opener.open.return_value = io.BytesIO(b'{}')
         with patch.object(special.urllib.request, "build_opener", return_value=opener):
             special.HttpClient.request_json(special.desktop.AGY_BASE + "loadCodeAssist",
-                                            {"User-Agent": "antigravity/1.0.0"}, {})
-            self.assertEqual(opener.open.call_args.args[0].get_header("User-agent"), "antigravity/1.0.0")
+                                            {"User-Agent": special.desktop.AGY_USER_AGENT}, {})
+            self.assertEqual(opener.open.call_args.args[0].get_header("User-agent"),
+                             special.desktop.AGY_USER_AGENT)
             with self.assertRaises(special.helpers.UsageError):
                 special.HttpClient.request_json("https://unrelated.example.test")
         opener.open.assert_called_once()

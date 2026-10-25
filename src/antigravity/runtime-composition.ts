@@ -218,9 +218,16 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
       snapshot.email?.toLowerCase() === request.email.toLowerCase();
     // A provider throttled this immutable request even if its local token was
     // replaced while it was in flight. Quota publication still rechecks below.
+    // A fresh snapshot may also report a throttle that hit only its optional
+    // per-model Gemini read: the summary windows are published, and the same
+    // identity-bound hold stops the next collections from retrying early.
+    const freshThrottled =
+      snapshot.status === 'fresh' &&
+      Number.isInteger(snapshot.retryAfterSeconds) &&
+      (snapshot.retryAfterSeconds as number) > 0;
     if (
       matchesRequest &&
-      snapshot.status === 'rate_limited' &&
+      (snapshot.status === 'rate_limited' || freshThrottled) &&
       snapshot.identityValidation !== 'mismatch' &&
       snapshot.identityValidation !== 'needs_sign_in' &&
       deps.ccsDirectory
