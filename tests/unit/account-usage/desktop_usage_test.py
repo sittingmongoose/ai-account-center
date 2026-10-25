@@ -604,6 +604,24 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(request.call_count, 3)
         self.assertEqual([window["key"] for window in result["windows"]], ["3p-5h"])
 
+    @patch("desktop_usage.time")
+    @patch("desktop_usage.request_json")
+    def test_antigravity_optional_read_boundary_is_inclusive_at_the_gate(self, request, clock):
+        # Exactly AGY_OPTIONAL_BUDGET_SECONDS elapsed still admits the optional
+        # read, so a later change to the constant moves this boundary with it.
+        clock.monotonic.return_value = 100.0 + usage.AGY_OPTIONAL_BUDGET_SECONDS
+        request.side_effect = [
+            {"cloudaicompanionProject": "project-fixture", "planInfo": {"planType": "pro"}},
+            {"groups": [{"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:30Z"}]}]},
+            {"buckets": [{"modelId": "gemini-3.8-flash", "remainingFraction": .55, "resetTime": "2026-10-25T20:42:30Z"}]},
+        ]
+        result = helpers.account("antigravity", "ubuntu")
+        with patch.object(usage, "AGY_BUDGET_STARTED", 100.0):
+            usage.fetch_antigravity(helpers.Credential("fixture-access"), result)
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual([window["key"] for window in result["windows"]], ["3p-5h", "gemini-5h"])
+
     @patch("desktop_usage.request_json")
     def test_antigravity_per_model_throttle_publishes_windows_and_keeps_cooldown(self, request):
         request.side_effect = [
