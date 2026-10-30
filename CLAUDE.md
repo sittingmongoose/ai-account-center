@@ -83,3 +83,14 @@ separate authorization.
 Keep current guides focused on account management. Label upstream feature history
 and third-party credits as attribution. Update affected help, tests and migration
 notes alongside behavior changes.
+
+<!-- browser-check: start -->
+## Browser checks
+
+Browser checks for this project are in `web-dashboard/tests/browser/checks` and run with browser-check (guide: `browser-check guide`, or Agent-Guides/browser-check.md on the Cursor share).
+
+- Run: `browser-check run web-dashboard/tests/browser/checks`. Read the printed summary; open only the images it lists under LOOK, and failure evidence only for failures you are working on.
+- Write checks as assertions (`t.visible`, `t.text`, `t.noOverflow`, `t.painted`/`t.moving`/`t.still`) rather than screenshots. Take `t.shot` (one full frame) only for a visual state someone must judge, and `t.crop` for detail at native resolution. Never downscale an image used to judge visuals.
+- Add a check file when you change a flow; keep checks fast and deterministic (stub network, synthetic data).
+- Delete run folders you no longer need (`browser-check clean`).
+<!-- browser-check: end -->
