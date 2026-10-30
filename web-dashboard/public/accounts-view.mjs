@@ -51,7 +51,7 @@ export const ACCOUNT_KINDS = {
   antigravity: { kind: 'cli', kindLabel: 'Supervised CLI login', icon: 'terminal', src: 'Antigravity CLI, supervised', slots: 3, actsMin: 262,
     how: 'The dashboard host runs and supervises the CLI login.' },
   cursor: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Cursor desktop app', slots: 2, actsMin: 150,
-    how: 'Sign in inside the Cursor desktop app; the dashboard reads that session.' },
+    how: 'Sign in inside Cursor on any computer the dashboard reads. Re-check uses whichever of those computers is signed in.' },
   muse: { kind: 'app', kindLabel: 'Device-code sign-in', icon: 'app-window', src: 'Muse Code session', slots: 2, actsMin: 150,
     how: 'Device-code sign-in on the Mac; then Sync in the Brave extension for quota.' },
   'kimi-code': { kind: 'apikey', kindLabel: 'API key', icon: 'key', src: 'API key', slots: 2, actsMin: 156,
@@ -313,7 +313,8 @@ function footActions(provider, accounts, ctx) {
       const signInGate = first ? gate(entry, 'signInAgain', provider) : add;
       const signin = gated({ act: 'session-signin', value: provider, label: 'Sign in', icon: def.kind === 'browser' ? 'globe' : 'login', probe: `session-signin:${provider}` }, signInGate,
         provider === 'muse' ? 'Start a device-code sign-in on the Mac; approve a code in any browser, then Sync in the Brave extension.'
-          : def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
+          : provider === 'cursor' ? 'Sign in inside Cursor on any computer the dashboard reads, then re-check. The dashboard uses whichever of those computers is signed in.'
+            : def.kind === 'browser' ? 'Open the console in the browser with the extension and sign in there; then re-check.' : `Open ${label} on its computer and sign in there; then re-check.`);
       const recheckGate = first ? (reg ? (reg.actions?.recheck === true ? { live: true } : { live: false, coming: false, reason: 'Re-check is not available for this account.' }) : gate(entry, 'recheck', provider))
         : { live: false, coming: false, reason: `Sign in first; there is no ${label} account to check yet.` };
       const recheck = gated({ act: 'recheck', value: first?.id || provider, label: 'Re-check', icon: 'refresh', probe: `recheck:${provider}`, busy: ctx.busyAct === `recheck:${first?.id}` }, recheckGate, 'Read the session again now.');
@@ -522,7 +523,9 @@ export function flowView(provider, f, ctx = {}) {
       v.title = `Sign in to ${label}`;
       if (g.kind === 'open-app') {
         const where = (Array.isArray(g.platforms) ? g.platforms : []).map(platformLabel).join(' or ') || 'its computer';
-        v.body = `Open ${label} on ${where} and sign in there, then re-check. The dashboard reads that session.`;
+        v.body = provider === 'cursor'
+          ? 'Sign in inside Cursor on any computer the dashboard reads, then re-check. The dashboard uses whichever of those computers is signed in.'
+          : `Open ${label} on ${where} and sign in there, then re-check. The dashboard reads that session.`;
         v.actions = [...(Array.isArray(g.platforms) ? g.platforms : []).filter(p => ['mac', 'windows'].includes(p)).map(p =>
           btn('flow-open-app', `${provider}:${p}`, `Open on ${platformLabel(p)}`, { platform: p === 'mac' ? 'apple' : 'windows', busy: ctx.busyAct === `open:${provider}:${p}` }))];
       } else {

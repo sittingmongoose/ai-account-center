@@ -857,6 +857,7 @@ test('API-key, browser and app providers: keys show their last 4, Replace key an
       ['recheck', 'cursor:usage', true],
     ]
   );
+  assert.match(provider(vm, 'cursor').foot[0].tip, /any computer the dashboard reads/);
   // Muse's sign-in is not on the server: "coming" with its reason; Re-check needs an account first
   const muse = provider(vm, 'muse');
   assert.deepEqual(
@@ -2040,6 +2041,7 @@ test('flows: Claude profiles, API keys that are never echoed, and guided app or 
       ['flow-cancel', 'cursor'],
     ]
   );
+  assert.match(cursor.body, /any computer the dashboard reads/);
   const qwen = flowView('qwen', {
     type: 'guide',
     accountId: 'qwen:usage',

@@ -437,7 +437,9 @@ describe('identity-bound usage source failover', () => {
     await queuedB;
     gates.forEach((release) => release());
     await Promise.all(busy);
-    expect(h.collected().filter((call) => call.host === 'windows')).toHaveLength(1);
+    expect(
+      h.collected().filter((call) => call.host === 'windows' && call.request.provider === 'muse')
+    ).toHaveLength(1);
   });
 
   it('skips a linked native Muse peer that its own account row already holds after a 429', async () => {
@@ -1149,6 +1151,305 @@ describe('identity-bound usage source failover', () => {
     const current = await restarted.collect(target, rowTemplate);
     expect(current.plan).toBe('premium');
     expect(current.windows[0].key).toBe('grok-shared-weekly');
+  });
+
+  it('reads a Cursor session from another computer when the configured one is signed out', async () => {
+    const h = await harness();
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+      primarySources: [{ ...UBUNTU, selector: 'discover' }],
+    };
+    const rowTemplate: DashboardAccount = {
+      ...template(),
+      provider: 'cursor',
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+    };
+    const session = candidate({
+      identity: { kind: 'cursor-subject', key: 'c'.repeat(64) },
+      locator: '5'.repeat(64),
+      plan: 'pro',
+    });
+    h.inventories.set('ubuntu', []);
+    h.inventories.set('mac', new Error('offline'));
+    h.inventories.set('windows', [session]);
+    h.collections.set('windows', { sample: reading(h.now(), { plan: 'pro' }), failureCode: null });
+    const row = await h.service.collect(target, rowTemplate);
+    expect(row.status).toBe('ok');
+    expect(row.platform).toBe('windows');
+    expect(row.plan).toBe('pro');
+    expect(h.collected().map((call) => call.host)).toEqual(['windows']);
+  });
+
+  it('uses the first other computer when the same Cursor session is signed in on more than one', async () => {
+    const h = await harness();
+    const session = candidate({
+      identity: { kind: 'cursor-subject', key: 'c'.repeat(64) },
+      plan: 'pro',
+    });
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+      primarySources: [{ ...UBUNTU, selector: 'discover' }],
+    };
+    h.inventories.set('ubuntu', []);
+    h.inventories.set('mac', [session]);
+    h.inventories.set('windows', [
+      candidate({
+        identity: session.identity,
+        locator: '6'.repeat(64),
+        revision: '7'.repeat(64),
+        plan: 'pro',
+      }),
+    ]);
+    h.collections.set('mac', { sample: reading(h.now(), { plan: 'pro' }), failureCode: null });
+    const row = await h.service.collect(target, {
+      ...template(),
+      provider: 'cursor',
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+    });
+    expect(row.status).toBe('ok');
+    expect(row.platform).toBe('mac');
+    expect(h.collected().map((call) => call.host)).toEqual(['mac']);
+  });
+
+  it('keeps a saved Cursor reading when the configured computer is down and others disagree', async () => {
+    const h = await harness();
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+      primarySources: [{ ...UBUNTU, selector: 'discover' }],
+    };
+    const saved = candidate({
+      identity: { kind: 'cursor-subject', key: 'c'.repeat(64) },
+      plan: 'pro',
+    });
+    const rowTemplate: DashboardAccount = {
+      ...template(),
+      provider: 'cursor',
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+    };
+    h.inventories.set('ubuntu', [saved]);
+    h.inventories.set('mac', []);
+    h.inventories.set('windows', []);
+    h.collections.set('ubuntu', { sample: reading(h.now(), { plan: 'pro' }), failureCode: null });
+    const first = await h.service.collect(target, rowTemplate);
+    expect(first.status).toBe('ok');
+    expect(first.plan).toBe('pro');
+    h.advance();
+    h.inventories.set('ubuntu', new Error('offline'));
+    h.inventories.set('mac', [
+      candidate({ identity: { kind: 'cursor-subject', key: 'a'.repeat(64) }, plan: 'ultra' }),
+    ]);
+    h.inventories.set('windows', [
+      candidate({
+        identity: { kind: 'cursor-subject', key: 'b'.repeat(64) },
+        locator: '8'.repeat(64),
+        plan: 'ultra',
+      }),
+    ]);
+    const count = h.collected().length;
+    const row = await h.service.collect(target, rowTemplate);
+    expect(row.status).toBe('cached');
+    expect(row.plan).toBe('pro');
+    expect(row.windows).toEqual(first.windows);
+    expect(h.collected()).toHaveLength(count);
+  });
+
+  it('drops a saved Cursor reading when every readable computer is signed out', async () => {
+    const h = await harness();
+    const nas1: UsageHost = { host: 'nas1', platform: 'ubuntu', sshHost: 'fixture-nas1' };
+    h.deps.hosts = async () => [MAC, UBUNTU, WINDOWS, nas1];
+    const service = new UsageFailoverService(h.deps);
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+      primarySources: [{ ...UBUNTU, selector: 'discover' }],
+    };
+    const rowTemplate: DashboardAccount = {
+      ...template(),
+      provider: 'cursor',
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+    };
+    h.inventories.set('ubuntu', [
+      candidate({ identity: { kind: 'cursor-subject', key: 'c'.repeat(64) }, plan: 'pro' }),
+    ]);
+    h.inventories.set('mac', []);
+    h.inventories.set('windows', []);
+    h.collections.set('ubuntu', { sample: reading(h.now(), { plan: 'pro' }), failureCode: null });
+    expect((await service.collect(target, rowTemplate)).status).toBe('ok');
+    h.advance();
+    h.inventories.set('ubuntu', []);
+    h.inventories.set('nas1', new Error('offline'));
+    const row = await service.collect(target, rowTemplate);
+    expect(row.status).not.toBe('cached');
+    expect(row.windows).toHaveLength(0);
+    expect(row.plan).toBeNull();
+  });
+
+  it('does not attribute Cursor when two computers are signed in to different accounts', async () => {
+    const h = await harness();
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+      primarySources: [{ ...UBUNTU, selector: 'discover' }],
+    };
+    h.inventories.set('ubuntu', []);
+    h.inventories.set('mac', [
+      candidate({ identity: { kind: 'cursor-subject', key: 'a'.repeat(64) }, plan: 'pro' }),
+    ]);
+    h.inventories.set('windows', [
+      candidate({
+        identity: { kind: 'cursor-subject', key: 'b'.repeat(64) },
+        locator: '8'.repeat(64),
+        plan: 'pro',
+      }),
+    ]);
+    const row = await h.service.collect(target, {
+      ...template(),
+      provider: 'cursor',
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+    });
+    expect(row.windows).toHaveLength(0);
+    expect(row.status).not.toBe('ok');
+    expect(h.collected()).toHaveLength(0);
+  });
+
+  it('uses the only Cursor session even when that computer could not finish its inventory', async () => {
+    const h = await harness();
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+      primarySources: [{ ...UBUNTU, selector: 'discover' }],
+    };
+    const session = candidate({
+      identity: { kind: 'cursor-subject', key: 'c'.repeat(64) },
+      plan: 'pro',
+    });
+    h.inventories.set('ubuntu', []);
+    h.inventories.set('mac', [session]);
+    h.inventories.set('windows', []);
+    h.collections.set('mac', { sample: reading(h.now(), { plan: 'pro' }), failureCode: null });
+    const inner = h.deps.transport;
+    const service = new UsageFailoverService({
+      ...h.deps,
+      transport: async (host, request) => {
+        const response = await inner(host, request);
+        return host.host === 'mac' && response.action === 'inventory'
+          ? { ...response, incompleteSelectors: ['discover'] }
+          : response;
+      },
+    });
+    const row = await service.collect(target, {
+      ...template(),
+      provider: 'cursor',
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+    });
+    expect(row.status).toBe('ok');
+    expect(row.platform).toBe('mac');
+    expect(h.collected().map((call) => call.host)).toEqual(['mac']);
+  });
+
+  it('does not adopt Cursor when a partial inventory already shows a second account', async () => {
+    const h = await harness();
+    const target: UsageFailoverTarget = {
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+      primarySources: [{ ...UBUNTU, selector: 'discover' }],
+    };
+    h.inventories.set('ubuntu', []);
+    h.inventories.set('mac', [
+      candidate({ identity: { kind: 'cursor-subject', key: 'a'.repeat(64) }, plan: 'pro' }),
+    ]);
+    h.inventories.set('windows', [
+      candidate({
+        identity: { kind: 'cursor-subject', key: 'b'.repeat(64) },
+        locator: '8'.repeat(64),
+        plan: 'pro',
+      }),
+    ]);
+    const inner = h.deps.transport;
+    const service = new UsageFailoverService({
+      ...h.deps,
+      transport: async (host, request) => {
+        const response = await inner(host, request);
+        return host.host === 'mac' && response.action === 'inventory'
+          ? { ...response, incompleteSelectors: ['*'] }
+          : response;
+      },
+    });
+    const row = await service.collect(target, {
+      ...template(),
+      provider: 'cursor',
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+    });
+    expect(row.windows).toHaveLength(0);
+    expect(row.status).not.toBe('ok');
+    expect(h.collected()).toHaveLength(0);
+  });
+
+  it('reports sign-in and rate-limit failures from the Cursor computer that was adopted', async () => {
+    const cursorTarget = (h: Awaited<ReturnType<typeof harness>>): UsageFailoverTarget => ({
+      ...h.target,
+      provider: 'cursor',
+      accountId: 'cursor:usage',
+      primarySources: [{ ...UBUNTU, selector: 'discover' }],
+    });
+    const rowTemplate: DashboardAccount = {
+      ...template(),
+      provider: 'cursor',
+      id: 'cursor:usage',
+      platform: 'ubuntu',
+    };
+    const session = candidate({
+      identity: { kind: 'cursor-subject', key: 'c'.repeat(64) },
+      locator: '5'.repeat(64),
+      plan: 'pro',
+    });
+    const signedOut = await harness();
+    signedOut.inventories.set('ubuntu', []);
+    signedOut.inventories.set('mac', []);
+    signedOut.inventories.set('windows', [session]);
+    signedOut.collections.set('windows', { sample: null, failureCode: 'needs_sign_in' });
+    const rejected = await signedOut.service.collect(cursorTarget(signedOut), rowTemplate);
+    expect(rejected.status).toBe('needs_sign_in');
+    expect(rejected.message).toBe('Sign in again on the configured source to refresh usage.');
+    expect(signedOut.collected().map((call) => call.host)).toEqual(['windows']);
+
+    const limited = await harness();
+    limited.inventories.set('ubuntu', []);
+    limited.inventories.set('mac', []);
+    limited.inventories.set('windows', [session]);
+    limited.collections.set('windows', {
+      sample: null,
+      failureCode: 'rate_limited',
+      retryAfterSeconds: 900,
+    });
+    const held = await limited.service.collect(cursorTarget(limited), rowTemplate);
+    expect(held.status).toBe('unavailable');
+    expect(held.message).toBe(
+      'Usage refresh is rate limited. The provider cooldown is being respected.'
+    );
+    const count = limited.collected().length;
+    limited.advance(60_000);
+    expect((await limited.service.collect(cursorTarget(limited), rowTemplate)).status).toBe(
+      'unavailable'
+    );
+    expect(limited.collected()).toHaveLength(count);
   });
 
   it('still tries a matching peer when cached quota accompanies a transient failure', async () => {
