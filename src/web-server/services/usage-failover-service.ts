@@ -337,6 +337,62 @@ export class UsageFailoverService {
       this.claudeProfile(target, host),
     ]);
   }
+  /**
+   * Cursor keeps one account and the desktop session may be on any computer
+   * the dashboard already reads. A readable empty configured host is not
+   * signed out while another computer has that session. Two different
+   * accounts are left unsigned rather than attributed to the wrong one.
+   * A computer that could not be read does not hide a session found elsewhere.
+   * Candidates that computer did return still count, so a second account is
+   * not ignored just because another store on that computer failed.
+   * An unreadable configured computer is not a sign-out: its saved reading
+   * stays, and a different account elsewhere is not adopted in its place.
+   * An unreadable extra computer does not keep a signed-out row cached.
+   */
+  private async cursorSession(
+    target: UsageFailoverTarget,
+    state: State
+  ): Promise<{
+    chosen: { host: UsageHost; candidate: UsageCandidate } | null;
+    conflict: boolean;
+    configuredUnreadable: boolean;
+  }> {
+    const hosts = [
+      ...target.primarySources,
+      ...(await (this.deps.hosts ?? configuredUsageHosts)()),
+    ].filter(
+      (host, index, all) => all.findIndex((other) => hostKey(other) === hostKey(host)) === index
+    );
+    const selector = target.primarySources[0]?.selector ?? 'discover';
+    const found: Array<{ host: UsageHost; candidate: UsageCandidate }> = [];
+    let configuredUnreadable = false;
+    for (const host of hosts) {
+      const candidates = await this.inventory(target, host);
+      this.applyInventorySignIn(target, state, host);
+      const configured = target.primarySources.some((source) => hostKey(source) === hostKey(host));
+      const gaps = this.unreadSelectors.get(this.inventoryKey(target, host));
+      if (
+        configured &&
+        (candidates === null || gaps?.has('*') === true || gaps?.has(selector) === true)
+      )
+        configuredUnreadable = true;
+      // A failed store does not erase sessions the same inventory already returned.
+      if (candidates === null) continue;
+      for (const candidate of candidates) {
+        if (!candidate.selectors.includes(selector)) continue;
+        if (candidateMatchesTarget(target, candidate)) found.push({ host, candidate });
+      }
+    }
+    const byIdentity = new Map<string, { host: UsageHost; candidate: UsageCandidate }>();
+    for (const item of found) {
+      const id = JSON.stringify([item.candidate.identity.kind, item.candidate.identity.key]);
+      if (!byIdentity.has(id)) byIdentity.set(id, item);
+    }
+    if (byIdentity.size > 1) return { chosen: null, conflict: true, configuredUnreadable };
+    if (byIdentity.size === 1)
+      return { chosen: [...byIdentity.values()][0], conflict: false, configuredUnreadable };
+    return { chosen: null, conflict: false, configuredUnreadable };
+  }
   private claudeProfile(target: UsageFailoverTarget, host: UsageHost) {
     return target.provider === 'claude'
       ? target.primarySources.find((source) => hostKey(source) === hostKey(host))?.claudeProfile
@@ -602,7 +658,35 @@ export class UsageFailoverService {
       primaries.push({ host: source, candidate });
       break;
     }
-    if (!primaries.length && missingPrimary && !target.expectedIdentity) {
+    if (!primaries.length && target.provider === 'cursor' && !target.expectedIdentity) {
+      const scan = await this.cursorSession(target, state);
+      const cached = state.identity;
+      const different =
+        !!scan.chosen && !!cached && !sameUsageIdentity(cached, scan.chosen.candidate.identity);
+      // The configured computer being down is not proof it signed out, so a
+      // different account on another computer must not replace the saved one.
+      if (scan.chosen && !(scan.configuredUnreadable && different)) {
+        if (!sameUsageIdentity(cached, scan.chosen.candidate.identity)) {
+          state.saved = null;
+          state.observedPlan = null;
+          state.observedPlanAt = null;
+          state.observedPlanPeer = null;
+        }
+        state.identity = scan.chosen.candidate.identity;
+        state.primary = scan.chosen.candidate;
+        primaries.push(scan.chosen);
+      } else if (scan.configuredUnreadable && cached) {
+        // Keep the verified reading and let the known account refresh below.
+      } else if (scan.conflict || !scan.configuredUnreadable) {
+        state.identity = null;
+        state.primary = null;
+        state.saved = null;
+        state.observedPlan = null;
+        state.observedPlanAt = null;
+        state.observedPlanPeer = null;
+        return;
+      } else if (!cached) return;
+    } else if (!primaries.length && missingPrimary && !target.expectedIdentity) {
       state.identity = null;
       state.primary = null;
       state.saved = null;
@@ -745,10 +829,22 @@ export class UsageFailoverService {
       // Held account: stop. Held linked peer only: other computers may still answer.
       if (response === null) return applyCooldown() ? 'done' : 'next';
       if (response.action !== 'collect') return 'next';
-      const primarySource = target.primarySources.some(
-        (source) =>
-          hostKey(source) === hostKey(host) && candidate.selectors.includes(source.selector)
-      );
+      // The computer whose Cursor session was adopted is the source for this
+      // read, even when it is not the configured host.
+      const adoptedCursor =
+        target.provider === 'cursor' &&
+        primaries.some(
+          (primary) =>
+            hostKey(primary.host) === hostKey(host) &&
+            primary.candidate.locator === candidate.locator &&
+            sameUsageIdentity(primary.candidate.identity, candidate.identity)
+        );
+      const primarySource =
+        adoptedCursor ||
+        target.primarySources.some(
+          (source) =>
+            hostKey(source) === hostKey(host) && candidate.selectors.includes(source.selector)
+        );
       if (primarySource) state.primaryFailure = response.failureCode;
       if (
         target.provider === 'claude' &&
