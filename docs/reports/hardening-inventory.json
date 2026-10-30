@@ -790,6 +790,10 @@
           "loc": 995
         },
         {
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 988
+        },
+        {
           "file": "src/web-server/services/account-dashboard-service.ts",
           "loc": 931
         },
@@ -800,10 +804,6 @@
         {
           "file": "src/cliproxy/model-catalog.ts",
           "loc": 895
-        },
-        {
-          "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 892
         },
         {
           "file": "src/cliproxy/accounts/registry.ts",
