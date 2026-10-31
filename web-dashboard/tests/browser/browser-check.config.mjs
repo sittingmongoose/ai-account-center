@@ -22,7 +22,8 @@ export default (ctx) => {
 			const home = path.join(ctx.dir, 'home');
 			if (ctx.args.home) {
 				const src = path.resolve(ctx.args.home);
-				if (src === path.resolve(os.homedir())) throw new Error('home= must be a fixture folder, never your real home');
+				const inside = (dir, root) => { const r = path.relative(root, dir); return !r.startsWith('..') && !path.isAbsolute(r); };
+				if (inside(src, os.homedir()) && !inside(src, os.tmpdir())) throw new Error('home= must be a fixture folder outside your real home (temp folders are fine)');
 				fs.cpSync(src, home, { recursive: true });
 			} else fs.mkdirSync(home, { recursive: true });
 			return { home, port: +ctx.args.port || (await freePort()) };
@@ -30,7 +31,7 @@ export default (ctx) => {
 		// CCS_HOME alone is not enough: some provider collectors read the real home (CLI logins, usage files, ssh keys
 		// for other machines). Every home-like variable points at the temporary folder, so no real account shows up.
 		server: (_, s) => ({
-			command: [process.execPath, cli, 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: 90000,
+			command: [process.execPath, cli, 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: +ctx.args.serverTimeout || 240000, // node_modules on the share can take 90 s to load
 			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude') }
 		}),
 		async teardown(_, s) { if (s && s.home && !ctx.args.keep) fs.rmSync(s.home, { recursive: true, force: true }); },
@@ -91,10 +92,13 @@ export default (ctx) => {
 				const ok = !!r && r.width >= 1 && r.height >= 1 && r.x >= -1 && r.y >= -1 && r.x + r.width <= w + 1 && r.y + r.height <= h + 1;
 				return t.record(name || `${id} visible`, ok, r ? `at ${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)} in a ${w}x${h} viewport` : `no probe "${id}" reported`, { target: r && r.width >= 1 ? r : null });
 			},
-			// Canvas layout without a DOM: no probed control starts left of 0 or ends past the right edge
-			async noProbeOverflow(t, name = 'no control past the edge') {
+			// Canvas layout without a DOM: no probed control starts left of 0 or ends past the right edge. An empty or
+			// incomplete probe map fails (probes that stopped reporting must not read as "no overflow").
+			async noProbeOverflow(t, name = 'no control past the edge', { require = ['update-apps'] } = {}) {
 				const all = await t.app.probes();
 				const w = await t.page.evaluate(() => innerWidth);
+				const missing = require.filter((id) => !all[id]);
+				if (!Object.keys(all).length || missing.length) return t.record(name, false, `probes missing: ${Object.keys(all).length ? missing.join(', ') : 'none reported (is ?e2e on?)'}`);
 				const bad = Object.entries(all).filter(([, r]) => r.width > 0 && (r.x < -1 || r.x + r.width > w + 1)).map(([id, r]) => `${id} spans ${Math.round(r.x)}..${Math.round(r.x + r.width)} of ${w}`);
 				return t.record(name, bad.length === 0, bad.slice(0, 8).join('; '), { note: `${Object.keys(all).length} probes` });
 			},
