@@ -3,14 +3,19 @@
 // One full frame for Home; the rest are saved for `browser-check diff`.
 // Note: a ProbeMark reports its rectangle even while its control is hidden, so a reported probe is not proof of
 // visibility; judge visibility from pixels (t.crop at the rectangle, t.painted) or a frame.
-const PAGES = ['home', 'analytics', 'accounts'];
+// Probes each page must report (an empty or foreign set fails): the shared top bar plus the page's own headings/controls
+const PAGES = {
+	home: ['update-apps', 'home-legend'],
+	analytics: ['update-apps', 'trend-head:title', 'quota-head:title', 'daily-head:title'],
+	accounts: ['update-apps', 'add:claude', 'pw-new', 'logout']
+};
 
-async function eachPage(t, label) {
-	for (const page of PAGES) {
+async function eachPage(t, label, extra = []) {
+	for (const [page, require] of Object.entries(PAGES)) {
 		await t.step(`${label} ${page}`, async () => {
 			await t.app.open({ page });
 			await t.painted('#canvas', 'canvas painted');
-			await t.app.noProbeOverflow();
+			await t.app.noProbeOverflow('no control past the edge', { require: [...require, ...extra] });
 			await t.snap(`${label}-${page}`);
 		});
 	}
@@ -45,6 +50,6 @@ export const tests = {
 		await t.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
 		await t.app.open();
 		for (const id of ['tab-home', 'tab-analytics', 'tab-accounts']) await t.app.probeVisible(id);
-		await eachPage(t, '390');
+		await eachPage(t, '390', ['tab-home', 'tab-analytics', 'tab-accounts']);
 	}
 };

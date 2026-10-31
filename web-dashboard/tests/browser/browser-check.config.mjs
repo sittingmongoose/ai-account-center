@@ -72,9 +72,16 @@ export default (ctx) => {
 				return true;
 			},
 			// Every probed control on the current page: { id: { x, y, width, height } } in CSS pixels
+			// probe_tick reports over the next frames; read until the set stops growing (max 2 s) so a sample is complete
 			async probes(t) {
 				await t.page.evaluate(() => window.__aacProbeNow && __aacProbeNow());
-				await t.page.waitForTimeout(200);
+				let last = -1, size = 0;
+				for (let waited = 0; waited < 2000; waited += 150) {
+					await t.page.waitForTimeout(150);
+					size = await t.page.evaluate(() => (window.__aacProbe ? __aacProbe.size : 0));
+					if (size > 0 && size === last) break;
+					last = size;
+				}
 				return t.page.evaluate(() => Object.fromEntries([...(window.__aacProbe || new Map())].map(([k, r]) => [k, { x: r.x, y: r.y, width: r.w, height: r.h }])));
 			},
 			async rect(t, id) { return (await t.app.probes())[id] || null; },
