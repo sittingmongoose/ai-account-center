@@ -41,8 +41,8 @@ Frames that aren't listed are saved as snaps for `browser-check diff <base run> 
 export default async function (t) {
 	await t.app.stub('/api/accounts/dashboard', fixture);   // synthetic data, shaped like src/web-server/services/*-types.ts
 	await t.app.open({ page: 'analytics' });
-	const r = await t.app.rect('quota-head');               // a control's rectangle from its ProbeMark
-	await t.crop('quota-head', r, 'quota header at 1360 px: refresh button not cut off');
+	const r = await t.app.rect('quota-head:title');             // a control's rectangle from its ProbeMark
+	await t.crop('quota-head', r, 'quota header title at 1360 px: not cut off');
 	await t.app.noProbeOverflow();
 }
 ```
