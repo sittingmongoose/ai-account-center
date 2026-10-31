@@ -23,7 +23,8 @@ API routing product or introduce a Rust backend rewrite.
   and [docs/README.md](docs/README.md).
 - Work on a task branch, change assigned files and preserve other agents' edits.
 - Never test against real `~/.ccs/` or `~/.claude/` data. Use `getCcsDir()` with
-  a temporary `CCS_HOME`; never repurpose HOME. Keep credentials out of logs,
+  a temporary `CCS_HOME`; never repurpose HOME, except for the browser-check kit's
+  child server, whose collectors read the real home. Keep credentials out of logs,
   fixtures and screenshots.
 - Keep private storage paths, profile/provider IDs, session aliases, native
   messaging identities and existing `CCS_*` settings compatible.
@@ -83,3 +84,9 @@ separate authorization.
 Keep current guides focused on account management. Label upstream feature history
 and third-party credits as attribution. Update affected help, tests and migration
 notes alongside behavior changes.
+
+<!-- browser-check: start -->
+## Browser checks
+
+Run `browser-check run web-dashboard/tests/browser/checks` from a checkout with `dist/` built. Kit facts and helpers: [web-dashboard/tests/browser/README.md](web-dashboard/tests/browser/README.md). Tool rules: `browser-check guide`. Free browser and recording slots on all machines: `browser-check slots`.
+<!-- browser-check: end -->

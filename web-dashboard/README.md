@@ -202,7 +202,7 @@ Details slides in, and frames arrive every 47-90 ms (11-21 fps), a rate set by
 SwiftShader's rasterising rather than by the page. Before the cached layers and
 static hover shadows, a hover in Analytics took 250-300 ms a frame (4 fps) and
 Home's scrolling about 20 ms of page work a frame. Hardware-accelerated browsers
-are far faster; the VM figure is the floor.
+are far faster; this software-WebGL figure is the floor.
 
 Every state push from `bridge.js` (`with_ui` and the other entry points in
 `src/lib.rs`) asks for a frame and wakes winit's event loop, so a change that
@@ -253,10 +253,8 @@ fake server (every action's request and every error code's words) and the
 sign-in rules (strength hint, first-run checks, tries and pauses, ended and
 revoked sessions).
 
-Visual checks use the sanitized fixture preview in
-`~/PM-Experiments/ccs-accounts-20260930/worktrees/preview/` (see its README):
-it serves `dist/ui` with the concept's fixture data and screenshots it in
-headless Chrome with SwiftShader WebGL. Compare against the approved Daylight
+Visual checks run with browser-check: see
+[tests/browser/README.md](tests/browser/README.md). Compare against the approved Daylight
 Atlas concept (`redesign-concepts-20261001/c-daylight-atlas/`) at 1024 x 700,
 1440 x 900, 1920 x 1080 and 2560 x 1440, light and dark.
 

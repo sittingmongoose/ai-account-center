@@ -553,7 +553,8 @@ Gotchas found in the W5 review (concept comparison and performance):
 
 ## Visual check
 
-`~/PM-Experiments/ccs-accounts-20260930/worktrees/preview/` serves `dist/ui` with sanitized fixtures and
-screenshots it in headless Chrome with SwiftShader WebGL; see its README. `POST /__preview/state` changes the
+Browser checks live in `web-dashboard/tests/browser/`; see its README. For fixture-rich screens, the sanitized
+preview at `~/PM-Experiments/ccs-accounts-20260930/worktrees/preview/` serves `dist/ui` with fixtures; drive it with
+a GPU browser, not its SwiftShader `shoot.mjs` screenshots. `POST /__preview/state` changes the
 data at runtime (hidden providers, example readings) and `shoot.mjs` steps `post`, `eval` and `film`
 (a CDP screencast, optionally clicking or evaluating once it runs) cover refresh, switch and load-in motion.
