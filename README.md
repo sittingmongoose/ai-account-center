@@ -310,6 +310,8 @@ On first run, give the tray the dashboard address and password once. Guides: [Ma
 
 ### 5️⃣ Let your agents see usage (optional)
 
+Setting this up for someone with an agent? Give it [docs/agent-setup.md](docs/agent-setup.md): the whole install, the sign-ins only the person can do, the agents' usage snapshot and T3 Code's usage hub, in order.
+
 ```bash
 ai-account-center dashboard usage-snapshot set /path/to/shared/folder
 python3 /path/to/shared/folder/aac-usage install-rules   # on each computer your agents use
@@ -358,6 +360,7 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 | Read this | For |
 | --- | --- |
 | [User guide](docs/user-guide.md) | Every page and control, sign-in flows, phone install, remote access, update and rollback, known limits |
+| [Agent setup guide](docs/agent-setup.md) | For an agent installing AAC for someone: build, the human sign-in steps, usage for agents, the T3 Code usage hub |
 | [Agent usage snapshot](docs/agent-usage-snapshot.md) | The shared-folder format and reader |
 | [Codex switching](docs/codex-auth.md) · [activation review](docs/activate-in-place.md) | How the guarded switch works |
 | [Antigravity on Ubuntu](docs/antigravity-runtime.md) | Profiles, sign-in and switching gates |

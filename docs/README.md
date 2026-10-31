@@ -18,6 +18,7 @@ Do not restore retired features to satisfy outdated prose.
 | Existing provider collectors | [Provider flows](system-architecture/provider-flows.md) |
 | Codex profiles and guarded activation | [Codex account contract](codex-auth.md), [activation](activate-in-place.md) |
 | Antigravity profiles, sign-in and the switching release | [Antigravity on Ubuntu](antigravity-runtime.md) |
+| An agent setting AAC up for someone, start to finish | [Agent setup guide](agent-setup.md) |
 | Quota bars in T3 Code (read-only CLIProxyAPI-compatible hub) | [T3 usage hub](t3-usage-hub.md) |
 | Account usage, pace and history for any agent (shared folder) | [Agent usage snapshot](agent-usage-snapshot.md) |
 | Product scope | [Product overview](project-overview-pdr.md) |
