@@ -23,7 +23,8 @@ API routing product or introduce a Rust backend rewrite.
   and [docs/README.md](docs/README.md).
 - Work on a task branch, change assigned files and preserve other agents' edits.
 - Never test against real `~/.ccs/` or `~/.claude/` data. Use `getCcsDir()` with
-  a temporary `CCS_HOME`; never repurpose HOME. Keep credentials out of logs,
+  a temporary `CCS_HOME`; never repurpose HOME, except for the browser-check kit's
+  child server, whose collectors read the real home. Keep credentials out of logs,
   fixtures and screenshots.
 - Keep private storage paths, profile/provider IDs, session aliases, native
   messaging identities and existing `CCS_*` settings compatible.
@@ -87,10 +88,5 @@ notes alongside behavior changes.
 <!-- browser-check: start -->
 ## Browser checks
 
-Browser checks for this project are in `web-dashboard/tests/browser/checks` and run with browser-check (guide: `browser-check guide`, or Agent-Guides/browser-check.md on the Cursor share).
-
-- Run: `browser-check run web-dashboard/tests/browser/checks`. Read the printed summary; open only the images it lists under LOOK, and failure evidence only for failures you are working on.
-- Write checks as assertions (`t.visible`, `t.text`, `t.noOverflow`, `t.painted`/`t.moving`/`t.still`) rather than screenshots. Take `t.shot` (one full frame) only for a visual state someone must judge, and `t.crop` for detail at native resolution. Never downscale an image used to judge visuals.
-- Add a check file when you change a flow; keep checks fast and deterministic (stub network, synthetic data).
-- Delete run folders you no longer need (`browser-check clean`).
+Run `browser-check run web-dashboard/tests/browser/checks` from a checkout with `dist/` built. Kit facts and helpers: [web-dashboard/tests/browser/README.md](web-dashboard/tests/browser/README.md). Tool rules: `browser-check guide`. Free browser and recording slots on all machines: `browser-check slots`.
 <!-- browser-check: end -->

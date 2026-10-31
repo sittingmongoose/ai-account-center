@@ -4,18 +4,16 @@
 //   browser-check run web-dashboard/tests/browser/checks
 //   browser-check run web-dashboard/tests/browser/checks --set home=/tmp/fixture-home   (a prepared CCS_HOME, copied)
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-
-const freePort = () => new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
 	const cli = path.join(root, 'dist', 'ccs.js');
 	if (!fs.existsSync(cli) || !fs.existsSync(path.join(root, 'dist', 'ui', 'index.html'))) {
-		throw new Error(`no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (CLAUDE.md: aac-winbuild, or the installed package's dist/ui for a first look)`);
+		throw new Error(`no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (see web-dashboard/tests/browser/README.md)`);
 	}
+	if (ctx.fleet) throw new Error('--host: the dashboard listens on 127.0.0.1 and setup is loopback-only, so a browser on another machine can\'t use it. Run from a checkout on that machine.');
 	return {
 		name: 'aac',
 		async setup() {
@@ -26,7 +24,7 @@ export default (ctx) => {
 				if (inside(src, os.homedir()) && !inside(src, os.tmpdir())) throw new Error('home= must be a fixture folder outside your real home (temp folders are fine)');
 				fs.cpSync(src, home, { recursive: true });
 			} else fs.mkdirSync(home, { recursive: true });
-			return { home, port: +ctx.args.port || (await freePort()) };
+			return { home, port: +ctx.args.port || (await ctx.freePort()) };
 		},
 		// CCS_HOME alone is not enough: some provider collectors read the real home (CLI logins, usage files, ssh keys
 		// for other machines). Every home-like variable points at the temporary folder, so no real account shows up.
