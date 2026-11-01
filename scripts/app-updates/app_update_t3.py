@@ -257,6 +257,18 @@ def service_state(service):
     return values.get("ActiveState", ""), int(restarts) if restarts.isdigit() else None
 
 
+def desktop_family_alive(install):
+    """Whether any family process still runs; unknown counts as alive. The
+    Windows process scan is a full CIM inventory with its own timeout, and a
+    scan that times out or fails says nothing about a T3 that may have become
+    healthy — only a completed scan that finds no family process ends the
+    health wait early."""
+    try:
+        return bool(family(install, scan(install.platform)))
+    except Exception:
+        return True
+
+
 def health_budget(deadline):
     """A verified install gets a real migration window (a big state migrates for many minutes),
     floored at one full probe: rolling a verified install back without waiting at all — the old
@@ -285,7 +297,7 @@ def health_check(host, seconds=30, service=None, alive=None):
             if state and (state[0] in ("failed", "inactive") or
                           (first and first[1] is not None and state[1] is not None and state[1] > first[1])):
                 raise UpdateFailure("restart_failed")
-        if alive and time.monotonic() - checked >= 10:
+        if alive and time.monotonic() - checked >= 15:
             checked = time.monotonic()
             if not alive():
                 raise UpdateFailure("restart_failed")
@@ -426,9 +438,10 @@ def update_windows(install, version, temporary, deadline, phase):
         # one took about 11 on Ubuntu). A 30-second wait here used to fail a
         # good install, roll it back and leave T3 closed — give the same
         # migration room Windows can afford inside the task's 35-minute limit.
-        # A relaunch that died ends the wait at once instead of at the budget.
+        # A relaunch that died ends the wait at once instead of at the budget;
+        # a scan that cannot run never does.
         health_check("windows", health_budget(deadline),
-                     alive=lambda: bool(family(install, scan("windows"))))
+                     alive=lambda: desktop_family_alive(install))
     except Exception:
         # Stop only the new T3 family before restoring the previous bundle.
         try:
@@ -517,14 +530,17 @@ def restart_lock_owner_alive(path):
     admission check for its own lock: a file whose pid is gone, or that names a
     process from before this boot, holds nothing. A malformed file is live only
     while it is fresh (it is written in one small dump); an old one is a crash
-    a later worker must recover."""
+    a later worker must recover. An unreadable process identity falls back to
+    pid liveness instead of counting as proof of death."""
     try:
         value = json.loads(pathlib.Path(path).read_bytes())
         pid = value.get("pid")
-        if not isinstance(pid, int) or pid < 1:
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid < 1:
             raise ValueError()
         if isinstance(value.get("identity"), str):
-            return process_identity(pid) == value["identity"] and _pid_alive(pid)
+            current = process_identity(pid)
+            if current is not None:
+                return current == value["identity"] and _pid_alive(pid)
         return _pid_alive(pid)
     except (OSError, ValueError, AttributeError, TypeError):
         try:
@@ -538,19 +554,35 @@ def claim_restart_lock(path):
     """Create the worker's exclusion marker, recovering one a killed worker or
     an interrupted machine left behind: a marker naming no live worker is
     removed and the create retried, so one crash cannot silence every later
-    retry. None when a live worker holds the marker now."""
+    retry. The inode is re-checked before the removal — a file the dashboard's
+    own recovery replaced in between is not ours to remove. None when a live
+    worker holds the marker now."""
+    path = pathlib.Path(path)
     while True:
         try:
             return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
             pass
-        if not restart_lock_owner_alive(path):
-            try:
-                os.unlink(path)
-            except OSError:
-                return None
+        try:
+            before = path.stat()
+        except OSError:
             continue
-        return None
+        if restart_lock_owner_alive(path):
+            return None
+        try:
+            after = path.stat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+        if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
+            return None
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
 
 
 def deferred_restart(parent_pid, root=None, dashboard=False):

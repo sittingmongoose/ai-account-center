@@ -398,14 +398,17 @@ public struct MenuBarReading: Sendable, Equatable {
     let value = mode == .used ? used : max(0, 100 - used)
     let text = "\(TrayFormat.number(value))%"
     let who = account.identity
-    let span: String
+    // A derived window whose cadence the provider never named reads without one
+    // ("Antigravity · who · used") rather than inventing "Weekly".
+    let span: String?
     if provider == "antigravity" {
-      span = window.period == .fiveHour ? "5-hour" : "Weekly"
+      span = window.period == .fiveHour ? "5-hour" : window.period == .week ? "Weekly" : nil
     } else {
       span = window.key == account.fiveHourWindow?.key ? "5-hour" : "Weekly"
     }
+    let cadence = span.map { "\($0) " } ?? ""
     return MenuBarReading(value: value, text: text, accountName: who,
-      detail: "\(providerName(provider)) · \(who) · \(span) \(mode == .used ? "used" : "remaining")")
+      detail: "\(providerName(provider)) · \(who) · \(cadence)\(mode == .used ? "used" : "remaining")")
   }
 
   /// The provider's accounts and the one the menu bar number comes from, following the

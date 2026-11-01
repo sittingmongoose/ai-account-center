@@ -566,6 +566,24 @@ class T3Fixtures(unittest.TestCase):
         command.assert_not_called()
         self.assertTrue((root / "t3-restart.lock").exists())  # The live worker's marker stays.
 
+    def test_restart_marker_liveness_validates_pid_and_falls_back_on_identity(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        path = root / "t3-restart.lock"
+        # A bool is not an integer pid: fresh malformed bytes count as live,
+        # stale malformed bytes are a crash the next worker recovers.
+        common.write_private_json(path, {"pid": True})
+        self.assertTrue(t3.restart_lock_owner_alive(path))
+        stale = time.time() - 400
+        os.utime(path, (stale, stale))
+        self.assertFalse(t3.restart_lock_owner_alive(path))
+        # A live worker whose identity cannot be read back stays live: an
+        # unreadable identity is not proof of death. A readable one that names
+        # another process is.
+        common.write_private_json(path, {"pid": os.getpid(), "identity": "unmatchable"})
+        with mock.patch.object(t3, "process_identity", return_value=None):
+            self.assertTrue(t3.restart_lock_owner_alive(path))
+        self.assertFalse(t3.restart_lock_owner_alive(path))
+
     def test_detached_restart_waits_for_nas1_to_finish_in_the_saved_job(self):
         root = t3.state_root(); root.mkdir(parents=True)
         common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
