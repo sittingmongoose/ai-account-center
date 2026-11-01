@@ -3,6 +3,8 @@
 // sometimes go off the page". Synthetic accounts only, shaped like the dashboard payload.
 // A probe reports its rectangle even while its control is hidden, so "on screen" here means the
 // rectangle sits inside the viewport; visibility itself is judged by the canvas shots.
+import { KNOWN_SMALL } from '../browser-check.config.mjs'; // the row toggles' known size finding
+
 const at = (minutes) => new Date(Date.parse('2026-11-01T15:00:00Z') + minutes * 60_000).toISOString();
 
 const quota = (key, label, used, minutes) => ({
@@ -108,8 +110,12 @@ export const tests = {
 				}
 			});
 			await assertCooldownInsidePolicyBox(t, width);
+			// Every control on the page with real accounts: reported, inside the edges, uncovered, big enough or spaced, drawn
+			await t.audit(`accounts ${width}`, { controls: ['add:claude'], ignore: KNOWN_SMALL });
 			await t.snap(`accounts-clicks-${width}`);
 		}
+		// The next test (and file) starts at the default width, not the last one here
+		await t.viewport(1920, 1080);
 	},
 
 	// The header controls re-render a provider's section in place; the row layout below them
@@ -129,6 +135,9 @@ export const tests = {
 					throw new Error(`${id} was pushed off the page by its own click: ${JSON.stringify({ rect, after })}`);
 				}
 				await t.app.noProbeOverflow(`no control past the edge after ${id}`);
+				// Back as it was: these toggles are saved by the server, and a hidden Claude section takes Home's legend with it
+				// for every test after this one
+				await t.app.click(id);
 			});
 		}
 		await t.snap('accounts-clicks-toggles');
@@ -160,6 +169,7 @@ export const tests = {
 				await t.page.waitForTimeout(150);
 			}
 		});
+		await t.audit('accounts 390', { controls: ['tab-accounts'] });
 		await t.snap('accounts-clicks-390');
 	},
 };
@@ -169,7 +179,7 @@ export const tests = {
 // viewport still had room. The card and both segmented rows carry probes, so the
 // assertion is in code, not only in the snapshots.
 async function assertCooldownInsidePolicyBox(t, width) {
-	await scrollIntoView(t, 'pmark:antigravity');
+	await scrollIntoView(t, 'show:antigravity');
 	const all = await t.app.probes();
 	const box = all['ag-policy'];
 	if (!box) throw new Error(`policy-box probe missing at ${width}`);
@@ -183,21 +193,12 @@ async function assertCooldownInsidePolicyBox(t, width) {
 	}
 }
 
-// The page scroller is Slint's own Flickable on one canvas, so a row is brought into view with
-// wheel events, not scrollIntoView — and the pointer must sit over the page, not the header,
-// or the wheel goes nowhere. Returns the row's rectangle once it sits inside the viewport.
+// The page scroller is Slint's own Flickable on one canvas, so a control is brought into view with real wheel turns
+// (browser-check's t.scrollToControl), with the pointer over the page, not the header, or the wheel goes nowhere.
+// Returns the control's rectangle once it sits wholly inside the viewport.
 async function scrollIntoView(t, id) {
-	const size = t.page.viewportSize();
-	const height = size.height;
-	await t.page.mouse.move(size.width / 2, height / 2);
-	let rect = await t.app.rect(id);
-	for (let tries = 0; rect && (rect.y < 0 || rect.y + rect.height > height) && tries < 12; tries += 1) {
-		const delta = rect.y + rect.height > height ? rect.y + rect.height - height + 60 : rect.y - 60;
-		await t.page.mouse.wheel(0, delta);
-		await t.page.waitForTimeout(200);
-		rect = await t.app.rect(id);
-	}
-	if (!rect) throw new Error(`no probe "${id}" after scrolling`);
+	const rect = await t.scrollToControl(id);
+	if (!rect) throw new Error(`could not scroll "${id}" into view (see the scroll check)`);
 	return rect;
 }
 

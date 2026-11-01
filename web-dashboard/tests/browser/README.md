@@ -14,15 +14,18 @@ browser-check run web-dashboard/tests/browser/checks --set home=/tmp/fixture-hom
 - **Isolated home.** The server starts with `CCS_HOME` and every home-like variable pointing at a temporary folder: `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, the XDG folders, `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Some collectors read the real home, so with only `CCS_HOME` set, real account emails and usage appear. Never point `home=` at a real home.
 - **Real sign-in.** `t.app.signIn()` goes through the real loopback setup (`POST /api/auth/setup`), or logs in once setup has happened. It runs as a `fetch` inside the page, so the session cookie lands in that page's jar.
 - **Probes.** Pages open with `?e2e`, so each `ProbeMark` reports its rectangle (`__aacProbeNow()` and `__aacProbe`). Pages are reached by URL (`?view=analytics`, `?view=accounts`): desktop has no tab probes, which exist only in the narrow tab bar.
+- **Canvas controls (browser-check 2.0).** The config's `controls(t)` hands browser-check the probes that are controls (the `CONTROL` list: buttons, fields, toggles, rows, tabs), not headings, hints, bars or panels; signed in, the hidden sign-in panel's probes are left out. So `t.audit` checks each control on screen: inside the left and right edges, not under a DOM element, at least 24 px or spaced as WCAG 2.5.8 allows, and drawn. Controls scrolled below the window or parked past an edge (the closed Details panel) are left out and named in a NOTE. A probe added to the UI that is a control belongs in `CONTROL`.
 
 ## Checks (`checks/smoke.check.mjs`)
 
 | Test | What it asserts |
 |---|---|
-| `signed out` | Sign-in fields reported inside the viewport; no probed control past the edge. |
-| `desktop` | Signed in at 1920x1080. Home, Analytics and Accounts paint, with no probed control past the edge. Lists one full frame (Home). |
+| `signed out` | Sign-in fields reported inside the viewport and usable (`t.audit`); no probed control past the edge. |
+| `desktop` | Signed in at 1920x1080. Home, Analytics and Accounts: `t.audit` (canvas painted, each page's controls reported and usable) and no probe, headings included, past the edge. Lists one full frame (Home). |
 | `widths` | The same at 1360, 1430, 1600 and 2200 px, the widths where header and quota-table overflow bugs showed up. |
-| `phone` | 390x844, touch, DPR 1. The tab bar probes are inside the viewport, every page paints, no overflow. |
+| `phone` | 390x844, touch, DPR 1. The same, with the tab bar required. |
+
+`checks/accounts-clicks.check.mjs` clicks every account row and header toggle at ten widths and on a phone, and asserts nothing is pushed off the page.
 
 Frames that aren't listed are saved as snaps for `browser-check diff <base run> <candidate run>`.
 
@@ -43,6 +46,7 @@ export default async function (t) {
 	await t.app.open({ page: 'analytics' });
 	const r = await t.app.rect('quota-head:title');             // a control's rectangle from its ProbeMark
 	await t.crop('quota-head', r, 'quota header title at 1360 px: not cut off');
+	await t.audit('analytics 1360', { controls: ['analytics-provider'] });   // controls: reported, on screen, usable, drawn
 	await t.app.noProbeOverflow();
 }
 ```
@@ -50,11 +54,12 @@ export default async function (t) {
 - **Helpers:**
   - `t.app.open({ page, signIn, query })`
   - `t.app.signIn()`
-  - `t.app.probes()` returns every probed rectangle.
+  - `t.app.probes({ require })` returns every probed rectangle, once the set has held still for two reads and has every id in `require` (up to 4 s).
   - `t.app.rect(id)`
-  - `t.app.click(id)` clicks the center of a probed control.
+  - `t.app.click(id)` clicks a control through `t.clickControl`: it waits for a late probe, wheels a control above or below the window into view, and refuses one a DOM element covers.
+  - `t.scrollToControl(id)` (browser-check) brings a control into view with real wheel turns over the page, not the header, and returns its rectangle.
   - `t.app.probeVisible(id)`
-  - `t.app.noProbeOverflow()`
+  - `t.app.noProbeOverflow()`: no probe reaches past the left or right edge; a probe parked wholly past it (the closed Details panel) is named in the note, not a failure.
   - `t.app.stub(path, json)`
 - **A probe reports even while its control is hidden.** A reported rectangle proves layout, not visibility. Judge visibility from pixels (`t.crop` at the rectangle, `t.painted`) or a frame.
 - **Synthetic data only:** made-up names and emails, never real account data.

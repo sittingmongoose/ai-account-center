@@ -7,6 +7,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Probes that are things to click or type into. The rest are headings, hints, bars, panels and marks, which t.audit must not
+// judge as controls (a 21 px heading isn't a target that is too small). pw-others is left out: the "Also sign out other
+// browsers" box shows only while a new password is confirmed, and while hidden its probe is a 16 px sliver over Sign out.
+// Known finding, 2026-11-01 (browser-check 2.0's first audit of Accounts): above the phone tier each usage or account row's show
+// and tray toggles are 28x16 (36x22 in the F tiers) with centres 21 px apart, under the 24 px WCAG 2.2 SC 2.5.8 asks for. The
+// audits leave them out by name until the row gives them room; every other control on the page is audited.
+export const KNOWN_SMALL = [/^acct-(show|tray):/];
+
+const CONTROL = /^(signin-(user|pass|submit|remember)$|update-apps$|install-app$|status-(line|block)$|home-legend$|analytics-provider$|included-usage$|tab-(home|analytics|accounts)$|(show|tray|add|add-key|row|acct-show|acct-tray|remove|signin-again|signin|session-signin|recheck):|recheck$|logout$|logsource-add$|cleanup-now$|all-(ask|do)$|network$|others-out$|pw-(cur|new|conf|toggle|submit|cancel)$)/;
+
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
 	const cli = path.join(root, 'dist', 'ccs.js');
@@ -37,6 +47,19 @@ export default (ctx) => {
 		// Signed out on an empty CCS_HOME, the update status call answers 401 by design
 		consoleErrors: { fail: true, allow: [/status of 401 .*\/api\/app-updates\/status/] },
 		failedRequests: { fail: false },
+		// The canvas's controls, for t.audit, t.clickControl and t.scrollToControl (browser-check 2.0): the interactive probes on
+		// this page, in CSS pixels. Signed in, the sign-in panel's probes still report while it is hidden, so they are left out.
+		// null off an ?e2e page, where nothing reports.
+		async controls(t) {
+			if (!/[?&]e2e\b/.test(t.page.url())) return null;
+			const all = await t.app.probes();
+			const signedIn = await t.page.evaluate(() => !!(window.__aacLastAuth && __aacLastAuth.signedIn));
+			return Object.entries(all).filter(([id]) => CONTROL.test(id) && !(signedIn && id.startsWith('signin-'))).map(([name, r]) => ({ name, ...r }));
+		},
+		// probe_tick reports over a few frames: a required control is asked for again for this long before it counts as missing
+		controlsWaitMs: 4000,
+		// Each test starts with no API stubs: accounts-clicks' synthetic accounts must not reach smoke's empty Home, even after a test that threw
+		async beforeEach(t) { await t.page.unrouteAll({ behavior: 'ignoreErrors' }); },
 		helpers: {
 			// Sign in for real: on an unconfigured home, loopback setup turns dashboard sign-in on and starts a session
 			// (POST /api/auth/setup); afterwards the same credentials sign in. Cookies land in this page's context.
@@ -70,25 +93,28 @@ export default (ctx) => {
 				return true;
 			},
 			// Every probed control on the current page: { id: { x, y, width, height } } in CSS pixels
-			// probe_tick reports over the next frames; read until the set stops growing (max 2 s) so a sample is complete
-			async probes(t) {
+			// probe_tick reports over the next frames, a section's probes some frames after the rest: read until the set has held
+			// still for 600 ms and has every id in require (max 4 s). Two reads 150 ms apart ended before a late probe reported
+			// ('probes missing: home-legend' on phone Home).
+			async probes(t, { require = [] } = {}) {
 				await t.page.evaluate(() => window.__aacProbeNow && __aacProbeNow());
-				let last = -1, size = 0;
-				for (let waited = 0; waited < 2000; waited += 150) {
+				let last = -1, same = 0;
+				for (let waited = 0; waited < 4000; waited += 150) {
 					await t.page.waitForTimeout(150);
-					size = await t.page.evaluate(() => (window.__aacProbe ? __aacProbe.size : 0));
-					if (size > 0 && size === last) break;
+					const { size, has } = await t.page.evaluate((ids) => ({ size: window.__aacProbe ? __aacProbe.size : 0, has: ids.every((id) => window.__aacProbe && __aacProbe.has(id)) }), require);
+					same = size > 0 && size === last ? same + 1 : 0;
+					if (same >= 4 && has) break;
 					last = size;
 				}
 				return t.page.evaluate(() => Object.fromEntries([...(window.__aacProbe || new Map())].map(([k, r]) => [k, { x: r.x, y: r.y, width: r.w, height: r.h }])));
 			},
 			async rect(t, id) { return (await t.app.probes())[id] || null; },
+			// A real mouse click at a control's centre, through browser-check: it waits for a late probe, wheels a control above or
+			// below the window into view first, and refuses one a DOM element covers
 			async click(t, id) {
-				const r = await t.app.rect(id);
-				if (!r) return t.fail(`click ${id}`, `no probe "${id}" on this page`);
-				await t.page.mouse.click(r.x + r.width / 2, r.y + r.height / 2);
+				const ok = await t.clickControl(id, { hover: 60 });
 				await t.page.waitForTimeout(400);
-				return true;
+				return ok;
 			},
 			// A probed control is reported, sized and inside the viewport
 			async probeVisible(t, id, name) {
@@ -99,16 +125,19 @@ export default (ctx) => {
 			},
 			// Canvas layout without a DOM: no probed control starts left of 0 or ends past the right edge. An empty or
 			// incomplete probe map fails (probes that stopped reporting must not read as "no overflow").
-			// ignore: ids of overlays whose closed geometry is parked past the edge on purpose (the F-tier
-			// SidePanel sits at x = window width while closed, and a probe reports even while hidden).
+			// A probe parked wholly past the edge (the F-tier SidePanel sits at x = window width while closed, and a probe reports
+			// even while hidden) is left out and named in the note. ignore: ids to leave out as well, such as an overlay while it opens.
 			async noProbeOverflow(t, name = 'no control past the edge', { require = ['update-apps'], ignore = [] } = {}) {
-				const all = await t.app.probes();
+				const all = await t.app.probes({ require });
 				const w = await t.page.evaluate(() => innerWidth);
 				const missing = require.filter((id) => !all[id]);
 				if (!Object.keys(all).length || missing.length) return t.record(name, false, `probes missing: ${Object.keys(all).length ? missing.join(', ') : 'none reported (is ?e2e on?)'}`);
 				const skipped = new Set(ignore);
-				const bad = Object.entries(all).filter(([id, r]) => !skipped.has(id) && r.width > 0 && (r.x < -1 || r.x + r.width > w + 1)).map(([id, r]) => `${id} spans ${Math.round(r.x)}..${Math.round(r.x + r.width)} of ${w}`);
-				return t.record(name, bad.length === 0, bad.slice(0, 8).join('; '), { note: `${Object.keys(all).length} probes` });
+				// Parked wholly past the left or right edge (a closed side panel) is not overflow: only what reaches into the window is,
+				// as browser-check's own canvas control check counts it
+				const parked = Object.entries(all).filter(([id, r]) => !skipped.has(id) && r.width > 0 && (r.x >= w || r.x + r.width <= 0)).map(([id]) => id);
+				const bad = Object.entries(all).filter(([id, r]) => !skipped.has(id) && !parked.includes(id) && r.width > 0 && (r.x < -1 || r.x + r.width > w + 1)).map(([id, r]) => `${id} spans ${Math.round(r.x)}..${Math.round(r.x + r.width)} of ${w}`);
+				return t.record(name, bad.length === 0, bad.slice(0, 8).join('; '), { note: `${Object.keys(all).length} probes${parked.length ? `; parked past the edge: ${parked.join(', ')}` : ''}` });
 			},
 			// Synthetic API answers (shape them like src/web-server/services/*-types.ts; made-up names only)
 			async stub(t, apiPath, json) { await t.page.route((u) => new URL(u).pathname === apiPath, (r) => r.fulfill({ json })); }
