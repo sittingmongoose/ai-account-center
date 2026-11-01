@@ -447,30 +447,29 @@ def job_finished(root, dashboard=False):
     """Whether the dashboard job file clears this computer's part for the restart.
 
     The detached worker replaces only this computer's T3 server, so what gates
-    the restart is that computer's own job: the job reached an end state and,
-    when it carries per-host progress, this host's entry says done. Remote
-    hosts still updating never depend on the Ubuntu server, so the restart no
-    longer waits out the slowest computer's app (a Windows Codex Desktop
-    package alone can run most of the job). A standalone --apply has no job
-    file and may restart once its helper is done; when one runs beside a
-    dashboard job's saved file, the same per-host read applies to it.
+    the restart is that computer's own job: its entry in the saved per-host
+    progress says done. The overall job may still be running — its state and
+    the dashboard lock clear only once every host is done, and requiring them
+    here kept waiting for the slowest computer's app (a Windows Codex Desktop
+    package alone can hold the job most of its run). A job saved before
+    per-host progress existed has no entries; its end state is the only
+    signal there, as before. A standalone --apply keeps the whole-job read it
+    has always had: every computer the job saved must be done.
     """
     try:
         raw = (root / "dashboard-job.json").read_bytes()
         if len(raw) > 1024 * 1024:
             return False
         job = json.loads(raw).get("job")
-        if not isinstance(job, dict) or job.get("state") not in ("completed", "failed"):
+        if not isinstance(job, dict):
             return False
         hosts = job.get("hosts")
         if dashboard:
-            # This computer's own entry gates the restart; a job saved before
-            # per-host progress existed has none, and its end state is enough.
-            return hosts is None or (
-                isinstance(hosts, dict) and isinstance(hosts.get("ubuntu"), dict)
-                and hosts["ubuntu"].get("state") == "done")
-        # Standalone --apply keeps the whole-job read it has always had: every
-        # computer the job saved must be done, and an empty table proves nothing.
+            if isinstance(hosts, dict):
+                return isinstance(hosts.get("ubuntu"), dict) and hosts["ubuntu"].get("state") == "done"
+            return job.get("state") in ("completed", "failed")
+        if job.get("state") not in ("completed", "failed"):
+            return False
         return hosts is None or (isinstance(hosts, dict) and len(hosts) > 0 and all(
             isinstance(host, dict) and host.get("state") == "done" for host in hosts.values()))
     except FileNotFoundError:
@@ -480,13 +479,22 @@ def job_finished(root, dashboard=False):
 
 
 def deferred_restart(parent_pid, root=None, dashboard=False):
-    """Detached worker: never restart in a helper or dashboard job's lifetime.
+    """Detached worker: restart once this computer's part of the update is over.
 
-    Holds the helper execution lock and AAC's exclusive dashboard lock across
-    the final check and restart. No AAC service is touched.
+    For a dashboard job that means the job file's entry for this host says
+    done; the dashboard lock and overall job state stay held by the remote
+    hosts still working and do not gate the restart (see job_finished). A
+    standalone --apply keeps every gate it always had: no dashboard lock, the
+    whole saved job done, the helper exited. Either way the final check and
+    the restart hold the helper execution lock, excluding a new local update.
     """
     root = root or state_root()
     lock = root / "dashboard-update.lock"
+    # In a dashboard job the dashboard's own lock file stays held by the remote
+    # hosts for most of the run, and the worker no longer waits for it — so the
+    # worker's exclusion marker during the restart is its own file and never
+    # touches the dashboard's (whose owner unlinks it when the job ends).
+    worker_lock = root / "t3-restart.lock" if dashboard else lock
     marker = root / "t3-code-pending-restart.json"
     deadline = time.monotonic() + 35 * 60
     quiet_since = None
@@ -504,13 +512,13 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
             # Same per-user lock as standalone --apply, even when the dashboard
             # stores its job in a custom directory. File existence is not a lock.
             with execution_lock():
-                if parent_alive or lock.exists() or not job_finished(root, dashboard):
+                if parent_alive or (lock.exists() and not dashboard) or not job_finished(root, dashboard):
                     quiet_since = None
                 elif quiet_since is None:
                     quiet_since = time.monotonic()
                 elif time.monotonic() - quiet_since >= 30:
                     try:
-                        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        descriptor = os.open(worker_lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     except FileExistsError:
                         quiet_since = None
                         continue
@@ -532,7 +540,7 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
                             finish_ubuntu_restart(root, daemon_reload)
                             return
                     finally:
-                        lock.unlink(missing_ok=True)
+                        worker_lock.unlink(missing_ok=True)
                     quiet_since = None
         except UpdateFailure as error:
             if error.code != "busy":
