@@ -592,7 +592,12 @@ class CollectionTests(unittest.TestCase):
                     {"bucketId": "argon-weekly", "window": "weekly", "remainingFraction": .012, "resetTime": "2026-10-29T20:42:30Z"}]},
                 {"displayName": "Claude and GPT models", "buckets": [
                     {"bucketId": "3p-5h", "window": "5h", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:30Z"}]}]},
-            {"buckets": [{"modelId": "gemini-3.8-flash", "remainingFraction": .9, "resetTime": "2026-10-29T20:42:26Z"}]},
+            {"buckets": [
+                {"modelId": "gemini-3.8-flash", "remainingFraction": .9, "resetTime": "2026-10-29T20:42:26Z"},
+                # An Argon per-model bucket shares the reset: it belongs to the
+                # Argon pool, and aggregating it would floor the derived Gemini
+                # window at the Argon bucket's remaining fraction.
+                {"modelId": "gemini-4-argon-pro", "remainingFraction": .1, "resetTime": "2026-10-29T20:42:26Z"}]},
         ]
         result = helpers.account("antigravity", "ubuntu")
         usage.fetch_antigravity_quota(helpers.Credential("fixture-access"), result)
@@ -600,6 +605,7 @@ class CollectionTests(unittest.TestCase):
         self.assertTrue(request.call_args_list[2].args[0].endswith("retrieveUserQuota"))
         keys = [window["key"] for window in result["windows"]]
         self.assertEqual(keys, ["argon-weekly", "3p-5h", "gemini-weekly"])
+        self.assertEqual(result["windows"][2]["remainingPercent"], 90.0)
 
     @patch("desktop_usage.time")
     @patch("desktop_usage.antigravity_oauth_client",

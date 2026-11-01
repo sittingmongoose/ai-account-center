@@ -144,6 +144,18 @@ extension DashboardAccount {
     return meterWindows.first { !$0.isFable && $0.period == period }
   }
 
+  /// The menu-bar headline window: the spec's pool order across both periods
+  /// (Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly), then
+  /// the first other meter. Not "any 5-hour before any weekly" — that let a
+  /// Claude/GPT 5-hour window outrank the higher-ranked Gemini pool on a plan
+  /// whose Gemini quota is weekly only.
+  public var antigravityHeadlineWindow: AccountQuotaWindow? {
+    for key in TrayColumns.antigravityKeys {
+      if let window = meterWindows.first(where: { $0.key == key }) { return window }
+    }
+    return meterWindows.first
+  }
+
   /// Fable appears only on Claude Max rows, read from the provider-reported `seven_day_fable` window.
   public var fableCell: FableCell {
     guard provider == "claude", isMaxPlan else { return .notApplicable }
@@ -374,13 +386,24 @@ public struct MenuBarReading: Sendable, Equatable {
     guard provider != nothingProvider,
       let pick = pickAccount(dashboard: dashboard, provider: provider, claudeAccountID: claudeAccountID) else { return nil }
     let account = pick.account
-    let fiveHour = account.fiveHourWindow
-    guard let window = fiveHour ?? account.weeklyWindow else { return nil }
+    let window: AccountQuotaWindow?
+    if provider == "antigravity" {
+      window = account.antigravityHeadlineWindow
+    } else {
+      let fiveHour = account.fiveHourWindow
+      window = fiveHour ?? account.weeklyWindow
+    }
+    guard let window else { return nil }
     guard account.pendingReset(window) == nil, let used = window.meterUsedPercent else { return nil }
     let value = mode == .used ? used : max(0, 100 - used)
     let text = "\(TrayFormat.number(value))%"
     let who = account.identity
-    let span = window.key == fiveHour?.key ? "5-hour" : "Weekly"
+    let span: String
+    if provider == "antigravity" {
+      span = window.period == .fiveHour ? "5-hour" : "Weekly"
+    } else {
+      span = window.key == account.fiveHourWindow?.key ? "5-hour" : "Weekly"
+    }
     return MenuBarReading(value: value, text: text, accountName: who,
       detail: "\(providerName(provider)) · \(who) · \(span) \(mode == .used ? "used" : "remaining")")
   }

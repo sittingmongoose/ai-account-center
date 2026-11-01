@@ -482,6 +482,11 @@ def job_finished(root, dashboard=False):
             return False
         hosts = job.get("hosts")
         if dashboard:
+            # A present but malformed host table fails closed; only a job saved
+            # before per-host progress existed (no hosts at all) falls back to
+            # its end state.
+            if hosts is not None and not isinstance(hosts, dict):
+                return False
             if isinstance(hosts, dict):
                 return isinstance(hosts.get("ubuntu"), dict) and hosts["ubuntu"].get("state") == "done"
             return job.get("state") in ("completed", "failed")
@@ -493,6 +498,59 @@ def job_finished(root, dashboard=False):
         return not dashboard  # Only standalone --apply may have no job file.
     except (OSError, ValueError, AttributeError, TypeError):
         return False
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def restart_lock_owner_alive(path):
+    """Whether the restart marker names a live worker, mirroring the dashboard's
+    admission check for its own lock: a file whose pid is gone, or that names a
+    process from before this boot, holds nothing. A malformed file is live only
+    while it is fresh (it is written in one small dump); an old one is a crash
+    a later worker must recover."""
+    try:
+        value = json.loads(pathlib.Path(path).read_bytes())
+        pid = value.get("pid")
+        if not isinstance(pid, int) or pid < 1:
+            raise ValueError()
+        if isinstance(value.get("identity"), str):
+            return process_identity(pid) == value["identity"] and _pid_alive(pid)
+        return _pid_alive(pid)
+    except (OSError, ValueError, AttributeError, TypeError):
+        try:
+            age = time.time() - pathlib.Path(path).stat().st_mtime
+        except OSError:
+            return False
+        return age < 300
+
+
+def claim_restart_lock(path):
+    """Create the worker's exclusion marker, recovering one a killed worker or
+    an interrupted machine left behind: a marker naming no live worker is
+    removed and the create retried, so one crash cannot silence every later
+    retry. None when a live worker holds the marker now."""
+    while True:
+        try:
+            return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        if not restart_lock_owner_alive(path):
+            try:
+                os.unlink(path)
+            except OSError:
+                return None
+            continue
+        return None
 
 
 def deferred_restart(parent_pid, root=None, dashboard=False):
@@ -534,9 +592,8 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
                 elif quiet_since is None:
                     quiet_since = time.monotonic()
                 elif time.monotonic() - quiet_since >= 30:
-                    try:
-                        descriptor = os.open(worker_lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                    except FileExistsError:
+                    descriptor = claim_restart_lock(worker_lock)
+                    if descriptor is None:
                         quiet_since = None
                         continue
                     try:

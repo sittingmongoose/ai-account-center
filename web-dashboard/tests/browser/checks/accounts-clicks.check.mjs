@@ -166,15 +166,20 @@ export const tests = {
 
 // The reported bug lived entirely inside the Antigravity policy card: five watch-pool
 // chips pushed the cooldown segments past the card's right edge while the page and
-// viewport still had room. The card and its cooldown row carry probes, so the
+// viewport still had room. The card and both segmented rows carry probes, so the
 // assertion is in code, not only in the snapshots.
 async function assertCooldownInsidePolicyBox(t, width) {
 	await scrollIntoView(t, 'pmark:antigravity');
-	const [box, cooldown] = await t.app.probes().then((all) => [all['ag-policy'], all['cooldown-segments']]);
-	if (!box || !cooldown) throw new Error(`policy-box probes missing at ${width} (box: ${!!box}, cooldown: ${!!cooldown})`);
-	// the box's own 14 px inner padding is the segment row's right limit
-	if (cooldown.x + cooldown.width > box.x + box.width - 13) {
-		throw new Error(`cooldown segments ran past the policy box at ${width}: segments end at ${Math.round(cooldown.x + cooldown.width)}, box at ${Math.round(box.x + box.width)}`);
+	const all = await t.app.probes();
+	const box = all['ag-policy'];
+	if (!box) throw new Error(`policy-box probe missing at ${width}`);
+	// the box's own 14 px inner padding is each segment row's right limit
+	for (const id of ['watch-pool-segments', 'cooldown-segments']) {
+		const row = all[id];
+		if (!row) throw new Error(`probe "${id}" missing at ${width}`);
+		if (row.x + row.width > box.x + box.width - 13) {
+			throw new Error(`${id} ran past the policy box at ${width}: row ends at ${Math.round(row.x + row.width)}, box at ${Math.round(box.x + box.width)}`);
+		}
 	}
 }
 

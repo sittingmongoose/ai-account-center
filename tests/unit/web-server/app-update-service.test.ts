@@ -472,6 +472,24 @@ describe('fixed app update service', () => {
     expect(second.getStatus().job!.results).toHaveLength(40);
     expect(fs.existsSync(path.join(root, 'app-updates/dashboard-update.lock'))).toBe(false);
   });
+  it('refuses to start while a live T3 restart worker holds its marker, and after a stale one', async () => {
+    const root = directory();
+    const restartLock = path.join(root, 'app-updates/t3-restart.lock');
+    fs.mkdirSync(path.join(root, 'app-updates'), { recursive: true, mode: 0o700 });
+    // A live worker (this process) holds the marker: a new job would start the
+    // remote hosts and then find every local row busy behind the restart.
+    fs.writeFileSync(restartLock, JSON.stringify({ pid: process.pid }), { mode: 0o600 });
+    const held = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
+    expect(() => held.start()).toThrow(AppUpdateBusyError);
+    // A marker left by a worker that since died names no live restart: it must
+    // not block admission forever.
+    fs.writeFileSync(restartLock, JSON.stringify({ pid: 999999999 }), { mode: 0o600 });
+    const after = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
+    const job = after.start().job;
+    expect(job.state).toBe('running');
+    await finish(after);
+    expect(fs.existsSync(restartLock)).toBe(true); // admission never deletes the worker's marker
+  });
   it('refuses a cancel from a process that does not own the running job', async () => {
     const root = directory();
     let release!: (value: string) => void;

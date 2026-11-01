@@ -442,6 +442,12 @@ export class AppUpdateService {
       }
       this.lockHeld = true;
     };
+    // The T3 restart worker's marker: while a live worker verifies its restart
+    // (its helper holds the execution lock for up to the ready wait), a new job
+    // here would start remote hosts and then find every local row busy.
+    if (this.lockOwnerAlive(path.join(this.directory, 't3-restart.lock'))) {
+      throw new AppUpdateBusyError();
+    }
     try {
       create();
     } catch (error) {
@@ -482,9 +488,8 @@ export class AppUpdateService {
     fs.chmodSync(target, 0o600);
   }
 
-  private lockOwnerAlive(): boolean {
+  private lockOwnerAlive(file = path.join(this.directory, 'dashboard-update.lock')): boolean {
     try {
-      const file = path.join(this.directory, 'dashboard-update.lock');
       const stat = fs.statSync(file);
       const malformedAlive = (): boolean => this.deps.now() - stat.mtimeMs < 5000;
       if (stat.size > 512) return malformedAlive();

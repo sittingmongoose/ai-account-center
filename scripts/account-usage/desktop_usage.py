@@ -375,7 +375,11 @@ def _antigravity_gemini_groups(buckets):
         reset = reset_at(bucket.get("resetTime"))
         if reset is None:
             continue
-        if not isinstance(model_id, str) or not model_id.startswith("gemini-") or not 0 < len(model_id) <= 160:
+        # A Gemini 4 Argon model belongs to its own pooled family, not to the
+        # Gemini Models windows this derivation builds: aggregating one floors
+        # the shared minimum at the Argon bucket's remaining fraction.
+        if not isinstance(model_id, str) or not model_id.startswith("gemini-") or "argon" in model_id.lower() \
+                or not 0 < len(model_id) <= 160:
             continue
         fraction = number(bucket.get("remainingFraction"))
         if fraction is None:

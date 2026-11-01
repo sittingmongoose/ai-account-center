@@ -473,6 +473,8 @@ class T3Fixtures(unittest.TestCase):
         self.assertFalse(finished(None, "running"))
         # A malformed or absent entry fails closed.
         self.assertFalse(finished({"ubuntu": "done"}))
+        self.assertFalse(finished([]))
+        self.assertFalse(finished("done"))
         self.assertFalse(finished({}))
         # A standalone --apply beside the same running job keeps the whole-job
         # read it has always had: no host may still be working.
@@ -511,6 +513,58 @@ class T3Fixtures(unittest.TestCase):
         self.assertFalse((root / "t3-restart.lock").exists())
         self.assertTrue((root / "dashboard-update.lock").exists())  # The dashboard's lock is untouched.
         self.assertFalse((root / "t3-code-pending-restart.json").exists())
+
+    def test_dashboard_worker_recovers_a_restart_marker_left_by_a_dead_worker(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
+        common.write_private_json(root / "dashboard-job.json", {"job": {"state": "running", "hosts": {
+            "ubuntu": {"state": "done"}, "mac": {"state": "done"},
+            "windows": {"state": "running"}, "nas1": {"state": "waiting"}}}})
+        # A worker that died mid-restart left its marker. A pid that is gone
+        # holds nothing: this retry must recover the marker and restart instead
+        # of waiting out its whole deadline behind a crashed run.
+        common.write_private_json(root / "t3-restart.lock", {"pid": 999999999})
+        now = [0]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        def run(argv, **kwargs):
+            self.assertGreaterEqual(now[0], 30)
+            if "--property=NeedDaemonReload" in argv:
+                return systemctl(argv)
+            self.assertEqual(argv, ["/usr/bin/systemctl", "--user", "restart", "t3code.service"])
+
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), \
+                mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=sleep), \
+                mock.patch.object(t3, "command", side_effect=run), \
+                mock.patch.object(t3, "health_check"), \
+                mock.patch.object(t3, "running_runtime_version", return_value=NEW):
+            t3.deferred_restart(12345, root, True)
+        self.assertFalse((root / "t3-restart.lock").exists())
+        self.assertFalse((root / "t3-code-pending-restart.json").exists())
+
+    def test_a_live_restart_marker_holds_a_second_worker_off(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
+        common.write_private_json(root / "dashboard-job.json", {"job": {"state": "running", "hosts": {
+            "ubuntu": {"state": "done"}, "mac": {"state": "done"}, "windows": {"state": "running"}}}})
+        # This process is alive, so its marker means a restart is being
+        # verified right now: a second worker waits instead of restarting too.
+        common.write_private_json(root / "t3-restart.lock", {"pid": os.getpid()})
+        now = [0]
+
+        def sleep(seconds):
+            now[0] += max(seconds, 60)
+
+        with mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=sleep), \
+                mock.patch.object(t3, "command") as command:
+            with self.assertRaisesRegex(common.UpdateFailure, "restart_failed"):
+                t3.deferred_restart(12345, root, True)
+        command.assert_not_called()
+        self.assertTrue((root / "t3-restart.lock").exists())  # The live worker's marker stays.
 
     def test_detached_restart_waits_for_nas1_to_finish_in_the_saved_job(self):
         root = t3.state_root(); root.mkdir(parents=True)
