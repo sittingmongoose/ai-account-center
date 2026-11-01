@@ -177,7 +177,9 @@ public enum TrayColumns {
       let known = Set(antigravityKeys)
       for account in accounts {
         for window in account.visibleWindows where window.isMeter && !known.contains(window.key) {
-          guard columns.count < 6, !columns.contains(where: { $0.key == window.key }) else { continue }
+          // Same cap as the Windows panel: the spec's four columns plus one
+          // extra pool keep the shared panel width readable.
+          guard columns.count < 5, !columns.contains(where: { $0.key == window.key }) else { continue }
           columns.append((key: window.key, label: shortLabel(provider: "antigravity", window)))
         }
       }

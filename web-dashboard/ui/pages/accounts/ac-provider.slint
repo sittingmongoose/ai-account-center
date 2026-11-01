@@ -778,13 +778,17 @@ component AgCool inherits AgParam {
         enabled: root.ag.cooldown-enabled && !root.busy;
         changed-value(v) => { root.act("antigravity-cooldown", v); }
     }
-    if !root.list: Segmented {
-        items: root.ag.cooldowns;
-        controlled: true;
-        model-value: root.ag.cooldown;
-        value: root.ag.cooldown;
-        enabled: root.ag.cooldown-enabled && !root.busy;
-        changed-value(v) => { root.act("antigravity-cooldown", v); }
+    if !root.list: Rectangle {
+        min-width: 0px;
+        Segmented {
+            items: root.ag.cooldowns;
+            controlled: true;
+            model-value: root.ag.cooldown;
+            value: root.ag.cooldown;
+            enabled: root.ag.cooldown-enabled && !root.busy;
+            changed-value(v) => { root.act("antigravity-cooldown", v); }
+        }
+        ProbeMark { id: "cooldown-segments"; x: 0px; y: 0px; width: parent.width; height: parent.height; }
     }
 }
 
@@ -1405,6 +1409,7 @@ export component ProviderSection inherits Plate {
                 ag: AcData.ag;
                 busy: root.busy;
                 act(kind, value) => { root.act(kind, value); }
+                ProbeMark { id: "ag-policy"; x: 0px; y: 0px; width: parent.width; height: parent.height; }
             }
         }
         FlowPanel {

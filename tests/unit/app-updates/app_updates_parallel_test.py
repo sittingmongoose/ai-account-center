@@ -97,7 +97,10 @@ class ParallelUpdateTests(unittest.TestCase):
         rows, started, events = self.gated_run()
         self.assertEqual(len(rows), len(common.APP_LABELS))
         self.assertEqual({row["status"] for row in rows}, {"current"})
-        self.assertEqual(started[-1], "codex-desktop")
+        # Both desktop heavyweights run in the pool now, so which of them starts
+        # last depends on slot timing; the gated test below pins their gates.
+        self.assertIn("t3-code", started)
+        self.assertIn("codex-desktop", started)
         self.assertEqual(len([event for event in events if event["event"] == "result"]), len(rows))
         active, visible = set(), None
         for index, event in enumerate(events):
@@ -135,7 +138,7 @@ class ParallelUpdateTests(unittest.TestCase):
                 # T3's desktop replacement interrupts the CLI updaters (the ones
                 # that stop or restart its hosted sessions), so all of those are
                 # finished and quiet before it runs. Codex Desktop is the one app
-                # allowed beside it, and the slow package is the run's last worker.
+                # allowed beside it in the pool.
                 others = active - {"codex-desktop"}
                 if app_id == "t3-code" and (others or len(finished - {"codex-desktop"}) != len(common.APP_LABELS) - 2):
                     violations.append("T3 before barrier")

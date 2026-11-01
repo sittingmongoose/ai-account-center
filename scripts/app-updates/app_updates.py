@@ -891,12 +891,13 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
     with execution_lock():
         emit({"event": "app", "appId": None, "phase": "checking"})
         installations = detect(platform)
-        # Codex Desktop follows its CLI. On Ubuntu, T3 stays last so the unit it
-        # schedules a restart for never outruns a worker. On Mac and Windows the
-        # T3 desktop's own replacement only interrupts the CLI updaters (the ones
-        # that stop or restart its hosted sessions), so T3 runs after them and the
-        # Codex Desktop package — by far the slowest step (a 900 MB download and
-        # a minutes-long Add-AppxPackage) — is the last thing the run waits on.
+        # Codex Desktop follows its CLI. On Ubuntu, T3 stays last and outside the
+        # pool: its row only schedules the detached restart. On Mac and Windows
+        # both desktop apps run in the pool under their own gates — T3 after the
+        # CLI updaters its replacement would interrupt (see t3_barriers), Codex
+        # Desktop after its CLI — so the slow MSIX download and install overlap
+        # T3's run instead of trailing it (review finding: serialized behind
+        # T3's health wait, its own time budget ran out).
         if platform == "ubuntu":
             order = [app_id for app_id in APP_LABELS if app_id not in ("codex-desktop", "t3-code")] + ["codex-desktop", "t3-code"]
         else:
@@ -905,7 +906,7 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
         # On the desktop platforms the pool schedules T3 itself, so its barrier
         # is a dependency: the CLI updaters (the ones that stop or restart its
         # hosted sessions) must all be finished before T3's replacement runs.
-        # Codex Desktop is the one app allowed to still be running beside it.
+        # Codex Desktop is the one app allowed beside it.
         t3_barriers = frozenset(APP_LABELS) - {"t3-code", "codex-desktop"}
 
         def gates(app_id):
@@ -963,11 +964,11 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
             except Exception:
                 return result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed")
 
-        # Ubuntu schedules no inline T3 restart, so nothing follows the workers
-        # there. On the desktop platforms Codex Desktop is the run's last app
-        # (see the order above) and is finished by the same pool.
-        last = "t3-code" if platform == "ubuntu" else "codex-desktop"
-        pending, running = order[:-1].copy(), {}
+        # Ubuntu's T3 row only schedules the detached restart, so it can close
+        # the pool after every other worker; the desktop platforms run all ten
+        # apps in the pool under their gates.
+        deferred_last = "t3-code" if platform == "ubuntu" else None
+        pending, running = order[:len(order) - 1].copy() if deferred_last else order.copy(), {}
         with ThreadPoolExecutor(max_workers=MAX_PARALLEL_UPDATES) as pool:
             while pending or running:
                 reserved = set().union(*(resources for _, resources in running.values()))
@@ -985,8 +986,9 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                     for future in finished:
                         running.pop(future)
                         report(future.result())
-        # No T3 replacement or deferred restart can interrupt another worker.
-        report(update_one(last))
+        if deferred_last:
+            # No T3 replacement or deferred restart can interrupt another worker.
+            report(update_one(deferred_last))
     return {"results": [results[app_id] for app_id in order]}
 
 

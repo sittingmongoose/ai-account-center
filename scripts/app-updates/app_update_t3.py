@@ -25,7 +25,7 @@ from app_update_common import (
     Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock, powershell, private_temporary,
     ps_quote, result, write_private_json, process_identity,
 )
-from app_update_processes import live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
+from app_update_processes import family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
 
 RELEASES = "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=20"
 RELEASE_BASE = "https://github.com/pingdotgg/t3code/releases/download/"
@@ -257,9 +257,18 @@ def service_state(service):
     return values.get("ActiveState", ""), int(restarts) if restarts.isdigit() else None
 
 
-def health_check(host, seconds=30, service=None):
+def health_budget(deadline):
+    """A verified install gets a real migration window (a big state migrates for many minutes),
+    floored at one full probe: rolling a verified install back without waiting at all — the old
+    fixed 30 s ran to its end even past the deadline — is the outcome worse than overrunning."""
+    return min(600, max(30, int(deadline - time.monotonic())))
+
+
+def health_check(host, seconds=30, service=None, alive=None):
     """Wait for T3's local server to answer. With a service, a slow start is not a failure: only a
-    unit that failed, stopped or was restarted again by systemd ends the wait early."""
+    unit that failed, stopped or was restarted again by systemd ends the wait early. With `alive`,
+    a relaunched desktop whose whole process family died ends the wait at once — a crashed
+    relaunch must not hold the full budget before the rollback puts the old build back."""
     deadline = time.monotonic() + seconds
     first = service_state(service) if service else None
     checked = time.monotonic()
@@ -275,6 +284,10 @@ def health_check(host, seconds=30, service=None):
             state = service_state(service)
             if state and (state[0] in ("failed", "inactive") or
                           (first and first[1] is not None and state[1] is not None and state[1] > first[1])):
+                raise UpdateFailure("restart_failed")
+        if alive and time.monotonic() - checked >= 10:
+            checked = time.monotonic()
+            if not alive():
                 raise UpdateFailure("restart_failed")
         time.sleep(1 if service else .3)
     raise UpdateFailure("restart_failed")
@@ -355,7 +368,9 @@ def update_mac(install, version, temporary, deadline, phase):
             restart_desktops(install, contexts)
         else:
             command(["/usr/bin/open", "-a", install.path], timeout=15)
-        health_check("mac")
+        # The same migration risk the Windows relaunch has: a 30-second wait
+        # failed a good install and rolled it back.
+        health_check("mac", health_budget(deadline))
         completed = True
     except Exception:
         if moved:
@@ -411,7 +426,9 @@ def update_windows(install, version, temporary, deadline, phase):
         # one took about 11 on Ubuntu). A 30-second wait here used to fail a
         # good install, roll it back and leave T3 closed — give the same
         # migration room Windows can afford inside the task's 35-minute limit.
-        health_check("windows", budget(deadline, 600))
+        # A relaunch that died ends the wait at once instead of at the budget.
+        health_check("windows", health_budget(deadline),
+                     alive=lambda: bool(family(install, scan("windows"))))
     except Exception:
         # Stop only the new T3 family before restoring the previous bundle.
         try:

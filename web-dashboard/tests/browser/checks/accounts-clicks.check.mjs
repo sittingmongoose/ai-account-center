@@ -107,6 +107,7 @@ export const tests = {
 					await t.page.waitForTimeout(400);
 				}
 			});
+			await assertCooldownInsidePolicyBox(t, width);
 			await t.snap(`accounts-clicks-${width}`);
 		}
 	},
@@ -162,6 +163,20 @@ export const tests = {
 		await t.snap('accounts-clicks-390');
 	},
 };
+
+// The reported bug lived entirely inside the Antigravity policy card: five watch-pool
+// chips pushed the cooldown segments past the card's right edge while the page and
+// viewport still had room. The card and its cooldown row carry probes, so the
+// assertion is in code, not only in the snapshots.
+async function assertCooldownInsidePolicyBox(t, width) {
+	await scrollIntoView(t, 'pmark:antigravity');
+	const [box, cooldown] = await t.app.probes().then((all) => [all['ag-policy'], all['cooldown-segments']]);
+	if (!box || !cooldown) throw new Error(`policy-box probes missing at ${width} (box: ${!!box}, cooldown: ${!!cooldown})`);
+	// the box's own 14 px inner padding is the segment row's right limit
+	if (cooldown.x + cooldown.width > box.x + box.width - 13) {
+		throw new Error(`cooldown segments ran past the policy box at ${width}: segments end at ${Math.round(cooldown.x + cooldown.width)}, box at ${Math.round(box.x + box.width)}`);
+	}
+}
 
 // The page scroller is Slint's own Flickable on one canvas, so a row is brought into view with
 // wheel events, not scrollIntoView — and the pointer must sit over the page, not the header,
