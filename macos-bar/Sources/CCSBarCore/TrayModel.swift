@@ -119,6 +119,7 @@ extension DashboardAccount {
   /// The 5-hour column: the exact `five_hour` window, else the first non-Fable 5-hour meter.
   public var fiveHourWindow: AccountQuotaWindow? {
     if provider == "codex" { return compactWindows.first { $0.key == "five_hour" } }
+    if provider == "antigravity" { return poolWindow(fiveHour: true) }
     return meterWindows.first { $0.key == "five_hour" }
       ?? meterWindows.first { !$0.isFable && $0.period == .fiveHour }
   }
@@ -126,8 +127,21 @@ extension DashboardAccount {
   /// The weekly column: the exact `seven_day` window, else the first non-Fable weekly meter.
   public var weeklyWindow: AccountQuotaWindow? {
     if provider == "codex" { return compactWindows.first { $0.key == "seven_day" } }
+    if provider == "antigravity" { return poolWindow(fiveHour: false) }
     return meterWindows.first { $0.key == "seven_day" }
       ?? meterWindows.first { !$0.isFable && $0.period == .week }
+  }
+
+  /// Antigravity's headline window for the menu bar and the compact row, by the spec's pool
+  /// order (Gemini before Claude/GPT) instead of the reported order. The provider moved its
+  /// Gemini windows to the end of the sample when the per-model read began deriving them,
+  /// and a first-5h-meter pick silently switched the menu bar to another pool's number.
+  private func poolWindow(fiveHour: Bool) -> AccountQuotaWindow? {
+    for key in TrayColumns.antigravityKeys where key.hasSuffix(fiveHour ? "-5h" : "-weekly") {
+      if let window = meterWindows.first(where: { $0.key == key }) { return window }
+    }
+    let period: QuotaPeriod = fiveHour ? .fiveHour : .week
+    return meterWindows.first { !$0.isFable && $0.period == period }
   }
 
   /// Fable appears only on Claude Max rows, read from the provider-reported `seven_day_fable` window.
@@ -151,11 +165,24 @@ public enum TrayColumns {
   /// 5-hour and weekly windows, then the Claude/GPT pool's. Keys stay exactly as the provider reports them.
   public static let antigravityKeys = ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"]
 
-  /// The concept's four Antigravity columns when the dashboard reports those buckets; otherwise the
-  /// first account's own meters, so nothing is guessed from labels.
+  /// The concept's four Antigravity columns when the dashboard reports those buckets, then any
+  /// pool the columns don't name yet (a new Antigravity pool reports under its own key) in
+  /// reported order, so a reported meter never vanishes from the panel; otherwise the first
+  /// account's own meters, so nothing is guessed from labels.
   public static func antigravity(_ accounts: [DashboardAccount]) -> [(key: String, label: String)] {
-    let present = antigravityKeys.filter { key in accounts.contains { $0.visibleWindows.contains { $0.key == key } } }
-    if !present.isEmpty { return present.map { (key: $0, label: antigravityLabel($0)) } }
+    var columns = antigravityKeys
+      .filter { key in accounts.contains { $0.visibleWindows.contains { $0.key == key } } }
+      .map { (key: $0, label: antigravityLabel($0)) }
+    if !columns.isEmpty {
+      let known = Set(antigravityKeys)
+      for account in accounts {
+        for window in account.visibleWindows where window.isMeter && !known.contains(window.key) {
+          guard columns.count < 6, !columns.contains(where: { $0.key == window.key }) else { continue }
+          columns.append((key: window.key, label: shortLabel(provider: "antigravity", window)))
+        }
+      }
+      return columns
+    }
     guard let first = accounts.first(where: { !$0.glanceMeters.isEmpty }) else { return [] }
     return first.glanceMeters.map { (key: $0.key, label: shortLabel(provider: "antigravity", $0)) }
   }

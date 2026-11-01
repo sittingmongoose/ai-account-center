@@ -313,16 +313,22 @@ GEMINI_RESET_CLUSTER_SECONDS = 10
 
 
 def antigravity_summary_has_gemini(summary_windows):
-    """Whether the quota summary already reports a Gemini (or Argon) group.
+    """Whether the quota summary already reports the Gemini (model) group.
 
     Both collectors check this before the optional per-model read: when the
     summary carries Gemini keys or labels, the derivation stands down and the
     extra request is never made, so a throttle on it cannot hold the account.
+    A group whose name only starts with "Gemini" does not count: "Gemini 4
+    Argon" is its own pooled family, and reading it as Gemini would stand the
+    per-model derivation down on an account whose summary reports Argon but
+    no Gemini Models group, leaving the tray with no Gemini windows at all.
     """
-    return any(isinstance(window, dict) and (
-        str(window.get("key", "")).startswith("gemini")
-        or str(window.get("label", "")).lower().startswith("gemini"))
-        for window in summary_windows)
+    def is_gemini(window):
+        key = str(window.get("key", "")).lower()
+        label = str(window.get("label", "")).lower()
+        return ("gemini" in key or label.startswith("gemini")) and "argon" not in key and "argon" not in label
+
+    return any(isinstance(window, dict) and is_gemini(window) for window in summary_windows)
 
 
 def _antigravity_gemini_period(reset, anchors):

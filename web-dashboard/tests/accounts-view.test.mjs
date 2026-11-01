@@ -1346,6 +1346,29 @@ test('Update apps shows a desktop download live with how long it has run', () =>
   assert.equal(legacy.result, 'Downloading');
 });
 
+test('Update apps elapsed text ticks in whole 15-second steps so status polls dedup', () => {
+  const job = {
+    state: 'running',
+    startedAt: at(-6),
+    finishedAt: null,
+    activePlatform: 'windows',
+    hosts: {
+      ubuntu: { state: 'done', currentApp: null, phase: null },
+      mac: { state: 'done', currentApp: null, phase: null },
+      windows: { state: 'running', currentApp: 'codex-desktop', phase: 'downloading', phaseSince: new Date(now - 60_000).toISOString() },
+    },
+    expectedResults: 21,
+    results: [],
+  };
+  // Two polls inside one 15-second tick push byte-identical view models, so
+  // bridge.js pushModel skips the Slint rebuild that made scrolling choppy.
+  const first = updateResultsView(job, now + 3_000);
+  const second = updateResultsView(job, now + 12_000);
+  assert.equal(JSON.stringify(first), JSON.stringify(second));
+  const nextTick = updateResultsView(job, now + 15_000);
+  assert.notEqual(JSON.stringify(first), JSON.stringify(nextTick));
+});
+
 test('Update apps reads a named quit-first row as the same needs-action warning', () => {
   const view = updateResultsView({
     state: 'completed', startedAt: at(-6), finishedAt: at(-1), activePlatform: null, expectedResults: 21,

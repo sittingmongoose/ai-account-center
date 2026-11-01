@@ -449,6 +449,29 @@ class T3Fixtures(unittest.TestCase):
         for hosts in ({}, [], "done", {"ubuntu": "done"}, {**three, "nas1": None}, {**three, "nas1": {"state": "DONE"}}):
             self.assertFalse(finished(hosts), hosts)
 
+    def test_dashboard_restart_follows_this_host_not_the_slowest_computer(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        path = root / "dashboard-job.json"
+
+        def finished(hosts, state="completed"):
+            common.write_private_json(path, {"job": {"state": state, "hosts": hosts}})
+            return t3.job_finished(root, dashboard=True)
+
+        four = {host: {"state": "done"} for host in ("ubuntu", "mac", "windows", "nas1")}
+        self.assertTrue(finished(four))
+        # The detached worker replaces only this computer's T3 server, so a
+        # remote host still updating never holds the Ubuntu restart back.
+        four["windows"]["state"] = "running"
+        self.assertTrue(finished(four))
+        # This host's own entry does hold it back: the gate reads the job the
+        # helper saved, and Ubuntu must have reported its part done.
+        four["ubuntu"]["state"] = "running"
+        self.assertFalse(finished(four))
+        # A job saved before per-host progress existed has no entries; its end
+        # state is enough. A job still running clears nothing.
+        self.assertTrue(finished(None))
+        self.assertFalse(finished(four, "running"))
+
     def test_detached_restart_waits_for_nas1_to_finish_in_the_saved_job(self):
         root = t3.state_root(); root.mkdir(parents=True)
         common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})

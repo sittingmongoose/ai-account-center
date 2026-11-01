@@ -406,7 +406,12 @@ def update_windows(install, version, temporary, deadline, phase):
             restart_desktops(install, contexts)
         else:
             powershell("Start-Process -FilePath " + ps_quote(install.path), timeout=15)
-        health_check("windows")
+        # The desktop relaunch succeeded; the server inside it migrates its
+        # database before it listens, and a big state takes minutes (a 35 GB
+        # one took about 11 on Ubuntu). A 30-second wait here used to fail a
+        # good install, roll it back and leave T3 closed — give the same
+        # migration room Windows can afford inside the task's 35-minute limit.
+        health_check("windows", budget(deadline, 600))
     except Exception:
         # Stop only the new T3 family before restoring the previous bundle.
         try:
@@ -439,6 +444,17 @@ def schedule_restart(version):
 
 
 def job_finished(root, dashboard=False):
+    """Whether the dashboard job file clears this computer's part for the restart.
+
+    The detached worker replaces only this computer's T3 server, so what gates
+    the restart is that computer's own job: the job reached an end state and,
+    when it carries per-host progress, this host's entry says done. Remote
+    hosts still updating never depend on the Ubuntu server, so the restart no
+    longer waits out the slowest computer's app (a Windows Codex Desktop
+    package alone can run most of the job). A standalone --apply has no job
+    file and may restart once its helper is done; when one runs beside a
+    dashboard job's saved file, the same per-host read applies to it.
+    """
     try:
         raw = (root / "dashboard-job.json").read_bytes()
         if len(raw) > 1024 * 1024:
@@ -447,13 +463,19 @@ def job_finished(root, dashboard=False):
         if not isinstance(job, dict) or job.get("state") not in ("completed", "failed"):
             return False
         hosts = job.get("hosts")
-        # Every computer the job saved must be done (Ubuntu, Mac, Windows and Nas1 today),
-        # so the restart also waits for one added later. An empty table proves nothing.
+        if dashboard:
+            # This computer's own entry gates the restart; a job saved before
+            # per-host progress existed has none, and its end state is enough.
+            return hosts is None or (
+                isinstance(hosts, dict) and isinstance(hosts.get("ubuntu"), dict)
+                and hosts["ubuntu"].get("state") == "done")
+        # Standalone --apply keeps the whole-job read it has always had: every
+        # computer the job saved must be done, and an empty table proves nothing.
         return hosts is None or (isinstance(hosts, dict) and len(hosts) > 0 and all(
             isinstance(host, dict) and host.get("state") == "done" for host in hosts.values()))
     except FileNotFoundError:
         return not dashboard  # Only standalone --apply may have no job file.
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, TypeError):
         return False
 
 

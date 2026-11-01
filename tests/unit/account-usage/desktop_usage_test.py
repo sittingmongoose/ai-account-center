@@ -580,6 +580,27 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertEqual([window["key"] for window in result["windows"]], ["gemini-5h", "3p-5h"])
 
+    @patch("desktop_usage.request_json")
+    def test_antigravity_fetch_still_derives_gemini_when_the_summary_only_names_argon(self, request):
+        # "Gemini 4 Argon" is its own pooled family, not the Gemini Models
+        # group: reading its name as Gemini used to stand the per-model read
+        # down and left the account without any Gemini window at all.
+        request.side_effect = [
+            {"cloudaicompanionProject": "project-fixture", "planInfo": {"planType": "pro"}},
+            {"groups": [
+                {"displayName": "Gemini 4 Argon", "buckets": [
+                    {"bucketId": "argon-weekly", "window": "weekly", "remainingFraction": .012, "resetTime": "2026-10-29T20:42:30Z"}]},
+                {"displayName": "Claude and GPT models", "buckets": [
+                    {"bucketId": "3p-5h", "window": "5h", "remainingFraction": .7, "resetTime": "2026-10-25T20:42:30Z"}]}]},
+            {"buckets": [{"modelId": "gemini-3.8-flash", "remainingFraction": .9, "resetTime": "2026-10-29T20:42:26Z"}]},
+        ]
+        result = helpers.account("antigravity", "ubuntu")
+        usage.fetch_antigravity_quota(helpers.Credential("fixture-access"), result)
+        self.assertEqual(request.call_count, 3)
+        self.assertTrue(request.call_args_list[2].args[0].endswith("retrieveUserQuota"))
+        keys = [window["key"] for window in result["windows"]]
+        self.assertEqual(keys, ["argon-weekly", "3p-5h", "gemini-weekly"])
+
     @patch("desktop_usage.time")
     @patch("desktop_usage.antigravity_oauth_client",
            return_value=("fixture-client.apps.googleusercontent.com", "synthetic-app-value"))
