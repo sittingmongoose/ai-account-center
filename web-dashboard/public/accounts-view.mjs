@@ -672,8 +672,10 @@ function antigravityPolicy(data, ctx, section, accounts) {
   let pools = native.antigravityPoolChoices.filter(choice => choice.id !== null).map(choice => ({ value: choice.label, label: choice.label, icon: '' }));
   let pool = native.antigravityPoolChoices.find(choice => choice.id === status?.requestedPoolId && choice.id !== null)?.label || '';
   if (!pools.length) {
+    // Each account reports the same pools under its own pool ids, so the labels repeat:
+    // one chip per label (five chips once pushed the cooldown buttons off the card).
     const reported = reportedPoolLabels(accounts);
-    pools = [...reported.values()].map(label => ({ value: label, label, icon: '' }));
+    pools = [...new Set(reported.values())].map(label => ({ value: label, label, icon: '' }));
     pool = status?.requestedPoolId && reported.has(status.requestedPoolId) ? reported.get(status.requestedPoolId) : '';
   }
   const cooldown = status && finite(status.cooldownSeconds) ? status.cooldownSeconds : null;

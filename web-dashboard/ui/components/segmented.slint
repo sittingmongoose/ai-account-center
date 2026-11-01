@@ -16,8 +16,11 @@ component SegButton inherits Rectangle {
     in property <length> pad: 13px;
     callback clicked();
     // Below D the track is 44 tall; the segment fills it inside the 4 px padding.
+    // Compressible: a squeezed control shares its width out and the labels elide instead of
+    // painting past the control (the Antigravity watch-pool row once pushed the cooldown off
+    // the card). Preferred stays the labels' natural width, so roomy placements are unchanged.
     height: Breakpoints.tier-d ? 28px : 36px;
-    min-width: row.min-width;
+    min-width: 0px;
     preferred-width: row.preferred-width;
     border-radius: Breakpoints.tier-d ? 7px : Theme.r-touch-inner;
     property <color> fg: root.selected || (ta.has-hover && Device.hover) ? Theme.ink : Theme.ink-3;
@@ -41,6 +44,9 @@ component SegButton inherits Rectangle {
             font-weight: 560;
             letter-spacing: root.mono ? 0.46px : 0px;
             vertical-alignment: center;
+            // a squeezed cell elides its label instead of painting past the control
+            min-width: 0px;
+            overflow: elide;
         }
     }
     // Vertical hit-slop below D only: segments tile horizontally with no gap (2.3 rule 2).
@@ -73,8 +79,10 @@ export component Segmented inherits Rectangle {
     property <bool> placed: false;
     property <int> selected-index: -1;
 
+    // Compressible for the same reason as SegButton below: an over-long item list squeezes
+    // instead of stretching its row past the card (the Antigravity watch-pool overflow).
     height: Breakpoints.tier-d ? 36px : 44px;
-    min-width: row.min-width;
+    min-width: 0px;
     preferred-width: row.preferred-width;
     border-radius: 10px;
     border-width: 1px;

@@ -17,9 +17,17 @@ const account = (id, provider, email, plan, extra = {}) => ({
 	windows: [], capabilities: {}, signInNeeded: [], ...extra,
 });
 
-const FIXTURE = {
+	const FIXTURE = {
 	schemaVersion: 1,
 	updatedAt: at(-1),
+	// The Antigravity policy box under the section: reported pools dedupe to one chip per label
+	// and the cooldown segments must stay inside the card (2026-11-01 screenshot: five chips
+	// pushed "60 min" past the card edge).
+	antigravityAutoSwitch: {
+		enabled: false, thresholdUsedPercent: 95, pollIntervalSeconds: 60, maxQuotaAgeSeconds: 300,
+		cooldownSeconds: 300, selectedHostIds: ['ubuntu'], requestedPoolId: null,
+		outcome: 'disabled', activationInProgress: false, message: '',
+	},
 	accounts: [
 		account('claude-1', 'claude', 'one@example.invalid', 'max', {
 			windows: [quota('five_hour', 'Five-hour usage', 41, 300), quota('seven_day', 'Weekly usage', 22, 10080), quota('seven_day_fable', 'Weekly Fable usage', 9, 10080)],
@@ -39,16 +47,17 @@ const FIXTURE = {
 		}),
 		account('antigravity-1', 'antigravity', 'one@example.invalid', 'pro', {
 			windows: [
-				quota('gemini-5h', 'Gemini Models · 5-hour', 3, 300),
-				quota('gemini-weekly', 'Gemini Models · Weekly', 12, 10080),
-				quota('3p-5h', 'Claude and GPT models · 5-hour', 66, 300),
-				quota('3p-weekly', 'Claude and GPT models · Weekly', 71, 10080),
+				quota('gemini-5h', 'Gemini Models · 5-hour', 3, 300), quota('gemini-weekly', 'Gemini Models · Weekly', 12, 10080),
+				quota('3p-5h', 'Claude and GPT models · 5-hour', 66, 300), quota('3p-weekly', 'Claude and GPT models · Weekly', 71, 10080),
 				quota('argon-weekly', 'Gemini 4 Argon · Weekly', 98.8, 10080),
-			],
+			].map((w, i) => ({ ...w, poolId: ['gemini', 'gemini', 'claude-gpt', 'claude-gpt', 'argon'][i], poolLabel: ['Gemini Models', 'Gemini Models', 'Claude and GPT models', 'Claude and GPT models', 'Gemini 4 Argon'][i] })),
 			antigravityPlan: { class: 'pro', quotaPolicy: 'five-hour-weekly', models: ['gemini'], thirdPartyModels: true, creditsOverage: true },
 		}),
 		account('antigravity-2', 'antigravity', 'two@example.invalid', 'free', {
-			windows: [quota('gemini-weekly', 'Gemini Models · Weekly', 44, 10080)],
+			// The same pools under this account's own pool ids: the labels repeat, which is
+			// exactly the watch-pool row that pushed the cooldown buttons off the card.
+			windows: [quota('gemini-weekly', 'Gemini Models · Weekly', 44, 10080), quota('3p-weekly', 'Claude and GPT models · Weekly', 8, 10080)]
+				.map((w, i) => ({ ...w, poolId: ['party-gemini', 'party-3p'][i], poolLabel: ['Gemini Models', 'Claude and GPT models'][i] })),
 			antigravityPlan: { class: 'free', quotaPolicy: 'weekly', models: ['gemini'], thirdPartyModels: false },
 		}),
 		account('cursor-1', 'cursor', 'one@example.invalid', 'premium', {
@@ -60,7 +69,8 @@ const FIXTURE = {
 
 // D tier (1280+), the F tiers in between (760-1279, where Details is a side panel or sheet),
 // and the phone tier separately below: every layout branch the page re-flows through.
-const WIDTHS = [1920, 1600, 1430, 1360, 1280, 1160, 1024, 900, 780];
+// 1710 is the width of the window the watch-pool overflow was reported at.
+const WIDTHS = [1920, 1710, 1600, 1430, 1360, 1280, 1160, 1024, 900, 780];
 
 // Below D the Details side panel parks past the right edge while closed and its probe reports
 // even hidden, so the page-level overflow check must skip it there (the open panel is asserted
