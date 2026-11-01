@@ -533,15 +533,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 702,
+      "totalThrows": 704,
       "typedThrows": 195,
       "plainThrows": 72,
-      "otherThrows": 435,
-      "adoptionRatio": 0.2778,
+      "otherThrows": 437,
+      "adoptionRatio": 0.277,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 340,
+          "count": 342,
           "typed": 130,
           "plain": 10
         },
@@ -763,7 +763,7 @@
     },
     "largeFiles": {
       "countOver400": 60,
-      "countOver600": 21,
+      "countOver600": 22,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",

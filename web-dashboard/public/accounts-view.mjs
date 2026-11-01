@@ -672,8 +672,10 @@ function antigravityPolicy(data, ctx, section, accounts) {
   let pools = native.antigravityPoolChoices.filter(choice => choice.id !== null).map(choice => ({ value: choice.label, label: choice.label, icon: '' }));
   let pool = native.antigravityPoolChoices.find(choice => choice.id === status?.requestedPoolId && choice.id !== null)?.label || '';
   if (!pools.length) {
+    // Each account reports the same pools under its own pool ids, so the labels repeat:
+    // one chip per label (five chips once pushed the cooldown buttons off the card).
     const reported = reportedPoolLabels(accounts);
-    pools = [...reported.values()].map(label => ({ value: label, label, icon: '' }));
+    pools = [...new Set(reported.values())].map(label => ({ value: label, label, icon: '' }));
     pool = status?.requestedPoolId && reported.has(status.requestedPoolId) ? reported.get(status.requestedPoolId) : '';
   }
   const cooldown = status && finite(status.cooldownSeconds) ? status.cooldownSeconds : null;
@@ -796,7 +798,15 @@ const phaseElapsed = (host, now, threshold) => {
   if (!Number.isFinite(seconds) || seconds < Math.max(threshold, 1)) return '';
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
 };
+// The elapsed strings are the only view-model fields that move while a long step
+// runs, and each 3-second status poll would otherwise rebuild the whole Accounts
+// page for a changed "45s". Every elapsed read is taken at one 15-second tick, so
+// identical polls push byte-identical JSON and the page is rebuilt at most once
+// per tick while nothing else changes.
+const ELAPSED_TICK_MS = 15_000;
+export const elapsedTick = (now = Date.now()) => Math.floor(now / ELAPSED_TICK_MS) * ELAPSED_TICK_MS;
 export function updateResultsView(job, now = Date.now()) {
+  now = elapsedTick(now);
   const results = Array.isArray(job?.results) ? job.results.filter(row => row && typeof row === 'object') : [];
   const running = job?.state === 'running';
   const cancelling = running && job.cancelRequested === true;

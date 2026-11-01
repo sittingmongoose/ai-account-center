@@ -449,6 +449,141 @@ class T3Fixtures(unittest.TestCase):
         for hosts in ({}, [], "done", {"ubuntu": "done"}, {**three, "nas1": None}, {**three, "nas1": {"state": "DONE"}}):
             self.assertFalse(finished(hosts), hosts)
 
+    def test_dashboard_restart_follows_this_host_not_the_slowest_computer(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        path = root / "dashboard-job.json"
+
+        def finished(hosts, state="running"):
+            common.write_private_json(path, {"job": {"state": state, "hosts": hosts}})
+            return t3.job_finished(root, dashboard=True)
+
+        four = {host: {"state": "done"} for host in ("ubuntu", "mac", "windows", "nas1")}
+        # The production case: the job and its dashboard lock are still live
+        # while remote hosts run, and Ubuntu's own entry already says done.
+        self.assertTrue(finished(four))
+        four["windows"]["state"] = "running"
+        self.assertTrue(finished(four))
+        # This host's own entry holds the restart back: Ubuntu must have
+        # reported its part done, whatever the other computers are doing.
+        four["ubuntu"]["state"] = "running"
+        self.assertFalse(finished(four))
+        # A job saved before per-host progress existed has no entries; its end
+        # state is the only signal there, as before — a running one says nothing.
+        self.assertTrue(finished(None, "completed"))
+        self.assertFalse(finished(None, "running"))
+        # A malformed or absent entry fails closed.
+        self.assertFalse(finished({"ubuntu": "done"}))
+        self.assertFalse(finished([]))
+        self.assertFalse(finished("done"))
+        self.assertFalse(finished({}))
+        # A standalone --apply beside the same running job keeps the whole-job
+        # read it has always had: no host may still be working.
+        common.write_private_json(path, {"job": {"state": "running", "hosts": four}})
+        self.assertFalse(t3.job_finished(root))
+
+    def test_dashboard_worker_restarts_while_remote_hosts_still_run(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
+        common.write_private_json(root / "dashboard-job.json", {"job": {"state": "running", "hosts": {
+            "ubuntu": {"state": "done"}, "mac": {"state": "done"},
+            "windows": {"state": "running"}, "nas1": {"state": "waiting"}}}})
+        (root / "dashboard-update.lock").write_text('{"pid":1}')
+        now = [0]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        def run(argv, **kwargs):
+            # The 30-second quiet window starts once Ubuntu's own part is done,
+            # even though the job and its dashboard lock are still live; the
+            # worker's own restart marker is a separate file.
+            self.assertGreaterEqual(now[0], 30)
+            if "--property=NeedDaemonReload" in argv:
+                return systemctl(argv)
+            self.assertEqual(argv, ["/usr/bin/systemctl", "--user", "restart", "t3code.service"])
+
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), \
+                mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=sleep), \
+                mock.patch.object(t3, "command", side_effect=run) as command, \
+                mock.patch.object(t3, "health_check"), \
+                mock.patch.object(t3, "running_runtime_version", return_value=NEW):
+            t3.deferred_restart(12345, root, True)
+        self.assertEqual(command.call_count, 2)  # The unit query, then the one restart.
+        self.assertFalse((root / "t3-restart.lock").exists())
+        self.assertTrue((root / "dashboard-update.lock").exists())  # The dashboard's lock is untouched.
+        self.assertFalse((root / "t3-code-pending-restart.json").exists())
+
+    def test_dashboard_worker_recovers_a_restart_marker_left_by_a_dead_worker(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
+        common.write_private_json(root / "dashboard-job.json", {"job": {"state": "running", "hosts": {
+            "ubuntu": {"state": "done"}, "mac": {"state": "done"},
+            "windows": {"state": "running"}, "nas1": {"state": "waiting"}}}})
+        # A worker that died mid-restart left its marker. A pid that is gone
+        # holds nothing: this retry must recover the marker and restart instead
+        # of waiting out its whole deadline behind a crashed run.
+        common.write_private_json(root / "t3-restart.lock", {"pid": 999999999})
+        now = [0]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        def run(argv, **kwargs):
+            self.assertGreaterEqual(now[0], 30)
+            if "--property=NeedDaemonReload" in argv:
+                return systemctl(argv)
+            self.assertEqual(argv, ["/usr/bin/systemctl", "--user", "restart", "t3code.service"])
+
+        with mock.patch.object(t3.os, "kill", side_effect=ProcessLookupError), \
+                mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=sleep), \
+                mock.patch.object(t3, "command", side_effect=run), \
+                mock.patch.object(t3, "health_check"), \
+                mock.patch.object(t3, "running_runtime_version", return_value=NEW):
+            t3.deferred_restart(12345, root, True)
+        self.assertFalse((root / "t3-restart.lock").exists())
+        self.assertFalse((root / "t3-code-pending-restart.json").exists())
+
+    def test_a_live_restart_marker_holds_a_second_worker_off(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})
+        common.write_private_json(root / "dashboard-job.json", {"job": {"state": "running", "hosts": {
+            "ubuntu": {"state": "done"}, "mac": {"state": "done"}, "windows": {"state": "running"}}}})
+        # This process is alive, so its marker means a restart is being
+        # verified right now: a second worker waits instead of restarting too.
+        common.write_private_json(root / "t3-restart.lock", {"pid": os.getpid()})
+        now = [0]
+
+        def sleep(seconds):
+            now[0] += max(seconds, 60)
+
+        with mock.patch.object(t3.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(t3.time, "sleep", side_effect=sleep), \
+                mock.patch.object(t3, "command") as command:
+            with self.assertRaisesRegex(common.UpdateFailure, "restart_failed"):
+                t3.deferred_restart(12345, root, True)
+        command.assert_not_called()
+        self.assertTrue((root / "t3-restart.lock").exists())  # The live worker's marker stays.
+
+    def test_restart_marker_liveness_validates_pid_and_falls_back_on_identity(self):
+        root = t3.state_root(); root.mkdir(parents=True)
+        path = root / "t3-restart.lock"
+        # A bool is not an integer pid: fresh malformed bytes count as live,
+        # stale malformed bytes are a crash the next worker recovers.
+        common.write_private_json(path, {"pid": True})
+        self.assertTrue(t3.restart_lock_owner_alive(path))
+        stale = time.time() - 400
+        os.utime(path, (stale, stale))
+        self.assertFalse(t3.restart_lock_owner_alive(path))
+        # A live worker whose identity cannot be read back stays live: an
+        # unreadable identity is not proof of death. A readable one that names
+        # another process is.
+        common.write_private_json(path, {"pid": os.getpid(), "identity": "unmatchable"})
+        with mock.patch.object(t3, "process_identity", return_value=None):
+            self.assertTrue(t3.restart_lock_owner_alive(path))
+        self.assertFalse(t3.restart_lock_owner_alive(path))
+
     def test_detached_restart_waits_for_nas1_to_finish_in_the_saved_job(self):
         root = t3.state_root(); root.mkdir(parents=True)
         common.write_private_json(root / "t3-code-pending-restart.json", {"version": NEW})

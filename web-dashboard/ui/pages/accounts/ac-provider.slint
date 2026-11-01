@@ -745,13 +745,17 @@ component AgPool inherits AgParam {
     callback act(string, string);
     caption: "WATCH POOL";
     live: root.ag.live;
-    if root.ag.pools.length > 0 && !root.list: Segmented {
-        items: root.ag.pools;
-        controlled: true;
-        model-value: root.ag.pool;
-        value: root.ag.pool;
-        enabled: root.ag.pool-enabled && !root.busy;
-        changed-value(v) => { root.act("antigravity-pool", v); }
+    if root.ag.pools.length > 0 && !root.list: Rectangle {
+        min-width: 0px;
+        Segmented {
+            items: root.ag.pools;
+            controlled: true;
+            model-value: root.ag.pool;
+            value: root.ag.pool;
+            enabled: root.ag.pool-enabled && !root.busy;
+            changed-value(v) => { root.act("antigravity-pool", v); }
+        }
+        ProbeMark { id: "watch-pool-segments"; x: 0px; y: 0px; width: parent.width; height: parent.height; }
     }
     if root.ag.pools.length > 0 && root.list: StretchSegmented {
         items: root.ag.pools;
@@ -778,13 +782,17 @@ component AgCool inherits AgParam {
         enabled: root.ag.cooldown-enabled && !root.busy;
         changed-value(v) => { root.act("antigravity-cooldown", v); }
     }
-    if !root.list: Segmented {
-        items: root.ag.cooldowns;
-        controlled: true;
-        model-value: root.ag.cooldown;
-        value: root.ag.cooldown;
-        enabled: root.ag.cooldown-enabled && !root.busy;
-        changed-value(v) => { root.act("antigravity-cooldown", v); }
+    if !root.list: Rectangle {
+        min-width: 0px;
+        Segmented {
+            items: root.ag.cooldowns;
+            controlled: true;
+            model-value: root.ag.cooldown;
+            value: root.ag.cooldown;
+            enabled: root.ag.cooldown-enabled && !root.busy;
+            changed-value(v) => { root.act("antigravity-cooldown", v); }
+        }
+        ProbeMark { id: "cooldown-segments"; x: 0px; y: 0px; width: parent.width; height: parent.height; }
     }
 }
 
@@ -1405,6 +1413,7 @@ export component ProviderSection inherits Plate {
                 ag: AcData.ag;
                 busy: root.busy;
                 act(kind, value) => { root.act(kind, value); }
+                ProbeMark { id: "ag-policy"; x: 0px; y: 0px; width: parent.width; height: parent.height; }
             }
         }
         FlowPanel {

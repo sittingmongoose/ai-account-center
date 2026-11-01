@@ -442,8 +442,19 @@ export class AppUpdateService {
       }
       this.lockHeld = true;
     };
+    // The T3 restart worker's marker: while a live worker verifies its restart
+    // (its helper holds the execution lock for up to the ready wait), a new job
+    // here would start remote hosts and then find every local row busy.
+    const restartLock = path.join(this.directory, 't3-restart.lock');
+    if (this.lockOwnerAlive(restartLock)) throw new AppUpdateBusyError();
+    let restartBegan = false;
     try {
       create();
+      // The worker commits its marker between the check and the create. With
+      // our lock held, a marker that now names a live worker means a restart
+      // is being verified: release and refuse. The worker's own gate re-reads
+      // the job file, so its restart waits for this job's local part in turn.
+      restartBegan = this.lockOwnerAlive(restartLock);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
         const observed = fs.statSync(lock);
@@ -460,6 +471,10 @@ export class AppUpdateService {
         }
       }
       throw new ConfigError('App update state could not be saved safely.');
+    }
+    if (restartBegan) {
+      this.releaseLock();
+      throw new AppUpdateBusyError();
     }
   }
 
@@ -482,9 +497,8 @@ export class AppUpdateService {
     fs.chmodSync(target, 0o600);
   }
 
-  private lockOwnerAlive(): boolean {
+  private lockOwnerAlive(file = path.join(this.directory, 'dashboard-update.lock')): boolean {
     try {
-      const file = path.join(this.directory, 'dashboard-update.lock');
       const stat = fs.statSync(file);
       const malformedAlive = (): boolean => this.deps.now() - stat.mtimeMs < 5000;
       if (stat.size > 512) return malformedAlive();

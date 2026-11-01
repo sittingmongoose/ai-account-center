@@ -644,13 +644,14 @@ public partial class MainWindow : Window
         if (provider == "codex")
             return new() { new("5h", "5-hour", a => Formatting.CodexPrimaryWindows(a).FirstOrDefault(w => w.Key == "five_hour")), new("week", "Weekly", a => Formatting.CodexPrimaryWindows(a).FirstOrDefault(w => w.Key == "seven_day")) };
         // Antigravity: Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour and Claude/GPT weekly when reported
-        // (ANTIGRAVITY-SPEC); unknown extra windows still fall back to the generic path, capped at four.
+        // (ANTIGRAVITY-SPEC); unknown extra windows still fall back to the generic path, capped at five so a
+        // pool the four columns don't name yet (a new Antigravity pool reports under its own key) gets a cell.
         var known = new[] { ("gemini-5h", "Gemini 5-hour"), ("gemini-weekly", "Gemini weekly"), ("3p-5h", "Claude/GPT 5-hour"), ("3p-weekly", "Claude/GPT weekly") };
         var keys = accounts.SelectMany(Meters).Select(window => window.Key).Distinct(StringComparer.Ordinal).ToList();
         var result = known.Where(item => keys.Contains(item.Item1)).Select(item => new Column(item.Item1, item.Item2, a => Meters(a).FirstOrDefault(w => w.Key == item.Item1))).ToList();
         foreach (var key in keys)
         {
-            if (result.Count >= 4) break;
+            if (result.Count >= 5) break;
             if (result.Any(column => column.Key == key)) continue;
             var sample = accounts.SelectMany(Meters).First(window => window.Key == key);
             result.Add(new Column(key, ShortLabel(provider, sample), a => Meters(a).FirstOrDefault(w => w.Key == key)));

@@ -99,12 +99,15 @@ export default (ctx) => {
 			},
 			// Canvas layout without a DOM: no probed control starts left of 0 or ends past the right edge. An empty or
 			// incomplete probe map fails (probes that stopped reporting must not read as "no overflow").
-			async noProbeOverflow(t, name = 'no control past the edge', { require = ['update-apps'] } = {}) {
+			// ignore: ids of overlays whose closed geometry is parked past the edge on purpose (the F-tier
+			// SidePanel sits at x = window width while closed, and a probe reports even while hidden).
+			async noProbeOverflow(t, name = 'no control past the edge', { require = ['update-apps'], ignore = [] } = {}) {
 				const all = await t.app.probes();
 				const w = await t.page.evaluate(() => innerWidth);
 				const missing = require.filter((id) => !all[id]);
 				if (!Object.keys(all).length || missing.length) return t.record(name, false, `probes missing: ${Object.keys(all).length ? missing.join(', ') : 'none reported (is ?e2e on?)'}`);
-				const bad = Object.entries(all).filter(([, r]) => r.width > 0 && (r.x < -1 || r.x + r.width > w + 1)).map(([id, r]) => `${id} spans ${Math.round(r.x)}..${Math.round(r.x + r.width)} of ${w}`);
+				const skipped = new Set(ignore);
+				const bad = Object.entries(all).filter(([id, r]) => !skipped.has(id) && r.width > 0 && (r.x < -1 || r.x + r.width > w + 1)).map(([id, r]) => `${id} spans ${Math.round(r.x)}..${Math.round(r.x + r.width)} of ${w}`);
 				return t.record(name, bad.length === 0, bad.slice(0, 8).join('; '), { note: `${Object.keys(all).length} probes` });
 			},
 			// Synthetic API answers (shape them like src/web-server/services/*-types.ts; made-up names only)

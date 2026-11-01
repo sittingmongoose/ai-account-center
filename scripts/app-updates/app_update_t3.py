@@ -25,7 +25,7 @@ from app_update_common import (
     Install, UpdateFailure, asar_package, cli_probe, command, download, execution_lock, powershell, private_temporary,
     ps_quote, result, write_private_json, process_identity,
 )
-from app_update_processes import live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
+from app_update_processes import family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops
 
 RELEASES = "https://api.github.com/repos/pingdotgg/t3code/releases?per_page=20"
 RELEASE_BASE = "https://github.com/pingdotgg/t3code/releases/download/"
@@ -257,9 +257,30 @@ def service_state(service):
     return values.get("ActiveState", ""), int(restarts) if restarts.isdigit() else None
 
 
-def health_check(host, seconds=30, service=None):
+def desktop_family_alive(install):
+    """Whether any family process still runs; unknown counts as alive. The
+    Windows process scan is a full CIM inventory with its own timeout, and a
+    scan that times out or fails says nothing about a T3 that may have become
+    healthy — only a completed scan that finds no family process ends the
+    health wait early."""
+    try:
+        return bool(family(install, scan(install.platform)))
+    except Exception:
+        return True
+
+
+def health_budget(deadline):
+    """A verified install gets a real migration window (a big state migrates for many minutes),
+    floored at one full probe: rolling a verified install back without waiting at all — the old
+    fixed 30 s ran to its end even past the deadline — is the outcome worse than overrunning."""
+    return min(600, max(30, int(deadline - time.monotonic())))
+
+
+def health_check(host, seconds=30, service=None, alive=None):
     """Wait for T3's local server to answer. With a service, a slow start is not a failure: only a
-    unit that failed, stopped or was restarted again by systemd ends the wait early."""
+    unit that failed, stopped or was restarted again by systemd ends the wait early. With `alive`,
+    a relaunched desktop whose whole process family died ends the wait at once — a crashed
+    relaunch must not hold the full budget before the rollback puts the old build back."""
     deadline = time.monotonic() + seconds
     first = service_state(service) if service else None
     checked = time.monotonic()
@@ -275,6 +296,10 @@ def health_check(host, seconds=30, service=None):
             state = service_state(service)
             if state and (state[0] in ("failed", "inactive") or
                           (first and first[1] is not None and state[1] is not None and state[1] > first[1])):
+                raise UpdateFailure("restart_failed")
+        if alive and time.monotonic() - checked >= 15:
+            checked = time.monotonic()
+            if not alive():
                 raise UpdateFailure("restart_failed")
         time.sleep(1 if service else .3)
     raise UpdateFailure("restart_failed")
@@ -355,7 +380,9 @@ def update_mac(install, version, temporary, deadline, phase):
             restart_desktops(install, contexts)
         else:
             command(["/usr/bin/open", "-a", install.path], timeout=15)
-        health_check("mac")
+        # The same migration risk the Windows relaunch has: a 30-second wait
+        # failed a good install and rolled it back.
+        health_check("mac", health_budget(deadline))
         completed = True
     except Exception:
         if moved:
@@ -406,7 +433,15 @@ def update_windows(install, version, temporary, deadline, phase):
             restart_desktops(install, contexts)
         else:
             powershell("Start-Process -FilePath " + ps_quote(install.path), timeout=15)
-        health_check("windows")
+        # The desktop relaunch succeeded; the server inside it migrates its
+        # database before it listens, and a big state takes minutes (a 35 GB
+        # one took about 11 on Ubuntu). A 30-second wait here used to fail a
+        # good install, roll it back and leave T3 closed — give the same
+        # migration room Windows can afford inside the task's 35-minute limit.
+        # A relaunch that died ends the wait at once instead of at the budget;
+        # a scan that cannot run never does.
+        health_check("windows", health_budget(deadline),
+                     alive=lambda: desktop_family_alive(install))
     except Exception:
         # Stop only the new T3 family before restoring the previous bundle.
         try:
@@ -439,32 +474,134 @@ def schedule_restart(version):
 
 
 def job_finished(root, dashboard=False):
+    """Whether the dashboard job file clears this computer's part for the restart.
+
+    The detached worker replaces only this computer's T3 server, so what gates
+    the restart is that computer's own job: its entry in the saved per-host
+    progress says done. The overall job may still be running — its state and
+    the dashboard lock clear only once every host is done, and requiring them
+    here kept waiting for the slowest computer's app (a Windows Codex Desktop
+    package alone can hold the job most of its run). A job saved before
+    per-host progress existed has no entries; its end state is the only
+    signal there, as before. A standalone --apply keeps the whole-job read it
+    has always had: every computer the job saved must be done.
+    """
     try:
         raw = (root / "dashboard-job.json").read_bytes()
         if len(raw) > 1024 * 1024:
             return False
         job = json.loads(raw).get("job")
-        if not isinstance(job, dict) or job.get("state") not in ("completed", "failed"):
+        if not isinstance(job, dict):
             return False
         hosts = job.get("hosts")
-        # Every computer the job saved must be done (Ubuntu, Mac, Windows and Nas1 today),
-        # so the restart also waits for one added later. An empty table proves nothing.
+        if dashboard:
+            # A present but malformed host table fails closed; only a job saved
+            # before per-host progress existed (no hosts at all) falls back to
+            # its end state.
+            if hosts is not None and not isinstance(hosts, dict):
+                return False
+            if isinstance(hosts, dict):
+                return isinstance(hosts.get("ubuntu"), dict) and hosts["ubuntu"].get("state") == "done"
+            return job.get("state") in ("completed", "failed")
+        if job.get("state") not in ("completed", "failed"):
+            return False
         return hosts is None or (isinstance(hosts, dict) and len(hosts) > 0 and all(
             isinstance(host, dict) and host.get("state") == "done" for host in hosts.values()))
     except FileNotFoundError:
         return not dashboard  # Only standalone --apply may have no job file.
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, TypeError):
         return False
 
 
-def deferred_restart(parent_pid, root=None, dashboard=False):
-    """Detached worker: never restart in a helper or dashboard job's lifetime.
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
 
-    Holds the helper execution lock and AAC's exclusive dashboard lock across
-    the final check and restart. No AAC service is touched.
+
+def restart_lock_owner_alive(path):
+    """Whether the restart marker names a live worker, mirroring the dashboard's
+    admission check for its own lock: a file whose pid is gone, or that names a
+    process from before this boot, holds nothing. A malformed file is live only
+    while it is fresh (it is written in one small dump); an old one is a crash
+    a later worker must recover. An unreadable process identity falls back to
+    pid liveness instead of counting as proof of death."""
+    try:
+        value = json.loads(pathlib.Path(path).read_bytes())
+        pid = value.get("pid")
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid < 1:
+            raise ValueError()
+        if isinstance(value.get("identity"), str):
+            current = process_identity(pid)
+            if current is not None:
+                return current == value["identity"] and _pid_alive(pid)
+        return _pid_alive(pid)
+    except (OSError, ValueError, AttributeError, TypeError):
+        try:
+            age = time.time() - pathlib.Path(path).stat().st_mtime
+        except OSError:
+            return False
+        return age < 300
+
+
+def claim_restart_lock(path):
+    """Create the worker's exclusion marker, recovering one a killed worker or
+    an interrupted machine left behind: a marker naming no live worker is
+    removed and the create retried, so one crash cannot silence every later
+    retry. The inode is re-checked before the removal — a file the dashboard's
+    own recovery replaced in between is not ours to remove. None when a live
+    worker holds the marker now."""
+    path = pathlib.Path(path)
+    while True:
+        try:
+            return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        try:
+            before = path.stat()
+        except OSError:
+            continue
+        if restart_lock_owner_alive(path):
+            return None
+        try:
+            after = path.stat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+        if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
+            return None
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+
+
+def deferred_restart(parent_pid, root=None, dashboard=False):
+    """Detached worker: restart once this computer's part of the update is over.
+
+    For a dashboard job that means the job file's entry for this host says
+    done; the dashboard lock and overall job state stay held by the remote
+    hosts still working and do not gate the restart (see job_finished). A
+    standalone --apply keeps every gate it always had: no dashboard lock, the
+    whole saved job done, the helper exited. Either way the final check and
+    the restart hold the helper execution lock, excluding a new local update.
     """
     root = root or state_root()
     lock = root / "dashboard-update.lock"
+    # In a dashboard job the dashboard's own lock file stays held by the remote
+    # hosts for most of the run, and the worker no longer waits for it — so the
+    # worker's exclusion marker during the restart is its own file and never
+    # touches the dashboard's (whose owner unlinks it when the job ends).
+    worker_lock = root / "t3-restart.lock" if dashboard else lock
     marker = root / "t3-code-pending-restart.json"
     deadline = time.monotonic() + 35 * 60
     quiet_since = None
@@ -482,14 +619,13 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
             # Same per-user lock as standalone --apply, even when the dashboard
             # stores its job in a custom directory. File existence is not a lock.
             with execution_lock():
-                if parent_alive or lock.exists() or not job_finished(root, dashboard):
+                if parent_alive or (lock.exists() and not dashboard) or not job_finished(root, dashboard):
                     quiet_since = None
                 elif quiet_since is None:
                     quiet_since = time.monotonic()
                 elif time.monotonic() - quiet_since >= 30:
-                    try:
-                        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                    except FileExistsError:
+                    descriptor = claim_restart_lock(worker_lock)
+                    if descriptor is None:
                         quiet_since = None
                         continue
                     try:
@@ -510,7 +646,7 @@ def deferred_restart(parent_pid, root=None, dashboard=False):
                             finish_ubuntu_restart(root, daemon_reload)
                             return
                     finally:
-                        lock.unlink(missing_ok=True)
+                        worker_lock.unlink(missing_ok=True)
                     quiet_since = None
         except UpdateFailure as error:
             if error.code != "busy":

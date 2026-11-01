@@ -97,7 +97,10 @@ class ParallelUpdateTests(unittest.TestCase):
         rows, started, events = self.gated_run()
         self.assertEqual(len(rows), len(common.APP_LABELS))
         self.assertEqual({row["status"] for row in rows}, {"current"})
-        self.assertEqual(started[-1], "t3-code")
+        # Both desktop heavyweights run in the pool now, so which of them starts
+        # last depends on slot timing; the gated test below pins their gates.
+        self.assertIn("t3-code", started)
+        self.assertIn("codex-desktop", started)
         self.assertEqual(len([event for event in events if event["event"] == "result"]), len(rows))
         active, visible = set(), None
         for index, event in enumerate(events):
@@ -118,7 +121,7 @@ class ParallelUpdateTests(unittest.TestCase):
         self.assertEqual(sum(row["status"] == "skipped" for row in rows), len(rows) - len(started))
         self.assertNotIn("t3-code", started)
 
-    def test_shared_installers_and_codex_are_serialized_and_t3_waits_for_every_app(self):
+    def test_shared_installers_and_codex_are_serialized_and_codex_desktop_is_last(self):
         active, finished, violations = set(), set(), []
         lock = threading.Lock()
 
@@ -132,7 +135,12 @@ class ParallelUpdateTests(unittest.TestCase):
                     violations.append("desktop before CLI")
                 if app_id == "t3-acp-adapters" and "zcode" not in finished:
                     violations.append("adapters before ZCode")
-                if app_id == "t3-code" and (active or len(finished) != len(common.APP_LABELS) - 1):
+                # T3's desktop replacement interrupts the CLI updaters (the ones
+                # that stop or restart its hosted sessions), so all of those are
+                # finished and quiet before it runs. Codex Desktop is the one app
+                # allowed beside it in the pool.
+                others = active - {"codex-desktop"}
+                if app_id == "t3-code" and (others or len(finished - {"codex-desktop"}) != len(common.APP_LABELS) - 2):
                     violations.append("T3 before barrier")
                 active.add(app_id)
             time.sleep(.01)
