@@ -16,6 +16,9 @@ import {
   type RuntimeRefreshResult,
 } from '../../../src/antigravity/runtime-refresh';
 
+// The installed Antigravity components exist on the Linux dashboard host only (the product returns none elsewhere).
+const itOnLinux = process.platform === 'linux' ? it : it.skip;
+
 const V14 = '1.2.14';
 const V16 = '1.2.16';
 const SHA14 = '0d0d3eba22daf29504dd290151c7ed9a4d33b0c6aa0acfc5da27bc3b01d2f029';
@@ -346,7 +349,7 @@ describe('runtime descriptor refresh', () => {
     expect(readInstalledAntigravityRuntime(ccsDir, home)?.nativeSha256).toBe(SHA16);
   });
 
-  it('opens the release gate through the injected refresh verdict', async () => {
+  itOnLinux('opens the release gate through the injected refresh verdict', async () => {
     const gate = (status: RuntimeRefreshResult['status']) =>
       createInstalledAntigravityComponents(ccsDir, home, {
         refreshDescriptor: async () =>
@@ -366,7 +369,7 @@ describe('runtime descriptor refresh', () => {
     expect(await gate('failed')).toBe(false);
   });
 
-  it('refuses the gate on fixture directories without writing or spawning', async () => {
+  itOnLinux('refuses the gate on fixture directories without writing or spawning', async () => {
     const before = fs.readFileSync(descriptorFile);
     const components = createInstalledAntigravityComponents(ccsDir, home);
     expect(components).not.toBeNull();

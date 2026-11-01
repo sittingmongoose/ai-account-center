@@ -9,7 +9,10 @@ import {
   type CodexProcessSnapshot,
 } from '../../../src/codex-auth/codex-activation-runtime';
 
-describe('confirmed switch with disposable real process families', () => {
+// Confirmed Codex switching runs on the Linux dashboard host, and this fixture reads /proc: Linux only.
+const describeOnLinux = process.platform === 'linux' ? describe : describe.skip;
+
+describeOnLinux('confirmed switch with disposable real process families', () => {
   it('actually stops only the approved family and reopens a fresh process preserving cwd/env without replaying its prompt', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-confirmed-process-'));
     const codexHome = path.join(directory, '.codex');

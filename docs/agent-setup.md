@@ -19,9 +19,22 @@ works from macOS or Windows too. Other computers are reached over SSH for their 
 
 ## 2. Build and install (you)
 
-Follow the README's **Get started** steps 1 and 2 on the dashboard computer: the pinned Node.js, Bun, Rust and
-wasm-pack versions, `bun run build:all`, then `./scripts/dev-install.sh --npm`. Docker is the alternative
-(`docker/README.md`).
+Plan for it, and tell the person before you start: **a source build of about 30 minutes and 5 GB** on a 4-core
+computer (most of it one Rust compile), with four toolchains.
+
+1. **Toolchains,** the versions in the README's **What you need**: Node.js 22, Bun 1.3.9, Rust 1.98.0 with
+   `wasm32-unknown-unknown`, and wasm-pack 0.15.0. On a Mac, Homebrew's `node` is the newest release, not 22:
+   `brew install node@22` and put `$(brew --prefix node@22)/bin` first on `PATH`. A fresh Mac needs the Command Line
+   Tools first, and Homebrew asks for the person's password in a terminal: those are their steps.
+2. **Build:** the README's **Get started** step 1 (clone, `bun install`, `bun run build:all`).
+3. **Install:** `./scripts/dev-install.sh --npm`. It runs AAC's own checks before installing (typecheck, lint and
+   about 4,500 tests: a few minutes). They pass on a clean Linux or macOS account with no AI tools installed. If one
+   fails anyway, don't change AAC to get past it: report the failing test names to the person (and as an issue on the
+   repository), and use the next item meanwhile.
+4. **Without installing:** the build already runs from the checkout. Use `node dist/ccs.js` wherever this guide says
+   `ai-account-center` (for example `node dist/ccs.js dashboard auth setup`). Install later, once the checks pass.
+
+Docker is the alternative (`docker/README.md`). It builds the same source.
 
 ## 3. Human steps (the person)
 

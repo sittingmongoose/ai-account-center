@@ -17,6 +17,9 @@ import type {
   VerifiedIdentity,
 } from '../../../src/antigravity/types';
 
+// The Ubuntu runtime bridge refuses to talk outside Linux (it checks the peer's credentials), so readiness exists there only.
+const testOnLinux = process.platform === 'linux' ? test : test.skip;
+
 // All identities/credentials/proofs are invented; only disposable Unix sockets
 // are opened. No real account reader, native CLI, provider or registry is used.
 function fixture() {
@@ -235,15 +238,18 @@ function packet(message: unknown) {
   return Buffer.concat([length, body]);
 }
 
-test('actual private framed prove response alone earns typed startup readiness', async () => {
-  const socketPath = await socketFixture((request, socket) => {
-    socket.end(packet({ requestId: request.requestId, error: 'runtime-startup-not-ready' }));
-  });
-  const bridge = createUbuntuRuntimeBridge({ socketPath });
-  await expect(bridge.proveRuntimeIdentity(fixture().expected)).rejects.toBeInstanceOf(
-    AntigravityRuntimeStartupNotReadyError
-  );
-});
+testOnLinux(
+  'actual private framed prove response alone earns typed startup readiness',
+  async () => {
+    const socketPath = await socketFixture((request, socket) => {
+      socket.end(packet({ requestId: request.requestId, error: 'runtime-startup-not-ready' }));
+    });
+    const bridge = createUbuntuRuntimeBridge({ socketPath });
+    await expect(bridge.proveRuntimeIdentity(fixture().expected)).rejects.toBeInstanceOf(
+      AntigravityRuntimeStartupNotReadyError
+    );
+  }
+);
 
 test('wrong request ID, extra/private fields, unknown failures and other methods never earn readiness', async () => {
   for (const kind of ['wrong-id', 'extra', 'unknown', 'ordinary-error', 'inspect']) {

@@ -18,6 +18,9 @@ import * as nativeTransport from '../../../src/antigravity/native-credential-tra
 import * as nativeBridge from '../../../src/antigravity/ubuntu-runtime-bridge';
 import * as nativeDriver from '../../../src/antigravity/ubuntu-driver';
 
+// The installed Antigravity runtime exists on the Linux dashboard host only (the product returns none elsewhere).
+const describeOnLinux = process.platform === 'linux' ? describe : describe.skip;
+
 // All identities, saved credentials and quota data below are invented. The only
 // filesystem access is the disposable fixture; no worker/native process runs.
 const PRIVATE = 'FIXTURE_ONLY_USAGE_NATIVE_SENTINEL';
@@ -92,7 +95,7 @@ function snapshot(directory: string): string[] {
   return result.sort();
 }
 
-describe('installed Antigravity saved-profile usage without native descriptor', () => {
+describeOnLinux('installed Antigravity saved-profile usage without native descriptor', () => {
   let fixture: string;
   let ccs: string;
   let runtime: AntigravityRuntime | null;

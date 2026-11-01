@@ -35,6 +35,8 @@ describe('chrome reuse resolver', () => {
 
   async function startDevToolsServer(versionPayload: Record<string, unknown>) {
     const server = Bun.serve({
+      // The resolver connects to 127.0.0.1: listen there, not on the default address, which on macOS can miss IPv4
+      hostname: '127.0.0.1',
       port: 0,
       fetch(request: Request) {
         if (new URL(request.url).pathname === '/json/version') {
@@ -49,6 +51,8 @@ describe('chrome reuse resolver', () => {
 
   async function startFailingDevToolsServer(status: number, body = 'error') {
     const server = Bun.serve({
+      // The resolver connects to 127.0.0.1: listen there, not on the default address, which on macOS can miss IPv4
+      hostname: '127.0.0.1',
       port: 0,
       fetch(request: Request) {
         if (new URL(request.url).pathname === '/json/version') {
@@ -63,6 +67,8 @@ describe('chrome reuse resolver', () => {
 
   async function startMalformedJsonDevToolsServer() {
     const server = Bun.serve({
+      // The resolver connects to 127.0.0.1: listen there, not on the default address, which on macOS can miss IPv4
+      hostname: '127.0.0.1',
       port: 0,
       fetch(request: Request) {
         if (new URL(request.url).pathname === '/json/version') {
@@ -80,6 +86,8 @@ describe('chrome reuse resolver', () => {
 
   function reserveClosedPort(): number {
     const server = Bun.serve({
+      // The resolver connects to 127.0.0.1: listen there, not on the default address, which on macOS can miss IPv4
+      hostname: '127.0.0.1',
       port: 0,
       fetch() {
         return new Response('ok');

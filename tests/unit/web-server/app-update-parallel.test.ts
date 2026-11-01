@@ -487,7 +487,8 @@ describe('the real Python helper with fake apps', () => {
           'u.update_zcode = lambda install, deadline, phase=None: fake(install, deadline)',
           'u.update_adapters = lambda install, deadline, phase=None: fake(install, deadline)',
           'pathlib.Path.home = classmethod(lambda cls: pathlib.Path(__import__("os").environ["CCS_HOME"]))',
-          "sys.argv = ['app_updates.py', '--apply', '--platform', 'ubuntu']",
+          // The helper refuses a platform that isn't this computer's
+          `sys.argv = ['app_updates.py', '--apply', '--platform', '${process.platform === 'darwin' ? 'mac' : 'ubuntu'}']`,
           'u.main()',
         ].join('\n')
       );

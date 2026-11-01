@@ -5,6 +5,10 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { AntigravityAutoSwitchFileStore } from '../../../../src/antigravity/auto-switch/store';
 import { NOW, state } from './fixtures';
 
+// Antigravity switching runs on the Linux dashboard host only: the product refuses it elsewhere (its own platform
+// gate), so these run on Linux, and on macOS or Windows the refusal itself is checked instead.
+const describeOnLinux = process.platform === 'linux' ? describe : describe.skip;
+
 const ownedRoots: string[] = [];
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-agy-auto-fixture-'));
@@ -20,7 +24,16 @@ afterEach(() => {
   for (const root of ownedRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe('explicit own private state file', () => {
+test.skipIf(process.platform === 'linux')(
+  'outside Linux the state file is refused, never written',
+  () => {
+    const value = fixture();
+    expect(() => value.store.write(state())).toThrow('managed on Ubuntu');
+    expect(fs.existsSync(value.directory)).toBe(false);
+  }
+);
+
+describeOnLinux('explicit own private state file', () => {
   test('a read of absent state returns off without creating files', () => {
     const value = fixture();
     expect(value.store.read().settings.enabled).toBe(false);

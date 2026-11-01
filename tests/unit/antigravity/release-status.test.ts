@@ -16,6 +16,9 @@ import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import { AntigravityAutoSwitchFileStore } from '../../../src/antigravity/auto-switch/store';
 import type { AntigravityRuntimeServiceProblem } from '../../../src/antigravity/usage-contract';
 
+// Automatic switching state exists on the Linux dashboard host only (the product refuses it elsewhere).
+const itOnLinux = process.platform === 'linux' ? it : it.skip;
+
 const PIN = 'a759ce7c7a235d9b6c281a25ead97cbbf2e92314a3ffd224e2f9144f3fae7a86';
 let root: string;
 let ccsDir: string;
@@ -140,7 +143,7 @@ function installRuntime(): string {
 }
 
 describe('Antigravity switching readiness', () => {
-  it('walks the gates in order and names the next step each time', async () => {
+  itOnLinux('walks the gates in order and names the next step each time', async () => {
     expect(read()).toMatchObject({ nativeCli: 'missing', profiles: [] });
     expect(read().nextStep).toContain('Install the Antigravity CLI');
     installAgy();
