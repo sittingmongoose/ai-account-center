@@ -10,6 +10,7 @@ again against this native account and organization before any balance request.
 import argparse
 import base64
 import ctypes
+import unicodedata
 import datetime as dt
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -654,30 +655,45 @@ def _plan_name(value):
     return name
 
 
+def _expose_max(name):
+    """Space only the single characters immediately before and after the
+    plan's own max token (when they are not whitespace or part of the word):
+    everything else in the name is preserved verbatim."""
+    def punctuation(char):
+        # Punctuation marks are separators; symbols that carry content (an
+        # emoji, a "+") are not, and a word character is part of the word.
+        return char.isspace() or unicodedata.category(char).startswith("P")
+
+    for match in reversed(list(re.finditer(r"(?i)max(?:5x|20x)?", name))):
+        start, end = match.span()
+        if start > 0 and (re.match(r"\w", name[start - 1]) or not punctuation(name[start - 1])):
+            continue
+        if end < len(name) and (re.match(r"\w", name[end]) or not punctuation(name[end])):
+            continue
+        if start > 0:
+            name = name[:start - 1] + " " + name[start:]
+            start, end = start + 1, end + 1
+        if end < len(name):
+            name = name[:end] + " " + name[end + 1:]
+    return name
+
+
 def _with_max_class(name, account):
     """Keep the standalone max token all three displays read for Fable
     eligibility: they normalize [_-] to spaces and then look for a max word
     bounded by whitespace or the string edges. A named tier that fails that
-    test gets only the separator runs hugging its max token spaced — the rest
-    of the name, accented letters included, is preserved; if the word is
-    still absent, the class is prefixed, bounded so the prefixed name stays
-    within the display length limit."""
+    test has its own max token exposed (only the characters hugging it
+    become spaces); if the word is still absent, the class is prefixed,
+    bounded so the prefixed name stays within the display length limit."""
     if (account or {}).get("has_claude_max") is not True:
         return name
     standalone = r"(?i)(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)"
     normalized = re.sub(r"[_\-]+", " ", name)
     if re.search(standalone, normalized):
         return name
-    parts = re.split(r"([^\W_]+)", normalized)  # Unicode word chars: accented tier letters stay words
-    for index, part in enumerate(parts):
-        if re.fullmatch(r"(?i)max(?:\s*(?:5|20)x)?", part):
-            if index > 0 and parts[index - 1].strip():
-                parts[index - 1] = " "
-            if index + 1 < len(parts) and parts[index + 1].strip():
-                parts[index + 1] = " "
-    separated = "".join(parts).strip()
-    if re.search(standalone, separated):
-        return separated
+    exposed = _expose_max(name)
+    if re.search(standalone, re.sub(r"[_\-]+", " ", exposed)):
+        return exposed
     name = name if len(name) <= 60 else name[:60].rstrip()
     return "Max " + name
 
