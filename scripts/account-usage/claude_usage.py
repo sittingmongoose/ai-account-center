@@ -638,41 +638,60 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
     return windows
 
 
+def _plan_name(value):
+    """A bounded plain-text plan name; control characters and credential-shaped
+    strings never pass, exactly like every other upstream string this
+    collector forwards."""
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    if not 0 < len(name) <= 64 or re.search(r"[\x00-\x1f\x7f]", name):
+        return None
+    if re.search(r"(?i)(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})", name):
+        return None
+    return name
+
+
+def _with_max_class(name, account):
+    """Keep the standalone max token all three displays read for Fable
+    eligibility: an entitlement that says Max names itself with the word, even
+    when the renamed tier itself does not carry it."""
+    if (account or {}).get("has_claude_max") is True and not re.search(r"(?i)(?<![a-z])max(?![a-z])", name):
+        return "Max " + name
+    return name
+
+
 def claude_plan(account, organization=None, fallback=None):
     """The plan Claude itself names, whatever Claude names it now. Prefer the
     profile's own tier fields, then a single has_claude_* entitlement flag —
     a renamed or added tier arrives under its own flag and surfaces with its
-    own name — then the stored class. Classic accounts set two flags (Max
-    includes Pro), and two flags only say "one of these", so the stored class
-    wins there."""
+    own name, underscores read as spaces — then the entitlement booleans, then
+    the stored class. Classic accounts set two flags (Max includes Pro), and
+    two flags only say "one of these", so the booleans decide there."""
     for source in (organization, account):
         if not isinstance(source, dict):
             continue
         for key in ("plan_type", "planType", "tier", "tier_name", "tierName", "plan_name", "planName"):
-            name = source.get(key)
-            # A display name is bounded plain text; control characters and
-            # credential-shaped strings never pass, exactly like every other
-            # upstream string this collector forwards.
-            if not isinstance(name, str) or not 0 < len(name.strip()) <= 64:
-                continue
-            name = name.strip()
-            if re.search(r"[\x00-\x1f\x7f]", name):
-                continue
-            if re.search(r"(?i)(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})", name):
-                continue
-            return name
+            name = _plan_name(source.get(key))
+            if name:
+                return _with_max_class(name, account)
     flags = sorted({
         key[len("has_claude_"):]
         for key, value in (account or {}).items()
         if isinstance(key, str) and isinstance(value, bool) and value
-        and SAFE_FLAG.match(key)
+        and SAFE_FLAG.fullmatch(key)
     })
-    if len(flags) == 1:
-        return flags[0].replace("_", " ")
+    names = [name for name in (flag.replace("_", " ") for flag in flags) if _plan_name(name)]
+    if len(names) == 1:
+        return _with_max_class(names[0], account)
+    if (account or {}).get("has_claude_max") is True:
+        return "max"
+    if (account or {}).get("has_claude_pro") is True:
+        return "pro"
     return fallback
 
 
-SAFE_FLAG = re.compile(r"^has_claude_[a-z0-9_]{1,40}$")
+SAFE_FLAG = re.compile(r"has_claude_[a-z0-9_]{1,40}")
 
 
 def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False):

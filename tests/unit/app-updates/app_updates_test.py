@@ -1086,23 +1086,37 @@ class DesktopWaitTests(unittest.TestCase):
         with mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure()):
             self.assertIsNone(REAL_CODEX_RELEASE_PACKAGE('x64'))
 
-    def test_windows_codex_store_build_without_a_release_package_is_current(self):
+    def test_windows_codex_store_build_without_a_release_answer_is_unknown(self):
+        # The release reader returns None for timeouts, malformed responses and
+        # missing architecture packages too: None does not establish that no
+        # installable release exists, so the store-ahead case reads unknown.
+        install = self._windows_codex()
+        with self.subTest(release=None), \
+                mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
+                mock.patch.object(desktop, 'codex_release_package', return_value=None), \
+                mock.patch.object(desktop, 'command', side_effect=AssertionError('winget was asked')), \
+                mock.patch.object(desktop, 'remote_msix_identity', side_effect=AssertionError('a package manifest was read')), \
+                mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('a package was downloaded')):
+            value = desktop.update_windows(install)
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
+                         ('unknown', 'readiness_unknown', '26.930.3748.0', False))
+
+    def test_windows_codex_store_build_the_release_feed_answers_is_current(self):
         # The Store feed's buildVersion runs ahead of what the Store actually
         # serves: observed 2026-11-01 with the feed at 26.1027.6604.0 while the
         # release feed sat at 26.1027.3384.0 and the app itself reported up to
-        # date. A build no release package names and the app does not offer is
-        # not an action for this computer.
+        # date. When the release feed answers and names nothing installable
+        # newer than the installed build, the ahead version is rollout
+        # telemetry, not an action for this computer.
         install = self._windows_codex()
-        for release in (None, ('26.930.3748.0', desktop.CODEX_RELEASE_PREFIX + '26.930.3748.0/ChatGPT-x64.msix')):
-            with self.subTest(release=release), \
-                    mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
-                    mock.patch.object(desktop, 'codex_release_package', return_value=release), \
-                    mock.patch.object(desktop, 'command', side_effect=AssertionError('winget was asked')), \
-                    mock.patch.object(desktop, 'remote_msix_identity', side_effect=AssertionError('a package manifest was read')), \
-                    mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('a package was downloaded')):
-                value = desktop.update_windows(install)
-            self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
-                             ('current', 'current', '26.930.3748.0', False))
+        with mock.patch.object(desktop, 'codex_store_version', return_value='26.1002.7124.0'), \
+                mock.patch.object(desktop, 'codex_release_package', return_value=('26.930.3748.0', desktop.CODEX_RELEASE_PREFIX + '26.930.3748.0/ChatGPT-x64.msix')), \
+                mock.patch.object(desktop, 'command', side_effect=AssertionError('winget was asked')), \
+                mock.patch.object(desktop, 'remote_msix_identity', side_effect=AssertionError('a package manifest was read')), \
+                mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('a package was downloaded')):
+            value = desktop.update_windows(install)
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
+                         ('current', 'current', '26.930.3748.0', False))
         self.assertFalse(hasattr(desktop, 'update_windows_store'))
 
     def test_windows_codex_with_no_newer_build_in_either_feed_is_current_without_the_direct_package(self):

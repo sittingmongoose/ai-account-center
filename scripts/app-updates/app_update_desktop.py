@@ -678,12 +678,17 @@ def update_windows(install, phase=None, deadline=None):
         elif store is None and release is None:
             return result(install.app_id, "windows", "unknown", before, before, install.manager, "readiness_unknown")
         elif store and version_tuple(store) > version_tuple(before):
-            # The Store feed's buildVersion runs ahead of what the Store actually
-            # serves: observed 2026-11-01 with the feed at 26.1027.6604.0 while
-            # the release feed sat at 26.1027.3384.0 and the app itself reported
-            # up to date. A build that no release package names and the app does
-            # not offer is not an action for this computer — the app is current
-            # on its actionable channel and the rollout arrives on its own.
+            if release is None:
+                # The release feed could not establish the actionable version
+                # (a timeout, a malformed response, no package for this
+                # architecture): that is not evidence the app is current, and
+                # the Store build may not be rolled out to this machine at all.
+                return result(install.app_id, "windows", "unknown", before, before, install.manager, "readiness_unknown")
+            # The release feed answered and names nothing installable newer
+            # than the installed build: the Store feed's ahead buildVersion is
+            # rollout telemetry, not an action for this computer (observed
+            # 2026-11-01: feed 26.1027.6604.0, release 26.1027.3384.0, the app
+            # itself up to date).
             return result(install.app_id, "windows", "current", before, before, install.manager)
         else:
             # Neither feed the app reads names a newer build: the app says the same.

@@ -362,11 +362,15 @@ Only a URL inside
 that version's own release folder is accepted. When neither feed names a newer
 version the row is `current`, and nothing is downloaded or closed; Codex never
 uses the unversioned `ChatGPT-x64.msix`. When both feeds are unreadable it is
-`unknown` / `readiness_unknown`. When only the Store feed names a newer build (the
-release feed is behind or unreadable), the row is `action_required` /
-`store_update_in_app` ("The Microsoft Store has a newer build that Update all
-cannot install yet; nothing changed. Use the update button in the app.") and
-Codex is not closed.
+`unknown` / `readiness_unknown`. When the Store feed names a newer build and the
+release feed cannot answer (behind, unreadable, or no package for this
+architecture), the row is `unknown` / `readiness_unknown` too — an unreadable
+release feed does not establish that the app is current, and the Store feed's
+`buildVersion` runs ahead of what the Store actually serves (observed
+2026-11-01: feed 26.1027.6604.0, release 26.1027.3384.0, the app itself up to
+date). When the release feed answers and names nothing newer than the installed
+build, the row is `current` — the ahead Store version is rollout telemetry, not
+an action for this computer — and Codex is not closed.
 
 winget is not used. Its msstore source never matches the installed package
 (`winget list --id 9PLM9XGG6VKS --source msstore` answers "No installed package

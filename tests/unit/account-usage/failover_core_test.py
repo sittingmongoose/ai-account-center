@@ -803,10 +803,29 @@ class CollectTests(unittest.TestCase):
 
     def test_claude_plan_keeps_the_stored_class_when_flags_stay_ambiguous(self):
         # Classic accounts set two flags (Max includes Pro): two flags only say
-        # "one of these", so the stored class decides.
+        # "one of these", so the stored class decides. A Windows desktop
+        # candidate stores no plan at all: the entitlement booleans still say
+        # Max, and the plan must not become None.
         both = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True, "has_claude_pro": True})
         result, _ = self.collect(self.claude, [both, {"five_hour": {"utilization": 0}}])
-        self.assertEqual(result["sample"]["plan"], self.claude["plan"])
+        self.assertEqual(result["sample"]["plan"], "max")
+        desktop = {**self.claude, "plan": None, "_mode": "desktop", "_profile": "work"}
+        result, _ = self.collect(desktop, [both, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "max")
+
+    def test_claude_plan_prefixes_the_max_class_a_renamed_tier_dropped(self):
+        # All three displays gate the Fable column on a standalone "max" token
+        # in the plan text: when the entitlement says Max and the named tier
+        # does not carry the word, the class is prefixed onto the name.
+        renamed = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                          organization={"uuid": ORG, "plan_type": "Premium"})
+        result, _ = self.collect(self.claude, [renamed, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "Max Premium")
+
+    def test_claude_plan_ignores_a_flag_whose_name_fails_the_text_checks(self):
+        credential_shaped = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_bearer_fixture": True})
+        result, _ = self.collect(self.claude, [credential_shaped, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "max")
 
     def desktop_optional(self, optional, usage=None):
         candidate = {**self.claude, "_mode": "desktop", "_profile": "work"}
