@@ -119,6 +119,73 @@ class IdentityTests(unittest.TestCase):
         for forbidden in (TOKEN, "fixture-private-refresh-token", "upstream-private", "upstream-secret", ACCOUNT, CLIENT, ORG):
             self.assertNotIn(forbidden, json.dumps(result))
 
+    def test_plan_reads_the_tier_claude_itself_names(self):
+        # A renamed tier arrives under the profile's own tier field and
+        # surfaces with its own name on the dashboard and trays.
+        renamed = profile(organization={"uuid": ORG, "plan_type": "Max Premium"})
+        result, _ = self.collect([renamed, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["plan"], "Max Premium")
+
+    def test_a_single_new_entitlement_flag_names_the_plan(self):
+        # A renamed tier may instead arrive as its own entitlement flag: one
+        # flag names the plan, with underscores read as spaces.
+        flex = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max_flex": True})
+        result, _ = self.collect([flex, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "max flex")
+
+    def test_plan_separator_variants_stay_display_faithful(self):
+        # The displays normalize [_-] but not other separators, so a tier named
+        # "Max/Premium" is spaced to "Max Premium" instead of double-prefixed.
+        renamed = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                          organization={"uuid": ORG, "plan_type": "Max/Premium"})
+        result, _ = self.collect([renamed, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Max Premium")
+
+    def test_plan_prefix_keeps_the_display_length_limit(self):
+        long = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                       organization={"uuid": ORG, "plan_type": "x" * 61})
+        result, _ = self.collect([long, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertTrue(result["plan"].startswith("Max "))
+        self.assertLessEqual(len(result["plan"]), 64)
+
+    def test_plan_names_preserve_non_ascii_tiers_and_reject_control_boundaries(self):
+        # Only the separator runs hugging the max token are spaced: the rest of
+        # a renamed tier, accented letters and trailing marks included,
+        # survives verbatim.
+        accented = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                           organization={"uuid": ORG, "plan_type": "Max/\u00c9lite"})
+        result, _ = self.collect([accented, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Max \u00c9lite")
+        marked = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                         organization={"uuid": ORG, "plan_type": "Max/Premium+"})
+        result, _ = self.collect([marked, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Max Premium+")
+        # Both separators hugging the token are exposed; the one between other
+        # words is kept. An underscore is a separator to the displays even
+        # though \w would call it a word character.
+        joined = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                         organization={"uuid": ORG, "plan_type": "Premium/Max Plus"})
+        result, _ = self.collect([joined, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Premium Max Plus")
+        underscored = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                              organization={"uuid": ORG, "plan_type": "Premium_Max/Plus"})
+        result, _ = self.collect([underscored, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Premium Max Plus")
+        # A slash between two non-Max words is not hugging the token: it stays.
+        slash = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                        organization={"uuid": ORG, "plan_type": "Premium/Flex"})
+        result, _ = self.collect([slash, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Max Premium/Flex")
+        # A control character the displays do not treat as a word boundary
+        # (U+0085) fails the name checks, and the entitlement booleans answer.
+        control = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                          organization={"uuid": ORG, "plan_type": "Max\u0085Premium"})
+        result, _ = self.collect([control, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "max")
+
+
+
     def test_wrong_email_account_and_org_cannot_produce_quota(self):
         wrong_profiles = [
             profile(account={"uuid": ACCOUNT, "email": "different@example.com"}),

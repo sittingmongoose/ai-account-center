@@ -789,6 +789,44 @@ class CollectTests(unittest.TestCase):
         for private in (TOKEN, ACCOUNT, ORG, "upstream-secret-marker", "fixture-upstream-private"):
             self.assertNotIn(private, json.dumps(result))
 
+    def test_claude_plan_reads_the_tier_claude_itself_names(self):
+        # A renamed tier arrives under the profile's own tier field and
+        # surfaces with its own name on the dashboard and trays.
+        renamed = profile(organization={"uuid": ORG, "plan_type": "Max Premium"})
+        result, client = self.collect(self.claude, [renamed, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "Max Premium")
+        # A renamed tier may instead arrive as its own entitlement flag: one
+        # flag names the plan, with underscores read as spaces.
+        flex = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max_flex": True})
+        result, _ = self.collect(self.claude, [flex, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "max flex")
+
+    def test_claude_plan_keeps_the_stored_class_when_flags_stay_ambiguous(self):
+        # Classic accounts set two flags (Max includes Pro): two flags only say
+        # "one of these", so the stored class decides. A Windows desktop
+        # candidate stores no plan at all: the entitlement booleans still say
+        # Max, and the plan must not become None.
+        both = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True, "has_claude_pro": True})
+        result, _ = self.collect(self.claude, [both, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "max")
+        desktop = {**self.claude, "plan": None, "_mode": "desktop", "_profile": "work"}
+        result, _ = self.collect(desktop, [both, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "max")
+
+    def test_claude_plan_prefixes_the_max_class_a_renamed_tier_dropped(self):
+        # All three displays gate the Fable column on a standalone "max" token
+        # in the plan text: when the entitlement says Max and the named tier
+        # does not carry the word, the class is prefixed onto the name.
+        renamed = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                          organization={"uuid": ORG, "plan_type": "Premium"})
+        result, _ = self.collect(self.claude, [renamed, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "Max Premium")
+
+    def test_claude_plan_ignores_a_flag_whose_name_fails_the_text_checks(self):
+        credential_shaped = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_bearer_fixture": True})
+        result, _ = self.collect(self.claude, [credential_shaped, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "max")
+
     def desktop_optional(self, optional, usage=None):
         candidate = {**self.claude, "_mode": "desktop", "_profile": "work"}
         client = FakeClient(profile(), usage if usage is not None else {"five_hour": {"utilization": 0}})

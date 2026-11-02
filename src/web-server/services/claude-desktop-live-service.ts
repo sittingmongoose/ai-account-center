@@ -23,7 +23,8 @@ export interface ClaudeDesktopLiveUsage {
   email: string;
   platform: 'windows';
   source: 'Claude Desktop live quota on Windows';
-  plan: 'max' | 'pro' | null;
+  /** The plan Claude itself names, whatever it names it now ("max", "Max Premium", "max flex"). */
+  plan: string | null;
   fetchedAt: string;
   windows: DashboardAccountWindow[];
   /** Private transport/cache binding; never projected into the account dashboard DTO. */
@@ -32,6 +33,23 @@ export interface ClaudeDesktopLiveUsage {
     resetCredits: 'ok' | 'unavailable';
     prepaidBalance: 'ok' | 'unavailable';
   };
+}
+
+/**
+ * A plan name as bounded plain text, so renamed tiers surface under their own
+ * names: control characters and credential-shaped strings never pass, exactly
+ * like the collector's own upstream-string rules that produced it.
+ */
+export function livePlan(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const plan = value.trim();
+  // Length counts code points, matching the collector's Python-side bound
+  // (a JS .length count would read astral characters as two and reject a
+  // name the collector accepted).
+  const length = [...plan].length;
+  if (!length || length > 64 || /[\u0000-\u001f\u007f]/.test(plan)) return null;
+  if (/(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})/i.test(plan)) return null;
+  return plan;
 }
 
 const CACHE_TTL_MS = 120_000;
@@ -313,7 +331,7 @@ function normalizeSample(
     email: expectedEmail,
     platform: 'windows',
     source: SOURCE,
-    plan: result.plan === 'max' || result.plan === 'pro' ? result.plan : null,
+    plan: livePlan(result.plan),
     fetchedAt,
     windows,
     ...(optionalExtras ? { optionalExtras } : {}),

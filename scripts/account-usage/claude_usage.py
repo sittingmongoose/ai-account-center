@@ -10,6 +10,7 @@ again against this native account and organization before any balance request.
 import argparse
 import base64
 import ctypes
+import unicodedata
 import datetime as dt
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -638,6 +639,100 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
     return windows
 
 
+def _plan_name(value):
+    """A bounded plain-text plan name; control characters and credential-shaped
+    strings never pass, exactly like every other upstream string this
+    collector forwards. C1 controls count as control characters: the
+    displays' whitespace classes do not treat them as word boundaries, so a
+    name carrying one could hide a Max account's Fable column."""
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    if not 0 < len(name) <= 64 or re.search(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", name):
+        return None
+    if re.search(r"(?i)(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})", name):
+        return None
+    return name
+
+
+def _expose_max(name):
+    """Space only the single characters immediately before and after the
+    plan's own max token (when they are not whitespace or part of the word):
+    everything else in the name is preserved verbatim."""
+    def punctuation(char):
+        # Punctuation marks are separators; symbols that carry content (an
+        # emoji, a "+") are not, and a word character is part of the word.
+        return char.isspace() or unicodedata.category(char).startswith("P")
+
+    for match in reversed(list(re.finditer(r"(?i)max(?:5x|20x)?", name))):
+        start, end = match.span()
+        # Underscore counts as a word character to \w but as a separator to
+        # the displays ([_-] normalizes to spaces), so it exposes the token.
+        if start > 0 and (re.match(r"[^\W_]", name[start - 1]) or not punctuation(name[start - 1])):
+            continue
+        if end < len(name) and (re.match(r"[^\W_]", name[end]) or not punctuation(name[end])):
+            continue
+        # Same-length replacements: the earlier matches' positions stay valid.
+        if start > 0:
+            name = name[:start - 1] + " " + name[start:]
+        if end < len(name):
+            name = name[:end] + " " + name[end + 1:]
+    return name
+
+
+def _with_max_class(name, account):
+    """Keep the standalone max token all three displays read for Fable
+    eligibility: they normalize [_-] to spaces and then look for a max word
+    bounded by whitespace or the string edges. A named tier that fails that
+    test has its own max token exposed (only the characters hugging it
+    become spaces); if the word is still absent, the class is prefixed,
+    bounded so the prefixed name stays within the display length limit."""
+    if (account or {}).get("has_claude_max") is not True:
+        return name
+    standalone = r"(?i)(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)"
+    normalized = re.sub(r"[_\-]+", " ", name)
+    if re.search(standalone, normalized):
+        return name
+    exposed = _expose_max(name)
+    if re.search(standalone, re.sub(r"[_\-]+", " ", exposed)):
+        return exposed
+    name = name if len(name) <= 60 else name[:60].rstrip()
+    return "Max " + name
+
+
+def claude_plan(account, organization=None, fallback=None):
+    """The plan Claude itself names, whatever Claude names it now. Prefer the
+    profile's own tier fields, then a single has_claude_* entitlement flag —
+    a renamed or added tier arrives under its own flag and surfaces with its
+    own name, underscores read as spaces — then the entitlement booleans, then
+    the stored class. Classic accounts set two flags (Max includes Pro), and
+    two flags only say "one of these", so the booleans decide there."""
+    for source in (organization, account):
+        if not isinstance(source, dict):
+            continue
+        for key in ("plan_type", "planType", "tier", "tier_name", "tierName", "plan_name", "planName"):
+            name = _plan_name(source.get(key))
+            if name:
+                return _with_max_class(name, account)
+    flags = sorted({
+        key[len("has_claude_"):]
+        for key, value in (account or {}).items()
+        if isinstance(key, str) and isinstance(value, bool) and value
+        and SAFE_FLAG.fullmatch(key)
+    })
+    names = [name for name in (flag.replace("_", " ") for flag in flags) if _plan_name(name)]
+    if len(names) == 1:
+        return _with_max_class(names[0], account)
+    if (account or {}).get("has_claude_max") is True:
+        return "max"
+    if (account or {}).get("has_claude_pro") is True:
+        return "pro"
+    return fallback
+
+
+SAFE_FLAG = re.compile(r"has_claude_[a-z0-9_]{1,40}")
+
+
 def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False):
     result = {
         "schemaVersion": 1, "provider": "claude", "profileId": profile_id,
@@ -691,7 +786,10 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             verify_root()
             result.update(
                 status="ok", email=expected,
-                plan="max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
+                plan=claude_plan(
+                    account, organization,
+                    "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
+                ),
                 fetchedAt=now_iso(), accountVerified=True, organizationVerified=True, windows=windows,
                 optionalExtras=optional_extras,
                 sourceContextFingerprint=hashlib.sha256(json.dumps([
