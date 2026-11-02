@@ -666,13 +666,15 @@ def _expose_max(name):
 
     for match in reversed(list(re.finditer(r"(?i)max(?:5x|20x)?", name))):
         start, end = match.span()
-        if start > 0 and (re.match(r"\w", name[start - 1]) or not punctuation(name[start - 1])):
+        # Underscore counts as a word character to \w but as a separator to
+        # the displays ([_-] normalizes to spaces), so it exposes the token.
+        if start > 0 and (re.match(r"[^\W_]", name[start - 1]) or not punctuation(name[start - 1])):
             continue
-        if end < len(name) and (re.match(r"\w", name[end]) or not punctuation(name[end])):
+        if end < len(name) and (re.match(r"[^\W_]", name[end]) or not punctuation(name[end])):
             continue
+        # Same-length replacements: the earlier matches' positions stay valid.
         if start > 0:
             name = name[:start - 1] + " " + name[start:]
-            start, end = start + 1, end + 1
         if end < len(name):
             name = name[:end] + " " + name[end + 1:]
     return name

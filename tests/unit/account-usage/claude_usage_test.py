@@ -161,6 +161,17 @@ class IdentityTests(unittest.TestCase):
                          organization={"uuid": ORG, "plan_type": "Max/Premium+"})
         result, _ = self.collect([marked, {"five_hour": {"utilization": 0, "resets_at": None}}])
         self.assertEqual(result["plan"], "Max Premium+")
+        # Both separators hugging the token are exposed; the one between other
+        # words is kept. An underscore is a separator to the displays even
+        # though \w would call it a word character.
+        joined = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                         organization={"uuid": ORG, "plan_type": "Premium/Max Plus"})
+        result, _ = self.collect([joined, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Premium Max Plus")
+        underscored = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                              organization={"uuid": ORG, "plan_type": "Premium_Max/Plus"})
+        result, _ = self.collect([underscored, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Premium Max Plus")
         # A control character the displays do not treat as a word boundary
         # (U+0085) fails the name checks, and the entitlement booleans answer.
         control = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},

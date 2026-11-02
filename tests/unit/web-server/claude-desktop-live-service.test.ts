@@ -1081,7 +1081,9 @@ describe('astral and stored-plan cases through the live projection', () => {
 		windows: [{ key: 'five_hour', usedPercent: 0, remainingPercent: 100, resetAt: null }],
 	});
 	it('counts astral characters as one code point each at the 64/65 boundary', () => {
-		const at = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + '\u{1F680}'.repeat(60)));
+		const name = 'Max ' + '\u{1F680}'.repeat(60);
+		const at = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live(name));
+		expect(at.plan).toBe(name);
 		expect([...(at.plan ?? '')].length).toBe(64);
 		const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + '\u{1F680}'.repeat(61)));
 		expect(over.plan).toBeNull();
