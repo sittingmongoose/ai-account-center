@@ -149,6 +149,26 @@ class IdentityTests(unittest.TestCase):
         self.assertTrue(result["plan"].startswith("Max "))
         self.assertLessEqual(len(result["plan"]), 64)
 
+    def test_plan_names_preserve_non_ascii_tiers_and_reject_control_boundaries(self):
+        # Only the separator runs hugging the max token are spaced: the rest of
+        # a renamed tier, accented letters and trailing marks included,
+        # survives verbatim.
+        accented = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                           organization={"uuid": ORG, "plan_type": "Max/\u00c9lite"})
+        result, _ = self.collect([accented, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Max \u00c9lite")
+        marked = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                         organization={"uuid": ORG, "plan_type": "Max/Premium+"})
+        result, _ = self.collect([marked, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Max Premium+")
+        # A control character the displays do not treat as a word boundary
+        # (U+0085) fails the name checks, and the entitlement booleans answer.
+        control = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                          organization={"uuid": ORG, "plan_type": "Max\u0085Premium"})
+        result, _ = self.collect([control, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "max")
+
+
 
     def test_wrong_email_account_and_org_cannot_produce_quota(self):
         wrong_profiles = [
