@@ -727,7 +727,7 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
             windows = claude_usage.normalize_windows(payload)
             if not windows:
                 raise Failure("invalid_response")
-            plan = "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else candidate["plan"]
+            plan = claude_usage.claude_plan(account, org, candidate["plan"])
             if platform == "windows" and candidate.get("_mode") == "desktop":
                 optional_windows, extras = _claude_optional_windows(candidate, home, cooldown)
                 windows.extend(optional_windows)

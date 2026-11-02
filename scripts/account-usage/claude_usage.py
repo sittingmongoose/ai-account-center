@@ -638,6 +638,43 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
     return windows
 
 
+def claude_plan(account, organization=None, fallback=None):
+    """The plan Claude itself names, whatever Claude names it now. Prefer the
+    profile's own tier fields, then a single has_claude_* entitlement flag —
+    a renamed or added tier arrives under its own flag and surfaces with its
+    own name — then the stored class. Classic accounts set two flags (Max
+    includes Pro), and two flags only say "one of these", so the stored class
+    wins there."""
+    for source in (organization, account):
+        if not isinstance(source, dict):
+            continue
+        for key in ("plan_type", "planType", "tier", "tier_name", "tierName", "plan_name", "planName"):
+            name = source.get(key)
+            # A display name is bounded plain text; control characters and
+            # credential-shaped strings never pass, exactly like every other
+            # upstream string this collector forwards.
+            if not isinstance(name, str) or not 0 < len(name.strip()) <= 64:
+                continue
+            name = name.strip()
+            if re.search(r"[\x00-\x1f\x7f]", name):
+                continue
+            if re.search(r"(?i)(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})", name):
+                continue
+            return name
+    flags = sorted({
+        key[len("has_claude_"):]
+        for key, value in (account or {}).items()
+        if isinstance(key, str) and isinstance(value, bool) and value
+        and SAFE_FLAG.match(key)
+    })
+    if len(flags) == 1:
+        return flags[0].replace("_", " ")
+    return fallback
+
+
+SAFE_FLAG = re.compile(r"^has_claude_[a-z0-9_]{1,40}$")
+
+
 def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False):
     result = {
         "schemaVersion": 1, "provider": "claude", "profileId": profile_id,
@@ -691,7 +728,10 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             verify_root()
             result.update(
                 status="ok", email=expected,
-                plan="max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
+                plan=claude_plan(
+                    account, organization,
+                    "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
+                ),
                 fetchedAt=now_iso(), accountVerified=True, organizationVerified=True, windows=windows,
                 optionalExtras=optional_extras,
                 sourceContextFingerprint=hashlib.sha256(json.dumps([

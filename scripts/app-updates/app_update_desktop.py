@@ -678,9 +678,13 @@ def update_windows(install, phase=None, deadline=None):
         elif store is None and release is None:
             return result(install.app_id, "windows", "unknown", before, before, install.manager, "readiness_unknown")
         elif store and version_tuple(store) > version_tuple(before):
-            # The Store offers a newer build that no release-feed package names
-            # yet. Only the app can install it; nothing closes.
-            return result(install.app_id, "windows", "action_required", before, before, install.manager, "store_update_in_app", False)
+            # The Store feed's buildVersion runs ahead of what the Store actually
+            # serves: observed 2026-11-01 with the feed at 26.1027.6604.0 while
+            # the release feed sat at 26.1027.3384.0 and the app itself reported
+            # up to date. A build that no release package names and the app does
+            # not offer is not an action for this computer — the app is current
+            # on its actionable channel and the rollout arrives on its own.
+            return result(install.app_id, "windows", "current", before, before, install.manager)
         else:
             # Neither feed the app reads names a newer build: the app says the same.
             return result(install.app_id, "windows", "current", before, before, install.manager)

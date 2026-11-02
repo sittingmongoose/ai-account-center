@@ -789,6 +789,25 @@ class CollectTests(unittest.TestCase):
         for private in (TOKEN, ACCOUNT, ORG, "upstream-secret-marker", "fixture-upstream-private"):
             self.assertNotIn(private, json.dumps(result))
 
+    def test_claude_plan_reads_the_tier_claude_itself_names(self):
+        # A renamed tier arrives under the profile's own tier field and
+        # surfaces with its own name on the dashboard and trays.
+        renamed = profile(organization={"uuid": ORG, "plan_type": "Max Premium"})
+        result, client = self.collect(self.claude, [renamed, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "Max Premium")
+        # A renamed tier may instead arrive as its own entitlement flag: one
+        # flag names the plan, with underscores read as spaces.
+        flex = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max_flex": True})
+        result, _ = self.collect(self.claude, [flex, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], "max flex")
+
+    def test_claude_plan_keeps_the_stored_class_when_flags_stay_ambiguous(self):
+        # Classic accounts set two flags (Max includes Pro): two flags only say
+        # "one of these", so the stored class decides.
+        both = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True, "has_claude_pro": True})
+        result, _ = self.collect(self.claude, [both, {"five_hour": {"utilization": 0}}])
+        self.assertEqual(result["sample"]["plan"], self.claude["plan"])
+
     def desktop_optional(self, optional, usage=None):
         candidate = {**self.claude, "_mode": "desktop", "_profile": "work"}
         client = FakeClient(profile(), usage if usage is not None else {"five_hour": {"utilization": 0}})

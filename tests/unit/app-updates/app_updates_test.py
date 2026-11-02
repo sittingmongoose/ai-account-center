@@ -1086,8 +1086,12 @@ class DesktopWaitTests(unittest.TestCase):
         with mock.patch.object(desktop, 'download', side_effect=common.UpdateFailure()):
             self.assertIsNone(REAL_CODEX_RELEASE_PACKAGE('x64'))
 
-    def test_windows_codex_store_build_without_a_release_package_is_left_to_the_app(self):
-        # winget's msstore source never matches the installed package, so it is never asked.
+    def test_windows_codex_store_build_without_a_release_package_is_current(self):
+        # The Store feed's buildVersion runs ahead of what the Store actually
+        # serves: observed 2026-11-01 with the feed at 26.1027.6604.0 while the
+        # release feed sat at 26.1027.3384.0 and the app itself reported up to
+        # date. A build no release package names and the app does not offer is
+        # not an action for this computer.
         install = self._windows_codex()
         for release in (None, ('26.930.3748.0', desktop.CODEX_RELEASE_PREFIX + '26.930.3748.0/ChatGPT-x64.msix')):
             with self.subTest(release=release), \
@@ -1098,7 +1102,7 @@ class DesktopWaitTests(unittest.TestCase):
                     mock.patch.object(desktop, 'download_desktop', side_effect=AssertionError('a package was downloaded')):
                 value = desktop.update_windows(install)
             self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
-                             ('action_required', 'store_update_in_app', '26.930.3748.0', False))
+                             ('current', 'current', '26.930.3748.0', False))
         self.assertFalse(hasattr(desktop, 'update_windows_store'))
 
     def test_windows_codex_with_no_newer_build_in_either_feed_is_current_without_the_direct_package(self):
@@ -1585,10 +1589,10 @@ class WindowsDesktopReopenTests(unittest.TestCase):
         self.assertEqual((value['status'], value['messageCode'], value['version']), ('failed', 'package_mismatch', self.OLD))
         self.assertEqual((self.events, fetched), ([], []))
 
-    def test_a_store_build_no_release_package_names_is_left_to_the_app_and_nothing_closes(self):
+    def test_a_store_build_no_release_package_names_is_current_and_nothing_closes(self):
         self.run_main()
         value, fetched = self.release_run((self.OLD, desktop.CODEX_RELEASE_PREFIX + self.OLD + '/ChatGPT-x64.msix'))
-        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('action_required', 'store_update_in_app', False))
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('current', 'current', False))
         self.assertEqual((self.events, fetched, self.launched), ([], [], []))
 
     def test_too_little_time_left_after_the_download_never_closes_the_app(self):

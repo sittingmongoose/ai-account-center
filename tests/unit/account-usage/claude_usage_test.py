@@ -119,6 +119,21 @@ class IdentityTests(unittest.TestCase):
         for forbidden in (TOKEN, "fixture-private-refresh-token", "upstream-private", "upstream-secret", ACCOUNT, CLIENT, ORG):
             self.assertNotIn(forbidden, json.dumps(result))
 
+    def test_plan_reads_the_tier_claude_itself_names(self):
+        # A renamed tier arrives under the profile's own tier field and
+        # surfaces with its own name on the dashboard and trays.
+        renamed = profile(organization={"uuid": ORG, "plan_type": "Max Premium"})
+        result, _ = self.collect([renamed, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["plan"], "Max Premium")
+
+    def test_a_single_new_entitlement_flag_names_the_plan(self):
+        # A renamed tier may instead arrive as its own entitlement flag: one
+        # flag names the plan, with underscores read as spaces.
+        flex = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max_flex": True})
+        result, _ = self.collect([flex, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "max flex")
+
     def test_wrong_email_account_and_org_cannot_produce_quota(self):
         wrong_profiles = [
             profile(account={"uuid": ACCOUNT, "email": "different@example.com"}),
