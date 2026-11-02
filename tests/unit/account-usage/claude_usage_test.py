@@ -172,6 +172,11 @@ class IdentityTests(unittest.TestCase):
                               organization={"uuid": ORG, "plan_type": "Premium_Max/Plus"})
         result, _ = self.collect([underscored, {"five_hour": {"utilization": 0, "resets_at": None}}])
         self.assertEqual(result["plan"], "Premium Max Plus")
+        # A slash between two non-Max words is not hugging the token: it stays.
+        slash = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                        organization={"uuid": ORG, "plan_type": "Premium/Flex"})
+        result, _ = self.collect([slash, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Max Premium/Flex")
         # A control character the displays do not treat as a word boundary
         # (U+0085) fails the name checks, and the entitlement booleans answer.
         control = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
