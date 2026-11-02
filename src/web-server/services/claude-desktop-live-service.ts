@@ -43,7 +43,11 @@ export interface ClaudeDesktopLiveUsage {
 export function livePlan(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const plan = value.trim();
-  if (!plan || plan.length > 64 || /[\u0000-\u001f\u007f]/.test(plan)) return null;
+  // Length counts code points, matching the collector's Python-side bound
+  // (a JS .length count would read astral characters as two and reject a
+  // name the collector accepted).
+  const length = [...plan].length;
+  if (!length || length > 64 || /[\u0000-\u001f\u007f]/.test(plan)) return null;
   if (/(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})/i.test(plan)) return null;
   return plan;
 }

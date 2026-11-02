@@ -654,11 +654,21 @@ def _plan_name(value):
 
 def _with_max_class(name, account):
     """Keep the standalone max token all three displays read for Fable
-    eligibility: an entitlement that says Max names itself with the word, even
-    when the renamed tier itself does not carry it."""
-    if (account or {}).get("has_claude_max") is True and not re.search(r"(?i)(?<![a-z])max(?![a-z])", name):
-        return "Max " + name
-    return name
+    eligibility: they normalize [_-] to spaces and then look for a max word
+    bounded by whitespace or the string edges. A named tier that fails that
+    test after the same normalization has its separators spaced; if the word
+    is still absent, the class is prefixed, bounded so the prefixed name
+    stays within the display length limit."""
+    if (account or {}).get("has_claude_max") is not True:
+        return name
+    standalone = r"(?i)(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)"
+    if re.search(standalone, re.sub(r"[_\-]+", " ", name)):
+        return name
+    separated = re.sub(r"[^A-Za-z0-9]+", " ", name).strip()
+    if re.search(standalone, separated):
+        return separated
+    name = name if len(name) <= 60 else name[:60].rstrip()
+    return "Max " + name
 
 
 def claude_plan(account, organization=None, fallback=None):

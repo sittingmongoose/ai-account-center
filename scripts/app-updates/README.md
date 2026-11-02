@@ -363,9 +363,9 @@ that version's own release folder is accepted. When neither feed names a newer
 version the row is `current`, and nothing is downloaded or closed; Codex never
 uses the unversioned `ChatGPT-x64.msix`. When both feeds are unreadable it is
 `unknown` / `readiness_unknown`. When the Store feed names a newer build and the
-release feed cannot answer (behind, unreadable, or no package for this
-architecture), the row is `unknown` / `readiness_unknown` too — an unreadable
-release feed does not establish that the app is current, and the Store feed's
+release feed cannot answer (unreadable, or no package for this architecture),
+the row is `unknown` / `readiness_unknown` — an unanswered release feed does
+not establish that the app is current, and the Store feed's
 `buildVersion` runs ahead of what the Store actually serves (observed
 2026-11-01: feed 26.1027.6604.0, release 26.1027.3384.0, the app itself up to
 date). When the release feed answers and names nothing newer than the installed

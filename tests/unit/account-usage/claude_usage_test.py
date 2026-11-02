@@ -134,6 +134,22 @@ class IdentityTests(unittest.TestCase):
         result, _ = self.collect([flex, {"five_hour": {"utilization": 0, "resets_at": None}}])
         self.assertEqual(result["plan"], "max flex")
 
+    def test_plan_separator_variants_stay_display_faithful(self):
+        # The displays normalize [_-] but not other separators, so a tier named
+        # "Max/Premium" is spaced to "Max Premium" instead of double-prefixed.
+        renamed = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                          organization={"uuid": ORG, "plan_type": "Max/Premium"})
+        result, _ = self.collect([renamed, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Max Premium")
+
+    def test_plan_prefix_keeps_the_display_length_limit(self):
+        long = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                       organization={"uuid": ORG, "plan_type": "x" * 61})
+        result, _ = self.collect([long, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertTrue(result["plan"].startswith("Max "))
+        self.assertLessEqual(len(result["plan"]), 64)
+
+
     def test_wrong_email_account_and_org_cannot_produce_quota(self):
         wrong_profiles = [
             profile(account={"uuid": ACCOUNT, "email": "different@example.com"}),

@@ -1043,3 +1043,29 @@ describe('identity-bound Claude Desktop live usage', () => {
     ).toBe('blocked');
   });
 });
+
+describe('renamed plan names through the live projection', () => {
+	const live = (plan: string): ClaudeDesktopLiveUsage => ({
+		profileId: 'gmail',
+		email: profile.email,
+		platform: 'windows',
+		source: 'Claude Desktop live quota on Windows',
+		plan,
+		fetchedAt: '2026-10-01T12:00:00Z',
+		windows: [{ key: 'five_hour', usedPercent: 0, remainingPercent: 100, resetAt: null }],
+	});
+	it('carries a renamed plan through the projection', () => {
+		const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('max flex'));
+		expect(applied.plan).toBe('max flex');
+	});
+	it('carries a 64-code-point plan and falls back past that length', () => {
+		const atLimit = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + 'x'.repeat(60)));
+		expect([...(atLimit.plan ?? '')].length).toBe(64);
+		const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + 'x'.repeat(61)));
+		expect(over.plan).toBeNull();
+	});
+	it('falls back to the stored plan for text that fails the plan checks', () => {
+		const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('bearer fixture'));
+		expect(applied.plan).toBeNull();
+	});
+});
