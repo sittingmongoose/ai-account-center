@@ -533,16 +533,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 704,
-      "typedThrows": 195,
+      "totalThrows": 716,
+      "typedThrows": 207,
       "plainThrows": 72,
       "otherThrows": 437,
-      "adoptionRatio": 0.277,
+      "adoptionRatio": 0.2891,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 342,
-          "typed": 130,
+          "count": 354,
+          "typed": 142,
           "plain": 10
         },
         {
@@ -615,8 +615,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 42,
-      "totalSourceFiles": 452,
-      "coverageRatio": 0.0929,
+      "totalSourceFiles": 453,
+      "coverageRatio": 0.0927,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -643,7 +643,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 181,
+          "count": 182,
           "withLogger": 26
         },
         {
@@ -791,7 +791,7 @@
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 988
+          "loc": 989
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
