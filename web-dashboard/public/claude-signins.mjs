@@ -21,6 +21,14 @@ const RESULT_WORDS = {
   wrong_account_saved: 'saved another account',
   claude_not_found: 'Claude Code not found',
 };
+// One line in a Details fact; the whole sentence goes in the Details note, which wraps.
+const NEED_WORDS = {
+  captcha: 'A CAPTCHA in its Chrome window',
+  mail_link_missing: 'Sign in to claude.ai in its Chrome window',
+  browser_signin_failed: 'Sign in to claude.ai in its Chrome window',
+  wrong_account: 'Its Chrome profile is on another account',
+  renewal_failing: 'Renewal keeps failing',
+};
 const resultWord = (value) =>
   RESULT_WORDS[value] || (typeof value === 'string' ? value.replace(/_/g, ' ') : '');
 
@@ -72,7 +80,8 @@ function rowWords(row, now) {
 
 /**
  * The Claude row's sign-in line: '' without a runner, else what matters most: a person is needed,
- * the runner stopped, a sign-in ended, or the soonest end ("Sign-ins renew by themselves · next Dec 2").
+ * the runner stopped, a sign-in ended, or the soonest end ("Auto-renews · next end Dec 2"). Kept short:
+ * it shares the row's meta line with the plan and the sample age.
  */
 export function claudeSignInLine(data, email, now = Date.now()) {
   const renewal = renewalOf(data);
@@ -83,8 +92,8 @@ export function claudeSignInLine(data, email, now = Date.now()) {
   const out = rows.filter((r) => r.state === 'logged_out' || r.state === 'no_refresh_token');
   if (out.length) return `Signed out on ${[...new Set(out.map((r) => hostWord(r.host)))].join(', ')}`;
   const ends = rows.map((r) => r.signInEndsAt).filter(valid).map(Date.parse).sort((a, b) => a - b);
-  if (!ends.length) return 'Sign-ins renew by themselves';
-  return `Sign-ins renew by themselves · next ends ${day.format(new Date(ends[0]))}`;
+  if (!ends.length) return 'Auto-renews';
+  return `Auto-renews · next end ${day.format(new Date(ends[0]))}`;
 }
 
 /** Details facts: the runner, any person-only step, then one line per computer and profile. */
@@ -94,7 +103,7 @@ export function claudeSignInFacts(data, email, now = Date.now()) {
   if (!renewal || rows.length === 0) return [];
   const facts = needsFor(data, email).map((need) => ({
     label: 'Needs you',
-    value: need.how || resultWord(need.reason),
+    value: NEED_WORDS[need.reason] || resultWord(need.reason),
     mono: false,
   }));
   facts.push({
@@ -123,6 +132,14 @@ export function claudeSignInFacts(data, email, now = Date.now()) {
       mono: false,
     });
   return facts;
+}
+
+/** The Details note: what exactly to do, in the runner's own words ('' when nothing is needed). */
+export function claudeSignInNote(data, email) {
+  return needsFor(data, email)
+    .map((need) => need.how)
+    .filter(Boolean)
+    .join(' ');
 }
 
 /** The notice the dashboard raises once per new person-only step. */

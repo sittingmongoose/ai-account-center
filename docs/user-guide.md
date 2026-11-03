@@ -113,6 +113,29 @@ None of these controls, and no account switching, activation, key storage,
 sign-in or Claude desktop flow, targets the optional second Linux computer: it
 holds no AI Account Center account state.
 
+## Claude Code sign-ins that renew themselves
+
+Every Claude Code sign-in ends about 30 days after it was made, and refreshing it does not move that
+end. The sign-in renewal runner ([scripts/claude-signin](../scripts/claude-signin/README.md)) runs
+every 10 minutes on the computer with the browser (the Mac), reads every sign-in on every computer,
+renews each one about four days before it ends through a Chrome profile kept signed in to claude.ai
+for that account, and checks the renewal again 9 hours later.
+
+- **Home:** each Claude row says "Auto-renews · next end Nov 29", or what needs attention ("Sign-in
+  renewal needs you", "Signed out on Windows", "Sign-in renewal stopped" when the runner has not
+  reported for an hour). The Claude header adds "1 sign-in step needs you" in the warning colour.
+- **Details:** what to do (for example "Solve the CAPTCHA in the Chrome window for ... on the Mac"),
+  who renews, when the account's claude.ai browser session ends, and one line per computer and
+  profile: its end, its last renewal and when the next one starts.
+- **Notice:** each new step only a person can do raises one notice. The runner also brings the
+  Chrome window forward and posts a desktop notification on the Mac; agents see the same line at
+  the top of `aac-usage`.
+
+A person is needed only for a CAPTCHA: when an account's claude.ai browser session has ended (about
+every 28 days) or when Cloudflare puts its "Verify you are human" check in front of claude.ai. After
+one is passed the runner carries on by itself and signs in the other accounts whose sessions end
+soon, so those come in the same sitting.
+
 ## Dashboard sign-in, devices and pairing
 
 The dashboard has its own username and password login for browsers, separate

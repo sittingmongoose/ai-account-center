@@ -731,6 +731,7 @@ def captcha_hook(cfg, st, email):
         if name == "captcha" and not told["done"]:
             told["done"] = True
             where = this_host_name(cfg) or socket.gethostname().split(".")[0]
+            where = {"mac": "Mac", "windows": "Windows PC", "ubuntu": "Ubuntu VM", "nas1": "Nas1"}.get(where, where)
             need_person(st, email, "captcha", "Solve the CAPTCHA in the Chrome window for %s on the %s; renewal carries on by itself after." % (email, where))
             save_state(st)
             publish(cfg, st)
@@ -1286,8 +1287,13 @@ def cmd_renew(args, cfg):
 
 
 def cmd_test_login(args, cfg):
-    """Renews a throwaway config folder on one computer: exercises the whole flow without touching a
-    real sign-in. Deletes the folder (and on the Mac its Keychain item) afterwards."""
+    """Signs a throwaway config folder in on one computer: the whole flow, without touching a real
+    sign-in. The caller removes the folder (and on the Mac its Keychain item) afterwards."""
+    with Lock():
+        return test_login(args, cfg)
+
+
+def test_login(args, cfg):
     host = next((h for h in hosts(cfg) if h["name"] == args.host), None)
     if not host:
         raise SystemExit("unknown computer %s" % args.host)

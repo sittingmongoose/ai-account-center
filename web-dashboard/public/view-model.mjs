@@ -4,7 +4,7 @@
 // added or averaged across accounts or windows; at most two decimals; the product visibility rules of
 // visible-usage.mjs; Fable only for Claude Max plans, from the seven_day_fable window.
 import { visibleUsageWindows } from './visible-usage.mjs';
-import { claudeSignInFacts, claudeSignInLine, needsFor } from './claude-signins.mjs';
+import { claudeSignInFacts, claudeSignInLine, claudeSignInNote, needsFor } from './claude-signins.mjs';
 import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
   antigravityView,
@@ -1387,6 +1387,7 @@ export function detailsViewModel(data, id, ctx = {}) {
       antigravityPlanNote(account),
       cursorPlanNote(account),
       opening,
+      account.provider === 'claude' ? claudeSignInNote(data, account.email) : '',
       missingFable
         ? 'Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.'
         : '',

@@ -30,7 +30,7 @@ const FIXTURE = {
 		runner: 'mac', runnerVersion: '1.0.0', generatedAt: at(-0.1), stale: false, renewWithinHours: 96,
 		needsYou: [{
 			email: 'two@example.invalid', reason: 'captcha',
-			how: 'Solve the CAPTCHA in the Chrome window for two@example.invalid on the mac; renewal carries on by itself after.',
+			how: 'Solve the CAPTCHA in the Chrome window for two@example.invalid on the Mac; renewal carries on by itself after.',
 			since: at(-0.2),
 		}],
 		hosts: [{ host: 'mac', readAt: at(-0.1), error: null }, { host: 'nas1', readAt: at(-0.1), error: null }],
@@ -62,21 +62,20 @@ export const tests = {
 				throw new Error(`expected one sign-in notice for two@example.invalid, got ${JSON.stringify(titles)}`);
 			}
 		});
-		const probes = await t.app.probes();
-		const rows = Object.keys(probes).filter((id) => /^row:claude-/.test(id));
-		if (rows.length) {
-			const first = probes[rows[0]];
-			const last = probes[rows.at(-1)];
-			await t.crop('claude-section', { x: 0, y: Math.max(0, first.y - 90), width: 1920, height: last.y + last.height - first.y + 110 },
-				'Claude header ends "1 sign-in step needs you"; row metas read "Sign-ins renew by themselves" and "Sign-in renewal needs you"');
-		}
+		await t.shot('home-signin-renewal',
+			'Claude header ends "1 sign-in step needs you" (warning tone); row metas read "Auto-renews · next end ..." and "Sign-in renewal needs you"; the red notice names two@example.invalid');
 		await t.audit('home with sign-in renewal');
 		await t.app.noProbeOverflow('no control past the edge with sign-in renewal lines');
-		for (const id of rows.slice(0, 2)) {
+		// Home rows carry no probes; the Accounts page rows open the same Details panel.
+		await t.app.open({ page: 'accounts' });
+		const rows = Object.keys(await t.app.probes()).filter((id) => /^row:claude-/.test(id));
+		await t.check('both Claude rows are on the Accounts page', rows.length === 2);
+		for (const id of rows) {
 			await t.app.click(id);
-			await t.page.waitForTimeout(600);
-			const panel = (await t.app.probes())['details-panel'];
-			if (panel) await t.crop(`details-${id}`, panel, `Details for ${id}: Needs you / Sign-in renewal / Browser session / one line per computer`);
+			await t.page.waitForTimeout(700);
+			// At 1920 px Details is the right-hand side panel, which carries no probe of its own.
+			await t.crop(`details-${id}`, { x: 1344, y: 0, width: 576, height: 1080 },
+				`Details for ${id}: Needs you (two only), Sign-in renewal, Browser session, then one "Sign-in · <computer>" line per profile with its end and renewal state`);
 			await t.app.noProbeOverflow(`no control past the edge with Details open for ${id}`);
 			await t.page.keyboard.press('Escape');
 			await t.page.waitForTimeout(400);

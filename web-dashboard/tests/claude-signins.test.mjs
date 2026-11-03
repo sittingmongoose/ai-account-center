@@ -27,7 +27,7 @@ test('an account sees only its own sign-ins, Mac first', () => {
 });
 
 test('the row line names the soonest end, then what needs attention first', () => {
-  assert.match(claudeSignInLine(data(), 'a@example.com', NOW), /^Sign-ins renew by themselves · next ends /);
+  assert.match(claudeSignInLine(data(), 'a@example.com', NOW), /^Auto-renews · next end /);
   assert.equal(claudeSignInLine(data({ stale: true }), 'a@example.com', NOW), 'Sign-in renewal stopped');
   const needs = { needsYou: [{ email: 'a@example.com', reason: 'captcha', how: 'Solve it.', since: null }] };
   assert.equal(claudeSignInLine(data(needs), 'a@example.com', NOW), 'Sign-in renewal needs you');
@@ -42,6 +42,9 @@ test('Details lists the runner and each computer; Home warns in the Claude heade
   const needs = { needsYou: [{ email: 'a@example.com', reason: 'captcha', how: 'Solve the CAPTCHA.', since: null }] };
   const facts = detailsViewModel(data(needs), 'c1', { now: NOW }).facts.map((f) => f.label);
   assert.deepEqual(facts.slice(-4), ['Needs you', 'Sign-in renewal', 'Sign-in · Mac gmail', 'Sign-in · Nas1']);
+  const details = detailsViewModel(data(needs), 'c1', { now: NOW });
+  assert.equal(details.facts.find((f) => f.label === 'Needs you').value, 'A CAPTCHA in its Chrome window');
+  assert.match(details.note, /Solve the CAPTCHA\./);
   const claude = dashboardViewModel(data(needs), { now: NOW }).sections[0];
   assert.match(claude.meta, /1 sign-in step needs you$/);
   assert.ok(claude.metaRuns.some((r) => r.tone === 'warn'));
