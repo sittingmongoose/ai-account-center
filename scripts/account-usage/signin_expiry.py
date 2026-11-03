@@ -36,15 +36,27 @@ CRITICAL_SECONDS = 4 * 3600
 ACCESS_TOKEN_LIFETIME_MS = 8 * 3600 * 1000
 
 
+# A representable OAuth epoch: 2001-09-09 (1e12 ms) through Nov 2286 (1e13 ms).
+EPOCH_MS_MIN, EPOCH_MS_MAX = 10 ** 12, 10 ** 13
+
+
 def epoch_ms(value):
-    """Milliseconds since the epoch for an int/float/numeric string, else None."""
+    """Milliseconds since the epoch for a finite, representable number or
+    numeric string; anything out of range or non-finite reads as absent."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    if isinstance(value, str) and re.fullmatch(r"\d{1,16}", value.strip()):
-        return int(value.strip())
-    return None
+    try:
+        if isinstance(value, (int, float)):
+            ms = int(value)
+        elif isinstance(value, str) and re.fullmatch(r"\d{1,16}", value.strip()):
+            ms = int(value.strip())
+        else:
+            return None
+    except (ValueError, OverflowError):
+        return None
+    if not EPOCH_MS_MIN <= ms <= EPOCH_MS_MAX:
+        return None
+    return ms
 
 
 def iso(ms):
@@ -55,26 +67,37 @@ def iso(ms):
 
 
 def logged_out_at(refresh_ms, access_ms, now_ms):
-    """The first access expiry that falls after the refresh expiry.
+    """The login's end time, reported only when the data supports it.
 
-    Access tokens last about 8 hours, so the login actually ends at the first
-    access expiry after the refresh time; if that is the current one, the
-    login has already ended."""
-    if refresh_ms is None:
+    The exact end is the first access expiry that falls after the refresh
+    expiry; the current access expiry only bounds it. Without a future
+    access expiry to name, the end is unknown rather than guessed."""
+    if refresh_ms is None or access_ms is None:
         return None
-    if access_ms is not None and access_ms >= refresh_ms:
-        return access_ms
-    return refresh_ms
+    if access_ms < refresh_ms:
+        return None
+    return access_ms
 
 
-def state_for(logged_out_ms, now_ms, has_tokens):
-    if not has_tokens or (logged_out_ms is not None and logged_out_ms <= now_ms):
+def state_for(logged_out_ms, now_ms, has_tokens, refresh_ms=None):
+    if not has_tokens:
         return "logged_out"
-    remaining = (logged_out_ms - now_ms) / 1000
-    if remaining < CRITICAL_SECONDS:
-        return "critical"
-    if remaining < WARN_SECONDS:
-        return "warn"
+    if logged_out_ms is not None:
+        if logged_out_ms <= now_ms:
+            return "logged_out"
+        remaining = (logged_out_ms - now_ms) / 1000
+        if remaining < CRITICAL_SECONDS:
+            return "critical"
+        if remaining < WARN_SECONDS:
+            return "warn"
+        return "ok"
+    # No end is derivable from the pair: the refresh expiry still bounds the
+    # login, so it degrades the state instead of claiming healthy.
+    if refresh_ms is not None:
+        if refresh_ms <= now_ms:
+            return "logged_out"
+        if (refresh_ms - now_ms) / 1000 < WARN_SECONDS:
+            return "warn"
     return "ok"
 
 
@@ -120,7 +143,7 @@ def claude_profile(name, config_dir, now_ms, fix_template):
         accessExpiresAt=iso(data["access"]),
         refreshExpiresAt=iso(data["refresh"]),
         loggedOutAt=iso(end),
-        state=state_for(end, now_ms, has_tokens),
+        state=state_for(end, now_ms, has_tokens, data["refresh"]),
     )
     return entry
 
@@ -157,7 +180,7 @@ def mac_keychain_profile(now_ms, fix_template):
         accessExpiresAt=iso(data["access"]),
         refreshExpiresAt=iso(data["refresh"]),
         loggedOutAt=iso(end),
-        state=state_for(end, now_ms, has_tokens),
+        state=state_for(end, now_ms, has_tokens, data["refresh"]),
     )
     return entry
 
