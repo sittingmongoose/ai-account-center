@@ -147,6 +147,20 @@ describe('agent usage projection', () => {
     expect(answer.accounts[1]).toMatchObject({ profile: 'party', source: null });
   });
 
+  it('screens the plan name while counting code points', () => {
+    const planOf = (plan: unknown) =>
+      projectAgentUsage([account({ plan: plan as never })], { now: NOW }).accounts[0].plan;
+    expect(planOf('Ultra')).toBe('Ultra');
+    // 80 astral characters are 80 code points (160 UTF-16 units): they pass.
+    expect(planOf('🚀'.repeat(80))).toBe('🚀'.repeat(80));
+    expect(planOf('🚀'.repeat(81))).toBeNull();
+    // Control characters and coerced non-strings never publish.
+    expect(planOf('Pro\nMax')).toBeNull();
+    expect(planOf(42)).toBeNull();
+    expect(planOf({ tier: 'max' })).toBeNull();
+    expect(planOf('')).toBeNull();
+  });
+
   it('names the computer the quota came from, not the Claude launcher', () => {
     const claude = account({
       id: 'claude:party',

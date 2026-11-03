@@ -320,6 +320,18 @@ def ascii(value):
     return str(value).encode("ascii", "backslashreplace").decode("ascii")
 
 
+def fix_command_text(row):
+    """(command, omitted) for a sign-in row: a command renders byte-exact
+    or not at all — a backslash-escaped path inside shell quotes is a
+    different directory, so a non-ASCII command is named as omitted."""
+    command = row.get("fixCommand")
+    if not command:
+        return None, False
+    if all(ord(character) < 128 for character in command):
+        return command, False
+    return None, True
+
+
 def sign_in_lines(snapshot, provider=None):
     """The Sign-in health section, worst state first — the same stamp-derived
     facts usage.md publishes (never a threshold word: a nonrenewable access
@@ -361,13 +373,20 @@ def sign_in_lines(snapshot, provider=None):
                 line += " sign-in ended %s." % row["loggedOutAt"]
             elif not end:
                 line += " tokens are gone or expired."
-            if row.get("fixCommand"):
-                line += " re-login: `%s`" % ascii(row["fixCommand"])
+            command, omitted = fix_command_text(row)
+            if command:
+                line += " re-login: `%s`" % command
+            elif omitted:
+                line += " re-login command omitted (non-ASCII path)."
         elif state in ("warn", "critical"):
             if not row.get("loggedOutAt") and not row.get("accessExpiresAt"):
                 line += " the next run renews this login."
-            elif row.get("fixCommand"):
-                line += " re-login when the window ends: `%s`" % ascii(row["fixCommand"])
+            else:
+                command, omitted = fix_command_text(row)
+                if command:
+                    line += " re-login when the window ends: `%s`" % command
+                elif omitted:
+                    line += " re-login command omitted (non-ASCII path)."
         elif state == "ok" and row.get("loggedOutAt"):
             line += " sign-in ends %s." % row["loggedOutAt"]
         print(line)
@@ -523,7 +542,9 @@ def cmd_install_rules(args):
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="replace")  # a Windows console without UTF-8 never fails a print
+            # Terminal output stays ASCII: a published value can never fail
+            # a print, and backslash escapes keep it readable.
+            stream.reconfigure(errors="backslashreplace")
         except (AttributeError, ValueError):
             pass
     parser = argparse.ArgumentParser(prog="aac-usage", description=__doc__.splitlines()[0])

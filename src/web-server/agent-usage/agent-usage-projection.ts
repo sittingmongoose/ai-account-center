@@ -160,6 +160,19 @@ function sourceOf(account: DashboardAccount): string | null {
   return value && !/[\\/]/.test(value) ? value : null;
 }
 
+/** The plan name under text()'s screening, bounded at 80 code points:
+ * the collector and live path count code points, so a UTF-16 length would
+ * drop valid astral names — but control characters and non-strings still
+ * never pass. */
+function planText(value: unknown): string | null {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    [...value].length <= 80 &&
+    !CONTROL.test(value)
+    ? value
+    : null;
+}
+
 function windowOf(
   window: DashboardAccountWindow,
   now: number,
@@ -225,12 +238,7 @@ function accountOf(account: DashboardAccount, now: number): AgentUsageAccount | 
     email: text(account.email, 254),
     profile: profileOf(account),
     source: sourceOf(account),
-    // The collector and live path bound the name at 80 code points; a
-    // plain slice would count UTF-16 units and drop valid astral names.
-    plan:
-      account.plan === null || account.plan === undefined
-        ? null
-        : [...String(account.plan)].slice(0, 80).join('') || null,
+    plan: planText(account.plan),
     /** The entitlement class beside the name ("Ultra" is Max-class); absent when unknown. */
     planClass:
       account.planClass === 'max' || account.planClass === 'pro' ? account.planClass : undefined,

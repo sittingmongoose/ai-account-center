@@ -20,6 +20,9 @@ import {
  * deadline: a stamp that crosses after collection drops the cache on read
  * (deadlines under the 30 s floor age out with the floor), while stamps
  * already past at collection are facts about the past and keep the cache.
+ * One collection pass only: a row whose deadline crossed while its hosts
+ * were still collecting is downgraded to unavailable in that same pass, so
+ * the whole fetch always settles inside the publisher's slot.
  */
 
 export interface SignInProfile extends SnapshotSignInProfile {
@@ -42,7 +45,29 @@ const COLLECTOR = 'signin_expiry.py';
 /** Accepted as-is; anything else is sanitized to a safe bounded identifier. */
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@+ -]{0,63}$/;
 /** A published timestamp must parse as a real calendar time; anything else reads as absent. */
-const STAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const STAMP_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** The only failure words ever published for a failed collection. Raw
+ * stderr names routing details (the resolved hostname or address behind
+ * an ssh alias, the remote user), so it is classified, never quoted. */
+export function collectorFailureWord(stderr: string): string {
+  const text = stderr.toLowerCase();
+  if (text.includes('timed out') || text.includes('timeout')) return 'collection timed out';
+  if (text.includes('connection refused')) return 'connection refused';
+  if (text.includes('permission denied')) return 'machine sign-in refused';
+  if (
+    text.includes('could not resolve') ||
+    text.includes('no such host') ||
+    text.includes('name or service not known') ||
+    text.includes('no route to host') ||
+    text.includes('network is unreachable') ||
+    text.includes('connection reset') ||
+    text.includes('host is down')
+  )
+    return 'host unreachable';
+  return 'collector failed';
+}
 
 function runCollector(
   command: string,
@@ -57,10 +82,7 @@ function runCollector(
       { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error && stdout.length === 0) {
-          // The cause is whatever the process said — never the command line
-          // (it names the ssh target) and never a Node error string.
-          const cause = stderr ? stderr.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
-          reject(new Error(cause || 'collector failed'));
+          reject(new Error(collectorFailureWord(stderr ?? '')));
           return;
         }
         resolve(stdout);
@@ -89,23 +111,37 @@ export function sanitizeName(raw: unknown): string {
 }
 
 function stamp(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length > 40 || !STAMP_PATTERN.test(value)) return null;
+  if (typeof value !== 'string' || value.length > 40) return null;
+  const parts = STAMP_PATTERN.exec(value);
+  if (!parts) return null;
   const at = Date.parse(value);
   if (Number.isNaN(at)) return null;
-  // Calendar, not just shape: 2026-02-30 parses nowhere but must not publish.
-  if (value.endsWith('Z') && new Date(at).toISOString().slice(0, 10) !== value.slice(0, 10))
+  // Calendar, not just shape, in every offset form: 2026-02-30 must not
+  // publish however it is suffixed. The components name a local wall time,
+  // so they are validated as a date in themselves, offset aside.
+  const [year, month, day, hour, minute, second] = parts.slice(1).map(Number);
+  const wall = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (
+    wall.getUTCFullYear() !== year ||
+    wall.getUTCMonth() !== month - 1 ||
+    wall.getUTCDate() !== day ||
+    wall.getUTCHours() !== hour ||
+    wall.getUTCMinutes() !== minute ||
+    wall.getUTCSeconds() !== second
+  )
     return null;
   return value;
 }
 
-/** A repair command that survives publication byte-exact: single-line, and
- * never truncated mid-quote. A command containing a backtick cannot live in
- * a markdown code span without changing what it does, so — like an overlong
- * one — it is omitted entirely: half or altered commands are worse than none. */
+/** A repair command that survives publication byte-exact or not at all:
+ * never rewritten, never truncated mid-quote. A command containing a
+ * control character (a newline inside a quoted path, say) or a backtick
+ * cannot be rendered on one markdown line without changing what it does,
+ * so — like an overlong one — it is omitted entirely: half or altered
+ * commands are worse than none. */
 export function publishableFixCommand(value: unknown): string {
   if (typeof value !== 'string') return '';
-  const cleaned = value.replace(/[\n\r]/g, ' ');
-  return cleaned.includes('`') || cleaned.length > 200 ? '' : cleaned;
+  return /[\u0000-\u001f\u007f`]/.test(value) || value.length > 200 ? '' : value;
 }
 
 /** The published DTO is allowlisted; a changed helper cannot add fields or
@@ -312,15 +348,15 @@ async function collectOnce(): Promise<SignInHealth> {
         return;
       }
     }
-    let reason =
+    // Rejection reasons are already allowlisted words (collectorFailureWord
+    // or the settlement race's own), so nothing a process printed — no ssh
+    // target, resolved address or remote user — reaches the published error.
+    const reason =
       result.status === 'rejected'
         ? result.reason instanceof Error
           ? result.reason.message
-          : String(result.reason)
+          : 'collector failed'
         : 'no profiles reported';
-    // The ssh target's alias or address is our routing detail, not the
-    // machine's story; it never reaches the published error.
-    if (host.sshHost) reason = reason.split(host.sshHost).join(host.host);
     machines[host.host] = unavailableHost(host.host, reason);
   });
   if (!machines.ubuntu) {
@@ -329,6 +365,34 @@ async function collectOnce(): Promise<SignInHealth> {
     machines.ubuntu = unavailableHost('ubuntu', 'no collection route from this host');
   }
   return { generatedAt: new Date().toISOString(), machines };
+}
+
+/** Rows whose state may already be stale: a live state's deadline that
+ * crossed while collection was running. Terminal and unreadable rows make
+ * no claim a crossing can falsify, so they stand as collected. */
+export function downgradeCrossedRows(health: SignInHealth, since: number, now: number): boolean {
+  let downgraded = false;
+  for (const rows of Object.values(health.machines)) {
+    for (const row of rows) {
+      if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') continue;
+      const crossed = [row.accessExpiresAt, row.refreshExpiresAt, row.loggedOutAt].some((value) => {
+        if (!value) return false;
+        const at = Date.parse(value);
+        return !Number.isNaN(at) && at > since && at <= now;
+      });
+      if (!crossed) continue;
+      // The state was computed against times that have already passed; say
+      // so instead of publishing it as current. The stamps go with it, so
+      // the row cannot re-trigger collection on every later read.
+      row.state = 'unavailable';
+      row.accessExpiresAt = null;
+      row.refreshExpiresAt = null;
+      row.loggedOutAt = null;
+      row.error = 'sign-in state changed during collection; recheck pending';
+      downgraded = true;
+    }
+  }
+  return downgraded;
 }
 
 function refresh(): Promise<SignInHealth> {
@@ -341,13 +405,10 @@ function refresh(): Promise<SignInHealth> {
   entry.health = (async (): Promise<SignInHealth> => {
     let value: SignInHealth;
     try {
+      // One pass, always inside the publisher's slot: rows a deadline
+      // crossed mid-collection are downgraded in place, never recollected
+      // here, and the short floor below lets the next sample recheck them.
       value = await collectOnce();
-      // A deadline crossed while the hosts were still collecting must not
-      // reach the first caller: one bounded revalidation pass, then the
-      // report stands as collected.
-      if (hasPassedDeadline(value, entry.collectedAt, Date.now())) {
-        value = await collectOnce();
-      }
     } catch (error) {
       // Host resolution is best effort by contract: the section simply
       // stays absent, and the retry waits only the floor.
@@ -355,7 +416,9 @@ function refresh(): Promise<SignInHealth> {
       entry.until = Date.now() + CACHE_MIN_MS;
       return { generatedAt: new Date().toISOString(), machines: {} };
     }
-    entry.until = Date.now() + cacheTtlFor(value, Date.now());
+    const settledAt = Date.now();
+    const downgraded = downgradeCrossedRows(value, entry.collectedAt, settledAt);
+    entry.until = settledAt + (downgraded ? CACHE_MIN_MS : cacheTtlFor(value, settledAt));
     return value;
   })();
   cache = entry;

@@ -195,19 +195,23 @@ def fix_command(config_dir, home):
     return f'CLAUDE_CONFIG_DIR="$HOME{escaped}" claude auth login'
 
 
-def _within_home(config_dir, home):
-    """True when the real path of config_dir resolves inside home: a linked
-    profile directory can never smuggle in a store from outside it (Windows
-    reparse points included, through realpath)."""
+def _within_allowed(path, home, ccs_dir=None):
+    """True when the real path resolves inside the home or inside the
+    explicitly configured CCS directory: a linked profile can never
+    smuggle in a store from anywhere else (Windows reparse points
+    included, through realpath), while a relocated CCS scope keeps its
+    saved profiles."""
     try:
-        real = os.path.realpath(config_dir)
-        home_real = os.path.realpath(home)
+        real = os.path.realpath(path)
+        roots = [os.path.realpath(home)]
+        if ccs_dir is not None:
+            roots.append(os.path.realpath(ccs_dir))
     except OSError:
         return False
-    return real == home_real or real.startswith(home_real + os.sep)
+    return any(real == root or real.startswith(root + os.sep) for root in roots)
 
 
-def claude_profile(name, config_dir, now_ms, home):
+def claude_profile(name, config_dir, now_ms, home, ccs_dir=None):
     """One config dir's sign-in state; missing/unreadable files read as unavailable."""
     relative = _home_relative(config_dir, home)
     # The default dir is what a bare re-login writes, so it names no
@@ -224,10 +228,16 @@ def claude_profile(name, config_dir, now_ms, home):
         "state": "unavailable",
         "fixCommand": fix,
     }
-    if not _within_home(config_dir, home):
-        entry["error"] = "profile directory resolves outside the home"
+    if not _within_allowed(config_dir, home, ccs_dir):
+        entry["error"] = "profile directory resolves outside the allowed roots"
         return entry
-    data = read_credentials(pathlib.Path(config_dir) / ".credentials.json")
+    credentials_path = pathlib.Path(config_dir) / ".credentials.json"
+    # The file itself is checked too: O_NOFOLLOW does not exist on Windows,
+    # where a linked credentials file must not be followed out either.
+    if not _within_allowed(credentials_path, home, ccs_dir):
+        entry["error"] = "credentials file missing or unreadable"
+        return entry
+    data = read_credentials(credentials_path)
     if data is None:
         entry["error"] = "credentials file missing or unreadable"
         return entry
@@ -308,9 +318,13 @@ def mac_keychain_profile(now_ms):
         return entry
     entry.pop("error")
     end, state = capability_state(data, now_ms)
+    if state == "unavailable":
+        entry["error"] = "expiry times unreadable"
+    # The same token-presence rule as file profiles: a blanked token's
+    # retained expiry field is a remnant and is never published.
     entry.update(
-        accessExpiresAt=iso(data["access"]),
-        refreshExpiresAt=iso(data["refresh"]),
+        accessExpiresAt=iso(data["access"]) if data["has_access"] else None,
+        refreshExpiresAt=iso(data["refresh"]) if data["has_refresh"] else None,
         loggedOutAt=iso(end),
         state=state,
     )
@@ -385,7 +399,23 @@ def claude_roots(home, ccs_dir=None):
     roots = [("default", default)]
     seen = {str(default)}
     complete = True
+    # The sibling discovery records every swallowed read failure and
+    # truncation through desktop_helpers; a count that moves while it runs
+    # means this list may be short even when it looks comfortably small.
+    try:
+        import desktop_helpers
+
+        failures_before = desktop_helpers.total_read_failures()
+    except Exception:
+        desktop_helpers = None
+        failures_before = None
     pairs = _saved_roots(home, ccs_dir or home / ".ccs")
+    if pairs is not None and failures_before is not None:
+        try:
+            if desktop_helpers.total_read_failures() > failures_before:
+                complete = False
+        except Exception:
+            complete = False
     if pairs is not None:
         # The sibling discovery truncates at its own bound; entries beyond it
         # vanish silently unless the length gives it away.
@@ -402,6 +432,7 @@ def claude_roots(home, ccs_dir=None):
                 if not root.is_dir():
                     continue
             except OSError:
+                complete = False
                 continue
             text_path = str(root)
             if text_path in seen:
@@ -447,7 +478,11 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
     run from touching the real login Keychain at all; ccs_dir selects the
     saved-instance scope on installs that relocate it."""
     roots, complete = claude_roots(home, ccs_dir)
-    profiles = [claude_profile(name, config_dir, now_ms, home) for name, config_dir in roots]
+    allowed_ccs = ccs_dir or home / ".ccs"
+    profiles = [
+        claude_profile(name, config_dir, now_ms, home, allowed_ccs)
+        for name, config_dir in roots
+    ]
     if not complete:
         profiles.append(
             {
@@ -478,11 +513,18 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
 def run():
     """Entry point for the in-memory helper transport: the real machine's
     default home, including the Keychain probe. A relocated CCS scope on
-    this host is honoured, never assumed away."""
+    this host is honoured with the app's own precedence (config-manager:
+    CCS_DIR names the directory itself; CCS_HOME carries a .ccs inside)."""
     home = pathlib.Path.home()
-    ccs = os.environ.get("CCS_HOME") or os.environ.get("CCS_DIR") or None
-    return collect(home, int(time.time() * 1000),
-                   ccs_dir=pathlib.Path(ccs) if ccs else None)
+    raw_dir = os.environ.get("CCS_DIR")
+    raw_home = os.environ.get("CCS_HOME")
+    if raw_dir:
+        ccs = pathlib.Path(os.path.abspath(raw_dir))
+    elif raw_home:
+        ccs = pathlib.Path(os.path.abspath(raw_home)) / ".ccs"
+    else:
+        ccs = None
+    return collect(home, int(time.time() * 1000), ccs_dir=ccs)
 
 
 def main():

@@ -217,6 +217,102 @@ class SignInExpiryTests(unittest.TestCase):
         entry = collector.codex_profile(NOW, self.home)
         self.assertEqual(entry["configDir"], "~/.codex/auth.json")
 
+    def test_a_profile_under_a_relocated_ccs_scope_still_reads(self):
+        import failover_core
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        ccs_dir = pathlib.Path(external.name) / "ccs"
+        profile = ccs_dir / "instances" / "alpha"
+        profile.mkdir(parents=True)
+        (profile / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        pairs = [(profile, ["claude-profile:alpha"])]
+        with mock.patch.object(failover_core, "_roots", return_value=pairs):
+            rows = {row["name"]: row for row in
+                    collector.collect(self.home, NOW, include_keychain=False,
+                                      ccs_dir=ccs_dir)["profiles"]}
+        self.assertEqual(rows["alpha"]["state"], "ok")
+
+    def test_a_profile_outside_home_and_ccs_scope_is_refused(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        profile = pathlib.Path(outside.name) / "elsewhere"
+        profile.mkdir()
+        (profile / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        row = collector.claude_profile("elsewhere", profile, NOW, self.home,
+                                       self.home / ".ccs")
+        self.assertEqual(row["state"], "unavailable")
+        self.assertIn("allowed roots", row["error"])
+
+    def test_run_uses_the_apps_ccs_precedence(self):
+        import os
+        seen = {}
+
+        def capture(home, now_ms, include_keychain=True, ccs_dir=None):
+            seen["ccs_dir"] = ccs_dir
+            return {"schemaVersion": 1, "profiles": []}
+
+        with mock.patch.object(collector, "collect", capture):
+            with mock.patch.dict(os.environ, {"CCS_HOME": "/scope/home"}, clear=False):
+                os.environ.pop("CCS_DIR", None)
+                collector.run()
+                self.assertEqual(seen["ccs_dir"], pathlib.Path("/scope/home/.ccs"))
+            with mock.patch.dict(os.environ,
+                                 {"CCS_HOME": "/scope/home", "CCS_DIR": "/scope/direct"}):
+                collector.run()
+                self.assertEqual(seen["ccs_dir"], pathlib.Path("/scope/direct"))
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CCS_DIR", None)
+                os.environ.pop("CCS_HOME", None)
+                collector.run()
+                self.assertIsNone(seen["ccs_dir"])
+
+    def test_a_sibling_read_failure_marks_discovery_incomplete(self):
+        import desktop_helpers
+        import failover_core
+
+        def failing_roots(home, provider, ccs_dir):
+            desktop_helpers.read_failed()
+            return [(home / ".claude", ["claude-profile:default"])]
+
+        with mock.patch.object(failover_core, "_roots", failing_roots):
+            rows = {row["name"]: row for row in self.report()["profiles"]}
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_settings_truncated_before_the_claude_filter_is_incomplete(self):
+        settings_home = self.home / ".claude-settings-alpha"
+        settings_home.mkdir()
+        (settings_home / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        instances = {}
+        for index in range(64):
+            instances["codex-%02d" % index] = {"driver": "codex", "config": {}}
+        instances["claude-alpha"] = {"driver": "claudeAgent",
+                                      "config": {"homePath": str(settings_home)}}
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        (userdata / "settings.json").write_text(
+            json.dumps({"providerInstances": instances}))
+        rows = {row["name"]: row for row in self.report()["profiles"]}
+        # The Claude entry sat past the sibling's pre-filter bound: unseen,
+        # and the report says so instead of implying a complete list.
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_keychain_rows_gate_stamps_on_token_presence(self):
+        payload = json.dumps({"claudeAiOauth": {
+            "accessToken": "", "refreshToken": "y",
+            "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}})
+        with mock.patch.object(collector.sys, "platform", "darwin"), \
+                mock.patch.object(collector, "_mac_keychain_text", return_value=payload):
+            entry = collector.mac_keychain_profile(NOW)
+        self.assertEqual(entry["state"], "warn")
+        self.assertIsNone(entry["accessExpiresAt"])
+        self.assertEqual(entry["refreshExpiresAt"], collector.iso(NOW + 30 * H))
+
 
 if __name__ == "__main__":
     unittest.main()

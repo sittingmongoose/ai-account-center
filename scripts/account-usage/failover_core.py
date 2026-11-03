@@ -174,13 +174,22 @@ def _children(home, value):
         return []
     try:
         # Bound directory enumeration as well as the number of returned homes.
+        # A listing cut short by either bound is an incomplete read, never a
+        # silent one: record it so inventories built on it say so.
+        truncated = False
         with os.scandir(root) as iterator:
             entries = []
             for entry in iterator:
                 if len(entries) >= MAX_FILES:
+                    truncated = True
                     break
                 entries.append(entry.name)
-        return [root / name for name in sorted(entries) if SAFE_NAME.fullmatch(name)][:MAX_SOURCES]
+        homes = [root / name for name in sorted(entries) if SAFE_NAME.fullmatch(name)]
+        if len(homes) > MAX_SOURCES:
+            truncated = True
+        if truncated:
+            read_failed()
+        return homes[:MAX_SOURCES]
     except (FileNotFoundError, NotADirectoryError):
         return []
     except OSError:
@@ -193,7 +202,12 @@ def _settings_homes(home, provider):
     settings = _read(home, state / "settings.json") or {}
     instances = _object(settings.get("providerInstances"))
     result = []
-    for instance in list(instances.values())[:MAX_SOURCES]:
+    values = list(instances.values())
+    if len(values) > MAX_SOURCES:
+        # The bound applies before the provider filter below, so entries
+        # past it are unseen, not absent: record the incomplete read.
+        read_failed()
+    for instance in values[:MAX_SOURCES]:
         item = _object(instance)
         if item.get("driver") != ("codex" if provider == "codex" else "claudeAgent"):
             continue
@@ -224,6 +238,8 @@ def _roots(home, provider, ccs_dir):
             found.extend(root / "shadow" for root in _children(home, home / ".t3/userdata/providers/codex"))
         return found + _settings_homes(home, provider)
     result.extend((root, ["t3"]) for root in attribute_reads(["t3"], t3_roots))
+    if len(result) > MAX_FILES:
+        read_failed()
     return result[:MAX_FILES]
 
 

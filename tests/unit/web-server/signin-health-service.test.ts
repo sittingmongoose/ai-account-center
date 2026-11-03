@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import {
   allowProfile,
   cacheTtlFor,
+  collectorFailureWord,
+  downgradeCrossedRows,
   hasPassedDeadline as hasPassedDeadlineWindow,
   nextDeadlineAt,
   parseRows,
@@ -70,13 +72,21 @@ describe('allowProfile', () => {
     expect(longButFitting?.fixCommand).toHaveLength(200);
   });
 
-  it('publishes a single-line repair command and omits one a code span would corrupt', () => {
+  it('omits a repair command that cannot render byte-exact, never rewrites it', () => {
+    // A newline inside a quoted path is part of the path: folding it to a
+    // space would aim the command at a different directory.
     const out = allowProfile(row({ fixCommand: 'claude auth login\nsecond line' }), 'mac');
-    expect(out?.fixCommand).toBe('claude auth login second line');
+    expect(out?.fixCommand).toBe('');
+    expect(out).not.toBeNull();
     // A backtick cannot live in a markdown code span without changing what
     // the command does: such a command is omitted whole, never rewritten.
-    const backticked = allowProfile(row({ fixCommand: '$env:CLAUDE_CONFIG_DIR = "$HOME\`$dir"; claude auth login' }), 'mac');
+    const backticked = allowProfile(
+      row({ fixCommand: '$env:CLAUDE_CONFIG_DIR = "$HOME\`$dir"; claude auth login' }),
+      'mac'
+    );
     expect(backticked?.fixCommand).toBe('');
+    const clean = allowProfile(row({ fixCommand: 'claude auth login' }), 'mac');
+    expect(clean?.fixCommand).toBe('claude auth login');
   });
 
   it('reads malformed stamps as absent, never as a reason to drop the row', () => {
@@ -88,6 +98,19 @@ describe('allowProfile', () => {
     expect(out?.accessExpiresAt).toBeNull();
     expect(out?.refreshExpiresAt).toBeNull();
     expect(allowProfile(row({ accessExpiresAt: 12345 }), 'mac')?.accessExpiresAt).toBeNull();
+  });
+
+  it('rejects impossible calendar dates in every offset form', () => {
+    for (const bad of [
+      '2026-02-30T00:00:00Z',
+      '2026-02-30T00:00:00+00:00',
+      '2026-13-01T00:00:00-05:00',
+    ])
+      expect(allowProfile(row({ accessExpiresAt: bad }), 'mac')?.accessExpiresAt).toBeNull();
+    // A real date whose UTC day differs from its wall day still publishes.
+    expect(
+      allowProfile(row({ accessExpiresAt: '2026-11-04T01:30:00+05:30' }), 'mac')?.accessExpiresAt
+    ).toBe('2026-11-04T01:30:00+05:30');
   });
 
   it('never passes helper-added fields through to the published DTO', () => {
@@ -186,5 +209,47 @@ describe('the cache outlives no deadline it published', () => {
     const far = health([row({ refreshExpiresAt: '2026-11-30T23:04:00Z' })]);
     expect(cacheTtlFor(far, NOW)).toBe(5 * 60_000);
     expect(cacheTtlFor(health([]), NOW)).toBe(5 * 60_000);
+  });
+
+  it('downgrades only live rows a deadline crossed during collection', () => {
+    const report = health([
+      row({ name: 'crossed', refreshExpiresAt: '2026-11-03T12:05:00Z' }),
+      row({ name: 'stable', refreshExpiresAt: '2026-11-30T23:04:00Z' }),
+      row({ name: 'gone', state: 'logged_out', loggedOutAt: '2026-11-03T12:05:00Z' }),
+      row({ name: 'past', accessExpiresAt: '2026-11-03T02:00:00Z', state: 'ok' }),
+    ]);
+    expect(downgradeCrossedRows(report, NOW, NOW + 10 * 60_000)).toBe(true);
+    const [crossed, stable, gone, past] = report.machines.ubuntu;
+    expect(crossed.state).toBe('unavailable');
+    expect(crossed.refreshExpiresAt).toBeNull();
+    expect(crossed.error).toContain('recheck pending');
+    expect(stable.state).toBe('ok');
+    // Terminal rows and stamps already past at collection stand as facts.
+    expect(gone.state).toBe('logged_out');
+    expect(past.state).toBe('ok');
+    expect(downgradeCrossedRows(report, NOW, NOW + 10 * 60_000)).toBe(false);
+  });
+});
+
+describe('collectorFailureWord', () => {
+  it('publishes only allowlisted words, never routing details from stderr', () => {
+    const cases: Array<[string, string]> = [
+      ['ssh: connect to host 10.0.0.9 port 22: Connection timed out', 'collection timed out'],
+      ['ssh: connect to host mac.lan port 22: Connection refused', 'connection refused'],
+      ['jared@10.0.0.9: Permission denied (publickey).', 'machine sign-in refused'],
+      [
+        'ssh: Could not resolve hostname secret-alias: Name or service not known',
+        'host unreachable',
+      ],
+      ['python3: /home/jared/.ccs/secret.py crashed', 'collector failed'],
+      ['', 'collector failed'],
+    ];
+    for (const [stderr, word] of cases) {
+      const published = collectorFailureWord(stderr);
+      expect(published).toBe(word);
+      expect(published).not.toContain('10.0.0.9');
+      expect(published).not.toContain('jared');
+      expect(published).not.toContain('secret');
+    }
   });
 });

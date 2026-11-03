@@ -172,6 +172,45 @@ class ReaderTests(unittest.TestCase):
         data = json.loads(self.run_reader("--provider", "codex", "--json", "history"))
         self.assertEqual([entry["accountId"] for entry in data["series"]], ["codex:gmail"])
 
+    def test_sign_in_section_omits_a_non_ascii_command_and_stays_ascii(self):
+        generated = aac.now_utc()
+        data = snapshot(generated)
+        data["signIn"] = [
+            {"provider": "claude", "machine": "ubuntu", "name": "jose", "state": "logged_out",
+             "loggedOutAt": iso(generated - dt.timedelta(hours=1)),
+             "fixCommand": 'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/josé" claude auth login'},
+            {"provider": "claude", "machine": "ubuntu", "name": "plain", "state": "logged_out",
+             "loggedOutAt": iso(generated - dt.timedelta(hours=2)),
+             "fixCommand": "claude auth login"},
+        ]
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
+                contextlib.redirect_stdout(out):
+            aac.main()
+        text = out.getvalue()
+        # The escaped form would name a different directory inside the quotes:
+        # the command is named as omitted, never printed altered.
+        self.assertIn("re-login command omitted (non-ASCII path)", text)
+        self.assertNotIn("\\xe9", text)
+        self.assertIn("re-login: `claude auth login`", text)
+        self.assertTrue(all(ord(character) < 128 for character in text))
+
+    def test_a_unicode_plan_never_fails_an_ascii_stdout(self):
+        generated = aac.now_utc()
+        data = snapshot(generated)
+        data["accounts"][0]["plan"] = "Prö"
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="ascii")
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
+                contextlib.redirect_stdout(stream):
+            aac.main()
+        stream.flush()
+        text = raw.getvalue().decode("ascii")
+        self.assertIn("Gmail", text)
+        self.assertIn("\\xf6", text)
+
     def test_a_retained_window_says_how_old_it_is(self):
         generated = aac.now_utc()
         data = snapshot(generated)
