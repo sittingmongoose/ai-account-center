@@ -114,11 +114,16 @@ export function statusLabel(account) {
 }
 export function accountView(account, inventory = [], clientPlatform = 'mac') {
   const windows = visibleUsageWindows(account.provider, account.windows);
-  const launcher = inventory.find(profile => profile.id === account.capabilities?.claudeProfileId);
-  const showFable = account.provider === 'claude' &&
-    (account.planClass
+  const launcher = inventory.find(
+    (profile) => profile.id === account.capabilities?.claudeProfileId
+  );
+  const showFable =
+    account.provider === 'claude' &&
+    (account.planClass != null
       ? account.planClass === 'max'
-      : /(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)/i.test(String(account.plan || '').replace(/[_-]/g, ' ')));
+      : /(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)/i.test(
+          String(account.plan || '').replace(/[_-]/g, ' ')
+        ));
   return {
     id: account.id,
     profile: account.capabilities?.codexProfile || account.capabilities?.claudeProfileId || '',

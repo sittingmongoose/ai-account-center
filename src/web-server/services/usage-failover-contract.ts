@@ -225,8 +225,12 @@ export function parseUsageReading(value: unknown, now = Date.now()): UsageReadin
     value.windows.length > 256
   )
     return null;
-  const planClass = safeUsageText(value.planClass);
-  if (planClass !== null && planClass !== 'max' && planClass !== 'pro') return null;
+  // A present class must be exactly max or pro: anything else (a mangled or
+  // absurdly long string) rejects the whole reading rather than dropping the
+  // class silently and keeping a stale eligibility.
+  const rawClass = value.planClass;
+  if (rawClass !== undefined && rawClass !== null && rawClass !== 'max' && rawClass !== 'pro')
+    return null;
   const sampledAt = usageTimestamp(value.sampledAt, now);
   const fetchedAt = usageTimestamp(value.fetchedAt, now);
   const successful = value.status === 'ok' || value.status === 'cached';
@@ -266,7 +270,7 @@ export function parseUsageReading(value: unknown, now = Date.now()): UsageReadin
     status: value.status as UsageReading['status'],
     email: usageEmail(value.email),
     plan: safeUsageText(value.plan),
-    ...(planClass ? { planClass } : {}),
+    ...(rawClass === 'max' || rawClass === 'pro' ? { planClass: rawClass as 'max' | 'pro' } : {}),
     sampledAt,
     fetchedAt,
     windows,

@@ -104,6 +104,7 @@ export async function writeClaudeDesktopLiveSnapshot(
       platform: sample.platform,
       source: sample.source,
       plan: sample.plan,
+      ...(sample.planClass ? { planClass: sample.planClass } : {}),
       fetchedAt: sample.fetchedAt,
       ...(typeof sample.sourceContextFingerprint === 'string' &&
       /^[a-f0-9]{64}$/.test(sample.sourceContextFingerprint)
