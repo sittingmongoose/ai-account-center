@@ -121,8 +121,12 @@ class SignInExpiryTests(unittest.TestCase):
                          'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/spaced" claude auth login')
         with mock.patch.object(collector.sys, "platform", "win32"):
             command = collector.fix_command(self.home / ".claude-t3" / "spaced", self.home)
-        self.assertEqual(command,
-                         '$env:CLAUDE_CONFIG_DIR = "$HOME\\.claude-t3\\spaced"; claude auth login')
+        # The home expands through USERPROFILE, the same source Python's
+        # Path.home() used to find this profile; $HOME can name another
+        # directory in a PowerShell whose home drive is mapped.
+        self.assertEqual(
+            command,
+            '$env:CLAUDE_CONFIG_DIR = "$env:USERPROFILE\\.claude-t3\\spaced"; claude auth login')
         # No absolute path of this machine reaches the published rows.
         self.assertNotIn(str(self.home), json.dumps(rows))
 
@@ -396,7 +400,9 @@ class SignInExpiryTests(unittest.TestCase):
                                "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
         (self.home / ".ccs" / "instances" / "linkone").symlink_to(real, target_is_directory=True)
         names = [row["name"] for row in self.report()["profiles"]]
-        self.assertEqual(sorted(n for n in names if n in ("realone", "linkone")), ["linkone"])
+        # One row, under the real spelling even though the link's name
+        # sorts (and is discovered) first.
+        self.assertEqual(sorted(n for n in names if n in ("realone", "linkone")), ["realone"])
 
     def test_an_overlong_settings_home_marks_discovery_incomplete(self):
         userdata = self.home / ".t3" / "userdata"
@@ -463,6 +469,77 @@ class SignInExpiryTests(unittest.TestCase):
                 "driver": "claudeAgent", "config": {"homePath": 0}}}}))
         rows = {row["name"]: row for row in self.report()["profiles"]}
         self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_windows_fix_command_omits_a_curly_quoted_dir(self):
+        # PowerShell reads curly quotes as quotes, so a name carrying one
+        # would break out of either quoted form; no command publishes.
+        with mock.patch.object(collector.sys, "platform", "win32"):
+            inside = collector.fix_command(
+                self.home / ".claude-t3" / "x\u201d; calc; \u201c", self.home)
+            outside = collector.fix_command(
+                pathlib.Path("C:/elsewhere/it\u2019s"), self.home)
+            clean = collector.fix_command(self.home / ".claude-t3" / "plain", self.home)
+        self.assertEqual(inside, "")
+        self.assertEqual(outside, "")
+        self.assertIn("$env:USERPROFILE", clean)
+
+    def test_malformed_settings_containers_mark_discovery_incomplete(self):
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        settings_home = self.home / ".claude-settings-alpha"
+        cases = (
+            # The instances container itself is a list, hiding its entries.
+            {"providerInstances": [{"driver": "claudeAgent",
+                                    "config": {"homePath": str(settings_home)}}]},
+            # A matching instance whose config is not an object.
+            {"providerInstances": {"claude-bad": {
+                "driver": "claudeAgent", "config": False}}},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                (userdata / "settings.json").write_text(json.dumps(payload))
+                rows = {row["name"]: row for row in self.report()["profiles"]}
+                self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_mac_default_login_reads_through_the_keychain_when_no_file(self):
+        payload = json.dumps({"claudeAiOauth": {
+            "accessToken": "x", "refreshToken": "y",
+            "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}})
+        with mock.patch.object(collector.sys, "platform", "darwin"), \
+                mock.patch.object(collector, "_mac_keychain_text", return_value=payload):
+            report = collector.collect(self.home, NOW, include_keychain=True)
+        rows = {row["name"]: row for row in report["profiles"]}
+        # One default login, one row: never a failed `default` beside a
+        # healthy `keychain` for the same login.
+        self.assertNotIn("keychain", rows)
+        self.assertEqual(rows["default"]["state"], "ok")
+        self.assertEqual(rows["default"]["refreshExpiresAt"], collector.iso(NOW + 30 * H))
+        self.assertEqual(rows["default"]["configDir"], "Keychain: 'Claude Code-credentials'")
+
+    def test_mac_default_file_verdict_stands_and_keychain_adds_no_row(self):
+        default = self.home / ".claude"
+        default.mkdir(parents=True, exist_ok=True)
+        (default / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        with mock.patch.object(collector.sys, "platform", "darwin"), \
+                mock.patch.object(collector, "_mac_keychain_text", return_value=None):
+            report = collector.collect(self.home, NOW, include_keychain=True)
+        rows = {row["name"]: row for row in report["profiles"]}
+        self.assertNotIn("keychain", rows)
+        self.assertEqual(rows["default"]["state"], "ok")
+        self.assertEqual(rows["default"]["configDir"], "~/.claude")
+
+    def test_mac_default_unreadable_in_both_sources_is_one_row(self):
+        with mock.patch.object(collector.sys, "platform", "darwin"), \
+                mock.patch.object(collector, "_mac_keychain_text", return_value=None):
+            report = collector.collect(self.home, NOW, include_keychain=True)
+        names = [row["name"] for row in report["profiles"]]
+        self.assertEqual(names.count("default"), 1)
+        self.assertNotIn("keychain", names)
+        default = {row["name"]: row for row in report["profiles"]}["default"]
+        self.assertEqual(default["state"], "unavailable")
+        self.assertEqual(default["error"], "keychain item unreadable")
 
     def test_keychain_rows_gate_stamps_on_token_presence(self):
         payload = json.dumps({"claudeAiOauth": {

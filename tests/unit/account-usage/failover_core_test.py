@@ -142,6 +142,24 @@ class InventoryTests(unittest.TestCase):
         self.assertNotEqual(core.digest(full["binding"]), core.digest(legacy["binding"]))
         self.assertEqual(legacy["binding"][-1], EMAIL)
 
+    def test_read_present_opens_nonblocking_so_a_swapped_fifo_cannot_stall(self):
+        if not hasattr(os, "O_NONBLOCK"):
+            self.skipTest("O_NONBLOCK does not apply here")
+        target = self.home / "settings.json"
+        target.write_text("{}", encoding="utf-8")
+        seen = {}
+        real_open = os.open
+
+        def capturing_open(path, flags, *args, **kwargs):
+            seen["flags"] = flags
+            return real_open(path, flags, *args, **kwargs)
+
+        with mock.patch.object(core.os, "open", capturing_open):
+            self.assertEqual(core._read_present(target, 1024), b"{}")
+        # Without O_NONBLOCK, a FIFO swapped in between the lstat and the
+        # open would block the whole discovery until a writer appears.
+        self.assertTrue(seen["flags"] & os.O_NONBLOCK)
+
     def test_explicit_ccs_root_and_host_environment_is_not_read(self):
         custom = self.home / "custom-ccs"
         write(custom / "codex-instances/saved/auth.json", codex_auth())

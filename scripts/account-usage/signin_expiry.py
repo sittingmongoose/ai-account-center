@@ -11,9 +11,10 @@ fresh `claude auth login`.
 "Logged out at" is therefore the first `expiresAt` that falls after
 `refreshTokenExpiresAt`. The collector reports that time, a state
 (ok / warn / critical / logged_out) and the exact fix command for every
-config dir on this machine — the default `~/.claude`, the per-account
-`~/.claude-t3/<name>` dirs, and on macOS the Keychain item Claude Desktop
-uses. Token values are never read beyond their presence and never printed.
+config dir on this machine — the default `~/.claude` (on macOS resolved
+through its Keychain item when the file store has no verdict) and the
+per-account `~/.claude-t3/<name>` dirs. Token values are never read
+beyond their presence and never printed.
 
 Other providers are probed for readable login end times too; a provider whose
 store carries no such time is reported as `unsupported` rather than guessed.
@@ -179,9 +180,9 @@ def read_credentials(path):
 
     The file is read but only its times and token presence are kept; token
     values never leave this function."""
-    # O_NOFOLLOW (inside the helper) refuses a linked credentials file: a link
-    # outside the selected home can never be read and attributed to this
-    # profile.
+    # The helper's lstat + O_NOFOLLOW refuse a linked credentials file
+    # wherever it points, in-home links included: a link is never followed
+    # and attributed to this profile.
     content = _read_regular_bytes(path)
     if content is None:
         return None
@@ -218,11 +219,22 @@ def fix_command(config_dir, home):
     exception and publishes as a quoted literal, as the README states."""
     relative = _home_relative(config_dir, home)
     if sys.platform == "win32":
+        # PowerShell reads curly quotes (U+2018-U+201F) as quotes too, and
+        # no escaping of the ASCII set can keep one inside either quoted
+        # form: a directory named with one gets no command rather than a
+        # pasted line that runs something else. The home expands through
+        # USERPROFILE, the same source Path.home() read on this machine.
+        curly = "".join(chr(cp) for cp in range(0x2018, 0x2020))
         if relative is None:
-            literal = str(config_dir).replace("'", "''")
+            literal = str(config_dir)
+            if any(character in literal for character in curly):
+                return ""
+            literal = literal.replace("'", "''")
             return f"$env:CLAUDE_CONFIG_DIR = '{literal}'; claude auth login"
+        if any(character in relative[1] for character in curly):
+            return ""
         escaped = relative[1][1:].replace("`", "``").replace('"', '`"').replace("$", "`$")
-        return f'$env:CLAUDE_CONFIG_DIR = "$HOME{escaped}"; claude auth login'
+        return f'$env:CLAUDE_CONFIG_DIR = "$env:USERPROFILE{escaped}"; claude auth login'
     if relative is None:
         literal = str(config_dir).replace("'", "'\\''")
         return f"CLAUDE_CONFIG_DIR='{literal}' claude auth login"
@@ -539,8 +551,23 @@ def claude_roots(home, ccs_dir=None):
     the report can say the list may be short instead of implying all."""
     default = home / ".claude"
     roots = [("default", default)]
-    seen = {_dedupe_key(default)}
+    seen = {_dedupe_key(default): 0}
     complete = True
+
+    def add_root(label, root):
+        # One directory under two spellings publishes once, under its real
+        # name: when the first-seen spelling is a link and a later one is
+        # the directory itself, the later spelling takes the slot. The
+        # default root (slot 0) is never replaced. is_symlink here only
+        # chooses the label; every presence verdict still comes from
+        # _dir_state before this point.
+        key = _dedupe_key(root)
+        existing = seen.get(key)
+        if existing is None:
+            seen[key] = len(roots)
+            roots.append((label, root))
+        elif existing > 0 and roots[existing][1].is_symlink() and not root.is_symlink():
+            roots[existing] = (label, root)
     # The sibling discovery records every swallowed read failure and
     # truncation through desktop_helpers; a count that moves while it runs
     # means this list may be short even when it looks comfortably small.
@@ -589,16 +616,12 @@ def claude_roots(home, ccs_dir=None):
                 continue
             if not is_dir:
                 continue
-            key = _dedupe_key(root)
-            if key in seen:
-                continue
-            seen.add(key)
             label = root.name or os.path.realpath(root)
             if selectors and isinstance(selectors[0], str) and selectors[0].startswith(
                 "claude-profile:"
             ):
                 label = selectors[0].split(":", 1)[1]
-            roots.append((label, root))
+            add_root(label, root)
     else:
         complete = False
 
@@ -629,11 +652,7 @@ def claude_roots(home, ccs_dir=None):
                 continue
             if not child_is_dir or child.name.startswith("."):
                 continue
-            key = _dedupe_key(child)
-            if key in seen:
-                continue
-            seen.add(key)
-            roots.append((child.name, child))
+            add_root(child.name, child)
 
     scan((ccs_dir or home / ".ccs") / "instances")
     scan(home / ".claude-t3")
@@ -668,8 +687,28 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
             }
         )
     if include_keychain and sys.platform == "darwin":
+        # The Keychain item and ~/.claude/.credentials.json are two stores
+        # for the same default login, so they resolve to the one default
+        # row (profiles[0], which claude_roots always puts first): a file
+        # verdict stands, and the Keychain supplies the verdict when the
+        # file store cannot. They never publish as two logins, one failed
+        # beside one healthy.
         keychain = mac_keychain_profile(now_ms)
-        profiles.append(keychain)
+        if profiles and profiles[0]["state"] == "unavailable":
+            if keychain["state"] != "unavailable":
+                profiles[0].update(
+                    configDir=keychain["configDir"],
+                    accessExpiresAt=keychain["accessExpiresAt"],
+                    refreshExpiresAt=keychain["refreshExpiresAt"],
+                    loggedOutAt=keychain["loggedOutAt"],
+                    state=keychain["state"],
+                )
+                profiles[0].pop("error", None)
+            elif keychain.get("error"):
+                # Neither store could answer; on this platform the
+                # Keychain is the canonical store, so its cause names
+                # the failure.
+                profiles[0]["error"] = keychain["error"]
     codex = codex_profile(now_ms, home)
     if codex:
         profiles.append(codex)

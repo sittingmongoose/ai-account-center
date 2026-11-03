@@ -401,7 +401,11 @@ def sign_in_lines(snapshot, provider=None):
             else:
                 command, omitted = fix_command_text(row)
                 if command:
-                    line += " re-login when the window ends: `%s`" % command
+                    # usage.md's words: a known end is "before then"; only
+                    # an unnamed end waits for the window.
+                    advice = ("re-login before then" if row.get("loggedOutAt")
+                              else "re-login when the window ends")
+                    line += " %s: `%s`" % (advice, command)
                 elif omitted:
                     line += " re-login command omitted (non-ASCII path)."
         elif state == "ok" and row.get("loggedOutAt"):

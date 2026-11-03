@@ -53,6 +53,11 @@ const STAMP_PATTERN =
  * none of them ever publish. */
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]/;
 
+/** A surrogate code unit with no partner: how a non-UTF-8 directory name
+ * arrives through JSON. UTF-8 output (the snapshot markdown) would
+ * replace it with U+FFFD, silently retargeting a published path. */
+const UNPAIRED_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
 /** The only failure words ever published for a failed collection. Raw
  * stderr names routing details (the resolved hostname or address behind
  * an ssh alias, the remote user), so it is classified, never quoted. */
@@ -165,7 +170,12 @@ export function publishableFixCommand(value: unknown): string {
   // Paste-to-shell text also refuses the bidi set inside CONTROL: those
   // characters cannot change what the quoted command does, but they can
   // change how it reads.
-  return CONTROL.test(value) || value.includes('`') || value.length > 200 ? '' : value;
+  return CONTROL.test(value) ||
+    UNPAIRED_SURROGATE.test(value) ||
+    value.includes('`') ||
+    value.length > 200
+    ? ''
+    : value;
 }
 
 /** The per-profile errors that ever publish: the collector's fixed
@@ -199,10 +209,17 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
   const states = ['ok', 'warn', 'critical', 'logged_out', 'unavailable', 'unsupported'];
   if (typeof row.state !== 'string' || !states.includes(row.state)) return null;
   const provider = row.provider === 'codex' ? 'codex' : 'claude';
-  const configDir =
-    typeof row.configDir === 'string' && !CONTROL.test(row.configDir)
+  const clippedDir =
+    typeof row.configDir === 'string' &&
+    !CONTROL.test(row.configDir) &&
+    !UNPAIRED_SURROGATE.test(row.configDir)
       ? row.configDir.slice(0, 200)
       : undefined;
+  // The clip itself must not split a surrogate pair at the bound.
+  const configDir =
+    clippedDir !== undefined && /[\ud800-\udbff]$/.test(clippedDir)
+      ? clippedDir.slice(0, -1)
+      : clippedDir;
   const error = row.state === 'unavailable' ? publishableError(row.error) : null;
   const profile: SignInProfile = {
     name:

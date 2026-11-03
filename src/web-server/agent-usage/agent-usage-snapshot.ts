@@ -371,7 +371,10 @@ function renderSignInMarkdown(
   return lines;
 }
 
-export function renderSnapshotMarkdown(snapshot: AgentUsageSnapshot): string {
+export function renderSnapshotMarkdown(
+  snapshot: AgentUsageSnapshot,
+  signInNow: number = Date.parse(snapshot.generatedAt)
+): string {
   const now = Date.parse(snapshot.generatedAt);
   const lines = [
     '# AI Account Center usage',
@@ -419,9 +422,11 @@ export function renderSnapshotMarkdown(snapshot: AgentUsageSnapshot): string {
     lines.push('## Sign-in health');
     lines.push('');
     lines.push(
+      // The sign-in section reads against render time when the publisher
+      // supplies it: its deadlines are wall-clock ends, not sample facts.
       ...renderSignInMarkdown(
         { machines: signInProfiles },
-        snapshot.generatedAt ? Date.parse(snapshot.generatedAt) : Date.now()
+        Number.isNaN(signInNow) ? Date.now() : signInNow
       )
     );
     lines.push('');
@@ -484,6 +489,36 @@ export async function syncSnapshotClient(
       .catch(() => null);
     if (current !== body) await writeAtomically(directory, file.name, body, file.mode);
   }
+}
+
+/** Publication-time recheck, on copies: a live row whose deadline crossed
+ * in (since, now] while collection and the folder checks were still
+ * running must not publish as a future end, in either file. The collected
+ * rows belong to the health service's cache and are never mutated here;
+ * stamps already past at `since` are facts the collected state already
+ * accounts for, exactly as in the service's own crossed-row downgrade. */
+export function downgradeCrossedSignInRows(
+  rows: SnapshotSignInProfile[],
+  since: number,
+  now: number
+): SnapshotSignInProfile[] {
+  return rows.map((row) => {
+    if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') return row;
+    const crossed = [row.accessExpiresAt, row.refreshExpiresAt, row.loggedOutAt].some((value) => {
+      if (!value) return false;
+      const at = Date.parse(value);
+      return !Number.isNaN(at) && at > since && at <= now;
+    });
+    if (!crossed) return row;
+    return {
+      ...row,
+      state: 'unavailable',
+      accessExpiresAt: null,
+      refreshExpiresAt: null,
+      loggedOutAt: null,
+      error: 'sign-in state changed during collection; recheck pending',
+    };
+  });
 }
 
 export interface SnapshotPublisherDeps {
@@ -552,6 +587,7 @@ export function createSnapshotPublisher(
       // so a slow remote overlaps them instead of extending the busy window.
       // A fetch that never returns is released at the limit: one lost
       // machine must not stop usage.json from updating for good.
+      const signInStartedAt = Date.now();
       const signInPending: Promise<SnapshotSignInProfile[]> = Promise.race([
         Promise.resolve(signIn()).catch(() => []),
         new Promise<SnapshotSignInProfile[]>((resolve) => {
@@ -569,7 +605,13 @@ export function createSnapshotPublisher(
         signInProfiles
       );
       await write(directory, SNAPSHOT_HISTORY, `${JSON.stringify(history)}\n`);
-      await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot));
+      // Rechecked against publication time, not the sample's, as late as
+      // the writes allow: a deadline that crossed while the fetch, the
+      // folder check or the history write was still running publishes as
+      // awaiting-recheck in both remaining files.
+      if (snapshot.signIn)
+        snapshot.signIn = downgradeCrossedSignInRows(snapshot.signIn, signInStartedAt, Date.now());
+      await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
       // usage.json last: its time says every file of this sample is in place.
       await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
       warned = null;

@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'bun:test';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import {
   allowProfile,
   cacheTtlFor,
@@ -94,6 +97,27 @@ describe('allowProfile', () => {
     expect(c1?.fixCommand).toBe('');
   });
 
+  it('omits a repair command whose path cannot survive UTF-8 publication', () => {
+    // A non-UTF-8 directory name reaches JSON as a lone surrogate; writing
+    // it to markdown would replace it with U+FFFD and aim the pasted
+    // command at a different directory, so it is omitted whole. A valid
+    // surrogate pair is ordinary text and passes.
+    const lone = allowProfile(
+      row({
+        fixCommand: 'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/bad\udcff" claude auth login',
+        configDir: '~/.claude-t3/bad\udcff',
+      }),
+      'ubuntu'
+    );
+    expect(lone?.fixCommand).toBe('');
+    expect(lone?.configDir).toBeUndefined();
+    const paired = allowProfile(
+      row({ fixCommand: 'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/\u{1F600}" claude auth login' }),
+      'ubuntu'
+    );
+    expect(paired?.fixCommand).toContain('\u{1F600}');
+  });
+
   it('omits a repair command carrying bidi controls', () => {
     const out = allowProfile(row({ fixCommand: 'claude auth\u202elogin' }), 'mac');
     expect(out?.fixCommand).toBe('');
@@ -125,6 +149,24 @@ describe('allowProfile', () => {
       expect(publishableError(other)).toBe('unavailable');
     expect(publishableError('')).toBeNull();
     expect(publishableError(42)).toBeNull();
+  });
+
+  it('keeps the allowlist tied to the collector error literals', () => {
+    // The Python collector's fixed error texts are the allowlist's source
+    // of truth: wording edited on one side must not silently collapse to
+    // the fixed word on the other.
+    const collector = fs.readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../../../scripts/account-usage/signin_expiry.py'
+      ),
+      'utf8'
+    );
+    const literals = new Set<string>();
+    for (const match of collector.matchAll(/(?:\["error"\] =|"error":) "([^"]+)"/g))
+      literals.add(match[1]);
+    expect(literals.size).toBe(7);
+    for (const literal of literals) expect(publishableError(literal)).toBe(literal);
   });
 
   it('screens control characters out of configDir and error', () => {

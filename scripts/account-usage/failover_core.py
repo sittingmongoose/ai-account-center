@@ -145,10 +145,13 @@ def _read_present(path, max_bytes):
         return None
     if hasattr(os, "getuid") and info.st_uid != os.getuid():
         return None
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
     with os.fdopen(descriptor, "rb") as handle:
         actual = os.fstat(handle.fileno())
-        if (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
+        # O_NONBLOCK plus the regular-file recheck: a FIFO swapped in
+        # between the lstat and the open must not stall discovery.
+        if not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
             return None
         raw = handle.read(max_bytes + 1)
     return raw if len(raw) <= max_bytes else None
@@ -208,7 +211,15 @@ SETTINGS_HOME_FAILURES = [0]
 def _settings_homes(home, provider):
     state = home / ".t3/userdata"
     settings = _read(home, state / "settings.json") or {}
-    instances = _object(settings.get("providerInstances"))
+    # A present container of the wrong shape (the instances map itself, an
+    # instance, its config) can hide configured homes exactly like a
+    # malformed homePath can: count it unseen instead of reading it as
+    # empty. Absent and null stay silent, like unset fields below.
+    raw_instances = settings.get("providerInstances")
+    if raw_instances is not None and not isinstance(raw_instances, dict):
+        SETTINGS_HOME_FAILURES[0] += 1
+        raw_instances = {}
+    instances = raw_instances or {}
     result = []
     values = list(instances.values())
     if len(values) > MAX_SOURCES:
@@ -216,10 +227,18 @@ def _settings_homes(home, provider):
         # past it are unseen, not absent: record the incomplete read.
         read_failed()
     for instance in values[:MAX_SOURCES]:
-        item = _object(instance)
+        if not isinstance(instance, dict):
+            if instance is not None:
+                SETTINGS_HOME_FAILURES[0] += 1
+            continue
+        item = instance
         if item.get("driver") != ("codex" if provider == "codex" else "claudeAgent"):
             continue
-        config = _object(item.get("config"))
+        raw_config = item.get("config")
+        if raw_config is not None and not isinstance(raw_config, dict):
+            SETTINGS_HOME_FAILURES[0] += 1
+            continue
+        config = raw_config or {}
         fields = ("homePath", "shadowHomePath") if provider == "codex" else ("homePath",)
         for field in fields:
             value = config.get(field)

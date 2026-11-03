@@ -22,6 +22,7 @@ import {
 import {
   buildSnapshotFiles,
   createSnapshotPublisher,
+  downgradeCrossedSignInRows,
   readSnapshotSettings,
   renderSnapshotMarkdown,
   SNAPSHOT_HISTORY,
@@ -1004,6 +1005,66 @@ describe('sign-in health section', () => {
     expect(refreshGone).toContain('refresh expired');
     expect(refreshGone).toContain('awaiting recheck');
     expect(refreshGone).not.toContain('healthy');
+  });
+
+  it('downgrades crossed rows on copies, never the collected rows', () => {
+    const rows = [
+      row({ state: 'critical', loggedOutAt: '2026-10-15T12:30:00Z' }),
+      row({ name: 'later', state: 'critical', loggedOutAt: '2026-10-16T12:00:00Z' }),
+      // A stamp already past before the window is a fact the collected
+      // state already accounts for, not a new crossing.
+      row({
+        name: 'renewing',
+        state: 'warn',
+        loggedOutAt: null,
+        accessExpiresAt: '2026-10-15T11:00:00Z',
+        refreshExpiresAt: '2026-11-30T00:00:00Z',
+      }),
+    ] as never[];
+    const out = downgradeCrossedSignInRows(rows, NOW, NOW + 60 * MINUTE);
+    expect(out[0].state).toBe('unavailable');
+    expect(out[0].error).toBe('sign-in state changed during collection; recheck pending');
+    expect(out[0].loggedOutAt).toBeNull();
+    expect(out[1].state).toBe('critical');
+    expect(out[2].state).toBe('warn');
+    // The collected (and cached) rows are untouched.
+    expect((rows[0] as { state: string }).state).toBe('critical');
+  });
+
+  it('rechecks sign-in deadlines at publication time, not the sample time', async () => {
+    const writes = new Map<string, string>();
+    const liveRow = {
+      name: 'soon',
+      provider: 'claude',
+      platform: 'ubuntu',
+      machine: 'ubuntu',
+      state: 'critical' as const,
+      loggedOutAt: new Date(Date.now() + 40).toISOString(),
+      fixCommand: 'claude auth login',
+    };
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      // A slow folder check holds publication past the row's deadline;
+      // the published reading must not present it as a future end.
+      isDirectory: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        return true;
+      },
+      refreshSeconds: () => 60,
+      signIn: async () => [liveRow],
+      write: async (_directory, name, body) => {
+        writes.set(name, body);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      true
+    );
+    const published = JSON.parse(writes.get(SNAPSHOT_JSON) as string);
+    expect(published.signIn[0].state).toBe('unavailable');
+    expect(writes.get(SNAPSHOT_MARKDOWN)).not.toContain('re-login before then');
+    // The health service's own row is never mutated by publication.
+    expect(liveRow.state).toBe('critical');
   });
 
   it('names no invented end when the collector could not derive one', () => {
