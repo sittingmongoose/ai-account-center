@@ -222,6 +222,8 @@ export function applyClaudeLiveUsage(
   const planClass = livePlanClass(live.planClass);
   return {
     ...account,
+    // `?? undefined` is load-bearing: a sample without a class must clear a
+    // stale one, and JSON.stringify drops explicit-undefined keys on publish.
     planClass: planClass ?? undefined,
     status: 'ok',
     source: 'Claude Desktop live quota on Windows',

@@ -305,6 +305,32 @@ def cmd_show(args):
         if account.get("status") in ("ok", "cached"):
             for window in account.get("windows", []):
                 print(window_line(window, now, account.get("sampledAt"), stale_after))
+    sign_in_lines(snapshot)
+
+
+def sign_in_lines(snapshot):
+    """The Sign-in health section, worst state first — the same facts
+    usage.md publishes, for the agents that read this CLI instead."""
+    rows = snapshot.get("signIn") or []
+    if not rows:
+        return
+    words = {"ok": "healthy", "warn": "ends within 24 hours", "critical": "ends within 4 hours",
+             "logged_out": "already logged out", "unavailable": "not readable on this machine",
+             "unsupported": "no expiry published"}
+    rank = {"logged_out": 0, "critical": 1, "warn": 2, "unavailable": 3, "unsupported": 4, "ok": 5}
+    print("\nSign-in health")
+    for row in sorted(rows, key=lambda r: rank.get(r.get("state"), 9)):
+        machine = row.get("machine") or row.get("platform") or "unknown"
+        line = "  %s · %s/%s: %s." % (row.get("provider"), machine, row.get("name"),
+                                      words.get(row.get("state"), row.get("state")))
+        if row.get("state") == "unavailable":
+            if row.get("error"):
+                line += " (%s)" % row["error"]
+        elif row.get("loggedOutAt"):
+            line += " sign-in ends %s." % row["loggedOutAt"]
+        if row.get("fixCommand"):
+            line += " re-login: `%s`" % row["fixCommand"]
+        print(line)
 
 
 def cmd_history(args):

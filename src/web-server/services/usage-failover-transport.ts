@@ -36,7 +36,6 @@ const MODULES = [
   'muse_console',
   'muse_native',
   'claude_usage',
-  'signin_expiry',
 ] as const;
 const MAX_BYTES = 2 * 1024 * 1024;
 const BOOTSTRAP =
@@ -114,6 +113,59 @@ export async function usageHelperBundle(): Promise<string> {
     'import failover_usage',
     'print(json.dumps(failover_usage.run(json.load(sys.stdin)),allow_nan=False))',
   ].join('\n');
+}
+
+/**
+ * The sign-in expiry collector as an in-memory stdin bundle, so a clean
+ * Mac or Windows reports without anything being installed on its disk.
+ * The collector imports failover_core for saved-profile discovery, so the
+ * bundle carries both.
+ */
+export async function signinHelperBundle(): Promise<string> {
+  const root = path.resolve(__dirname, '../../..');
+  const modules: Record<string, string> = {};
+  for (const name of ['failover_core', 'signin_expiry'] as const) {
+    modules[name] = await fs.promises.readFile(
+      path.join(root, 'scripts/account-usage', `${name}.py`),
+      'utf8'
+    );
+  }
+  if (Buffer.byteLength(JSON.stringify(modules)) > MAX_BYTES)
+    throw new ValidationError('Usage helper unavailable.');
+  return [
+    'import sys,json,importlib.abc,importlib.util',
+    `_sources=json.loads(${JSON.stringify(JSON.stringify(modules))})`,
+    'class _Bundle(importlib.abc.MetaPathFinder,importlib.abc.Loader):',
+    ' def find_spec(self,fullname,path=None,target=None):',
+    '  return importlib.util.spec_from_loader(fullname,self) if fullname in _sources else None',
+    ' def create_module(self,spec): return None',
+    ' def exec_module(self,module):',
+    "  module.__file__='managed-usage/'+module.__name__+'.py'",
+    "  exec(compile(_sources[module.__name__],module.__file__,'exec'),module.__dict__)",
+    'sys.meta_path.insert(0,_Bundle())',
+    'import signin_expiry',
+    'print(json.dumps(signin_expiry.run(),allow_nan=False))',
+  ].join('\n');
+}
+
+/** The same command shape as the usage helper: stdin carries the bundle. */
+export function signinHelperCommand(platform: UsageHost['platform']): string {
+  if (platform !== 'windows') {
+    const quoted = `'${BOOTSTRAP.replace(/'/g, `'"'"'`)}'`;
+    return `if [ -x "$HOME/.ccs/claude-session-migration/venv/bin/python3" ]; then exec "$HOME/.ccs/claude-session-migration/venv/bin/python3" -c ${quoted}; else exec /usr/bin/python3 -c ${quoted}; fi`;
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$env:PYTHONIOENCODING = 'utf-8'",
+    "$env:PYTHONUTF8 = '1'",
+    "$venv = [IO.Path]::Combine($HOME, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
+    '$python = if (Test-Path -LiteralPath $venv -PathType Leaf) { $venv } else { (Get-Command python3.exe,python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source }',
+    'if (-not $python) { exit 1 }',
+    `& $python -c '${BOOTSTRAP.replace(/'/g, "''")}'`,
+    'exit $LASTEXITCODE',
+  ].join('; ');
+  return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
 }
 
 export function parseUsageHelperResponse(text: string): UsageHelperResponse {

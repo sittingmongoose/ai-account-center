@@ -2027,3 +2027,20 @@ describe('identity-bound usage source failover', () => {
     }
   });
 });
+
+describe('the entitlement class rides the failover row', () => {
+  it('carries a reading class into the row and drops it when the class is gone', async () => {
+    const h = await harness();
+    h.collections.set('mac', {
+      sample: reading(h.now(), { plan: 'Ultra', planClass: 'max' }),
+      failureCode: null,
+    });
+    const carried = await h.service.collect(h.target, template());
+    expect(carried.planClass).toBe('max');
+    expect(carried.plan).toBe('Ultra');
+    h.advance();
+    h.collections.set('mac', { sample: reading(h.now(), { plan: 'Ultra' }), failureCode: null });
+    const cleared = await h.service.collect(h.target, template());
+    expect(cleared.planClass).toBeUndefined();
+  });
+});

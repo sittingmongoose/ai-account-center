@@ -765,16 +765,14 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             optional_extras = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
             windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown))
             verify_root()
+            plan_name = claude_plan(
+                account, organization,
+                "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
+            )
             result.update(
                 status="ok", email=expected,
-                plan=claude_plan(
-                    account, organization,
-                    "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
-                ),
-                planClass=claude_plan_class(
-                    account, organization,
-                    claude_plan(account, organization, "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None),
-                ),
+                plan=plan_name,
+                planClass=claude_plan_class(account, organization, plan_name),
                 fetchedAt=now_iso(), accountVerified=True, organizationVerified=True, windows=windows,
                 optionalExtras=optional_extras,
                 sourceContextFingerprint=hashlib.sha256(json.dumps([

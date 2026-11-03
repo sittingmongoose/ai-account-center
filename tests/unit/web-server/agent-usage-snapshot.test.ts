@@ -951,7 +951,7 @@ describe('sign-in health section', () => {
     expect(markdown).toContain('re-login: `');
     expect(markdown).not.toContain('re-login before then');
     expect(markdown).not.toContain('sign-in ends');
-    expect(markdown).toContain('not readable on this machine (connection refused)');
+    expect(markdown).toContain('not readable on this machine. (connection refused)');
   });
 
   it('names no invented end when the collector could not derive one', () => {

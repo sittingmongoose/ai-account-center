@@ -59,6 +59,8 @@ export interface AgentUsageAccount {
   /** Where AAC reads it, for example "Codex usage on Ubuntu". */
   source: string | null;
   plan: string | null;
+  /** The entitlement class beside the plan name ("Ultra" is Max-class); absent when unknown. */
+  planClass?: 'max' | 'pro';
   /** AAC's platform for the account (for Claude, the computer its desktop app opens on). */
   platform: DashboardPlatform;
   /**
@@ -224,6 +226,9 @@ function accountOf(account: DashboardAccount, now: number): AgentUsageAccount | 
     profile: profileOf(account),
     source: sourceOf(account),
     plan: text(account.plan, 80),
+    /** The entitlement class beside the name ("Ultra" is Max-class); absent when unknown. */
+    planClass:
+      account.planClass === 'max' || account.planClass === 'pro' ? account.planClass : undefined,
     platform: account.platform,
     host: quotaHost(account),
     active: account.isActive === true,

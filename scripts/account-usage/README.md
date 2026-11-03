@@ -181,3 +181,25 @@ dashboard writes keys for its own host in-process in the same format and uses th
 helper over ssh only for a key kept on another host. Nas1 is never that host: it
 stores no keys, so a source saved for Nas1 relies on `discover`.
 
+
+## Sign-in expiry (`signin_expiry.py`)
+
+A read-only probe of login lifetimes: for every Claude config dir on the
+computer it runs on (the default `~/.claude`, the saved `~/.ccs/instances`
+homes, the `~/.claude-t3/<name>` account dirs, settings-defined homes, and on
+macOS the Claude Desktop Keychain item), it reads only the two OAuth times
+and token presence from `.credentials.json`. `refreshTokenExpiresAt` is the
+hard end of the whole login; once it has passed, the login dies at the first
+access expiry after it. The row names that end only when the data supports
+one — a refresh-derived state is labeled as the refresh expiry's bound, never
+as the login's end. A login whose store holds tokens but no readable times
+reads `unavailable`, not healthy; an access token with no refresh token
+cannot renew, so it reads `critical` until its expiry and `logged_out`
+after. Codex `auth.json` is probed and reported `unsupported` because it
+publishes no end-of-login time; only field names are shown, never values.
+
+Published rows carry the config dir and fix command in `$HOME`-relative
+form, so no absolute path reaches `usage.json`/`usage.md`. The dashboard
+runs this collector on its own computer from the packaged file and on the
+configured Mac/Windows through the same in-memory SSH stdin stream the usage
+helper uses — nothing is installed on remote disks.

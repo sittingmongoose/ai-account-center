@@ -86,6 +86,8 @@ export interface SnapshotSignInProfile {
   fixCommand: string;
   /** Why a machine's report is unavailable; absent otherwise. */
   error?: string;
+  /** Key NAMES a codex store exposes; values are never read. */
+  fieldsAvailable?: string[];
 }
 
 export interface AgentUsageSnapshot {
@@ -292,30 +294,40 @@ function renderSignInMarkdown(
   };
   profiles.sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9));
   for (const row of profiles) {
-    const word = SIGNIN_STATE_WORDS[row.state] ?? row.state;
-    // The published end is a bound, not always the exact time: when the
-    // collector could not name one, the wording says the window closes soon
-    // instead of inventing a time. The fix text is state-aware.
+    // The deadline words only claim a login end when the collector could
+    // name one; a refresh-derived warning is the refresh expiry's bound,
+    // not the login's end. A logged-out row never names a future end: the
+    // stored times of emptied tokens are remnants, not events.
+    const endedAt =
+      row.loggedOutAt !== null && row.loggedOutAt !== undefined && row.loggedOutAt !== ''
+        ? Date.parse(row.loggedOutAt)
+        : NaN;
+    const namesEnd = !Number.isNaN(endedAt) && row.state !== 'logged_out';
+    const word =
+      row.state === 'warn' || row.state === 'critical'
+        ? namesEnd
+          ? `ends within ${row.state === 'warn' ? '24' : '4'} hours`
+          : `refresh expiry within ${row.state === 'warn' ? '24' : '4'} hours`
+        : (SIGNIN_STATE_WORDS[row.state] ?? row.state);
     const detail = (): string => {
       if (row.state === 'logged_out')
         return (
-          `${row.loggedOutAt ? `sign-in ended ${utc(row.loggedOutAt)}` : 'tokens are gone'}` +
+          `${row.loggedOutAt && !Number.isNaN(endedAt) && endedAt <= now ? `sign-in ended ${utc(row.loggedOutAt)}` : 'tokens are gone or expired'}` +
           (row.fixCommand ? `; re-login: \`${row.fixCommand}\`` : '')
         );
       if (row.state === 'unavailable')
-        return `not readable on this machine${row.error ? ` (${row.error})` : ''}`;
+        // The state word already says "not readable": the detail only adds
+        // the cause.
+        return row.error ? `(${row.error})` : 'reason unknown';
       if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
-      if (row.loggedOutAt)
-        return `sign-in ends ${utc(row.loggedOutAt)}${row.fixCommand ? `; re-login before then: \`${row.fixCommand}\`` : ''}`;
-      // No exact end is derivable here (the access expiry still sits ahead of
-      // the refresh expiry); only a warn/critical row should sound urgent.
+      if (namesEnd)
+        return `sign-in ends ${utc(row.loggedOutAt as string)}${row.fixCommand ? `; re-login before then: \`${row.fixCommand}\`` : ''}`;
       if (row.state === 'warn' || row.state === 'critical')
         return 'no exact end published; re-login when the window ends';
       return 'no exact end published yet';
     };
     lines.push(`- **${row.provider} · ${row.machine}/${row.name}**: ${word}. ${detail()}`);
   }
-  void now;
   return lines;
 }
 
@@ -482,22 +494,25 @@ export function createSnapshotPublisher(
       }
       return false;
     }
-    // The ssh-backed sign-in fetch starts before the busy flag is held, so a
-    // slow remote overlaps the settings/stat work below instead of extending
-    // this sample's busy window. It is still awaited inside the guard.
-    const signInPending: Promise<SnapshotSignInProfile[]> = Promise.resolve(signIn()).catch(
-      () => []
-    );
+    // The busy flag is held synchronously after the guard; the early returns
+    // below release it through the finally.
     busy = true;
     busySince = Date.now();
     stallLogged = false;
     let directory = '';
     try {
       const chosen = await settings();
+      // Off until a folder is set, and nothing to publish without accounts:
+      // neither case may start the sign-in local reads and ssh probes below.
       if (!chosen) return false;
       directory = chosen.directory;
       // Until the dashboard has read any account, there is nothing true to publish.
       if (event.accounts.length === 0) return false;
+      // The ssh-backed sign-in fetch starts before the heavier reads below,
+      // so a slow remote overlaps them instead of extending the busy window.
+      const signInPending: Promise<SnapshotSignInProfile[]> = Promise.resolve(signIn()).catch(
+        () => []
+      );
       if (!(await isDirectory(directory)))
         throw new ValidationError('The usage snapshot folder is not a folder.');
       const signInProfiles = await signInPending;

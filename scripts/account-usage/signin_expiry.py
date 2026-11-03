@@ -19,7 +19,7 @@ Other providers are probed for readable login end times too; a provider whose
 store carries no such time is reported as `unsupported` rather than guessed.
 
 Output: one JSON object on stdout, nothing else. Exit 0 even when some roots
-are unreadable (they read as `unavailable`); exit 1 only on bad arguments.
+are unreadable (they read as `unavailable`); argparse exits 2 on bad arguments.
 """
 
 import argparse
@@ -34,7 +34,9 @@ import time
 SCHEMA_VERSION = 1
 WARN_SECONDS = 24 * 3600
 CRITICAL_SECONDS = 4 * 3600
-ACCESS_TOKEN_LIFETIME_MS = 8 * 3600 * 1000
+# Enumerating every config dir is bounded; a machine with more roots than this
+# reports the first MAX_ROOTS and stays honest about the rest by not guessing.
+MAX_ROOTS = 64
 
 
 # A representable OAuth epoch: 2001-09-09 (1e12 ms) through Nov 2286 (1e13 ms).
@@ -64,10 +66,13 @@ def iso(ms):
     """UTC ISO-8601 for epoch milliseconds, or None."""
     if ms is None:
         return None
-    return datetime.datetime.fromtimestamp(ms / 1000, datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    stamp = datetime.datetime.fromtimestamp(
+        ms / 1000, datetime.timezone.utc
+    ).isoformat(timespec="seconds")
+    return stamp.replace("+00:00", "Z")
 
 
-def logged_out_at(refresh_ms, access_ms, now_ms):
+def logged_out_at(refresh_ms, access_ms):
     """The login's end time, reported only when the data supports it.
 
     The exact end is the first access expiry that falls after the refresh
@@ -80,26 +85,48 @@ def logged_out_at(refresh_ms, access_ms, now_ms):
     return access_ms
 
 
-def state_for(logged_out_ms, now_ms, has_tokens, refresh_ms=None):
-    if not has_tokens:
-        return "logged_out"
-    if logged_out_ms is not None:
-        if logged_out_ms <= now_ms:
-            return "logged_out"
-        remaining = (logged_out_ms - now_ms) / 1000
+def capability_state(data, now_ms):
+    """(end_ms, state) for one credentials payload, from what the tokens
+    can actually still do.
+
+    A login with no refresh token cannot renew: it ends at the access
+    expiry (critical while it lasts, logged_out after). Access missing with
+    a live refresh token means the next run renews: warn, not healthy.
+    Tokens present with no readable times at all are unavailable, not ok.
+    With empty tokens the retained expiry fields are remnants, never a
+    named logout event in the future."""
+    access_ms, refresh_ms = data["access"], data["refresh"]
+    has_access, has_refresh = data["has_access"], data["has_refresh"]
+    if not (has_access or has_refresh):
+        return None, "logged_out"
+    if access_ms is None and refresh_ms is None:
+        return None, "unavailable"
+    if not has_refresh:
+        if access_ms is None:
+            return None, "unavailable"
+        if access_ms <= now_ms:
+            return access_ms, "logged_out"
+        return access_ms, "critical"
+    if not has_access:
+        if refresh_ms is not None and refresh_ms <= now_ms:
+            return None, "logged_out"
+        return None, "warn"
+    end = logged_out_at(refresh_ms, access_ms)
+    if end is not None:
+        if end <= now_ms:
+            return end, "logged_out"
+        remaining = (end - now_ms) / 1000
         if remaining < CRITICAL_SECONDS:
-            return "critical"
+            return end, "critical"
         if remaining < WARN_SECONDS:
-            return "warn"
-        return "ok"
-    # No end is derivable from the pair: the refresh expiry still bounds the
-    # login, so it degrades the state instead of claiming healthy.
+            return end, "warn"
+        return end, "ok"
     if refresh_ms is not None:
         if refresh_ms <= now_ms:
-            return "logged_out"
+            return None, "logged_out"
         if (refresh_ms - now_ms) / 1000 < WARN_SECONDS:
-            return "warn"
-    return "ok"
+            return None, "warn"
+    return None, "ok"
 
 
 def read_credentials(path):
@@ -123,29 +150,56 @@ def read_credentials(path):
     }
 
 
-def claude_profile(name, config_dir, now_ms, fix_template):
+def _home_relative(config_dir, home):
+    """(posix, windows) forms of config_dir relative to home, or None."""
+    try:
+        rel = pathlib.Path(config_dir).relative_to(home)
+    except ValueError:
+        return None
+    if not str(rel):
+        return None
+    return "~/" + rel.as_posix(), "~\\" + str(rel).replace("/", "\\")
+
+
+def fix_command(config_dir, home):
+    """An executable re-login command for this machine's shell. The path is
+    published as a $HOME-relative form the target expands at run time, so
+    no absolute path ever reaches the published files."""
+    relative = _home_relative(config_dir, home)
+    if sys.platform == "win32":
+        tail = relative[1][1:] if relative else str(config_dir)
+        escaped = tail.replace("`", "``").replace('"', '`"')
+        return f'$env:CLAUDE_CONFIG_DIR = "$HOME{escaped}"; claude auth login'
+    tail = relative[0][1:] if relative else str(config_dir)
+    escaped = tail.replace("`", "\\`").replace('"', '\\"').replace("$", "\\$")
+    return f'CLAUDE_CONFIG_DIR="$HOME{escaped}" claude auth login'
+
+
+def claude_profile(name, config_dir, now_ms, home):
     """One config dir's sign-in state; missing/unreadable files read as unavailable."""
+    relative = _home_relative(config_dir, home)
     entry = {
         "name": name,
-        "configDir": str(config_dir),
+        "configDir": relative[0] if relative else str(config_dir),
         "provider": "claude",
         "accessExpiresAt": None,
         "refreshExpiresAt": None,
         "loggedOutAt": None,
         "state": "unavailable",
-        "fixCommand": fix_template.format(name=name, config_dir=str(config_dir)),
+        "fixCommand": fix_command(config_dir, home),
     }
     data = read_credentials(pathlib.Path(config_dir) / ".credentials.json")
     if data is None:
         entry["error"] = "credentials file missing or unreadable"
         return entry
-    has_tokens = data["has_access"] or data["has_refresh"]
-    end = logged_out_at(data["refresh"], data["access"], now_ms)
+    end, state = capability_state(data, now_ms)
+    if state == "unavailable":
+        entry["error"] = "expiry times unreadable"
     entry.update(
         accessExpiresAt=iso(data["access"]),
         refreshExpiresAt=iso(data["refresh"]),
         loggedOutAt=iso(end),
-        state=state_for(end, now_ms, has_tokens, data["refresh"]),
+        state=state,
     )
     return entry
 
@@ -187,7 +241,7 @@ def _mac_keychain_text():
         return None
 
 
-def mac_keychain_profile(now_ms, fix_template):
+def mac_keychain_profile(now_ms):
     """macOS: Claude Desktop stores the same JSON in the login Keychain."""
     entry = {
         "name": "keychain",
@@ -197,7 +251,7 @@ def mac_keychain_profile(now_ms, fix_template):
         "refreshExpiresAt": None,
         "loggedOutAt": None,
         "state": "unavailable",
-        "fixCommand": fix_template.format(name="keychain", config_dir="keychain"),
+        "fixCommand": "claude auth login",
         "error": "keychain item unreadable",
     }
     if sys.platform != "darwin":
@@ -211,13 +265,12 @@ def mac_keychain_profile(now_ms, fix_template):
         entry["error"] = "keychain item holds no readable credentials"
         return entry
     entry.pop("error")
-    has_tokens = data["has_access"] or data["has_refresh"]
-    end = logged_out_at(data["refresh"], data["access"], now_ms)
+    end, state = capability_state(data, now_ms)
     entry.update(
         accessExpiresAt=iso(data["access"]),
         refreshExpiresAt=iso(data["refresh"]),
         loggedOutAt=iso(end),
-        state=state_for(end, now_ms, has_tokens, data["refresh"]),
+        state=state,
     )
     return entry
 
@@ -239,7 +292,7 @@ def read_credentials_from_text(raw):
     }
 
 
-def codex_profile(now_ms, fix_template, home=None):
+def codex_profile(now_ms, home=None):
     """Codex: its auth.json carries tokens and a last_refresh time but no
     published end-of-login time, so no `logged out at` can be computed; the
     entry reports what exists instead of guessing. Only the field NAMES are
@@ -263,29 +316,70 @@ def codex_profile(now_ms, fix_template, home=None):
     return None
 
 
-def claude_roots(home):
-    """The default config dir plus every ~/.claude-t3/<name> account dir."""
-    roots = [("default", home / ".claude")]
-    t3 = home / ".claude-t3"
-    if t3.is_dir():
-        for child in sorted(t3.iterdir()):
+def _saved_roots(home, ccs_dir):
+    """Saved instance homes and settings-defined homes through the sibling
+    discovery; None when that module is unavailable (a plain standalone run
+    still covers the default and T3 dirs below)."""
+    try:
+        import failover_core
+
+        return failover_core._roots(home, "claude", ccs_dir)
+    except Exception:  # discovery is best effort by contract; never fatal
+        return None
+
+
+def claude_roots(home, ccs_dir=None):
+    """Every Claude config dir this machine knows: the default, the saved
+    ~/.ccs/instances homes, the T3 account dirs, and settings-defined homes.
+    Bounded, deduplicated; the default row always reports (a missing default
+    is itself sign-in news). An unreadable directory never kills the scan."""
+    default = home / ".claude"
+    roots = [("default", default)]
+    seen = {str(default)}
+    pairs = _saved_roots(home, ccs_dir or home / ".ccs")
+    if pairs is not None:
+        for root, selectors in pairs:
+            try:
+                if not root.is_dir():
+                    continue
+            except OSError:
+                continue
+            text = str(root)
+            if text in seen:
+                continue
+            seen.add(text)
+            label = root.name or text
+            if selectors and isinstance(selectors[0], str) and selectors[0].startswith(
+                "claude-profile:"
+            ):
+                label = selectors[0].split(":", 1)[1]
+            roots.append((label, root))
+    else:
+        t3 = home / ".claude-t3"
+        try:
+            children = sorted(t3.iterdir()) if t3.is_dir() else []
+        except OSError:
+            children = []
+        for child in children:
             if child.is_dir() and not child.name.startswith("."):
-                roots.append((child.name, child))
-    return roots
+                text = str(child)
+                if text not in seen:
+                    seen.add(text)
+                    roots.append((child.name, child))
+    return roots[:MAX_ROOTS]
 
 
-def collect(home, now_ms):
-    # Quoted so a path with spaces stays one variable; the codex probe is not
-    # a Claude login, so its row carries no fix command at all.
-    fix_template = "CLAUDE_CONFIG_DIR='{config_dir}' claude auth login"
+def collect(home, now_ms, include_keychain=True):
+    """One machine's report. include_keychain=False keeps a --home fixture
+    run from touching the real login Keychain."""
     profiles = [
-        claude_profile(name, config_dir, now_ms, fix_template)
+        claude_profile(name, config_dir, now_ms, home)
         for name, config_dir in claude_roots(home)
     ]
-    keychain = mac_keychain_profile(now_ms, "claude auth login")
-    if keychain["state"] != "unavailable" or sys.platform == "darwin":
+    keychain = mac_keychain_profile(now_ms)
+    if include_keychain and (keychain["state"] != "unavailable" or sys.platform == "darwin"):
         profiles.append(keychain)
-    codex = codex_profile(now_ms, fix_template, home)
+    codex = codex_profile(now_ms, home)
     if codex:
         profiles.append(codex)
     return {
@@ -295,13 +389,21 @@ def collect(home, now_ms):
     }
 
 
+def run():
+    """Entry point for the in-memory helper transport: the real machine's
+    default home, including the Keychain probe."""
+    return collect(pathlib.Path.home(), int(time.time() * 1000))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Read-only sign-in expiry report")
-    parser.add_argument("--home", type=pathlib.Path, default=pathlib.Path.home(),
-                        help="Home directory override (tests)")
+    parser.add_argument("--home", type=pathlib.Path, default=None,
+                        help="Home directory override (tests); skips the Keychain")
     args = parser.parse_args()
     now_ms = int(time.time() * 1000)
-    print(json.dumps(collect(args.home, now_ms), ensure_ascii=True, allow_nan=False))
+    home = args.home or pathlib.Path.home()
+    print(json.dumps(collect(home, now_ms, include_keychain=args.home is None),
+                     ensure_ascii=True, allow_nan=False))
     return 0
 
 
