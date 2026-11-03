@@ -66,7 +66,7 @@ export interface UsageReading {
   email: string | null;
   plan: string | null;
   /** Claude only: the entitlement class the Fable column gates on; the display name may not carry the word. */
-  plan_class?: 'max' | 'pro' | null;
+  planClass?: 'max' | 'pro' | null;
   sampledAt: string | null;
   fetchedAt: string | null;
   windows: DashboardAccountWindow[];
@@ -215,9 +215,6 @@ export function parseUsageCandidate(value: unknown): UsageCandidate | null {
     revision: value.revision,
     email: usageEmail(value.email),
     plan: safeUsageText(value.plan),
-    ...(safeUsageText(value.plan_class) === 'max' || safeUsageText(value.plan_class) === 'pro'
-      ? { plan_class: safeUsageText(value.plan_class) as 'max' | 'pro' }
-      : {}),
   };
 }
 export function parseUsageReading(value: unknown, now = Date.now()): UsageReading | null {
@@ -228,6 +225,8 @@ export function parseUsageReading(value: unknown, now = Date.now()): UsageReadin
     value.windows.length > 256
   )
     return null;
+  const planClass = safeUsageText(value.planClass);
+  if (planClass !== null && planClass !== 'max' && planClass !== 'pro') return null;
   const sampledAt = usageTimestamp(value.sampledAt, now);
   const fetchedAt = usageTimestamp(value.fetchedAt, now);
   const successful = value.status === 'ok' || value.status === 'cached';
@@ -267,6 +266,7 @@ export function parseUsageReading(value: unknown, now = Date.now()): UsageReadin
     status: value.status as UsageReading['status'],
     email: usageEmail(value.email),
     plan: safeUsageText(value.plan),
+    ...(planClass ? { planClass } : {}),
     sampledAt,
     fetchedAt,
     windows,

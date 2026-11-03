@@ -52,6 +52,7 @@ export function retainClaudeFailoverExtras(
     !previous ||
     previous.email !== next.email ||
     previous.plan !== next.plan ||
+    previous.planClass !== next.planClass ||
     !next.optionalExtrasContext ||
     !HEX_DIGEST.test(next.optionalExtrasContext) ||
     next.optionalExtrasContext !== previous.optionalExtrasContext ||

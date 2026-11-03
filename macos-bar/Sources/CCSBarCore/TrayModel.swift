@@ -110,7 +110,7 @@ public enum FableCell: Sendable {
 
 extension DashboardAccount {
   public var isMaxPlan: Bool {
-    if planClass == "max" { return true }
+    if planClass != nil { return planClass == "max" }
     let plan = (plan ?? "").lowercased().replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
     return plan.range(of: "(^|\\s)max(\\s*(5|20)x)?($|\\s)", options: .regularExpression) != nil
   }

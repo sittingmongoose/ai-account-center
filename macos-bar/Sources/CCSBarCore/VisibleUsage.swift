@@ -14,7 +14,7 @@ extension DashboardAccount {
     }
     let primary = visibleWindows.filter { $0.kind != "balance" && $0.kind != "extra_usage" }
     let candidates = primary.isEmpty ? visibleWindows : primary
-    guard provider == "claude", plan?.lowercased().contains("max") == true,
+    guard provider == "claude", isMaxPlan,
       let fable = candidates.first(where: { $0.key == "seven_day_fable" })
     else { return Array(candidates.prefix(3)) }
     let core = ["five_hour", "seven_day"].compactMap { key in candidates.first { $0.key == key } }

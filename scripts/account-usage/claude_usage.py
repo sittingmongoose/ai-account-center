@@ -688,26 +688,26 @@ def claude_plan(account, organization=None, fallback=None):
     return fallback
 
 
-def claude_plan_class(account, organization=None):
+def claude_plan_class(account, organization=None, name=None):
     """The entitlement class the Fable column gates on, independent of the
-    display name: the rate limit tier names it ("default_claude_max_20x"),
-    then the entitlement flags, then the display name's own max word."""
-    tier = ""
+    display name. The rate limit tier names it in bounded tokens
+    ("default_claude_max_20x"), then the entitlement flags, then the selected
+    display name's own max word."""
+    tier_tokens = set()
     if isinstance(organization, dict) and isinstance(organization.get("rate_limit_tier"), str):
-        tier = organization["rate_limit_tier"].lower()
-    if "max" in tier:
+        tier_tokens = set(re.split(r"[^a-z0-9]+", organization["rate_limit_tier"].lower()))
+    if "max" in tier_tokens:
         return "max"
-    if "pro" in tier and tier:
+    if "pro" in tier_tokens:
         return "pro"
     account = account or {}
     if account.get("has_claude_max") is True:
         return "max"
     if account.get("has_claude_pro") is True:
         return "pro"
-    name = str(account.get("plan") or "")
-    if re.search(r"(?i)(?:^|[\s/_-])max(?:\s*(?:5|20)x)?(?:$|[\s/_-])", name):
+    if name and re.search(r"(?i)(?:^|[\s/_-])max(?:\s*(?:5|20)x)?(?:$|[\s/_-])", name):
         return "max"
-    if re.search(r"(?i)(?:^|[\s/_-])pro(?:$|[\s/_-])", name):
+    if name and re.search(r"(?i)(?:^|[\s/_-])pro(?:$|[\s/_-])", name):
         return "pro"
     return None
 
@@ -772,7 +772,10 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                     account, organization,
                     "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None,
                 ),
-                planClass=claude_plan_class(account, organization),
+                planClass=claude_plan_class(
+                    account, organization,
+                    claude_plan(account, organization, "max" if account.get("has_claude_max") is True else "pro" if account.get("has_claude_pro") is True else None),
+                ),
                 fetchedAt=now_iso(), accountVerified=True, organizationVerified=True, windows=windows,
                 optionalExtras=optional_extras,
                 sourceContextFingerprint=hashlib.sha256(json.dumps([

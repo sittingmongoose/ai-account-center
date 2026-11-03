@@ -1058,10 +1058,10 @@ describe('renamed plan names through the live projection', () => {
 		const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('max flex'));
 		expect(applied.plan).toBe('max flex');
 	});
-	it('carries a 64-code-point plan and falls back past that length', () => {
+	it('carries a 64-code-point plan and falls back past the 80-code-point bound', () => {
 		const atLimit = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + 'x'.repeat(60)));
 		expect([...(atLimit.plan ?? '')].length).toBe(64);
-		const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + 'x'.repeat(61)));
+		const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + 'x'.repeat(81)));
 		expect(over.plan).toBeNull();
 	});
 	it('falls back to the stored plan for text that fails the plan checks', () => {
@@ -1080,13 +1080,22 @@ describe('astral and stored-plan cases through the live projection', () => {
 		fetchedAt: '2026-10-01T12:00:00Z',
 		windows: [{ key: 'five_hour', usedPercent: 0, remainingPercent: 100, resetAt: null }],
 	});
-	it('counts astral characters as one code point each at the 64/65 boundary', () => {
-		const name = 'Max ' + '\u{1F680}'.repeat(60);
+	it('counts astral characters as one code point each at the 80/81 boundary', () => {
+		const name = 'Max ' + '\u{1F680}'.repeat(76);
 		const at = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live(name));
 		expect(at.plan).toBe(name);
-		expect([...(at.plan ?? '')].length).toBe(64);
-		const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + '\u{1F680}'.repeat(61)));
+		expect([...(at.plan ?? '')].length).toBe(80);
+		const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + '\u{1F680}'.repeat(77)));
 		expect(over.plan).toBeNull();
+	});
+	it('carries the entitlement class through the projection and clears a stale one', () => {
+		const carried = applyClaudeLiveUsage(
+			{ ...claudeAccount(profile, 'mac'), planClass: 'pro' },
+			{ ...live('Ultra'), planClass: 'max' }
+		);
+		expect(carried.planClass).toBe('max');
+		const cleared = applyClaudeLiveUsage({ ...claudeAccount(profile, 'mac'), planClass: 'max' }, live('Ultra'));
+		expect(cleared.planClass).toBeUndefined();
 	});
 	it('preserves a non-null stored plan when the live name fails the checks', () => {
 		const account = { ...claudeAccount(profile, 'mac'), plan: 'Max 20x' };

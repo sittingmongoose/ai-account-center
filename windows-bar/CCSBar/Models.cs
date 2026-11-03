@@ -221,7 +221,7 @@ public sealed class DashboardAccount
     /// <summary>Claude only: the entitlement class the Fable column gates on ("max"/"pro");
     /// a renamed display name may not carry the word. Null on other providers and older dashboards.</summary>
     public string? PlanClass { get; set; }
-    public bool IsMaxPlanAccount => PlanClass == "max" || IsMaxPlan(Plan);
+    public bool IsMaxPlanAccount => PlanClass != null ? PlanClass == "max" : Formatting.IsMaxPlan(Plan);
     public string Platform { get; set; } = "";
     public string? Host { get; set; }
     [JsonIgnore] public string Provenance => Host ?? Platform;

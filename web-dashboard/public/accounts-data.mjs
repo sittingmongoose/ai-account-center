@@ -62,7 +62,9 @@ export function accountView(account, inventory = [], clientPlatform = 'mac') {
   const windows = visibleUsageWindows(account.provider, account.windows);
   const launcher = inventory.find(profile => profile.id === account.capabilities?.claudeProfileId);
   const showFable = account.provider === 'claude' &&
-    (account.planClass === 'max' || /(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)/i.test(String(account.plan || '').replace(/[_-]/g, ' ')));
+    (account.planClass
+      ? account.planClass === 'max'
+      : /(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)/i.test(String(account.plan || '').replace(/[_-]/g, ' ')));
   return {
     id: account.id, profile: account.capabilities?.codexProfile || account.capabilities?.claudeProfileId || '',
     email: account.email || account.label || 'Account identity unavailable', plan: account.provider === 'cursor' ? cursorPlanLabel(account.plan) : account.plan || '',

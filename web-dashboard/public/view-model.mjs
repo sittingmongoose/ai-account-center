@@ -221,8 +221,9 @@ export function period(w) {
 }
 export const isMaxPlan = (account) =>
   account?.provider === 'claude' &&
-  (account?.planClass === 'max' ||
-    /(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)/i.test(String(account.plan || '').replace(/[_-]/g, ' ')));
+  (account?.planClass
+    ? account.planClass === 'max'
+    : /(?:^|\s)max(?:\s*(?:5|20)x)?(?:$|\s)/i.test(String(account.plan || '').replace(/[_-]/g, ' ')));
 const PERIOD_LABEL = { '5h': '5-hour', week: 'Weekly', month: 'Monthly' };
 export function windowLabel(provider, w) {
   if (isFable(w)) return 'Fable';

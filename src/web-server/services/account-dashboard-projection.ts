@@ -222,7 +222,7 @@ export function applyClaudeLiveUsage(
   const planClass = livePlanClass(live.planClass);
   return {
     ...account,
-    ...(planClass ? { planClass } : {}),
+    planClass: planClass ?? undefined,
     status: 'ok',
     source: 'Claude Desktop live quota on Windows',
     plan: livePlan(live.plan) ?? account.plan,
