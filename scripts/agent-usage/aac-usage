@@ -285,7 +285,10 @@ def cmd_show(args):
     if note:
         print(note)
     if not accounts:
+        # Quota rows can match nothing while sign-in health still applies to
+        # this machine: the section prints on, scoped only by --provider.
         print("No matching accounts.")
+        sign_in_lines(snapshot, provider)
         return
     current = None
     for account in accounts:
@@ -311,11 +314,19 @@ def cmd_show(args):
     sign_in_lines(snapshot, provider)
 
 
+def ascii(value):
+    """Terminal-safe form of a published value: the output rule is ASCII,
+    and backslashreplace keeps the information readable."""
+    return str(value).encode("ascii", "backslashreplace").decode("ascii")
+
+
 def sign_in_lines(snapshot, provider=None):
     """The Sign-in health section, worst state first — the same stamp-derived
     facts usage.md publishes (never a threshold word: a nonrenewable access
     token can be critical with eight hours left), for the agents that read
-    this CLI instead. Output stays ASCII."""
+    this CLI instead. Rows carry machines and profile names rather than
+    emails, so --account does not scope them; --provider does. Output stays
+    ASCII."""
     rows = snapshot.get("signIn") or []
     if provider:
         rows = [r for r in rows if r.get("provider") == provider]
@@ -343,7 +354,7 @@ def sign_in_lines(snapshot, provider=None):
         line = "  %s | %s/%s: %s." % (row.get("provider"), machine, row.get("name"), word)
         if state == "unavailable":
             if row.get("error"):
-                line += " (%s)" % row["error"]
+                line += " (%s)" % ascii(row["error"])
         elif state == "logged_out":
             end = parse_time(row.get("loggedOutAt"))
             if end and end <= now:
@@ -351,12 +362,12 @@ def sign_in_lines(snapshot, provider=None):
             elif not end:
                 line += " tokens are gone or expired."
             if row.get("fixCommand"):
-                line += " re-login: `%s`" % row["fixCommand"]
+                line += " re-login: `%s`" % ascii(row["fixCommand"])
         elif state in ("warn", "critical"):
             if not row.get("loggedOutAt") and not row.get("accessExpiresAt"):
                 line += " the next run renews this login."
             elif row.get("fixCommand"):
-                line += " re-login when the window ends: `%s`" % row["fixCommand"]
+                line += " re-login when the window ends: `%s`" % ascii(row["fixCommand"])
         elif state == "ok" and row.get("loggedOutAt"):
             line += " sign-in ends %s." % row["loggedOutAt"]
         print(line)

@@ -8,6 +8,7 @@ import {
   localUsagePython,
   parseUsageHelperResponse,
   runUsageHelper,
+  signinHelperBundle,
   usageHelperBundle,
   usageHelperCommand,
 } from '../../../src/web-server/services/usage-failover-transport';
@@ -359,5 +360,23 @@ describe('packaged usage failover transport', () => {
         )
       ).toThrow();
     }
+  });
+});
+
+describe('the sign-in helper bundle', () => {
+  it('carries the whole import closure of the collector inside the size bound', async () => {
+    const bundle = await signinHelperBundle();
+    // The regression this guards: failover_core imports claude_usage and
+    // desktop_helpers at its top — a bundle without them silently shrinks
+    // a clean remote's discovery to the default and T3 dirs.
+    for (const name of ['failover_core', 'claude_usage', 'desktop_helpers', 'signin_expiry'])
+      expect(bundle).toContain(name);
+    // The keys are JSON-escaped in the bundle; the import closure itself is
+    // what matters, and failover_core's own top-level imports must be there.
+    expect(bundle).toContain('import claude_usage');
+    expect(bundle).toContain('from desktop_helpers import');
+    expect(bundle).toContain('import signin_expiry');
+    expect(bundle).toContain('signin_expiry.run()');
+    expect(Buffer.byteLength(bundle)).toBeLessThan(2 * 1024 * 1024);
   });
 });

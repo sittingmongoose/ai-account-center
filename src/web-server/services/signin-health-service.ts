@@ -16,10 +16,10 @@ import {
  * values are never read or transported. Remote machines run the collector
  * from an in-memory stdin bundle, so nothing is ever installed on their
  * disks; the hosts are the same configured ones every other usage transport
- * uses. Results are cached until the next published deadline or five
- * minutes, whichever is longer for the report's freshness: a cached state
- * whose deadline has passed is dropped on read, so no served row outlives
- * the time it names (deadlines under the 30 s floor age out with the floor).
+ * uses. Results are cached for at most five minutes, never past a published
+ * deadline: a stamp that crosses after collection drops the cache on read
+ * (deadlines under the 30 s floor age out with the floor), while stamps
+ * already past at collection are facts about the past and keep the cache.
  */
 
 export interface SignInProfile extends SnapshotSignInProfile {
@@ -36,13 +36,13 @@ export interface SignInHealth {
 
 const CACHE_MIN_MS = 30_000;
 const CACHE_MAX_MS = 5 * 60 * 1000;
+/** Each host's collection settles inside this; the publisher's slot is longer. */
+const HOST_LIMIT_MS = 45_000;
 const COLLECTOR = 'signin_expiry.py';
 /** Accepted as-is; anything else is sanitized to a safe bounded identifier. */
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@+ -]{0,63}$/;
 /** A published timestamp must parse as a real calendar time; anything else reads as absent. */
 const STAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
-
-let cache: { until: number; health: Promise<SignInHealth> } | null = null;
 
 function runCollector(
   command: string,
@@ -57,10 +57,10 @@ function runCollector(
       { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error && stdout.length === 0) {
-          // The command line is noise; the cause is whatever the process
-          // said — and never the ssh target's alias or address.
-          const cause = (stderr || error.message).replace(/\s+/g, ' ').trim();
-          reject(new Error(cause.slice(0, 200) || 'collector failed'));
+          // The cause is whatever the process said — never the command line
+          // (it names the ssh target) and never a Node error string.
+          const cause = stderr ? stderr.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+          reject(new Error(cause || 'collector failed'));
           return;
         }
         resolve(stdout);
@@ -90,16 +90,22 @@ export function sanitizeName(raw: unknown): string {
 
 function stamp(value: unknown): string | null {
   if (typeof value !== 'string' || value.length > 40 || !STAMP_PATTERN.test(value)) return null;
-  return Number.isNaN(Date.parse(value)) ? null : value;
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return null;
+  // Calendar, not just shape: 2026-02-30 parses nowhere but must not publish.
+  if (value.endsWith('Z') && new Date(at).toISOString().slice(0, 10) !== value.slice(0, 10))
+    return null;
+  return value;
 }
 
-/** A repair command that survives publication: single-line, code-span safe,
- * and never truncated mid-quote — an overlong command is omitted entirely,
- * because a half command is worse than none. */
+/** A repair command that survives publication byte-exact: single-line, and
+ * never truncated mid-quote. A command containing a backtick cannot live in
+ * a markdown code span without changing what it does, so — like an overlong
+ * one — it is omitted entirely: half or altered commands are worse than none. */
 export function publishableFixCommand(value: unknown): string {
   if (typeof value !== 'string') return '';
-  const cleaned = value.replace(/[\n\r]/g, ' ').replace(/`/g, "'");
-  return cleaned.length <= 200 ? cleaned : '';
+  const cleaned = value.replace(/[\n\r]/g, ' ');
+  return cleaned.includes('`') || cleaned.length > 200 ? '' : cleaned;
 }
 
 /** The published DTO is allowlisted; a changed helper cannot add fields or
@@ -206,13 +212,26 @@ export function parseRows(stdout: string, machine: string): SignInProfile[] {
   return [];
 }
 
-function hasPassedDeadline(health: SignInHealth, nowMs: number): boolean {
+interface CacheEntry {
+  /** When collection started: only deadlines crossing after this moment
+   * invalidate the cache — stamps already past at collection are facts
+   * about the past (an idle login's expired access token, a logged-out
+   * row's end), not news, and must not force a recollection every read. */
+  collectedAt: number;
+  until: number;
+  health: Promise<SignInHealth>;
+}
+
+let cache: CacheEntry | null = null;
+
+export function hasPassedDeadline(health: SignInHealth, since: number, now: number): boolean {
   for (const rows of Object.values(health.machines)) {
     for (const row of rows) {
       for (const value of [row.accessExpiresAt, row.refreshExpiresAt, row.loggedOutAt]) {
         if (!value) continue;
         const at = Date.parse(value);
-        if (!Number.isNaN(at) && at <= nowMs) return true;
+        if (Number.isNaN(at) || at <= since || at > now) continue;
+        return true;
       }
     }
   }
@@ -237,7 +256,7 @@ export function nextDeadlineAt(health: SignInHealth, nowMs: number): number | nu
 
 /** Cache until the next published deadline — a cached state must not
  * outlive the time it names — but never shorter than the floor; a deadline
- * under the floor is caught by the passed-deadline check on read instead. */
+ * under the floor is caught by the crossed-deadline check on read instead. */
 export function cacheTtlFor(health: SignInHealth, nowMs: number): number {
   const deadline = nextDeadlineAt(health, nowMs);
   if (deadline === null) return CACHE_MAX_MS;
@@ -247,11 +266,11 @@ export function cacheTtlFor(health: SignInHealth, nowMs: number): number {
 export function getSignInHealth(): Promise<SignInHealth> {
   const now = Date.now();
   if (cache && now < cache.until) {
-    // A deadline that passed while the cache held — including one that
-    // crossed while its own collection was still running — invalidates the
-    // cache on read: no served row outlives its named time.
-    return cache.health.then((value) => {
-      if (!hasPassedDeadline(value, Date.now())) return value;
+    // A deadline that crossed after collection — including one that passed
+    // while its own collection was still running — drops the cache on read.
+    const entry = cache;
+    return entry.health.then((value) => {
+      if (!hasPassedDeadline(value, entry.collectedAt, Date.now())) return value;
       cache = null;
       return refresh();
     });
@@ -259,50 +278,85 @@ export function getSignInHealth(): Promise<SignInHealth> {
   return refresh();
 }
 
+/** One collection pass. Hosts race their own settlement deadline, so a
+ * single wedged machine cannot hold allSettled past the publisher's slot
+ * and wipe successful machines' rows with it. */
+async function collectOnce(): Promise<SignInHealth> {
+  const machines: Record<string, SignInProfile[]> = {};
+  const hosts = await configuredUsageHosts();
+  const results = await Promise.allSettled(
+    hosts.map((host) => {
+      const runner = host.sshHost ? collectRemote(host) : collectLocal();
+      return new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('collection timed out')), HOST_LIMIT_MS);
+        timer.unref?.();
+        runner.then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          (error) => {
+            clearTimeout(timer);
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        );
+      });
+    })
+  );
+  hosts.forEach((host, index) => {
+    const result = results[index];
+    if (result.status === 'fulfilled') {
+      const rows = parseRows(result.value, host.host);
+      if (rows.length > 0) {
+        machines[host.host] = rows;
+        return;
+      }
+    }
+    let reason =
+      result.status === 'rejected'
+        ? result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason)
+        : 'no profiles reported';
+    // The ssh target's alias or address is our routing detail, not the
+    // machine's story; it never reaches the published error.
+    if (host.sshHost) reason = reason.split(host.sshHost).join(host.host);
+    machines[host.host] = unavailableHost(host.host, reason);
+  });
+  if (!machines.ubuntu) {
+    // A dashboard hosted on the Mac or Windows collects no Ubuntu route:
+    // the machine names itself rather than silently disappearing.
+    machines.ubuntu = unavailableHost('ubuntu', 'no collection route from this host');
+  }
+  return { generatedAt: new Date().toISOString(), machines };
+}
+
 function refresh(): Promise<SignInHealth> {
   const now = Date.now();
-  const entry: { until: number; health: Promise<SignInHealth> } = {
+  const entry: CacheEntry = {
+    collectedAt: now,
     until: now + CACHE_MAX_MS,
     health: undefined as unknown as Promise<SignInHealth>,
   };
   entry.health = (async (): Promise<SignInHealth> => {
-    const machines: Record<string, SignInProfile[]> = {};
+    let value: SignInHealth;
     try {
-      const hosts = await configuredUsageHosts();
-      const results = await Promise.allSettled(
-        hosts.map((host) => (host.sshHost ? collectRemote(host) : collectLocal()))
-      );
-      hosts.forEach((host, index) => {
-        const result = results[index];
-        if (result.status === 'fulfilled') {
-          const rows = parseRows(result.value, host.host);
-          if (rows.length > 0) {
-            machines[host.host] = rows;
-            return;
-          }
-        }
-        const reason =
-          result.status === 'rejected'
-            ? result.reason instanceof Error
-              ? result.reason.message
-              : String(result.reason)
-            : 'no profiles reported';
-        machines[host.host] = unavailableHost(host.host, reason);
-      });
-      if (!machines.ubuntu) {
-        // A dashboard hosted on the Mac or Windows collects no Ubuntu route:
-        // the machine names itself rather than silently disappearing.
-        machines.ubuntu = unavailableHost('ubuntu', 'no collection route from this host');
+      value = await collectOnce();
+      // A deadline crossed while the hosts were still collecting must not
+      // reach the first caller: one bounded revalidation pass, then the
+      // report stands as collected.
+      if (hasPassedDeadline(value, entry.collectedAt, Date.now())) {
+        value = await collectOnce();
       }
     } catch (error) {
       // Host resolution is best effort by contract: the section simply
       // stays absent, and the retry waits only the floor.
       void error;
       entry.until = Date.now() + CACHE_MIN_MS;
-      return { generatedAt: new Date().toISOString(), machines };
+      return { generatedAt: new Date().toISOString(), machines: {} };
     }
-    entry.until = Date.now() + cacheTtlFor({ generatedAt: '', machines }, Date.now());
-    return { generatedAt: new Date().toISOString(), machines };
+    entry.until = Date.now() + cacheTtlFor(value, Date.now());
+    return value;
   })();
   cache = entry;
   return entry.health;

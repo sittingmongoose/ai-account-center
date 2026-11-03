@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   allowProfile,
   cacheTtlFor,
+  hasPassedDeadline as hasPassedDeadlineWindow,
   nextDeadlineAt,
   parseRows,
   sanitizeName,
@@ -69,9 +70,13 @@ describe('allowProfile', () => {
     expect(longButFitting?.fixCommand).toHaveLength(200);
   });
 
-  it('publishes a code-span-safe, single-line repair command', () => {
-    const out = allowProfile(row({ fixCommand: 'claude `auth` login\nsecond line' }), 'mac');
-    expect(out?.fixCommand).toBe("claude 'auth' login second line");
+  it('publishes a single-line repair command and omits one a code span would corrupt', () => {
+    const out = allowProfile(row({ fixCommand: 'claude auth login\nsecond line' }), 'mac');
+    expect(out?.fixCommand).toBe('claude auth login second line');
+    // A backtick cannot live in a markdown code span without changing what
+    // the command does: such a command is omitted whole, never rewritten.
+    const backticked = allowProfile(row({ fixCommand: '$env:CLAUDE_CONFIG_DIR = "$HOME\`$dir"; claude auth login' }), 'mac');
+    expect(backticked?.fixCommand).toBe('');
   });
 
   it('reads malformed stamps as absent, never as a reason to drop the row', () => {
@@ -154,6 +159,21 @@ describe('the cache outlives no deadline it published', () => {
         NOW
       )
     ).toBeNull();
+  });
+
+  it('only deadlines crossing after collection invalidate, never historical stamps', () => {
+    // An idle login's expired access token and a logged-out row's end are
+    // facts about the past: they must not force a recollection every read.
+    const historical = health([
+      row({ accessExpiresAt: '2026-11-03T02:00:00Z', state: 'ok' }),
+      row({ name: 'gone', state: 'logged_out', loggedOutAt: '2026-11-03T01:00:00Z' }),
+    ]);
+    expect(hasPassedDeadlineWindow(historical, NOW - 3 * 3600_000, NOW)).toBe(false);
+    // A deadline that crosses after collection does invalidate.
+    const crossing = health([row({ refreshExpiresAt: '2026-11-03T12:05:00Z' })]);
+    expect(hasPassedDeadlineWindow(crossing, NOW, NOW + 10 * 60_000)).toBe(true);
+    expect(hasPassedDeadlineWindow(crossing, NOW - 60_000, NOW + 6 * 60_000)).toBe(true);
+    expect(hasPassedDeadlineWindow(crossing, NOW + 6 * 60_000, NOW + 60_000)).toBe(false);
   });
 
   it('clamps the cache lifetime to the next deadline, with a floor and a ceiling', () => {

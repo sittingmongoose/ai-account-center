@@ -199,7 +199,10 @@ after. Codex `auth.json` is probed and reported `unsupported` because it
 publishes no end-of-login time; only field names are shown, never values.
 
 Published rows carry the config dir and fix command in `$HOME`-relative
-form, so no absolute path reaches `usage.json`/`usage.md`. The dashboard
+form, so nothing under the home reaches `usage.json`/`usage.md` as an
+absolute path; a directory outside the home (a relocated `--ccs-dir`
+scope) is the one deliberate exception and is published as a quoted
+literal. The dashboard
 runs this collector on its own computer from the packaged file and on the
 configured Mac/Windows through the same in-memory SSH stdin stream the usage
 helper uses — nothing is installed on remote disks.

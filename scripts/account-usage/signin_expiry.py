@@ -195,6 +195,18 @@ def fix_command(config_dir, home):
     return f'CLAUDE_CONFIG_DIR="$HOME{escaped}" claude auth login'
 
 
+def _within_home(config_dir, home):
+    """True when the real path of config_dir resolves inside home: a linked
+    profile directory can never smuggle in a store from outside it (Windows
+    reparse points included, through realpath)."""
+    try:
+        real = os.path.realpath(config_dir)
+        home_real = os.path.realpath(home)
+    except OSError:
+        return False
+    return real == home_real or real.startswith(home_real + os.sep)
+
+
 def claude_profile(name, config_dir, now_ms, home):
     """One config dir's sign-in state; missing/unreadable files read as unavailable."""
     relative = _home_relative(config_dir, home)
@@ -212,6 +224,9 @@ def claude_profile(name, config_dir, now_ms, home):
         "state": "unavailable",
         "fixCommand": fix,
     }
+    if not _within_home(config_dir, home):
+        entry["error"] = "profile directory resolves outside the home"
+        return entry
     data = read_credentials(pathlib.Path(config_dir) / ".credentials.json")
     if data is None:
         entry["error"] = "credentials file missing or unreadable"
@@ -219,9 +234,12 @@ def claude_profile(name, config_dir, now_ms, home):
     end, state = capability_state(data, now_ms)
     if state == "unavailable":
         entry["error"] = "expiry times unreadable"
+    # A time is published only for a token that exists: a blanked token's
+    # retained expiry field is a remnant, and the renderers read these
+    # stamps as evidence of token presence.
     entry.update(
-        accessExpiresAt=iso(data["access"]),
-        refreshExpiresAt=iso(data["refresh"]),
+        accessExpiresAt=iso(data["access"]) if data["has_access"] else None,
+        refreshExpiresAt=iso(data["refresh"]) if data["has_refresh"] else None,
         loggedOutAt=iso(end),
         state=state,
     )
@@ -326,7 +344,7 @@ def codex_profile(now_ms, home=None):
         try:
             with open(candidate, "rb") as handle:
                 raw = json.loads(handle.read(65536).decode("utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             continue
         keys = sorted(raw.keys()) if isinstance(raw, dict) else []
         relative = _home_relative(candidate, home)
@@ -369,6 +387,16 @@ def claude_roots(home, ccs_dir=None):
     complete = True
     pairs = _saved_roots(home, ccs_dir or home / ".ccs")
     if pairs is not None:
+        # The sibling discovery truncates at its own bound; entries beyond it
+        # vanish silently unless the length gives it away.
+        try:
+            import failover_core
+
+            limit = getattr(failover_core, "MAX_SOURCES", None)
+        except Exception:
+            limit = None
+        if limit is not None and len(pairs) >= limit:
+            complete = False
         for root, selectors in pairs:
             try:
                 if not root.is_dir():
@@ -392,6 +420,7 @@ def claude_roots(home, ccs_dir=None):
         children = list(itertools.islice(t3.iterdir(), MAX_ROOTS + 1)) if t3.is_dir() else []
     except OSError:
         children = []
+        complete = False
     if len(children) > MAX_ROOTS:
         complete = False
         children = children[:MAX_ROOTS]
@@ -400,6 +429,7 @@ def claude_roots(home, ccs_dir=None):
             if not child.is_dir() or child.name.startswith("."):
                 continue
         except OSError:
+            complete = False
             continue
         text_path = str(child)
         if text_path in seen:
@@ -447,8 +477,12 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
 
 def run():
     """Entry point for the in-memory helper transport: the real machine's
-    default home, including the Keychain probe."""
-    return collect(pathlib.Path.home(), int(time.time() * 1000))
+    default home, including the Keychain probe. A relocated CCS scope on
+    this host is honoured, never assumed away."""
+    home = pathlib.Path.home()
+    ccs = os.environ.get("CCS_HOME") or os.environ.get("CCS_DIR") or None
+    return collect(home, int(time.time() * 1000),
+                   ccs_dir=pathlib.Path(ccs) if ccs else None)
 
 
 def main():

@@ -328,10 +328,11 @@ function renderSignInMarkdown(
         return row.error ? `(${row.error})` : 'reason unknown';
       if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
       if (row.state === 'ok')
-        return (
-          `${namesEnd ? `sign-in ends ${utc(row.loggedOutAt as string)}` : 'no exact end published yet'}` +
-          (row.fixCommand && namesEnd ? `; re-login before then: \`${row.fixCommand}\`` : '')
-        );
+        // Healthy rows state the end without prescribing a re-login; the
+        // warn/critical/logged-out words carry the fix command.
+        return namesEnd
+          ? `sign-in ends ${utc(row.loggedOutAt as string)}`
+          : 'no exact end published yet';
       // warn/critical: the time is already in the word; the detail only
       // advises, and a missing access token renews on the next run rather
       // than needing a re-login.
