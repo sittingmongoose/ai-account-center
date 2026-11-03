@@ -202,11 +202,12 @@ def read_credentials_from_text(raw):
     }
 
 
-def codex_profile(now_ms, fix_template):
+def codex_profile(now_ms, fix_template, home=None):
     """Codex: its auth.json carries tokens and a last_refresh time but no
     published end-of-login time, so no `logged out at` can be computed; the
-    entry reports what exists instead of guessing."""
-    home = pathlib.Path.home()
+    entry reports what exists instead of guessing. Only the field NAMES are
+    published, never values."""
+    home = home or pathlib.Path.home()
     for candidate in (home / ".codex" / "auth.json",):
         try:
             with open(candidate, "rb") as handle:
@@ -220,7 +221,7 @@ def codex_profile(now_ms, fix_template):
             "configDir": str(candidate),
             "state": "unsupported",
             "fieldsAvailable": keys,
-            "fixCommand": fix_template.format(name="codex", config_dir=str(candidate)),
+            "fixCommand": "",
         }
     return None
 
@@ -237,7 +238,9 @@ def claude_roots(home):
 
 
 def collect(home, now_ms):
-    fix_template = "CLAUDE_CONFIG_DIR={config_dir} claude auth login"
+    # Quoted so a path with spaces stays one variable; the codex probe is not
+    # a Claude login, so its row carries no fix command at all.
+    fix_template = "CLAUDE_CONFIG_DIR='{config_dir}' claude auth login"
     profiles = [
         claude_profile(name, config_dir, now_ms, fix_template)
         for name, config_dir in claude_roots(home)
@@ -245,7 +248,7 @@ def collect(home, now_ms):
     keychain = mac_keychain_profile(now_ms, "claude auth login")
     if keychain["state"] != "unavailable" or sys.platform == "darwin":
         profiles.append(keychain)
-    codex = codex_profile(now_ms, fix_template)
+    codex = codex_profile(now_ms, fix_template, home)
     if codex:
         profiles.append(codex)
     return {

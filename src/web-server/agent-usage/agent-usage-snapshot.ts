@@ -75,6 +75,8 @@ export interface SnapshotSignInProfile {
   name: string;
   provider: string;
   platform: string;
+  /** The machine this report came from; set by the health service. */
+  machine?: string;
   configDir?: string;
   accessExpiresAt?: string | null;
   refreshExpiresAt?: string | null;
@@ -82,6 +84,8 @@ export interface SnapshotSignInProfile {
   loggedOutAt?: string | null;
   state: 'ok' | 'warn' | 'critical' | 'logged_out' | 'unavailable' | 'unsupported';
   fixCommand: string;
+  /** Why a machine's report is unavailable; absent otherwise. */
+  error?: string;
 }
 
 export interface AgentUsageSnapshot {
@@ -276,7 +280,7 @@ function renderSignInMarkdown(
   const lines: string[] = [];
   const profiles = (machines.machines ?? []).map((row) => ({
     ...row,
-    machine: row.platform ?? 'unknown',
+    machine: row.machine ?? row.platform ?? 'unknown',
   }));
   const rank: Record<string, number> = {
     logged_out: 0,
@@ -288,11 +292,19 @@ function renderSignInMarkdown(
   };
   profiles.sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9));
   for (const row of profiles) {
-    const when = row.loggedOutAt ? `sign-in ends ${utc(row.loggedOutAt)}` : 'no end time published';
-    const fix = row.state === 'unsupported' ? '' : `; re-login before then: \`${row.fixCommand}\``;
-    lines.push(
-      `- **${row.provider} · ${row.machine}/${row.name}**: ${when} (${SIGNIN_STATE_WORDS[row.state] ?? row.state})${fix}`
-    );
+    const word = SIGNIN_STATE_WORDS[row.state] ?? row.state;
+    // The published end is a bound, not always the exact time: when the
+    // collector could not name one, the wording says the window closes soon
+    // instead of inventing a time. The fix text is state-aware.
+    const detail = (): string => {
+      if (row.state === 'unavailable')
+        return `not readable on this machine${row.error ? ` (${row.error})` : ''}`;
+      if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
+      if (row.loggedOutAt)
+        return `sign-in ends ${utc(row.loggedOutAt)}${row.fixCommand ? `; re-login before then: \`${row.fixCommand}\`` : ''}`;
+      return 're-login window closes soon; no exact end published';
+    };
+    lines.push(`- **${row.provider} · ${row.machine}/${row.name}**: ${word}. ${detail()}`);
   }
   void now;
   return lines;
@@ -461,6 +473,11 @@ export function createSnapshotPublisher(
       }
       return false;
     }
+    // The ssh-backed sign-in fetch starts before the busy guard so a slow
+    // remote never holds a sample's publish slot.
+    const signInPending: Promise<SnapshotSignInProfile[]> = Promise.resolve(signIn()).catch(
+      () => []
+    );
     busy = true;
     busySince = Date.now();
     stallLogged = false;
@@ -473,7 +490,7 @@ export function createSnapshotPublisher(
       if (event.accounts.length === 0) return false;
       if (!(await isDirectory(directory)))
         throw new ValidationError('The usage snapshot folder is not a folder.');
-      const signInProfiles = await signIn().catch(() => []);
+      const signInProfiles = await signInPending;
       const { snapshot, history } = buildSnapshotFiles(
         event,
         refreshSeconds(),

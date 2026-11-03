@@ -891,3 +891,77 @@ describe('agent usage snapshot publisher', () => {
     expect(await handleUsageSnapshotCommand(['bogus'], io)).toBe(1);
   });
 });
+
+describe('sign-in health section', () => {
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    name: 'me',
+    provider: 'claude',
+    platform: 'ubuntu',
+    machine: 'ubuntu',
+    state: 'ok',
+    fixCommand: "CLAUDE_CONFIG_DIR='~/.claude-t3/me' claude auth login",
+    ...overrides,
+  });
+  const snapshotWith = (profiles: Record<string, unknown>[]) =>
+    ({
+      accounts: [],
+      generatedAt: new Date(NOW).toISOString(),
+      refreshSeconds: 60,
+      staleAfterSeconds: 180,
+      signIn: profiles,
+    }) as unknown as AgentUsageSnapshot;
+
+  it('publishes the section worst-first with end time and fix command', () => {
+    const markdown = renderSnapshotMarkdown(
+      snapshotWith([
+        row({ state: 'ok', loggedOutAt: '2026-11-30T23:04:00Z' }),
+        row({
+          name: 'party',
+          machine: 'windows',
+          platform: 'windows',
+          state: 'critical',
+          loggedOutAt: '2026-11-04T09:43:00Z',
+        }),
+      ])
+    );
+    const party = markdown.indexOf('claude · windows/party');
+    const me = markdown.indexOf('claude · ubuntu/me');
+    expect(party).toBeGreaterThanOrEqual(0);
+    expect(party).toBeLessThan(me);
+    expect(markdown).toContain('sign-in ends 2026-11-04 09:43 UTC');
+    expect(markdown).toContain('re-login before then');
+  });
+
+  it('says logged out for empty tokens and unavailable for a failed host', () => {
+    const markdown = renderSnapshotMarkdown(
+      snapshotWith([
+        row({ state: 'logged_out', loggedOutAt: '2026-11-04T09:43:00Z' }),
+        {
+          name: 'mac',
+          provider: 'claude',
+          platform: 'mac',
+          machine: 'mac',
+          state: 'unavailable',
+          fixCommand: '',
+          error: 'connection refused',
+        },
+      ])
+    );
+    expect(markdown).toContain('already logged out');
+    expect(markdown).toContain('not readable on this machine (connection refused)');
+  });
+
+  it('names no invented end when the collector could not derive one', () => {
+    const markdown = renderSnapshotMarkdown(
+      snapshotWith([row({ state: 'ok', loggedOutAt: null })])
+    );
+    expect(markdown).toContain('no exact end published');
+    expect(markdown).not.toContain('sign-in ends');
+  });
+
+  it('omits the section when no machine reported profiles', () => {
+    const { snapshot } = buildSnapshotFiles({ accounts: [], history: null, sampledAt: NOW }, 60);
+    expect(snapshot.signIn).toBeUndefined();
+    expect(renderSnapshotMarkdown(snapshot)).not.toContain('Sign-in health');
+  });
+});

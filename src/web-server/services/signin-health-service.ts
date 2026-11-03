@@ -27,7 +27,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const COLLECTOR = 'signin_expiry.py';
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_. -]{0,63}$/;
 
-let cache: { at: number; health: Promise<SignInHealth> } | null = null;
+let cache: { at: number; key: string; health: Promise<SignInHealth> } | null = null;
 
 function runCollector(command: string, args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -186,7 +186,8 @@ export function getSignInHealth(
   remoteHosts: readonly string[] = REMOTE_HOSTS
 ): Promise<SignInHealth> {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.health;
+  const key = remoteHosts.join(',');
+  if (cache && cache.key === key && now - cache.at < CACHE_TTL_MS) return cache.health;
   const health = (async (): Promise<SignInHealth> => {
     const machines: Record<string, SignInProfile[]> = {};
     const results = await Promise.allSettled([collectLocal(), collectMac(), collectWindows()]);
@@ -207,7 +208,7 @@ export function getSignInHealth(
     });
     return { generatedAt: new Date().toISOString(), machines };
   })();
-  cache = { at: now, health };
+  cache = { at: now, key, health };
   return health;
 }
 
