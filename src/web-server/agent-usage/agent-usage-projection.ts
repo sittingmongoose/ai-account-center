@@ -225,7 +225,12 @@ function accountOf(account: DashboardAccount, now: number): AgentUsageAccount | 
     email: text(account.email, 254),
     profile: profileOf(account),
     source: sourceOf(account),
-    plan: text(account.plan, 80),
+    // The collector and live path bound the name at 80 code points; a
+    // plain slice would count UTF-16 units and drop valid astral names.
+    plan:
+      account.plan === null || account.plan === undefined
+        ? null
+        : [...String(account.plan)].slice(0, 80).join('') || null,
     /** The entitlement class beside the name ("Ultra" is Max-class); absent when unknown. */
     planClass:
       account.planClass === 'max' || account.planClass === 'pro' ? account.planClass : undefined,

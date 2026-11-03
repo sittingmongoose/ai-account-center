@@ -124,7 +124,15 @@ export async function usageHelperBundle(): Promise<string> {
 export async function signinHelperBundle(): Promise<string> {
   const root = path.resolve(__dirname, '../../..');
   const modules: Record<string, string> = {};
-  for (const name of ['failover_core', 'signin_expiry'] as const) {
+  // failover_core imports claude_usage and desktop_helpers at its top: the
+  // bundle must carry the whole import closure or a clean remote silently
+  // loses saved and settings-defined profile discovery.
+  for (const name of [
+    'failover_core',
+    'claude_usage',
+    'desktop_helpers',
+    'signin_expiry',
+  ] as const) {
     modules[name] = await fs.promises.readFile(
       path.join(root, 'scripts/account-usage', `${name}.py`),
       'utf8'
@@ -146,26 +154,6 @@ export async function signinHelperBundle(): Promise<string> {
     'import signin_expiry',
     'print(json.dumps(signin_expiry.run(),allow_nan=False))',
   ].join('\n');
-}
-
-/** The same command shape as the usage helper: stdin carries the bundle. */
-export function signinHelperCommand(platform: UsageHost['platform']): string {
-  if (platform !== 'windows') {
-    const quoted = `'${BOOTSTRAP.replace(/'/g, `'"'"'`)}'`;
-    return `if [ -x "$HOME/.ccs/claude-session-migration/venv/bin/python3" ]; then exec "$HOME/.ccs/claude-session-migration/venv/bin/python3" -c ${quoted}; else exec /usr/bin/python3 -c ${quoted}; fi`;
-  }
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    "$ProgressPreference = 'SilentlyContinue'",
-    "$env:PYTHONIOENCODING = 'utf-8'",
-    "$env:PYTHONUTF8 = '1'",
-    "$venv = [IO.Path]::Combine($HOME, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
-    '$python = if (Test-Path -LiteralPath $venv -PathType Leaf) { $venv } else { (Get-Command python3.exe,python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source }',
-    'if (-not $python) { exit 1 }',
-    `& $python -c '${BOOTSTRAP.replace(/'/g, "''")}'`,
-    'exit $LASTEXITCODE',
-  ].join('; ');
-  return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
 }
 
 export function parseUsageHelperResponse(text: string): UsageHelperResponse {

@@ -93,6 +93,9 @@ class SignInExpiryTests(unittest.TestCase):
             ({"refreshToken": "y", "refreshTokenExpiresAt": NOW + 30 * H}, "warn", None),
             # Empty tokens are logged out; retained future times are never a named end.
             ({"expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + H}, "logged_out", None),
+            # A token whose own expiry cannot be read leaves the end unknown.
+            ({"accessToken": "x", "refreshToken": "y", "expiresAt": NOW + 2 * H}, "unavailable", None),
+            ({"accessToken": "x", "refreshToken": "y", "refreshTokenExpiresAt": "garbage"}, "unavailable", None),
         ]
         for index, (credentials, state, end) in enumerate(cases):
             name = "cap%d" % index
@@ -157,7 +160,10 @@ class SignInExpiryTests(unittest.TestCase):
             with mock.patch.object(pathlib.Path, "iterdir", broken_iterdir):
                 report = self.report()
         names = {row["name"] for row in report["profiles"]}
-        self.assertEqual(names, {"default"} | ({"keychain"} if sys.platform == "darwin" else set()))
+        self.assertEqual(names, {"default", "saved-profiles"} | ({"keychain"} if sys.platform == "darwin" else set()))
+        partial = {row["name"]: row for row in report["profiles"]}["saved-profiles"]
+        self.assertEqual(partial["state"], "unavailable")
+        self.assertIn("incomplete", partial["error"])
         rows = {row["name"]: row for row in report["profiles"]}
         self.assertEqual(rows["default"]["state"], "ok")
 
@@ -209,7 +215,7 @@ class SignInExpiryTests(unittest.TestCase):
         (self.home / ".codex").mkdir(parents=True, exist_ok=True)
         (self.home / ".codex" / "auth.json").write_text(json.dumps({"last_refresh": "fixture"}))
         entry = collector.codex_profile(NOW, self.home)
-        self.assertEqual(entry["configDir"], str(self.home / ".codex" / "auth.json"))
+        self.assertEqual(entry["configDir"], "~/.codex/auth.json")
 
 
 if __name__ == "__main__":

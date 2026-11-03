@@ -273,7 +273,10 @@ def cmd_show(args):
                 # A reading older than the stale limit when read carries no pace either.
                 if not current_reading(window, now, account.get("sampledAt"), stale_after):
                     window["burn"] = None
-        print(json.dumps(dict(snapshot, accounts=accounts), indent=2))
+        payload = dict(snapshot, accounts=accounts)
+        if provider:
+            payload["signIn"] = [r for r in snapshot.get("signIn") or [] if r.get("provider") == provider]
+        print(json.dumps(payload, indent=2))
         return
     note = stale_note(snapshot, now)
     generated = parse_time(snapshot.get("generatedAt"))
@@ -305,31 +308,57 @@ def cmd_show(args):
         if account.get("status") in ("ok", "cached"):
             for window in account.get("windows", []):
                 print(window_line(window, now, account.get("sampledAt"), stale_after))
-    sign_in_lines(snapshot)
+    sign_in_lines(snapshot, provider)
 
 
-def sign_in_lines(snapshot):
-    """The Sign-in health section, worst state first — the same facts
-    usage.md publishes, for the agents that read this CLI instead."""
+def sign_in_lines(snapshot, provider=None):
+    """The Sign-in health section, worst state first — the same stamp-derived
+    facts usage.md publishes (never a threshold word: a nonrenewable access
+    token can be critical with eight hours left), for the agents that read
+    this CLI instead. Output stays ASCII."""
     rows = snapshot.get("signIn") or []
+    if provider:
+        rows = [r for r in rows if r.get("provider") == provider]
     if not rows:
         return
-    words = {"ok": "healthy", "warn": "ends within 24 hours", "critical": "ends within 4 hours",
-             "logged_out": "already logged out", "unavailable": "not readable on this machine",
-             "unsupported": "no expiry published"}
     rank = {"logged_out": 0, "critical": 1, "warn": 2, "unavailable": 3, "unsupported": 4, "ok": 5}
+    words = {"ok": "healthy", "logged_out": "already logged out",
+             "unavailable": "not readable on this machine", "unsupported": "no expiry published"}
+    now = now_utc()
     print("\nSign-in health")
     for row in sorted(rows, key=lambda r: rank.get(r.get("state"), 9)):
         machine = row.get("machine") or row.get("platform") or "unknown"
-        line = "  %s · %s/%s: %s." % (row.get("provider"), machine, row.get("name"),
-                                      words.get(row.get("state"), row.get("state")))
-        if row.get("state") == "unavailable":
+        state = row.get("state")
+        if state in ("warn", "critical"):
+            if row.get("loggedOutAt"):
+                word = "ends %s" % row["loggedOutAt"]
+            elif row.get("refreshExpiresAt"):
+                word = "refresh expires %s" % row["refreshExpiresAt"]
+            elif not row.get("accessExpiresAt"):
+                word = "no access token in the store; the next run renews"
+            else:
+                word = "exact end unknown"
+        else:
+            word = words.get(state, state)
+        line = "  %s | %s/%s: %s." % (row.get("provider"), machine, row.get("name"), word)
+        if state == "unavailable":
             if row.get("error"):
                 line += " (%s)" % row["error"]
-        elif row.get("loggedOutAt"):
+        elif state == "logged_out":
+            end = parse_time(row.get("loggedOutAt"))
+            if end and end <= now:
+                line += " sign-in ended %s." % row["loggedOutAt"]
+            elif not end:
+                line += " tokens are gone or expired."
+            if row.get("fixCommand"):
+                line += " re-login: `%s`" % row["fixCommand"]
+        elif state in ("warn", "critical"):
+            if not row.get("loggedOutAt") and not row.get("accessExpiresAt"):
+                line += " the next run renews this login."
+            elif row.get("fixCommand"):
+                line += " re-login when the window ends: `%s`" % row["fixCommand"]
+        elif state == "ok" and row.get("loggedOutAt"):
             line += " sign-in ends %s." % row["loggedOutAt"]
-        if row.get("fixCommand"):
-            line += " re-login: `%s`" % row["fixCommand"]
         print(line)
 
 

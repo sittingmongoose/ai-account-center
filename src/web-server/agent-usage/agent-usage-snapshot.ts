@@ -61,6 +61,8 @@ export const SNAPSHOT_MARKDOWN = 'usage.md';
 export const SNAPSHOT_HISTORY = 'history.json';
 /** A write still running after this long is reported once in the dashboard log. */
 const STALL_LOG_MS = 5 * 60_000;
+/** The sign-in fetch waits at most this long inside a publish slot. */
+const SIGNIN_FETCH_LIMIT_MS = 60_000;
 
 export interface SnapshotWindow extends AgentUsageWindow {
   burn: BurnRate | null;
@@ -267,8 +269,6 @@ function hostName(account: AgentUsageAccount): string {
 /** The same snapshot in plain words, one provider section and one line per window. */
 const SIGNIN_STATE_WORDS: Record<string, string> = {
   ok: 'healthy',
-  warn: 'ends within 24 hours',
-  critical: 'ends within 4 hours',
   logged_out: 'already logged out',
   unavailable: 'not readable on this machine',
   unsupported: 'no expiry published',
@@ -294,21 +294,28 @@ function renderSignInMarkdown(
   };
   profiles.sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9));
   for (const row of profiles) {
-    // The deadline words only claim a login end when the collector could
-    // name one; a refresh-derived warning is the refresh expiry's bound,
-    // not the login's end. A logged-out row never names a future end: the
-    // stored times of emptied tokens are remnants, not events.
+    // The words carry the actual known time and never a threshold: a
+    // nonrenewable access token can be critical with eight hours left, and
+    // a refresh-bound warning can sit thirty hours out. Severity only
+    // decides the worst-first order. A logged-out row never names a future
+    // end: the stored times of emptied tokens are remnants, not events.
     const endedAt =
       row.loggedOutAt !== null && row.loggedOutAt !== undefined && row.loggedOutAt !== ''
         ? Date.parse(row.loggedOutAt)
         : NaN;
     const namesEnd = !Number.isNaN(endedAt) && row.state !== 'logged_out';
-    const word =
-      row.state === 'warn' || row.state === 'critical'
-        ? namesEnd
-          ? `ends within ${row.state === 'warn' ? '24' : '4'} hours`
-          : `refresh expiry within ${row.state === 'warn' ? '24' : '4'} hours`
-        : (SIGNIN_STATE_WORDS[row.state] ?? row.state);
+    let word = SIGNIN_STATE_WORDS[row.state] ?? row.state;
+    if (row.state === 'warn' || row.state === 'critical') {
+      if (namesEnd) word = `ends ${utc(row.loggedOutAt as string)}`;
+      else if (row.refreshExpiresAt) word = `refresh expires ${utc(row.refreshExpiresAt)}`;
+      else if (
+        row.accessExpiresAt === null ||
+        row.accessExpiresAt === undefined ||
+        row.accessExpiresAt === ''
+      )
+        word = 'no access token in the store; the next run renews';
+      else word = 'exact end unknown';
+    }
     const detail = (): string => {
       if (row.state === 'logged_out')
         return (
@@ -320,13 +327,31 @@ function renderSignInMarkdown(
         // the cause.
         return row.error ? `(${row.error})` : 'reason unknown';
       if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
-      if (namesEnd)
-        return `sign-in ends ${utc(row.loggedOutAt as string)}${row.fixCommand ? `; re-login before then: \`${row.fixCommand}\`` : ''}`;
-      if (row.state === 'warn' || row.state === 'critical')
-        return 'no exact end published; re-login when the window ends';
-      return 'no exact end published yet';
+      if (row.state === 'ok')
+        return (
+          `${namesEnd ? `sign-in ends ${utc(row.loggedOutAt as string)}` : 'no exact end published yet'}` +
+          (row.fixCommand && namesEnd ? `; re-login before then: \`${row.fixCommand}\`` : '')
+        );
+      // warn/critical: the time is already in the word; the detail only
+      // advises, and a missing access token renews on the next run rather
+      // than needing a re-login.
+      if (
+        row.state === 'warn' &&
+        (row.accessExpiresAt === null ||
+          row.accessExpiresAt === undefined ||
+          row.accessExpiresAt === '')
+      )
+        return 'the next run renews this login';
+      if (row.fixCommand)
+        return namesEnd
+          ? `re-login before then: \`${row.fixCommand}\``
+          : `re-login when the window ends: \`${row.fixCommand}\``;
+      return namesEnd ? '' : 're-login when the window ends';
     };
-    lines.push(`- **${row.provider} · ${row.machine}/${row.name}**: ${word}. ${detail()}`);
+    const detailText = detail();
+    lines.push(
+      `- **${row.provider} · ${row.machine}/${row.name}**: ${word}.${detailText ? ` ${detailText}` : ''}`
+    );
   }
   return lines;
 }
@@ -510,9 +535,15 @@ export function createSnapshotPublisher(
       if (event.accounts.length === 0) return false;
       // The ssh-backed sign-in fetch starts before the heavier reads below,
       // so a slow remote overlaps them instead of extending the busy window.
-      const signInPending: Promise<SnapshotSignInProfile[]> = Promise.resolve(signIn()).catch(
-        () => []
-      );
+      // A fetch that never returns is released at the limit: one lost
+      // machine must not stop usage.json from updating for good.
+      const signInPending: Promise<SnapshotSignInProfile[]> = Promise.race([
+        Promise.resolve(signIn()).catch(() => []),
+        new Promise<SnapshotSignInProfile[]>((resolve) => {
+          const timer = setTimeout(() => resolve([]), SIGNIN_FETCH_LIMIT_MS);
+          timer.unref?.();
+        }),
+      ]);
       if (!(await isDirectory(directory)))
         throw new ValidationError('The usage snapshot folder is not a folder.');
       const signInProfiles = await signInPending;

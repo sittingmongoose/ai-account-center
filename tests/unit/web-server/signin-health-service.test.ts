@@ -56,14 +56,22 @@ describe('allowProfile', () => {
     expect(sanitizeName('   ')).toBe('unnamed');
   });
 
-  it('never drops a row over a bound; bounds clip instead', () => {
+  it('never drops a row over a bound; paths clip and overlong commands are omitted whole', () => {
     const clipped = allowProfile(
-      row({ configDir: 'x'.repeat(300), fixCommand: 'y'.repeat(300) }),
+      row({ configDir: 'x'.repeat(300), fixCommand: `${'claude auth login; '.repeat(30)}` }),
       'mac'
     );
     expect(clipped).not.toBeNull();
     expect(clipped?.configDir).toHaveLength(200);
-    expect(clipped?.fixCommand).toHaveLength(200);
+    // A command truncated mid-quote is worse than none: overlong omits whole.
+    expect(clipped?.fixCommand).toBe('');
+    const longButFitting = allowProfile(row({ fixCommand: 'x'.repeat(200) }), 'mac');
+    expect(longButFitting?.fixCommand).toHaveLength(200);
+  });
+
+  it('publishes a code-span-safe, single-line repair command', () => {
+    const out = allowProfile(row({ fixCommand: 'claude `auth` login\nsecond line' }), 'mac');
+    expect(out?.fixCommand).toBe("claude 'auth' login second line");
   });
 
   it('reads malformed stamps as absent, never as a reason to drop the row', () => {

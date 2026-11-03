@@ -698,6 +698,19 @@ describe('agent usage snapshot publisher', () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
+  it('never starts the sign-in probes while no folder is configured', async () => {
+    let signInCalls = 0;
+    const publish = createSnapshotPublisher({
+      settings: async () => null,
+      signIn: async () => {
+        signInCalls += 1;
+        return [];
+      },
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: NOW })).toBe(false);
+    expect(signInCalls).toBe(0);
+  });
+
   it('writes nothing until a folder is set, then all three files after each sample', async () => {
     const folder = path.join(home, 'share');
     fs.mkdirSync(folder);
@@ -928,7 +941,10 @@ describe('sign-in health section', () => {
     const me = markdown.indexOf('claude · ubuntu/me');
     expect(party).toBeGreaterThanOrEqual(0);
     expect(party).toBeLessThan(me);
-    expect(markdown).toContain('sign-in ends 2026-11-04 09:43 UTC');
+    // The word carries the actual end, never a threshold: this critical has
+    // days left, so it says when it ends instead of "within 4 hours".
+    expect(markdown).toContain('ends 2026-11-04 09:43 UTC');
+    expect(markdown).not.toContain('within 4 hours');
     expect(markdown).toContain('re-login before then');
   });
 
@@ -961,6 +977,31 @@ describe('sign-in health section', () => {
     expect(markdown).toContain('no exact end published');
     expect(markdown).not.toContain('sign-in ends');
     expect(markdown).not.toContain('closes soon');
+  });
+
+  it('carries the entitlement class into the published snapshot accounts', () => {
+    const accountWithClass = {
+      id: 'claude:one',
+      provider: 'claude',
+      providerLabel: 'Claude',
+      label: 'One',
+      email: null,
+      profile: null,
+      source: null,
+      plan: 'Ultra',
+      planClass: 'max',
+      platform: 'ubuntu',
+      host: 'ubuntu',
+      active: false,
+      status: 'ok',
+      sampledAt: NOW,
+      ageSeconds: 0,
+      hidden: false,
+      windows: [],
+    } as unknown as Parameters<typeof buildSnapshotFiles>[0]['accounts'][number];
+    const { snapshot } = buildSnapshotFiles({ accounts: [accountWithClass], history: null, sampledAt: NOW }, 60);
+    expect(snapshot.accounts[0]?.plan).toBe('Ultra');
+    expect(snapshot.accounts[0]?.planClass).toBe('max');
   });
 
   it('omits the section when no machine reported profiles', () => {

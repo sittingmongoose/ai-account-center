@@ -25,7 +25,9 @@ are unreadable (they read as `unavailable`); argparse exits 2 on bad arguments.
 import argparse
 import ctypes
 import datetime
+import itertools
 import json
+import os
 import pathlib
 import re
 import sys
@@ -99,7 +101,9 @@ def capability_state(data, now_ms):
     has_access, has_refresh = data["has_access"], data["has_refresh"]
     if not (has_access or has_refresh):
         return None, "logged_out"
-    if access_ms is None and refresh_ms is None:
+    if (has_access and access_ms is None) or (has_refresh and refresh_ms is None):
+        # A token whose own expiry cannot be read leaves the login's real
+        # end unknown in both directions: unavailable, never a guess.
         return None, "unavailable"
     if not has_refresh:
         if access_ms is None:
@@ -135,9 +139,15 @@ def read_credentials(path):
     The file is read but only its times and token presence are kept; token
     values never leave this function."""
     try:
-        with open(path, "rb") as handle:
-            raw = json.loads(handle.read(65536).decode("utf-8"))
-    except (OSError, ValueError):
+        # O_NOFOLLOW refuses a linked credentials file: a link outside the
+        # selected home can never be read and attributed to this profile.
+        descriptor = os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb")
+    except OSError:
+        return None
+    try:
+        with descriptor:
+            raw = json.loads(descriptor.read(65536).decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
         return None
     credentials = raw.get("claudeAiOauth", raw) if isinstance(raw, dict) else None
     if not isinstance(credentials, dict):
@@ -167,17 +177,31 @@ def fix_command(config_dir, home):
     no absolute path ever reaches the published files."""
     relative = _home_relative(config_dir, home)
     if sys.platform == "win32":
-        tail = relative[1][1:] if relative else str(config_dir)
-        escaped = tail.replace("`", "``").replace('"', '`"')
+        if relative is None:
+            literal = str(config_dir).replace("'", "''")
+            return f"$env:CLAUDE_CONFIG_DIR = '{literal}'; claude auth login"
+        escaped = relative[1][1:].replace("`", "``").replace('"', '`"').replace("$", "`$")
         return f'$env:CLAUDE_CONFIG_DIR = "$HOME{escaped}"; claude auth login'
-    tail = relative[0][1:] if relative else str(config_dir)
-    escaped = tail.replace("`", "\\`").replace('"', '\\"').replace("$", "\\$")
+    if relative is None:
+        literal = str(config_dir).replace("'", "'\\''")
+        return f"CLAUDE_CONFIG_DIR='{literal}' claude auth login"
+    escaped = (
+        relative[0][1:]
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("`", "\\`")
+    )
     return f'CLAUDE_CONFIG_DIR="$HOME{escaped}" claude auth login'
 
 
 def claude_profile(name, config_dir, now_ms, home):
     """One config dir's sign-in state; missing/unreadable files read as unavailable."""
     relative = _home_relative(config_dir, home)
+    # The default dir is what a bare re-login writes, so it names no
+    # CLAUDE_CONFIG_DIR: on macOS the login and the Keychain item stay the
+    # same one this collector reads.
+    fix = "claude auth login" if pathlib.Path(config_dir) == home / ".claude" else fix_command(config_dir, home)
     entry = {
         "name": name,
         "configDir": relative[0] if relative else str(config_dir),
@@ -186,7 +210,7 @@ def claude_profile(name, config_dir, now_ms, home):
         "refreshExpiresAt": None,
         "loggedOutAt": None,
         "state": "unavailable",
-        "fixCommand": fix_command(config_dir, home),
+        "fixCommand": fix,
     }
     data = read_credentials(pathlib.Path(config_dir) / ".credentials.json")
     if data is None:
@@ -279,7 +303,7 @@ def read_credentials_from_text(raw):
     """Same shape as read_credentials, from an in-memory JSON document."""
     try:
         parsed = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     credentials = parsed.get("claudeAiOauth", parsed) if isinstance(parsed, dict) else None
     if not isinstance(credentials, dict):
@@ -305,10 +329,11 @@ def codex_profile(now_ms, home=None):
         except (OSError, ValueError):
             continue
         keys = sorted(raw.keys()) if isinstance(raw, dict) else []
+        relative = _home_relative(candidate, home)
         return {
             "name": "codex",
             "provider": "codex",
-            "configDir": str(candidate),
+            "configDir": relative[0] if relative else "~/.codex/auth.json",
             "state": "unsupported",
             "fieldsAvailable": keys,
             "fixCommand": "",
@@ -331,11 +356,17 @@ def _saved_roots(home, ccs_dir):
 def claude_roots(home, ccs_dir=None):
     """Every Claude config dir this machine knows: the default, the saved
     ~/.ccs/instances homes, the T3 account dirs, and settings-defined homes.
-    Bounded, deduplicated; the default row always reports (a missing default
-    is itself sign-in news). An unreadable directory never kills the scan."""
+
+    The T3 dirs are enumerated here even when the sibling discovery is
+    available, because its name filter refuses valid directory names
+    (email-shaped names, apostrophes); display names are sanitized later,
+    never at discovery. Returns (roots, complete): complete is False when
+    the sibling discovery was unavailable or enumeration hit the bound, so
+    the report can say the list may be short instead of implying all."""
     default = home / ".claude"
     roots = [("default", default)]
     seen = {str(default)}
+    complete = True
     pairs = _saved_roots(home, ccs_dir or home / ".ccs")
     if pairs is not None:
         for root, selectors in pairs:
@@ -344,40 +375,65 @@ def claude_roots(home, ccs_dir=None):
                     continue
             except OSError:
                 continue
-            text = str(root)
-            if text in seen:
+            text_path = str(root)
+            if text_path in seen:
                 continue
-            seen.add(text)
-            label = root.name or text
+            seen.add(text_path)
+            label = root.name or text_path
             if selectors and isinstance(selectors[0], str) and selectors[0].startswith(
                 "claude-profile:"
             ):
                 label = selectors[0].split(":", 1)[1]
             roots.append((label, root))
     else:
-        t3 = home / ".claude-t3"
+        complete = False
+    t3 = home / ".claude-t3"
+    try:
+        children = list(itertools.islice(t3.iterdir(), MAX_ROOTS + 1)) if t3.is_dir() else []
+    except OSError:
+        children = []
+    if len(children) > MAX_ROOTS:
+        complete = False
+        children = children[:MAX_ROOTS]
+    for child in sorted(children, key=lambda item: item.name):
         try:
-            children = sorted(t3.iterdir()) if t3.is_dir() else []
+            if not child.is_dir() or child.name.startswith("."):
+                continue
         except OSError:
-            children = []
-        for child in children:
-            if child.is_dir() and not child.name.startswith("."):
-                text = str(child)
-                if text not in seen:
-                    seen.add(text)
-                    roots.append((child.name, child))
-    return roots[:MAX_ROOTS]
+            continue
+        text_path = str(child)
+        if text_path in seen:
+            continue
+        seen.add(text_path)
+        roots.append((child.name, child))
+    if len(roots) > MAX_ROOTS:
+        complete = False
+        roots = roots[:MAX_ROOTS]
+    return roots, complete
 
 
-def collect(home, now_ms, include_keychain=True):
+def collect(home, now_ms, include_keychain=True, ccs_dir=None):
     """One machine's report. include_keychain=False keeps a --home fixture
-    run from touching the real login Keychain."""
-    profiles = [
-        claude_profile(name, config_dir, now_ms, home)
-        for name, config_dir in claude_roots(home)
-    ]
-    keychain = mac_keychain_profile(now_ms)
-    if include_keychain and (keychain["state"] != "unavailable" or sys.platform == "darwin"):
+    run from touching the real login Keychain at all; ccs_dir selects the
+    saved-instance scope on installs that relocate it."""
+    roots, complete = claude_roots(home, ccs_dir)
+    profiles = [claude_profile(name, config_dir, now_ms, home) for name, config_dir in roots]
+    if not complete:
+        profiles.append(
+            {
+                "name": "saved-profiles",
+                "provider": "claude",
+                "configDir": "discovery",
+                "accessExpiresAt": None,
+                "refreshExpiresAt": None,
+                "loggedOutAt": None,
+                "state": "unavailable",
+                "fixCommand": "",
+                "error": "profile discovery was incomplete; this machine's list may be missing homes",
+            }
+        )
+    if include_keychain and sys.platform == "darwin":
+        keychain = mac_keychain_profile(now_ms)
         profiles.append(keychain)
     codex = codex_profile(now_ms, home)
     if codex:
@@ -399,11 +455,14 @@ def main():
     parser = argparse.ArgumentParser(description="Read-only sign-in expiry report")
     parser.add_argument("--home", type=pathlib.Path, default=None,
                         help="Home directory override (tests); skips the Keychain")
+    parser.add_argument("--ccs-dir", type=pathlib.Path, default=None,
+                        help="Saved-instance scope override (tests)")
     args = parser.parse_args()
     now_ms = int(time.time() * 1000)
     home = args.home or pathlib.Path.home()
-    print(json.dumps(collect(home, now_ms, include_keychain=args.home is None),
-                     ensure_ascii=True, allow_nan=False))
+    print(json.dumps(
+        collect(home, now_ms, include_keychain=args.home is None, ccs_dir=args.ccs_dir),
+        ensure_ascii=True, allow_nan=False))
     return 0
 
 

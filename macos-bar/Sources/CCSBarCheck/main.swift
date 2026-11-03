@@ -3528,6 +3528,7 @@ private func checkPlanClassGate() throws {
       "id": "claude-gate", "provider": "claude", "providerLabel": "Claude", "label": "Gate",
       "email": NSNull(), "plan": plan, "platform": "mac", "source": "Fixture", "status": "ok",
       "message": NSNull(), "fetchedAt": NSNull(), "sampledAt": NSNull(), "isActive": false,
+      "capabilities": ["codexProfile": NSNull(), "claudeProfileId": NSNull(), "claudePlatforms": []],
       "windows": [
         ["key": "five_hour", "label": "Five-hour", "usedPercent": 10, "remainingPercent": 90,
          "resetAt": "2026-11-04T09:43:00Z", "windowMinutes": 300, "used": 10, "limit": 100, "unit": "requests"],
@@ -3549,10 +3550,11 @@ private func checkPlanClassGate() throws {
   let maxNamedNoClass = try account(plan: "claude-max-20x", planClass: nil)
   try expect(maxNamedNoClass.isMaxPlan, "Without a class the display name still gates")
   let malformed = try account(plan: "Ultra", planClass: 42)
-  try expect(malformed.planClass == nil && malformed.isMaxPlan,
-    "A malformed class decodes as absent and falls back to the name")
+  try expect(malformed.planClass == nil && !malformed.isMaxPlan,
+    "A malformed class decodes as absent; a name without a Max token is not Max")
 }
 
+/// "Opened · copied 3 of 18" when a bounded copy opened Claude before every record was across.
 private func checkClaudeOpenPartialCopy() throws {
   func operation(_ state: String, _ confirmed: Int?, _ total: Int?) throws -> ClaudeOpenOperation {
     var object: [String: Any] = ["id": "op", "platform": "mac", "state": state, "message": NSNull()]

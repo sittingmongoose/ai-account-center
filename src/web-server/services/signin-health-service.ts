@@ -1,11 +1,12 @@
 import { execFile } from 'child_process';
 import * as path from 'path';
+import { getCcsDir } from '../../utils/config-manager';
 import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-snapshot';
 import {
   configuredUsageHosts,
   localUsagePython,
   signinHelperBundle,
-  signinHelperCommand,
+  usageHelperCommand,
 } from './usage-failover-transport';
 
 /**
@@ -15,9 +16,10 @@ import {
  * values are never read or transported. Remote machines run the collector
  * from an in-memory stdin bundle, so nothing is ever installed on their
  * disks; the hosts are the same configured ones every other usage transport
- * uses. Results are cached until the next state deadline or five minutes,
- * whichever comes first: the underlying times move in hours, not seconds,
- * but a cached "critical" must not outlive the deadline it names.
+ * uses. Results are cached until the next published deadline or five
+ * minutes, whichever is longer for the report's freshness: a cached state
+ * whose deadline has passed is dropped on read, so no served row outlives
+ * the time it names (deadlines under the 30 s floor age out with the floor).
  */
 
 export interface SignInProfile extends SnapshotSignInProfile {
@@ -37,7 +39,7 @@ const CACHE_MAX_MS = 5 * 60 * 1000;
 const COLLECTOR = 'signin_expiry.py';
 /** Accepted as-is; anything else is sanitized to a safe bounded identifier. */
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@+ -]{0,63}$/;
-/** A published timestamp must look like one; anything else reads as absent. */
+/** A published timestamp must parse as a real calendar time; anything else reads as absent. */
 const STAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 let cache: { until: number; health: Promise<SignInHealth> } | null = null;
@@ -55,7 +57,8 @@ function runCollector(
       { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error && stdout.length === 0) {
-          // The command line is noise; the cause is whatever the process said.
+          // The command line is noise; the cause is whatever the process
+          // said — and never the ssh target's alias or address.
           const cause = (stderr || error.message).replace(/\s+/g, ' ').trim();
           reject(new Error(cause.slice(0, 200) || 'collector failed'));
           return;
@@ -86,9 +89,17 @@ export function sanitizeName(raw: unknown): string {
 }
 
 function stamp(value: unknown): string | null {
-  return typeof value === 'string' && value.length <= 40 && STAMP_PATTERN.test(value)
-    ? value
-    : null;
+  if (typeof value !== 'string' || value.length > 40 || !STAMP_PATTERN.test(value)) return null;
+  return Number.isNaN(Date.parse(value)) ? null : value;
+}
+
+/** A repair command that survives publication: single-line, code-span safe,
+ * and never truncated mid-quote — an overlong command is omitted entirely,
+ * because a half command is worse than none. */
+export function publishableFixCommand(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const cleaned = value.replace(/[\n\r]/g, ' ').replace(/`/g, "'");
+  return cleaned.length <= 200 ? cleaned : '';
 }
 
 /** The published DTO is allowlisted; a changed helper cannot add fields or
@@ -100,7 +111,6 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
   if (typeof row.state !== 'string' || !states.includes(row.state)) return null;
   const provider = row.provider === 'codex' ? 'codex' : 'claude';
   const configDir = typeof row.configDir === 'string' ? row.configDir.slice(0, 200) : undefined;
-  const fixCommand = typeof row.fixCommand === 'string' ? row.fixCommand.slice(0, 200) : '';
   const profile: SignInProfile = {
     name:
       typeof row.name === 'string' && NAME_PATTERN.test(row.name)
@@ -114,7 +124,7 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
     refreshExpiresAt: stamp(row.refreshExpiresAt),
     loggedOutAt: stamp(row.loggedOutAt),
     state: row.state as SignInProfile['state'],
-    fixCommand,
+    fixCommand: publishableFixCommand(row.fixCommand),
     ...(row.state === 'unavailable' && typeof row.error === 'string' && row.error !== ''
       ? { error: row.error.replace(/\s+/g, ' ').trim().slice(0, 120) }
       : {}),
@@ -145,9 +155,12 @@ function unavailableHost(machine: string, error: string): SignInProfile[] {
 
 async function collectLocal(): Promise<string> {
   // The packaged helper, resolved from this module like the sibling usage
-  // transports, run by the host's own installed python when it has one.
+  // transports, run by this host's own installed python when it has one,
+  // scoped to the dashboard's configured CCS directory (CCS_HOME and
+  // --config-dir installs keep their saved-instance homes and venv).
   const helper = path.resolve(__dirname, '../../../scripts/account-usage', COLLECTOR);
-  return runCollector(localUsagePython({}), [helper], 20_000);
+  const ccsDir = getCcsDir();
+  return runCollector(localUsagePython({ ccsDir }), [helper, '--ccs-dir', ccsDir], 20_000);
 }
 
 type UsageHostEntry = Awaited<ReturnType<typeof configuredUsageHosts>>[number];
@@ -172,7 +185,7 @@ async function collectRemote(host: UsageHostEntry): Promise<string> {
       'ServerAliveCountMax=1',
       '--',
       host.sshHost as string,
-      signinHelperCommand(host.platform),
+      usageHelperCommand(host.platform),
     ],
     30_000,
     JSON.stringify({ request: {}, helperSource: bundle })
@@ -193,6 +206,19 @@ export function parseRows(stdout: string, machine: string): SignInProfile[] {
   return [];
 }
 
+function hasPassedDeadline(health: SignInHealth, nowMs: number): boolean {
+  for (const rows of Object.values(health.machines)) {
+    for (const row of rows) {
+      for (const value of [row.accessExpiresAt, row.refreshExpiresAt, row.loggedOutAt]) {
+        if (!value) continue;
+        const at = Date.parse(value);
+        if (!Number.isNaN(at) && at <= nowMs) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** The earliest future state deadline across a report, or null. */
 export function nextDeadlineAt(health: SignInHealth, nowMs: number): number | null {
   let earliest: number | null = null;
@@ -209,8 +235,9 @@ export function nextDeadlineAt(health: SignInHealth, nowMs: number): number | nu
   return earliest;
 }
 
-/** Cache until the next deadline — a cached critical must not outlive the
- * end time it publishes — but never shorter than the floor. */
+/** Cache until the next published deadline — a cached state must not
+ * outlive the time it names — but never shorter than the floor; a deadline
+ * under the floor is caught by the passed-deadline check on read instead. */
 export function cacheTtlFor(health: SignInHealth, nowMs: number): number {
   const deadline = nextDeadlineAt(health, nowMs);
   if (deadline === null) return CACHE_MAX_MS;
@@ -219,7 +246,21 @@ export function cacheTtlFor(health: SignInHealth, nowMs: number): number {
 
 export function getSignInHealth(): Promise<SignInHealth> {
   const now = Date.now();
-  if (cache && now < cache.until) return cache.health;
+  if (cache && now < cache.until) {
+    // A deadline that passed while the cache held — including one that
+    // crossed while its own collection was still running — invalidates the
+    // cache on read: no served row outlives its named time.
+    return cache.health.then((value) => {
+      if (!hasPassedDeadline(value, Date.now())) return value;
+      cache = null;
+      return refresh();
+    });
+  }
+  return refresh();
+}
+
+function refresh(): Promise<SignInHealth> {
+  const now = Date.now();
   const entry: { until: number; health: Promise<SignInHealth> } = {
     until: now + CACHE_MAX_MS,
     health: undefined as unknown as Promise<SignInHealth>,
@@ -248,6 +289,11 @@ export function getSignInHealth(): Promise<SignInHealth> {
             : 'no profiles reported';
         machines[host.host] = unavailableHost(host.host, reason);
       });
+      if (!machines.ubuntu) {
+        // A dashboard hosted on the Mac or Windows collects no Ubuntu route:
+        // the machine names itself rather than silently disappearing.
+        machines.ubuntu = unavailableHost('ubuntu', 'no collection route from this host');
+      }
     } catch (error) {
       // Host resolution is best effort by contract: the section simply
       // stays absent, and the retry waits only the floor.
