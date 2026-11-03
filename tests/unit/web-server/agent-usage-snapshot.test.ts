@@ -35,6 +35,9 @@ import { handleUsageSnapshotCommand } from '../../../src/commands/usage-snapshot
 import { writePrivateJsonFile } from '../../../src/web-server/services/private-json-store';
 import {
   CLIENT_FILES,
+  RUNNER_FILES,
+  RUNNER_FOLDER,
+  runnerSourceFolder,
   clientSourceFolder,
   writeAtomically,
 } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
@@ -715,7 +718,15 @@ describe('agent usage snapshot publisher', () => {
         SNAPSHOT_LOCATIONS,
         SNAPSHOT_MARKDOWN,
         ...CLIENT_FILES.map((file) => file.name),
+        RUNNER_FOLDER,
       ].sort()
+    );
+    // The sign-in renewal runner is kept current beside the reader, byte for byte.
+    expect(fs.readdirSync(path.join(folder, RUNNER_FOLDER)).sort()).toEqual(
+      RUNNER_FILES.map((file) => file.name).sort()
+    );
+    expect(fs.readFileSync(path.join(folder, RUNNER_FOLDER, 'claude_signin.py'), 'utf8')).toBe(
+      fs.readFileSync(path.join(runnerSourceFolder(), 'claude_signin.py'), 'utf8')
     );
     expect(JSON.parse(fs.readFileSync(path.join(folder, SNAPSHOT_LOCATIONS), 'utf8'))).toEqual({
       version: 1,
@@ -963,5 +974,60 @@ describe('sign-in health section', () => {
     const { snapshot } = buildSnapshotFiles({ accounts: [], history: null, sampledAt: NOW }, 60);
     expect(snapshot.signIn).toBeUndefined();
     expect(renderSnapshotMarkdown(snapshot)).not.toContain('Sign-in health');
+  });
+});
+
+describe('sign-in renewal in usage.md', () => {
+  it('names what needs a person and a stopped runner, and renewed rows say they renew themselves', () => {
+    const base = {
+      version: 1 as const,
+      source: 'AI Account Center' as const,
+      generatedAt: new Date(NOW).toISOString(),
+      refreshSeconds: 60,
+      staleAfterSeconds: 300,
+      accounts: [],
+      signIn: [
+        {
+          name: 'gmail',
+          provider: 'claude',
+          platform: 'mac',
+          machine: 'mac',
+          email: 'a@example.com',
+          refreshExpiresAt: new Date(NOW + 40 * 86400_000).toISOString(),
+          loggedOutAt: new Date(NOW + 40 * 86400_000).toISOString(),
+          state: 'ok' as const,
+          fixCommand: '',
+          autoRenew: true,
+          renewFrom: new Date(NOW + 36 * 86400_000).toISOString(),
+          lastResult: 'renewed',
+          lastRenewAt: new Date(NOW - 3600_000).toISOString(),
+        },
+      ],
+    };
+    const fresh = renderSnapshotMarkdown({
+      ...base,
+      signInRenewal: {
+        runner: 'mac',
+        generatedAt: new Date(NOW - 60_000).toISOString(),
+        stale: false,
+        needsYou: [
+          { email: 'a@example.com', reason: 'captcha', how: 'Solve the CAPTCHA.', since: null },
+        ],
+      },
+    });
+    expect(fresh).toContain('Claude Code sign-ins renew by themselves (runner on mac');
+    expect(fresh).toContain('- **NEEDS YOU · a@example.com**: Solve the CAPTCHA.');
+    expect(fresh).toContain('(a@example.com): healthy. sign-in ends');
+    expect(fresh).toContain('renews by itself from');
+    const stale = renderSnapshotMarkdown({
+      ...base,
+      signInRenewal: {
+        runner: 'mac',
+        generatedAt: new Date(NOW - 7200_000).toISOString(),
+        stale: true,
+        needsYou: [],
+      },
+    });
+    expect(stale).toContain('renewals are not happening until it runs again');
   });
 });

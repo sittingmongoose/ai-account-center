@@ -66,6 +66,9 @@ DEFAULTS = {
     "verifyAfterHours": 9,
     # Write claude-signins.json / .md here (the AI Account Center usage snapshot folder).
     "publishDir": None,
+    # When this computer may not write that folder itself (macOS keeps scheduled jobs off network
+    # volumes), publish through another computer that mounts it: {"host": "<name>", "dir": "<path>"}.
+    "publishVia": None,
     # How long the runner waits for a person to solve a CAPTCHA before carrying on.
     "humanWaitMinutes": 20,
     # Mail used to read claude.ai sign-in links: {"kind": "mailapp"} (Mac), or
@@ -989,9 +992,94 @@ def check_browser_waits(cfg, st):
                 browser(cfg, "front", email, timeout=60)
 
 
-def publish(cfg, st):
+SHARE_WRITE = r"""
+import json, os, sys, tempfile
+folder, files = sys.argv[1], json.load(sys.stdin)
+for name, text in files.items():
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise SystemExit("bad name")
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=folder)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, os.path.join(folder, name))
+"""
+
+SHARE_READ = r"""
+import json, os, sys
+folder, names = sys.argv[1], sys.argv[2:]
+out = {}
+for name in names:
+    try:
+        with open(os.path.join(folder, name), "rb") as f:
+            out[name] = f.read().decode("utf-8")
+    except OSError:
+        pass
+print(json.dumps(out))
+"""
+
+
+def via_host(cfg):
+    via = cfg.get("publishVia") or {}
+    host = next((h for h in hosts(cfg) if h["name"] == via.get("host") and not h.get("local")), None)
+    return (host, via.get("dir")) if host and via.get("dir") else (None, None)
+
+
+def share_write(cfg, files):
+    """Writes {name: text} into the snapshot folder, here or through publishVia. True when written."""
     folder = cfg.get("publishDir")
-    if not folder or not os.path.isdir(folder):
+    if folder and os.path.isdir(folder):
+        try:
+            for name, text in files.items():
+                write_atomic(os.path.join(folder, name), text, 0o644)
+            return True
+        except OSError as e:
+            if not cfg.get("publishVia"):
+                log("cannot write the publish folder (%s)" % type(e).__name__)
+                return False
+    host, remote = via_host(cfg)
+    if not host:
+        return False
+    py = "python" if host["os"] == "windows" else "python3"
+    try:
+        r = subprocess.run(ssh_args(host) + ["%s -c %s %s" % (py, shq(SHARE_WRITE), shq(remote))],
+                           input=json.dumps(files).encode(), capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return False
+    if r.returncode != 0:
+        log("publishing through %s failed: %s" % (host["name"], scrub(r.stderr.decode("utf-8", "replace").strip().splitlines()[-1:])))
+    return r.returncode == 0
+
+
+def share_read(cfg, sub, names):
+    """Reads files from a subfolder of the snapshot folder, here or through publishVia."""
+    folder = cfg.get("publishDir")
+    out = {}
+    if folder and os.path.isdir(os.path.join(folder, sub)):
+        try:
+            for name in names:
+                with open(os.path.join(folder, sub, name), "rb") as f:
+                    out[name] = f.read()
+            return out
+        except OSError:
+            out = {}
+    host, remote = via_host(cfg)
+    if not host:
+        return out
+    py = "python" if host["os"] == "windows" else "python3"
+    try:
+        r = subprocess.run(ssh_args(host) + ["%s -c %s %s %s" % (py, shq(SHARE_READ), shq(remote.rstrip("/") + "/" + sub),
+                                                                   " ".join(shq(n) for n in names))],
+                           capture_output=True, timeout=60)
+        if r.returncode == 0:
+            return {k: v.encode("utf-8") for k, v in json.loads(r.stdout.decode("utf-8")).items()}
+    except (subprocess.TimeoutExpired, ValueError):
+        pass
+    return out
+
+
+def publish(cfg, st):
+    if not cfg.get("publishDir") and not cfg.get("publishVia"):
         return False
     now = now_ms()
     rows = []
@@ -1020,9 +1108,9 @@ def publish(cfg, st):
         "tickSeconds": 600, "staleAfterSeconds": 3600,
         "renewWithinHours": cfg["renewWithinHours"], "needsYou": needs, "hosts": hosts_out, "signIns": rows,
     }
-    write_atomic(os.path.join(folder, PUBLISH_MD), render_markdown(doc), 0o644)
-    write_atomic(os.path.join(folder, PUBLISH_JSON), json.dumps(doc, indent=1) + "\n", 0o644)
-    return True
+    # The JSON last: its generatedAt says the markdown beside it is from the same run.
+    return share_write(cfg, {PUBLISH_MD: render_markdown(doc)}) and \
+        share_write(cfg, {PUBLISH_JSON: json.dumps(doc, indent=1) + "\n"})
 
 
 def render_markdown(doc):
@@ -1149,21 +1237,20 @@ def cmd_test_login(args, cfg):
 
 def sync_from_share(cfg):
     """Keeps this installed copy current with the one the dashboard publishes in the share folder."""
-    folder = cfg.get("publishDir")
-    src = os.path.join(folder or "", "claude-signin")
     install = os.path.join(state_dir(), "app")
-    if not folder or not os.path.isdir(src) or os.path.abspath(HERE) != os.path.abspath(install):
+    if os.path.abspath(HERE) != os.path.abspath(install):
         return
-    for name in ("claude_signin.py", "browser_auth.mjs", "README.md"):
-        a, b = os.path.join(src, name), os.path.join(install, name)
+    names = ("claude_signin.py", "browser_auth.mjs", "README.md")
+    fresh = share_read(cfg, "claude-signin", names)
+    for name in names:
+        b = os.path.join(install, name)
+        new = fresh.get(name)
         try:
-            with open(a, "rb") as f:
-                new = f.read()
             with open(b, "rb") as f:
                 old = f.read()
         except OSError:
-            continue
-        if new != old and new.startswith(b"#!"):
+            old = None
+        if new and new != old and (name == "README.md" or new.startswith(b"#!")):
             with open(b + ".new", "wb") as f:
                 f.write(new)
             os.replace(b + ".new", b)

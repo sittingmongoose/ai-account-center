@@ -2,10 +2,7 @@ import {
   getCodexAuthProfilesSummary,
   type CodexAuthProfilesSummary,
 } from '../../codex-auth/codex-auth-dashboard-service';
-import {
-  readClaudeSignInRenewal,
-  type ClaudeSignInRenewal,
-} from './claude-signin-renewal';
+import { readClaudeSignInRenewal, type ClaudeSignInRenewal } from './claude-signin-renewal';
 import { getCcsDir } from '../../utils/config-manager';
 import {
   getAntigravityAccounts,
@@ -817,9 +814,9 @@ export class AccountDashboardService {
       ...(registeredAntigravity ? state.antigravity : []),
     ];
     const server = (this.deps.serverInfo ?? getDashboardServerInfo)();
-    const claudeSignIns = await (this.deps.claudeSignIns ?? (() => readClaudeSignInRenewal()))().catch(
-      () => null
-    );
+    const claudeSignIns = await (
+      this.deps.claudeSignIns ?? (() => readClaudeSignInRenewal())
+    )().catch(() => null);
     const jobs = (this.deps.accountJobStates ?? (() => getSignInJobRunner().accountStates()))();
     const rows = accounts.flatMap((account) => {
       let current = account;

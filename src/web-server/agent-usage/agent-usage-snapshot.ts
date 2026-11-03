@@ -323,10 +323,16 @@ function renderSignInMarkdown(
       if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
       if (row.autoRenew && row.state !== 'logged_out')
         return [
-          row.refreshExpiresAt ? `sign-in ends ${utc(row.refreshExpiresAt)}` : 'sign-in end not published',
+          row.refreshExpiresAt
+            ? `sign-in ends ${utc(row.refreshExpiresAt)}`
+            : 'sign-in end not published',
           row.renewFrom ? `renews by itself from ${utc(row.renewFrom)}` : 'renews by itself',
-          row.lastResult === 'renewed' && row.lastRenewAt ? `last renewed ${utc(row.lastRenewAt)}` : '',
-          row.lastResult && row.lastResult !== 'renewed' ? `last attempt: ${row.lastResult.replace(/_/g, ' ')}` : '',
+          row.lastResult === 'renewed' && row.lastRenewAt
+            ? `last renewed ${utc(row.lastRenewAt)}`
+            : '',
+          row.lastResult && row.lastResult !== 'renewed'
+            ? `last attempt: ${row.lastResult.replace(/_/g, ' ')}`
+            : '',
         ]
           .filter(Boolean)
           .join('; ');

@@ -17,7 +17,9 @@ function file(overrides: Record<string, unknown> = {}) {
     generatedAt: at(NOW - 5 * 60 * 1000),
     staleAfterSeconds: 3600,
     renewWithinHours: 96,
-    needsYou: [{ email: 'A@Example.com', reason: 'captcha', how: 'Solve the CAPTCHA.', since: at(NOW) }],
+    needsYou: [
+      { email: 'A@Example.com', reason: 'captcha', how: 'Solve the CAPTCHA.', since: at(NOW) },
+    ],
     hosts: [
       { host: 'mac', readAt: at(NOW), error: null },
       { host: 'windows', readAt: at(NOW - H), error: 'ssh_timeout' },
@@ -39,7 +41,13 @@ function file(overrides: Record<string, unknown> = {}) {
         reverts: 0,
         readAt: at(NOW),
       },
-      { host: 'windows', profile: 'gmail', email: 'a@example.com', state: 'ok', lastResult: 'end_not_moved' },
+      {
+        host: 'windows',
+        profile: 'gmail',
+        email: 'a@example.com',
+        state: 'ok',
+        lastResult: 'end_not_moved',
+      },
     ],
     ...overrides,
   };
@@ -57,7 +65,10 @@ describe('claude sign-in renewal file', () => {
   });
 
   it('marks a runner that stopped writing as stale', () => {
-    const parsed = parseClaudeSignInRenewal(JSON.stringify(file({ generatedAt: at(NOW - 2 * H) })), NOW);
+    const parsed = parseClaudeSignInRenewal(
+      JSON.stringify(file({ generatedAt: at(NOW - 2 * H) })),
+      NOW
+    );
     expect(parsed?.stale).toBe(true);
   });
 
@@ -66,11 +77,22 @@ describe('claude sign-in renewal file', () => {
       JSON.stringify(
         file({
           needsYou: [
-            { email: 'a@example.com', reason: 'captcha', how: 'open https://claude.ai/magic-link#x' },
-            { email: 'b@example.com', reason: 'captcha', how: `type ${'A'.repeat(24)}#${'B'.repeat(24)}` },
+            {
+              email: 'a@example.com',
+              reason: 'captcha',
+              how: 'open https://claude.ai/magic-link#x',
+            },
+            {
+              email: 'b@example.com',
+              reason: 'captcha',
+              how: `type ${'A'.repeat(24)}#${'B'.repeat(24)}`,
+            },
             { email: 'not-an-email', reason: 'captcha' },
           ],
-          signIns: [{ host: '../etc', profile: 'p', state: 'ok' }, { host: 'mac', profile: 'p', state: 'weird' }],
+          signIns: [
+            { host: '../etc', profile: 'p', state: 'ok' },
+            { host: 'mac', profile: 'p', state: 'weird' },
+          ],
         })
       ),
       NOW
@@ -106,8 +128,22 @@ describe('merging renewal into sign-in health', () => {
     const merged = mergeRenewal(
       {
         mac: [
-          { name: 'keychain', provider: 'claude', platform: 'mac', machine: 'mac', state: 'unavailable', fixCommand: '' },
-          { name: 'codex', provider: 'codex', platform: 'mac', machine: 'mac', state: 'unsupported', fixCommand: '' },
+          {
+            name: 'keychain',
+            provider: 'claude',
+            platform: 'mac',
+            machine: 'mac',
+            state: 'unavailable',
+            fixCommand: '',
+          },
+          {
+            name: 'codex',
+            provider: 'codex',
+            platform: 'mac',
+            machine: 'mac',
+            state: 'unsupported',
+            fixCommand: '',
+          },
         ],
       },
       renewal,
@@ -117,17 +153,31 @@ describe('merging renewal into sign-in health', () => {
       'claude:gmail:ok',
       'codex:codex:unsupported',
     ]);
-    expect(merged.mac[0]).toMatchObject({ email: 'a@example.com', autoRenew: true, lastResult: 'renewed' });
+    expect(merged.mac[0]).toMatchObject({
+      email: 'a@example.com',
+      autoRenew: true,
+      lastResult: 'renewed',
+    });
   });
 
   it('only adds renewal fields where the runner could not read the computer', () => {
-    const own = { name: 'gmail', provider: 'claude', platform: 'windows', machine: 'windows', state: 'ok' as const, fixCommand: 'x' };
+    const own = {
+      name: 'gmail',
+      provider: 'claude',
+      platform: 'windows',
+      machine: 'windows',
+      state: 'ok' as const,
+      fixCommand: 'x',
+    };
     const merged = mergeRenewal({ windows: [own] }, renewal, NOW);
     expect(merged.windows[0]).toMatchObject({ fixCommand: 'x', lastResult: 'end_not_moved' });
   });
 
   it('ignores a stale runner', () => {
-    const stale = parseClaudeSignInRenewal(JSON.stringify(file({ generatedAt: at(NOW - 3 * H) })), NOW);
+    const stale = parseClaudeSignInRenewal(
+      JSON.stringify(file({ generatedAt: at(NOW - 3 * H) })),
+      NOW
+    );
     const machines = { mac: [] };
     expect(mergeRenewal(machines, stale, NOW)).toBe(machines);
   });
