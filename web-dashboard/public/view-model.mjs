@@ -916,9 +916,7 @@ function codexSection(accounts, data, now, allAccounts = accounts) {
   const metaRuns = [
     run(rows.length, true),
     run(` ${rows.length === 1 ? 'account' : 'accounts'} · `),
-    ...(active
-      ? [run(activeName, true, 'good'), run(' active')]
-      : [run('none active')]),
+    ...(active ? [run(activeName, true, 'good'), run(' active')] : [run('none active')]),
   ];
   return {
     id: 'codex',
@@ -1079,7 +1077,9 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
             shown: true,
             warn: true,
             runs: [run(native.antigravityServiceProblem || native.antigravityUpdatePaused)],
-            words: wordsOf([run(native.antigravityServiceProblem || native.antigravityUpdatePaused)]),
+            words: wordsOf([
+              run(native.antigravityServiceProblem || native.antigravityUpdatePaused),
+            ]),
             when: '',
           }
         : noFoot(),
@@ -1174,7 +1174,9 @@ function providerCards(accounts, hidden, now) {
         ]
           .filter(Boolean)
           .join(' · '),
-        packsNote: sameExpiry ? expiryText(packs[0].expiresAt, now, `All ${packs.length} packs expire `) : '',
+        packsNote: sameExpiry
+          ? expiryText(packs[0].expiresAt, now, `All ${packs.length} packs expire `)
+          : '',
         note: text(account.message) || (meters.length ? '' : 'Usage unavailable'),
         meters,
         amounts: amountWindows.map((w) =>
@@ -1248,7 +1250,12 @@ export function dashboardViewModel(data, ctx = {}) {
     );
   if (!hidden.has('codex'))
     sections.push(
-      codexSection(of('codex'), data, now, everyAccount.filter((account) => account.provider === 'codex'))
+      codexSection(
+        of('codex'),
+        data,
+        now,
+        everyAccount.filter((account) => account.provider === 'codex')
+      )
     );
   if (!hidden.has('antigravity') && of('antigravity').length)
     sections.push(
@@ -1407,8 +1414,7 @@ export const updateTotal = (job) =>
 export function updateRunningHosts(job) {
   if (job?.state !== 'running') return [];
   const hosts = job.hosts && typeof job.hosts === 'object' ? job.hosts : null;
-  if (hosts)
-    return UPDATE_HOST_IDS.filter((id) => hosts[id]?.state === 'running');
+  if (hosts) return UPDATE_HOST_IDS.filter((id) => hosts[id]?.state === 'running');
   return job.activePlatform ? [job.activePlatform] : [];
 }
 

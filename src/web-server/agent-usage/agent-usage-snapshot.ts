@@ -70,6 +70,20 @@ export interface SnapshotAccount extends Omit<AgentUsageAccount, 'windows'> {
   windows: SnapshotWindow[];
 }
 
+/** One machine's Claude sign-in expiry report (see scripts/account-usage/signin_expiry.py). */
+export interface SnapshotSignInProfile {
+  name: string;
+  provider: string;
+  platform: string;
+  configDir?: string;
+  accessExpiresAt?: string | null;
+  refreshExpiresAt?: string | null;
+  /** The first access expiry that falls after the refresh expiry; after this the login is dead. */
+  loggedOutAt?: string | null;
+  state: 'ok' | 'warn' | 'critical' | 'logged_out' | 'unavailable' | 'unsupported';
+  fixCommand: string;
+}
+
 export interface AgentUsageSnapshot {
   version: 1;
   source: 'AI Account Center';
@@ -79,6 +93,8 @@ export interface AgentUsageSnapshot {
   /** Older than this, the dashboard has stopped writing: treat the readings as stale. */
   staleAfterSeconds: number;
   accounts: SnapshotAccount[];
+  /** Claude sign-in expiry per machine, worst first in the markdown; absent until first collected. */
+  signIn?: SnapshotSignInProfile[];
 }
 
 export interface AgentUsageHistoryFile {
@@ -93,7 +109,8 @@ export interface AgentUsageHistoryFile {
 export function buildSnapshotFiles(
   event: AccountAnalyticsSampleEvent,
   refreshSeconds: number,
-  recent: RecentReadings | null = null
+  recent: RecentReadings | null = null,
+  signIn: SnapshotSignInProfile[] = []
 ): { snapshot: AgentUsageSnapshot; history: AgentUsageHistoryFile } {
   const now = event.sampledAt;
   const projected = projectAgentUsage(event.accounts, { now, includeHidden: true });
@@ -132,6 +149,7 @@ export function buildSnapshotFiles(
       refreshSeconds,
       staleAfterSeconds: staleAfterSeconds(refreshSeconds),
       accounts,
+      ...(signIn.length > 0 ? { signIn } : {}),
     },
     history: { version: 1, generatedAt, hours: HISTORY_HOURS, series },
   };
@@ -241,6 +259,45 @@ function hostName(account: AgentUsageAccount): string {
 }
 
 /** The same snapshot in plain words, one provider section and one line per window. */
+const SIGNIN_STATE_WORDS: Record<string, string> = {
+  ok: 'healthy',
+  warn: 'ends within 24 hours',
+  critical: 'ends within 4 hours',
+  logged_out: 'already logged out',
+  unavailable: 'not readable on this machine',
+  unsupported: 'no expiry published',
+};
+
+/** The sign-in section, worst state first; a machine with nothing readable still names itself. */
+function renderSignInMarkdown(
+  machines: { machines?: SnapshotSignInProfile[] },
+  now: number
+): string[] {
+  const lines: string[] = [];
+  const profiles = (machines.machines ?? []).map((row) => ({
+    ...row,
+    machine: row.platform ?? 'unknown',
+  }));
+  const rank: Record<string, number> = {
+    logged_out: 0,
+    critical: 1,
+    warn: 2,
+    unavailable: 3,
+    unsupported: 4,
+    ok: 5,
+  };
+  profiles.sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9));
+  for (const row of profiles) {
+    const when = row.loggedOutAt ? `sign-in ends ${utc(row.loggedOutAt)}` : 'no end time published';
+    const fix = row.state === 'unsupported' ? '' : `; re-login before then: \`${row.fixCommand}\``;
+    lines.push(
+      `- **${row.provider} · ${row.machine}/${row.name}**: ${when} (${SIGNIN_STATE_WORDS[row.state] ?? row.state})${fix}`
+    );
+  }
+  void now;
+  return lines;
+}
+
 export function renderSnapshotMarkdown(snapshot: AgentUsageSnapshot): string {
   const now = Date.parse(snapshot.generatedAt);
   const lines = [
@@ -281,6 +338,19 @@ export function renderSnapshotMarkdown(snapshot: AgentUsageSnapshot): string {
     );
     if (account.status === 'ok' || account.status === 'cached')
       for (const window of account.windows) lines.push(`  - ${windowText(window, now)}`);
+    lines.push('');
+  }
+  const signInProfiles = snapshot.signIn ?? [];
+  if (signInProfiles.length > 0) {
+    lines.push('');
+    lines.push('## Sign-in health');
+    lines.push('');
+    lines.push(
+      ...renderSignInMarkdown(
+        { machines: signInProfiles },
+        snapshot.generatedAt ? Date.parse(snapshot.generatedAt) : Date.now()
+      )
+    );
     lines.push('');
   }
   return `${lines.join('\n').trimEnd()}\n`;
@@ -349,6 +419,8 @@ export interface SnapshotPublisherDeps {
   isDirectory?: (directory: string) => Promise<boolean>;
   refreshSeconds?: () => number;
   syncClient?: (directory: string) => Promise<void>;
+  /** Sign-in expiry reports per machine; best effort, a failure publishes without them. */
+  signIn?: () => Promise<SnapshotSignInProfile[]>;
 }
 
 /** Handles one sample; resolves whether the files were written. */
@@ -362,6 +434,7 @@ export function createSnapshotPublisher(
     (async (directory: string) => (await fs.promises.stat(directory)).isDirectory());
   const refreshSeconds = deps.refreshSeconds ?? getAccountRefreshIntervalSeconds;
   const syncClient = deps.syncClient ?? ((directory: string) => syncSnapshotClient(directory));
+  const signIn = deps.signIn ?? (async () => []);
   const recent = new RecentReadings();
   let busy = false;
   let busySince = 0;
@@ -400,7 +473,13 @@ export function createSnapshotPublisher(
       if (event.accounts.length === 0) return false;
       if (!(await isDirectory(directory)))
         throw new ValidationError('The usage snapshot folder is not a folder.');
-      const { snapshot, history } = buildSnapshotFiles(event, refreshSeconds(), recent);
+      const signInProfiles = await signIn().catch(() => []);
+      const { snapshot, history } = buildSnapshotFiles(
+        event,
+        refreshSeconds(),
+        recent,
+        signInProfiles
+      );
       await write(directory, SNAPSHOT_HISTORY, `${JSON.stringify(history)}\n`);
       await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot));
       // usage.json last: its time says every file of this sample is in place.

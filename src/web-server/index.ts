@@ -66,6 +66,7 @@ import {
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { getSignInHealth } from './services/signin-health-service';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
 import { createUsageHubRouter } from './usage-hub/usage-hub-router';
 
@@ -383,7 +384,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         );
       }
       // Agent usage snapshot (off until a folder is set): written after every analytics sample.
-      stopAgentUsageSnapshot = startAgentUsageSnapshot();
+      stopAgentUsageSnapshot = startAgentUsageSnapshot({
+        signIn: async () => {
+          const health = await getSignInHealth();
+          return Object.entries(health.machines).flatMap(([machine, rows]) =>
+            rows.map((row) => ({ ...row, platform: machine }))
+          );
+        },
+      });
       startAccountAnalyticsSampling();
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();
