@@ -102,6 +102,22 @@ describe('claude sign-in renewal file', () => {
     expect(JSON.stringify(parsed)).not.toContain('magic-link');
   });
 
+  it('keeps browser session ends, never cookie values', () => {
+    const parsed = parseClaudeSignInRenewal(
+      JSON.stringify(
+        file({
+          browserSessions: [
+            { email: 'a@example.com', signedIn: true, sessionEndsAt: at(NOW + 28 * 24 * H), visitExtends: false, value: 'sk' },
+          ],
+        })
+      ),
+      NOW
+    );
+    expect(parsed?.browserSessions).toEqual([
+      { email: 'a@example.com', signedIn: true, sessionEndsAt: at(NOW + 28 * 24 * H), checkedAt: null, visitExtends: false },
+    ]);
+  });
+
   it('refuses other versions and broken JSON', () => {
     expect(parseClaudeSignInRenewal(JSON.stringify(file({ version: 2 })), NOW)).toBeNull();
     expect(parseClaudeSignInRenewal('{', NOW)).toBeNull();

@@ -570,13 +570,13 @@ def node_path(cfg):
         (p for p in ("/opt/homebrew/bin/node", "/usr/local/bin/node", os.path.expanduser("~/.local/bin/node")) if os.path.isfile(p)), None)
 
 
-def browser(cfg, command, email, stdin_text=None, on_event=None, timeout=1800):
+def browser(cfg, command, email, stdin_text=None, on_event=None, timeout=1800, extra=None):
     """Runs one browser_auth.mjs command; returns its result dict. Secrets stay in the dict."""
     node = node_path(cfg)
     if not node:
         return {"result": "error", "reason": "no_node"}
     argv = [node, os.path.join(HERE, "browser_auth.mjs"), command, email,
-            "--profiles", cfg["chromeProfilesDir"], "--wait-minutes", str(cfg["humanWaitMinutes"])]
+            "--profiles", cfg["chromeProfilesDir"], "--wait-minutes", str(cfg["humanWaitMinutes"])] + (extra or [])
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         if stdin_text is not None:
@@ -594,7 +594,7 @@ def browser(cfg, command, email, stdin_text=None, on_event=None, timeout=1800):
         if "event" in item and on_event:
             on_event(item["event"])
         if "result" in item:
-            result = item
+            result = dict(item.pop("extra", None) or {}, **item) if isinstance(item.get("extra"), dict) else item
         if time.time() > end:
             proc.kill()
             break
@@ -792,8 +792,9 @@ def sign_in_browser(cfg, st, email):
 
 # ---------------------------------------------------------------- renewing one sign-in
 
-def renew_one(cfg, st, host, data, row):
-    """Renews one sign-in. Returns "renewed", "signed_out" or a failure word."""
+def renew_one(cfg, st, host, data, row, until_link=False):
+    """Renews one sign-in. Returns "entered", "signed_out" or a failure word ("link_captured" with
+    until_link: the login started and printed its link, which is then dropped unopened)."""
     email = row["email"]
     try:
         argv = login_command(host, dict(row, _claude=data.get("claude")), cfg)
@@ -808,6 +809,8 @@ def renew_one(cfg, st, host, data, row):
             url = prompt.url()
         if not url:
             return "no_login_link"
+        if until_link:
+            return "link_captured"
         on_captcha, _ = captcha_hook(cfg, st, email)
         res = browser(cfg, "authorize", email, stdin_text=url, on_event=on_captcha)
         url = None
@@ -939,6 +942,10 @@ def renew_due(cfg, st, results, only=None, force=False, dry_run=False):
         result = renew_one(cfg, st, h, data, row)
         if result == "signed_out":
             if sign_in_browser(cfg, st, email):
+                # A person is at the screen right now: sign in the other accounts whose browser
+                # session ends soon too, so their CAPTCHAs come in one sitting instead of on
+                # separate days.
+                batch_browser_sign_ins(cfg, st, exclude=email)
                 result = renew_one(cfg, st, h, data, row)
             else:
                 result = "captcha_timeout"
@@ -978,6 +985,63 @@ def renew_due(cfg, st, results, only=None, force=False, dry_run=False):
         outcomes.append((k, result))
         save_state(st)
     return outcomes
+
+
+SESSION_SOON_MS = 5 * 24 * HOUR_MS
+
+
+def browser_sessions(cfg, st, force=False):
+    """Each account's claude.ai session end in its Chrome profile (cookie expiry only). Checked every
+    6 hours; once a day it also opens claude.ai briefly to learn whether a visit extends the session."""
+    now = now_ms()
+    emails = sorted({p.get("email") for p in st["profiles"].values() if p.get("email")})
+    for email in emails:
+        acc = st["accounts"].setdefault(email, {})
+        if not force and now - (acc.get("sessionCheckedAt") or 0) < 6 * HOUR_MS:
+            continue
+        visit = acc.get("signedIn") and now - (acc.get("visitedAt") or 0) > 24 * HOUR_MS and not acc.get("needs")
+        res = browser(cfg, "session", email, extra=["--visit"] if visit else None, timeout=120)
+        if res.get("result") != "ok":
+            continue
+        acc["sessionCheckedAt"] = now
+        acc["signedIn"] = bool(res.get("signedIn"))
+        acc["sessionEndsAt"] = parse_iso(res.get("sessionEndsAt"))
+        if res.get("visited"):
+            acc["visitedAt"] = now
+            before, after = parse_iso(res.get("before")), acc["sessionEndsAt"]
+            if not res.get("challenged") and before and after:
+                acc["sessionSlides"] = after > before + 60000
+                if after > before + 60000:
+                    log("%s: the claude.ai visit extended its browser session to %s" % (email, human_time(after)))
+
+
+def parse_iso(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(dt.datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def batch_browser_sign_ins(cfg, st, exclude=None):
+    now = now_ms()
+    for email, acc in sorted(st["accounts"].items()):
+        if email == exclude or acc.get("needs"):
+            continue
+        ends = acc.get("sessionEndsAt")
+        if acc.get("signedIn") is False or (ends and ends - now < SESSION_SOON_MS):
+            log("%s: its browser session ends %s; signing it in now while a person is here" % (email, human_time(ends)))
+            if sign_in_browser(cfg, st, email):
+                acc["signedIn"] = True
+                acc["sessionCheckedAt"] = 0
+
+
+def close_browsers(cfg, st):
+    """Quits the Chrome profiles this run used, except one a person is still working in."""
+    for email, acc in st["accounts"].items():
+        if acc.get("needs") not in ("captcha",):
+            browser(cfg, "close", email, timeout=60)
 
 
 def check_browser_waits(cfg, st):
@@ -1100,6 +1164,9 @@ def publish(cfg, st):
         })
     needs = [{"email": e, "reason": a["needs"], "how": a.get("needsHow"), "since": iso(a.get("needsSince"))}
              for e, a in sorted(st["accounts"].items()) if a.get("needs")]
+    sessions = [{"email": e, "signedIn": a.get("signedIn"), "sessionEndsAt": iso(a.get("sessionEndsAt")),
+                 "checkedAt": iso(a.get("sessionCheckedAt")), "visitExtends": a.get("sessionSlides")}
+                for e, a in sorted(st["accounts"].items()) if a.get("sessionCheckedAt")]
     hosts_out = [{"host": n, "readAt": iso(h.get("readAt")), "error": h.get("error")}
                  for n, h in sorted((st.get("hosts") or {}).items())]
     doc = {
@@ -1107,6 +1174,7 @@ def publish(cfg, st):
         "generatedAt": iso(now), "runner": this_host_name(cfg) or socket.gethostname().split(".")[0].lower(),
         "tickSeconds": 600, "staleAfterSeconds": 3600,
         "renewWithinHours": cfg["renewWithinHours"], "needsYou": needs, "hosts": hosts_out, "signIns": rows,
+        "browserSessions": sessions,
     }
     # The JSON last: its generatedAt says the markdown beside it is from the same run.
     return share_write(cfg, {PUBLISH_MD: render_markdown(doc)}) and \
@@ -1129,6 +1197,12 @@ def render_markdown(doc):
     for h in doc["hosts"]:
         if h.get("error"):
             lines.append("- **%s** could not be read: %s (last read %s)" % (h["host"], h["error"], when(h.get("readAt"))))
+    if doc.get("browserSessions"):
+        lines += ["", "Browser sessions (the Chrome profile per account that approves renewals; when one has ended,",
+                  "the next renewal for that account needs one CAPTCHA):", ""]
+        for b in doc["browserSessions"]:
+            lines.append("- %s: %s" % (b["email"], ("signed in until %s" % when(b["sessionEndsAt"])) if b.get("signedIn")
+                                       else "signed out"))
     lines += ["", "| Computer | Profile | Account | State | Sign-in ends | Logs out about | Last renewal |", "|---|---|---|---|---|---|---|"]
     for r in doc["signIns"]:
         lines.append("| %s | %s | %s | %s | %s | %s | %s |" % (
@@ -1179,7 +1253,9 @@ def cmd_tick(args, cfg):
         results = scan(cfg, st)
         save_state(st)
         renew_due(cfg, st, results)
+        browser_sessions(cfg, st)
         check_browser_waits(cfg, st)
+        close_browsers(cfg, st)
         save_state(st)
         publish(cfg, st)
     return 0
@@ -1223,8 +1299,10 @@ def cmd_test_login(args, cfg):
         cfg["humanWaitMinutes"] = args.wait_minutes
     row = {"profile": "_test", "dir": folder, "default": False, "email": args.account.lower(), "signInEndsAt": 0}
     st = load_state()
-    result = renew_one(cfg, st, host, data, row)
+    result = renew_one(cfg, st, host, data, row, until_link=args.until_link)
     print("login:", result)
+    if args.until_link:
+        return 0 if result == "link_captured" else 1
     if result == "signed_out":
         print("that account's Chrome profile is signed out; run renew for a real profile to sign it in")
         return 1
@@ -1385,6 +1463,7 @@ def main():
     t.add_argument("--account", required=True)
     t.add_argument("--dir", required=True, help="absolute throwaway CLAUDE_CONFIG_DIR on that computer")
     t.add_argument("--wait-minutes", type=int, help="how long to wait for a person at a CAPTCHA")
+    t.add_argument("--until-link", action="store_true", help="stop once the login prints its link (no browser)")
     sub.add_parser("install")
     sub.add_parser("uninstall")
     sub.add_parser("doctor")

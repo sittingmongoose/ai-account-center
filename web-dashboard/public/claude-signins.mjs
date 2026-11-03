@@ -104,6 +104,18 @@ export function claudeSignInFacts(data, email, now = Date.now()) {
       : `Automatic, by the runner on ${hostWord(renewal.runner)}`,
     mono: false,
   });
+  const session = (renewal.browserSessions || []).find((b) => b?.email === String(email || '').trim().toLowerCase());
+  if (session)
+    facts.push({
+      label: 'Browser session',
+      value:
+        session.signedIn === false
+          ? 'Signed out: the next renewal needs one CAPTCHA'
+          : valid(session.sessionEndsAt)
+            ? `Signed in until ${when.format(new Date(session.sessionEndsAt))}`
+            : 'Signed in',
+      mono: false,
+    });
   for (const row of rows)
     facts.push({
       label: `Sign-in · ${hostWord(row.host)}${row.profile === 'default' ? '' : ` ${row.profile}`}`,

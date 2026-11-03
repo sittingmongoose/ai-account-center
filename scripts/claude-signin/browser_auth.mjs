@@ -9,6 +9,8 @@
 //   node browser_auth.mjs request-link <email> --profiles <dir>     ask claude.ai to email a sign-in link
 //   node browser_auth.mjs open-link    <email> --profiles <dir> [--wait-minutes N]   link on stdin
 //   node browser_auth.mjs front        <email> --profiles <dir>     bring that account's window forward
+//   node browser_auth.mjs session      <email> --profiles <dir> [--visit]   claude.ai session end (cookie expiry)
+//   node browser_auth.mjs close        <email> --profiles <dir>     quit that account's Chrome if it runs
 //
 // stdout carries JSON lines only: {"event": ...} while it runs, then one {"result": ...} line.
 // The authorize result is the only line that carries a secret (the one-use code); the caller reads
@@ -23,6 +25,8 @@ import { join } from 'node:path';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (message) => process.stderr.write(`[browser] ${message}\n`);
 const emit = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+/** A command's outcome; the top level reports it once the command's tab is closed. */
+const done = (result, extra = {}) => ({ result, extra });
 const finish = (result, extra = {}) => {
   emit({ result, ...extra });
   process.exit(result === 'code' || result === 'sent' || result === 'signed_in' || result === 'ok' ? 0 : 1);
@@ -55,7 +59,8 @@ async function readStdinLine() {
 
 function chromeLaunch(flags) {
   const os = platform();
-  if (os === 'darwin') return ['open', ['-na', 'Google Chrome', '--args', ...flags]];
+  // -g -j: start in the background, hidden; a window comes forward only when a person is needed.
+  if (os === 'darwin') return ['open', ['-g', '-j', '-na', 'Google Chrome', '--args', ...flags]];
   if (os === 'win32') {
     const roots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA].filter(Boolean);
     for (const root of roots) {
@@ -324,7 +329,7 @@ const clickByText = (label) => `(() => {
 
 async function authorize() {
   const url = await readStdinLine();
-  if (!/^https:\/\/claude\.(com|ai)\/[^\s]*oauth\/authorize\?/.test(url)) finish('error', { reason: 'bad_url' });
+  if (!/^https:\/\/claude\.(com|ai)\/[^\s]*oauth\/authorize\?/.test(url)) return done('error', { reason: 'bad_url' });
   const cdp = new Cdp(await ensureChrome());
   await cdp.open();
   const tab = await Tab.open(cdp);
@@ -333,9 +338,9 @@ async function authorize() {
     let found = false;
     const human = { told: false };
     for (let i = 0; i < 40 && !found; i++) {
-      if (!(await waitOutChallenge(tab, human))) return finish('captcha_timeout');
+      if (!(await waitOutChallenge(tab, human))) return done('captcha_timeout');
       const href = await tab.url();
-      if (ON_LOGIN.test(href)) return finish('signed_out');
+      if (ON_LOGIN.test(href)) return done('signed_out');
       found = await tab.eval(`[...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Authorize')`).catch(() => false);
       if (!found) await sleep(1500);
     }
@@ -346,12 +351,12 @@ async function authorize() {
         log('buttons ' + JSON.stringify(await tab.eval(`[...document.querySelectorAll('button')].map((b) => b.innerText.trim()).slice(0, 20)`).catch(() => [])));
         log('text ' + JSON.stringify(body.slice(0, 300)));
       }
-      if (/continue with (email|google)|log in|sign in/i.test(body) && !/logged in as/i.test(body)) return finish('signed_out');
-      return finish('error', { reason: 'no_authorize_button' });
+      if (/continue with (email|google)|log in|sign in/i.test(body) && !/logged in as/i.test(body)) return done('signed_out');
+      return done('error', { reason: 'no_authorize_button' });
     }
     const who = (await tab.text()).match(/Logged in as\s+(\S+@\S+)/i);
     const signedInAs = who ? who[1].replace(/[.,;:]+$/, '').toLowerCase() : '';
-    if (signedInAs !== email) return finish('wrong_account', { signedInAs: signedInAs || null });
+    if (signedInAs !== email) return done('wrong_account', { signedInAs: signedInAs || null });
     // Authorize can take 15 s or more to answer; reloading cancels it, so wait long before one retry.
     let reached = false;
     for (let attempt = 0; attempt < 2 && !reached; attempt++) {
@@ -364,10 +369,10 @@ async function authorize() {
       for (let i = 0; i < 90 && !reached; i++) {
         await sleep(1000);
         reached = /\/oauth\/code\/callback/.test(await tab.url());
-        if (!reached && !(await waitOutChallenge(tab, human))) return finish('captcha_timeout');
+        if (!reached && !(await waitOutChallenge(tab, human))) return done('captcha_timeout');
       }
     }
-    if (!reached) return finish('error', { reason: 'authorize_timeout' });
+    if (!reached) return done('error', { reason: 'authorize_timeout' });
     let code = null;
     for (let i = 0; i < 30 && !code; i++) {
       await sleep(1000);
@@ -383,9 +388,9 @@ async function authorize() {
         })()`)
         .catch(() => null);
     }
-    if (!code) return finish('error', { reason: 'no_code' });
+    if (!code) return done('error', { reason: 'no_code' });
     await tab.go('about:blank').catch(() => {});
-    return finish('code', { code });
+    return done('code', { code });
   } finally {
     await tab.close();
     cdp.close();
@@ -399,17 +404,17 @@ async function requestLink() {
   try {
     await tab.go('https://claude.ai/login');
     const human = { told: false };
-    if (!(await waitOutChallenge(tab, human))) return finish('captcha_timeout');
-    if (!ON_LOGIN.test(await tab.url())) return finish('signed_in');
+    if (!(await waitOutChallenge(tab, human))) return done('captcha_timeout');
+    if (!ON_LOGIN.test(await tab.url())) return done('signed_in');
     let ready = false;
     for (let i = 0; i < 30 && !ready; i++) {
       ready = await tab.eval(`!!document.querySelector('input[type=email]')`).catch(() => false);
       if (!ready) {
-        if (!(await waitOutChallenge(tab, human))) return finish('captcha_timeout');
+        if (!(await waitOutChallenge(tab, human))) return done('captcha_timeout');
         await sleep(1000);
       }
     }
-    if (!ready) return finish('error', { reason: 'no_email_box' });
+    if (!ready) return done('error', { reason: 'no_email_box' });
     await tab.eval(`(() => {
       const box = document.querySelector('input[type=email]');
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -420,13 +425,13 @@ async function requestLink() {
       return true;
     })()`);
     await sleep(800);
-    if (!(await tab.eval(clickByText('Continue with email')))) return finish('error', { reason: 'no_continue_button' });
+    if (!(await tab.eval(clickByText('Continue with email')))) return done('error', { reason: 'no_continue_button' });
     for (let i = 0; i < 15; i++) {
       await sleep(1000);
-      if (!(await waitOutChallenge(tab, human))) return finish('captcha_timeout');
+      if (!(await waitOutChallenge(tab, human))) return done('captcha_timeout');
       if (/check your (email|inbox)|sent|magic link|verification/i.test(await tab.text())) break;
     }
-    return finish('sent');
+    return done('sent');
   } finally {
     await tab.close();
     cdp.close();
@@ -435,7 +440,7 @@ async function requestLink() {
 
 async function openLink() {
   const link = await readStdinLine();
-  if (!/^https:\/\/claude\.ai\/magic-link#\S+$/.test(link)) finish('error', { reason: 'bad_link' });
+  if (!/^https:\/\/claude\.ai\/magic-link#\S+$/.test(link)) return done('error', { reason: 'bad_link' });
   const cdp = new Cdp(await ensureChrome());
   await cdp.open();
   const tab = await Tab.open(cdp);
@@ -447,7 +452,7 @@ async function openLink() {
     while (Date.now() < end) {
       await sleep(2000);
       const href = await tab.url();
-      if (href.startsWith('https://claude.ai/') && !ON_LOGIN.test(href)) return finish('signed_in');
+      if (href.startsWith('https://claude.ai/') && !ON_LOGIN.test(href)) return done('signed_in');
       if (!told && (await challenged(tab))) {
         told = true;
         await tab.front();
@@ -457,7 +462,7 @@ async function openLink() {
     }
     // Leave the page where it is: a person can still finish it, and the next run finds the profile signed in.
     keepOpen = told;
-    return finish(told ? 'captcha_timeout' : 'timeout');
+    return done(told ? 'captcha_timeout' : 'timeout');
   } finally {
     if (!keepOpen) await tab.close();
     cdp.close();
@@ -474,9 +479,61 @@ async function front() {
     await new Tab(cdp, page.targetId, sessionId).front();
   } else raiseApp();
   cdp.close();
-  finish('ok');
+  return done('ok');
 }
 
-const commands = { authorize, 'request-link': requestLink, 'open-link': openLink, front };
+/**
+ * When this account's claude.ai session ends: the expiry of its session cookie, read from Chrome's
+ * cookie store. Only the cookie's name and expiry are read, never its value. With --visit it first
+ * opens claude.ai briefly (a person-only check is not waited for) to learn whether a visit extends
+ * the session.
+ */
+async function session() {
+  adoptPrototypeProfile();
+  const running = !!(await browserEndpoint()) || existsSync(profileDir);
+  if (!running) return done('ok', { signedIn: false, sessionEndsAt: null, profile: false });
+  const cdp = new Cdp(await ensureChrome());
+  await cdp.open();
+  const read = async () => {
+    const { cookies } = await cdp.send('Storage.getCookies');
+    const key = cookies.find((c) => c.name === 'sessionKey' && /(^|\.)claude\.ai$/.test(c.domain));
+    const ends = key && key.expires > 0 ? new Date(key.expires * 1000).toISOString() : null;
+    return { signedIn: !!key && (!ends || Date.parse(ends) > Date.now()), sessionEndsAt: ends };
+  };
+  try {
+    const before = await read();
+    if (!args.includes('--visit') || !before.signedIn) return done('ok', { ...before, profile: true });
+    const tab = await Tab.open(cdp);
+    let challengedVisit = false;
+    try {
+      await tab.go('https://claude.ai/new');
+      await sleep(4000);
+      challengedVisit = await challenged(tab);
+    } finally {
+      await tab.close();
+    }
+    const after = await read();
+    return done('ok', { ...after, profile: true, visited: true, challenged: challengedVisit, before: before.sessionEndsAt });
+  } finally {
+    cdp.close();
+  }
+}
+
+/** Quits this account's Chrome (cookies stay on disk); nothing to do when it is not running. */
+async function close() {
+  const url = await browserEndpoint();
+  if (!url) return done('ok', { closed: false });
+  const cdp = new Cdp(url);
+  await cdp.open();
+  await cdp.send('Browser.close').catch(() => {});
+  cdp.close();
+  return done('ok', { closed: true });
+}
+
+const commands = { authorize, 'request-link': requestLink, 'open-link': openLink, front, session, close };
 if (!commands[command]) finish('error', { reason: 'unknown_command' });
-commands[command]().catch((error) => finish('error', { reason: 'exception', detail: String(error?.message || error).slice(0, 160) }));
+adoptPrototypeProfile();
+// Each command returns its result; its own finally has closed the tab before the process exits.
+commands[command]()
+  .then((outcome) => finish(outcome.result, outcome.extra))
+  .catch((error) => finish('error', { reason: 'exception', detail: String(error?.message || error).slice(0, 160) }));

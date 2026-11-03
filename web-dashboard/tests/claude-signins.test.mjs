@@ -47,6 +47,14 @@ test('Details lists the runner and each computer; Home warns in the Claude heade
   assert.ok(claude.metaRuns.some((r) => r.tone === 'warn'));
 });
 
+test('Details says when the browser session that approves renewals ends', () => {
+  const d = data({ browserSessions: [{ email: 'a@example.com', signedIn: true, sessionEndsAt: iso(NOW + 28 * 24 * H) }] });
+  const fact = claudeSignInFacts(d, 'a@example.com', NOW).find((f) => f.label === 'Browser session');
+  assert.match(fact.value, /^Signed in until /);
+  const out = data({ browserSessions: [{ email: 'a@example.com', signedIn: false, sessionEndsAt: null }] });
+  assert.equal(claudeSignInFacts(out, 'a@example.com', NOW).find((f) => f.label === 'Browser session').value, 'Signed out: the next renewal needs one CAPTCHA');
+});
+
 test('each new person-only step raises one notice', () => {
   const seen = new Set();
   const d = data({ needsYou: [{ email: 'a@example.com', reason: 'captcha', how: 'Solve it.', since: 'x' }] });

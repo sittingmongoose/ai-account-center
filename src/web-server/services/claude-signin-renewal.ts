@@ -71,6 +71,20 @@ export interface ClaudeSignInRenewal {
   needsYou: ClaudeSignInNeed[];
   hosts: Array<{ host: string; readAt: string | null; error: string | null }>;
   signIns: ClaudeSignInRenewalRow[];
+  /**
+   * Each account's claude.ai session in the Chrome profile that approves its renewals. Once one has
+   * ended, that account's next renewal needs a person for one CAPTCHA.
+   */
+  browserSessions: ClaudeBrowserSession[];
+}
+
+export interface ClaudeBrowserSession {
+  email: string;
+  signedIn: boolean | null;
+  sessionEndsAt: string | null;
+  checkedAt: string | null;
+  /** Whether a visit to claude.ai moved the session end later; null until measured. */
+  visitExtends: boolean | null;
 }
 
 const str = (value: unknown, pattern: RegExp): string | null =>
@@ -167,6 +181,21 @@ export function parseClaudeSignInRenewal(
     signIns: list(doc.signIns, 128)
       .map(row)
       .filter((r): r is ClaudeSignInRenewalRow => r !== null),
+    browserSessions: list(doc.browserSessions, 32)
+      .map((raw): ClaudeBrowserSession | null => {
+        const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+        const email = typeof r.email === 'string' ? str(r.email.toLowerCase(), EMAIL) : null;
+        if (!email) return null;
+        const flag = (value: unknown) => (typeof value === 'boolean' ? value : null);
+        return {
+          email,
+          signedIn: flag(r.signedIn),
+          sessionEndsAt: time(r.sessionEndsAt),
+          checkedAt: time(r.checkedAt),
+          visitExtends: flag(r.visitExtends),
+        };
+      })
+      .filter((s): s is ClaudeBrowserSession => s !== null),
   };
 }
 

@@ -39,14 +39,22 @@ reported as needing a person.
 
 ## When a person is needed
 
-The Chrome profiles stay signed in to claude.ai, so most renewals need nobody. Two things only a
-person may do:
+The Chrome profiles stay signed in to claude.ai, so most renewals need nobody. A claude.ai browser
+session lasts about 28 days from its sign-in, a little less than a Claude Code sign-in, so the
+runner tracks when each account's session ends (the session cookie's expiry, never its value; every
+6 hours, published as `browserSessions`) and once a day opens claude.ai briefly to learn whether a
+visit extends it (`visitExtends`). Chrome starts hidden and is quit after each run unless a person
+is working in it. Two things only a person may do:
 
 - **A signed-out profile.** The runner enters the email on claude.ai/login, chooses "Continue with
   email", reads the `https://claude.ai/magic-link#...` link from the mail (Mail.app on the Mac, or
   IMAP) and opens it. claude.ai then shows an hCaptcha.
 - **Cloudflare's "Verify you are human".** After many sign-ins from one network in a short time,
   claude.ai can put this check in front of every page, signed in or not.
+
+When a person passes one of these, the runner at once signs in every other account whose
+browser session ends within 5 days, so those CAPTCHAs come in the same sitting rather than on
+separate days.
 
 In both cases the runner brings that Chrome window forward, posts a desktop notification, publishes
 "needs you" (dashboard notice, `claude-signins.md`, `aac-usage`), waits up to `humanWaitMinutes`
