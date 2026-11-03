@@ -48,6 +48,9 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@+ -]{0,63}$/;
 const STAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
+/** C0, DEL and C1 controls: none of them ever publish. */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
 /** The only failure words ever published for a failed collection. Raw
  * stderr names routing details (the resolved hostname or address behind
  * an ssh alias, the remote user), so it is classified, never quoted. */
@@ -67,6 +70,22 @@ export function collectorFailureWord(stderr: string): string {
   )
     return 'host unreachable';
   return 'collector failed';
+}
+
+const FAILURE_WORDS = new Set([
+  'collection timed out',
+  'connection refused',
+  'machine sign-in refused',
+  'host unreachable',
+  'collector failed',
+  'no profiles reported',
+]);
+
+/** The publication boundary for every rejection, setup failures included:
+ * a bundle read or process spawn can throw errors quoting absolute paths
+ * or the ssh target, so only the fixed words above ever publish. */
+export function publishableFailureReason(reason: unknown): string {
+  return typeof reason === 'string' && FAILURE_WORDS.has(reason) ? reason : 'collector failed';
 }
 
 function runCollector(
@@ -141,7 +160,7 @@ function stamp(value: unknown): string | null {
  * commands are worse than none. */
 export function publishableFixCommand(value: unknown): string {
   if (typeof value !== 'string') return '';
-  return /[\u0000-\u001f\u007f`]/.test(value) || value.length > 200 ? '' : value;
+  return CONTROL.test(value) || value.includes('`') || value.length > 200 ? '' : value;
 }
 
 /** The published DTO is allowlisted; a changed helper cannot add fields or
@@ -152,7 +171,10 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
   const states = ['ok', 'warn', 'critical', 'logged_out', 'unavailable', 'unsupported'];
   if (typeof row.state !== 'string' || !states.includes(row.state)) return null;
   const provider = row.provider === 'codex' ? 'codex' : 'claude';
-  const configDir = typeof row.configDir === 'string' ? row.configDir.slice(0, 200) : undefined;
+  const configDir =
+    typeof row.configDir === 'string' && !CONTROL.test(row.configDir)
+      ? row.configDir.slice(0, 200)
+      : undefined;
   const profile: SignInProfile = {
     name:
       typeof row.name === 'string' && NAME_PATTERN.test(row.name)
@@ -168,7 +190,13 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
     state: row.state as SignInProfile['state'],
     fixCommand: publishableFixCommand(row.fixCommand),
     ...(row.state === 'unavailable' && typeof row.error === 'string' && row.error !== ''
-      ? { error: row.error.replace(/\s+/g, ' ').trim().slice(0, 120) }
+      ? {
+          error: row.error
+            .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 120),
+        }
       : {}),
     ...(row.state === 'unsupported' && Array.isArray(row.fieldsAvailable)
       ? {
@@ -263,6 +291,10 @@ let cache: CacheEntry | null = null;
 export function hasPassedDeadline(health: SignInHealth, since: number, now: number): boolean {
   for (const rows of Object.values(health.machines)) {
     for (const row of rows) {
+      // Only a live state's claim can be falsified by a crossing, exactly
+      // as in downgradeCrossedRows: a terminal row's crossed end was
+      // already observed as terminal and must not force a recollection.
+      if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') continue;
       for (const value of [row.accessExpiresAt, row.refreshExpiresAt, row.loggedOutAt]) {
         if (!value) continue;
         const at = Date.parse(value);
@@ -307,6 +339,9 @@ export function getSignInHealth(): Promise<SignInHealth> {
     const entry = cache;
     return entry.health.then((value) => {
       if (!hasPassedDeadline(value, entry.collectedAt, Date.now())) return value;
+      // Concurrent waiters share one recollection: only the waiter that
+      // still owns the cache slot replaces it; the rest join the fresh one.
+      if (cache !== entry) return cache ? cache.health : refresh();
       cache = null;
       return refresh();
     });
@@ -348,14 +383,14 @@ async function collectOnce(): Promise<SignInHealth> {
         return;
       }
     }
-    // Rejection reasons are already allowlisted words (collectorFailureWord
-    // or the settlement race's own), so nothing a process printed — no ssh
-    // target, resolved address or remote user — reaches the published error.
+    // Every rejection passes the allowlist boundary: a setup failure (the
+    // bundle read, a spawn error) can quote absolute paths or the ssh
+    // target, so its text never reaches the published error either.
     const reason =
       result.status === 'rejected'
-        ? result.reason instanceof Error
-          ? result.reason.message
-          : 'collector failed'
+        ? publishableFailureReason(
+            result.reason instanceof Error ? result.reason.message : result.reason
+          )
         : 'no profiles reported';
     machines[host.host] = unavailableHost(host.host, reason);
   });

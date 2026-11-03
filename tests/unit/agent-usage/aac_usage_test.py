@@ -202,7 +202,8 @@ class ReaderTests(unittest.TestCase):
         data["accounts"][0]["plan"] = "Prö"
         (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
         raw = io.BytesIO()
-        stream = io.TextIOWrapper(raw, encoding="ascii")
+        # Even a UTF-8 console gets ASCII: main() reconfigures the stream.
+        stream = io.TextIOWrapper(raw, encoding="utf-8")
         with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
                 contextlib.redirect_stdout(stream):
             aac.main()
@@ -210,6 +211,28 @@ class ReaderTests(unittest.TestCase):
         text = raw.getvalue().decode("ascii")
         self.assertIn("Gmail", text)
         self.assertIn("\\xf6", text)
+
+    def test_a_sign_in_deadline_already_passed_reads_as_past(self):
+        generated = aac.now_utc()
+        data = snapshot(generated)
+        data["signIn"] = [
+            {"provider": "claude", "machine": "ubuntu", "name": "late", "state": "warn",
+             "loggedOutAt": iso(generated - dt.timedelta(seconds=5)),
+             "accessExpiresAt": iso(generated - dt.timedelta(seconds=5)),
+             "fixCommand": "claude auth login"},
+            {"provider": "claude", "machine": "ubuntu", "name": "soon", "state": "warn",
+             "loggedOutAt": iso(generated + dt.timedelta(hours=2)),
+             "accessExpiresAt": iso(generated + dt.timedelta(hours=2)),
+             "fixCommand": "claude auth login"},
+        ]
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
+                contextlib.redirect_stdout(out):
+            aac.main()
+        text = out.getvalue()
+        self.assertIn("past its deadline; awaiting recheck", text)
+        self.assertIn("re-login when the window ends", text)
 
     def test_a_retained_window_says_how_old_it_is(self):
         generated = aac.now_utc()

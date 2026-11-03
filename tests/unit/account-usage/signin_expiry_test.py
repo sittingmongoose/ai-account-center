@@ -302,6 +302,62 @@ class SignInExpiryTests(unittest.TestCase):
         # and the report says so instead of implying a complete list.
         self.assertIn("incomplete", rows["saved-profiles"]["error"])
 
+    def test_iso_keeps_milliseconds_so_same_second_crossings_stay_visible(self):
+        self.assertIn(".123Z", collector.iso(1700000000123))
+
+    def test_a_saved_instance_with_a_dotted_name_is_discovered(self):
+        import failover_core
+        profile = self.home / ".ccs" / "instances" / "work.example"
+        profile.mkdir(parents=True)
+        (profile / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        # The sibling's name filter drops this dir; the collector's own
+        # saved-instance scan must still find it.
+        pairs = [(self.home / ".claude", ["claude-profile:default"])]
+        with mock.patch.object(failover_core, "_roots", return_value=pairs):
+            rows = {row["name"]: row for row in self.report()["profiles"]}
+        self.assertEqual(rows["work.example"]["state"], "ok")
+
+    def test_an_unreadable_saved_profile_marks_discovery_incomplete(self):
+        import failover_core
+        import os
+        if os.geteuid() == 0:
+            self.skipTest("permission bits do not bind root")
+        blocked = self.home / "blocked"
+        profile = blocked / "configured"
+        profile.mkdir(parents=True)
+        (profile / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        blocked.chmod(0)
+        self.addCleanup(blocked.chmod, 0o700)
+        pairs = [(profile, ["claude-profile:configured"])]
+        with mock.patch.object(failover_core, "_roots", return_value=pairs):
+            rows = {row["name"]: row for row in self.report()["profiles"]}
+        # is_dir() would swallow this permission failure into False; the
+        # explicit stat must surface it as incomplete discovery instead.
+        self.assertNotIn("configured", rows)
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_a_relative_settings_home_marks_discovery_incomplete(self):
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        (userdata / "settings.json").write_text(json.dumps(
+            {"providerInstances": {"claude-rel": {
+                "driver": "claudeAgent", "config": {"homePath": "relative/home"}}}}))
+        rows = {row["name"]: row for row in self.report()["profiles"]}
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_codex_auth_link_outside_the_home_is_not_followed(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        target = pathlib.Path(outside.name) / "auth.json"
+        target.write_text(json.dumps({"access_token": "fixture-private"}))
+        (self.home / ".codex").mkdir(parents=True, exist_ok=True)
+        (self.home / ".codex" / "auth.json").symlink_to(target)
+        self.assertIsNone(collector.codex_profile(NOW, self.home))
+
     def test_keychain_rows_gate_stamps_on_token_presence(self):
         payload = json.dumps({"claudeAiOauth": {
             "accessToken": "", "refreshToken": "y",

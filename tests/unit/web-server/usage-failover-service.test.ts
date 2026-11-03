@@ -2040,7 +2040,9 @@ describe('the entitlement class rides the failover row', () => {
     expect(carried.plan).toBe('Ultra');
     h.advance();
     h.collections.set('mac', { sample: reading(h.now(), { plan: 'Ultra' }), failureCode: null });
-    const cleared = await h.service.collect(h.target, template());
+    // The previous row rides in as the template: its class must not
+    // survive a reading that no longer carries one.
+    const cleared = await h.service.collect(h.target, carried);
     expect(cleared.planClass).toBeUndefined();
   });
 });

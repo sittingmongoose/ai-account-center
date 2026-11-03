@@ -223,6 +223,10 @@ def _settings_homes(home, provider):
                 value = str(home / value[2:])
             if Path(value).is_absolute() and _within(home, Path(os.path.abspath(value))):
                 result.append(Path(value))
+            elif value:
+                # A matching instance names a home discovery cannot use
+                # (relative, or outside this home): unseen, not absent.
+                read_failed()
     return result
 
 

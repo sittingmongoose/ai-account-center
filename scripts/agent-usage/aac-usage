@@ -352,7 +352,18 @@ def sign_in_lines(snapshot, provider=None):
     for row in sorted(rows, key=lambda r: rank.get(r.get("state"), 9)):
         machine = row.get("machine") or row.get("platform") or "unknown"
         state = row.get("state")
-        if state in ("warn", "critical"):
+        # The snapshot may be read after a live row's deadline: that reading
+        # is past, not future, until the next sample rechecks it.
+        end_dt = parse_time(row.get("loggedOutAt"))
+        crossed = state in ("warn", "critical", "ok") and end_dt is not None and end_dt <= now
+        refresh_dt = parse_time(row.get("refreshExpiresAt")) if not row.get("loggedOutAt") else None
+        refresh_crossed = (state in ("warn", "critical") and refresh_dt is not None
+                           and refresh_dt <= now)
+        if crossed:
+            word = "ended %s (past its deadline; awaiting recheck)" % row["loggedOutAt"]
+        elif refresh_crossed:
+            word = "refresh expired %s (awaiting recheck)" % row["refreshExpiresAt"]
+        elif state in ("warn", "critical"):
             if row.get("loggedOutAt"):
                 word = "ends %s" % row["loggedOutAt"]
             elif row.get("refreshExpiresAt"):
@@ -373,6 +384,12 @@ def sign_in_lines(snapshot, provider=None):
                 line += " sign-in ended %s." % row["loggedOutAt"]
             elif not end:
                 line += " tokens are gone or expired."
+            command, omitted = fix_command_text(row)
+            if command:
+                line += " re-login: `%s`" % command
+            elif omitted:
+                line += " re-login command omitted (non-ASCII path)."
+        elif crossed or refresh_crossed:
             command, omitted = fix_command_text(row)
             if command:
                 line += " re-login: `%s`" % command
@@ -542,9 +559,10 @@ def cmd_install_rules(args):
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         try:
-            # Terminal output stays ASCII: a published value can never fail
-            # a print, and backslash escapes keep it readable.
-            stream.reconfigure(errors="backslashreplace")
+            # Terminal output is ASCII on every console encoding: a
+            # published value can never fail a print, and backslash
+            # escapes keep it readable.
+            stream.reconfigure(encoding="ascii", errors="backslashreplace")
         except (AttributeError, ValueError):
             pass
     parser = argparse.ArgumentParser(prog="aac-usage", description=__doc__.splitlines()[0])

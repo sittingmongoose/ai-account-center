@@ -156,6 +156,8 @@ describe('agent usage projection', () => {
     expect(planOf('🚀'.repeat(81))).toBeNull();
     // Control characters and coerced non-strings never publish.
     expect(planOf('Pro\nMax')).toBeNull();
+    expect(planOf('Pro\u0085Max')).toBeNull();
+    expect(planOf('sk-abcdefgh')).toBeNull();
     expect(planOf(42)).toBeNull();
     expect(planOf({ tier: 'max' })).toBeNull();
     expect(planOf('')).toBeNull();

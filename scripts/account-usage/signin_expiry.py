@@ -30,6 +30,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import sys
 import time
 
@@ -65,12 +66,14 @@ def epoch_ms(value):
 
 
 def iso(ms):
-    """UTC ISO-8601 for epoch milliseconds, or None."""
+    """UTC ISO-8601 for epoch milliseconds, or None. Milliseconds are kept:
+    a stamp truncated to its second can predate a collection that started
+    later in that same second, hiding a deadline that crossed within it."""
     if ms is None:
         return None
     stamp = datetime.datetime.fromtimestamp(
         ms / 1000, datetime.timezone.utc
-    ).isoformat(timespec="seconds")
+    ).isoformat(timespec="milliseconds")
     return stamp.replace("+00:00", "Z")
 
 
@@ -172,9 +175,10 @@ def _home_relative(config_dir, home):
 
 
 def fix_command(config_dir, home):
-    """An executable re-login command for this machine's shell. The path is
-    published as a $HOME-relative form the target expands at run time, so
-    no absolute path ever reaches the published files."""
+    """An executable re-login command for this machine's shell. A dir under
+    the home publishes as a $HOME-relative form the target expands at run
+    time; a dir outside it (a relocated CCS scope) is the one deliberate
+    exception and publishes as a quoted literal, as the README states."""
     relative = _home_relative(config_dir, home)
     if sys.platform == "win32":
         if relative is None:
@@ -208,7 +212,24 @@ def _within_allowed(path, home, ccs_dir=None):
             roots.append(os.path.realpath(ccs_dir))
     except OSError:
         return False
-    return any(real == root or real.startswith(root + os.sep) for root in roots)
+    return any(
+        real == root or real.startswith(root if root.endswith(os.sep) else root + os.sep)
+        for root in roots
+    )
+
+
+def _dir_state(path):
+    """(is_directory, read_failed) for one path. Path.is_dir() cannot be
+    used for this: it swallows permission and I/O errors into False, which
+    would make an unreadable profile indistinguishable from an absent
+    one. A missing path is not a failure; an unreadable one is."""
+    try:
+        mode = path.stat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return False, False
+    except OSError:
+        return False, True
+    return stat.S_ISDIR(mode), False
 
 
 def claude_profile(name, config_dir, now_ms, home, ccs_dir=None):
@@ -355,8 +376,15 @@ def codex_profile(now_ms, home=None):
     published, never values."""
     home = home or pathlib.Path.home()
     for candidate in (home / ".codex" / "auth.json",):
+        # The same containment as Claude stores: a linked auth.json outside
+        # the home is never followed, even though only key names publish.
+        if not _within_allowed(candidate, home):
+            continue
         try:
-            with open(candidate, "rb") as handle:
+            descriptor = os.fdopen(
+                os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb"
+            )
+            with descriptor as handle:
                 raw = json.loads(handle.read(65536).decode("utf-8"))
         except (OSError, ValueError, RecursionError):
             continue
@@ -389,10 +417,10 @@ def claude_roots(home, ccs_dir=None):
     """Every Claude config dir this machine knows: the default, the saved
     ~/.ccs/instances homes, the T3 account dirs, and settings-defined homes.
 
-    The T3 dirs are enumerated here even when the sibling discovery is
-    available, because its name filter refuses valid directory names
-    (email-shaped names, apostrophes); display names are sanitized later,
-    never at discovery. Returns (roots, complete): complete is False when
+    The saved-instance and T3 dirs are enumerated here even when the
+    sibling discovery is available, because its name filter refuses valid
+    directory names (dotted and email-shaped names, apostrophes); display
+    names are sanitized later, never at discovery. Returns (roots, complete): complete is False when
     the sibling discovery was unavailable or enumeration hit the bound, so
     the report can say the list may be short instead of implying all."""
     default = home / ".claude"
@@ -428,11 +456,11 @@ def claude_roots(home, ccs_dir=None):
         if limit is not None and len(pairs) >= limit:
             complete = False
         for root, selectors in pairs:
-            try:
-                if not root.is_dir():
-                    continue
-            except OSError:
+            is_dir, stat_failed = _dir_state(root)
+            if stat_failed:
                 complete = False
+                continue
+            if not is_dir:
                 continue
             text_path = str(root)
             if text_path in seen:
@@ -446,27 +474,42 @@ def claude_roots(home, ccs_dir=None):
             roots.append((label, root))
     else:
         complete = False
-    t3 = home / ".claude-t3"
-    try:
-        children = list(itertools.islice(t3.iterdir(), MAX_ROOTS + 1)) if t3.is_dir() else []
-    except OSError:
-        children = []
-        complete = False
-    if len(children) > MAX_ROOTS:
-        complete = False
-        children = children[:MAX_ROOTS]
-    for child in sorted(children, key=lambda item: item.name):
+
+    def scan(base):
+        # The collector's own enumeration, with no name filter beyond
+        # dot-prefixed entries: the sibling's filter refuses directory
+        # names the app accepts (dotted and email-shaped names,
+        # apostrophes), for saved instances exactly as for T3 dirs.
+        nonlocal complete
+        is_dir, stat_failed = _dir_state(base)
+        if stat_failed:
+            complete = False
+            return
+        if not is_dir:
+            return
         try:
-            if not child.is_dir() or child.name.startswith("."):
-                continue
+            children = list(itertools.islice(base.iterdir(), MAX_ROOTS + 1))
         except OSError:
             complete = False
-            continue
-        text_path = str(child)
-        if text_path in seen:
-            continue
-        seen.add(text_path)
-        roots.append((child.name, child))
+            return
+        if len(children) > MAX_ROOTS:
+            complete = False
+            children = children[:MAX_ROOTS]
+        for child in sorted(children, key=lambda item: item.name):
+            child_is_dir, child_failed = _dir_state(child)
+            if child_failed:
+                complete = False
+                continue
+            if not child_is_dir or child.name.startswith("."):
+                continue
+            text_path = str(child)
+            if text_path in seen:
+                continue
+            seen.add(text_path)
+            roots.append((child.name, child))
+
+    scan((ccs_dir or home / ".ccs") / "instances")
+    scan(home / ".claude-t3")
     if len(roots) > MAX_ROOTS:
         complete = False
         roots = roots[:MAX_ROOTS]

@@ -435,7 +435,9 @@ export class UsageFailoverService {
       ...template,
       email: template.email ?? reading.email,
       plan: reading.plan,
-      ...(reading.planClass ? { planClass: reading.planClass } : {}),
+      // The reading's class replaces the template's outright: a class from
+      // an earlier plan must not ride along under a new plan name.
+      planClass: reading.planClass ?? undefined,
       sampledAt: reading.sampledAt,
       fetchedAt: reading.fetchedAt,
       windows: structuredClone(reading.windows),

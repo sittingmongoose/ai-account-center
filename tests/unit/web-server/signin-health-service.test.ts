@@ -4,6 +4,7 @@ import {
   cacheTtlFor,
   collectorFailureWord,
   downgradeCrossedRows,
+  publishableFailureReason,
   hasPassedDeadline as hasPassedDeadlineWindow,
   nextDeadlineAt,
   parseRows,
@@ -87,6 +88,19 @@ describe('allowProfile', () => {
     expect(backticked?.fixCommand).toBe('');
     const clean = allowProfile(row({ fixCommand: 'claude auth login' }), 'mac');
     expect(clean?.fixCommand).toBe('claude auth login');
+    // C1 controls are controls too: U+0085 omits the command whole.
+    const c1 = allowProfile(row({ fixCommand: 'claude auth\u0085login' }), 'mac');
+    expect(c1?.fixCommand).toBe('');
+  });
+
+  it('screens control characters out of configDir and error', () => {
+    const out = allowProfile(
+      row({ configDir: '~/bad\u0000dir', state: 'unavailable', error: 'bad\u001b[31m news' }),
+      'mac'
+    );
+    expect(out?.configDir).toBeUndefined();
+    expect(out?.error).not.toContain('\u001b');
+    expect(out?.error).toContain('news');
   });
 
   it('reads malformed stamps as absent, never as a reason to drop the row', () => {
@@ -197,6 +211,10 @@ describe('the cache outlives no deadline it published', () => {
     expect(hasPassedDeadlineWindow(crossing, NOW, NOW + 10 * 60_000)).toBe(true);
     expect(hasPassedDeadlineWindow(crossing, NOW - 60_000, NOW + 6 * 60_000)).toBe(true);
     expect(hasPassedDeadlineWindow(crossing, NOW + 6 * 60_000, NOW + 60_000)).toBe(false);
+    // A terminal row whose end crossed mid-collection was already observed
+    // as terminal: it must not force a recollection on the next read.
+    const terminal = health([row({ state: 'logged_out', loggedOutAt: '2026-11-03T12:05:00Z' })]);
+    expect(hasPassedDeadlineWindow(terminal, NOW, NOW + 10 * 60_000)).toBe(false);
   });
 
   it('clamps the cache lifetime to the next deadline, with a floor and a ceiling', () => {
@@ -251,5 +269,19 @@ describe('collectorFailureWord', () => {
       expect(published).not.toContain('someone');
       expect(published).not.toContain('secret');
     }
+  });
+
+  it('admits only the fixed words at the publication boundary', () => {
+    expect(publishableFailureReason('host unreachable')).toBe('host unreachable');
+    expect(publishableFailureReason('collection timed out')).toBe('collection timed out');
+    // A setup failure (bundle read, spawn) quotes paths and targets: it
+    // collapses to the fixed word instead of publishing.
+    const leaked = publishableFailureReason(
+      "ENOENT: no such file or directory, open '/home/user/install/signin_expiry.py'"
+    );
+    expect(leaked).toBe('collector failed');
+    expect(publishableFailureReason('ssh secret-alias exited 255')).toBe('collector failed');
+    expect(publishableFailureReason(new Error('boom'))).toBe('collector failed');
+    expect(publishableFailureReason(undefined)).toBe('collector failed');
   });
 });
