@@ -236,19 +236,19 @@ describe('collectorFailureWord', () => {
     const cases: Array<[string, string]> = [
       ['ssh: connect to host 10.0.0.9 port 22: Connection timed out', 'collection timed out'],
       ['ssh: connect to host mac.lan port 22: Connection refused', 'connection refused'],
-      ['jared@10.0.0.9: Permission denied (publickey).', 'machine sign-in refused'],
+      ['someone@10.0.0.9: Permission denied (publickey).', 'machine sign-in refused'],
       [
         'ssh: Could not resolve hostname secret-alias: Name or service not known',
         'host unreachable',
       ],
-      ['python3: /home/jared/.ccs/secret.py crashed', 'collector failed'],
+      ['python3: /home/user/.ccs/secret.py crashed', 'collector failed'],
       ['', 'collector failed'],
     ];
     for (const [stderr, word] of cases) {
       const published = collectorFailureWord(stderr);
       expect(published).toBe(word);
       expect(published).not.toContain('10.0.0.9');
-      expect(published).not.toContain('jared');
+      expect(published).not.toContain('someone');
       expect(published).not.toContain('secret');
     }
   });
