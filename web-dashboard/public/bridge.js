@@ -1,5 +1,6 @@
 import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_theme_ready, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
+import { needToasts } from './claude-signins.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
 import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView, rememberSessionHours, rememberedSessionHours } from './auth-view.mjs';
 import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
@@ -263,8 +264,11 @@ function pushModel(key, json, send) {
   pushedJson.set(key, json);
   send(json);
 }
+// Each new person-only step of the Claude sign-in renewal (a CAPTCHA, a missing mail) is raised once.
+const seenSignInNeeds = new Set();
 function render() {
   if (!data) return;
+  for (const item of needToasts(data, seenSignInNeeds)) toast(item.kind, item.title, item.body, 20000);
   pushModel('dashboard', JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))), set_dashboard);
   if (openDetailsId) renderDetails(openDetailsId);
   renderAccounts();

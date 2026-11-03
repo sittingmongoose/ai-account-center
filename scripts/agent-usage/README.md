@@ -21,6 +21,12 @@ folder, as the dashboard's owner set it, and `aac-usage rules` includes them.
 - `locations.json`: where each group of computers finds this folder (`where`, `path`), from
   `usage-snapshot set <folder> --location "<where>=<path>"`; empty when none were given.
 - `aac-usage`, `aac-usage.cmd`: the reader below.
+- `claude-signins.json`, `claude-signins.md`: when each Claude Code sign-in on each computer ends,
+  how its automatic renewal went and anything only a person can do (a CAPTCHA), written by the
+  sign-in renewal runner after each run (see `claude-signin/README.md`). `staleAfterSeconds` old
+  means the runner stopped.
+- `claude-signin/`: the renewal runner itself, kept current by the dashboard; the installed runner
+  updates itself from here.
 
 ## Which account is which
 
@@ -53,9 +59,11 @@ aac-usage --provider codex       codex, claude, antigravity, muse, cursor, kimi,
 aac-usage --account gmail        accounts whose label, email or profile contains the text
 aac-usage --json                 usage.json after the same filters
 aac-usage history --provider claude --hours 6
+aac-usage signins [--account me]  when each Claude Code sign-in ends and how its renewal went
 aac-usage rules | install-rules  the agent rules block, or write it into this computer's rules files
 ```
 
-The reader only reads these files. Switching accounts, sign-in and refreshes stay in the AI Account
+Every view starts with a `NEEDS YOU (Claude sign-in): ...` line when the renewal runner is waiting
+for a person; pass that on to them. The reader only reads these files. Switching accounts, sign-in and refreshes stay in the AI Account
 Center dashboard. On the dashboard computer, `ai-account-center dashboard usage-snapshot status`
 shows where it writes.

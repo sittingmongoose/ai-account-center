@@ -87,6 +87,7 @@ run_fixture_check node --test browser-bridge/qwen/tests/*.test.mjs
 case "$(uname -s)" in
   Linux|Darwin)
     run_fixture_check python3 tests/unit/account-usage/claude_usage_test.py
+    run_fixture_check python3 tests/unit/claude-signin/claude_signin_test.py
     run_fixture_check python3 -m unittest discover -s browser-bridge/opencode-muse/tests -p 'test_*.py'
     run_fixture_check python3 macos-bar/Scripts/migration_check.py
     ;;

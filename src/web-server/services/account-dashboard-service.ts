@@ -2,6 +2,10 @@ import {
   getCodexAuthProfilesSummary,
   type CodexAuthProfilesSummary,
 } from '../../codex-auth/codex-auth-dashboard-service';
+import {
+  readClaudeSignInRenewal,
+  type ClaudeSignInRenewal,
+} from './claude-signin-renewal';
 import { getCcsDir } from '../../utils/config-manager';
 import {
   getAntigravityAccounts,
@@ -115,6 +119,8 @@ export interface AccountDashboardDeps {
   readVisibility?: (scope: string) => Promise<AccountVisibilityRead>;
   /** Live facts behind providers[].signIn and capabilities. */
   providerFacts?: (context: AccountDashboardRequestContext) => ProviderRegistryFacts;
+  /** Claude sign-in renewal published by the renewal runner; null when none publishes. */
+  claudeSignIns?: () => Promise<ClaudeSignInRenewal | null>;
   /** Running sign-in jobs by account id (lifecycle.state signing_in or verifying). */
   accountJobStates?: () => AccountJobStates;
   /** Claude profiles created by Add that wait for their first sign-in. */
@@ -811,6 +817,9 @@ export class AccountDashboardService {
       ...(registeredAntigravity ? state.antigravity : []),
     ];
     const server = (this.deps.serverInfo ?? getDashboardServerInfo)();
+    const claudeSignIns = await (this.deps.claudeSignIns ?? (() => readClaudeSignInRenewal()))().catch(
+      () => null
+    );
     const jobs = (this.deps.accountJobStates ?? (() => getSignInJobRunner().accountStates()))();
     const rows = accounts.flatMap((account) => {
       let current = account;
@@ -899,6 +908,7 @@ export class AccountDashboardService {
         (this.deps.getAutoSwitchStatus ?? (() => getCodexAutoSwitchService().getStatus()))()
       ),
       ...(server ? { server } : {}),
+      ...(claudeSignIns ? { claudeSignIns } : {}),
     };
   }
 }

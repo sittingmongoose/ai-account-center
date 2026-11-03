@@ -42,12 +42,22 @@ readings that sample just recorded:
 - `history.json`: the measured readings of every window over the last 7 days;
 - `locations.json`: the saved locations, rewritten only when they change.
 
+The sign-in renewal runner ([scripts/claude-signin](../scripts/claude-signin/README.md)) writes
+`claude-signins.json` and `claude-signins.md` into the same folder after each of its runs. The
+dashboard reads that file (allowlisted fields only, `src/web-server/services/claude-signin-renewal.ts`)
+into the dashboard response as `claudeSignIns`, into the `signIn` rows of `usage.json` (the runner's
+rows replace the dashboard's own ssh reading for every computer the runner read, so the Mac's
+Keychain sign-ins and Nas1 appear) and into a `signInRenewal` summary: runner, last run, stale, and
+`needsYou`. `usage.md` names anything only a person can do at the top of its sign-in section.
+
 Of the three data files `usage.json` is written last, so its `generatedAt` says that sample's
 `history.json` and `usage.md` are in place. `locations.json` follows when the locations changed; a
 failed write of it never fails the sample and is retried at the next one.
 Readers treat a snapshot older than `staleAfterSeconds` (three refreshes, at least 5 minutes) as
 stale. On the first write after a dashboard start, the dashboard also copies the packaged reader
-and guide into the folder when their bytes differ, so the reader always matches the format.
+and guide into the folder when their bytes differ, so the reader always matches the format, and
+the renewal runner into its `claude-signin/` subfolder, from which the installed runner updates
+itself.
 
 ## Readings, pace and privacy
 

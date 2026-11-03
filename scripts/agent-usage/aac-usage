@@ -281,6 +281,8 @@ def cmd_show(args):
     print("AI Account Center usage, snapshot %s ago (%s)" % (age, folder / "usage.json"))
     if note:
         print(note)
+    for line in signins_notice(folder, now):
+        print(line)
     if not accounts:
         print("No matching accounts.")
         return
@@ -305,6 +307,54 @@ def cmd_show(args):
         if account.get("status") in ("ok", "cached"):
             for window in account.get("windows", []):
                 print(window_line(window, now, account.get("sampledAt"), stale_after))
+
+
+def signins_doc(folder):
+    """claude-signins.json from the sign-in renewal runner, or None when no runner publishes here."""
+    try:
+        with open(folder / "claude-signins.json", encoding="utf-8") as handle:
+            doc = json.load(handle)
+        return doc if isinstance(doc, dict) and doc.get("version") == 1 else None
+    except (OSError, ValueError):
+        return None
+
+
+def signins_notice(folder, now):
+    """One or two lines for the top of every view: what only a person can do, or a stopped runner."""
+    doc = signins_doc(folder)
+    if not doc:
+        return []
+    lines = ["NEEDS YOU (Claude sign-in): %s" % (need.get("how") or need.get("reason"))
+             for need in doc.get("needsYou") or [] if isinstance(need, dict)]
+    generated = parse_time(doc.get("generatedAt"))
+    if generated and (now - generated).total_seconds() > (doc.get("staleAfterSeconds") or 3600):
+        lines.append("Claude sign-in renewal on %s last ran %s ago: sign-ins are not being renewed." % (
+            doc.get("runner") or "?", span((now - generated).total_seconds())))
+    return lines
+
+
+def cmd_signins(args):
+    folder = require_folder(args.dir)
+    doc = signins_doc(folder)
+    if not doc:
+        sys.exit("aac-usage: no Claude sign-in renewal runner publishes into %s." % folder)
+    if args.json:
+        print(json.dumps(doc, indent=2))
+        return
+    now = now_utc()
+    for line in signins_notice(folder, now):
+        print(line)
+    print("Claude Code sign-ins (renewal runner on %s; each renews by itself %s hours before it ends)" % (
+        doc.get("runner") or "?", doc.get("renewWithinHours") or "?"))
+    for row in doc.get("signIns") or []:
+        if args.account and args.account.lower() not in (row.get("email") or "").lower():
+            continue
+        end = parse_time(row.get("signInEndsAt"))
+        ends = ("ends %s" % clock(row["signInEndsAt"], now)) if end else "end not reported"
+        last = row.get("lastResult")
+        print("  %-8s %-11s %-30s %-11s %s%s" % (
+            HOSTS.get(row.get("host"), row.get("host")), row.get("profile"), row.get("email") or "?",
+            row.get("state"), ends, ("; last renewal: %s" % last.replace("_", " ")) if last else ""))
 
 
 def cmd_history(args):
@@ -479,6 +529,10 @@ def main(argv=None):
     rules = sub.add_parser("rules", help="print the rules block")
     rules.add_argument("kind", nargs="?", default="other", choices=["claude", "other"])
     rules.add_argument("--dir", default=argparse.SUPPRESS)
+    signins = sub.add_parser("signins", help="when each Claude Code sign-in ends and how its renewal went")
+    signins.add_argument("--account", default=argparse.SUPPRESS)
+    signins.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    signins.add_argument("--dir", default=argparse.SUPPRESS)
     install = sub.add_parser("install-rules", help="write the rules block into this computer's agent rules files")
     install.add_argument("--dir", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -488,6 +542,8 @@ def main(argv=None):
         print(rules_text(args.kind, args.dir), end="")
     elif args.cmd == "install-rules":
         cmd_install_rules(args)
+    elif args.cmd == "signins":
+        cmd_signins(args)
     else:
         cmd_show(args)
 

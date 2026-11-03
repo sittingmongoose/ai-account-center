@@ -21,6 +21,7 @@ Do not restore retired features to satisfy outdated prose.
 | An agent setting AAC up for someone, start to finish | [Agent setup guide](agent-setup.md) |
 | Quota bars in T3 Code (read-only CLIProxyAPI-compatible hub) | [T3 usage hub](t3-usage-hub.md) |
 | Account usage, pace and history for any agent (shared folder) | [Agent usage snapshot](agent-usage-snapshot.md) |
+| Claude Code sign-ins renewed before they end, on every computer | [Sign-in renewal](../scripts/claude-signin/README.md) |
 | Product scope | [Product overview](project-overview-pdr.md) |
 | Current work | [Project direction](project-roadmap.md) |
 | Local packaging and retained automation | [Release process](release-process.md) |

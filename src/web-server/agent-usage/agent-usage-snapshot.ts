@@ -86,6 +86,23 @@ export interface SnapshotSignInProfile {
   fixCommand: string;
   /** Why a machine's report is unavailable; absent otherwise. */
   error?: string;
+  /** The account this sign-in belongs to (from the renewal runner). */
+  email?: string | null;
+  /** Renewal runner fields: whether it renews by itself, from when, and how the last one went. */
+  autoRenew?: boolean;
+  renewFrom?: string | null;
+  lastRenewAt?: string | null;
+  lastResult?: string | null;
+  nextVerifyAt?: string | null;
+  reverts?: number;
+}
+
+/** The renewal runner's summary: who it is, whether it is current and what needs a person. */
+export interface SnapshotSignInRenewal {
+  runner: string;
+  generatedAt: string;
+  stale: boolean;
+  needsYou: Array<{ email: string; reason: string; how: string; since: string | null }>;
 }
 
 export interface AgentUsageSnapshot {
@@ -99,6 +116,8 @@ export interface AgentUsageSnapshot {
   accounts: SnapshotAccount[];
   /** Claude sign-in expiry per machine, worst first in the markdown; absent until first collected. */
   signIn?: SnapshotSignInProfile[];
+  /** The sign-in renewal runner's summary; absent when no runner publishes. */
+  signInRenewal?: SnapshotSignInRenewal;
 }
 
 export interface AgentUsageHistoryFile {
@@ -114,7 +133,8 @@ export function buildSnapshotFiles(
   event: AccountAnalyticsSampleEvent,
   refreshSeconds: number,
   recent: RecentReadings | null = null,
-  signIn: SnapshotSignInProfile[] = []
+  signIn: SnapshotSignInProfile[] = [],
+  signInRenewal: SnapshotSignInRenewal | null = null
 ): { snapshot: AgentUsageSnapshot; history: AgentUsageHistoryFile } {
   const now = event.sampledAt;
   const projected = projectAgentUsage(event.accounts, { now, includeHidden: true });
@@ -154,6 +174,7 @@ export function buildSnapshotFiles(
       staleAfterSeconds: staleAfterSeconds(refreshSeconds),
       accounts,
       ...(signIn.length > 0 ? { signIn } : {}),
+      ...(signInRenewal ? { signInRenewal } : {}),
     },
     history: { version: 1, generatedAt, hours: HISTORY_HOURS, series },
   };
@@ -300,13 +321,49 @@ function renderSignInMarkdown(
       if (row.state === 'unavailable')
         return `not readable on this machine${row.error ? ` (${row.error})` : ''}`;
       if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
+      if (row.autoRenew && row.state !== 'logged_out')
+        return [
+          row.refreshExpiresAt ? `sign-in ends ${utc(row.refreshExpiresAt)}` : 'sign-in end not published',
+          row.renewFrom ? `renews by itself from ${utc(row.renewFrom)}` : 'renews by itself',
+          row.lastResult === 'renewed' && row.lastRenewAt ? `last renewed ${utc(row.lastRenewAt)}` : '',
+          row.lastResult && row.lastResult !== 'renewed' ? `last attempt: ${row.lastResult.replace(/_/g, ' ')}` : '',
+        ]
+          .filter(Boolean)
+          .join('; ');
+      if (row.autoRenew) return 'logged out; the renewal runner signs it in again on its next run';
       if (row.loggedOutAt)
         return `sign-in ends ${utc(row.loggedOutAt)}${row.fixCommand ? `; re-login before then: \`${row.fixCommand}\`` : ''}`;
       return 're-login window closes soon; no exact end published';
     };
-    lines.push(`- **${row.provider} · ${row.machine}/${row.name}**: ${word}. ${detail()}`);
+    const who = row.email ? ` (${row.email})` : '';
+    lines.push(`- **${row.provider} · ${row.machine}/${row.name}**${who}: ${word}. ${detail()}`);
   }
   void now;
+  return lines;
+}
+
+/** Who keeps the sign-ins alive, whether it is running, and what only a person can do. */
+function renderRenewalMarkdown(renewal: SnapshotSignInRenewal | undefined, now: number): string[] {
+  if (!renewal) return [];
+  const lines: string[] = [];
+  if (renewal.stale)
+    lines.push(
+      `**The sign-in renewal runner on ${renewal.runner} last reported ${utc(renewal.generatedAt)}; ` +
+        'renewals are not happening until it runs again.**',
+      ''
+    );
+  else
+    lines.push(
+      `Claude Code sign-ins renew by themselves (runner on ${renewal.runner}, ` +
+        `last run ${span(Math.max(0, Math.round((now - Date.parse(renewal.generatedAt)) / 1000)))} ago).`,
+      ''
+    );
+  for (const need of renewal.needsYou)
+    lines.push(
+      `- **NEEDS YOU · ${need.email}**: ${need.how || need.reason.replace(/_/g, ' ')}` +
+        (need.since ? ` (since ${utc(need.since)})` : '')
+    );
+  if (renewal.needsYou.length > 0) lines.push('');
   return lines;
 }
 
@@ -357,6 +414,7 @@ export function renderSnapshotMarkdown(snapshot: AgentUsageSnapshot): string {
     lines.push('');
     lines.push('## Sign-in health');
     lines.push('');
+    lines.push(...renderRenewalMarkdown(snapshot.signInRenewal, now));
     lines.push(
       ...renderSignInMarkdown(
         { machines: signInProfiles },
@@ -410,12 +468,28 @@ export function clientSourceFolder(): string {
   return path.resolve(__dirname, '../../../scripts/agent-usage');
 }
 
-/** Copies each client file whose bytes differ; a file already current is left untouched. */
-export async function syncSnapshotClient(
+/**
+ * The Claude sign-in renewal runner (`scripts/claude-signin`), kept current in the folder's
+ * `claude-signin/` subfolder. The installed runner on the Mac copies itself from there on each run,
+ * so a dashboard upgrade reaches it without anyone reinstalling it.
+ */
+export const RUNNER_FILES: ReadonlyArray<{ name: string; mode: number; crlf: boolean }> = [
+  { name: 'claude_signin.py', mode: 0o755, crlf: false },
+  { name: 'browser_auth.mjs', mode: 0o644, crlf: false },
+  { name: 'README.md', mode: 0o644, crlf: false },
+];
+export const RUNNER_FOLDER = 'claude-signin';
+
+export function runnerSourceFolder(): string {
+  return path.resolve(__dirname, '../../../scripts/claude-signin');
+}
+
+async function syncFiles(
   directory: string,
-  source = clientSourceFolder()
+  source: string,
+  files: ReadonlyArray<{ name: string; mode: number; crlf: boolean }>
 ): Promise<void> {
-  for (const file of CLIENT_FILES) {
+  for (const file of files) {
     const lf = (await readPackagedSource(path.join(source, file.name))).toString('utf8');
     const body = file.crlf ? lf.replace(/\n/g, '\r\n') : lf;
     const current = await fs.promises
@@ -423,6 +497,21 @@ export async function syncSnapshotClient(
       .catch(() => null);
     if (current !== body) await writeAtomically(directory, file.name, body, file.mode);
   }
+}
+
+/** Copies each client file whose bytes differ; a file already current is left untouched. */
+export async function syncSnapshotClient(
+  directory: string,
+  source = clientSourceFolder(),
+  runnerSource: string | null = runnerSourceFolder()
+): Promise<void> {
+  await syncFiles(directory, source, CLIENT_FILES);
+  if (!runnerSource) return;
+  const runner = path.join(directory, RUNNER_FOLDER);
+  const info = await fs.promises.lstat(runner).catch(() => null);
+  if (info && (!info.isDirectory() || info.isSymbolicLink())) return;
+  if (!info) await fs.promises.mkdir(runner, { mode: 0o755 });
+  await syncFiles(runner, runnerSource, RUNNER_FILES);
 }
 
 export interface SnapshotPublisherDeps {
@@ -433,6 +522,8 @@ export interface SnapshotPublisherDeps {
   syncClient?: (directory: string) => Promise<void>;
   /** Sign-in expiry reports per machine; best effort, a failure publishes without them. */
   signIn?: () => Promise<SnapshotSignInProfile[]>;
+  /** The renewal runner's summary (claude-signins.json in the same folder); best effort. */
+  signInRenewal?: () => Promise<SnapshotSignInRenewal | null>;
 }
 
 /** Handles one sample; resolves whether the files were written. */
@@ -447,6 +538,7 @@ export function createSnapshotPublisher(
   const refreshSeconds = deps.refreshSeconds ?? getAccountRefreshIntervalSeconds;
   const syncClient = deps.syncClient ?? ((directory: string) => syncSnapshotClient(directory));
   const signIn = deps.signIn ?? (async () => []);
+  const signInRenewal = deps.signInRenewal ?? (async () => null);
   const recent = new RecentReadings();
   let busy = false;
   let busySince = 0;
@@ -478,6 +570,9 @@ export function createSnapshotPublisher(
     const signInPending: Promise<SnapshotSignInProfile[]> = Promise.resolve(signIn()).catch(
       () => []
     );
+    const renewalPending: Promise<SnapshotSignInRenewal | null> = Promise.resolve(
+      signInRenewal()
+    ).catch(() => null);
     busy = true;
     busySince = Date.now();
     stallLogged = false;
@@ -495,7 +590,8 @@ export function createSnapshotPublisher(
         event,
         refreshSeconds(),
         recent,
-        signInProfiles
+        signInProfiles,
+        await renewalPending
       );
       await write(directory, SNAPSHOT_HISTORY, `${JSON.stringify(history)}\n`);
       await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot));

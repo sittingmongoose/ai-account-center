@@ -4,6 +4,7 @@
 // added or averaged across accounts or windows; at most two decimals; the product visibility rules of
 // visible-usage.mjs; Fable only for Claude Max plans, from the seven_day_fable window.
 import { visibleUsageWindows } from './visible-usage.mjs';
+import { claudeSignInFacts, claudeSignInLine, needsFor } from './claude-signins.mjs';
 import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
   antigravityView,
@@ -709,7 +710,7 @@ function openLine(openProgress, profileId) {
   const view = profileId && openProgress instanceof Map ? openProgress.get(profileId) : null;
   return view && typeof view.text === 'string' ? view.text : '';
 }
-function claudeSection(accounts, profiles, platform, now, openProgress) {
+function claudeSection(accounts, profiles, platform, now, openProgress, data = null) {
   const anyMax = accounts.some(isMaxPlan);
   const columns = [
     { key: 'five', label: '5-hour' },
@@ -739,6 +740,7 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
     if (anyMax && isMaxPlan(account) && !fable) cells[2].key = `${account.id}|seven_day_fable`;
     const opening = openLine(openProgress, account.capabilities?.claudeProfileId);
     const signIn = claudeSignInNeeded(account);
+    const renewal = claudeSignInLine(data, account.email, now);
     return {
       id: account.id,
       provider: 'claude',
@@ -756,6 +758,7 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
               ? ''
               : statusWord(account),
           signIn ? `Sign-in needed on ${signIn}` : '',
+          renewal,
         ]
           .filter(Boolean)
           .join(' · '),
@@ -781,9 +784,13 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
       cells,
     };
   });
+  const needs = needsFor(data);
   const metaRuns = [
     run(rows.length, true),
     run(` ${rows.length === 1 ? 'account' : 'accounts'} · desktop profiles`),
+    ...(needs.length
+      ? [run(' · '), run(`${needs.length} sign-in ${needs.length === 1 ? 'step needs' : 'steps need'} you`, true, 'warn')]
+      : []),
   ];
   return {
     id: 'claude',
@@ -792,7 +799,7 @@ function claudeSection(accounts, profiles, platform, now, openProgress) {
     longLabel: 'Claude',
     switchable: false,
     canSwitch: false,
-    meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'} · desktop profiles`,
+    meta: runsText(metaRuns),
     metaRuns,
     metaWords: wordsOf(metaRuns),
     foot: noFoot(),
@@ -1248,7 +1255,7 @@ export function dashboardViewModel(data, ctx = {}) {
   const sections = [];
   if (!hidden.has('claude'))
     sections.push(
-      claudeSection(of('claude'), ctx.profiles, ctx.platform || 'mac', now, ctx.openProgress)
+      claudeSection(of('claude'), ctx.profiles, ctx.platform || 'mac', now, ctx.openProgress, data)
     );
   if (!hidden.has('codex'))
     sections.push(
@@ -1336,6 +1343,7 @@ export function detailsViewModel(data, id, ctx = {}) {
     ...(text(account.message)
       ? [{ label: 'Note', value: text(account.message), mono: false }]
       : []),
+    ...(account.provider === 'claude' ? claudeSignInFacts(data, account.email, now) : []),
   ];
   const missingFable = isMaxPlan(account) && !visibleMeters(account).some(isFable);
   const opening =

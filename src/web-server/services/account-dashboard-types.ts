@@ -1,3 +1,4 @@
+import type { ClaudeSignInRenewal } from './claude-signin-renewal';
 import type { AntigravityAutoSwitchStatus } from '../../antigravity/auto-switch/types';
 import type { AntigravityPlan } from '../../antigravity/plan';
 /** Public account-only contract shared by the dashboard and native clients. */
@@ -250,4 +251,9 @@ export interface AccountDashboard {
   antigravityAutoSwitch?: AntigravityAutoSwitchStatus;
   codexAutoSwitch: CodexAutoSwitchDashboardStatus;
   server?: DashboardServerInfo;
+  /**
+   * Claude Code sign-in renewal (scripts/claude-signin), when a runner publishes into the usage
+   * snapshot folder: each sign-in's end and renewal state, and what needs a person.
+   */
+  claudeSignIns?: ClaudeSignInRenewal;
 }

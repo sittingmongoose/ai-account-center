@@ -67,6 +67,7 @@ import {
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
 import { getSignInHealth } from './services/signin-health-service';
+import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
 import { createUsageHubRouter } from './usage-hub/usage-hub-router';
 
@@ -390,6 +391,17 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
           return Object.entries(health.machines).flatMap(([machine, rows]) =>
             rows.map((row) => ({ ...row, platform: machine }))
           );
+        },
+        signInRenewal: async () => {
+          const renewal = await readClaudeSignInRenewal();
+          return renewal
+            ? {
+                runner: renewal.runner,
+                generatedAt: renewal.generatedAt,
+                stale: renewal.stale,
+                needsYou: renewal.needsYou,
+              }
+            : null;
         },
       });
       startAccountAnalyticsSampling();

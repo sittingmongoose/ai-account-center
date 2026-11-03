@@ -2,6 +2,11 @@ import { execFile } from 'child_process';
 import * as path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
 import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-snapshot';
+import {
+  readClaudeSignInRenewal,
+  type ClaudeSignInRenewal,
+  type ClaudeSignInRenewalRow,
+} from './claude-signin-renewal';
 
 /**
  * Sign-in expiry health for every Claude OAuth login on the machines AAC
@@ -21,6 +26,83 @@ export interface SignInProfile extends SnapshotSignInProfile {
 export interface SignInHealth {
   generatedAt: string;
   machines: Record<string, SignInProfile[]>;
+  /** The renewal runner's own state, when one publishes into the snapshot folder. */
+  renewal?: ClaudeSignInRenewal;
+}
+
+const WARN_MS = 24 * 3600 * 1000;
+const CRITICAL_MS = 4 * 3600 * 1000;
+
+/** One runner row in the collector's shape, with the renewal fields beside it. */
+export function renewalProfile(row: ClaudeSignInRenewalRow, now: number): SignInProfile {
+  const end = row.logoutAt ? Date.parse(row.logoutAt) : NaN;
+  const state: SignInProfile['state'] =
+    row.state === 'logged_out' || row.state === 'no_refresh_token'
+      ? 'logged_out'
+      : row.state !== 'ok'
+        ? 'unavailable'
+        : !Number.isFinite(end)
+          ? 'ok'
+          : end <= now
+            ? 'logged_out'
+            : end - now < CRITICAL_MS
+              ? 'critical'
+              : end - now < WARN_MS
+                ? 'warn'
+                : 'ok';
+  return {
+    name: row.profile,
+    provider: 'claude',
+    platform: row.host,
+    machine: row.host,
+    accessExpiresAt: null,
+    refreshExpiresAt: row.signInEndsAt,
+    loggedOutAt: row.logoutAt,
+    state,
+    fixCommand: '',
+    ...renewalFields(row),
+  };
+}
+
+function renewalFields(row: ClaudeSignInRenewalRow): Partial<SignInProfile> {
+  return {
+    email: row.email,
+    autoRenew: row.autoRenew,
+    renewFrom: row.renewFrom,
+    lastRenewAt: row.lastRenewAt,
+    lastResult: row.lastResult,
+    nextVerifyAt: row.nextVerifyAt,
+    reverts: row.reverts,
+  };
+}
+
+/**
+ * While the runner is current, its rows are the truth for every computer it read: it reads the
+ * Mac's Keychain from the desktop session (ssh cannot) and covers Nas1. A computer it could not
+ * read keeps this service's own rows, with the renewal fields added where the profile names match.
+ */
+export function mergeRenewal(
+  machines: Record<string, SignInProfile[]>,
+  renewal: ClaudeSignInRenewal | null,
+  now: number
+): Record<string, SignInProfile[]> {
+  if (!renewal || renewal.stale) return machines;
+  const merged: Record<string, SignInProfile[]> = { ...machines };
+  const readOk = new Set(renewal.hosts.filter((h) => !h.error).map((h) => h.host));
+  const byHost = new Map<string, ClaudeSignInRenewalRow[]>();
+  for (const row of renewal.signIns) byHost.set(row.host, [...(byHost.get(row.host) ?? []), row]);
+  for (const [host, rows] of byHost) {
+    if (readOk.has(host)) {
+      const others = (merged[host] ?? []).filter((r) => r.provider !== 'claude');
+      merged[host] = [...rows.map((r) => renewalProfile(r, now)), ...others];
+    } else if (merged[host]) {
+      merged[host] = merged[host].map((r) => {
+        const match = rows.find((x) => x.profile === r.name);
+        return match ? { ...r, ...renewalFields(match) } : r;
+      });
+    }
+  }
+  return merged;
 }
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -183,7 +265,8 @@ function parseRows(stdout: string): SignInProfile[] {
 const REMOTE_HOSTS: readonly string[] = ['mac', 'windows'];
 
 export function getSignInHealth(
-  remoteHosts: readonly string[] = REMOTE_HOSTS
+  remoteHosts: readonly string[] = REMOTE_HOSTS,
+  readRenewal: () => Promise<ClaudeSignInRenewal | null> = () => readClaudeSignInRenewal()
 ): Promise<SignInHealth> {
   const now = Date.now();
   const key = remoteHosts.join(',');
@@ -206,7 +289,12 @@ export function getSignInHealth(
         machines[host] = unavailableHost(host, reason);
       }
     });
-    return { generatedAt: new Date().toISOString(), machines };
+    const renewal = await readRenewal().catch(() => null);
+    return {
+      generatedAt: new Date().toISOString(),
+      machines: mergeRenewal(machines, renewal, Date.now()),
+      ...(renewal ? { renewal } : {}),
+    };
   })();
   cache = { at: now, key, health };
   return health;
