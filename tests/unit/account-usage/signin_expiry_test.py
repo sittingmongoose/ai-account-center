@@ -23,6 +23,12 @@ class SignInExpiryTests(unittest.TestCase):
         patcher = mock.patch.object(pathlib.Path, "home", return_value=self.home)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A fixture home does not isolate the macOS Keychain: the probe
+        # reads through this mock (empty unless a test supplies a payload),
+        # so no test can touch the real item on a Mac.
+        keychain = mock.patch.object(collector, "_mac_keychain_text", return_value=None)
+        keychain.start()
+        self.addCleanup(keychain.stop)
 
     def _write(self, name, credentials):
         root = self.home / ".claude-t3" / name
@@ -30,7 +36,7 @@ class SignInExpiryTests(unittest.TestCase):
         (root / ".credentials.json").write_text(json.dumps({"claudeAiOauth": credentials}))
 
     def report(self):
-        return collector.collect(self.home, NOW)
+        return collector.collect(self.home, NOW, include_keychain=False)
 
     def test_refresh_passed_but_access_still_valid_ends_at_the_access_expiry(self):
         # The VM-party case: renewal at 03:25 could not push the login end
@@ -160,7 +166,7 @@ class SignInExpiryTests(unittest.TestCase):
             with mock.patch.object(pathlib.Path, "iterdir", broken_iterdir):
                 report = self.report()
         names = {row["name"] for row in report["profiles"]}
-        self.assertEqual(names, {"default", "saved-profiles"} | ({"keychain"} if sys.platform == "darwin" else set()))
+        self.assertEqual(names, {"default", "saved-profiles"})
         partial = {row["name"]: row for row in report["profiles"]}["saved-profiles"]
         self.assertEqual(partial["state"], "unavailable")
         self.assertIn("incomplete", partial["error"])
@@ -322,8 +328,8 @@ class SignInExpiryTests(unittest.TestCase):
     def test_an_unreadable_saved_profile_marks_discovery_incomplete(self):
         import failover_core
         import os
-        if os.geteuid() == 0:
-            self.skipTest("permission bits do not bind root")
+        if not hasattr(os, "geteuid") or os.geteuid() == 0:
+            self.skipTest("POSIX permission bits do not apply here")
         blocked = self.home / "blocked"
         profile = blocked / "configured"
         profile.mkdir(parents=True)
@@ -356,7 +362,39 @@ class SignInExpiryTests(unittest.TestCase):
         target.write_text(json.dumps({"access_token": "fixture-private"}))
         (self.home / ".codex").mkdir(parents=True, exist_ok=True)
         (self.home / ".codex" / "auth.json").symlink_to(target)
-        self.assertIsNone(collector.codex_profile(NOW, self.home))
+        entry = collector.codex_profile(NOW, self.home)
+        # Present but refused: an unavailable row, never the linked values.
+        self.assertEqual(entry["state"], "unavailable")
+        self.assertNotIn("fieldsAvailable", entry)
+
+    def test_a_dangling_profile_link_marks_discovery_incomplete(self):
+        (self.home / ".claude-t3" / "gone").mkdir(parents=True, exist_ok=True)
+        link = self.home / ".claude-t3" / "dangling"
+        link.symlink_to(self.home / ".claude-t3" / "gone")
+        (self.home / ".claude-t3" / "gone").rmdir()
+        rows = {row["name"]: row for row in self.report()["profiles"]}
+        self.assertNotIn("dangling", rows)
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_a_symlinked_instance_is_not_counted_twice(self):
+        real = self.home / ".ccs" / "instances" / "realone"
+        real.mkdir(parents=True)
+        (real / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        (self.home / ".ccs" / "instances" / "linkone").symlink_to(real, target_is_directory=True)
+        names = [row["name"] for row in self.report()["profiles"]]
+        self.assertEqual(sorted(n for n in names if n in ("realone", "linkone")), ["linkone"])
+
+    def test_an_overlong_settings_home_marks_discovery_incomplete(self):
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        long_home = str(self.home / ("deep" * 300))
+        (userdata / "settings.json").write_text(json.dumps(
+            {"providerInstances": {"claude-long": {
+                "driver": "claudeAgent", "config": {"homePath": long_home}}}}))
+        rows = {row["name"]: row for row in self.report()["profiles"]}
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
 
     def test_keychain_rows_gate_stamps_on_token_presence(self):
         payload = json.dumps({"claudeAiOauth": {

@@ -222,11 +222,16 @@ def _dir_state(path):
     """(is_directory, read_failed) for one path. Path.is_dir() cannot be
     used for this: it swallows permission and I/O errors into False, which
     would make an unreadable profile indistinguishable from an absent
-    one. A missing path is not a failure; an unreadable one is."""
+    one. A missing path is not a failure; an unreadable one — including a
+    dangling symlink whose target is gone — is."""
     try:
         mode = path.stat().st_mode
     except (FileNotFoundError, NotADirectoryError):
-        return False, False
+        try:
+            path.lstat()
+        except OSError:
+            return False, False
+        return False, True
     except OSError:
         return False, True
     return stat.S_ISDIR(mode), False
@@ -376,10 +381,21 @@ def codex_profile(now_ms, home=None):
     published, never values."""
     home = home or pathlib.Path.home()
     for candidate in (home / ".codex" / "auth.json",):
+        present = os.path.lexists(candidate)
         # The same containment as Claude stores: a linked auth.json outside
         # the home is never followed, even though only key names publish.
-        if not _within_allowed(candidate, home):
-            continue
+        # A file that exists but cannot be read is unseen, not absent: it
+        # reports unavailable instead of vanishing.
+        unreadable = {
+            "name": "codex",
+            "provider": "codex",
+            "configDir": "~/.codex/auth.json",
+            "state": "unavailable",
+            "error": "auth file missing or unreadable",
+            "fixCommand": "",
+        }
+        if present and not _within_allowed(candidate, home):
+            return unreadable
         try:
             descriptor = os.fdopen(
                 os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb"
@@ -387,7 +403,7 @@ def codex_profile(now_ms, home=None):
             with descriptor as handle:
                 raw = json.loads(handle.read(65536).decode("utf-8"))
         except (OSError, ValueError, RecursionError):
-            continue
+            return unreadable if present else None
         keys = sorted(raw.keys()) if isinstance(raw, dict) else []
         relative = _home_relative(candidate, home)
         return {
@@ -425,7 +441,7 @@ def claude_roots(home, ccs_dir=None):
     the report can say the list may be short instead of implying all."""
     default = home / ".claude"
     roots = [("default", default)]
-    seen = {str(default)}
+    seen = {os.path.realpath(default)}
     complete = True
     # The sibling discovery records every swallowed read failure and
     # truncation through desktop_helpers; a count that moves while it runs
@@ -437,10 +453,23 @@ def claude_roots(home, ccs_dir=None):
     except Exception:
         desktop_helpers = None
         failures_before = None
+    try:
+        import failover_core
+
+        settings_before = failover_core.SETTINGS_HOME_FAILURES[0]
+    except Exception:
+        failover_core = None
+        settings_before = None
     pairs = _saved_roots(home, ccs_dir or home / ".ccs")
     if pairs is not None and failures_before is not None:
         try:
             if desktop_helpers.total_read_failures() > failures_before:
+                complete = False
+        except Exception:
+            complete = False
+    if pairs is not None and settings_before is not None:
+        try:
+            if failover_core.SETTINGS_HOME_FAILURES[0] > settings_before:
                 complete = False
         except Exception:
             complete = False
@@ -462,7 +491,7 @@ def claude_roots(home, ccs_dir=None):
                 continue
             if not is_dir:
                 continue
-            text_path = str(root)
+            text_path = os.path.realpath(root)
             if text_path in seen:
                 continue
             seen.add(text_path)
@@ -502,7 +531,7 @@ def claude_roots(home, ccs_dir=None):
                 continue
             if not child_is_dir or child.name.startswith("."):
                 continue
-            text_path = str(child)
+            text_path = os.path.realpath(child)
             if text_path in seen:
                 continue
             seen.add(text_path)

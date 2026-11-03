@@ -224,6 +224,10 @@ class ReaderTests(unittest.TestCase):
              "loggedOutAt": iso(generated + dt.timedelta(hours=2)),
              "accessExpiresAt": iso(generated + dt.timedelta(hours=2)),
              "fixCommand": "claude auth login"},
+            {"provider": "claude", "machine": "ubuntu", "name": "stale-ok", "state": "ok",
+             "refreshExpiresAt": iso(generated - dt.timedelta(seconds=5)),
+             "accessExpiresAt": iso(generated - dt.timedelta(seconds=5)),
+             "fixCommand": "claude auth login"},
         ]
         (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
         out = io.StringIO()
@@ -232,7 +236,11 @@ class ReaderTests(unittest.TestCase):
             aac.main()
         text = out.getvalue()
         self.assertIn("past its deadline; awaiting recheck", text)
+        self.assertIn("refresh expired", text)
+        self.assertIn("awaiting recheck", text)
         self.assertIn("re-login when the window ends", text)
+        stale_line = next(line for line in text.splitlines() if "stale-ok" in line)
+        self.assertNotIn("healthy", stale_line)
 
     def test_a_retained_window_says_how_old_it_is(self):
         generated = aac.now_utc()

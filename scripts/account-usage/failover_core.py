@@ -197,6 +197,14 @@ def _children(home, value):
         return []
 
 
+# Settings homes this discovery could not use (relative, outside the home,
+# overlong, malformed). Counted separately from read failures: the sign-in
+# collector treats them as incomplete discovery, while the shared quota
+# inventory must not report every machine with such a settings entry as
+# permanently incomplete.
+SETTINGS_HOME_FAILURES = [0]
+
+
 def _settings_homes(home, provider):
     state = home / ".t3/userdata"
     settings = _read(home, state / "settings.json") or {}
@@ -215,7 +223,14 @@ def _settings_homes(home, provider):
         fields = ("homePath", "shadowHomePath") if provider == "codex" else ("homePath",)
         for field in fields:
             value = config.get(field)
+            if value is None:
+                continue
             if not isinstance(value, str) or len(value) > 1024 or "\x00" in value:
+                # Configured but unusable (malformed, overlong): unseen,
+                # not absent. An empty string is T3's unset placeholder
+                # and stays silent.
+                if value:
+                    SETTINGS_HOME_FAILURES[0] += 1
                 continue
             if value == "~":
                 value = str(home)
@@ -224,9 +239,7 @@ def _settings_homes(home, provider):
             if Path(value).is_absolute() and _within(home, Path(os.path.abspath(value))):
                 result.append(Path(value))
             elif value:
-                # A matching instance names a home discovery cannot use
-                # (relative, or outside this home): unseen, not absent.
-                read_failed()
+                SETTINGS_HOME_FAILURES[0] += 1
     return result
 
 

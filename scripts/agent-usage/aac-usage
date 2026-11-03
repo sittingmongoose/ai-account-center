@@ -274,7 +274,7 @@ def cmd_show(args):
                 if not current_reading(window, now, account.get("sampledAt"), stale_after):
                     window["burn"] = None
         payload = dict(snapshot, accounts=accounts)
-        if provider:
+        if provider and "signIn" in snapshot:
             payload["signIn"] = [r for r in snapshot.get("signIn") or [] if r.get("provider") == provider]
         print(json.dumps(payload, indent=2))
         return
@@ -357,7 +357,7 @@ def sign_in_lines(snapshot, provider=None):
         end_dt = parse_time(row.get("loggedOutAt"))
         crossed = state in ("warn", "critical", "ok") and end_dt is not None and end_dt <= now
         refresh_dt = parse_time(row.get("refreshExpiresAt")) if not row.get("loggedOutAt") else None
-        refresh_crossed = (state in ("warn", "critical") and refresh_dt is not None
+        refresh_crossed = (state in ("warn", "critical", "ok") and refresh_dt is not None
                            and refresh_dt <= now)
         if crossed:
             word = "ended %s (past its deadline; awaiting recheck)" % row["loggedOutAt"]

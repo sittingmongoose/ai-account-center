@@ -4,6 +4,7 @@ import {
   cacheTtlFor,
   collectorFailureWord,
   downgradeCrossedRows,
+  publishableError,
   publishableFailureReason,
   hasPassedDeadline as hasPassedDeadlineWindow,
   nextDeadlineAt,
@@ -91,6 +92,23 @@ describe('allowProfile', () => {
     // C1 controls are controls too: U+0085 omits the command whole.
     const c1 = allowProfile(row({ fixCommand: 'claude auth\u0085login' }), 'mac');
     expect(c1?.fixCommand).toBe('');
+  });
+
+  it('omits a repair command carrying bidi controls', () => {
+    const out = allowProfile(row({ fixCommand: 'claude auth\u202elogin' }), 'mac');
+    expect(out?.fixCommand).toBe('');
+  });
+
+  it('collapses a path-quoting or credential-shaped profile error to a fixed word', () => {
+    expect(publishableError('credentials file missing or unreadable')).toBe(
+      'credentials file missing or unreadable'
+    );
+    expect(publishableError("open '/home/user/.claude/.credentials.json' failed")).toBe(
+      'unavailable'
+    );
+    expect(publishableError('token ' + 'sk' + '-abcdefgh rejected')).toBe('unavailable');
+    expect(publishableError('')).toBeNull();
+    expect(publishableError(42)).toBeNull();
   });
 
   it('screens control characters out of configDir and error', () => {

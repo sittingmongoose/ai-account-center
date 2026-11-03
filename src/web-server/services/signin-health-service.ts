@@ -48,8 +48,9 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@+ -]{0,63}$/;
 const STAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-/** C0, DEL and C1 controls: none of them ever publish. */
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+/** C0, DEL and C1 controls plus Unicode line/paragraph separators:
+ * none of them ever publish. */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 /** The only failure words ever published for a failed collection. Raw
  * stderr names routing details (the resolved hostname or address behind
@@ -160,7 +161,33 @@ function stamp(value: unknown): string | null {
  * commands are worse than none. */
 export function publishableFixCommand(value: unknown): string {
   if (typeof value !== 'string') return '';
-  return CONTROL.test(value) || value.includes('`') || value.length > 200 ? '' : value;
+  // Paste-to-shell text also refuses bidi controls: they cannot change
+  // what the quoted command does, but they can change how it reads.
+  return CONTROL.test(value) ||
+    /[\u202a-\u202e\u2066-\u2069]/.test(value) ||
+    value.includes('`') ||
+    value.length > 200
+    ? ''
+    : value;
+}
+
+/** A per-profile error publishes as plain words only: controls stripped,
+ * and anything quoting a filesystem path or credential shape collapses to
+ * a fixed word — the same discipline host-level errors already get. */
+export function publishableError(value: unknown): string | null {
+  if (typeof value !== 'string' || value === '') return null;
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+  if (cleaned === '') return null;
+  if (
+    /(^|[\s"'(])(\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(cleaned) ||
+    /(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})/i.test(cleaned)
+  )
+    return 'unavailable';
+  return cleaned;
 }
 
 /** The published DTO is allowlisted; a changed helper cannot add fields or
@@ -175,6 +202,7 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
     typeof row.configDir === 'string' && !CONTROL.test(row.configDir)
       ? row.configDir.slice(0, 200)
       : undefined;
+  const error = row.state === 'unavailable' ? publishableError(row.error) : null;
   const profile: SignInProfile = {
     name:
       typeof row.name === 'string' && NAME_PATTERN.test(row.name)
@@ -189,15 +217,7 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
     loggedOutAt: stamp(row.loggedOutAt),
     state: row.state as SignInProfile['state'],
     fixCommand: publishableFixCommand(row.fixCommand),
-    ...(row.state === 'unavailable' && typeof row.error === 'string' && row.error !== ''
-      ? {
-          error: row.error
-            .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 120),
-        }
-      : {}),
+    ...(error !== null ? { error } : {}),
     ...(row.state === 'unsupported' && Array.isArray(row.fieldsAvailable)
       ? {
           fieldsAvailable: row.fieldsAvailable
