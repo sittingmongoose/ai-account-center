@@ -340,7 +340,10 @@ function normalizeSample(
     platform: 'windows',
     source: SOURCE,
     plan: livePlan(result.plan),
-    ...(livePlanClass(result.planClass) ? { planClass: livePlanClass(result.planClass) } : {}),
+    ...(() => {
+      const planClass = livePlanClass(result.planClass);
+      return planClass ? { planClass } : {};
+    })(),
     fetchedAt,
     windows,
     ...(optionalExtras ? { optionalExtras } : {}),

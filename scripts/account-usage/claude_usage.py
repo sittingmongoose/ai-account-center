@@ -10,7 +10,6 @@ again against this native account and organization before any balance request.
 import argparse
 import base64
 import ctypes
-import unicodedata
 import datetime as dt
 from email.utils import parsedate_to_datetime
 import hashlib

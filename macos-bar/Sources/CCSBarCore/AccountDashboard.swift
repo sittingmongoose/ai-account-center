@@ -234,7 +234,7 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
     label = try container.decode(String.self, forKey: .label)
     email = try container.decodeIfPresent(String.self, forKey: .email)
     plan = try container.decodeIfPresent(String.self, forKey: .plan)
-    planClass = try container.decodeIfPresent(String.self, forKey: .planClass)
+    planClass = (try? container.decodeIfPresent(String.self, forKey: .planClass)) ?? nil
     platform = try container.decode(String.self, forKey: .platform)
     host = try container.decodeIfPresent(String.self, forKey: .host)
     source = try container.decode(String.self, forKey: .source)
