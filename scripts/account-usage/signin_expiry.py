@@ -23,12 +23,13 @@ are unreadable (they read as `unavailable`); exit 1 only on bad arguments.
 """
 
 import argparse
+import ctypes
 import datetime
 import json
-import os
 import pathlib
 import re
 import sys
+import time
 
 SCHEMA_VERSION = 1
 WARN_SECONDS = 24 * 3600
@@ -136,6 +137,7 @@ def claude_profile(name, config_dir, now_ms, fix_template):
     }
     data = read_credentials(pathlib.Path(config_dir) / ".credentials.json")
     if data is None:
+        entry["error"] = "credentials file missing or unreadable"
         return entry
     has_tokens = data["has_access"] or data["has_refresh"]
     end = logged_out_at(data["refresh"], data["access"], now_ms)
@@ -146,6 +148,43 @@ def claude_profile(name, config_dir, now_ms, fix_template):
         state=state_for(end, now_ms, has_tokens, data["refresh"]),
     )
     return entry
+
+
+def _mac_keychain_text():
+    """The Keychain item's JSON through Security's noninteractive C API.
+
+    The `security` CLI can prompt for keychain access; over ssh that prompt
+    hangs until the timeout and the primary store never reports. User
+    interaction is explicitly disabled for this lookup, so it either reads
+    or fails immediately."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
+        security.SecKeychainSetUserInteractionAllowed.argtypes = [ctypes.c_bool]
+        security.SecKeychainSetUserInteractionAllowed.restype = ctypes.c_int32
+        if security.SecKeychainSetUserInteractionAllowed(False) != 0:
+            return None
+        find = security.SecKeychainFindGenericPassword
+        find.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
+                         ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32),
+                         ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+        find.restype = ctypes.c_int32
+        security.SecKeychainItemFreeContent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        service = b"Claude Code-credentials"
+        length, pointer = ctypes.c_uint32(), ctypes.c_void_p()
+        status_code = find(None, len(service), service, 0, None,
+                           ctypes.byref(length), ctypes.byref(pointer), None)
+        if status_code != 0:
+            return None
+        try:
+            if not 0 < length.value <= 65536:
+                return None
+            return ctypes.string_at(pointer, length.value).decode("utf-8")
+        finally:
+            security.SecKeychainItemFreeContent(None, pointer)
+    except (OSError, ValueError, UnicodeError, AttributeError):
+        return None
 
 
 def mac_keychain_profile(now_ms, fix_template):
@@ -159,21 +198,19 @@ def mac_keychain_profile(now_ms, fix_template):
         "loggedOutAt": None,
         "state": "unavailable",
         "fixCommand": fix_template.format(name="keychain", config_dir="keychain"),
+        "error": "keychain item unreadable",
     }
     if sys.platform != "darwin":
+        entry.pop("error")
         return entry
-    import subprocess
-
-    try:
-        raw = subprocess.run(
-            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-            capture_output=True, timeout=10, check=True,
-        ).stdout.decode("utf-8")
-        data = read_credentials_from_text(raw)
-    except (OSError, ValueError, subprocess.SubprocessError):
+    raw = _mac_keychain_text()
+    if raw is None:
         return entry
+    data = read_credentials_from_text(raw)
     if data is None:
+        entry["error"] = "keychain item holds no readable credentials"
         return entry
+    entry.pop("error")
     has_tokens = data["has_access"] or data["has_refresh"]
     end = logged_out_at(data["refresh"], data["access"], now_ms)
     entry.update(
@@ -269,6 +306,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import time
-
     sys.exit(main())

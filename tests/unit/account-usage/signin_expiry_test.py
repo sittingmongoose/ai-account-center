@@ -79,7 +79,12 @@ class SignInExpiryTests(unittest.TestCase):
         (self.home / ".claude-t3" / "broken" / ".credentials.json").write_text("{not json")
         rows = {row["name"]: row for row in self.report()["profiles"]}
         self.assertEqual(rows["broken"]["state"], "unavailable")
-        self.assertTrue(any(row["name"] == "default" for row in self.report()["profiles"]))
+        self.assertEqual(rows["broken"]["error"], "credentials file missing or unreadable")
+        self.assertEqual(rows["default"]["state"], "unavailable")
+        self.assertEqual(rows["default"]["error"], "credentials file missing or unreadable")
+
+    def test_time_is_imported_at_module_level_for_embedded_main(self):
+        self.assertTrue(hasattr(collector, "time"))
 
     def test_token_values_never_reach_the_report(self):
         secret = "sk-ant-secret-token-value"

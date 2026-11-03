@@ -103,13 +103,19 @@ def public_candidate(value, provider, request=False):
     if address is not None and _email(address) is None or plan is not None and _text(plan) is None:
         return None
     # Claude only: the entitlement class rides beside the display name ("Ultra"
-    # is a Max-class plan) so the Fable column keeps gating on Max.
-    plan_class = value.get("planClass") if provider == "claude" else None
-    if plan_class is not None and _text(plan_class) not in ("max", "pro"):
+    # is a Max-class plan) so the Fable column keeps gating on Max. A present
+    # class that does not normalize to max/pro rejects the candidate outright —
+    # it never silently drops, which is how the class was being lost.
+    raw_class = value.get("planClass") if provider == "claude" else None
+    plan_class = _text(raw_class)
+    if raw_class is not None and plan_class not in ("max", "pro"):
         return None
-    return {"locator": value["locator"], "selectors": list(dict.fromkeys(selectors)),
-            "identity": {"kind": identity["kind"], "key": identity["key"]},
-            "revision": value["revision"], "email": _email(address), "plan": _text(plan)}
+    candidate = {"locator": value["locator"], "selectors": list(dict.fromkeys(selectors)),
+                 "identity": {"kind": identity["kind"], "key": identity["key"]},
+                 "revision": value["revision"], "email": _email(address), "plan": _text(plan)}
+    if plan_class is not None:
+        candidate["planClass"] = plan_class
+    return candidate
 
 
 def _window(value):
@@ -204,9 +210,11 @@ def public_sample(value, provider, platform):
     if address is not None and _email(address) is None or plan is not None and _text(plan) is None:
         return None
     # Claude only: the entitlement class rides beside the display name ("Ultra"
-    # is a Max-class plan) so the Fable column keeps gating on Max.
-    plan_class = value.get("planClass") if provider == "claude" else None
-    if plan_class is not None and _text(plan_class) not in ("max", "pro"):
+    # is a Max-class plan) so the Fable column keeps gating on Max. A present
+    # class that does not normalize to max/pro rejects the sample outright.
+    raw_class = value.get("planClass") if provider == "claude" else None
+    plan_class = _text(raw_class)
+    if raw_class is not None and plan_class not in ("max", "pro"):
         return None
     raw_windows = value.get("windows")
     if not isinstance(raw_windows, list) or not 1 <= len(raw_windows) <= MAX_WINDOWS:

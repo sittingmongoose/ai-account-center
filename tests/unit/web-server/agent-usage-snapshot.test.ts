@@ -948,6 +948,9 @@ describe('sign-in health section', () => {
       ])
     );
     expect(markdown).toContain('already logged out');
+    expect(markdown).toContain('re-login: `');
+    expect(markdown).not.toContain('re-login before then');
+    expect(markdown).not.toContain('sign-in ends');
     expect(markdown).toContain('not readable on this machine (connection refused)');
   });
 
@@ -957,6 +960,7 @@ describe('sign-in health section', () => {
     );
     expect(markdown).toContain('no exact end published');
     expect(markdown).not.toContain('sign-in ends');
+    expect(markdown).not.toContain('closes soon');
   });
 
   it('omits the section when no machine reported profiles', () => {

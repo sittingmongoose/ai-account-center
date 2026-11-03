@@ -1,6 +1,5 @@
 import { execFile } from 'child_process';
 import * as path from 'path';
-import { getCcsDir } from '../../utils/config-manager';
 import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-snapshot';
 
 /**
@@ -50,7 +49,7 @@ function runCollector(command: string, args: string[], timeoutMs: number): Promi
 }
 
 /** The published DTO is allowlisted: a changed helper cannot add fields. */
-function allowProfile(raw: unknown, machine: string): SignInProfile | null {
+export function allowProfile(raw: unknown, machine: string): SignInProfile | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const row = raw as Record<string, unknown>;
   if (typeof row.name !== 'string' || !NAME_PATTERN.test(row.name)) return null;
@@ -67,6 +66,11 @@ function allowProfile(raw: unknown, machine: string): SignInProfile | null {
     (typeof row.fixCommand !== 'string' || row.fixCommand.length > 200)
   )
     return null;
+  if (
+    row.configDir !== undefined &&
+    (typeof row.configDir !== 'string' || row.configDir.length > 200)
+  )
+    return null;
   const provider = row.provider === 'codex' ? 'codex' : 'claude';
   return {
     name: row.name,
@@ -79,6 +83,9 @@ function allowProfile(raw: unknown, machine: string): SignInProfile | null {
     loggedOutAt: typeof row.loggedOutAt === 'string' ? row.loggedOutAt : null,
     state: row.state as SignInProfile['state'],
     fixCommand: typeof row.fixCommand === 'string' ? row.fixCommand : '',
+    ...(row.state === 'unavailable' && typeof row.error === 'string' && row.error !== ''
+      ? { error: row.error.slice(0, 120) }
+      : {}),
     ...(row.state === 'unsupported' && Array.isArray(row.fieldsAvailable)
       ? {
           fieldsAvailable: row.fieldsAvailable
@@ -103,17 +110,16 @@ function unavailableHost(machine: string, error: string): SignInProfile[] {
   ];
 }
 
-async function collectLocal(): Promise<SignInProfile[]> {
-  const helper = path.join(getCcsDir(), 'account-usage', COLLECTOR);
-  const stdout = await runCollector('python3', [helper], 20_000);
-  const start = stdout.lastIndexOf('{"schemaVersion"');
-  const rows = parseRows(start < 0 ? '' : stdout.slice(start));
-  return rows;
+async function collectLocal(): Promise<string> {
+  // The packaged helper, resolved from this module like the sibling usage
+  // transports — nothing installs the collector into ~/.ccs on a clean machine.
+  const helper = path.resolve(__dirname, '../../../scripts/account-usage', COLLECTOR);
+  return runCollector('python3', [helper], 20_000);
 }
 
-async function collectMac(): Promise<SignInProfile[]> {
+async function collectMac(): Promise<string> {
   // The Mac runs the same collector from its synced helper folder.
-  const stdout = await runCollector(
+  return runCollector(
     'ssh',
     [
       '-T',
@@ -131,11 +137,9 @@ async function collectMac(): Promise<SignInProfile[]> {
     ],
     30_000
   );
-  const start = stdout.lastIndexOf('{"schemaVersion"');
-  return parseRows(start < 0 ? '' : stdout.slice(start));
 }
 
-async function collectWindows(): Promise<SignInProfile[]> {
+async function collectWindows(): Promise<string> {
   // Windows: the synced helper folder under the remote %HOME%, run by the
   // remote python (the same layout the claude usage helper uses).
   const script = [
@@ -146,7 +150,7 @@ async function collectWindows(): Promise<SignInProfile[]> {
     "$python = 'python.exe'",
     '& $python $helper',
   ].join('; ');
-  const stdout = await runCollector(
+  return runCollector(
     'ssh',
     [
       '-T',
@@ -162,16 +166,28 @@ async function collectWindows(): Promise<SignInProfile[]> {
     ],
     30_000
   );
-  const start = stdout.lastIndexOf('{"schemaVersion"');
-  return parseRows(start < 0 ? '' : stdout.slice(start));
 }
 
-function parseRows(stdout: string): SignInProfile[] {
+/** Each host is paired with its own collector; results never shift position. */
+export function hostCollectors(
+  remoteHosts: readonly string[]
+): { host: string; run: () => Promise<string> }[] {
+  const list: { host: string; run: () => Promise<string> }[] = [
+    { host: 'ubuntu', run: collectLocal },
+  ];
+  for (const host of remoteHosts) {
+    if (host === 'mac') list.push({ host, run: collectMac });
+    else if (host === 'windows') list.push({ host, run: collectWindows });
+  }
+  return list;
+}
+
+export function parseRows(stdout: string, machine: string): SignInProfile[] {
   try {
     const value = JSON.parse(stdout);
     if (value && value.schemaVersion === 1 && Array.isArray(value.profiles)) {
       return value.profiles
-        .map((row: unknown) => allowProfile(row, ''))
+        .map((row: unknown) => allowProfile(row, machine))
         .filter((row: SignInProfile | null): row is SignInProfile => row !== null);
     }
   } catch {
@@ -190,21 +206,24 @@ export function getSignInHealth(
   if (cache && cache.key === key && now - cache.at < CACHE_TTL_MS) return cache.health;
   const health = (async (): Promise<SignInHealth> => {
     const machines: Record<string, SignInProfile[]> = {};
-    const results = await Promise.allSettled([collectLocal(), collectMac(), collectWindows()]);
-    const hosts: string[] = ['ubuntu', ...remoteHosts.filter((h) => h !== 'ubuntu')];
-    hosts.forEach((host, index) => {
+    const pairs = hostCollectors(remoteHosts);
+    const results = await Promise.allSettled(pairs.map((pair) => pair.run()));
+    pairs.forEach(({ host }, index) => {
       const result = results[index];
-      if (result.status === 'fulfilled' && result.value.length > 0) {
-        machines[host] = result.value.map((row) => ({ ...row, machine: host }));
-      } else {
-        const reason =
-          result.status === 'rejected'
-            ? result.reason instanceof Error
-              ? result.reason.message
-              : String(result.reason)
-            : 'no profiles reported';
-        machines[host] = unavailableHost(host, reason);
+      if (result.status === 'fulfilled') {
+        const rows = parseRows(result.value, host);
+        if (rows.length > 0) {
+          machines[host] = rows;
+          return;
+        }
       }
+      const reason =
+        result.status === 'rejected'
+          ? result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason)
+          : 'no profiles reported';
+      machines[host] = unavailableHost(host, reason);
     });
     return { generatedAt: new Date().toISOString(), machines };
   })();

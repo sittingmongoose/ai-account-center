@@ -36,6 +36,7 @@ const MODULES = [
   'muse_console',
   'muse_native',
   'claude_usage',
+  'signin_expiry',
 ] as const;
 const MAX_BYTES = 2 * 1024 * 1024;
 const BOOTSTRAP =

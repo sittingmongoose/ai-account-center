@@ -297,12 +297,21 @@ function renderSignInMarkdown(
     // collector could not name one, the wording says the window closes soon
     // instead of inventing a time. The fix text is state-aware.
     const detail = (): string => {
+      if (row.state === 'logged_out')
+        return (
+          `${row.loggedOutAt ? `sign-in ended ${utc(row.loggedOutAt)}` : 'tokens are gone'}` +
+          (row.fixCommand ? `; re-login: \`${row.fixCommand}\`` : '')
+        );
       if (row.state === 'unavailable')
         return `not readable on this machine${row.error ? ` (${row.error})` : ''}`;
       if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
       if (row.loggedOutAt)
         return `sign-in ends ${utc(row.loggedOutAt)}${row.fixCommand ? `; re-login before then: \`${row.fixCommand}\`` : ''}`;
-      return 're-login window closes soon; no exact end published';
+      // No exact end is derivable here (the access expiry still sits ahead of
+      // the refresh expiry); only a warn/critical row should sound urgent.
+      if (row.state === 'warn' || row.state === 'critical')
+        return 'no exact end published; re-login when the window ends';
+      return 'no exact end published yet';
     };
     lines.push(`- **${row.provider} · ${row.machine}/${row.name}**: ${word}. ${detail()}`);
   }
@@ -473,8 +482,9 @@ export function createSnapshotPublisher(
       }
       return false;
     }
-    // The ssh-backed sign-in fetch starts before the busy guard so a slow
-    // remote never holds a sample's publish slot.
+    // The ssh-backed sign-in fetch starts before the busy flag is held, so a
+    // slow remote overlaps the settings/stat work below instead of extending
+    // this sample's busy window. It is still awaited inside the guard.
     const signInPending: Promise<SnapshotSignInProfile[]> = Promise.resolve(signIn()).catch(
       () => []
     );
