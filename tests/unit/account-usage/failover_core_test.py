@@ -17,6 +17,7 @@ import urllib.error
 HELPERS = Path(__file__).resolve().parents[3] / "scripts" / "account-usage"
 sys.path.insert(0, str(HELPERS))
 import failover_core as core
+import failover_usage
 
 EMAIL = "fixture@example.com"
 ACCOUNT = "11111111-1111-1111-1111-111111111111"
@@ -822,6 +823,15 @@ class CollectTests(unittest.TestCase):
         result, _ = self.collect(self.claude, [renamed, {"five_hour": {"utilization": 0}}])
         self.assertEqual(result["sample"]["plan"], "Premium")
         self.assertEqual(result["sample"]["planClass"], "max")
+        # The failover public sample (what the dashboard actually reads) keeps
+        # the class beside the name instead of dropping it at the rebuild.
+        public = failover_usage.public_sample(result["sample"], "claude", "ubuntu")
+        self.assertIsNotNone(public)
+        self.assertEqual(public["plan"], "Premium")
+        self.assertEqual(public["planClass"], "max")
+        # A garbage class rejects the whole public sample, never passes through.
+        broken = {**result["sample"], "planClass": "x" * 200}
+        self.assertIsNone(failover_usage.public_sample(broken, "claude", "ubuntu"))
 
     def test_claude_plan_ignores_a_flag_whose_name_fails_the_text_checks(self):
         credential_shaped = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_bearer_fixture": True})

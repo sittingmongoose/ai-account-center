@@ -102,6 +102,11 @@ def public_candidate(value, provider, request=False):
     address, plan = value.get("email"), value.get("plan")
     if address is not None and _email(address) is None or plan is not None and _text(plan) is None:
         return None
+    # Claude only: the entitlement class rides beside the display name ("Ultra"
+    # is a Max-class plan) so the Fable column keeps gating on Max.
+    plan_class = value.get("planClass") if provider == "claude" else None
+    if plan_class is not None and _text(plan_class) not in ("max", "pro"):
+        return None
     return {"locator": value["locator"], "selectors": list(dict.fromkeys(selectors)),
             "identity": {"kind": identity["kind"], "key": identity["key"]},
             "revision": value["revision"], "email": _email(address), "plan": _text(plan)}
@@ -198,6 +203,11 @@ def public_sample(value, provider, platform):
     address, plan = value.get("email"), value.get("plan")
     if address is not None and _email(address) is None or plan is not None and _text(plan) is None:
         return None
+    # Claude only: the entitlement class rides beside the display name ("Ultra"
+    # is a Max-class plan) so the Fable column keeps gating on Max.
+    plan_class = value.get("planClass") if provider == "claude" else None
+    if plan_class is not None and _text(plan_class) not in ("max", "pro"):
+        return None
     raw_windows = value.get("windows")
     if not isinstance(raw_windows, list) or not 1 <= len(raw_windows) <= MAX_WINDOWS:
         return None
@@ -214,6 +224,7 @@ def public_sample(value, provider, platform):
     result = {"id": "native:" + actual_provider + ":" + platform,
               "provider": actual_provider, "providerLabel": label, "label": label,
               "email": _email(address), "plan": _text(plan), "platform": platform,
+              **({"planClass": plan_class} if plan_class else {}),
               "source": label + " usage on " + {"ubuntu": "Ubuntu", "mac": "Mac", "windows": "Windows"}[platform],
               "status": value["status"], "message": None, "sampledAt": sampled, "fetchedAt": fetched,
               "isActive": False, "windows": windows,
