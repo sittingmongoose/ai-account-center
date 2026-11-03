@@ -65,6 +65,8 @@ export interface UsageReading {
   status: 'ok' | 'cached' | 'unavailable' | 'error' | 'needs_sign_in';
   email: string | null;
   plan: string | null;
+  /** Claude only: the entitlement class the Fable column gates on; the display name may not carry the word. */
+  plan_class?: 'max' | 'pro' | null;
   sampledAt: string | null;
   fetchedAt: string | null;
   windows: DashboardAccountWindow[];
@@ -213,6 +215,9 @@ export function parseUsageCandidate(value: unknown): UsageCandidate | null {
     revision: value.revision,
     email: usageEmail(value.email),
     plan: safeUsageText(value.plan),
+    ...(safeUsageText(value.plan_class) === 'max' || safeUsageText(value.plan_class) === 'pro'
+      ? { plan_class: safeUsageText(value.plan_class) as 'max' | 'pro' }
+      : {}),
   };
 }
 export function parseUsageReading(value: unknown, now = Date.now()): UsageReading | null {

@@ -645,17 +645,20 @@ def _codex_windows(payload, now):
     return windows
 
 
-def _sample(candidate, platform, windows, plan):
+def _sample(candidate, platform, windows, plan, plan_class=None):
     provider = candidate["_provider"]
     label = "Codex" if provider == "codex" else "Claude"
     stamp = dt.datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    return {"id": "native:" + provider + ":" + platform, "provider": provider,
+    sample = {"id": "native:" + provider + ":" + platform, "provider": provider,
             "providerLabel": label, "label": label, "email": candidate["email"], "plan": plan,
             "platform": platform, "source": label + " verified quota on " +
             {"ubuntu": "Ubuntu", "mac": "Mac", "windows": "Windows"}[platform],
             "status": "ok", "message": None, "fetchedAt": stamp, "sampledAt": stamp,
             "isActive": False, "windows": windows,
             "capabilities": {"codexProfile": None, "claudeProfileId": None, "claudePlatforms": []}}
+    if plan_class:
+        sample["planClass"] = plan_class
+    return sample
 
 
 def _claude_optional_windows(candidate, home, cooldown=None):
@@ -699,6 +702,7 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
         provider = candidate.get("_provider")
         client = Client()
         extras = {}
+        plan_class = None
         if provider == "codex":
             payload = client.get(CODEX_URL, candidate["_token"], candidate["_account"])
             windows = _codex_windows(payload, time.time())
@@ -728,6 +732,7 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
             if not windows:
                 raise Failure("invalid_response")
             plan = claude_usage.claude_plan(account, org, candidate["plan"])
+            plan_class = claude_usage.claude_plan_class(account, org)
             if platform == "windows" and candidate.get("_mode") == "desktop":
                 optional_windows, extras = _claude_optional_windows(candidate, home, cooldown)
                 windows.extend(optional_windows)
@@ -736,7 +741,7 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
             raise Failure()
         if not windows:
             raise Failure("invalid_response")
-        return {"sample": {**_sample(candidate, platform, windows, plan), **extras}, "failureCode": None, **cooldown}
+        return {"sample": {**_sample(candidate, platform, windows, plan, plan_class), **extras}, "failureCode": None, **cooldown}
     except Failure as error:
         hold = dict(cooldown)
         if hold.get("failureCode") == "rate_limited" and error.code == "source_changed":

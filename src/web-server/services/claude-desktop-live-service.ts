@@ -23,8 +23,10 @@ export interface ClaudeDesktopLiveUsage {
   email: string;
   platform: 'windows';
   source: 'Claude Desktop live quota on Windows';
-  /** The plan Claude itself names, whatever it names it now ("max", "Max Premium", "max flex"). */
+  /** The plan Claude itself names, whatever it names it now ("max", "Ultra"). */
   plan: string | null;
+  /** Claude only: the entitlement class the Fable column gates on ("max"/"pro"); the display name may not carry the word. */
+  planClass?: 'max' | 'pro' | null;
   fetchedAt: string;
   windows: DashboardAccountWindow[];
   /** Private transport/cache binding; never projected into the account dashboard DTO. */
@@ -40,6 +42,11 @@ export interface ClaudeDesktopLiveUsage {
  * names: control characters and credential-shaped strings never pass, exactly
  * like the collector's own upstream-string rules that produced it.
  */
+export function livePlanClass(value: unknown): 'max' | 'pro' | null {
+  const plan = livePlan(value);
+  return plan === 'max' || plan === 'pro' ? plan : null;
+}
+
 export function livePlan(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const plan = value.trim();
@@ -332,6 +339,7 @@ function normalizeSample(
     platform: 'windows',
     source: SOURCE,
     plan: livePlan(result.plan),
+    ...(livePlanClass(result.planClass) ? { planClass: livePlanClass(result.planClass) } : {}),
     fetchedAt,
     windows,
     ...(optionalExtras ? { optionalExtras } : {}),

@@ -435,6 +435,7 @@ export class UsageFailoverService {
       ...template,
       email: template.email ?? reading.email,
       plan: reading.plan,
+      ...(reading.plan_class ? { planClass: reading.plan_class } : {}),
       sampledAt: reading.sampledAt,
       fetchedAt: reading.fetchedAt,
       windows: structuredClone(reading.windows),

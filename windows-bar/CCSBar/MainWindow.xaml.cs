@@ -637,7 +637,7 @@ public partial class MainWindow : Window
         if (provider == "claude")
         {
             var columns = new List<Column> { new("5h", "5-hour", a => ClaudeWindow(a, "five_hour", 300)), new("week", "Weekly", a => ClaudeWindow(a, "seven_day", 10080)) };
-            if (accounts.Any(account => Formatting.IsMaxPlan(account.Plan)))
+            if (accounts.Any(account => account.IsMaxPlanAccount))
                 columns.Add(new("fable", "Fable", a => Formatting.VisibleWindows(a).FirstOrDefault(Formatting.IsFable)));
             return columns;
         }
@@ -855,7 +855,7 @@ public partial class MainWindow : Window
         var key = account.Id + "|" + column.Key;
         if (provider == "claude" && column.Key == "fable")
         {
-            if (!Formatting.IsMaxPlan(account.Plan)) return null; // Pro: no Fable cell
+            if (!account.IsMaxPlanAccount) return null; // Pro: no Fable cell
             var fable = column.Pick(account);
             if (fable is null) return ShowMeter(key, MeterKind.Compact, new MeterSpec(null, "Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.", NaText: "Not reported yet"));
             return ShowMeter(key, MeterKind.Compact, CompactSpec(account, fable, null, 1));

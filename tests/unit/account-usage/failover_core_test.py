@@ -813,14 +813,15 @@ class CollectTests(unittest.TestCase):
         result, _ = self.collect(desktop, [both, {"five_hour": {"utilization": 0}}])
         self.assertEqual(result["sample"]["plan"], "max")
 
-    def test_claude_plan_prefixes_the_max_class_a_renamed_tier_dropped(self):
-        # All three displays gate the Fable column on a standalone "max" token
-        # in the plan text: when the entitlement says Max and the named tier
-        # does not carry the word, the class is prefixed onto the name.
+    def test_claude_plan_reads_the_display_name_and_carries_the_class(self):
+        # The display name is the plan ("Premium", no max word); the entitlement
+        # class travels beside it so the Fable column still gates on Max.
         renamed = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                          organization={"uuid": ORG, "plan_type": "Premium"})
+                          organization={"uuid": ORG, "plan_type": "Premium",
+                                        "rate_limit_tier": "default_claude_max_20x"})
         result, _ = self.collect(self.claude, [renamed, {"five_hour": {"utilization": 0}}])
-        self.assertEqual(result["sample"]["plan"], "Max Premium")
+        self.assertEqual(result["sample"]["plan"], "Premium")
+        self.assertEqual(result["sample"]["planClass"], "max")
 
     def test_claude_plan_ignores_a_flag_whose_name_fails_the_text_checks(self):
         credential_shaped = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_bearer_fixture": True})

@@ -8,7 +8,11 @@ import {
   type ClaudeDesktopProfile,
 } from './claude-desktop-profile-service';
 import type { ClaudeDesktopUsage } from './claude-desktop-usage-service';
-import { livePlan, type ClaudeDesktopLiveUsage } from './claude-desktop-live-service';
+import {
+  livePlan,
+  livePlanClass,
+  type ClaudeDesktopLiveUsage,
+} from './claude-desktop-live-service';
 import type {
   ClaudeDashboardPlatform,
   DashboardAccount,
@@ -215,8 +219,10 @@ export function applyClaudeLiveUsage(
     live.windows.length === 0
   )
     return account;
+  const planClass = livePlanClass(live.planClass);
   return {
     ...account,
+    ...(planClass ? { planClass } : {}),
     status: 'ok',
     source: 'Claude Desktop live quota on Windows',
     plan: livePlan(live.plan) ?? account.plan,

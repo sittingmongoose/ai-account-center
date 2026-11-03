@@ -193,6 +193,10 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   public let label: String
   public let email: String?
   public let plan: String?
+  /// Claude only: the entitlement class the Fable column gates on ("max"/"pro");
+  /// a renamed display name may not carry the word. Absent on other providers
+  /// and older dashboards.
+  public let planClass: String?
   public let platform: String
   public let host: String?
   public var provenance: String { host ?? platform }
@@ -217,6 +221,7 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case id, provider, providerLabel, label, email, plan, platform, host, source, status, message
     case fetchedAt, sampledAt, isActive, windows, capabilities, trayHidden, signInNeeded, antigravityPlan
+    case planClass
   }
 
   // A hand-written init (the struct was synthesized before `antigravityPlan`) so the new object can be
@@ -229,6 +234,7 @@ public struct DashboardAccount: Decodable, Identifiable, Sendable {
     label = try container.decode(String.self, forKey: .label)
     email = try container.decodeIfPresent(String.self, forKey: .email)
     plan = try container.decodeIfPresent(String.self, forKey: .plan)
+    planClass = try container.decodeIfPresent(String.self, forKey: .planClass)
     platform = try container.decode(String.self, forKey: .platform)
     host = try container.decodeIfPresent(String.self, forKey: .host)
     source = try container.decode(String.self, forKey: .source)

@@ -218,6 +218,10 @@ public sealed class DashboardAccount
     public string Label { get; set; } = "";
     public string? Email { get; set; }
     public string? Plan { get; set; }
+    /// <summary>Claude only: the entitlement class the Fable column gates on ("max"/"pro");
+    /// a renamed display name may not carry the word. Null on other providers and older dashboards.</summary>
+    public string? PlanClass { get; set; }
+    public bool IsMaxPlanAccount => PlanClass == "max" || IsMaxPlan(Plan);
     public string Platform { get; set; } = "";
     public string? Host { get; set; }
     [JsonIgnore] public string Provenance => Host ?? Platform;
@@ -455,7 +459,7 @@ public static class Formatting
     public static QuotaWindow[] VisibleWindows(DashboardAccount account) => account.Windows.Where(window =>
     {
         var key = Normalize(window.Key); var label = Normalize(window.Label);
-        if (account.Provider == "claude" && IsFable(window) && (!IsMaxPlan(account.Plan) || window.DisplayPercent is null)) return false;
+        if (account.Provider == "claude" && IsFable(window) && (!account.IsMaxPlanAccount || window.DisplayPercent is null)) return false;
         if (account.Provider == "codex")
         {
             if (IsChatPass(window.Key) || IsChatPass(window.Label)) return false;

@@ -74,6 +74,12 @@ export interface DashboardAccount {
   label: string;
   email: string | null;
   plan: string | null;
+  /**
+   * Claude only: the entitlement class the plan display name may not carry
+   * ("Ultra" is a Max-class plan). Drives the Fable column, which gates on
+   * the class, not the name. Absent for other providers and older samples.
+   */
+  planClass?: 'max' | 'pro';
   /** Antigravity coding entitlement at the sample time; absent for unknown plans. */
   antigravityPlan?: AntigravityPlan;
   platform: DashboardPlatform;

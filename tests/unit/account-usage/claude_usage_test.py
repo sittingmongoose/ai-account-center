@@ -134,57 +134,50 @@ class IdentityTests(unittest.TestCase):
         result, _ = self.collect([flex, {"five_hour": {"utilization": 0, "resets_at": None}}])
         self.assertEqual(result["plan"], "max flex")
 
-    def test_plan_separator_variants_stay_display_faithful(self):
-        # The displays normalize [_-] but not other separators, so a tier named
-        # "Max/Premium" is spaced to "Max Premium" instead of double-prefixed.
-        renamed = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                          organization={"uuid": ORG, "plan_type": "Max/Premium"})
-        result, _ = self.collect([renamed, {"five_hour": {"utilization": 0, "resets_at": None}}])
-        self.assertEqual(result["plan"], "Max Premium")
-
-    def test_plan_prefix_keeps_the_display_length_limit(self):
-        long = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                       organization={"uuid": ORG, "plan_type": "x" * 61})
-        result, _ = self.collect([long, {"five_hour": {"utilization": 0, "resets_at": None}}])
-        self.assertTrue(result["plan"].startswith("Max "))
-        self.assertLessEqual(len(result["plan"]), 64)
-
-    def test_plan_names_preserve_non_ascii_tiers_and_reject_control_boundaries(self):
-        # Only the separator runs hugging the max token are spaced: the rest of
-        # a renamed tier, accented letters and trailing marks included,
-        # survives verbatim.
+    def test_plan_names_preserve_the_official_name_and_carry_the_class(self):
+        # The organization's display name is the plan, verbatim - separators,
+        # accented letters and trailing marks included. The entitlement class
+        # travels beside it, because a renamed Max tier ("Ultra") carries no
+        # max word for the Fable column to gate on.
         accented = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                           organization={"uuid": ORG, "plan_type": "Max/\u00c9lite"})
+                           organization={"uuid": ORG, "plan_type": "Max/\u00c9lite",
+                                         "rate_limit_tier": "default_claude_max_20x"})
         result, _ = self.collect([accented, {"five_hour": {"utilization": 0, "resets_at": None}}])
-        self.assertEqual(result["plan"], "Max \u00c9lite")
-        marked = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                         organization={"uuid": ORG, "plan_type": "Max/Premium+"})
-        result, _ = self.collect([marked, {"five_hour": {"utilization": 0, "resets_at": None}}])
-        self.assertEqual(result["plan"], "Max Premium+")
-        # Both separators hugging the token are exposed; the one between other
-        # words is kept. An underscore is a separator to the displays even
-        # though \w would call it a word character.
-        joined = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                         organization={"uuid": ORG, "plan_type": "Premium/Max Plus"})
-        result, _ = self.collect([joined, {"five_hour": {"utilization": 0, "resets_at": None}}])
-        self.assertEqual(result["plan"], "Premium Max Plus")
-        underscored = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                              organization={"uuid": ORG, "plan_type": "Premium_Max/Plus"})
-        result, _ = self.collect([underscored, {"five_hour": {"utilization": 0, "resets_at": None}}])
-        self.assertEqual(result["plan"], "Premium Max Plus")
-        # A slash between two non-Max words is not hugging the token: it stays.
-        slash = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                        organization={"uuid": ORG, "plan_type": "Premium/Flex"})
-        result, _ = self.collect([slash, {"five_hour": {"utilization": 0, "resets_at": None}}])
-        self.assertEqual(result["plan"], "Max Premium/Flex")
-        # A control character the displays do not treat as a word boundary
-        # (U+0085) fails the name checks, and the entitlement booleans answer.
+        self.assertEqual(result["plan"], "Max/\u00c9lite")
+        self.assertEqual(result["planClass"], "max")
         control = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
-                          organization={"uuid": ORG, "plan_type": "Max\u0085Premium"})
+                          organization={"uuid": ORG, "plan_type": "Max\u0085Premium",
+                                        "rate_limit_tier": "default_claude_max_20x"})
         result, _ = self.collect([control, {"five_hour": {"utilization": 0, "resets_at": None}}])
         self.assertEqual(result["plan"], "max")
+        self.assertEqual(result["planClass"], "max")
+        long = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                       organization={"uuid": ORG, "plan_type": "x" * 78,
+                                     "rate_limit_tier": "default_claude_max_20x"})
+        result, _ = self.collect([long, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "x" * 78)
+        self.assertEqual(result["planClass"], "max")
 
+    def test_plan_class_reads_the_rate_limit_tier_then_the_flags(self):
+        renamed = profile(account={"uuid": ACCOUNT, "email": EMAIL},
+                          organization={"uuid": ORG, "rate_limit_tier": "default_claude_max_20x",
+                                        "plan_display_name": "Ultra", "plan_display_label": "Ultra plan"})
+        result, _ = self.collect([renamed, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "Ultra")
+        self.assertEqual(result["planClass"], "max")
+        pro = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_pro": True},
+                      organization={"uuid": ORG, "rate_limit_tier": "default_claude_pro"})
+        result, _ = self.collect([pro, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "pro")
+        self.assertEqual(result["planClass"], "pro")
 
+    def test_plan_display_name_passes_through_at_full_length(self):
+        long = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_max": True},
+                       organization={"uuid": ORG, "plan_type": "x" * 78,
+                                     "rate_limit_tier": "default_claude_max_20x"})
+        result, _ = self.collect([long, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["plan"], "x" * 78)
+        self.assertEqual(result["planClass"], "max")
 
     def test_wrong_email_account_and_org_cannot_produce_quota(self):
         wrong_profiles = [
