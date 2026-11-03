@@ -284,6 +284,7 @@ const CHALLENGE_SCRIPT = `(() => [...document.querySelectorAll('iframe')].some((
     : getComputedStyle(f).visibility !== 'hidden';
 }))()`;
 
+const GRACE_SECONDS = 60;
 const INTERSTITIAL = /performing security verification|verify you are human|just a moment\.\.\./i;
 
 /** A check only a person may pass: a visible hCaptcha/Turnstile, or Cloudflare's interstitial page. */
@@ -299,6 +300,13 @@ async function challenged(tab) {
  */
 async function waitOutChallenge(tab, state) {
   if (!(await challenged(tab))) return true;
+  // Most Cloudflare checks (the "Just a moment..." page, a Turnstile box that ticks itself) pass by
+  // themselves within seconds. Only one still on screen after the grace period needs a person.
+  const grace = Date.now() + GRACE_SECONDS * 1000;
+  while (!state.told && Date.now() < grace) {
+    await sleep(3000);
+    if (!(await challenged(tab))) return true;
+  }
   if (!state.told) {
     state.told = true;
     await tab.front();

@@ -56,7 +56,8 @@ When a person passes one of these, the runner at once signs in every other accou
 browser session ends within 5 days, so those CAPTCHAs come in the same sitting rather than on
 separate days.
 
-In both cases the runner brings that Chrome window forward, posts a desktop notification, publishes
+Cloudflare's "Just a moment..." page and a Turnstile box that ticks itself pass without anyone, so
+the runner first waits 60 seconds. If the check is still there, the runner brings that Chrome window forward, posts a desktop notification, publishes
 "needs you" (dashboard notice, `claude-signins.md`, `aac-usage`), waits up to `humanWaitMinutes`
 (20), and carries on by itself once the check is passed. If nobody passes it in time, the page stays
 open, the account's other sign-ins wait, and the next run picks up where it left off (a fresh link
