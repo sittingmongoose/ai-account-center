@@ -3523,9 +3523,9 @@ private func checkResetPassedField() throws {
 /// The entitlement class decides the Fable column everywhere; the display name
 /// only gates when no class is present, and a malformed class degrades to nil.
 private func checkPlanClassGate() throws {
-  func account(plan: String, planClass: Any?) throws -> DashboardAccount {
+  func account(plan: String, planClass: Any?, provider: String = "claude") throws -> DashboardAccount {
     var object: [String: Any] = [
-      "id": "claude-gate", "provider": "claude", "providerLabel": "Claude", "label": "Gate",
+      "id": "claude-gate", "provider": provider, "providerLabel": "Claude", "label": "Gate",
       "email": NSNull(), "plan": plan, "platform": "mac", "source": "Fixture", "status": "ok",
       "message": NSNull(), "fetchedAt": NSNull(), "sampledAt": NSNull(), "isActive": false,
       "capabilities": ["codexProfile": NSNull(), "claudeProfileId": NSNull(), "claudePlatforms": []],
@@ -3552,6 +3552,12 @@ private func checkPlanClassGate() throws {
   let malformed = try account(plan: "Ultra", planClass: 42)
   try expect(malformed.planClass == nil && !malformed.isMaxPlan,
     "A malformed class decodes as absent; a name without a Max token is not Max")
+  let nonClaudeClass = try account(plan: "Pro", planClass: "max", provider: "codex")
+  try expect(!nonClaudeClass.isMaxPlan,
+    "A plan class on another provider's row never counts as Max")
+  let nonClaudeName = try account(plan: "Max 20x", planClass: nil, provider: "codex")
+  try expect(!nonClaudeName.isMaxPlan,
+    "A Max display name on another provider's row never counts as Max either")
 }
 
 /// "Opened · copied 3 of 18" when a bounded copy opened Claude before every record was across.

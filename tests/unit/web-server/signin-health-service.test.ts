@@ -99,14 +99,30 @@ describe('allowProfile', () => {
     expect(out?.fixCommand).toBe('');
   });
 
-  it('collapses a path-quoting or credential-shaped profile error to a fixed word', () => {
-    expect(publishableError('credentials file missing or unreadable')).toBe(
-      'credentials file missing or unreadable'
-    );
-    expect(publishableError("open '/home/user/.claude/.credentials.json' failed")).toBe(
-      'unavailable'
-    );
-    expect(publishableError('token ' + 'sk' + '-abcdefgh rejected')).toBe('unavailable');
+  it('publishes only the collector fixed error literals, nothing else', () => {
+    for (const literal of [
+      'profile directory resolves outside the allowed roots',
+      'credentials file missing or unreadable',
+      'expiry times unreadable',
+      'keychain item unreadable',
+      'keychain item holds no readable credentials',
+      'auth file missing or unreadable',
+      "profile discovery was incomplete; this machine's list may be missing homes",
+      'sign-in state changed during collection; recheck pending',
+    ])
+      expect(publishableError(literal)).toBe(literal);
+    // Every unlisted shape collapses: quoted and separator-joined
+    // absolute paths, relative paths, addresses, credential shapes.
+    for (const other of [
+      "open '/home/user/.claude/.credentials.json' failed",
+      'path=/home/user/private',
+      'failed:/home/user/private',
+      'home/user/.claude is gone',
+      'write to user@mac.example.internal failed',
+      'token ' + 'sk' + '-abcdefgh rejected',
+      'some future wording',
+    ])
+      expect(publishableError(other)).toBe('unavailable');
     expect(publishableError('')).toBeNull();
     expect(publishableError(42)).toBeNull();
   });
@@ -117,8 +133,19 @@ describe('allowProfile', () => {
       'mac'
     );
     expect(out?.configDir).toBeUndefined();
-    expect(out?.error).not.toContain('\u001b');
-    expect(out?.error).toContain('news');
+    // An unlisted error publishes as the fixed word, never cleaned text.
+    expect(out?.error).toBe('unavailable');
+  });
+
+  it('omits a repair command or configDir carrying bidi marks', () => {
+    for (const mark of ['\u061c', '\u200e', '\u200f', '\ufeff']) {
+      const out = allowProfile(
+        row({ fixCommand: `claude auth${mark}login`, configDir: `~/.claude-t3/a${mark}b` }),
+        'mac'
+      );
+      expect(out?.fixCommand).toBe('');
+      expect(out?.configDir).toBeUndefined();
+    }
   });
 
   it('reads malformed stamps as absent, never as a reason to drop the row', () => {
@@ -152,17 +179,25 @@ describe('allowProfile', () => {
     expect(JSON.stringify(out)).not.toContain('extra');
   });
 
-  it('carries a single-line bounded error only on unavailable rows', () => {
+  it('carries an error only on unavailable rows, as a fixed literal or the fixed word', () => {
     const failed = allowProfile(
       row({ state: 'unavailable', error: 'ssh: refused\n\n   connection timed out   ' }),
       'ubuntu'
     );
-    expect(failed?.error).toBe('ssh: refused connection timed out');
-    expect(failed?.error?.length).toBeLessThanOrEqual(120);
+    // Unlisted text is never cleaned and republished; it collapses whole.
+    expect(failed?.error).toBe('unavailable');
     expect(allowProfile(row({ error: 'some error' }), 'ubuntu')?.error).toBeUndefined();
     expect(
+      allowProfile(
+        row({ state: 'unavailable', error: 'credentials file missing or unreadable' }),
+        'ubuntu'
+      )?.error
+    ).toBe('credentials file missing or unreadable');
+    // Host-level failure words reach rows through unavailableHost, never
+    // through a collector row: as a row error they are unlisted text.
+    expect(
       allowProfile(row({ state: 'unavailable', error: 'connection refused' }), 'ubuntu')?.error
-    ).toBe('connection refused');
+    ).toBe('unavailable');
   });
 
   it('caps fieldsAvailable on unsupported rows', () => {

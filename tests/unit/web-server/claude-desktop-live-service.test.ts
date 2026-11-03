@@ -1097,6 +1097,11 @@ describe('astral and stored-plan cases through the live projection', () => {
 		const cleared = applyClaudeLiveUsage({ ...claudeAccount(profile, 'mac'), planClass: 'max' }, live('Ultra'));
 		expect(cleared.planClass).toBeUndefined();
 	});
+	it('rejects a live plan name carrying a bidi mark', () => {
+		const account = { ...claudeAccount(profile, 'mac'), plan: 'Max 20x' };
+		const applied = applyClaudeLiveUsage(account, live('Pro\u200fMax'));
+		expect(applied.plan).toBe('Max 20x');
+	});
 	it('preserves a non-null stored plan when the live name fails the checks', () => {
 		const account = { ...claudeAccount(profile, 'mac'), plan: 'Max 20x' };
 		const applied = applyClaudeLiveUsage(account, live('bearer fixture'));

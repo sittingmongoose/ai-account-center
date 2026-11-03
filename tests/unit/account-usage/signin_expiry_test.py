@@ -113,7 +113,10 @@ class SignInExpiryTests(unittest.TestCase):
 
     def test_fix_command_uses_the_shell_of_the_machine_and_hides_paths(self):
         self._write("spaced", {"accessToken": "x", "refreshToken": "y", "windows": []})
-        rows = {row["name"]: row for row in self.report()["profiles"]}
+        # Both shell forms are selected explicitly: the host running this
+        # suite must not decide which syntax the first assertion expects.
+        with mock.patch.object(collector.sys, "platform", "linux"):
+            rows = {row["name"]: row for row in self.report()["profiles"]}
         self.assertEqual(rows["spaced"]["fixCommand"],
                          'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/spaced" claude auth login')
         with mock.patch.object(collector.sys, "platform", "win32"):
@@ -122,6 +125,15 @@ class SignInExpiryTests(unittest.TestCase):
                          '$env:CLAUDE_CONFIG_DIR = "$HOME\\.claude-t3\\spaced"; claude auth login')
         # No absolute path of this machine reaches the published rows.
         self.assertNotIn(str(self.home), json.dumps(rows))
+
+    def test_fix_command_single_quotes_a_bang_carrying_dir(self):
+        # Interactive bash history-expands `!` inside double quotes (and
+        # `\!` keeps the backslash), so this dir pastes single-quoted.
+        with mock.patch.object(collector.sys, "platform", "linux"):
+            command = collector.fix_command(self.home / ".claude-t3" / "a!b", self.home)
+        self.assertEqual(
+            command,
+            "CLAUDE_CONFIG_DIR=\"$HOME\"'/.claude-t3/a!b' claude auth login")
 
     def test_a_name_the_sibling_discovery_refuses_still_reads_in_the_fallback(self):
         # The saved/T3 discovery bounds directory names; the plain fallback
@@ -393,6 +405,62 @@ class SignInExpiryTests(unittest.TestCase):
         (userdata / "settings.json").write_text(json.dumps(
             {"providerInstances": {"claude-long": {
                 "driver": "claudeAgent", "config": {"homePath": long_home}}}}))
+        rows = {row["name"]: row for row in self.report()["profiles"]}
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_a_configured_home_under_a_dangling_ancestor_is_incomplete(self):
+        import failover_core
+        (self.home / "dead-link").symlink_to(
+            self.home / "missing-target", target_is_directory=True)
+        profile = self.home / "dead-link" / "configured"
+        pairs = [(profile, ["claude-profile:configured"])]
+        with mock.patch.object(failover_core, "_roots", return_value=pairs):
+            rows = {row["name"]: row for row in self.report()["profiles"]}
+        # stat and lstat both fail at the leaf; the broken ancestor is what
+        # marks this unseen instead of absent.
+        self.assertNotIn("configured", rows)
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_a_dangling_ccs_link_marks_discovery_incomplete(self):
+        (self.home / ".ccs").symlink_to(
+            self.home / "missing-ccs", target_is_directory=True)
+        rows = {row["name"]: row for row in self.report()["profiles"]}
+        self.assertIn("incomplete", rows["saved-profiles"]["error"])
+
+    def test_codex_under_an_unreadable_parent_reports_unavailable(self):
+        import os
+        if not hasattr(os, "geteuid") or os.geteuid() == 0:
+            self.skipTest("POSIX permission bits do not apply here")
+        codex = self.home / ".codex"
+        codex.mkdir(parents=True)
+        (codex / "auth.json").write_text(json.dumps({"last_refresh": "fixture"}))
+        codex.chmod(0)
+        self.addCleanup(codex.chmod, 0o700)
+        entry = collector.codex_profile(NOW, self.home)
+        # lexists would call this absent; the stat verdict calls it unseen.
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["state"], "unavailable")
+
+    def test_a_fifo_at_a_credentials_path_never_blocks_the_report(self):
+        import os
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFOs do not apply here")
+        root = self.home / ".claude-t3" / "fifo"
+        root.mkdir(parents=True)
+        os.mkfifo(root / ".credentials.json")
+        codex = self.home / ".codex"
+        codex.mkdir(parents=True)
+        os.mkfifo(codex / "auth.json")
+        rows = {row["name"]: row for row in self.report()["profiles"]}
+        self.assertEqual(rows["fifo"]["state"], "unavailable")
+        self.assertEqual(rows["codex"]["state"], "unavailable")
+
+    def test_a_falsy_settings_home_marks_discovery_incomplete(self):
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        (userdata / "settings.json").write_text(json.dumps(
+            {"providerInstances": {"claude-zero": {
+                "driver": "claudeAgent", "config": {"homePath": 0}}}}))
         rows = {row["name"]: row for row in self.report()["profiles"]}
         self.assertIn("incomplete", rows["saved-profiles"]["error"])
 

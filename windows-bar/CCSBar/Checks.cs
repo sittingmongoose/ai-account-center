@@ -427,8 +427,9 @@ public static partial class Checks
         var classProNamedMax = new DashboardAccount { Provider = "claude", Plan = "Max 20x", PlanClass = "pro" };
         var namedMaxNoClass = new DashboardAccount { Provider = "claude", Plan = "claude-max-20x" };
         var classOnlyOnClaude = new DashboardAccount { Provider = "codex", Plan = "Pro", PlanClass = "max" };
+        var nameOnlyOnClaude = new DashboardAccount { Provider = "codex", Plan = "Max 20x" };
         report.Checks["plan_class_gate_agrees_with_the_other_layers"] = classUltra.IsMaxPlanAccount && !classProNamedMax.IsMaxPlanAccount
-            && namedMaxNoClass.IsMaxPlanAccount && !classOnlyOnClaude.IsMaxPlanAccount;
+            && namedMaxNoClass.IsMaxPlanAccount && !classOnlyOnClaude.IsMaxPlanAccount && !nameOnlyOnClaude.IsMaxPlanAccount;
         var mixed = new[] { "zai", "newcode", "codex", "claude", "antigravity", "zai" }.Select(provider => new DashboardAccount { Provider = provider }).ToArray();
         report.Checks["provider_order_keeps_any_provider"] = Formatting.ProviderOrder(mixed).SequenceEqual(new[] { "claude", "codex", "antigravity", "zai", "newcode" });
         // The trays honour only "Show in tray" (providers[].trayVisible, settings.trayHiddenProviders); "Show on

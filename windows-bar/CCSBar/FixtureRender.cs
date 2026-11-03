@@ -420,7 +420,10 @@ public static class FixtureRender
             {
                 var process = System.Diagnostics.Process.GetCurrentProcess();
                 process.Refresh(); var cpu = process.TotalProcessorTime; var clock = System.Diagnostics.Stopwatch.StartNew();
-                await Task.Delay(4000);
+                // TotalProcessorTime advances in 15.625 ms timer ticks: over a 4 s window the
+                // 1.5% bound below is under four ticks, so ordinary runtime housekeeping can
+                // fail it by a tick. An 8 s window keeps the same bound meaningful.
+                await Task.Delay(8000);
                 process.Refresh();
                 return (process.TotalProcessorTime - cpu).TotalMilliseconds / clock.Elapsed.TotalMilliseconds * 100;
             }
@@ -437,8 +440,8 @@ public static class FixtureRender
             await Task.Delay(1000);
             var hiddenA = await IdlePercent(); var hiddenB = await IdlePercent();
             var shownIdle = Math.Min(shownA, shownB); var hiddenIdle = Math.Min(hiddenA, hiddenB);
-            measures["idle_cpu_percent_shown_4s_a"] = shownA; measures["idle_cpu_percent_shown_4s_b"] = shownB;
-            measures["idle_cpu_percent_hidden_4s_a"] = hiddenA; measures["idle_cpu_percent_hidden_4s_b"] = hiddenB;
+            measures["idle_cpu_percent_shown_8s_a"] = shownA; measures["idle_cpu_percent_shown_8s_b"] = shownB;
+            measures["idle_cpu_percent_hidden_8s_a"] = hiddenA; measures["idle_cpu_percent_hidden_8s_b"] = hiddenB;
             report.Checks["idle_panel_uses_no_cpu"] = shownIdle < 1.5 && hiddenIdle < 1.5;
         }
         finally { window.AllowClose = true; window.Close(); Motion.Enabled = false; }

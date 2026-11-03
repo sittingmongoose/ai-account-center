@@ -52,7 +52,7 @@ class _Discard:
 
 def _text(value, maximum=160):
     if (not isinstance(value, str) or not value.strip() or len(value) > maximum or
-            re.search(r"[\x00-\x1f\x7f]|(?:bearer\s|sk[-_]|dca:|eyJ[A-Za-z0-9_-]{8}|access_token|refresh_token|https?://)", value, re.I)):
+            re.search(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]|(?:bearer\s|sk[-_]|dca:|eyJ[A-Za-z0-9_-]{8}|access_token|refresh_token|https?://)", value, re.I)):
         return None
     return value.strip()
 

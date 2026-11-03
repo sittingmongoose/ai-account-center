@@ -647,7 +647,9 @@ def _plan_name(value):
     if not isinstance(value, str):
         return None
     name = value.strip()
-    if not 0 < len(name) <= 80 or re.search(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", name):
+    if not 0 < len(name) <= 80 or re.search(
+        r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]", name
+    ):
         return None
     if re.search(r"(?i)(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})", name):
         return None
@@ -684,7 +686,9 @@ def claude_plan(account, organization=None, fallback=None):
         return "max"
     if (account or {}).get("has_claude_pro") is True:
         return "pro"
-    return fallback
+    # The fallback publishes under the same screen as every other source:
+    # a stored string carrying a separator or control never bypasses it.
+    return _plan_name(fallback)
 
 
 def claude_plan_class(account, organization=None, name=None):

@@ -106,7 +106,7 @@ const STATUSES: readonly DashboardAccountStatus[] = [
 ];
 const PLATFORMS: readonly DashboardPlatform[] = ['ubuntu', 'mac', 'windows'];
 const KINDS = ['rate_limit', 'balance', 'spend', 'extra_usage'] as const;
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,159}$/;
 
 function text(value: unknown, max: number): string | null {

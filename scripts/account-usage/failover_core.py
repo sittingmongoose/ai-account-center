@@ -227,10 +227,11 @@ def _settings_homes(home, provider):
                 continue
             if not isinstance(value, str) or len(value) > 1024 or "\x00" in value:
                 # Configured but unusable (malformed, overlong): unseen,
-                # not absent. An empty string is T3's unset placeholder
-                # and stays silent.
-                if value:
-                    SETTINGS_HOME_FAILURES[0] += 1
+                # not absent — a falsy wrong-typed value (0, [], {}) is as
+                # configured as a truthy one. Only a missing value (above)
+                # and the empty string — T3's unset placeholder, which
+                # never reaches this branch — stay silent.
+                SETTINGS_HOME_FAILURES[0] += 1
                 continue
             if value == "~":
                 value = str(home)

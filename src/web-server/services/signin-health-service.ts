@@ -48,9 +48,10 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@+ -]{0,63}$/;
 const STAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-/** C0, DEL and C1 controls plus Unicode line/paragraph separators:
+/** C0, DEL and C1 controls, Unicode line/paragraph separators, and the
+ * bidi controls and marks (including U+061C, U+200E/U+200F and the BOM):
  * none of them ever publish. */
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]/;
 
 /** The only failure words ever published for a failed collection. Raw
  * stderr names routing details (the resolved hostname or address behind
@@ -161,33 +162,33 @@ function stamp(value: unknown): string | null {
  * commands are worse than none. */
 export function publishableFixCommand(value: unknown): string {
   if (typeof value !== 'string') return '';
-  // Paste-to-shell text also refuses bidi controls: they cannot change
-  // what the quoted command does, but they can change how it reads.
-  return CONTROL.test(value) ||
-    /[\u202a-\u202e\u2066-\u2069]/.test(value) ||
-    value.includes('`') ||
-    value.length > 200
-    ? ''
-    : value;
+  // Paste-to-shell text also refuses the bidi set inside CONTROL: those
+  // characters cannot change what the quoted command does, but they can
+  // change how it reads.
+  return CONTROL.test(value) || value.includes('`') || value.length > 200 ? '' : value;
 }
 
-/** A per-profile error publishes as plain words only: controls stripped,
- * and anything quoting a filesystem path or credential shape collapses to
- * a fixed word — the same discipline host-level errors already get. */
+/** The per-profile errors that ever publish: the collector's fixed
+ * literals, plus this service's own downgrade wording. An allowlist, not
+ * a screen — a separator-joined or relative path (`path=/home/…`,
+ * `home/user/…`), an address or a credential shape can dodge a boundary
+ * heuristic, but no unlisted text of any shape passes here. Anything
+ * else collapses to the fixed word, the same discipline host-level
+ * errors already get. */
+const PROFILE_ERRORS = new Set([
+  'profile directory resolves outside the allowed roots',
+  'credentials file missing or unreadable',
+  'expiry times unreadable',
+  'keychain item unreadable',
+  'keychain item holds no readable credentials',
+  'auth file missing or unreadable',
+  "profile discovery was incomplete; this machine's list may be missing homes",
+  'sign-in state changed during collection; recheck pending',
+]);
+
 export function publishableError(value: unknown): string | null {
   if (typeof value !== 'string' || value === '') return null;
-  const cleaned = value
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 120);
-  if (cleaned === '') return null;
-  if (
-    /(^|[\s"'(])(\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(cleaned) ||
-    /(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})/i.test(cleaned)
-  )
-    return 'unavailable';
-  return cleaned;
+  return PROFILE_ERRORS.has(value) ? value : 'unavailable';
 }
 
 /** The published DTO is allowlisted; a changed helper cannot add fields or

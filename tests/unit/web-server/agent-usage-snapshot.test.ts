@@ -157,6 +157,9 @@ describe('agent usage projection', () => {
     // Control characters and coerced non-strings never publish.
     expect(planOf('Pro\nMax')).toBeNull();
     expect(planOf('Pro\u0085Max')).toBeNull();
+    // Bidi marks and controls never publish either.
+    expect(planOf('Pro\u200eMax')).toBeNull();
+    expect(planOf('Pro\u202eMax')).toBeNull();
     expect(planOf('sk-abcdefgh')).toBeNull();
     expect(planOf(42)).toBeNull();
     expect(planOf({ tier: 'max' })).toBeNull();
@@ -984,6 +987,23 @@ describe('sign-in health section', () => {
     expect(markdown).not.toContain('re-login before then');
     expect(markdown).not.toContain('sign-in ends');
     expect(markdown).toContain('not readable on this machine. (connection refused)');
+  });
+
+  it('reads a live row rendered past its deadline as awaiting recheck, never healthy', () => {
+    const ended = renderSnapshotMarkdown(
+      snapshotWith([row({ state: 'ok', loggedOutAt: '2026-10-15T11:00:00Z' })])
+    );
+    expect(ended).toContain('past its deadline; awaiting recheck');
+    expect(ended).not.toContain('sign-in ends');
+    expect(ended).toContain('re-login: `');
+    const refreshGone = renderSnapshotMarkdown(
+      snapshotWith([
+        row({ state: 'ok', loggedOutAt: null, refreshExpiresAt: '2026-10-15T11:00:00Z' }),
+      ])
+    );
+    expect(refreshGone).toContain('refresh expired');
+    expect(refreshGone).toContain('awaiting recheck');
+    expect(refreshGone).not.toContain('healthy');
   });
 
   it('names no invented end when the collector could not derive one', () => {

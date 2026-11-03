@@ -833,6 +833,16 @@ class CollectTests(unittest.TestCase):
         broken = {**result["sample"], "planClass": "x" * 200}
         self.assertIsNone(failover_usage.public_sample(broken, "claude", "ubuntu"))
 
+    def test_claude_plan_screens_the_stored_fallback_like_every_source(self):
+        # The stored-plan fallback publishes only through the same text
+        # screen: a separator or bidi mark in it never reaches a display,
+        # at the collector or through the failover public sample.
+        self.assertIsNone(core.claude_usage.claude_plan({}, {}, "Pro\u2028Max"))
+        self.assertIsNone(core.claude_usage.claude_plan({}, {}, "Pro\u200eMax"))
+        self.assertEqual(core.claude_usage.claude_plan({}, {}, "Max 20x"), "Max 20x")
+        bad_sample = {"plan": "Pro\u2028Max", "windows": []}
+        self.assertIsNone(failover_usage.public_sample(bad_sample, "claude", "ubuntu"))
+
     def test_claude_plan_ignores_a_flag_whose_name_fails_the_text_checks(self):
         credential_shaped = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_bearer_fixture": True})
         result, _ = self.collect(self.claude, [credential_shaped, {"five_hour": {"utilization": 0}}])

@@ -304,8 +304,20 @@ function renderSignInMarkdown(
         ? Date.parse(row.loggedOutAt)
         : NaN;
     const namesEnd = !Number.isNaN(endedAt) && row.state !== 'logged_out';
+    // The same crossed-deadline recheck the CLI reader makes: a live row
+    // rendered after its deadline is a past reading awaiting its next
+    // sample, never a healthy future end.
+    const live = row.state === 'ok' || row.state === 'warn' || row.state === 'critical';
+    const refreshAt =
+      !row.loggedOutAt && row.refreshExpiresAt ? Date.parse(row.refreshExpiresAt) : NaN;
+    const crossedEnd = live && !Number.isNaN(endedAt) && endedAt <= now;
+    const crossedRefresh = live && !Number.isNaN(refreshAt) && refreshAt <= now;
     let word = SIGNIN_STATE_WORDS[row.state] ?? row.state;
-    if (row.state === 'warn' || row.state === 'critical') {
+    if (crossedEnd)
+      word = `ended ${utc(row.loggedOutAt as string)} (past its deadline; awaiting recheck)`;
+    else if (crossedRefresh)
+      word = `refresh expired ${utc(row.refreshExpiresAt as string)} (awaiting recheck)`;
+    else if (row.state === 'warn' || row.state === 'critical') {
       if (namesEnd) word = `ends ${utc(row.loggedOutAt as string)}`;
       else if (row.refreshExpiresAt) word = `refresh expires ${utc(row.refreshExpiresAt)}`;
       else if (
@@ -327,6 +339,8 @@ function renderSignInMarkdown(
         // the cause.
         return row.error ? `(${row.error})` : 'reason unknown';
       if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
+      if (crossedEnd || crossedRefresh)
+        return row.fixCommand ? `re-login: \`${row.fixCommand}\`` : '';
       if (row.state === 'ok')
         // Healthy rows state the end without prescribing a re-login; the
         // warn/critical/logged-out words carry the fix command.

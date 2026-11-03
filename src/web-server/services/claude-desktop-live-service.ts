@@ -55,7 +55,12 @@ export function livePlan(value: unknown): string | null {
   // (a JS .length count would read astral characters as two and reject a
   // name the collector accepted).
   const length = [...plan].length;
-  if (!length || length > 80 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(plan)) return null;
+  if (
+    !length ||
+    length > 80 ||
+    /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]/.test(plan)
+  )
+    return null;
   if (/(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})/i.test(plan)) return null;
   return plan;
 }

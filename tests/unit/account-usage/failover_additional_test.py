@@ -31,6 +31,11 @@ def public(candidate):
 
 class AdditionalFailoverTests(unittest.TestCase):
     def setUp(self):
+        # Failure accounting is process-global: absolute-count assertions
+        # below must not inherit another suite's leftovers in a shared
+        # one-process discover run.
+        import desktop_helpers
+        desktop_helpers.reset_read_failures()
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.home = Path(self.temporary.name)

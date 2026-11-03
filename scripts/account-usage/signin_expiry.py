@@ -136,21 +136,58 @@ def capability_state(data, now_ms):
     return None, "ok"
 
 
+def _read_regular_bytes(path, limit=65536):
+    """Bounded bytes from a regular file, or None. The lstat + S_ISREG check
+    comes first (as in the sibling collector): a plain open of a FIFO blocks
+    until a writer appears, which would stall the whole report until the
+    transport timeout; O_NONBLOCK plus an fstat recheck covers a file swapped
+    between the stat and the open."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    try:
+        descriptor = os.fdopen(
+            os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+                | getattr(os, "O_BINARY", 0),
+            ),
+            "rb",
+        )
+    except OSError:
+        return None
+    try:
+        with descriptor:
+            actual = os.fstat(descriptor.fileno())
+            if not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino) != (
+                info.st_dev,
+                info.st_ino,
+            ):
+                return None
+            return descriptor.read(limit)
+    except OSError:
+        return None
+
+
 def read_credentials(path):
     """The two times and token presence from one credentials file, or None.
 
     The file is read but only its times and token presence are kept; token
     values never leave this function."""
-    try:
-        # O_NOFOLLOW refuses a linked credentials file: a link outside the
-        # selected home can never be read and attributed to this profile.
-        descriptor = os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb")
-    except OSError:
+    # O_NOFOLLOW (inside the helper) refuses a linked credentials file: a link
+    # outside the selected home can never be read and attributed to this
+    # profile.
+    content = _read_regular_bytes(path)
+    if content is None:
         return None
     try:
-        with descriptor:
-            raw = json.loads(descriptor.read(65536).decode("utf-8"))
-    except (OSError, ValueError, RecursionError):
+        raw = json.loads(content.decode("utf-8"))
+    except (ValueError, RecursionError):
         return None
     credentials = raw.get("claudeAiOauth", raw) if isinstance(raw, dict) else None
     if not isinstance(credentials, dict):
@@ -189,9 +226,15 @@ def fix_command(config_dir, home):
     if relative is None:
         literal = str(config_dir).replace("'", "'\\''")
         return f"CLAUDE_CONFIG_DIR='{literal}' claude auth login"
+    suffix = relative[0][1:]
+    if "!" in suffix:
+        # Interactive bash history-expands `!` even inside double quotes, and
+        # `\!` keeps its backslash there, so a `!`-carrying suffix is pasted
+        # as a single-quoted segment instead, where `!` is inert.
+        quoted = suffix.replace("'", "'\\''")
+        return f"CLAUDE_CONFIG_DIR=\"$HOME\"'{quoted}' claude auth login"
     escaped = (
-        relative[0][1:]
-        .replace("\\", "\\\\")
+        suffix.replace("\\", "\\\\")
         .replace('"', '\\"')
         .replace("$", "\\$")
         .replace("`", "\\`")
@@ -218,20 +261,40 @@ def _within_allowed(path, home, ccs_dir=None):
     )
 
 
+def _has_broken_ancestor(path):
+    """True when the nearest existing ancestor of a missing path is itself a
+    broken lookup: a dangling symlink (lstat sees it, stat cannot follow it)
+    or a component whose lstat fails outright. The final component is not
+    the whole story — `~/dead-link/profile` and a dangling `~/.ccs` both
+    fail stat and lstat at the leaf, yet a configured home is hiding behind
+    the broken link. A plain file as the nearest ancestor is a confirmed
+    absence: no profiles can hide under a file."""
+    for ancestor in (path, *path.parents):
+        try:
+            info = ancestor.lstat()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            return True
+        if stat.S_ISLNK(info.st_mode):
+            try:
+                ancestor.stat()
+            except OSError:
+                return True
+        return False
+    return False
+
+
 def _dir_state(path):
     """(is_directory, read_failed) for one path. Path.is_dir() cannot be
     used for this: it swallows permission and I/O errors into False, which
     would make an unreadable profile indistinguishable from an absent
     one. A missing path is not a failure; an unreadable one — including a
-    dangling symlink whose target is gone — is."""
+    dangling symlink whose target is gone, at the path or above it — is."""
     try:
         mode = path.stat().st_mode
     except (FileNotFoundError, NotADirectoryError):
-        try:
-            path.lstat()
-        except OSError:
-            return False, False
-        return False, True
+        return False, _has_broken_ancestor(path)
     except OSError:
         return False, True
     return stat.S_ISDIR(mode), False
@@ -381,7 +444,20 @@ def codex_profile(now_ms, home=None):
     published, never values."""
     home = home or pathlib.Path.home()
     for candidate in (home / ".codex" / "auth.json",):
-        present = os.path.lexists(candidate)
+        # Presence is a stat verdict, never lexists: lexists also returns
+        # False when the parent directory denies access, which would read
+        # an existing-but-unseen auth file as simply absent. Only a clean
+        # FileNotFoundError under a healthy ancestor chain is absence;
+        # anything else is unseen and reports unavailable, not silence.
+        try:
+            info = candidate.lstat()
+            present = True
+        except (FileNotFoundError, NotADirectoryError):
+            info = None
+            present = _has_broken_ancestor(candidate)
+        except OSError:
+            info = None
+            present = True
         # The same containment as Claude stores: a linked auth.json outside
         # the home is never followed, even though only key names publish.
         # A file that exists but cannot be read is unseen, not absent: it
@@ -396,14 +472,21 @@ def codex_profile(now_ms, home=None):
         }
         if present and not _within_allowed(candidate, home):
             return unreadable
-        try:
-            descriptor = os.fdopen(
-                os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb"
-            )
-            with descriptor as handle:
-                raw = json.loads(handle.read(65536).decode("utf-8"))
-        except (OSError, ValueError, RecursionError):
+        # A non-file at the auth path (a directory, a FIFO) is present but
+        # unreadable; opening a FIFO would block, so it never gets opened.
+        # A link is left to the containment check above and the no-follow
+        # open inside the helper.
+        if info is not None and not (
+            stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+        ):
+            return unreadable
+        content = _read_regular_bytes(candidate)
+        if content is None:
             return unreadable if present else None
+        try:
+            raw = json.loads(content.decode("utf-8"))
+        except (ValueError, RecursionError):
+            return unreadable
         keys = sorted(raw.keys()) if isinstance(raw, dict) else []
         relative = _home_relative(candidate, home)
         return {
@@ -429,6 +512,21 @@ def _saved_roots(home, ccs_dir):
         return None
 
 
+def _dedupe_key(path):
+    """Identity of a config dir for de-duplication: the filesystem object
+    itself when stat can see it, so a symlinked instance — and, on a
+    case-insensitive volume, a case-variant spelling of the same dir —
+    publishes once; the realpath when it cannot. A zero inode (some
+    Windows volumes report one) is no identity and falls back too."""
+    try:
+        info = path.stat()
+    except OSError:
+        return ("path", os.path.realpath(path))
+    if not info.st_ino:
+        return ("path", os.path.realpath(path))
+    return ("inode", info.st_dev, info.st_ino)
+
+
 def claude_roots(home, ccs_dir=None):
     """Every Claude config dir this machine knows: the default, the saved
     ~/.ccs/instances homes, the T3 account dirs, and settings-defined homes.
@@ -441,7 +539,7 @@ def claude_roots(home, ccs_dir=None):
     the report can say the list may be short instead of implying all."""
     default = home / ".claude"
     roots = [("default", default)]
-    seen = {os.path.realpath(default)}
+    seen = {_dedupe_key(default)}
     complete = True
     # The sibling discovery records every swallowed read failure and
     # truncation through desktop_helpers; a count that moves while it runs
@@ -491,11 +589,11 @@ def claude_roots(home, ccs_dir=None):
                 continue
             if not is_dir:
                 continue
-            text_path = os.path.realpath(root)
-            if text_path in seen:
+            key = _dedupe_key(root)
+            if key in seen:
                 continue
-            seen.add(text_path)
-            label = root.name or text_path
+            seen.add(key)
+            label = root.name or os.path.realpath(root)
             if selectors and isinstance(selectors[0], str) and selectors[0].startswith(
                 "claude-profile:"
             ):
@@ -531,10 +629,10 @@ def claude_roots(home, ccs_dir=None):
                 continue
             if not child_is_dir or child.name.startswith("."):
                 continue
-            text_path = os.path.realpath(child)
-            if text_path in seen:
+            key = _dedupe_key(child)
+            if key in seen:
                 continue
-            seen.add(text_path)
+            seen.add(key)
             roots.append((child.name, child))
 
     scan((ccs_dir or home / ".ccs") / "instances")
