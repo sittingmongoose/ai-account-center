@@ -201,8 +201,8 @@ identity's item may substitute. Because the service name hashes the
 spelled dir, two spellings of one macOS directory are two login
 identities and keep separate rows; elsewhere they publish once.
 A custom OAuth overlay stores under a suffixed service; when a custom
-OAuth URL is present in the probe's environment, an answered variant
-item publishes as its own row (without a generated fix command — its
+OAuth URL is present in the probe's environment, a variant item that
+demonstrably exists publishes as its own row (without a generated fix command — its
 repair is re-running the existing overlay session). The local/staging
 suffixes belong to other build flavors and cannot be identified from
 the environment, so they are not probed. `refreshTokenExpiresAt` is the

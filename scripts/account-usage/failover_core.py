@@ -27,6 +27,10 @@ from desktop_helpers import attribute_reads, email, read_failed, safe_text, secr
 MAX_BYTES = 1024 * 1024
 MAX_SOURCES = 64
 MAX_FILES = 256
+# Raw entries one directory scan will look at while collecting
+# candidate homes; mirrors the sign-in collector's own bound so the
+# two inventories agree on what a full listing is.
+MAX_SCAN_ENTRIES = 1024
 HTTP_SECONDS = 12
 UTC = dt.timezone.utc
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -200,7 +204,7 @@ def _children(home, value):
         with os.scandir(root) as iterator:
             entries = []
             for entry in iterator:
-                if len(entries) >= MAX_FILES:
+                if len(entries) >= MAX_SCAN_ENTRIES:
                     truncated = True
                     break
                 entries.append(entry)
@@ -213,6 +217,15 @@ def _children(home, value):
             except OSError:
                 read_failed()
                 candidate = True
+            if not candidate:
+                # is_dir() answers False for a dangling symlink without
+                # raising; a link whose target cannot be stat'ed is a
+                # failed read, not a plain non-directory.
+                try:
+                    if entry.is_symlink():
+                        entry.stat()
+                except OSError:
+                    read_failed()
             if candidate:
                 homes.append(root / entry.name)
         if len(homes) > MAX_SOURCES:
@@ -235,7 +248,7 @@ def _children(home, value):
 SETTINGS_HOME_FAILURES = [0]
 
 
-def _settings_homes(home, provider):
+def _settings_homes(home, provider, ccs_dir=None):
     state = home / ".t3/userdata"
     settings = _read(home, state / "settings.json") or {}
     # A present container of the wrong shape (the instances map itself, an
@@ -292,7 +305,14 @@ def _settings_homes(home, provider):
             elif value.startswith(("~/", "~\\")):
                 value = str(home / value[2:])
             value = os.path.normpath(value)
-            if Path(value).is_absolute() and _within(home, Path(os.path.abspath(value))):
+            # Admission roots match the sign-in layer's: the home, plus
+            # the configured CCS scope when one is in play — a settings
+            # home under a relocated scope is configured, not unseen.
+            admitted = Path(value).is_absolute() and (
+                _within(home, Path(os.path.abspath(value)))
+                or (ccs_dir is not None and _within(ccs_dir, Path(os.path.abspath(value))))
+            )
+            if admitted:
                 result.append(Path(value))
             elif value:
                 SETTINGS_HOME_FAILURES[0] += 1
@@ -309,7 +329,7 @@ def _roots(home, provider, ccs_dir):
         found = _children(home, home / (".codex-t3" if provider == "codex" else ".claude-t3"))
         if provider == "codex":
             found.extend(root / "shadow" for root in _children(home, home / ".t3/userdata/providers/codex"))
-        return found + _settings_homes(home, provider)
+        return found + _settings_homes(home, provider, ccs_dir)
     result.extend((root, ["t3"]) for root in attribute_reads(["t3"], t3_roots))
     if len(result) > MAX_FILES:
         read_failed()
