@@ -115,6 +115,20 @@ class DecisionTests(Home):
         runner.check_verification({"events": []}, "k", pst, self.row(signInEndsAt=end))
         self.assertIn("expectEnd", pst)
 
+    def test_a_captcha_wait_nothing_is_waiting_on_is_cleared(self):
+        st = {"profiles": {}, "accounts": {"a@example.com": {"needs": "captcha", "needsHow": "x", "needsSince": NOW},
+                                           "b@example.com": {"needs": "captcha", "needsHow": "x", "needsSince": NOW},
+                                           "c@example.com": {"needs": "wrong_account", "needsHow": "x"}}}
+        host = {"name": "ubuntu"}
+        rows = [self.row(email="a@example.com"), self.row(profile="b", email="b@example.com", signInEndsAt=NOW + H)]
+        runner.drop_stale_captchas(CFG, st, [(host, {"profiles": rows})])
+        self.assertNotIn("needs", st["accounts"]["a@example.com"])
+        self.assertEqual(st["accounts"]["b@example.com"]["needs"], "captcha")  # its renewal is due: still waiting
+        self.assertEqual(st["accounts"]["c@example.com"]["needs"], "wrong_account")
+        st["accounts"]["a@example.com"]["needs"] = "captcha"
+        runner.drop_stale_captchas(CFG, st, [(host, {"profiles": rows}), ({"name": "mac"}, {"error": "ssh"})])
+        self.assertEqual(st["accounts"]["a@example.com"]["needs"], "captcha")  # a computer went unread
+
 
 class LoginCommandTests(Home):
     def test_windows_keeps_no_space_before_the_ampersands(self):

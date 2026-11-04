@@ -739,6 +739,8 @@ def captcha_hook(cfg, st, email):
             log("%s: a CAPTCHA is on screen; notified and waiting up to %d min" % (email, cfg["humanWaitMinutes"]))
         elif name == "captcha_cleared" and told["done"]:
             clear_need(st, email)
+            save_state(st)
+            publish(cfg, st)
             log("%s: the CAPTCHA was passed" % email)
     return on_event, told
 
@@ -1045,6 +1047,23 @@ def close_browsers(cfg, st):
             browser(cfg, "close", email, timeout=60)
 
 
+def drop_stale_captchas(cfg, st, results):
+    """A CAPTCHA wait left by a run that ended (stopped, or a test that got through) is no longer on
+    screen: once every computer was read and none of that account's sign-ins is due, nothing waits."""
+    if any("error" in data for _, data in results):
+        return
+    now = now_ms()
+    due = set()
+    for h, data in results:
+        for row in data["profiles"]:
+            if row.get("email") and due_reason(row, cfg, st["profiles"].get(key(h, row["profile"]), {}), now):
+                due.add(row["email"])
+    for email, acc in st["accounts"].items():
+        if acc.get("needs") == "captcha" and email not in due:
+            clear_need(st, email)
+            log("%s: no renewal is waiting on a CAPTCHA any more; cleared" % email)
+
+
 def check_browser_waits(cfg, st):
     """An account waiting for a person: done once its Chrome profile is signed in again, which the
     next renewal attempt finds out by itself. Reminds at most every 6 hours."""
@@ -1255,6 +1274,7 @@ def cmd_tick(args, cfg):
         save_state(st)
         renew_due(cfg, st, results)
         browser_sessions(cfg, st)
+        drop_stale_captchas(cfg, st, results)
         check_browser_waits(cfg, st)
         close_browsers(cfg, st)
         save_state(st)
@@ -1307,6 +1327,11 @@ def test_login(args, cfg):
     st = load_state()
     result = renew_one(cfg, st, host, data, row, until_link=args.until_link)
     print("login:", result)
+    if result == "entered" and (st["accounts"].get(row["email"]) or {}).get("needs") == "captcha":
+        # A browser that got through has no CAPTCHA left waiting, whatever an earlier run left behind.
+        clear_need(st, row["email"])
+        save_state(st)
+        publish(cfg, st)
     if args.until_link:
         return 0 if result == "link_captured" else 1
     if result == "signed_out":
