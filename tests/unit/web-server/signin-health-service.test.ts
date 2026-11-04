@@ -138,6 +138,7 @@ describe('allowProfile', () => {
       'keychain item unreadable',
       'keychain item holds no readable credentials',
       'keychain locked or access not allowed',
+      'keychain state could not be checked',
       'auth file missing or unreadable',
       "profile discovery was incomplete; this machine's list may be missing homes",
       'sign-in state changed during collection; recheck pending',
@@ -178,7 +179,7 @@ describe('allowProfile', () => {
       /(?:\[(?:"error"|'error')\]\s*=|(?:"error"|'error')\s*:|\berror\s*=)\s*(?:"([^"]+)"|'([^']+)')/g
     ))
       literals.add(match[1] ?? match[2]);
-    expect(literals.size).toBe(8);
+    expect(literals.size).toBe(9);
     for (const literal of literals) expect(publishableError(literal)).toBe(literal);
   });
 

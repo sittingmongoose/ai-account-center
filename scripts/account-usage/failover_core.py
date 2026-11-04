@@ -18,6 +18,7 @@ import re
 import stat
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 
@@ -213,19 +214,32 @@ def _children(home, value):
             if not SAFE_NAME.fullmatch(entry.name):
                 continue
             try:
-                candidate = entry.is_dir()
+                if entry.is_symlink():
+                    # A link's target is validated before anything
+                    # follows it: an outside or network target is
+                    # never stat'ed during discovery (an offline
+                    # mount can outlive the process deadline). The
+                    # validated path's own lstat decides candidacy.
+                    candidate = False
+                    validated = _local_path(home, root / entry.name)
+                    if validated is not None:
+                        candidate = stat.S_ISDIR(os.lstat(validated).st_mode)
+                    else:
+                        # Tell a policy rejection from a permitted
+                        # target that cannot resolve (a dangling
+                        # link) using the written target alone: the
+                        # latter is a failed read, the former a
+                        # silent exclusion.
+                        target = os.readlink(entry.path)
+                        if not target.startswith(("\\\\", "//")) and _within(
+                                Path(os.path.abspath(home)),
+                                Path(os.path.abspath(root / target))):
+                            read_failed()
+                else:
+                    candidate = entry.is_dir(follow_symlinks=False)
             except OSError:
                 read_failed()
                 candidate = True
-            if not candidate:
-                # is_dir() answers False for a dangling symlink without
-                # raising; a link whose target cannot be stat'ed is a
-                # failed read, not a plain non-directory.
-                try:
-                    if entry.is_symlink():
-                        entry.stat()
-                except OSError:
-                    read_failed()
             if candidate:
                 homes.append(root / entry.name)
         if len(homes) > MAX_SOURCES:
@@ -304,6 +318,13 @@ def _settings_homes(home, provider, ccs_dir=None):
                 value = str(home)
             elif value.startswith(("~/", "~\\")):
                 value = str(home / value[2:])
+            # Claude derives its config dir NFC-normalized, so its
+            # files live under the NFC spelling: an NFD-configured
+            # home is read there, not at the spelling as written.
+            try:
+                value = unicodedata.normalize("NFC", value)
+            except (ValueError, UnicodeError):
+                pass
             value = os.path.normpath(value)
             # Admission roots match the sign-in layer's: the home, plus
             # the configured CCS scope when one is in play — a settings

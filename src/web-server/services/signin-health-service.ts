@@ -174,7 +174,7 @@ export function publishableFixCommand(value: unknown): string {
   // the scoped Windows command (save/clear/restore of every selector
   // in a try/finally, plus the USERPROFILE fallback expression)
   // measures 711 characters with no path at all, 878 carrying a
-  // 64-character account suffix and 888 a 180-character literal path.
+  // 64-character account name and 888 a 180-character literal path.
   // Longer extremes (a near-255-character directory name) omit whole
   // rather than truncate, like every other unpublishable shape.
   return CONTROL.test(value) ||
@@ -199,6 +199,7 @@ const PROFILE_ERRORS = new Set([
   'keychain item unreadable',
   'keychain item holds no readable credentials',
   'keychain locked or access not allowed',
+  'keychain state could not be checked',
   'auth file missing or unreadable',
   "profile discovery was incomplete; this machine's list may be missing homes",
   'sign-in state changed during collection; recheck pending',

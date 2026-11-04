@@ -100,8 +100,16 @@ def public_candidate(value, provider, request=False):
             any(not isinstance(selector, str) or not SELECTOR.fullmatch(selector) for selector in selectors)):
         return None
     address, plan = value.get("email"), value.get("plan")
-    if address is not None and _email(address) is None or plan is not None and _text(plan) is None:
+    if address is not None and _email(address) is None:
         return None
+    if plan is not None and _text(plan) is None:
+        # A caller-supplied candidate stays strictly validated. An
+        # inventory candidate's plan is display-only, so there the
+        # refused name is omitted instead of rejecting the row
+        # (one rejected candidate puts the whole inventory at risk).
+        if request:
+            return None
+        plan = None
     # The candidate contract carries no plan class at all — not even for
     # validation: the strict TypeScript reader rejects unknown candidate
     # keys and one rejected candidate throws away a whole inventory. The
@@ -201,8 +209,13 @@ def public_sample(value, provider, platform):
     if not sampled or not fetched or sampled > fetched:
         return None
     address, plan = value.get("email"), value.get("plan")
-    if address is not None and _email(address) is None or plan is not None and _text(plan) is None:
+    if address is not None and _email(address) is None:
         return None
+    # The plan name is display-only (the entitlement class below is
+    # what gates on it): a name the public screen refuses is omitted,
+    # never a reason to discard the quota sample it rode in on.
+    if plan is not None and _text(plan) is None:
+        plan = None
     # Claude only: the entitlement class rides beside the display name ("Ultra"
     # is a Max-class plan) so the Fable column keeps gating on Max. A present
     # class that does not normalize to max/pro rejects the sample outright.

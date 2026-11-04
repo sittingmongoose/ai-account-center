@@ -1073,6 +1073,100 @@ class SignInExpiryTests(unittest.TestCase):
         self.assertEqual(rows["work"]["state"], "ok")
         self.assertEqual(rows["work"]["fixCommand"], "")
 
+    def test_empty_config_selector_uses_the_plain_keychain_service(self):
+        # Upstream treats a set-but-empty CLAUDE_CONFIG_DIR as unset
+        # for service selection: the plain item, never a hash of the
+        # empty string. The variant suffix rides the plain form too.
+        root = self.home / "work"
+        self.assertEqual(
+            collector._keychain_service_for_root(root, "dir", spelling=""),
+            "Claude Code-credentials")
+        self.assertEqual(
+            collector._keychain_service_for_root(
+                root, "dir", "-custom-oauth", spelling=""),
+            "Claude Code-custom-oauth-credentials")
+
+    def test_empty_config_row_binds_to_the_plain_item_on_mac(self):
+        # The working-directory file is only the fallback: a blanked
+        # plain item binds the empty-selector row exactly like the
+        # default row, so the two never publish contradictory states
+        # for one store.
+        import os as real_os
+        work = self.home / "work"
+        work.mkdir(parents=True)
+        (work / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": "x", "refreshToken": "y",
+            "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        (self.home / ".claude").mkdir(parents=True, exist_ok=True)
+        blanked = json.dumps({"claudeAiOauth": {
+            "accessToken": "", "refreshToken": "",
+            "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}})
+
+        def keychain_text(service="Claude Code-credentials"):
+            return blanked if service == "Claude Code-credentials" else None
+
+        previous = real_os.getcwd()
+        real_os.chdir(work)
+        try:
+            with mock.patch.object(collector.sys, "platform", "darwin"), \
+                    mock.patch.dict(collector.os.environ, {}, clear=False), \
+                    mock.patch.object(collector, "_mac_keychain_text",
+                                      side_effect=keychain_text):
+                collector.os.environ.pop("CLAUDE_SECURESTORAGE_CONFIG_DIR", None)
+                collector.os.environ["CLAUDE_CONFIG_DIR"] = ""
+                report = collector.collect(self.home, NOW, include_keychain=True)
+        finally:
+            real_os.chdir(previous)
+        rows = {r["name"]: r for r in report["profiles"]}
+        self.assertEqual(rows["default"]["state"], "logged_out")
+        self.assertEqual(rows["work"]["state"], "logged_out")
+
+    def test_configured_mac_home_without_a_directory_still_probes_its_item(self):
+        # A settings-defined home can hold its login only in the
+        # Keychain: the directory being absent must not discard the
+        # identity before its one service is queried.
+        configured = self.home / "configured" / "ghostacct"
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        (userdata / "settings.json").write_text(json.dumps({"providerInstances": {
+            "claude-a": {"driver": "claudeAgent", "config": {
+                "homePath": str(configured)}},
+        }}))
+        healthy = json.dumps({"claudeAiOauth": {
+            "accessToken": "x", "refreshToken": "y",
+            "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}})
+        asked = []
+
+        def keychain_text(service="Claude Code-credentials"):
+            asked.append(service)
+            if service == collector._keychain_service_for(str(configured)):
+                return healthy
+            return None
+
+        with mock.patch.object(collector.sys, "platform", "darwin"), \
+                mock.patch.object(collector, "_mac_keychain_text",
+                                  side_effect=keychain_text):
+            report = collector.collect(self.home, NOW, include_keychain=True)
+        self.assertIn(collector._keychain_service_for(str(configured)), asked)
+        rows = {r["name"]: r for r in report["profiles"]}
+        self.assertEqual(rows["ghostacct"]["state"], "ok")
+
+    def test_missing_dir_identities_without_store_evidence_publish_nothing(self):
+        # No directory and no item evidence (absent, locked, or
+        # indeterminate) is no store at all: ambient and configured
+        # ghosts publish nothing, while the default row — the
+        # selector-free identity — is never filtered away with them.
+        for answer in (None, collector.KEYCHAIN_LOCKED,
+                       collector.KEYCHAIN_INDETERMINATE):
+            with mock.patch.object(collector.sys, "platform", "darwin"), \
+                    mock.patch.dict(collector.os.environ, {
+                        "CLAUDE_CONFIG_DIR": str(self.home / ".claude")}), \
+                    mock.patch.object(collector, "_mac_keychain_text",
+                                      return_value=answer):
+                report = collector.collect(self.home, NOW, include_keychain=True)
+            names = [r["name"] for r in report["profiles"]]
+            self.assertEqual(names, ["default"])
+
     def test_empty_securestorage_declares_no_ambient_identity(self):
         # Set-but-empty securestorage selects the plain store outright
         # upstream, whatever CLAUDE_CONFIG_DIR says: no ambient row is
@@ -1183,6 +1277,100 @@ class SignInExpiryTests(unittest.TestCase):
             self.home, NOW, include_keychain=False, ccs_dir=ccs_dir)["profiles"]}
         self.assertEqual(rows["relocated"]["state"], "ok")
         self.assertNotIn("saved-profiles", rows)
+
+    def test_nfd_settings_home_is_discovered_through_its_nfc_directory(self):
+        # Discovery presence follows the same normalized file root
+        # the credentials read uses: an NFD settings home whose NFC
+        # directory exists is a discovered login, not a silently
+        # skipped one.
+        import unicodedata as _ud
+        configured = self.home / "configured"
+        nfc_dir = configured / _ud.normalize("NFC", "café")
+        nfc_dir.mkdir(parents=True)
+        (nfc_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": "x", "refreshToken": "y",
+            "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}}))
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        (userdata / "settings.json").write_text(json.dumps({"providerInstances": {
+            "claude-a": {"driver": "claudeAgent", "config": {
+                "homePath": str(configured / _ud.normalize("NFD", "café"))}},
+        }}))
+        report = collector.collect(self.home, NOW, include_keychain=False)
+        states = {_ud.normalize("NFC", r["name"]): r["state"]
+                  for r in report["profiles"]}
+        self.assertEqual(states.get("café"), "ok")
+        self.assertNotIn("saved-profiles", states)
+
+    def test_file_root_follows_os_resolution_when_dotdot_crosses_a_symlink(self):
+        # Textual normpath and OS resolution disagree when `..`
+        # crosses a symlink: upstream joins the raw spelling and the
+        # OS resolves it, so the file root must follow the OS.
+        import os as real_os
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        outside = pathlib.Path(external.name) / "outside"
+        outside.mkdir()
+        link = self.home / "esc"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        spelling = str(self.home / "esc" / ".." / "acct")
+        self.assertEqual(
+            collector._file_root_for(spelling, self.home),
+            pathlib.Path(real_os.path.realpath(spelling)))
+
+    def test_storage_dir_repair_pins_a_co_inherited_config_selector(self):
+        # A securestorage repair must not clear a co-inherited
+        # CLAUDE_CONFIG_DIR: upstream writes account metadata under
+        # it, so clearing would rewrite the default account's file.
+        store = self.home / ".claude-t3" / "acct"
+        store.mkdir(parents=True)
+        other = str(self.home / ".claude-t3" / "other")
+        with mock.patch.dict(collector.os.environ,
+                             {"CLAUDE_CONFIG_DIR": other}):
+            with mock.patch.object(collector.sys, "platform", "linux"):
+                command = collector.fix_command(
+                    store, self.home,
+                    storage_var="CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                    spelling=str(store))
+            self.assertIn("CLAUDE_CONFIG_DIR='%s'" % other, command)
+            unset = command.split("&&")[0]
+            self.assertNotIn("CLAUDE_CONFIG_DIR", unset.split("unset", 1)[1])
+        win_other = "C:\\Users\\x\\other"
+        with mock.patch.dict(collector.os.environ,
+                             {"CLAUDE_CONFIG_DIR": win_other}), \
+                mock.patch.object(collector.sys, "platform", "win32"):
+            command = collector.fix_command(
+                store, self.home,
+                storage_var="CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                spelling="C:\\Users\\x\\.claude-t3\\acct")
+        self.assertIn("$env:CLAUDE_CONFIG_DIR = '%s'" % win_other, command)
+
+    def test_refused_profile_publishes_no_fix_command(self):
+        # A containment-refused row must not carry a repair for the
+        # refused spelling into published JSON.
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        outside = pathlib.Path(external.name) / "acct"
+        outside.mkdir()
+        row = collector.claude_profile("acct", outside, NOW, self.home)
+        self.assertEqual(row["error"],
+                         "profile directory resolves outside the allowed roots")
+        self.assertEqual(row["fixCommand"], "")
+
+    def test_indeterminate_keychain_outcome_has_its_own_wording(self):
+        # A lookup that could not run says the state is unknown; it
+        # does not claim an item exists and was unreadable.
+        with mock.patch.object(collector.sys, "platform", "darwin"), \
+                mock.patch.object(collector, "_mac_keychain_text",
+                                  return_value=collector.KEYCHAIN_INDETERMINATE):
+            profile = collector.mac_keychain_profile_for_service(
+                NOW, "Claude Code-credentials")
+        self.assertTrue(profile["answered"])
+        self.assertNotIn("evidence", profile)
+        self.assertEqual(profile["error"], "keychain state could not be checked")
 
     def test_plain_files_beside_accounts_do_not_mark_discovery_incomplete(self):
         # Seventy plain files beside one account are not homes in

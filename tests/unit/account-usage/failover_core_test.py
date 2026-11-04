@@ -82,6 +82,24 @@ class InventoryTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.home = Path(self.temporary.name)
 
+    def test_children_never_follow_a_link_outside_the_home(self):
+        # Enumeration validates a link's target before following it:
+        # an outside (or network) target is never stat'ed during
+        # discovery, while an in-home link stays a candidate.
+        base = self.home / ".claude-t3"
+        (base / "real").mkdir(parents=True)
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        outside = Path(external.name) / "outside"
+        outside.mkdir()
+        try:
+            (base / "outlink").symlink_to(outside, target_is_directory=True)
+            (base / "inlink").symlink_to(base / "real", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        names = [path.name for path in core._children(self.home, base)]
+        self.assertEqual(names, ["inlink", "real"])
+
     def test_codex_inventory_default_saved_and_t3_homes(self):
         roots = [self.home / ".codex", self.home / ".ccs/codex-instances/saved",
                  self.home / ".codex-t3/personal", self.home / ".t3/userdata/providers/codex/configured/shadow",

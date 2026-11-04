@@ -8,7 +8,10 @@ import { afterAll, describe, expect, it, mock } from 'bun:test';
  *
  * Bun module mocks are process-wide, so the mock spreads the real
  * module's exports (a partial shape would break later importers of
- * the other exports in the same process) and is restored after. */
+ * the other exports in the same process) and teardown re-registers
+ * the real module explicitly — mock.restore() alone does not undo
+ * a mock.module() replacement, so the overrides would otherwise
+ * leak into any file imported later in the same process. */
 
 const actualTransport =
   await import('../../../src/web-server/services/usage-failover-transport');
@@ -27,7 +30,12 @@ const { getSignInHealth, invalidateSignInHealthCache } =
   await import('../../../src/web-server/services/signin-health-service');
 
 afterAll(() => {
+  mock.module(
+    '../../../src/web-server/services/usage-failover-transport',
+    () => actualTransport
+  );
   mock.restore();
+  invalidateSignInHealthCache();
 });
 
 describe('host resolution failure', () => {

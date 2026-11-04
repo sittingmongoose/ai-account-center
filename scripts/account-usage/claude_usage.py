@@ -651,7 +651,7 @@ def _plan_name(value):
         r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]", name
     ):
         return None
-    if re.search(r"(?i)(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})", name):
+    if re.search(r"(?i)(bearer\s|dca:|sk[-_]|eyJ[A-Za-z0-9_-]{8})", name):
         return None
     return name
 

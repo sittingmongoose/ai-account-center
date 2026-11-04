@@ -194,10 +194,11 @@ macOS each identity also resolves through its own Claude Code Keychain
 item — the canonical store there, named plainly for the selector-free
 default login and with a hash of the identity's spelled dir otherwise,
 looked up under the account Claude Code writes to — and the two stores
-publish as one row. That one item binds the row whenever it can be read
-at all, even when its verdict is `unavailable`; the credentials file
-speaks only when the item does not answer, and no other spelling's or
-identity's item may substitute. Because the service name hashes the
+publish as one row. That one item binds the row whenever the store
+answers at all — a readable payload, a locked refusal, or a lookup
+that could not run — even when its verdict is `unavailable`; the
+credentials file speaks only when the item does not exist, and no
+other spelling's or identity's item may substitute. Because the service name hashes the
 spelled dir, two spellings of one macOS directory are two login
 identities and keep separate rows; elsewhere they publish once.
 A custom OAuth overlay stores under a suffixed service; when a custom
@@ -220,7 +221,11 @@ form (`$HOME` on POSIX, `USERPROFILE` with its `HOMEDRIVE`+`HOMEPATH`
 fallback on Windows), so nothing under the home reaches
 `usage.json`/`usage.md` as an absolute path; a directory outside the home
 (a relocated `--ccs-dir` scope) is the one deliberate exception and is
-published as a quoted literal. Fix commands pin every credential
+published as a quoted literal. An inherited selector spelling that the
+home-relative form cannot reproduce likewise publishes as a quoted
+literal, and one that is relative or empty — whose meaning depends on
+the working directory it is pasted in — publishes with no command at
+all rather than a wrong one. Fix commands pin every credential
 selector — setting the one their identity needs and unsetting the rest,
 including the OAuth-variant selectors — and scope that to the invocation
 (a POSIX subshell; save/restore in PowerShell), so a pasted command

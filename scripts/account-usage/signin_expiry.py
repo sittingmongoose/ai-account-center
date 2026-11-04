@@ -10,8 +10,9 @@ fresh `claude auth login`.
 
 "Logged out at" is therefore the first `expiresAt` that falls after
 `refreshTokenExpiresAt`. The collector reports that time, a state
-(ok / warn / critical / logged_out) and the exact fix command for every
-login identity on this machine — the default `~/.claude`, the per-account
+(ok / warn / critical / logged_out) and, where one can be bound
+safely, the exact fix command for every login identity on this
+machine — the default `~/.claude`, the per-account
 `~/.claude-t3/<name>` dirs, a configured home naming the default dir
 (launched with an explicit selector, so a different macOS login), any
 storage identity this probe process itself inherited, and the custom
@@ -337,11 +338,23 @@ def _file_root_for(spelling, fallback):
     normalizes to "." (empty included) names the working directory."""
     text = spelling if spelling is not None else str(fallback)
     try:
-        normalized = os.path.normpath(unicodedata.normalize("NFC", text))
+        nfc_text = unicodedata.normalize("NFC", text)
     except (ValueError, UnicodeError):
-        normalized = os.path.normpath(text)
+        nfc_text = text
+    normalized = os.path.normpath(nfc_text)
     if normalized == ".":
         return pathlib.Path.cwd()
+    if ".." in pathlib.PurePath(nfc_text).parts:
+        # Textual normalization and OS resolution disagree when `..`
+        # crosses a symlink (the OS resolves the link first, then
+        # climbs). Upstream joins the raw spelling and the OS
+        # resolves it, so where the two disagree the OS form wins.
+        try:
+            os_resolved = os.path.realpath(nfc_text)
+            if os_resolved != os.path.realpath(normalized):
+                return pathlib.Path(os_resolved)
+        except OSError:
+            pass
     return pathlib.Path(normalized)
 
 
@@ -369,6 +382,19 @@ def fix_command(config_dir, home, storage_var="CLAUDE_CONFIG_DIR", spelling=None
     it verbatim, so the command must assign it verbatim too — the
     $HOME form carries its raw remainder, and a spelling that form
     cannot reproduce publishes as a quoted literal."""
+    # A securestorage repair must not clear a co-inherited
+    # CLAUDE_CONFIG_DIR: the securestorage selector already decides
+    # the store, but upstream writes account metadata under the
+    # config selector, so clearing it would rewrite the default
+    # account's metadata file. Pin the inherited value instead; a
+    # relative one cannot be pinned safely from another directory,
+    # so it gets no command.
+    co_config = None
+    if storage_var == "CLAUDE_SECURESTORAGE_CONFIG_DIR" \
+            and "CLAUDE_CONFIG_DIR" in os.environ:
+        co_config = os.environ["CLAUDE_CONFIG_DIR"]
+        if not _spelling_is_absolute(co_config):
+            return ""
     relative = _home_relative(config_dir, home)
     if sys.platform == "win32":
         # PowerShell reads curly quotes (U+2018-U+201F) as quotes too, and
@@ -377,6 +403,12 @@ def fix_command(config_dir, home, storage_var="CLAUDE_CONFIG_DIR", spelling=None
         # pasted line that runs something else. The home expands the way
         # Path.home() resolved it on this machine (see below).
         curly = "".join(chr(cp) for cp in range(0x2018, 0x2020))
+        co_override = {}
+        if co_config is not None:
+            if any(character in co_config for character in curly):
+                return ""
+            co_override = {
+                "CLAUDE_CONFIG_DIR": "'" + co_config.replace("'", "''") + "'"}
         if spelling is not None:
             if any(character in spelling for character in curly):
                 return ""
@@ -385,16 +417,16 @@ def fix_command(config_dir, home, storage_var="CLAUDE_CONFIG_DIR", spelling=None
             raw_suffix = _raw_home_suffix(spelling, home)
             if raw_suffix is None:
                 literal = spelling.replace("'", "''")
-                return _win32_login_command({storage_var: f"'{literal}'"})
+                return _win32_login_command({storage_var: f"'{literal}'", **co_override})
             escaped = raw_suffix.replace("`", "``").replace('"', '`"').replace("$", "`$")
             home_expr = "$(if (Test-Path env:USERPROFILE) { $env:USERPROFILE } else { $env:HOMEDRIVE + $env:HOMEPATH })"
-            return _win32_login_command({storage_var: f'"{home_expr}{escaped}"'})
+            return _win32_login_command({storage_var: f'"{home_expr}{escaped}"', **co_override})
         if relative is None:
             literal = str(config_dir)
             if any(character in literal for character in curly):
                 return ""
             literal = literal.replace("'", "''")
-            return _win32_login_command({storage_var: f"'{literal}'"})
+            return _win32_login_command({storage_var: f"'{literal}'", **co_override})
         if any(character in relative[1] for character in curly):
             return ""
         escaped = relative[1][1:].replace("`", "``").replace('"', '`"').replace("$", "`$")
@@ -402,18 +434,22 @@ def fix_command(config_dir, home, storage_var="CLAUDE_CONFIG_DIR", spelling=None
         # (even empty), else HOMEDRIVE+HOMEPATH; the command resolves
         # the same presence test at paste time.
         home_expr = "$(if (Test-Path env:USERPROFILE) { $env:USERPROFILE } else { $env:HOMEDRIVE + $env:HOMEPATH })"
-        return _win32_login_command({storage_var: f'"{home_expr}{escaped}"'})
-    cleared = [name for name in SELECTOR_ORDER if name != storage_var]
+        return _win32_login_command({storage_var: f'"{home_expr}{escaped}"', **co_override})
+    cleared = [name for name in SELECTOR_ORDER if name != storage_var
+               and not (co_config is not None and name == "CLAUDE_CONFIG_DIR")]
+    co_assignment = ""
+    if co_config is not None:
+        co_assignment = "CLAUDE_CONFIG_DIR='%s' " % co_config.replace("'", "'\\''")
     if spelling is not None:
         suffix = _raw_home_suffix(spelling, home)
         if suffix is None:
             if not _spelling_is_absolute(spelling):
                 return ""
             literal = spelling.replace("'", "'\\''")
-            return _posix_login_command(cleared, f"{storage_var}='{literal}' ")
+            return _posix_login_command(cleared, f"{storage_var}='{literal}' " + co_assignment)
     elif relative is None:
         literal = str(config_dir).replace("'", "'\\''")
-        return _posix_login_command(cleared, f"{storage_var}='{literal}' ")
+        return _posix_login_command(cleared, f"{storage_var}='{literal}' " + co_assignment)
     else:
         suffix = relative[0][1:]
     if "!" in suffix:
@@ -421,14 +457,14 @@ def fix_command(config_dir, home, storage_var="CLAUDE_CONFIG_DIR", spelling=None
         # `\!` keeps its backslash there, so a `!`-carrying suffix is pasted
         # as a single-quoted segment instead, where `!` is inert.
         quoted = suffix.replace("'", "'\\''")
-        return _posix_login_command(cleared, f"{storage_var}=\"$HOME\"'{quoted}' ")
+        return _posix_login_command(cleared, f"{storage_var}=\"$HOME\"'{quoted}' " + co_assignment)
     escaped = (
         suffix.replace("\\", "\\\\")
         .replace('"', '\\"')
         .replace("$", "\\$")
         .replace("`", "\\`")
     )
-    return _posix_login_command(cleared, f'{storage_var}="$HOME{escaped}" ')
+    return _posix_login_command(cleared, f'{storage_var}="$HOME{escaped}" ' + co_assignment)
 
 
 def _within_allowed(path, home, ccs_dir=None):
@@ -544,6 +580,9 @@ def claude_profile(name, config_dir, now_ms, home, ccs_dir=None, kind="dir", spe
     file_dir = _file_root_for(spelling, config_dir)
     if not _within_allowed(file_dir, home, ccs_dir):
         entry["error"] = "profile directory resolves outside the allowed roots"
+        # A refused spelling gets no repair either: the containment
+        # refusal covers every action on that store.
+        entry["fixCommand"] = ""
         return entry
     credentials_path = file_dir / ".credentials.json"
     # The file itself is checked too: O_NOFOLLOW does not exist on Windows,
@@ -592,7 +631,10 @@ def _keychain_service_for_root(root, kind, oauth_suffix="", spelling=None):
     string its command sets. No other spelling's or identity's item
     may substitute for it. A dir string UTF-8 cannot encode (a
     non-UTF-8 filename) yields no service rather than aborting."""
-    if kind == "default":
+    if kind == "default" or spelling == "":
+        # A set-but-empty config selector selects the plain store
+        # upstream (an empty value reads as unset there), never a
+        # hash of the empty string.
         return f"Claude Code{oauth_suffix}-credentials"
     try:
         return _keychain_service_for(spelling if spelling is not None else str(root),
@@ -733,6 +775,7 @@ def mac_keychain_profile_for_service(now_ms, service):
         entry["error"] = "keychain locked or access not allowed"
         return entry
     if raw is KEYCHAIN_INDETERMINATE:
+        entry["error"] = "keychain state could not be checked"
         return entry
     entry["evidence"] = True
     if raw is KEYCHAIN_ANSWERED_UNREADABLE:
@@ -890,18 +933,23 @@ def _dedupe_key(path, kind="dir", spelling=None):
         except (ValueError, UnicodeError):
             pass
         return ("spelled", "default" if kind == "default" else "hashed", spelled)
+    # The filesystem identity is the file root's: an NFD spelling and
+    # the NFC directory it reads are one store, and statting the raw
+    # spelling (absent on a byte-exact filesystem) would invent a
+    # second identity for it.
+    file_root = _file_root_for(spelling, path)
     try:
-        info = path.stat()
+        info = file_root.stat()
     except OSError:
-        return ("path", os.path.realpath(path))
+        return ("path", os.path.realpath(file_root))
     if not info.st_ino:
-        return ("path", os.path.realpath(path))
+        return ("path", os.path.realpath(file_root))
     return ("inode", info.st_dev, info.st_ino)
 
 
 def claude_roots(home, ccs_dir=None, include_ambient=False):
     """Every Claude login identity this machine knows, as
-    (label, dir, kind) triples: the default, the saved
+    (label, dir, kind, spelling) tuples: the default, the saved
     ~/.ccs/instances homes, the T3 account dirs, settings-defined
     homes, a configured home naming the default dir as its own explicit
     identity, and — on real-machine runs — any storage identity this
@@ -995,11 +1043,17 @@ def claude_roots(home, ccs_dir=None, include_ambient=False):
             except ValueError:
                 complete = False
                 continue
-            is_dir, stat_failed = _dir_state(root)
+            # Presence is the file root's, like the read itself: an
+            # NFD spelling whose NFC directory exists is present.
+            # On macOS an absent directory still keeps the identity —
+            # its login can live only in the Keychain — and the
+            # evidence filter in collect() decides whether it
+            # publishes; elsewhere there is no other store to ask.
+            is_dir, stat_failed = _dir_state(_file_root_for(str(root), root))
             if stat_failed:
                 complete = False
                 continue
-            if not is_dir:
+            if not is_dir and sys.platform != "darwin":
                 continue
             label = root.name or os.path.realpath(root)
             for selector in selectors or []:
@@ -1127,6 +1181,7 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
         # canonical store's own verdict. The stores never publish as two
         # logins, one failed beside one healthy.
         # profiles[i] matches roots[i] here; later rows are appended below.
+        evidenced = set()
         for index, (_label, root, kind, spelling) in enumerate(roots):
             row = profiles[index]
             if row.get("error") == "profile directory resolves outside the allowed roots":
@@ -1137,6 +1192,8 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
             if service is None:
                 continue
             candidate = mac_keychain_profile_for_service(now_ms, service)
+            if candidate.get("evidence"):
+                evidenced.add(index)
             if candidate.get("answered"):
                 merge_keychain(row, candidate)
             # Unanswered means "no such item": the file's own cause
@@ -1169,23 +1226,24 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
                 row["fixCommand"] = ""
                 merge_keychain(row, candidate)
                 profiles.append(row)
-        # An inherited identity whose dir does not exist and whose item
-        # did not answer has no store evidence at all: like an absent
-        # configured root, it publishes nothing instead of a permanent
-        # ghost unavailable row.
-        ambient_spellings = {raw for _path, _kind, raw in _ambient_storage_roots(home)}
-        if ambient_spellings:
-            kept = []
-            for index, row in enumerate(profiles):
-                if index < len(roots):
-                    _label, root, _kind, spelling = roots[index]
-                    is_dir, _failed = _dir_state(root)
-                    if (spelling in ambient_spellings and not is_dir
-                            and row["state"] == "unavailable"
-                            and row.get("error") == "credentials file missing or unreadable"):
-                        continue
-                kept.append(row)
-            profiles = kept
+        # An identity whose file directory does not exist and whose
+        # item gave no evidence of existing has no store at all —
+        # absent, locked and indeterminate alike: it publishes
+        # nothing instead of a permanent ghost unavailable row. The
+        # default identity (slot 0) is never filtered: the
+        # selector-free login's row stands even when neither of its
+        # stores can answer, and no other row may be dropped for
+        # merely sharing its spelling.
+        kept = []
+        for index, row in enumerate(profiles):
+            if 0 < index < len(roots):
+                _label, root, _kind, spelling = roots[index]
+                is_dir, _failed = _dir_state(_file_root_for(spelling, root))
+                if not is_dir and index not in evidenced \
+                        and row["state"] == "unavailable":
+                    continue
+            kept.append(row)
+        profiles = kept
     if not complete:
         profiles.append(
             {
