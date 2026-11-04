@@ -23,6 +23,7 @@
  */
 import { randomBytes } from 'crypto';
 import fs from 'fs';
+import { hostname } from 'os';
 import { ValidationError } from '../../errors/error-types';
 import path from 'path';
 import { createLogger } from '../../services/logging';
@@ -61,6 +62,8 @@ export const SNAPSHOT_MARKDOWN = 'usage.md';
 export const SNAPSHOT_HISTORY = 'history.json';
 /** A write still running after this long is reported once in the dashboard log. */
 const STALL_LOG_MS = 5 * 60_000;
+/** The sign-in fetch waits at most this long inside a publish slot. */
+const SIGNIN_FETCH_LIMIT_MS = 60_000;
 
 export interface SnapshotWindow extends AgentUsageWindow {
   burn: BurnRate | null;
@@ -86,6 +89,8 @@ export interface SnapshotSignInProfile {
   fixCommand: string;
   /** Why a machine's report is unavailable; absent otherwise. */
   error?: string;
+  /** Key NAMES a codex store exposes; values are never read. */
+  fieldsAvailable?: string[];
   /** The account this sign-in belongs to (from the renewal runner). */
   email?: string | null;
   /** Renewal runner fields: whether it renews by itself, from when, and how the last one went. */
@@ -286,8 +291,6 @@ function hostName(account: AgentUsageAccount): string {
 /** The same snapshot in plain words, one provider section and one line per window. */
 const SIGNIN_STATE_WORDS: Record<string, string> = {
   ok: 'healthy',
-  warn: 'ends within 24 hours',
-  critical: 'ends within 4 hours',
   logged_out: 'already logged out',
   unavailable: 'not readable on this machine',
   unsupported: 'no expiry published',
@@ -302,6 +305,14 @@ function renderSignInMarkdown(
   const profiles = (machines.machines ?? []).map((row) => ({
     ...row,
     machine: row.machine ?? row.platform ?? 'unknown',
+    // Last line before UTF-8 bytes: production rows are screened at the
+    // publish boundary, but a command carrying an unpaired surrogate
+    // would be rewritten to U+FFFD here and aim at another directory.
+    fixCommand:
+      row.fixCommand &&
+      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(row.fixCommand)
+        ? ''
+        : row.fixCommand,
   }));
   const rank: Record<string, number> = {
     logged_out: 0,
@@ -313,15 +324,56 @@ function renderSignInMarkdown(
   };
   profiles.sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9));
   for (const row of profiles) {
-    const word = SIGNIN_STATE_WORDS[row.state] ?? row.state;
-    // The published end is a bound, not always the exact time: when the
-    // collector could not name one, the wording says the window closes soon
-    // instead of inventing a time. The fix text is state-aware.
+    // The words carry the actual known time and never a threshold: a
+    // nonrenewable access token can be critical with eight hours left, and
+    // a refresh-bound warning can sit thirty hours out. Severity only
+    // decides the worst-first order. A logged-out row never names a future
+    // end: the stored times of emptied tokens are remnants, not events.
+    const endedAt =
+      row.loggedOutAt !== null && row.loggedOutAt !== undefined && row.loggedOutAt !== ''
+        ? Date.parse(row.loggedOutAt)
+        : NaN;
+    const namesEnd = !Number.isNaN(endedAt) && row.state !== 'logged_out';
+    // The same crossed-deadline recheck the CLI reader makes: a live row
+    // rendered after its deadline is a past reading awaiting its next
+    // sample, never a healthy future end.
+    const live = row.state === 'ok' || row.state === 'warn' || row.state === 'critical';
+    const refreshAt =
+      !row.loggedOutAt && row.refreshExpiresAt ? Date.parse(row.refreshExpiresAt) : NaN;
+    const crossedEnd = live && !Number.isNaN(endedAt) && endedAt <= now;
+    const crossedRefresh = live && !Number.isNaN(refreshAt) && refreshAt <= now;
+    let word = SIGNIN_STATE_WORDS[row.state] ?? row.state;
+    if (crossedEnd)
+      word = `ended ${utc(row.loggedOutAt as string)} (past its deadline; awaiting recheck)`;
+    else if (crossedRefresh)
+      word = `refresh expired ${utc(row.refreshExpiresAt as string)} (awaiting recheck)`;
+    else if (row.state === 'warn' || row.state === 'critical') {
+      if (namesEnd) word = `ends ${utc(row.loggedOutAt as string)}`;
+      else if (row.refreshExpiresAt) word = `refresh expires ${utc(row.refreshExpiresAt)}`;
+      else if (
+        row.accessExpiresAt === null ||
+        row.accessExpiresAt === undefined ||
+        row.accessExpiresAt === ''
+      )
+        word = 'no access token in the store; the next run renews';
+      else word = 'exact end unknown';
+    }
     const detail = (): string => {
+      if (row.state === 'logged_out' && row.autoRenew)
+        return 'logged out; the renewal runner signs it in again on its next run';
+      if (row.state === 'logged_out')
+        return (
+          `${row.loggedOutAt && !Number.isNaN(endedAt) && endedAt <= now ? `sign-in ended ${utc(row.loggedOutAt)}` : 'tokens are gone or expired'}` +
+          (row.fixCommand ? `; re-login: \`${row.fixCommand}\`` : '')
+        );
       if (row.state === 'unavailable')
-        return `not readable on this machine${row.error ? ` (${row.error})` : ''}`;
+        // The state word already says "not readable": the detail only adds
+        // the cause.
+        return row.error ? `(${row.error})` : 'reason unknown';
       if (row.state === 'unsupported') return `no login end time is published by ${row.provider}`;
-      if (row.autoRenew && row.state !== 'logged_out')
+      if (crossedEnd || crossedRefresh)
+        return row.fixCommand ? `re-login: \`${row.fixCommand}\`` : '';
+      if (row.autoRenew)
         return [
           row.refreshExpiresAt
             ? `sign-in ends ${utc(row.refreshExpiresAt)}`
@@ -336,15 +388,36 @@ function renderSignInMarkdown(
         ]
           .filter(Boolean)
           .join('; ');
-      if (row.autoRenew) return 'logged out; the renewal runner signs it in again on its next run';
-      if (row.loggedOutAt)
-        return `sign-in ends ${utc(row.loggedOutAt)}${row.fixCommand ? `; re-login before then: \`${row.fixCommand}\`` : ''}`;
-      return 're-login window closes soon; no exact end published';
+      if (row.state === 'ok')
+        // Healthy rows state the end without prescribing a re-login; the
+        // warn/critical/logged-out words carry the fix command.
+        return namesEnd
+          ? `sign-in ends ${utc(row.loggedOutAt as string)}`
+          : row.refreshExpiresAt
+            ? `refresh expires ${utc(row.refreshExpiresAt)}`
+            : 'no exact end published yet';
+      // warn/critical: the time is already in the word; the detail only
+      // advises, and a missing access token renews on the next run rather
+      // than needing a re-login.
+      if (
+        row.state === 'warn' &&
+        (row.accessExpiresAt === null ||
+          row.accessExpiresAt === undefined ||
+          row.accessExpiresAt === '')
+      )
+        return 'the next run renews this login';
+      if (row.fixCommand)
+        return namesEnd
+          ? `re-login before then: \`${row.fixCommand}\``
+          : `re-login when the window ends: \`${row.fixCommand}\``;
+      return namesEnd ? 're-login before then' : 're-login when the window ends';
     };
+    const detailText = detail();
     const who = row.email ? ` (${row.email})` : '';
-    lines.push(`- **${row.provider} · ${row.machine}/${row.name}**${who}: ${word}. ${detail()}`);
+    lines.push(
+      `- **${row.provider} · ${row.machine}/${row.name}**${who}: ${word}.${detailText ? ` ${detailText}` : ''}`
+    );
   }
-  void now;
   return lines;
 }
 
@@ -373,7 +446,10 @@ function renderRenewalMarkdown(renewal: SnapshotSignInRenewal | undefined, now: 
   return lines;
 }
 
-export function renderSnapshotMarkdown(snapshot: AgentUsageSnapshot): string {
+export function renderSnapshotMarkdown(
+  snapshot: AgentUsageSnapshot,
+  signInNow: number = Date.parse(snapshot.generatedAt)
+): string {
   const now = Date.parse(snapshot.generatedAt);
   const lines = [
     '# AI Account Center usage',
@@ -422,9 +498,11 @@ export function renderSnapshotMarkdown(snapshot: AgentUsageSnapshot): string {
     lines.push('');
     lines.push(...renderRenewalMarkdown(snapshot.signInRenewal, now));
     lines.push(
+      // The sign-in section reads against render time when the publisher
+      // supplies it: its deadlines are wall-clock ends, not sample facts.
       ...renderSignInMarkdown(
         { machines: signInProfiles },
-        snapshot.generatedAt ? Date.parse(snapshot.generatedAt) : Date.now()
+        Number.isNaN(signInNow) ? Date.now() : signInNow
       )
     );
     lines.push('');
@@ -520,16 +598,75 @@ export async function syncSnapshotClient(
   await syncFiles(runner, runnerSource, RUNNER_FILES);
 }
 
+/** Publication-time recheck, on copies: a live row whose deadline crossed
+ * in (since, now] while collection and the folder checks were still
+ * running must not publish as a future end, in either file. The collected
+ * rows belong to the health service's cache and are never mutated here;
+ * stamps already past at `since` are facts the collected state already
+ * accounts for, exactly as in the service's own crossed-row downgrade. */
+export function downgradeCrossedSignInRows(
+  rows: SnapshotSignInProfile[],
+  since: number,
+  now: number
+): SnapshotSignInProfile[] {
+  return rows.map((row) => {
+    if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') return row;
+    // The known login end counts crossed whenever it is already past at
+    // `now` (a behind-clock remote), exactly as in the service; the
+    // renewable stamps count only inside (since, now]. With no named
+    // end, a refresh end already past is the same skew shape: no
+    // single-clock collector emits it live, and a named future end
+    // (the legitimate dying window) exempts it.
+    const end = row.loggedOutAt ? Date.parse(row.loggedOutAt) : NaN;
+    const refresh = row.refreshExpiresAt ? Date.parse(row.refreshExpiresAt) : NaN;
+    const crossed =
+      (!Number.isNaN(end) && end <= now) ||
+      (Number.isNaN(end) && !Number.isNaN(refresh) && refresh <= now) ||
+      [row.accessExpiresAt, row.refreshExpiresAt].some((value) => {
+        if (!value) return false;
+        const at = Date.parse(value);
+        return !Number.isNaN(at) && at > since && at <= now;
+      });
+    if (!crossed) return row;
+    return {
+      ...row,
+      state: 'unavailable',
+      accessExpiresAt: null,
+      refreshExpiresAt: null,
+      loggedOutAt: null,
+      error: 'sign-in state changed during collection; recheck pending',
+    };
+  });
+}
+
 export interface SnapshotPublisherDeps {
   settings?: () => Promise<SnapshotSettings | null>;
   write?: (directory: string, name: string, body: string) => Promise<void>;
   isDirectory?: (directory: string) => Promise<boolean>;
   refreshSeconds?: () => number;
   syncClient?: (directory: string) => Promise<void>;
-  /** Sign-in expiry reports per machine; best effort, a failure publishes without them. */
+  /** Sign-in expiry reports per machine; a failed fetch publishes a named collection-failed row. */
   signIn?: () => Promise<SnapshotSignInProfile[]>;
   /** The renewal runner's summary (claude-signins.json in the same folder); best effort. */
   signInRenewal?: () => Promise<SnapshotSignInRenewal | null>;
+}
+
+/** The row a failed or timed-out sign-in fetch publishes: the section
+ * stays and names the failed collection, instead of the absence of a
+ * section reading as "no sign-in problems" on every machine. */
+function signInCollectionFailedRow(): SnapshotSignInProfile {
+  return {
+    name: 'sign-in collection',
+    provider: 'claude',
+    platform: hostname(),
+    machine: hostname(),
+    accessExpiresAt: null,
+    refreshExpiresAt: null,
+    loggedOutAt: null,
+    state: 'unavailable',
+    fixCommand: '',
+    error: 'sign-in collection failed',
+  };
 }
 
 /** Handles one sample; resolves whether the files were written. */
@@ -571,27 +708,48 @@ export function createSnapshotPublisher(
       }
       return false;
     }
-    // The ssh-backed sign-in fetch starts before the busy guard so a slow
-    // remote never holds a sample's publish slot.
-    const signInPending: Promise<SnapshotSignInProfile[]> = Promise.resolve(signIn()).catch(
-      () => []
-    );
-    const renewalPending: Promise<SnapshotSignInRenewal | null> = Promise.resolve(
-      signInRenewal()
-    ).catch(() => null);
+    // The busy flag is held synchronously after the guard; the early returns
+    // below release it through the finally.
     busy = true;
     busySince = Date.now();
     stallLogged = false;
     let directory = '';
     try {
       const chosen = await settings();
+      // Off until a folder is set, and nothing to publish without accounts:
+      // neither case may start the sign-in local reads and ssh probes below.
       if (!chosen) return false;
       directory = chosen.directory;
       // Until the dashboard has read any account, there is nothing true to publish.
       if (event.accounts.length === 0) return false;
+      // The ssh-backed sign-in fetch starts before the heavier reads below,
+      // so a slow remote overlaps them instead of extending the busy window.
+      // A fetch that never returns is released at the limit: one lost
+      // machine must not stop usage.json from updating for good.
+      const signInStartedAt = Date.now();
+      // A rejected or timed-out fetch is a collection failure, not an
+      // empty result: it publishes as a named unavailable row below.
+      const signInPending: Promise<{ rows: SnapshotSignInProfile[]; failed: boolean }> =
+        Promise.race([
+          Promise.resolve(signIn()).then(
+            (rows) => ({ rows, failed: false }),
+            () => ({ rows: [], failed: true })
+          ),
+          new Promise<{ rows: SnapshotSignInProfile[]; failed: boolean }>((resolve) => {
+            const timer = setTimeout(
+              () => resolve({ rows: [], failed: true }),
+              SIGNIN_FETCH_LIMIT_MS
+            );
+            timer.unref?.();
+          }),
+        ]);
+      const renewalPending: Promise<SnapshotSignInRenewal | null> = Promise.resolve(
+        signInRenewal()
+      ).catch(() => null);
       if (!(await isDirectory(directory)))
         throw new ValidationError('The usage snapshot folder is not a folder.');
-      const signInProfiles = await signInPending;
+      const fetched = await signInPending;
+      const signInProfiles = fetched.failed ? [signInCollectionFailedRow()] : fetched.rows;
       const { snapshot, history } = buildSnapshotFiles(
         event,
         refreshSeconds(),
@@ -600,9 +758,66 @@ export function createSnapshotPublisher(
         await renewalPending
       );
       await write(directory, SNAPSHOT_HISTORY, `${JSON.stringify(history)}\n`);
-      await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot));
-      // usage.json last: its time says every file of this sample is in place.
-      await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
+      // Rechecked against publication time, not the sample's, as late as
+      // the writes allow: a deadline that crossed while the fetch, the
+      // folder check, the history write or either remaining write itself
+      // was still running publishes as awaiting-recheck in both files.
+      // Downgrades only ever accumulate, so rechecking after each write
+      // — the JSON write included — converges: a crossing during one
+      // write retires at least one more live row, both files are
+      // rewritten, and the pass ends only when a full markdown+JSON
+      // pair lands with the rows stable across both writes.
+      if (snapshot.signIn)
+        snapshot.signIn = downgradeCrossedSignInRows(snapshot.signIn, signInStartedAt, Date.now());
+      // usage.json is the commit point of each pass — the last write,
+      // whose time says every file of this sample is in place. If a
+      // correction pass fails after it landed (a share dying
+      // mid-publish), one best-effort JSON rewrite still carries the
+      // latest downgraded rows: machines read the JSON, and it must
+      // not keep an expired login published as live. The failure
+      // itself still propagates.
+      let jsonCommitted = false;
+      try {
+        for (;;) {
+          await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
+          if (snapshot.signIn) {
+            const rechecked = downgradeCrossedSignInRows(
+              snapshot.signIn,
+              signInStartedAt,
+              Date.now()
+            );
+            if (!rechecked.every((row, index) => row === snapshot.signIn?.[index])) {
+              snapshot.signIn = rechecked;
+              continue;
+            }
+          }
+          await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
+          jsonCommitted = true;
+          if (!snapshot.signIn) break;
+          const rechecked = downgradeCrossedSignInRows(
+            snapshot.signIn,
+            signInStartedAt,
+            Date.now()
+          );
+          if (rechecked.every((row, index) => row === snapshot.signIn?.[index])) break;
+          snapshot.signIn = rechecked;
+        }
+      } catch (error) {
+        if (jsonCommitted) {
+          try {
+            if (snapshot.signIn)
+              snapshot.signIn = downgradeCrossedSignInRows(
+                snapshot.signIn,
+                signInStartedAt,
+                Date.now()
+              );
+            await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
+          } catch {
+            /* The original failure is the one that reports. */
+          }
+        }
+        throw error;
+      }
       warned = null;
       // The setting can change without a restart, so this follows it; unchanged, it is not rewritten.
       const locations = renderSnapshotLocations(chosen.locations);

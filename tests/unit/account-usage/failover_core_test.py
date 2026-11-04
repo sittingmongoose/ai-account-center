@@ -82,6 +82,71 @@ class InventoryTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.home = Path(self.temporary.name)
 
+    def test_children_never_follow_a_link_outside_the_home(self):
+        # Enumeration validates a link's target before following it:
+        # an outside (or network) target is never stat'ed during
+        # discovery, while an in-home link stays a candidate.
+        base = self.home / ".claude-t3"
+        (base / "real").mkdir(parents=True)
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        outside = Path(external.name) / "outside"
+        outside.mkdir()
+        try:
+            (base / "outlink").symlink_to(outside, target_is_directory=True)
+            (base / "inlink").symlink_to(base / "real", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        names = [path.name for path in core._children(self.home, base)]
+        self.assertEqual(names, ["inlink", "real"])
+
+    def test_children_exclude_a_multi_hop_outside_link_without_a_read_failure(self):
+        # A link through another in-home link to an outside directory is
+        # a policy refusal (silent), never a failed read; only a chain
+        # that ends at nothing counts as one.
+        import desktop_helpers
+        base = self.home / ".claude-t3"
+        (base / "real").mkdir(parents=True)
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        outside = Path(external.name) / "outside"
+        outside.mkdir()
+        try:
+            (base / "hop").symlink_to(outside, target_is_directory=True)
+            (base / "twohop").symlink_to(base / "hop", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        desktop_helpers.READ_FAILURES = 0
+        names = [path.name for path in core._children(self.home, base)]
+        self.assertEqual(names, ["real"])
+        self.assertEqual(desktop_helpers.READ_FAILURES, 0)
+        (base / "dangling").symlink_to(base / "missing", target_is_directory=True)
+        desktop_helpers.READ_FAILURES = 0
+        core._children(self.home, base)
+        self.assertEqual(desktop_helpers.READ_FAILURES, 1)
+        # A loop never resolves in bounds: a failed read, not a refusal.
+        (base / "dangling").unlink()
+        (base / "loop").symlink_to(base / "loop", target_is_directory=True)
+        desktop_helpers.READ_FAILURES = 0
+        names = [path.name for path in core._children(self.home, base)]
+        self.assertEqual(names, ["real"])
+        self.assertEqual(desktop_helpers.READ_FAILURES, 1)
+
+    def test_codex_settings_homes_keep_their_spelling(self):
+        # Only Claude NFC-normalizes its config dir; a Codex home is
+        # read exactly as configured.
+        import unicodedata as _ud
+        nfd = str(self.home / "codexhomes" / _ud.normalize("NFD", "café"))
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        (userdata / "settings.json").write_text(json.dumps({"providerInstances": {
+            "codex-a": {"driver": "codex", "config": {"homePath": nfd}},
+            "claude-a": {"driver": "claudeAgent", "config": {"homePath": nfd}},
+        }}))
+        self.assertEqual(core._settings_homes(self.home, "codex"), [Path(nfd)])
+        self.assertEqual(core._settings_homes(self.home, "claude"),
+                         [Path(_ud.normalize("NFC", nfd))])
+
     def test_codex_inventory_default_saved_and_t3_homes(self):
         roots = [self.home / ".codex", self.home / ".ccs/codex-instances/saved",
                  self.home / ".codex-t3/personal", self.home / ".t3/userdata/providers/codex/configured/shadow",
@@ -141,6 +206,44 @@ class InventoryTests(unittest.TestCase):
                                                payload={"sub": None, "iss": None})["tokens"])
         self.assertNotEqual(core.digest(full["binding"]), core.digest(legacy["binding"]))
         self.assertEqual(legacy["binding"][-1], EMAIL)
+
+    def test_read_present_opens_nonblocking_so_a_swapped_fifo_cannot_stall(self):
+        if not hasattr(os, "O_NONBLOCK"):
+            self.skipTest("O_NONBLOCK does not apply here")
+        target = self.home / "settings.json"
+        target.write_text("{}", encoding="utf-8")
+        seen = {}
+        real_open = os.open
+
+        def capturing_open(path, flags, *args, **kwargs):
+            seen["flags"] = flags
+            return real_open(path, flags, *args, **kwargs)
+
+        with mock.patch.object(core.os, "open", capturing_open):
+            self.assertEqual(core._read_present(target, 1024), b"{}")
+        # Without O_NONBLOCK, a FIFO swapped in between the lstat and the
+        # open would block the whole discovery until a writer appears.
+        self.assertTrue(seen["flags"] & os.O_NONBLOCK)
+
+    def test_read_present_a_directory_swapped_at_open_leaks_no_descriptor(self):
+        if not hasattr(os, "O_NONBLOCK") or not os.path.isdir("/proc/self/fd"):
+            self.skipTest("fd accounting needs /proc")
+        target = self.home / "swap.json"
+        real_open = os.open
+
+        def swapping_open(path, flags, *args, **kwargs):
+            os.unlink(path)
+            os.mkdir(path)
+            return real_open(path, flags, *args, **kwargs)
+
+        before = len(os.listdir("/proc/self/fd"))
+        for _ in range(3):
+            if os.path.isdir(target):
+                os.rmdir(target)
+            target.write_bytes(b"{}")
+            with mock.patch.object(core.os, "open", swapping_open):
+                self.assertIsNone(core._read_present(target, 1024))
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_explicit_ccs_root_and_host_environment_is_not_read(self):
         custom = self.home / "custom-ccs"
@@ -832,6 +935,16 @@ class CollectTests(unittest.TestCase):
         # A garbage class rejects the whole public sample, never passes through.
         broken = {**result["sample"], "planClass": "x" * 200}
         self.assertIsNone(failover_usage.public_sample(broken, "claude", "ubuntu"))
+
+    def test_claude_plan_screens_the_stored_fallback_like_every_source(self):
+        # The stored-plan fallback publishes only through the same text
+        # screen: a separator or bidi mark in it never reaches a display,
+        # at the collector or through the failover public sample.
+        self.assertIsNone(core.claude_usage.claude_plan({}, {}, "Pro\u2028Max"))
+        self.assertIsNone(core.claude_usage.claude_plan({}, {}, "Pro\u200eMax"))
+        self.assertEqual(core.claude_usage.claude_plan({}, {}, "Max 20x"), "Max 20x")
+        bad_sample = {"plan": "Pro\u2028Max", "windows": []}
+        self.assertIsNone(failover_usage.public_sample(bad_sample, "claude", "ubuntu"))
 
     def test_claude_plan_ignores_a_flag_whose_name_fails_the_text_checks(self):
         credential_shaped = profile(account={"uuid": ACCOUNT, "email": EMAIL, "has_claude_bearer_fixture": True})

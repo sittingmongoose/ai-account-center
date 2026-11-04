@@ -127,6 +127,18 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["plan"], "Max Premium")
 
+    def test_a_display_name_the_transport_would_reject_falls_back_to_the_tier(self):
+        # The collector's credential screen matches the transport's:
+        # a display name carrying a token-shaped substring ("Ta" +
+        # "sk_" + "Plus") never selects as the plan, so the sample
+        # reaches publication under the tier's own name instead of
+        # being discarded whole downstream.
+        named = profile(organization={"uuid": ORG, "plan_type": "max",
+                                      "plan_display_name": "Task_Plus"})
+        result, _ = self.collect([named, {"five_hour": {"utilization": 0, "resets_at": None}}])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["plan"], "max")
+
     def test_a_single_new_entitlement_flag_names_the_plan(self):
         # A renamed tier may instead arrive as its own entitlement flag: one
         # flag names the plan, with underscores read as spaces.

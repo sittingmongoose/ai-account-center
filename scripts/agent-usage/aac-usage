@@ -273,7 +273,10 @@ def cmd_show(args):
                 # A reading older than the stale limit when read carries no pace either.
                 if not current_reading(window, now, account.get("sampledAt"), stale_after):
                     window["burn"] = None
-        print(json.dumps(dict(snapshot, accounts=accounts), indent=2))
+        payload = dict(snapshot, accounts=accounts)
+        if provider and "signIn" in snapshot:
+            payload["signIn"] = [r for r in snapshot.get("signIn") or [] if r.get("provider") == provider]
+        print(json.dumps(payload, indent=2))
         return
     note = stale_note(snapshot, now)
     generated = parse_time(snapshot.get("generatedAt"))
@@ -284,7 +287,10 @@ def cmd_show(args):
     for line in signins_notice(folder, now):
         print(line)
     if not accounts:
+        # Quota rows can match nothing while sign-in health still applies to
+        # this machine: the section prints on, scoped only by --provider.
         print("No matching accounts.")
+        sign_in_lines(snapshot, provider)
         return
     current = None
     for account in accounts:
@@ -307,6 +313,119 @@ def cmd_show(args):
         if account.get("status") in ("ok", "cached"):
             for window in account.get("windows", []):
                 print(window_line(window, now, account.get("sampledAt"), stale_after))
+    sign_in_lines(snapshot, provider)
+
+
+def ascii(value):
+    """Terminal-safe form of a published value: the output rule is ASCII,
+    and backslashreplace keeps the information readable."""
+    return str(value).encode("ascii", "backslashreplace").decode("ascii")
+
+
+def fix_command_text(row):
+    """(command, omitted) for a sign-in row: a command renders byte-exact
+    or not at all — a backslash-escaped path inside shell quotes is a
+    different directory, so a non-ASCII command is named as omitted."""
+    command = row.get("fixCommand")
+    if not command:
+        return None, False
+    if all(ord(character) < 128 for character in command):
+        return command, False
+    return None, True
+
+
+def sign_in_lines(snapshot, provider=None):
+    """The Sign-in health section, worst state first — the same stamp-derived
+    facts usage.md publishes (never a threshold word: a nonrenewable access
+    token can be critical with eight hours left), for the agents that read
+    this CLI instead. Rows carry machines and profile names rather than
+    emails, so --account does not scope them; --provider does. Output stays
+    ASCII."""
+    rows = snapshot.get("signIn") or []
+    if provider:
+        rows = [r for r in rows if r.get("provider") == provider]
+    if not rows:
+        return
+    rank = {"logged_out": 0, "critical": 1, "warn": 2, "unavailable": 3, "unsupported": 4, "ok": 5}
+    words = {"ok": "healthy", "logged_out": "already logged out",
+             "unavailable": "not readable on this machine", "unsupported": "no expiry published"}
+    now = now_utc()
+    print("\nSign-in health")
+    for row in sorted(rows, key=lambda r: rank.get(r.get("state"), 9)):
+        machine = row.get("machine") or row.get("platform") or "unknown"
+        state = row.get("state")
+        # The snapshot may be read after a live row's deadline: that reading
+        # is past, not future, until the next sample rechecks it.
+        end_dt = parse_time(row.get("loggedOutAt"))
+        crossed = state in ("warn", "critical", "ok") and end_dt is not None and end_dt <= now
+        refresh_dt = parse_time(row.get("refreshExpiresAt")) if not row.get("loggedOutAt") else None
+        refresh_crossed = (state in ("warn", "critical", "ok") and refresh_dt is not None
+                           and refresh_dt <= now)
+        if crossed:
+            word = "ended %s (past its deadline; awaiting recheck)" % row["loggedOutAt"]
+        elif refresh_crossed:
+            word = "refresh expired %s (awaiting recheck)" % row["refreshExpiresAt"]
+        elif state in ("warn", "critical"):
+            if row.get("loggedOutAt"):
+                word = "ends %s" % row["loggedOutAt"]
+            elif row.get("refreshExpiresAt"):
+                word = "refresh expires %s" % row["refreshExpiresAt"]
+            elif not row.get("accessExpiresAt"):
+                word = "no access token in the store; the next run renews"
+            else:
+                word = "exact end unknown"
+        else:
+            word = words.get(state, state)
+        line = "  %s | %s/%s: %s." % (row.get("provider"), machine, row.get("name"), word)
+        if state == "unavailable":
+            if row.get("error"):
+                line += " (%s)" % ascii(row["error"])
+            else:
+                line += " reason unknown."
+        elif state == "unsupported":
+            line += " no login end time is published by %s." % row.get("provider")
+        elif state == "logged_out":
+            end = parse_time(row.get("loggedOutAt"))
+            if end and end <= now:
+                line += " sign-in ended %s." % row["loggedOutAt"]
+            elif not end:
+                line += " tokens are gone or expired."
+            command, omitted = fix_command_text(row)
+            if command:
+                line += " re-login: `%s`" % command
+            elif omitted:
+                line += " re-login command omitted (non-ASCII path)."
+        elif crossed or refresh_crossed:
+            command, omitted = fix_command_text(row)
+            if command:
+                line += " re-login: `%s`" % command
+            elif omitted:
+                line += " re-login command omitted (non-ASCII path)."
+        elif state in ("warn", "critical"):
+            if not row.get("loggedOutAt") and not row.get("accessExpiresAt"):
+                line += " the next run renews this login."
+            else:
+                command, omitted = fix_command_text(row)
+                if command:
+                    # usage.md's words: a known end is "before then"; only
+                    # an unnamed end waits for the window.
+                    advice = ("re-login before then" if row.get("loggedOutAt")
+                              else "re-login when the window ends")
+                    line += " %s: `%s`" % (advice, command)
+                elif omitted:
+                    line += " re-login command omitted (non-ASCII path)."
+                elif row.get("loggedOutAt"):
+                    # No command published; usage.md still gives the advice.
+                    line += " re-login before then."
+                else:
+                    line += " re-login when the window ends."
+        elif state == "ok" and row.get("loggedOutAt"):
+            line += " sign-in ends %s." % row["loggedOutAt"]
+        elif state == "ok" and row.get("refreshExpiresAt"):
+            line += " refresh expires %s." % row["refreshExpiresAt"]
+        elif state == "ok":
+            line += " no exact end published yet."
+        print(line)
 
 
 def signins_doc(folder):
@@ -507,7 +626,10 @@ def cmd_install_rules(args):
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="replace")  # a Windows console without UTF-8 never fails a print
+            # Terminal output is ASCII on every console encoding: a
+            # published value can never fail a print, and backslash
+            # escapes keep it readable.
+            stream.reconfigure(encoding="ascii", errors="backslashreplace")
         except (AttributeError, ValueError):
             pass
     parser = argparse.ArgumentParser(prog="aac-usage", description=__doc__.splitlines()[0])

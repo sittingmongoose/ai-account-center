@@ -8,6 +8,7 @@ import {
   localUsagePython,
   parseUsageHelperResponse,
   runUsageHelper,
+  signinHelperBundle,
   usageHelperBundle,
   usageHelperCommand,
 } from '../../../src/web-server/services/usage-failover-transport';
@@ -359,5 +360,28 @@ describe('packaged usage failover transport', () => {
         )
       ).toThrow();
     }
+  });
+});
+
+describe('the sign-in helper bundle', () => {
+  it('carries the whole import closure of the collector inside the size bound', async () => {
+    const bundle = await signinHelperBundle();
+    // The regression this guards: failover_core imports claude_usage and
+    // desktop_helpers at its top — a bundle without them silently shrinks
+    // a clean remote's discovery to the default and T3 dirs. Assert on the
+    // embedded module map itself: name substrings also match failover_core's
+    // own import lines, so they cannot catch a dropped module.
+    const embedded = /_sources=json\.loads\(("(?:\\.|[^"\\])*")\)/.exec(bundle);
+    expect(embedded).not.toBeNull();
+    const modules = JSON.parse(JSON.parse(embedded![1]) as string) as Record<string, string>;
+    expect(Object.keys(modules).sort()).toEqual(
+      ['claude_usage', 'desktop_helpers', 'failover_core', 'signin_expiry'].sort()
+    );
+    for (const source of Object.values(modules)) expect(source.length).toBeGreaterThan(0);
+    expect(modules.failover_core).toContain('import claude_usage');
+    expect(modules.failover_core).toContain('from desktop_helpers import');
+    expect(bundle).toContain('import signin_expiry');
+    expect(bundle).toContain('signin_expiry.run()');
+    expect(Buffer.byteLength(bundle)).toBeLessThan(2 * 1024 * 1024);
   });
 });

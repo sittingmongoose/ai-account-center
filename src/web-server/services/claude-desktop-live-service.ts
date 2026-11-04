@@ -37,25 +37,30 @@ export interface ClaudeDesktopLiveUsage {
   };
 }
 
-/**
- * A plan name as bounded plain text, so renamed tiers surface under their own
- * names: control characters and credential-shaped strings never pass, exactly
- * like the collector's own upstream-string rules that produced it.
- */
+/** The entitlement class a display may carry, narrowed to what the collector emits. */
 export function livePlanClass(value: unknown): 'max' | 'pro' | null {
   const plan = livePlan(value);
   return plan === 'max' || plan === 'pro' ? plan : null;
 }
 
+/**
+ * A plan name as bounded plain text, so renamed tiers surface under their own
+ * names: control characters and credential-shaped strings never pass, exactly
+ * like the collector's own upstream-string rules that produced it.
+ */
 export function livePlan(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const plan = value.trim();
-  // Length counts code points, matching the collector's Python-side bound
+  // Length counts 80 code points, matching the collector's Python-side bound
   // (a JS .length count would read astral characters as two and reject a
   // name the collector accepted).
-  // 80 code points, matching the collector's Python-side bound.
   const length = [...plan].length;
-  if (!length || length > 80 || /[\u0000-\u001f\u007f]/.test(plan)) return null;
+  if (
+    !length ||
+    length > 80 ||
+    /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]/.test(plan)
+  )
+    return null;
   if (/(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})/i.test(plan)) return null;
   return plan;
 }

@@ -22,6 +22,7 @@ import {
 import {
   buildSnapshotFiles,
   createSnapshotPublisher,
+  downgradeCrossedSignInRows,
   readSnapshotSettings,
   renderSnapshotMarkdown,
   SNAPSHOT_HISTORY,
@@ -148,6 +149,25 @@ describe('agent usage projection', () => {
       ageSeconds: 0,
     });
     expect(answer.accounts[1]).toMatchObject({ profile: 'party', source: null });
+  });
+
+  it('screens the plan name while counting code points', () => {
+    const planOf = (plan: unknown) =>
+      projectAgentUsage([account({ plan: plan as never })], { now: NOW }).accounts[0].plan;
+    expect(planOf('Ultra')).toBe('Ultra');
+    // 80 astral characters are 80 code points (160 UTF-16 units): they pass.
+    expect(planOf('🚀'.repeat(80))).toBe('🚀'.repeat(80));
+    expect(planOf('🚀'.repeat(81))).toBeNull();
+    // Control characters and coerced non-strings never publish.
+    expect(planOf('Pro\nMax')).toBeNull();
+    expect(planOf('Pro\u0085Max')).toBeNull();
+    // Bidi marks and controls never publish either.
+    expect(planOf('Pro\u200eMax')).toBeNull();
+    expect(planOf('Pro\u202eMax')).toBeNull();
+    expect(planOf('sk-abcdefgh')).toBeNull();
+    expect(planOf(42)).toBeNull();
+    expect(planOf({ tier: 'max' })).toBeNull();
+    expect(planOf('')).toBeNull();
   });
 
   it('names the computer the quota came from, not the Claude launcher', () => {
@@ -701,6 +721,19 @@ describe('agent usage snapshot publisher', () => {
     fs.rmSync(home, { recursive: true, force: true });
   });
 
+  it('never starts the sign-in probes while no folder is configured', async () => {
+    let signInCalls = 0;
+    const publish = createSnapshotPublisher({
+      settings: async () => null,
+      signIn: async () => {
+        signInCalls += 1;
+        return [];
+      },
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: NOW })).toBe(false);
+    expect(signInCalls).toBe(0);
+  });
+
   it('writes nothing until a folder is set, then all three files after each sample', async () => {
     const folder = path.join(home, 'share');
     fs.mkdirSync(folder);
@@ -939,7 +972,10 @@ describe('sign-in health section', () => {
     const me = markdown.indexOf('claude · ubuntu/me');
     expect(party).toBeGreaterThanOrEqual(0);
     expect(party).toBeLessThan(me);
-    expect(markdown).toContain('sign-in ends 2026-11-04 09:43 UTC');
+    // The word carries the actual end, never a threshold: this critical has
+    // days left, so it says when it ends instead of "within 4 hours".
+    expect(markdown).toContain('ends 2026-11-04 09:43 UTC');
+    expect(markdown).not.toContain('within 4 hours');
     expect(markdown).toContain('re-login before then');
   });
 
@@ -959,7 +995,279 @@ describe('sign-in health section', () => {
       ])
     );
     expect(markdown).toContain('already logged out');
-    expect(markdown).toContain('not readable on this machine (connection refused)');
+    expect(markdown).toContain('re-login: `');
+    expect(markdown).not.toContain('re-login before then');
+    expect(markdown).not.toContain('sign-in ends');
+    expect(markdown).toContain('not readable on this machine. (connection refused)');
+  });
+
+  it('reads a live row rendered past its deadline as awaiting recheck, never healthy', () => {
+    const ended = renderSnapshotMarkdown(
+      snapshotWith([row({ state: 'ok', loggedOutAt: '2026-10-15T11:00:00Z' })])
+    );
+    expect(ended).toContain('past its deadline; awaiting recheck');
+    expect(ended).not.toContain('sign-in ends');
+    expect(ended).toContain('re-login: `');
+    const refreshGone = renderSnapshotMarkdown(
+      snapshotWith([
+        row({ state: 'ok', loggedOutAt: null, refreshExpiresAt: '2026-10-15T11:00:00Z' }),
+      ])
+    );
+    expect(refreshGone).toContain('refresh expired');
+    expect(refreshGone).toContain('awaiting recheck');
+    expect(refreshGone).not.toContain('healthy');
+  });
+
+  it('downgrades crossed rows on copies, never the collected rows', () => {
+    const rows = [
+      row({ state: 'critical', loggedOutAt: '2026-10-15T12:30:00Z' }),
+      row({ name: 'later', state: 'critical', loggedOutAt: '2026-10-16T12:00:00Z' }),
+      // A stamp already past before the window is a fact the collected
+      // state already accounts for, not a new crossing.
+      row({
+        name: 'renewing',
+        state: 'warn',
+        loggedOutAt: null,
+        accessExpiresAt: '2026-10-15T11:00:00Z',
+        refreshExpiresAt: '2026-11-30T00:00:00Z',
+      }),
+    ] as never[];
+    // A known login end already past at `now` (a behind-clock remote)
+    // is crossed even when it predates the window; only the login end
+    // gets that treatment, never the renewable access stamp above.
+    const skewed = downgradeCrossedSignInRows(
+      [row({ state: 'critical', loggedOutAt: '2026-10-15T11:00:00Z' })] as never[],
+      NOW,
+      NOW
+    );
+    expect(skewed[0].state).toBe('unavailable');
+    // A past refresh end with no named login end is the same skew
+    // shape through the other stamp: no single-clock collector emits
+    // it live, so it counts crossed here too.
+    const refreshSkewed = downgradeCrossedSignInRows(
+      [
+        row({
+          state: 'warn',
+          loggedOutAt: null,
+          accessExpiresAt: '2026-10-15T11:00:00Z',
+          refreshExpiresAt: '2026-10-15T11:30:00Z',
+        }),
+      ] as never[],
+      NOW,
+      NOW
+    );
+    expect(refreshSkewed[0].state).toBe('unavailable');
+    const out = downgradeCrossedSignInRows(rows, NOW, NOW + 60 * MINUTE);
+    expect(out[0].state).toBe('unavailable');
+    expect(out[0].error).toBe('sign-in state changed during collection; recheck pending');
+    expect(out[0].loggedOutAt).toBeNull();
+    expect(out[1].state).toBe('critical');
+    expect(out[2].state).toBe('warn');
+    // The collected (and cached) rows are untouched.
+    expect((rows[0] as { state: string }).state).toBe('critical');
+  });
+
+  it('rechecks sign-in deadlines at publication time, not the sample time', async () => {
+    const writes = new Map<string, string>();
+    const liveRow = {
+      name: 'soon',
+      provider: 'claude',
+      platform: 'ubuntu',
+      machine: 'ubuntu',
+      state: 'critical' as const,
+      loggedOutAt: new Date(Date.now() + 40).toISOString(),
+      fixCommand: 'claude auth login',
+    };
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      // A slow folder check holds publication past the row's deadline;
+      // the published reading must not present it as a future end.
+      isDirectory: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        return true;
+      },
+      refreshSeconds: () => 60,
+      signIn: async () => [liveRow],
+      write: async (_directory, name, body) => {
+        writes.set(name, body);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      true
+    );
+    const published = JSON.parse(writes.get(SNAPSHOT_JSON) as string);
+    expect(published.signIn[0].state).toBe('unavailable');
+    expect(writes.get(SNAPSHOT_MARKDOWN)).not.toContain('re-login before then');
+    // The health service's own row is never mutated by publication.
+    expect(liveRow.state).toBe('critical');
+  });
+
+  it('rechecks again after a slow markdown write, before the JSON lands', async () => {
+    const writes: Array<[string, string]> = [];
+    const liveRow = {
+      name: 'soon',
+      provider: 'claude',
+      platform: 'ubuntu',
+      machine: 'ubuntu',
+      state: 'critical' as const,
+      loggedOutAt: new Date(Date.now() + 80).toISOString(),
+      fixCommand: 'claude auth login',
+    };
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      isDirectory: async () => true,
+      refreshSeconds: () => 60,
+      signIn: async () => [liveRow],
+      // The markdown write itself is the slow stage (a network share):
+      // the deadline crosses while it is in flight.
+      write: async (_directory, name, body) => {
+        if (name === SNAPSHOT_MARKDOWN)
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        writes.push([name, body]);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      true
+    );
+    const json = writes.find(([name]) => name === SNAPSHOT_JSON)?.[1] as string;
+    expect(JSON.parse(json).signIn[0].state).toBe('unavailable');
+    const markdownWrites = writes.filter(([name]) => name === SNAPSHOT_MARKDOWN);
+    expect(markdownWrites[markdownWrites.length - 1][1]).not.toContain('re-login before then');
+    expect(liveRow.state).toBe('critical');
+  });
+
+  it('rechecks after the JSON write too, converging both files', async () => {
+    const writes: Array<[string, string]> = [];
+    const liveRow = {
+      name: 'soon',
+      provider: 'claude',
+      platform: 'ubuntu',
+      machine: 'ubuntu',
+      state: 'critical' as const,
+      loggedOutAt: new Date(Date.now() + 80).toISOString(),
+      fixCommand: 'claude auth login',
+    };
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      isDirectory: async () => true,
+      refreshSeconds: () => 60,
+      signIn: async () => [liveRow],
+      // This time the JSON write is the slow stage: the deadline
+      // crosses while usage.json itself is in flight, after every
+      // earlier recheck has passed.
+      write: async (_directory, name, body) => {
+        if (name === SNAPSHOT_JSON) await new Promise((resolve) => setTimeout(resolve, 200));
+        writes.push([name, body]);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      true
+    );
+    const jsonWrites = writes.filter(([name]) => name === SNAPSHOT_JSON);
+    const finalJson = jsonWrites[jsonWrites.length - 1][1];
+    expect(JSON.parse(finalJson).signIn[0].state).toBe('unavailable');
+    const markdownWrites = writes.filter(([name]) => name === SNAPSHOT_MARKDOWN);
+    expect(markdownWrites[markdownWrites.length - 1][1]).not.toContain('re-login before then');
+    expect(liveRow.state).toBe('critical');
+  });
+
+  it('corrects the JSON when the markdown correction itself fails', async () => {
+    const writes: Array<[string, string]> = [];
+    let markdownWrites = 0;
+    const liveRow = {
+      name: 'soon',
+      provider: 'claude',
+      platform: 'ubuntu',
+      machine: 'ubuntu',
+      state: 'critical' as const,
+      loggedOutAt: new Date(Date.now() + 80).toISOString(),
+      fixCommand: 'claude auth login',
+    };
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      isDirectory: async () => true,
+      refreshSeconds: () => 60,
+      signIn: async () => [liveRow],
+      // The deadline crosses during the JSON write; the markdown
+      // correction then fails (dead share). usage.json is the file
+      // machines read: it must not keep the expired row as live —
+      // a final JSON correction carries the downgraded rows.
+      write: async (_directory, name, body) => {
+        if (name === SNAPSHOT_JSON) await new Promise((resolve) => setTimeout(resolve, 200));
+        if (name === SNAPSHOT_MARKDOWN) {
+          markdownWrites += 1;
+          if (markdownWrites > 1) throw new Error('share gone');
+        }
+        writes.push([name, body]);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      false
+    );
+    const jsonWrites = writes.filter(([name]) => name === SNAPSHOT_JSON);
+    const finalJson = jsonWrites[jsonWrites.length - 1][1];
+    expect(JSON.parse(finalJson).signIn[0].state).toBe('unavailable');
+  });
+
+  it('marks the sign-in section when the fetch itself failed', async () => {
+    const writes = new Map<string, string>();
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      isDirectory: async () => true,
+      refreshSeconds: () => 60,
+      // A rejected (or timed-out) fetch must not read as "no sign-in
+      // problems": the section stays, naming the failed collection.
+      signIn: async () => {
+        throw new Error('collector exploded');
+      },
+      write: async (_directory, name, body) => {
+        writes.set(name, body);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      true
+    );
+    const published = JSON.parse(writes.get(SNAPSHOT_JSON) as string);
+    expect(published.signIn).toHaveLength(1);
+    expect(published.signIn[0].state).toBe('unavailable');
+    expect(published.signIn[0].error).toBe('sign-in collection failed');
+    expect(writes.get(SNAPSHOT_MARKDOWN)).toContain('sign-in collection failed');
+  });
+
+  it('advises before a known end even when no command is published', () => {
+    const markdown = renderSnapshotMarkdown(
+      snapshotWith([
+        row({ state: 'critical', fixCommand: '', loggedOutAt: '2026-10-16T12:00:00Z' }),
+        row({
+          name: 'refreshable',
+          state: 'ok',
+          loggedOutAt: null,
+          refreshExpiresAt: '2026-10-20T12:00:00Z',
+        }),
+      ])
+    );
+    expect(markdown).toContain('re-login before then');
+    expect(markdown).toContain('refresh expires 2026-10-20 12:00 UTC');
+  });
+
+  it('never puts an unpaired surrogate from a repair command into the markdown', () => {
+    // Production rows are screened upstream; the renderer is the last
+    // line before UTF-8 bytes, so it refuses the command itself too.
+    const markdown = renderSnapshotMarkdown(
+      snapshotWith([
+        row({
+          state: 'critical',
+          fixCommand: 'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/bad\udcff" claude auth login',
+        }),
+      ])
+    );
+    expect(markdown).not.toContain('\udcff');
+    expect(Buffer.from(markdown, 'utf8').toString('utf8')).not.toContain('bad�');
   });
 
   it('names no invented end when the collector could not derive one', () => {
@@ -968,6 +1276,32 @@ describe('sign-in health section', () => {
     );
     expect(markdown).toContain('no exact end published');
     expect(markdown).not.toContain('sign-in ends');
+    expect(markdown).not.toContain('closes soon');
+  });
+
+  it('carries the entitlement class into the published snapshot accounts', () => {
+    const accountWithClass = {
+      id: 'claude:one',
+      provider: 'claude',
+      providerLabel: 'Claude',
+      label: 'One',
+      email: null,
+      profile: null,
+      source: null,
+      plan: 'Ultra',
+      planClass: 'max',
+      platform: 'ubuntu',
+      host: 'ubuntu',
+      active: false,
+      status: 'ok',
+      sampledAt: NOW,
+      ageSeconds: 0,
+      hidden: false,
+      windows: [],
+    } as unknown as Parameters<typeof buildSnapshotFiles>[0]['accounts'][number];
+    const { snapshot } = buildSnapshotFiles({ accounts: [accountWithClass], history: null, sampledAt: NOW }, 60);
+    expect(snapshot.accounts[0]?.plan).toBe('Ultra');
+    expect(snapshot.accounts[0]?.planClass).toBe('max');
   });
 
   it('omits the section when no machine reported profiles', () => {

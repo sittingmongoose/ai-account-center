@@ -388,9 +388,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       stopAgentUsageSnapshot = startAgentUsageSnapshot({
         signIn: async () => {
           const health = await getSignInHealth();
-          return Object.entries(health.machines).flatMap(([machine, rows]) =>
-            rows.map((row) => ({ ...row, platform: machine }))
-          );
+          return Object.values(health.machines).flat();
         },
         signInRenewal: async () => {
           const renewal = await readClaudeSignInRenewal();

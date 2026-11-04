@@ -89,6 +89,16 @@ class ProtocolTests(unittest.TestCase):
         with mock.patch.object(usage, "_adapter", return_value=adapter), mock.patch.object(usage.sys, "platform", "linux"):
             return usage.run(request), adapter
 
+    def test_an_unpublishable_plan_name_omits_the_name_not_the_sample(self):
+        # The plan name is display-only (planClass carries the
+        # entitlement): a name the public screen refuses drops the
+        # name, never the quota sample it rode in on.
+        row = sample(provider="claude", plan="Task_Plus", planClass="max")
+        result = usage.public_sample(row, "claude", "ubuntu")
+        self.assertIsNotNone(result)
+        self.assertIsNone(result["plan"])
+        self.assertEqual(result["planClass"], "max")
+
     def test_inventory_emits_only_bounded_public_fields(self):
         result, _ = self.run_helper(self.request("inventory"))
         self.assertEqual(result, {"version": 1, "action": "inventory", "candidates": [public(candidate())]})

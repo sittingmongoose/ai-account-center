@@ -181,3 +181,64 @@ dashboard writes keys for its own host in-process in the same format and uses th
 helper over ssh only for a key kept on another host. Nas1 is never that host: it
 stores no keys, so a source saved for Nas1 relies on `discover`.
 
+
+## Sign-in expiry (`signin_expiry.py`)
+
+A read-only probe of login lifetimes: for every Claude login identity on
+the computer it runs on (the default `~/.claude`, the saved
+`~/.ccs/instances` homes, the `~/.claude-t3/<name>` account dirs,
+settings-defined homes, a configured home naming the default dir as its
+own explicit identity, and any storage identity the probe process itself
+inherited), it reads only the two OAuth times and token presence. On
+macOS each identity also resolves through its own Claude Code Keychain
+item — the canonical store there, named plainly for the selector-free
+default login and with a hash of the identity's spelled dir otherwise,
+looked up under the account Claude Code writes to — and the two stores
+publish as one row. That one item binds the row whenever the store
+answers at all — a readable payload, a locked refusal, or a lookup
+that could not run — even when its verdict is `unavailable`; the
+credentials file speaks only when the item does not exist, and no
+other spelling's or identity's item may substitute. Because the service name hashes the
+spelled dir, two spellings of one macOS directory are two login
+identities and keep separate rows; elsewhere they publish once.
+An identity with no directory and no evidence that its item exists
+publishes no row; when the item could not be checked at all (a
+locked Keychain, or a lookup that could not run), the report also
+says its list may be incomplete, since a Keychain-only login could
+be hiding there.
+A custom OAuth overlay stores under a suffixed service; when a custom
+OAuth URL is present in the probe's environment, a variant item that
+demonstrably exists publishes as its own row (without a generated fix command — its
+repair is re-running the existing overlay session). The local/staging
+suffixes belong to other build flavors and cannot be identified from
+the environment, so they are not probed. `refreshTokenExpiresAt` is the
+hard end of the whole login; once it has passed, the login dies at the first
+access expiry after it. The row names that end only when the data supports
+one — a refresh-derived state is labeled as the refresh expiry's bound, never
+as the login's end. A login whose store holds tokens but no readable times
+reads `unavailable`, not healthy; an access token with no refresh token
+cannot renew, so it reads `critical` until its expiry and `logged_out`
+after. Codex `auth.json` is probed and reported `unsupported` because it
+publishes no end-of-login time; only known, non-secret field names are
+shown (an unexpected key could itself be a credential), never values.
+
+Published rows carry the config dir and fix command in home-relative
+form (`$HOME` on POSIX, `USERPROFILE` with its `HOMEDRIVE`+`HOMEPATH`
+fallback on Windows), so nothing under the home reaches
+`usage.json`/`usage.md` as an absolute path; a directory outside the home
+(a relocated `--ccs-dir` scope) is the one deliberate exception and is
+published as a quoted literal. An inherited selector spelling that the
+home-relative form cannot reproduce likewise publishes as a quoted
+literal, and one that is relative or empty — whose meaning depends on
+the working directory it is pasted in — publishes with no command at
+all rather than a wrong one. Fix commands pin every credential
+selector — setting the one their identity needs and unsetting the rest,
+including the OAuth-variant selectors; an inherited securestorage
+identity also keeps the probe's own `CLAUDE_CONFIG_DIR`, where upstream
+writes that session's account metadata — and scope that to the invocation
+(a POSIX subshell; save/restore in PowerShell), so a pasted command
+repairs the login its row names, whatever the shell happens to export,
+and leaves the session's own selectors untouched. The dashboard
+runs this collector on its own computer from the packaged file and on the
+configured Mac/Windows through the same in-memory SSH stdin stream the usage
+helper uses — nothing is installed on remote disks.

@@ -359,3 +359,24 @@ describe('private Claude failover optional extras', () => {
     expect(invalid).not.toHaveProperty('optionalExtras');
   });
 });
+
+describe('the entitlement class on a reading', () => {
+  const base = () => ({ ...reading(), plan: 'Ultra' });
+
+  it('keeps a max class and a pro class beside the display name', () => {
+    expect(parseUsageReading({ ...base(), planClass: 'max' }, NOW)?.planClass).toBe('max');
+    expect(parseUsageReading({ ...base(), planClass: 'pro' }, NOW)?.planClass).toBe('pro');
+  });
+
+  it('rejects an unknown class instead of publishing it', () => {
+    expect(parseUsageReading({ ...base(), planClass: 'ultra' }, NOW)).toBeNull();
+    expect(parseUsageReading({ ...base(), planClass: 'x'.repeat(80) }, NOW)).toBeNull();
+    expect(parseUsageReading({ ...base(), planClass: 42 }, NOW)).toBeNull();
+  });
+
+  it('reads a class-less reading as null and never invents one', () => {
+    const result = parseUsageReading(base(), NOW);
+    expect(result?.plan).toBe('Ultra');
+    expect(result?.planClass ?? null).toBeNull();
+  });
+});

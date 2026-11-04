@@ -3520,6 +3520,47 @@ private func checkResetPassedField() throws {
 }
 
 /// "Opened · copied 3 of 18" when a bounded copy opened Claude before every record was across.
+/// The entitlement class decides the Fable column everywhere; the display name
+/// only gates when no class is present, and a malformed class degrades to nil.
+private func checkPlanClassGate() throws {
+  func account(plan: String, planClass: Any?, provider: String = "claude") throws -> DashboardAccount {
+    var object: [String: Any] = [
+      "id": "claude-gate", "provider": provider, "providerLabel": "Claude", "label": "Gate",
+      "email": NSNull(), "plan": plan, "platform": "mac", "source": "Fixture", "status": "ok",
+      "message": NSNull(), "fetchedAt": NSNull(), "sampledAt": NSNull(), "isActive": false,
+      "capabilities": ["codexProfile": NSNull(), "claudeProfileId": NSNull(), "claudePlatforms": []],
+      "windows": [
+        ["key": "five_hour", "label": "Five-hour", "usedPercent": 10, "remainingPercent": 90,
+         "resetAt": "2026-11-04T09:43:00Z", "windowMinutes": 300, "used": 10, "limit": 100, "unit": "requests"],
+        ["key": "seven_day", "label": "Weekly", "usedPercent": 20, "remainingPercent": 80,
+         "resetAt": "2026-11-09T09:43:00Z", "windowMinutes": 10080, "used": 20, "limit": 100, "unit": "requests"],
+        ["key": "seven_day_fable", "label": "Fable", "usedPercent": 5, "remainingPercent": 95,
+         "resetAt": "2026-11-09T09:43:00Z", "windowMinutes": 10080, "used": 5, "limit": 100, "unit": "requests"],
+      ],
+    ]
+    object["planClass"] = planClass ?? NSNull()
+    return try JSONDecoder().decode(DashboardAccount.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  let ultraMax = try account(plan: "Ultra", planClass: "max")
+  try expect(ultraMax.isMaxPlan, "A Max-class Ultra gates on the class, not the name")
+  try expect(ultraMax.compactWindows.last?.key == "seven_day_fable",
+    "The compact Max row gives the reported Fable window its own slot")
+  let maxNamedPro = try account(plan: "Max 20x", planClass: "pro")
+  try expect(!maxNamedPro.isMaxPlan, "A Pro class is decisive even when the name says Max")
+  let maxNamedNoClass = try account(plan: "claude-max-20x", planClass: nil)
+  try expect(maxNamedNoClass.isMaxPlan, "Without a class the display name still gates")
+  let malformed = try account(plan: "Ultra", planClass: 42)
+  try expect(malformed.planClass == nil && !malformed.isMaxPlan,
+    "A malformed class decodes as absent; a name without a Max token is not Max")
+  let nonClaudeClass = try account(plan: "Pro", planClass: "max", provider: "codex")
+  try expect(!nonClaudeClass.isMaxPlan,
+    "A plan class on another provider's row never counts as Max")
+  let nonClaudeName = try account(plan: "Max 20x", planClass: nil, provider: "codex")
+  try expect(!nonClaudeName.isMaxPlan,
+    "A Max display name on another provider's row never counts as Max either")
+}
+
+/// "Opened · copied 3 of 18" when a bounded copy opened Claude before every record was across.
 private func checkClaudeOpenPartialCopy() throws {
   func operation(_ state: String, _ confirmed: Int?, _ total: Int?) throws -> ClaudeOpenOperation {
     var object: [String: Any] = ["id": "op", "platform": "mac", "state": state, "message": NSNull()]
@@ -3738,6 +3779,8 @@ do {
   print("PASS rotation after rotateAfter: saved before first use, refusals keep the key and wait, revocation surfaces")
   try checkResetPassedField()
   print("PASS dashboard resetPassed mark honoured with the tray's own F6 rule")
+  try checkPlanClassGate()
+  print("PASS plan class gate: Max-class Ultra shows Fable, Pro class beats a Max name, absent class falls back to the name, malformed class degrades")
   print("AI Account Center core checks passed (offline; no real credentials or network)")
 } catch {
   fputs("AI Account Center core check failed: \(error)\n", stderr)

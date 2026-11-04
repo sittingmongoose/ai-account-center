@@ -15,6 +15,7 @@ import {
   wordsOf,
   resetClock,
   shortWindowLabel,
+  isMaxPlan,
 } from '../public/view-model.mjs';
 import { getDisplayTimeZone, setDisplayTimeZone, displayFormat } from '../public/time-format.mjs';
 
@@ -1457,4 +1458,17 @@ test('refreshing chrome omits an unknown count but retains a real zero and hidde
   for (const dto of [null, {}, { accounts: null }]) assert.equal(chromeView(dto, { refreshing: true }).statusStrong, '');
   assert.equal(chromeView({ accounts: [] }, { refreshing: true }).statusStrong, '0 accounts');
   assert.equal(chromeView({ accounts: [account({ hidden: true })] }, { refreshing: true }).statusStrong, '1 accounts');
+});
+
+test('the entitlement class decides the Max gate before the display name', () => {
+  const ultra = { provider: 'claude', plan: 'Ultra', planClass: 'max' };
+  assert.equal(isMaxPlan(ultra), true, 'a Max-class Ultra gates on the class, not the name');
+  const proNamedMax = { provider: 'claude', plan: 'Max 20x', planClass: 'pro' };
+  assert.equal(isMaxPlan(proNamedMax), false, 'a Pro class is decisive even when the name says Max');
+  assert.equal(isMaxPlan({ provider: 'claude', plan: 'claude-max-20x' }), true,
+    'without a class the display name still gates');
+  assert.equal(isMaxPlan({ provider: 'claude', plan: 'Ultra', planClass: null }), false,
+    'a null class falls back to the name, and Ultra is not Max');
+  assert.equal(isMaxPlan({ provider: 'codex', plan: 'Pro', planClass: 'max' }), false,
+    'only Claude rows gate');
 });

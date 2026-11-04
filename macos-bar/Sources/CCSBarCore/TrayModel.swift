@@ -110,6 +110,10 @@ public enum FableCell: Sendable {
 
 extension DashboardAccount {
   public var isMaxPlan: Bool {
+    // Max is a Claude entitlement class: neither the class nor the name
+    // fallback applies to another provider's row, exactly like the web
+    // and Windows gates, so no caller has to scope it.
+    guard provider == "claude" else { return false }
     if planClass != nil { return planClass == "max" }
     let plan = (plan ?? "").lowercased().replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
     return plan.range(of: "(^|\\s)max(\\s*(5|20)x)?($|\\s)", options: .regularExpression) != nil

@@ -421,6 +421,15 @@ public static partial class Checks
     private static void NewBehaviourChecks(CheckReport report)
     {
         report.Checks["max_plan_detection_for_fable"] = new[] { "max", "Max", "max_5x", "Max 20x", "claude_max" }.All(Formatting.IsMaxPlan) && !new[] { "pro", "maximum", "", null }.Any(Formatting.IsMaxPlan);
+        // The entitlement class is decisive when present; the display name only gates without one,
+        // and the C# gate must agree with the TypeScript, Swift and Python gates.
+        var classUltra = new DashboardAccount { Provider = "claude", Plan = "Ultra", PlanClass = "max" };
+        var classProNamedMax = new DashboardAccount { Provider = "claude", Plan = "Max 20x", PlanClass = "pro" };
+        var namedMaxNoClass = new DashboardAccount { Provider = "claude", Plan = "claude-max-20x" };
+        var classOnlyOnClaude = new DashboardAccount { Provider = "codex", Plan = "Pro", PlanClass = "max" };
+        var nameOnlyOnClaude = new DashboardAccount { Provider = "codex", Plan = "Max 20x" };
+        report.Checks["plan_class_gate_agrees_with_the_other_layers"] = classUltra.IsMaxPlanAccount && !classProNamedMax.IsMaxPlanAccount
+            && namedMaxNoClass.IsMaxPlanAccount && !classOnlyOnClaude.IsMaxPlanAccount && !nameOnlyOnClaude.IsMaxPlanAccount;
         var mixed = new[] { "zai", "newcode", "codex", "claude", "antigravity", "zai" }.Select(provider => new DashboardAccount { Provider = provider }).ToArray();
         report.Checks["provider_order_keeps_any_provider"] = Formatting.ProviderOrder(mixed).SequenceEqual(new[] { "claude", "codex", "antigravity", "zai", "newcode" });
         // The trays honour only "Show in tray" (providers[].trayVisible, settings.trayHiddenProviders); "Show on

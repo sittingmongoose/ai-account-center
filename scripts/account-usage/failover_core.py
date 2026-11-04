@@ -18,6 +18,7 @@ import re
 import stat
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 
@@ -27,6 +28,10 @@ from desktop_helpers import attribute_reads, email, read_failed, safe_text, secr
 MAX_BYTES = 1024 * 1024
 MAX_SOURCES = 64
 MAX_FILES = 256
+# Raw entries one directory scan will look at while collecting
+# candidate homes; mirrors the sign-in collector's own bound so the
+# two inventories agree on what a full listing is.
+MAX_SCAN_ENTRIES = 1024
 HTTP_SECONDS = 12
 UTC = dt.timezone.utc
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -79,11 +84,15 @@ def _within(root, path):
         return False
 
 
-def _local_path(home, value):
+def _local_path(home, value, missing=None):
     """Follow only bounded links whose written targets stay inside this home.
 
     Do not stat a UNC/network link target: offline mounts can outlive a process
     deadline. T3 shadow auth links into another local account home are allowed.
+    When `missing` is a list, a None result for a chain that never
+    resolves in bounds (an absent component, a loop, or a chain longer
+    than the hop bound) appends to it, so callers can tell that failed
+    read from a policy refusal (outside or network target).
     """
     root = Path(os.path.abspath(home))
     path = Path(os.path.abspath(value))
@@ -98,6 +107,8 @@ def _local_path(home, value):
             try:
                 info = current.lstat()
             except (FileNotFoundError, NotADirectoryError):
+                if missing is not None:
+                    missing.append(current)
                 return None
             except OSError:
                 read_failed()
@@ -120,6 +131,10 @@ def _local_path(home, value):
                 break
         if not redirected:
             return current
+    # The hop bound ran out (a loop, or an overlong chain): unresolved,
+    # which is a failed read, never a refusal.
+    if missing is not None:
+        missing.append(path)
     return None
 
 
@@ -145,10 +160,25 @@ def _read_present(path, max_bytes):
         return None
     if hasattr(os, "getuid") and info.st_uid != os.getuid():
         return None
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
-    with os.fdopen(descriptor, "rb") as handle:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    try:
+        # fdopen refuses a directory swapped in at the open; that refusal
+        # (OSError, or ValueError from a mode the descriptor cannot
+        # take) must not strand the raw descriptor, and closing an
+        # already-closed descriptor must not escape either.
+        opened = os.fdopen(descriptor, "rb")
+    except (OSError, ValueError):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        return None
+    with opened as handle:
         actual = os.fstat(handle.fileno())
-        if (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
+        # O_NONBLOCK plus the regular-file recheck: a FIFO swapped in
+        # between the lstat and the open must not stall discovery.
+        if not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
             return None
         raw = handle.read(max_bytes + 1)
     return raw if len(raw) <= max_bytes else None
@@ -174,13 +204,57 @@ def _children(home, value):
         return []
     try:
         # Bound directory enumeration as well as the number of returned homes.
+        # A listing cut short by either bound is an incomplete read, never a
+        # silent one: record it so inventories built on it say so. Only
+        # candidate directories count toward the homes bound: plain files
+        # with safe names are not homes, and seventy of them beside one
+        # account must not read as a truncated inventory. An entry whose
+        # type cannot be read stays a candidate, as before, and records
+        # the failure for the downstream read to report.
+        truncated = False
         with os.scandir(root) as iterator:
             entries = []
             for entry in iterator:
-                if len(entries) >= MAX_FILES:
+                if len(entries) >= MAX_SCAN_ENTRIES:
+                    truncated = True
                     break
-                entries.append(entry.name)
-        return [root / name for name in sorted(entries) if SAFE_NAME.fullmatch(name)][:MAX_SOURCES]
+                entries.append(entry)
+        homes = []
+        for entry in sorted(entries, key=lambda item: item.name):
+            if not SAFE_NAME.fullmatch(entry.name):
+                continue
+            try:
+                if entry.is_symlink():
+                    # A link's target is validated before anything
+                    # follows it: an outside or network target is
+                    # never stat'ed during discovery (an offline
+                    # mount can outlive the process deadline). The
+                    # validated path's own lstat decides candidacy.
+                    candidate = False
+                    missing = []
+                    validated = _local_path(home, root / entry.name, missing)
+                    if validated is not None:
+                        candidate = stat.S_ISDIR(os.lstat(validated).st_mode)
+                    elif missing:
+                        # A permitted chain that ends at nothing (a
+                        # dangling link at any hop, a loop, or one past
+                        # the hop bound) is a failed read;
+                        # a chain refused anywhere for leaving the home
+                        # or naming a network target is a silent
+                        # exclusion.
+                        read_failed()
+                else:
+                    candidate = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                read_failed()
+                candidate = True
+            if candidate:
+                homes.append(root / entry.name)
+        if len(homes) > MAX_SOURCES:
+            truncated = True
+        if truncated:
+            read_failed()
+        return homes[:MAX_SOURCES]
     except (FileNotFoundError, NotADirectoryError):
         return []
     except OSError:
@@ -188,27 +262,92 @@ def _children(home, value):
         return []
 
 
-def _settings_homes(home, provider):
+# Settings homes this discovery could not use (relative, outside the home,
+# overlong, malformed). Counted separately from read failures: the sign-in
+# collector treats them as incomplete discovery, while the shared quota
+# inventory must not report every machine with such a settings entry as
+# permanently incomplete.
+SETTINGS_HOME_FAILURES = [0]
+
+
+def _settings_homes(home, provider, ccs_dir=None):
     state = home / ".t3/userdata"
     settings = _read(home, state / "settings.json") or {}
-    instances = _object(settings.get("providerInstances"))
+    # A present container of the wrong shape (the instances map itself, an
+    # instance, its config) can hide configured homes exactly like a
+    # malformed homePath can: count it unseen instead of reading it as
+    # empty. Absent and null stay silent, like unset fields below.
+    raw_instances = settings.get("providerInstances")
+    if raw_instances is not None and not isinstance(raw_instances, dict):
+        SETTINGS_HOME_FAILURES[0] += 1
+        raw_instances = {}
+    instances = raw_instances or {}
     result = []
-    for instance in list(instances.values())[:MAX_SOURCES]:
-        item = _object(instance)
+    values = list(instances.values())
+    if len(values) > MAX_SOURCES:
+        # The bound applies before the provider filter below, so entries
+        # past it are unseen, not absent: record the incomplete read.
+        read_failed()
+    for instance in values[:MAX_SOURCES]:
+        if not isinstance(instance, dict):
+            if instance is not None:
+                SETTINGS_HOME_FAILURES[0] += 1
+            continue
+        item = instance
         if item.get("driver") != ("codex" if provider == "codex" else "claudeAgent"):
             continue
-        config = _object(item.get("config"))
+        raw_config = item.get("config")
+        if raw_config is not None and not isinstance(raw_config, dict):
+            SETTINGS_HOME_FAILURES[0] += 1
+            continue
+        config = raw_config or {}
         fields = ("homePath", "shadowHomePath") if provider == "codex" else ("homePath",)
         for field in fields:
             value = config.get(field)
+            if value is None:
+                continue
             if not isinstance(value, str) or len(value) > 1024 or "\x00" in value:
+                # Configured but unusable (malformed, overlong): unseen,
+                # not absent — a falsy wrong-typed value (0, [], {}) is as
+                # configured as a truthy one. Only a missing value (above)
+                # and the empty string — T3's unset placeholder, which
+                # never reaches this branch — stay silent.
+                SETTINGS_HOME_FAILURES[0] += 1
+                continue
+            # The launcher trims and resolves the value before using
+            # it, so admission sees the same spelling: a padded value
+            # is a real home, a whitespace-only one is the unset
+            # placeholder, and `..` segments resolve as text even
+            # across folders that do not exist.
+            value = value.strip()
+            if not value:
                 continue
             if value == "~":
                 value = str(home)
             elif value.startswith(("~/", "~\\")):
                 value = str(home / value[2:])
-            if Path(value).is_absolute() and _within(home, Path(os.path.abspath(value))):
+            # Claude derives its config dir NFC-normalized, so its
+            # files live under the NFC spelling: an NFD-configured
+            # home is read there, not at the spelling as written.
+            # Codex does no such normalization: its homes stay as
+            # spelled.
+            if provider != "codex":
+                try:
+                    value = unicodedata.normalize("NFC", value)
+                except (ValueError, UnicodeError):
+                    pass
+            value = os.path.normpath(value)
+            # Admission roots match the sign-in layer's: the home, plus
+            # the configured CCS scope when one is in play — a settings
+            # home under a relocated scope is configured, not unseen.
+            admitted = Path(value).is_absolute() and (
+                _within(home, Path(os.path.abspath(value)))
+                or (ccs_dir is not None and _within(ccs_dir, Path(os.path.abspath(value))))
+            )
+            if admitted:
                 result.append(Path(value))
+            elif value:
+                SETTINGS_HOME_FAILURES[0] += 1
     return result
 
 
@@ -222,8 +361,10 @@ def _roots(home, provider, ccs_dir):
         found = _children(home, home / (".codex-t3" if provider == "codex" else ".claude-t3"))
         if provider == "codex":
             found.extend(root / "shadow" for root in _children(home, home / ".t3/userdata/providers/codex"))
-        return found + _settings_homes(home, provider)
+        return found + _settings_homes(home, provider, ccs_dir)
     result.extend((root, ["t3"]) for root in attribute_reads(["t3"], t3_roots))
+    if len(result) > MAX_FILES:
+        read_failed()
     return result[:MAX_FILES]
 
 

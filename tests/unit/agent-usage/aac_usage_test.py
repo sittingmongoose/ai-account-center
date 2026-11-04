@@ -172,6 +172,114 @@ class ReaderTests(unittest.TestCase):
         data = json.loads(self.run_reader("--provider", "codex", "--json", "history"))
         self.assertEqual([entry["accountId"] for entry in data["series"]], ["codex:gmail"])
 
+    def test_sign_in_section_omits_a_non_ascii_command_and_stays_ascii(self):
+        generated = aac.now_utc()
+        data = snapshot(generated)
+        data["signIn"] = [
+            {"provider": "claude", "machine": "ubuntu", "name": "jose", "state": "logged_out",
+             "loggedOutAt": iso(generated - dt.timedelta(hours=1)),
+             "fixCommand": 'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/josé" claude auth login'},
+            {"provider": "claude", "machine": "ubuntu", "name": "plain", "state": "logged_out",
+             "loggedOutAt": iso(generated - dt.timedelta(hours=2)),
+             "fixCommand": "claude auth login"},
+        ]
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
+                contextlib.redirect_stdout(out):
+            aac.main()
+        text = out.getvalue()
+        # The escaped form would name a different directory inside the quotes:
+        # the command is named as omitted, never printed altered.
+        self.assertIn("re-login command omitted (non-ASCII path)", text)
+        self.assertNotIn("\\xe9", text)
+        self.assertIn("re-login: `claude auth login`", text)
+        self.assertTrue(all(ord(character) < 128 for character in text))
+
+    def test_a_unicode_plan_never_fails_an_ascii_stdout(self):
+        generated = aac.now_utc()
+        data = snapshot(generated)
+        data["accounts"][0]["plan"] = "Prö"
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        raw = io.BytesIO()
+        # Even a UTF-8 console gets ASCII: main() reconfigures the stream.
+        stream = io.TextIOWrapper(raw, encoding="utf-8")
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
+                contextlib.redirect_stdout(stream):
+            aac.main()
+        stream.flush()
+        text = raw.getvalue().decode("ascii")
+        self.assertIn("Gmail", text)
+        self.assertIn("\\xf6", text)
+
+    def test_a_sign_in_deadline_already_passed_reads_as_past(self):
+        generated = aac.now_utc()
+        data = snapshot(generated)
+        data["signIn"] = [
+            {"provider": "claude", "machine": "ubuntu", "name": "late", "state": "warn",
+             "loggedOutAt": iso(generated - dt.timedelta(seconds=5)),
+             "accessExpiresAt": iso(generated - dt.timedelta(seconds=5)),
+             "fixCommand": "claude auth login"},
+            {"provider": "claude", "machine": "ubuntu", "name": "soon", "state": "warn",
+             "loggedOutAt": iso(generated + dt.timedelta(hours=2)),
+             "accessExpiresAt": iso(generated + dt.timedelta(hours=2)),
+             "fixCommand": "claude auth login"},
+            {"provider": "claude", "machine": "ubuntu", "name": "stale-ok", "state": "ok",
+             "refreshExpiresAt": iso(generated - dt.timedelta(seconds=5)),
+             "accessExpiresAt": iso(generated - dt.timedelta(seconds=5)),
+             "fixCommand": "claude auth login"},
+            {"provider": "claude", "machine": "ubuntu", "name": "later", "state": "warn",
+             "refreshExpiresAt": iso(generated + dt.timedelta(hours=2)),
+             "accessExpiresAt": iso(generated + dt.timedelta(hours=2)),
+             "fixCommand": "claude auth login"},
+            {"provider": "claude", "machine": "ubuntu", "name": "nocmd", "state": "warn",
+             "refreshExpiresAt": iso(generated + dt.timedelta(hours=2)),
+             "accessExpiresAt": iso(generated + dt.timedelta(hours=2)),
+             "fixCommand": ""},
+            {"provider": "claude", "machine": "ubuntu", "name": "openended", "state": "ok",
+             "refreshExpiresAt": iso(generated + dt.timedelta(hours=30)),
+             "accessExpiresAt": iso(generated + dt.timedelta(hours=2))},
+            {"provider": "claude", "machine": "ubuntu", "name": "nocmd-end", "state": "critical",
+             "loggedOutAt": iso(generated + dt.timedelta(hours=2)),
+             "fixCommand": ""},
+            {"provider": "codex", "machine": "ubuntu", "name": "plain", "state": "unsupported"},
+            {"provider": "claude", "machine": "ubuntu", "name": "mute", "state": "unavailable"},
+        ]
+        (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.object(aac.sys, "argv", ["aac-usage", "--dir", str(self.folder)]), \
+                contextlib.redirect_stdout(out):
+            aac.main()
+        text = out.getvalue()
+        self.assertIn("past its deadline; awaiting recheck", text)
+        self.assertIn("refresh expired", text)
+        self.assertIn("awaiting recheck", text)
+        # The same detail words usage.md uses: a known end reads "before
+        # then"; only an unnamed end waits for the window.
+        soon_line = next(line for line in text.splitlines() if "soon" in line)
+        self.assertIn("re-login before then", soon_line)
+        later_line = next(line for line in text.splitlines() if "later" in line)
+        self.assertIn("re-login when the window ends", later_line)
+        # usage.md gives the same advice without a command when none is
+        # published, and names the open end on a healthy row.
+        nocmd_line = next(line for line in text.splitlines() if "/nocmd:" in line)
+        self.assertIn("re-login when the window ends", nocmd_line)
+        self.assertNotIn("`", nocmd_line)
+        open_line = next(line for line in text.splitlines() if "openended" in line)
+        self.assertIn("refresh expires", open_line)
+        # The remaining shapes usage.md already words: advice without a
+        # command at a known end, the unsupported detail, and an
+        # unavailable row with no recorded cause.
+        nocmd_end = next(line for line in text.splitlines() if "nocmd-end" in line)
+        self.assertIn("re-login before then", nocmd_end)
+        self.assertNotIn("`", nocmd_end)
+        plain_line = next(line for line in text.splitlines() if "plain" in line)
+        self.assertIn("no login end time is published by codex", plain_line)
+        mute_line = next(line for line in text.splitlines() if "mute" in line)
+        self.assertIn("reason unknown", mute_line)
+        stale_line = next(line for line in text.splitlines() if "stale-ok" in line)
+        self.assertNotIn("healthy", stale_line)
+
     def test_a_retained_window_says_how_old_it_is(self):
         generated = aac.now_utc()
         data = snapshot(generated)

@@ -88,7 +88,7 @@ def safe_text(value, maximum=160):
     if not isinstance(value, str) or not value.strip() or len(value) > maximum:
         return None
     value = value.strip()
-    if re.search(r"[\x00-\x1f\x7f]", value):
+    if re.search(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]", value):
         return None
     # Display metadata must never accidentally become a credential channel.
     if re.search(r"(?i)(bearer\s|dca:|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9_-]{8})", value):
@@ -194,6 +194,21 @@ def total_read_failures():
     for name in ("plan_common", "claude_usage"):
         total += getattr(sys.modules.get(name), "READ_FAILURES", 0) or 0
     return total
+
+
+def reset_read_failures():
+    """Test support: the failure accounting above is process-global, so a
+    suite asserting absolute counts must start from zero whatever suite ran
+    before it in the same process."""
+    global READ_FAILURES, ATTRIBUTED_FAILURES
+    READ_FAILURES = 0
+    ATTRIBUTED_FAILURES = 0
+    INCOMPLETE_SELECTORS.clear()
+    _EXPLAINED.clear()
+    for name in ("plan_common", "claude_usage"):
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "READ_FAILURES"):
+            module.READ_FAILURES = 0
 
 
 def attribute_reads(selectors, read):

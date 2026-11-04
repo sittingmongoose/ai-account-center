@@ -157,3 +157,21 @@ describe('protected persisted Claude quota snapshots', () => {
     }
   });
 });
+
+describe('the persisted snapshot keeps the entitlement class', () => {
+  it('round trips planClass through the disk cache and a pre-class snapshot reads as absent', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-claude-quota-class-'));
+    try {
+      const manifestHash = 'a'.repeat(64);
+      const withClass: ClaudeDesktopLiveUsage = { ...sample, planClass: 'max' };
+      await writeClaudeDesktopLiveSnapshot(root, 'gmail', manifestHash, withClass);
+      expect((await readClaudeDesktopLiveSnapshot(root, 'gmail', manifestHash))?.planClass).toBe('max');
+      const without = { ...sample };
+      delete (without as { planClass?: string }).planClass;
+      await writeClaudeDesktopLiveSnapshot(root, 'gmail', manifestHash, without);
+      expect((await readClaudeDesktopLiveSnapshot(root, 'gmail', manifestHash))?.planClass).toBeUndefined();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

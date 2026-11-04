@@ -88,9 +88,9 @@ class SpecialFailoverTests(unittest.TestCase):
 
     def reset_reads(self):
         helpers_module = sys.modules["desktop_helpers"]
-        helpers_module.READ_FAILURES = 0
-        helpers_module.INCOMPLETE_SELECTORS = set()
-        helpers_module.ATTRIBUTED_FAILURES = 0
+        # The shared reset also zeroes the sibling counters total_read_failures
+        # sums, so a suite that ran earlier in this process cannot leak in.
+        helpers_module.reset_read_failures()
         return helpers_module
 
     def test_one_unreadable_saved_profile_marks_only_that_profile(self):

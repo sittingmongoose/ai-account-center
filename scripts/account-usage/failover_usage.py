@@ -52,7 +52,7 @@ class _Discard:
 
 def _text(value, maximum=160):
     if (not isinstance(value, str) or not value.strip() or len(value) > maximum or
-            re.search(r"[\x00-\x1f\x7f]|(?:bearer\s|sk[-_]|dca:|eyJ[A-Za-z0-9_-]{8}|access_token|refresh_token|https?://)", value, re.I)):
+            re.search(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]|(?:bearer\s|sk[-_]|dca:|eyJ[A-Za-z0-9_-]{8}|access_token|refresh_token|https?://)", value, re.I)):
         return None
     return value.strip()
 
@@ -100,13 +100,21 @@ def public_candidate(value, provider, request=False):
             any(not isinstance(selector, str) or not SELECTOR.fullmatch(selector) for selector in selectors)):
         return None
     address, plan = value.get("email"), value.get("plan")
-    if address is not None and _email(address) is None or plan is not None and _text(plan) is None:
+    if address is not None and _email(address) is None:
         return None
-    # Claude only: the entitlement class rides beside the display name ("Ultra"
-    # is a Max-class plan) so the Fable column keeps gating on Max.
-    plan_class = value.get("planClass") if provider == "claude" else None
-    if plan_class is not None and _text(plan_class) not in ("max", "pro"):
-        return None
+    if plan is not None and _text(plan) is None:
+        # A caller-supplied candidate stays strictly validated. An
+        # inventory candidate's plan is display-only, so there the
+        # refused name is omitted instead of rejecting the row
+        # (one rejected candidate puts the whole inventory at risk).
+        if request:
+            return None
+        plan = None
+    # The candidate contract carries no plan class at all — not even for
+    # validation: the strict TypeScript reader rejects unknown candidate
+    # keys and one rejected candidate throws away a whole inventory. The
+    # class travels on the public sample instead, where a bad value only
+    # skips that one sample.
     return {"locator": value["locator"], "selectors": list(dict.fromkeys(selectors)),
             "identity": {"kind": identity["kind"], "key": identity["key"]},
             "revision": value["revision"], "email": _email(address), "plan": _text(plan)}
@@ -201,12 +209,19 @@ def public_sample(value, provider, platform):
     if not sampled or not fetched or sampled > fetched:
         return None
     address, plan = value.get("email"), value.get("plan")
-    if address is not None and _email(address) is None or plan is not None and _text(plan) is None:
+    if address is not None and _email(address) is None:
         return None
+    # The plan name is display-only (the entitlement class below is
+    # what gates on it): a name the public screen refuses is omitted,
+    # never a reason to discard the quota sample it rode in on.
+    if plan is not None and _text(plan) is None:
+        plan = None
     # Claude only: the entitlement class rides beside the display name ("Ultra"
-    # is a Max-class plan) so the Fable column keeps gating on Max.
-    plan_class = value.get("planClass") if provider == "claude" else None
-    if plan_class is not None and _text(plan_class) not in ("max", "pro"):
+    # is a Max-class plan) so the Fable column keeps gating on Max. A present
+    # class that does not normalize to max/pro rejects the sample outright.
+    raw_class = value.get("planClass") if provider == "claude" else None
+    plan_class = _text(raw_class)
+    if raw_class is not None and plan_class not in ("max", "pro"):
         return None
     raw_windows = value.get("windows")
     if not isinstance(raw_windows, list) or not 1 <= len(raw_windows) <= MAX_WINDOWS:

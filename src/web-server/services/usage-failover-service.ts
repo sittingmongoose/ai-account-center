@@ -435,13 +435,17 @@ export class UsageFailoverService {
       ...template,
       email: template.email ?? reading.email,
       plan: reading.plan,
-      ...(reading.planClass ? { planClass: reading.planClass } : {}),
+      // The reading's class replaces the template's outright: a class from
+      // an earlier plan must not ride along under a new plan name.
+      planClass: reading.planClass ?? undefined,
       sampledAt: reading.sampledAt,
       fetchedAt: reading.fetchedAt,
       windows: structuredClone(reading.windows),
-      ...(reading.antigravityPlan
-        ? { antigravityPlan: structuredClone(reading.antigravityPlan) }
-        : {}),
+      // Same outright replacement as the class: a plan detail from an
+      // earlier reading must not ride along under new windows.
+      antigravityPlan: reading.antigravityPlan
+        ? structuredClone(reading.antigravityPlan)
+        : undefined,
       status: stale ? 'cached' : 'ok',
       source: `Verified ${nativeMusePeer ? 'native subscription ' : ''}quota on ${HOST_LABELS[host]}${fallback ? ' (fallback)' : ''}`,
       message: stale ? 'Showing the last successful reading; live usage is unavailable.' : null,
