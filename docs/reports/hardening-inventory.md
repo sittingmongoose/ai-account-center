@@ -100,5 +100,5 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/native-quota-collector.ts` | 848 |
 | `src/auth/profile-detector.ts` | 767 |
 | `src/web-server/usage/aggregator.ts` | 767 |
-| `src/web-server/services/additional-account-service.ts` | 760 |
+| `src/web-server/agent-usage/agent-usage-snapshot.ts` | 762 |
 
