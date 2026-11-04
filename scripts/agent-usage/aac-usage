@@ -408,8 +408,13 @@ def sign_in_lines(snapshot, provider=None):
                     line += " %s: `%s`" % (advice, command)
                 elif omitted:
                     line += " re-login command omitted (non-ASCII path)."
+                elif not row.get("loggedOutAt"):
+                    # No command published; usage.md still gives the advice.
+                    line += " re-login when the window ends."
         elif state == "ok" and row.get("loggedOutAt"):
             line += " sign-in ends %s." % row["loggedOutAt"]
+        elif state == "ok":
+            line += " no exact end published yet."
         print(line)
 
 

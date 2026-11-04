@@ -11,10 +11,11 @@ fresh `claude auth login`.
 "Logged out at" is therefore the first `expiresAt` that falls after
 `refreshTokenExpiresAt`. The collector reports that time, a state
 (ok / warn / critical / logged_out) and the exact fix command for every
-config dir on this machine — the default `~/.claude` (on macOS resolved
-through its Keychain item when the file store has no verdict) and the
-per-account `~/.claude-t3/<name>` dirs. Token values are never read
-beyond their presence and never printed.
+config dir on this machine — the default `~/.claude` and the per-account
+`~/.claude-t3/<name>` dirs; on macOS each dir resolves through its
+Keychain item first (the canonical store there), the file only when the
+Keychain cannot answer. Token values are never read beyond their
+presence and never printed.
 
 Other providers are probed for readable login end times too; a provider whose
 store carries no such time is reported as `unsupported` rather than guessed.
@@ -26,6 +27,7 @@ are unreadable (they read as `unavailable`); argparse exits 2 on bad arguments.
 import argparse
 import ctypes
 import datetime
+import hashlib
 import itertools
 import json
 import os
@@ -34,6 +36,7 @@ import re
 import stat
 import sys
 import time
+import unicodedata
 
 SCHEMA_VERSION = 1
 WARN_SECONDS = 24 * 3600
@@ -150,17 +153,21 @@ def _read_regular_bytes(path, limit=65536):
     if not stat.S_ISREG(info.st_mode):
         return None
     try:
-        descriptor = os.fdopen(
-            os.open(
-                path,
-                os.O_RDONLY
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_NONBLOCK", 0)
-                | getattr(os, "O_BINARY", 0),
-            ),
-            "rb",
+        raw_fd = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_BINARY", 0),
         )
     except OSError:
+        return None
+    try:
+        # fdopen itself refuses a directory swapped in at the open; that
+        # refusal must not strand the raw descriptor.
+        descriptor = os.fdopen(raw_fd, "rb")
+    except OSError:
+        os.close(raw_fd)
         return None
     try:
         with descriptor:
@@ -222,8 +229,8 @@ def fix_command(config_dir, home):
         # PowerShell reads curly quotes (U+2018-U+201F) as quotes too, and
         # no escaping of the ASCII set can keep one inside either quoted
         # form: a directory named with one gets no command rather than a
-        # pasted line that runs something else. The home expands through
-        # USERPROFILE, the same source Path.home() read on this machine.
+        # pasted line that runs something else. The home expands the way
+        # Path.home() resolved it on this machine (see below).
         curly = "".join(chr(cp) for cp in range(0x2018, 0x2020))
         if relative is None:
             literal = str(config_dir)
@@ -234,7 +241,10 @@ def fix_command(config_dir, home):
         if any(character in relative[1] for character in curly):
             return ""
         escaped = relative[1][1:].replace("`", "``").replace('"', '`"').replace("$", "`$")
-        return f'$env:CLAUDE_CONFIG_DIR = "$env:USERPROFILE{escaped}"; claude auth login'
+        # Python's Windows home is USERPROFILE, else HOMEDRIVE+HOMEPATH;
+        # the command resolves the same fallback at paste time.
+        home_expr = "$(if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOMEDRIVE + $env:HOMEPATH })"
+        return f'$env:CLAUDE_CONFIG_DIR = "{home_expr}{escaped}"; claude auth login'
     if relative is None:
         literal = str(config_dir).replace("'", "'\\''")
         return f"CLAUDE_CONFIG_DIR='{literal}' claude auth login"
@@ -357,7 +367,41 @@ def claude_profile(name, config_dir, now_ms, home, ccs_dir=None):
     return entry
 
 
-def _mac_keychain_text():
+def _keychain_service_for(config_dir_text):
+    """The per-config-dir Keychain service name, exactly as Claude Code
+    builds it (verified against its bundled source): the plain service
+    plus "-" and the first eight hex digits of the SHA-256 of the
+    NFC-normalized config dir string, exactly as configured."""
+    digest = hashlib.sha256(
+        unicodedata.normalize("NFC", config_dir_text).encode("utf-8")
+    ).hexdigest()[:8]
+    return "Claude Code-credentials-" + digest
+
+
+def _mac_keychain_services(root, is_default):
+    """Keychain service candidates for one config dir, in probe order.
+
+    The default login (no CLAUDE_CONFIG_DIR) uses the plain service. A
+    per-account dir is always launched with CLAUDE_CONFIG_DIR set, so its
+    item carries the hash suffix; the spelled and resolved forms of the
+    dir are both candidates because launchers differ in which they set.
+    A global CLAUDE_SECURESTORAGE_CONFIG_DIR in this collector's own
+    environment names the storage dir Claude Code would hash instead;
+    it is added for the default row only, since per-account values are
+    set per launch and cannot be seen from here."""
+    services = []
+    if is_default:
+        securestorage = os.environ.get("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+        if securestorage:
+            services.append(_keychain_service_for(securestorage))
+        services.append("Claude Code-credentials")
+    else:
+        spellings = {str(root), os.path.realpath(root)}
+        services.extend(sorted(_keychain_service_for(spelling) for spelling in spellings))
+    return list(dict.fromkeys(services))
+
+
+def _mac_keychain_text(service="Claude Code-credentials"):
     """The Keychain item's JSON through Security's noninteractive C API.
 
     The `security` CLI can prompt for keychain access; over ssh that prompt
@@ -378,9 +422,9 @@ def _mac_keychain_text():
                          ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
         find.restype = ctypes.c_int32
         security.SecKeychainItemFreeContent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        service = b"Claude Code-credentials"
+        service_bytes = service.encode("utf-8")
         length, pointer = ctypes.c_uint32(), ctypes.c_void_p()
-        status_code = find(None, len(service), service, 0, None,
+        status_code = find(None, len(service_bytes), service_bytes, 0, None,
                            ctypes.byref(length), ctypes.byref(pointer), None)
         if status_code != 0:
             return None
@@ -394,11 +438,11 @@ def _mac_keychain_text():
         return None
 
 
-def mac_keychain_profile(now_ms):
-    """macOS: Claude Desktop stores the same JSON in the login Keychain."""
+def mac_keychain_profile(now_ms, service="Claude Code-credentials"):
+    """macOS: Claude Code stores the same JSON in the login Keychain."""
     entry = {
         "name": "keychain",
-        "configDir": "Keychain: 'Claude Code-credentials'",
+        "configDir": "Keychain: '%s'" % service,
         "provider": "claude",
         "accessExpiresAt": None,
         "refreshExpiresAt": None,
@@ -410,7 +454,7 @@ def mac_keychain_profile(now_ms):
     if sys.platform != "darwin":
         entry.pop("error")
         return entry
-    raw = _mac_keychain_text()
+    raw = _mac_keychain_text(service)
     if raw is None:
         return entry
     data = read_credentials_from_text(raw)
@@ -599,16 +643,10 @@ def claude_roots(home, ccs_dir=None):
         except Exception:
             complete = False
     if pairs is not None:
-        # The sibling discovery truncates at its own bound; entries beyond it
-        # vanish silently unless the length gives it away.
-        try:
-            import failover_core
-
-            limit = getattr(failover_core, "MAX_SOURCES", None)
-        except Exception:
-            limit = None
-        if limit is not None and len(pairs) >= limit:
-            complete = False
+        # Every sibling truncation (the roots list, settings instances,
+        # each base's children) records itself through the read-failure
+        # counters watched above, so a long list alone is not evidence of
+        # one: exactly MAX_SOURCES readable homes stay complete.
         for root, selectors in pairs:
             is_dir, stat_failed = _dir_state(root)
             if stat_failed:
@@ -687,28 +725,41 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
             }
         )
     if include_keychain and sys.platform == "darwin":
-        # The Keychain item and ~/.claude/.credentials.json are two stores
-        # for the same default login, so they resolve to the one default
-        # row (profiles[0], which claude_roots always puts first): a file
-        # verdict stands, and the Keychain supplies the verdict when the
-        # file store cannot. They never publish as two logins, one failed
-        # beside one healthy.
-        keychain = mac_keychain_profile(now_ms)
-        if profiles and profiles[0]["state"] == "unavailable":
+        # The Keychain and .credentials.json are two stores for the same
+        # login (Claude Code's backend is keychain-with-plaintext-fallback):
+        # the Keychain is the canonical store, read first, and the file is
+        # only its fallback for a locked Keychain. Each root therefore
+        # resolves through its Keychain candidates first and keeps the
+        # file verdict only when the Keychain cannot answer; the stores
+        # never publish as two logins, one failed beside one healthy.
+        # profiles[i] matches roots[i] here; later rows are appended below.
+        for index, (_label, root) in enumerate(roots):
+            row = profiles[index]
+            keychain = None
+            for service in _mac_keychain_services(root, index == 0):
+                candidate = mac_keychain_profile(now_ms, service)
+                if keychain is None:
+                    keychain = candidate
+                if candidate["state"] != "unavailable":
+                    keychain = candidate
+                    break
+            if keychain is None:
+                continue
             if keychain["state"] != "unavailable":
-                profiles[0].update(
+                row.update(
                     configDir=keychain["configDir"],
                     accessExpiresAt=keychain["accessExpiresAt"],
                     refreshExpiresAt=keychain["refreshExpiresAt"],
                     loggedOutAt=keychain["loggedOutAt"],
                     state=keychain["state"],
                 )
-                profiles[0].pop("error", None)
-            elif keychain.get("error"):
-                # Neither store could answer; on this platform the
-                # Keychain is the canonical store, so its cause names
-                # the failure.
-                profiles[0]["error"] = keychain["error"]
+                row.pop("error", None)
+            elif index == 0 and row["state"] == "unavailable" and keychain.get("error"):
+                # Neither default store could answer; the canonical
+                # store's cause names the failure. Per-account rows keep
+                # the file cause: a hashed item may simply not exist for
+                # a file-kept account, which says nothing unreadable.
+                row["error"] = keychain["error"]
     codex = codex_profile(now_ms, home)
     if codex:
         profiles.append(codex)

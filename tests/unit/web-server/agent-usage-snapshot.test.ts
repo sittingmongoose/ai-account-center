@@ -1021,6 +1021,15 @@ describe('sign-in health section', () => {
         refreshExpiresAt: '2026-11-30T00:00:00Z',
       }),
     ] as never[];
+    // A known login end already past at `now` (a behind-clock remote)
+    // is crossed even when it predates the window; only the login end
+    // gets that treatment, never the renewable access stamp above.
+    const skewed = downgradeCrossedSignInRows(
+      [row({ state: 'critical', loggedOutAt: '2026-10-15T11:00:00Z' })] as never[],
+      NOW,
+      NOW
+    );
+    expect(skewed[0].state).toBe('unavailable');
     const out = downgradeCrossedSignInRows(rows, NOW, NOW + 60 * MINUTE);
     expect(out[0].state).toBe('unavailable');
     expect(out[0].error).toBe('sign-in state changed during collection; recheck pending');
@@ -1065,6 +1074,56 @@ describe('sign-in health section', () => {
     expect(writes.get(SNAPSHOT_MARKDOWN)).not.toContain('re-login before then');
     // The health service's own row is never mutated by publication.
     expect(liveRow.state).toBe('critical');
+  });
+
+  it('rechecks again after a slow markdown write, before the JSON lands', async () => {
+    const writes: Array<[string, string]> = [];
+    const liveRow = {
+      name: 'soon',
+      provider: 'claude',
+      platform: 'ubuntu',
+      machine: 'ubuntu',
+      state: 'critical' as const,
+      loggedOutAt: new Date(Date.now() + 80).toISOString(),
+      fixCommand: 'claude auth login',
+    };
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      isDirectory: async () => true,
+      refreshSeconds: () => 60,
+      signIn: async () => [liveRow],
+      // The markdown write itself is the slow stage (a network share):
+      // the deadline crosses while it is in flight.
+      write: async (_directory, name, body) => {
+        if (name === SNAPSHOT_MARKDOWN)
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        writes.push([name, body]);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      true
+    );
+    const json = writes.find(([name]) => name === SNAPSHOT_JSON)?.[1] as string;
+    expect(JSON.parse(json).signIn[0].state).toBe('unavailable');
+    const markdownWrites = writes.filter(([name]) => name === SNAPSHOT_MARKDOWN);
+    expect(markdownWrites[markdownWrites.length - 1][1]).not.toContain('re-login before then');
+    expect(liveRow.state).toBe('critical');
+  });
+
+  it('never puts an unpaired surrogate from a repair command into the markdown', () => {
+    // Production rows are screened upstream; the renderer is the last
+    // line before UTF-8 bytes, so it refuses the command itself too.
+    const markdown = renderSnapshotMarkdown(
+      snapshotWith([
+        row({
+          state: 'critical',
+          fixCommand: 'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/bad\udcff" claude auth login',
+        }),
+      ])
+    );
+    expect(markdown).not.toContain('\udcff');
+    expect(Buffer.from(markdown, 'utf8').toString('utf8')).not.toContain('bad�');
   });
 
   it('names no invented end when the collector could not derive one', () => {

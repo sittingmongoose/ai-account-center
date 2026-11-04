@@ -121,12 +121,14 @@ class SignInExpiryTests(unittest.TestCase):
                          'CLAUDE_CONFIG_DIR="$HOME/.claude-t3/spaced" claude auth login')
         with mock.patch.object(collector.sys, "platform", "win32"):
             command = collector.fix_command(self.home / ".claude-t3" / "spaced", self.home)
-        # The home expands through USERPROFILE, the same source Python's
-        # Path.home() used to find this profile; $HOME can name another
-        # directory in a PowerShell whose home drive is mapped.
+        # The home expands the way Python's Path.home() resolved it on
+        # Windows: USERPROFILE, falling back to HOMEDRIVE+HOMEPATH when
+        # USERPROFILE is unset; $HOME can name another directory in a
+        # PowerShell whose home drive is mapped.
         self.assertEqual(
             command,
-            '$env:CLAUDE_CONFIG_DIR = "$env:USERPROFILE\\.claude-t3\\spaced"; claude auth login')
+            '$env:CLAUDE_CONFIG_DIR = "$(if ($env:USERPROFILE) { $env:USERPROFILE } '
+            'else { $env:HOMEDRIVE + $env:HOMEPATH })\\.claude-t3\\spaced"; claude auth login')
         # No absolute path of this machine reaches the published rows.
         self.assertNotIn(str(self.home), json.dumps(rows))
 
@@ -515,6 +517,103 @@ class SignInExpiryTests(unittest.TestCase):
         self.assertEqual(rows["default"]["state"], "ok")
         self.assertEqual(rows["default"]["refreshExpiresAt"], collector.iso(NOW + 30 * H))
         self.assertEqual(rows["default"]["configDir"], "Keychain: 'Claude Code-credentials'")
+
+    def test_mac_keychain_verdict_wins_over_a_stale_fallback_file(self):
+        # The Keychain is the canonical macOS store and the credentials
+        # file only its fallback, so a readable Keychain verdict stands in
+        # both directions: a healthy file cannot mask a logged-out
+        # Keychain login, and a blanked fallback file cannot mask a
+        # healthy one.
+        import hashlib
+        healthy = {"accessToken": "x", "refreshToken": "y",
+                   "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}
+        blank = {"accessToken": "", "refreshToken": "",
+                 "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}
+        for file_creds, keychain_creds, expected in (
+                (healthy, blank, "logged_out"),
+                (blank, healthy, "ok")):
+            with self.subTest(expected=expected):
+                default = self.home / ".claude"
+                default.mkdir(parents=True, exist_ok=True)
+                (default / ".credentials.json").write_text(
+                    json.dumps({"claudeAiOauth": file_creds}))
+                with mock.patch.object(collector.sys, "platform", "darwin"), \
+                        mock.patch.object(
+                            collector, "_mac_keychain_text",
+                            return_value=json.dumps({"claudeAiOauth": keychain_creds})):
+                    report = collector.collect(self.home, NOW, include_keychain=True)
+                rows = {row["name"]: row for row in report["profiles"]}
+                self.assertNotIn("keychain", rows)
+                self.assertEqual(rows["default"]["state"], expected)
+                self.assertEqual(rows["default"]["configDir"],
+                                 "Keychain: 'Claude Code-credentials'")
+        # The hash helper itself is part of the contract.
+        self.assertEqual(
+            collector._keychain_service_for("/Users/x/.claude-t3/acct"),
+            "Claude Code-credentials-" + hashlib.sha256(
+                "/Users/x/.claude-t3/acct".encode("utf-8")).hexdigest()[:8])
+
+    def test_mac_per_account_login_reads_its_hashed_keychain_item(self):
+        # Claude Code names a per-config-dir Keychain item by hashing the
+        # config dir string; a T3 account on the Mac lives there, not in a
+        # credentials file.
+        import hashlib
+        import unicodedata
+        root = self.home / ".claude-t3" / "acct"
+        root.mkdir(parents=True)
+        expected = "Claude Code-credentials-" + hashlib.sha256(
+            unicodedata.normalize("NFC", str(root)).encode("utf-8")).hexdigest()[:8]
+        payload = json.dumps({"claudeAiOauth": {
+            "accessToken": "x", "refreshToken": "y",
+            "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H}})
+        seen = []
+
+        def keychain_text(service="Claude Code-credentials"):
+            seen.append(service)
+            return payload if service == expected else None
+
+        with mock.patch.object(collector.sys, "platform", "darwin"), \
+                mock.patch.object(collector, "_mac_keychain_text", side_effect=keychain_text):
+            report = collector.collect(self.home, NOW, include_keychain=True)
+        rows = {row["name"]: row for row in report["profiles"]}
+        self.assertIn(expected, seen)
+        self.assertEqual(rows["acct"]["state"], "ok")
+        self.assertEqual(rows["acct"]["configDir"], "Keychain: '%s'" % expected)
+
+    def test_exactly_sixty_four_readable_homes_stay_complete(self):
+        # 64 published homes is the bound exactly, not past it: with every
+        # home readable and no truncation signal from the sibling, no
+        # incomplete-discovery warning may publish.
+        for index in range(63):
+            self._write("acct%02d" % index,
+                        {"accessToken": "x", "refreshToken": "y",
+                         "expiresAt": NOW + 2 * H, "refreshTokenExpiresAt": NOW + 30 * H})
+        rows = self.report()["profiles"]
+        self.assertEqual(len(rows), 64)
+        self.assertNotIn("saved-profiles", {row["name"] for row in rows})
+
+    def test_a_directory_swapped_at_open_leaks_no_descriptor(self):
+        import os as real_os
+        if not pathlib.Path("/proc/self/fd").is_dir():
+            self.skipTest("fd accounting needs /proc")
+        target = self.home / "swap.json"
+        real_open = real_os.open
+
+        def swapping_open(path, flags, *args, **kwargs):
+            pathlib.Path(path).unlink(missing_ok=True)
+            pathlib.Path(path).mkdir(exist_ok=True)
+            return real_open(path, flags, *args, **kwargs)
+
+        def fd_count():
+            return len(list(pathlib.Path("/proc/self/fd").iterdir()))
+
+        before = fd_count()
+        for _ in range(3):
+            target.rmdir() if target.is_dir() else None
+            target.write_text("{}")
+            with mock.patch.object(collector.os, "open", swapping_open):
+                self.assertIsNone(collector._read_regular_bytes(target, 1024))
+        self.assertEqual(fd_count(), before)
 
     def test_mac_default_file_verdict_stands_and_keychain_adds_no_row(self):
         default = self.home / ".claude"

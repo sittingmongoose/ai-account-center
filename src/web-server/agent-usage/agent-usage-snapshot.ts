@@ -283,6 +283,14 @@ function renderSignInMarkdown(
   const profiles = (machines.machines ?? []).map((row) => ({
     ...row,
     machine: row.machine ?? row.platform ?? 'unknown',
+    // Last line before UTF-8 bytes: production rows are screened at the
+    // publish boundary, but a command carrying an unpaired surrogate
+    // would be rewritten to U+FFFD here and aim at another directory.
+    fixCommand:
+      row.fixCommand &&
+      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(row.fixCommand)
+        ? ''
+        : row.fixCommand,
   }));
   const rank: Record<string, number> = {
     logged_out: 0,
@@ -504,11 +512,17 @@ export function downgradeCrossedSignInRows(
 ): SnapshotSignInProfile[] {
   return rows.map((row) => {
     if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') return row;
-    const crossed = [row.accessExpiresAt, row.refreshExpiresAt, row.loggedOutAt].some((value) => {
-      if (!value) return false;
-      const at = Date.parse(value);
-      return !Number.isNaN(at) && at > since && at <= now;
-    });
+    // The known login end counts crossed whenever it is already past at
+    // `now` (a behind-clock remote), exactly as in the service; the
+    // renewable stamps count only inside (since, now].
+    const end = row.loggedOutAt ? Date.parse(row.loggedOutAt) : NaN;
+    const crossed =
+      (!Number.isNaN(end) && end <= now) ||
+      [row.accessExpiresAt, row.refreshExpiresAt].some((value) => {
+        if (!value) return false;
+        const at = Date.parse(value);
+        return !Number.isNaN(at) && at > since && at <= now;
+      });
     if (!crossed) return row;
     return {
       ...row,
@@ -607,11 +621,20 @@ export function createSnapshotPublisher(
       await write(directory, SNAPSHOT_HISTORY, `${JSON.stringify(history)}\n`);
       // Rechecked against publication time, not the sample's, as late as
       // the writes allow: a deadline that crossed while the fetch, the
-      // folder check or the history write was still running publishes as
-      // awaiting-recheck in both remaining files.
+      // folder check, the history write or the markdown write itself was
+      // still running publishes as awaiting-recheck in both remaining
+      // files. Downgrades only ever accumulate, so rechecking after each
+      // markdown write converges; the JSON is serialized only once the
+      // rows are stable at that instant.
       if (snapshot.signIn)
         snapshot.signIn = downgradeCrossedSignInRows(snapshot.signIn, signInStartedAt, Date.now());
       await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
+      while (snapshot.signIn) {
+        const rechecked = downgradeCrossedSignInRows(snapshot.signIn, signInStartedAt, Date.now());
+        if (rechecked.every((row, index) => row === snapshot.signIn?.[index])) break;
+        snapshot.signIn = rechecked;
+        await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
+      }
       // usage.json last: its time says every file of this sample is in place.
       await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
       warned = null;

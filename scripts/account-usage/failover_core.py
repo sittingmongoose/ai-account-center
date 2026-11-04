@@ -147,7 +147,14 @@ def _read_present(path, max_bytes):
         return None
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
                          | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
-    with os.fdopen(descriptor, "rb") as handle:
+    try:
+        # fdopen refuses a directory swapped in at the open; that refusal
+        # must not strand the raw descriptor.
+        opened = os.fdopen(descriptor, "rb")
+    except OSError:
+        os.close(descriptor)
+        return None
+    with opened as handle:
         actual = os.fstat(handle.fileno())
         # O_NONBLOCK plus the regular-file recheck: a FIFO swapped in
         # between the lstat and the open must not stall discovery.

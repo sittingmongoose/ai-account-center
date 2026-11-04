@@ -160,6 +160,26 @@ class InventoryTests(unittest.TestCase):
         # open would block the whole discovery until a writer appears.
         self.assertTrue(seen["flags"] & os.O_NONBLOCK)
 
+    def test_read_present_a_directory_swapped_at_open_leaks_no_descriptor(self):
+        if not hasattr(os, "O_NONBLOCK") or not os.path.isdir("/proc/self/fd"):
+            self.skipTest("fd accounting needs /proc")
+        target = self.home / "swap.json"
+        real_open = os.open
+
+        def swapping_open(path, flags, *args, **kwargs):
+            os.unlink(path)
+            os.mkdir(path)
+            return real_open(path, flags, *args, **kwargs)
+
+        before = len(os.listdir("/proc/self/fd"))
+        for _ in range(3):
+            if os.path.isdir(target):
+                os.rmdir(target)
+            target.write_bytes(b"{}")
+            with mock.patch.object(core.os, "open", swapping_open):
+                self.assertIsNone(core._read_present(target, 1024))
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
     def test_explicit_ccs_root_and_host_environment_is_not_read(self):
         custom = self.home / "custom-ccs"
         write(custom / "codex-instances/saved/auth.json", codex_auth())

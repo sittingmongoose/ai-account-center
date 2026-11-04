@@ -326,6 +326,34 @@ interface CacheEntry {
 
 let cache: CacheEntry | null = null;
 
+/** Whether one stamp of a live row has crossed by `now`. Access and
+ * refresh stamps count only inside (since, now]: already past at
+ * collection they are facts the row's state already accounts for. The
+ * known login end is different: a live row whose end is already past
+ * here cannot be a live future fact under any clock, so a remote whose
+ * clock runs behind still counts as crossed. */
+function stampCrossed(value: string | null | undefined, since: number, now: number): boolean {
+  if (!value) return false;
+  const at = Date.parse(value);
+  return !Number.isNaN(at) && at > since && at <= now;
+}
+
+export function deadlineCrossedForRow(
+  row: {
+    accessExpiresAt?: string | null;
+    refreshExpiresAt?: string | null;
+    loggedOutAt?: string | null;
+  },
+  since: number,
+  now: number
+): boolean {
+  const end = row.loggedOutAt ? Date.parse(row.loggedOutAt) : NaN;
+  if (!Number.isNaN(end) && end <= now) return true;
+  return (
+    stampCrossed(row.accessExpiresAt, since, now) || stampCrossed(row.refreshExpiresAt, since, now)
+  );
+}
+
 export function hasPassedDeadline(health: SignInHealth, since: number, now: number): boolean {
   for (const rows of Object.values(health.machines)) {
     for (const row of rows) {
@@ -333,12 +361,7 @@ export function hasPassedDeadline(health: SignInHealth, since: number, now: numb
       // as in downgradeCrossedRows: a terminal row's crossed end was
       // already observed as terminal and must not force a recollection.
       if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') continue;
-      for (const value of [row.accessExpiresAt, row.refreshExpiresAt, row.loggedOutAt]) {
-        if (!value) continue;
-        const at = Date.parse(value);
-        if (Number.isNaN(at) || at <= since || at > now) continue;
-        return true;
-      }
+      if (deadlineCrossedForRow(row, since, now)) return true;
     }
   }
   return false;
@@ -448,11 +471,7 @@ export function downgradeCrossedRows(health: SignInHealth, since: number, now: n
   for (const rows of Object.values(health.machines)) {
     for (const row of rows) {
       if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') continue;
-      const crossed = [row.accessExpiresAt, row.refreshExpiresAt, row.loggedOutAt].some((value) => {
-        if (!value) return false;
-        const at = Date.parse(value);
-        return !Number.isNaN(at) && at > since && at <= now;
-      });
+      const crossed = deadlineCrossedForRow(row, since, now);
       if (!crossed) continue;
       // The state was computed against times that have already passed; say
       // so instead of publishing it as current. The stamps go with it, so

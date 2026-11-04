@@ -186,9 +186,11 @@ stores no keys, so a source saved for Nas1 relies on `discover`.
 
 A read-only probe of login lifetimes: for every Claude config dir on the
 computer it runs on (the default `~/.claude`, the saved `~/.ccs/instances`
-homes, the `~/.claude-t3/<name>` account dirs, settings-defined homes, and on
-macOS the Claude Desktop Keychain item), it reads only the two OAuth times
-and token presence from `.credentials.json`. `refreshTokenExpiresAt` is the
+homes, the `~/.claude-t3/<name>` account dirs, and settings-defined homes),
+it reads only the two OAuth times and token presence. On macOS each dir
+also resolves through its Claude Code Keychain item — the canonical store
+there, named plainly for the default login and with a hash of the config
+dir for per-account logins — and the two stores publish as one row. `refreshTokenExpiresAt` is the
 hard end of the whole login; once it has passed, the login dies at the first
 access expiry after it. The row names that end only when the data supports
 one — a refresh-derived state is labeled as the refresh expiry's bound, never
@@ -198,11 +200,12 @@ cannot renew, so it reads `critical` until its expiry and `logged_out`
 after. Codex `auth.json` is probed and reported `unsupported` because it
 publishes no end-of-login time; only field names are shown, never values.
 
-Published rows carry the config dir and fix command in `$HOME`-relative
-form, so nothing under the home reaches `usage.json`/`usage.md` as an
-absolute path; a directory outside the home (a relocated `--ccs-dir`
-scope) is the one deliberate exception and is published as a quoted
-literal. The dashboard
+Published rows carry the config dir and fix command in home-relative
+form (`$HOME` on POSIX, `USERPROFILE` with its `HOMEDRIVE`+`HOMEPATH`
+fallback on Windows), so nothing under the home reaches
+`usage.json`/`usage.md` as an absolute path; a directory outside the home
+(a relocated `--ccs-dir` scope) is the one deliberate exception and is
+published as a quoted literal. The dashboard
 runs this collector on its own computer from the packaged file and on the
 configured Mac/Windows through the same in-memory SSH stdin stream the usage
 helper uses — nothing is installed on remote disks.

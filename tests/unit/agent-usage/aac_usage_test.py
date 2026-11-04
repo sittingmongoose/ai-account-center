@@ -232,6 +232,13 @@ class ReaderTests(unittest.TestCase):
              "refreshExpiresAt": iso(generated + dt.timedelta(hours=2)),
              "accessExpiresAt": iso(generated + dt.timedelta(hours=2)),
              "fixCommand": "claude auth login"},
+            {"provider": "claude", "machine": "ubuntu", "name": "nocmd", "state": "warn",
+             "refreshExpiresAt": iso(generated + dt.timedelta(hours=2)),
+             "accessExpiresAt": iso(generated + dt.timedelta(hours=2)),
+             "fixCommand": ""},
+            {"provider": "claude", "machine": "ubuntu", "name": "openended", "state": "ok",
+             "refreshExpiresAt": iso(generated + dt.timedelta(hours=30)),
+             "accessExpiresAt": iso(generated + dt.timedelta(hours=2))},
         ]
         (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
         out = io.StringIO()
@@ -248,6 +255,13 @@ class ReaderTests(unittest.TestCase):
         self.assertIn("re-login before then", soon_line)
         later_line = next(line for line in text.splitlines() if "later" in line)
         self.assertIn("re-login when the window ends", later_line)
+        # usage.md gives the same advice without a command when none is
+        # published, and names the open end on a healthy row.
+        nocmd_line = next(line for line in text.splitlines() if "nocmd" in line)
+        self.assertIn("re-login when the window ends", nocmd_line)
+        self.assertNotIn("`", nocmd_line)
+        open_line = next(line for line in text.splitlines() if "openended" in line)
+        self.assertIn("no exact end published yet", open_line)
         stale_line = next(line for line in text.splitlines() if "stale-ok" in line)
         self.assertNotIn("healthy", stale_line)
 

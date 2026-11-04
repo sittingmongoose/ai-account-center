@@ -163,8 +163,13 @@ describe('allowProfile', () => {
       'utf8'
     );
     const literals = new Set<string>();
-    for (const match of collector.matchAll(/(?:\["error"\] =|"error":) "([^"]+)"/g))
-      literals.add(match[1]);
+    // Both quote styles, dict/assignment/keyword forms: a future literal
+    // in any of today's plausible spellings must be seen here, not slip
+    // past because the extraction only knew one shape.
+    for (const match of collector.matchAll(
+      /(?:\[(?:"error"|'error')\]\s*=|(?:"error"|'error')\s*:|\berror\s*=)\s*(?:"([^"]+)"|'([^']+)')/g
+    ))
+      literals.add(match[1] ?? match[2]);
     expect(literals.size).toBe(7);
     for (const literal of literals) expect(publishableError(literal)).toBe(literal);
   });
@@ -341,6 +346,21 @@ describe('the cache outlives no deadline it published', () => {
     expect(gone.state).toBe('logged_out');
     expect(past.state).toBe('ok');
     expect(downgradeCrossedRows(report, NOW, NOW + 10 * 60_000)).toBe(false);
+  });
+
+  it('treats a live row whose known end is already past as crossed, clock skew included', () => {
+    // A remote whose clock runs behind can report a live state whose
+    // loggedOutAt is already past here. That known end cannot be a live
+    // future fact, unlike an expired access stamp on a renewable login.
+    const skewed = health([
+      row({ name: 'skewed', state: 'critical', loggedOutAt: '2026-11-03T11:59:00Z' }),
+      row({ name: 'renewable', accessExpiresAt: '2026-11-03T11:00:00Z', loggedOutAt: null }),
+    ]);
+    expect(hasPassedDeadlineWindow(skewed, NOW, NOW)).toBe(true);
+    expect(downgradeCrossedRows(skewed, NOW, NOW)).toBe(true);
+    const [skewedRow, renewable] = skewed.machines.ubuntu;
+    expect(skewedRow.state).toBe('unavailable');
+    expect(renewable.state).toBe('ok');
   });
 });
 
