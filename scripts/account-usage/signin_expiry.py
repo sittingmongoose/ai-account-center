@@ -58,14 +58,13 @@ MAX_ROOTS = 64
 MAX_SCAN_ENTRIES = 1024
 # The macOS Keychain service of the selector-free default login.
 KEYCHAIN_PLAIN_SERVICE = "Claude Code-credentials"
-# Credential selectors a pasted re-login must pin, in one fixed order:
-# the two storage selectors, then the OAuth-variant selectors that move
-# a login to the custom/local storage identities upstream.
 # The non-secret top-level field names a Codex auth.json can carry
 # (current and earlier layouts). Only these are ever published.
 CODEX_AUTH_FIELDS = frozenset({
     "OPENAI_API_KEY", "auth_mode", "last_refresh", "tokens",
     "access_token", "refresh_token", "id_token", "account_id",
+    "agent_identity", "personal_access_token", "bedrock_api_key",
+    "bedrock_access_keys",
 })
 
 # Keychain answers that leave an item's existence unknown.
@@ -74,6 +73,9 @@ KEYCHAIN_UNCHECKED = frozenset({
     "keychain state could not be checked",
 })
 
+# Credential selectors a pasted re-login must pin, in one fixed order:
+# the two storage selectors, then the OAuth-variant selectors that move
+# a login to the custom/local storage identities upstream.
 SELECTOR_ORDER = [
     "CLAUDE_CONFIG_DIR",
     "CLAUDE_SECURESTORAGE_CONFIG_DIR",
@@ -440,9 +442,12 @@ def fix_command(config_dir, home, storage_var="CLAUDE_CONFIG_DIR", spelling=None
                 co_override = {
                     "CLAUDE_CONFIG_DIR": "'" + co_config.replace("'", "''") + "'"}
             else:
-                co_escaped = co_suffix.replace("`", "``").replace('"', '`"').replace("$", "`$")
+                # The remainder is a single-quoted literal appended to
+                # the home expression: no backtick escapes (which the
+                # publisher refuses) and nothing in it expands.
                 co_home = "$(if (Test-Path env:USERPROFILE) { $env:USERPROFILE } else { $env:HOMEDRIVE + $env:HOMEPATH })"
-                co_override = {"CLAUDE_CONFIG_DIR": f'"{co_home}{co_escaped}"'}
+                co_override = {"CLAUDE_CONFIG_DIR":
+                               f'"{co_home}" + \'' + co_suffix.replace("'", "''") + "'"}
         if spelling is not None:
             if any(character in spelling for character in curly):
                 return ""

@@ -89,9 +89,10 @@ def _local_path(home, value, missing=None):
 
     Do not stat a UNC/network link target: offline mounts can outlive a process
     deadline. T3 shadow auth links into another local account home are allowed.
-    When `missing` is a list, a None result caused by an absent in-bounds
-    component (a dangling link) appends to it, so callers can tell that
-    failed read from a policy refusal (outside or network target).
+    When `missing` is a list, a None result for a chain that never
+    resolves in bounds (an absent component, a loop, or a chain longer
+    than the hop bound) appends to it, so callers can tell that failed
+    read from a policy refusal (outside or network target).
     """
     root = Path(os.path.abspath(home))
     path = Path(os.path.abspath(value))
@@ -130,6 +131,10 @@ def _local_path(home, value, missing=None):
                 break
         if not redirected:
             return current
+    # The hop bound ran out (a loop, or an overlong chain): unresolved,
+    # which is a failed read, never a refusal.
+    if missing is not None:
+        missing.append(path)
     return None
 
 
@@ -232,7 +237,8 @@ def _children(home, value):
                         candidate = stat.S_ISDIR(os.lstat(validated).st_mode)
                     elif missing:
                         # A permitted chain that ends at nothing (a
-                        # dangling link, at any hop) is a failed read;
+                        # dangling link at any hop, a loop, or one past
+                        # the hop bound) is a failed read;
                         # a chain refused anywhere for leaving the home
                         # or naming a network target is a silent
                         # exclusion.

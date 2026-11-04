@@ -124,6 +124,13 @@ class InventoryTests(unittest.TestCase):
         desktop_helpers.READ_FAILURES = 0
         core._children(self.home, base)
         self.assertEqual(desktop_helpers.READ_FAILURES, 1)
+        # A loop never resolves in bounds: a failed read, not a refusal.
+        (base / "dangling").unlink()
+        (base / "loop").symlink_to(base / "loop", target_is_directory=True)
+        desktop_helpers.READ_FAILURES = 0
+        names = [path.name for path in core._children(self.home, base)]
+        self.assertEqual(names, ["real"])
+        self.assertEqual(desktop_helpers.READ_FAILURES, 1)
 
     def test_codex_settings_homes_keep_their_spelling(self):
         # Only Claude NFC-normalizes its config dir; a Codex home is

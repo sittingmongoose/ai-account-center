@@ -1,5 +1,6 @@
 """Sign-in expiry collector regressions."""
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -22,6 +23,15 @@ except Exception:
 
 NOW = int(time.time() * 1000)
 H = 3600 * 1000
+
+
+# Tests that simulate a POSIX platform's paths (sys.platform patched to
+# linux/darwin, absolute "/..." spellings, links to /etc) cannot run on
+# a Windows host, whose pathlib keeps drive letters and backslashes; the
+# Linux CI run covers them, and the Windows code paths are exercised
+# there through the win32 mocks.
+posix_host_only = unittest.skipUnless(
+    os.name == "posix", "simulates POSIX path semantics the host cannot represent")
 
 
 class SignInExpiryTests(unittest.TestCase):
@@ -131,6 +141,7 @@ class SignInExpiryTests(unittest.TestCase):
             expected_stamp = collector.iso(end) if end else None
             self.assertEqual(rows[name]["loggedOutAt"], expected_stamp, credentials)
 
+    @posix_host_only
     def test_fix_command_uses_the_shell_of_the_machine_and_hides_paths(self):
         self._write("spaced", {"accessToken": "x", "refreshToken": "y", "windows": []})
         # Both shell forms are selected explicitly: the host running this
@@ -309,6 +320,7 @@ class SignInExpiryTests(unittest.TestCase):
         self.assertEqual(row["state"], "unavailable")
         self.assertIn("allowed roots", row["error"])
 
+    @posix_host_only
     def test_run_uses_the_apps_ccs_precedence(self):
         import os
         seen = {}
@@ -714,6 +726,7 @@ class SignInExpiryTests(unittest.TestCase):
         self.assertIsNone(entry["accessExpiresAt"])
         self.assertEqual(entry["refreshExpiresAt"], collector.iso(NOW + 30 * H))
 
+    @posix_host_only
     def test_fix_commands_scope_the_credential_selectors(self):
         # A pasted re-login must repair the login its row names even when
         # the user's shell exports credential selectors for another
@@ -880,6 +893,7 @@ class SignInExpiryTests(unittest.TestCase):
         self.assertEqual(
             sorted(n for n in linux_names if n in ("alias", "target")), ["target"])
 
+    @posix_host_only
     def test_mac_securestorage_override_is_never_the_default_rows_service(self):
         # The default row is the login its repair command recreates:
         # the command unsets every selector, so it always targets the
@@ -936,6 +950,7 @@ class SignInExpiryTests(unittest.TestCase):
             "CLAUDE_LOCAL_OAUTH_API_BASE CLAUDE_CODE_CUSTOM_OAUTH_URL && "
             'CLAUDE_SECURESTORAGE_CONFIG_DIR="$HOME/elsewhere" claude auth login)')
 
+    @posix_host_only
     def test_mac_ambient_selector_spelling_is_hashed_and_repaired_verbatim(self):
         # Upstream hashes the inherited selector string exactly as set
         # (NFC only); a trailing slash is part of the identity. The
@@ -1340,13 +1355,12 @@ class SignInExpiryTests(unittest.TestCase):
             link.symlink_to(nested, target_is_directory=True)
         except (OSError, NotImplementedError):
             self.skipTest("symlinks unavailable")
-        for name, expiry in (("acct", NOW + 30 * H), ):
-            store = self.home / name
-            store.mkdir()
-            (store / ".credentials.json").write_text(json.dumps(
-                {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
-                                   "expiresAt": NOW + 2 * H,
-                                   "refreshTokenExpiresAt": expiry}}))
+        store = self.home / "acct"
+        store.mkdir()
+        (store / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW + 2 * H,
+                               "refreshTokenExpiresAt": NOW + 30 * H}}))
         decoy = self.home / "nested" / "acct"
         decoy.mkdir()
         (decoy / ".credentials.json").write_text(json.dumps(
@@ -1360,6 +1374,7 @@ class SignInExpiryTests(unittest.TestCase):
                                        kind="dir", spelling=spelling)
         self.assertEqual(row["state"], "ok")
 
+    @posix_host_only
     def test_storage_dir_repair_pins_a_co_inherited_config_selector(self):
         # A securestorage repair must not clear a co-inherited
         # CLAUDE_CONFIG_DIR: upstream writes account metadata under
@@ -1395,9 +1410,23 @@ class SignInExpiryTests(unittest.TestCase):
                 store, win_home,
                 storage_var="CLAUDE_SECURESTORAGE_CONFIG_DIR",
                 spelling=win_home + "\\.claude-t3\\acct")
-        self.assertIn('\\.claude-t3\\other"', command)
         self.assertIn("$env:CLAUDE_CONFIG_DIR = \"$(if (Test-Path env:USERPROFILE)", command)
+        self.assertIn("\" + '\\.claude-t3\\other';", command)
         self.assertNotIn(win_home, command)
+        # A remainder carrying PowerShell-special characters stays a
+        # single-quoted literal: no backtick escapes, which the
+        # publisher refuses, and nothing in it expands.
+        with mock.patch.dict(collector.os.environ,
+                             {"CLAUDE_CONFIG_DIR": win_home + "\\proj$te`st'x"}), \
+                mock.patch.object(collector.sys, "platform", "win32"):
+            command = collector.fix_command(
+                store, win_home,
+                storage_var="CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                spelling=win_home + "\\.claude-t3\\acct")
+        self.assertIn("+ '\\proj$te`st''x';", command)
+        co_part = command.split("$env:CLAUDE_CONFIG_DIR = ", 2)[2].split(";", 1)[0]
+        self.assertNotIn("``", co_part)
+        self.assertNotIn("`$", co_part)
         win_other = "C:\\Users\\x\\other"
         with mock.patch.dict(collector.os.environ,
                              {"CLAUDE_CONFIG_DIR": win_other}), \
@@ -1512,13 +1541,19 @@ class SignInExpiryTests(unittest.TestCase):
         base.mkdir(parents=True)
         nfc = base / _ud.normalize("NFC", "café")
         nfc.mkdir()
-        (base / _ud.normalize("NFD", "café")).symlink_to(
-            nfc, target_is_directory=True)
+        try:
+            (base / _ud.normalize("NFD", "café")).symlink_to(
+                nfc, target_is_directory=True)
+        except (FileExistsError, OSError, NotImplementedError):
+            # A normalization-insensitive filesystem (APFS) treats the
+            # two spellings as one name: the fixture cannot exist there.
+            self.skipTest("filesystem cannot hold both spellings")
         with mock.patch.object(collector.sys, "platform", "darwin"):
             names = [name for name, *_ in collector.claude_roots(self.home)[0]]
         cafes = [n for n in names if _ud.normalize("NFC", n) == "café"]
         self.assertEqual(len(cafes), 1, names)
 
+    @posix_host_only
     def test_mac_settings_default_dir_is_its_own_explicit_identity(self):
         # A configured home naming ~/.claude is launched with
         # CLAUDE_CONFIG_DIR set, which upstream turns into the hashed
@@ -1649,6 +1684,7 @@ class SignInExpiryTests(unittest.TestCase):
         self.assertEqual(variant["fixCommand"], "")
         self.assertNotIn("acct-local-oauth", rows)
 
+    @posix_host_only
     def test_mac_variant_probe_respects_the_outside_roots_refusal(self):
         # A dir refused for resolving outside the allowed roots is
         # refused for every store: its variant item is never probed
@@ -1730,7 +1766,11 @@ class SignInExpiryTests(unittest.TestCase):
         base = self.home / ".claude-t3"
         base.mkdir(parents=True)
         odd = real_os.fsencode(base) + b"/bad\xff"
-        real_os.mkdir(odd)
+        try:
+            real_os.mkdir(odd)
+        except (OSError, UnicodeError):
+            # APFS and Windows refuse a name that is not valid UTF-8.
+            self.skipTest("filesystem refuses non-UTF-8 names")
         pathlib.Path(real_os.fsdecode(odd), ".credentials.json").write_text(
             json.dumps({"claudeAiOauth": {
                 "accessToken": "x", "refreshToken": "y",

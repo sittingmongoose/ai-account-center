@@ -56,6 +56,10 @@ const CODEX_AUTH_FIELDS = new Set([
   'refresh_token',
   'id_token',
   'account_id',
+  'agent_identity',
+  'personal_access_token',
+  'bedrock_api_key',
+  'bedrock_access_keys',
 ]);
 /** A published timestamp must parse as a real calendar time; anything else reads as absent. */
 const STAMP_PATTERN =
