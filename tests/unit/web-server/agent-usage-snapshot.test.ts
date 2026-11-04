@@ -1030,6 +1030,22 @@ describe('sign-in health section', () => {
       NOW
     );
     expect(skewed[0].state).toBe('unavailable');
+    // A past refresh end with no named login end is the same skew
+    // shape through the other stamp: no single-clock collector emits
+    // it live, so it counts crossed here too.
+    const refreshSkewed = downgradeCrossedSignInRows(
+      [
+        row({
+          state: 'warn',
+          loggedOutAt: null,
+          accessExpiresAt: '2026-10-15T11:00:00Z',
+          refreshExpiresAt: '2026-10-15T11:30:00Z',
+        }),
+      ] as never[],
+      NOW,
+      NOW
+    );
+    expect(refreshSkewed[0].state).toBe('unavailable');
     const out = downgradeCrossedSignInRows(rows, NOW, NOW + 60 * MINUTE);
     expect(out[0].state).toBe('unavailable');
     expect(out[0].error).toBe('sign-in state changed during collection; recheck pending');
@@ -1106,6 +1122,42 @@ describe('sign-in health section', () => {
     );
     const json = writes.find(([name]) => name === SNAPSHOT_JSON)?.[1] as string;
     expect(JSON.parse(json).signIn[0].state).toBe('unavailable');
+    const markdownWrites = writes.filter(([name]) => name === SNAPSHOT_MARKDOWN);
+    expect(markdownWrites[markdownWrites.length - 1][1]).not.toContain('re-login before then');
+    expect(liveRow.state).toBe('critical');
+  });
+
+  it('rechecks after the JSON write too, converging both files', async () => {
+    const writes: Array<[string, string]> = [];
+    const liveRow = {
+      name: 'soon',
+      provider: 'claude',
+      platform: 'ubuntu',
+      machine: 'ubuntu',
+      state: 'critical' as const,
+      loggedOutAt: new Date(Date.now() + 80).toISOString(),
+      fixCommand: 'claude auth login',
+    };
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      isDirectory: async () => true,
+      refreshSeconds: () => 60,
+      signIn: async () => [liveRow],
+      // This time the JSON write is the slow stage: the deadline
+      // crosses while usage.json itself is in flight, after every
+      // earlier recheck has passed.
+      write: async (_directory, name, body) => {
+        if (name === SNAPSHOT_JSON) await new Promise((resolve) => setTimeout(resolve, 200));
+        writes.push([name, body]);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      true
+    );
+    const jsonWrites = writes.filter(([name]) => name === SNAPSHOT_JSON);
+    const finalJson = jsonWrites[jsonWrites.length - 1][1];
+    expect(JSON.parse(finalJson).signIn[0].state).toBe('unavailable');
     const markdownWrites = writes.filter(([name]) => name === SNAPSHOT_MARKDOWN);
     expect(markdownWrites[markdownWrites.length - 1][1]).not.toContain('re-login before then');
     expect(liveRow.state).toBe('critical');

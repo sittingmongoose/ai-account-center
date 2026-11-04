@@ -75,6 +75,12 @@ describe('allowProfile', () => {
     expect(clipped?.fixCommand).toBe('');
     const longButFitting = allowProfile(row({ fixCommand: 'x'.repeat(200) }), 'mac');
     expect(longButFitting?.fixCommand).toHaveLength(200);
+    // The scoped Windows form (selector clearing plus the USERPROFILE
+    // fallback expression) is long before the account suffix; the bound
+    // leaves room for a real one instead of dropping the command.
+    const atBound = allowProfile(row({ fixCommand: 'x'.repeat(400) }), 'mac');
+    expect(atBound?.fixCommand).toHaveLength(400);
+    expect(allowProfile(row({ fixCommand: 'x'.repeat(401) }), 'mac')?.fixCommand).toBe('');
   });
 
   it('omits a repair command that cannot render byte-exact, never rewrites it', () => {
@@ -346,6 +352,31 @@ describe('the cache outlives no deadline it published', () => {
     expect(gone.state).toBe('logged_out');
     expect(past.state).toBe('ok');
     expect(downgradeCrossedRows(report, NOW, NOW + 10 * 60_000)).toBe(false);
+  });
+
+  it('treats a live row with a past refresh end and no named end as crossed', () => {
+    // No collector on one clock emits this shape — a past refresh end
+    // with no derivable login end reads logged_out at the source — so a
+    // live row carrying one comes from a clock that disagrees with
+    // this one, exactly like a past loggedOutAt. A past ACCESS stamp on
+    // a renewable login (refresh still ahead) stays a historical fact,
+    // and a dying window (refresh past, named end still ahead) stands.
+    const skewed = health([
+      row({ name: 'skewed', state: 'warn', loggedOutAt: null, refreshExpiresAt: '2026-11-03T11:00:00Z' }),
+      row({ name: 'renewable', accessExpiresAt: '2026-11-03T11:00:00Z', loggedOutAt: null }),
+      row({
+        name: 'dying',
+        state: 'critical',
+        refreshExpiresAt: '2026-11-03T11:00:00Z',
+        loggedOutAt: '2026-11-03T14:00:00Z',
+      }),
+    ]);
+    expect(hasPassedDeadlineWindow(skewed, NOW, NOW)).toBe(true);
+    expect(downgradeCrossedRows(skewed, NOW, NOW)).toBe(true);
+    const [skewedRow, renewable, dying] = skewed.machines.ubuntu;
+    expect(skewedRow.state).toBe('unavailable');
+    expect(renewable.state).toBe('ok');
+    expect(dying.state).toBe('critical');
   });
 
   it('treats a live row whose known end is already past as crossed, clock skew included', () => {

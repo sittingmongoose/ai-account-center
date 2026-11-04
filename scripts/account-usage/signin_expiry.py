@@ -14,8 +14,11 @@ fresh `claude auth login`.
 config dir on this machine — the default `~/.claude` and the per-account
 `~/.claude-t3/<name>` dirs; on macOS each dir resolves through its
 Keychain item first (the canonical store there), the file only when the
-Keychain cannot answer. Token values are never read beyond their
-presence and never printed.
+Keychain item cannot be read at all — a readable item's verdict stands
+even when that verdict is `unavailable`. Fix commands pin their
+credential selectors, so a pasted command repairs the login its row
+names whatever the shell exports. Token values are never read beyond
+their presence and never printed.
 
 Other providers are probed for readable login end times too; a provider whose
 store carries no such time is reported as `unsupported` rather than guessed.
@@ -28,7 +31,6 @@ import argparse
 import ctypes
 import datetime
 import hashlib
-import itertools
 import json
 import os
 import pathlib
@@ -44,6 +46,9 @@ CRITICAL_SECONDS = 4 * 3600
 # Enumerating every config dir is bounded; a machine with more roots than this
 # reports the first MAX_ROOTS and stays honest about the rest by not guessing.
 MAX_ROOTS = 64
+# Raw entries one base scan will look at while collecting candidate homes;
+# dot-prefixed entries are looked at but never counted as candidates.
+MAX_SCAN_ENTRIES = 1024
 
 
 # A representable OAuth epoch: 2001-09-09 (1e12 ms) through Nov 2286 (1e13 ms).
@@ -164,10 +169,15 @@ def _read_regular_bytes(path, limit=65536):
         return None
     try:
         # fdopen itself refuses a directory swapped in at the open; that
-        # refusal must not strand the raw descriptor.
+        # refusal (OSError, or ValueError from a mode the descriptor
+        # cannot take) must not strand the raw descriptor, and closing
+        # an already-closed descriptor must not escape either.
         descriptor = os.fdopen(raw_fd, "rb")
-    except OSError:
-        os.close(raw_fd)
+    except (OSError, ValueError):
+        try:
+            os.close(raw_fd)
+        except OSError:
+            pass
         return None
     try:
         with descriptor:
@@ -219,11 +229,30 @@ def _home_relative(config_dir, home):
     return "~/" + rel.as_posix(), "~\\" + str(rel).replace("/", "\\")
 
 
+def _default_fix_command():
+    """The re-login command for the default ~/.claude login. It must not
+    inherit credential selectors exported for another account in the
+    shell it is pasted into, so both are unset for the invocation —
+    unset, never emptied: a set-but-empty CLAUDE_SECURESTORAGE_CONFIG_DIR
+    still selects storage upstream (the plain service), and an empty
+    CLAUDE_CONFIG_DIR is only a fallback by accident of one helper. The
+    POSIX form unsets in a subshell rather than through `env`, so the
+    `claude` name still resolves through the shell (functions and
+    aliases included), exactly as the unscoped command did."""
+    if sys.platform == "win32":
+        return ("$env:CLAUDE_CONFIG_DIR = $null; "
+                "$env:CLAUDE_SECURESTORAGE_CONFIG_DIR = $null; claude auth login")
+    return "(unset CLAUDE_CONFIG_DIR CLAUDE_SECURESTORAGE_CONFIG_DIR; claude auth login)"
+
+
 def fix_command(config_dir, home):
     """An executable re-login command for this machine's shell. A dir under
     the home publishes as a $HOME-relative form the target expands at run
     time; a dir outside it (a relocated CCS scope) is the one deliberate
-    exception and publishes as a quoted literal, as the README states."""
+    exception and publishes as a quoted literal, as the README states.
+    Every form also clears CLAUDE_SECURESTORAGE_CONFIG_DIR: inherited
+    from the pasting shell it would redirect the login's storage to
+    another account's, whatever CLAUDE_CONFIG_DIR says."""
     relative = _home_relative(config_dir, home)
     if sys.platform == "win32":
         # PowerShell reads curly quotes (U+2018-U+201F) as quotes too, and
@@ -232,36 +261,41 @@ def fix_command(config_dir, home):
         # pasted line that runs something else. The home expands the way
         # Path.home() resolved it on this machine (see below).
         curly = "".join(chr(cp) for cp in range(0x2018, 0x2020))
+        clear = "$env:CLAUDE_SECURESTORAGE_CONFIG_DIR = $null; "
         if relative is None:
             literal = str(config_dir)
             if any(character in literal for character in curly):
                 return ""
             literal = literal.replace("'", "''")
-            return f"$env:CLAUDE_CONFIG_DIR = '{literal}'; claude auth login"
+            return f"{clear}$env:CLAUDE_CONFIG_DIR = '{literal}'; claude auth login"
         if any(character in relative[1] for character in curly):
             return ""
         escaped = relative[1][1:].replace("`", "``").replace('"', '`"').replace("$", "`$")
-        # Python's Windows home is USERPROFILE, else HOMEDRIVE+HOMEPATH;
-        # the command resolves the same fallback at paste time.
-        home_expr = "$(if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOMEDRIVE + $env:HOMEPATH })"
-        return f'$env:CLAUDE_CONFIG_DIR = "{home_expr}{escaped}"; claude auth login'
+        # Python's Windows home is USERPROFILE when the variable exists
+        # (even empty), else HOMEDRIVE+HOMEPATH; the command resolves
+        # the same presence test at paste time.
+        home_expr = "$(if (Test-Path env:USERPROFILE) { $env:USERPROFILE } else { $env:HOMEDRIVE + $env:HOMEPATH })"
+        return f'{clear}$env:CLAUDE_CONFIG_DIR = "{home_expr}{escaped}"; claude auth login'
+    # A subshell unset, not `env -u`: `claude` must still resolve
+    # through the shell (functions and aliases included).
+    clear = "(unset CLAUDE_SECURESTORAGE_CONFIG_DIR; "
     if relative is None:
         literal = str(config_dir).replace("'", "'\\''")
-        return f"CLAUDE_CONFIG_DIR='{literal}' claude auth login"
+        return f"{clear}CLAUDE_CONFIG_DIR='{literal}' claude auth login)"
     suffix = relative[0][1:]
     if "!" in suffix:
         # Interactive bash history-expands `!` even inside double quotes, and
         # `\!` keeps its backslash there, so a `!`-carrying suffix is pasted
         # as a single-quoted segment instead, where `!` is inert.
         quoted = suffix.replace("'", "'\\''")
-        return f"CLAUDE_CONFIG_DIR=\"$HOME\"'{quoted}' claude auth login"
+        return f"{clear}CLAUDE_CONFIG_DIR=\"$HOME\"'{quoted}' claude auth login)"
     escaped = (
         suffix.replace("\\", "\\\\")
         .replace('"', '\\"')
         .replace("$", "\\$")
         .replace("`", "\\`")
     )
-    return f'CLAUDE_CONFIG_DIR="$HOME{escaped}" claude auth login'
+    return f'{clear}CLAUDE_CONFIG_DIR="$HOME{escaped}" claude auth login)'
 
 
 def _within_allowed(path, home, ccs_dir=None):
@@ -325,10 +359,11 @@ def _dir_state(path):
 def claude_profile(name, config_dir, now_ms, home, ccs_dir=None):
     """One config dir's sign-in state; missing/unreadable files read as unavailable."""
     relative = _home_relative(config_dir, home)
-    # The default dir is what a bare re-login writes, so it names no
-    # CLAUDE_CONFIG_DIR: on macOS the login and the Keychain item stay the
-    # same one this collector reads.
-    fix = "claude auth login" if pathlib.Path(config_dir) == home / ".claude" else fix_command(config_dir, home)
+    # The default dir is what a selector-free re-login writes, so its
+    # command unsets both selectors instead of naming a dir: naming
+    # ~/.claude explicitly would move the macOS login to a different
+    # (hashed) Keychain item than the plain one this collector reads.
+    fix = _default_fix_command() if pathlib.Path(config_dir) == home / ".claude" else fix_command(config_dir, home)
     entry = {
         "name": name,
         "configDir": relative[0] if relative else str(config_dir),
@@ -368,10 +403,10 @@ def claude_profile(name, config_dir, now_ms, home, ccs_dir=None):
 
 
 def _keychain_service_for(config_dir_text):
-    """The per-config-dir Keychain service name, exactly as Claude Code
-    builds it (verified against its bundled source): the plain service
-    plus "-" and the first eight hex digits of the SHA-256 of the
-    NFC-normalized config dir string, exactly as configured."""
+    """The per-config-dir Keychain service name, matching the naming
+    helper in Claude Code's bundled source: the plain service plus "-"
+    and the first eight hex digits of the SHA-256 of the NFC-normalized
+    config dir string, exactly as configured."""
     digest = hashlib.sha256(
         unicodedata.normalize("NFC", config_dir_text).encode("utf-8")
     ).hexdigest()[:8]
@@ -381,23 +416,44 @@ def _keychain_service_for(config_dir_text):
 def _mac_keychain_services(root, is_default):
     """Keychain service candidates for one config dir, in probe order.
 
-    The default login (no CLAUDE_CONFIG_DIR) uses the plain service. A
-    per-account dir is always launched with CLAUDE_CONFIG_DIR set, so its
-    item carries the hash suffix; the spelled and resolved forms of the
-    dir are both candidates because launchers differ in which they set.
-    A global CLAUDE_SECURESTORAGE_CONFIG_DIR in this collector's own
-    environment names the storage dir Claude Code would hash instead;
-    it is added for the default row only, since per-account values are
-    set per launch and cannot be seen from here."""
+    Upstream selects exactly one service per launch (from its bundled
+    naming helper): CLAUDE_SECURESTORAGE_CONFIG_DIR set non-empty wins
+    outright and hashes its own value; set-but-empty selects the plain
+    service; otherwise a set CLAUDE_CONFIG_DIR hashes, and no selector
+    at all is plain. The candidate list mirrors that selection for the
+    spellings a launcher can be observed to use, spelled form first:
+    the row's verdict must bind to the login its own fix command
+    repairs, never to whichever distinct item a hash-sorted probe
+    happens to reach first. A securestorage value in this collector's
+    own environment is honored for the default row only, since
+    per-account values are set per launch and cannot be seen here;
+    when it is set, no differently-scoped item may answer instead.
+    A dir string UTF-8 cannot encode (a non-UTF-8 filename) yields no
+    candidate for that spelling rather than aborting the report."""
+    def hashed(text):
+        try:
+            return _keychain_service_for(text)
+        except (UnicodeError, ValueError):
+            return None
+
     services = []
     if is_default:
         securestorage = os.environ.get("CLAUDE_SECURESTORAGE_CONFIG_DIR")
         if securestorage:
-            services.append(_keychain_service_for(securestorage))
-        services.append("Claude Code-credentials")
+            candidates = [hashed(securestorage)]
+        elif securestorage is not None:
+            candidates = ["Claude Code-credentials"]
+        else:
+            # Plain first (the selector-free launch), then the hashed
+            # item a launch with CLAUDE_CONFIG_DIR explicitly naming
+            # the default dir would have written.
+            candidates = ["Claude Code-credentials", hashed(str(root))]
+        services.extend(candidate for candidate in candidates if candidate)
     else:
-        spellings = {str(root), os.path.realpath(root)}
-        services.extend(sorted(_keychain_service_for(spelling) for spelling in spellings))
+        for spelling in dict.fromkeys((str(root), os.path.realpath(root))):
+            service = hashed(spelling)
+            if service:
+                services.append(service)
     return list(dict.fromkeys(services))
 
 
@@ -431,7 +487,11 @@ def _mac_keychain_text(service="Claude Code-credentials"):
         try:
             if not 0 < length.value <= 65536:
                 return None
-            return ctypes.string_at(pointer, length.value).decode("utf-8")
+            # surrogateescape: a payload that is not UTF-8 text still
+            # counts as the item answering (its JSON parse then fails),
+            # never as silence the fallback file may speak over.
+            return ctypes.string_at(pointer, length.value).decode(
+                "utf-8", "surrogateescape")
         finally:
             security.SecKeychainItemFreeContent(None, pointer)
     except (OSError, ValueError, UnicodeError, AttributeError):
@@ -439,7 +499,14 @@ def _mac_keychain_text(service="Claude Code-credentials"):
 
 
 def mac_keychain_profile(now_ms, service="Claude Code-credentials"):
-    """macOS: Claude Code stores the same JSON in the login Keychain."""
+    """macOS: Claude Code stores the same JSON in the login Keychain.
+
+    `answered` separates storage-read success from the health verdict:
+    it is True once the item's payload was actually read, even when the
+    payload's own verdict is `unavailable` (unreadable credentials,
+    unknown expiry). Only an unanswered probe — no item, a locked
+    Keychain — may fall back to the credentials file. The marker is
+    internal: publication copies named fields only."""
     entry = {
         "name": "keychain",
         "configDir": "Keychain: '%s'" % service,
@@ -448,8 +515,9 @@ def mac_keychain_profile(now_ms, service="Claude Code-credentials"):
         "refreshExpiresAt": None,
         "loggedOutAt": None,
         "state": "unavailable",
-        "fixCommand": "claude auth login",
+        "fixCommand": _default_fix_command(),
         "error": "keychain item unreadable",
+        "answered": False,
     }
     if sys.platform != "darwin":
         entry.pop("error")
@@ -457,6 +525,7 @@ def mac_keychain_profile(now_ms, service="Claude Code-credentials"):
     raw = _mac_keychain_text(service)
     if raw is None:
         return entry
+    entry["answered"] = True
     data = read_credentials_from_text(raw)
     if data is None:
         entry["error"] = "keychain item holds no readable credentials"
@@ -573,7 +642,15 @@ def _dedupe_key(path):
     itself when stat can see it, so a symlinked instance — and, on a
     case-insensitive volume, a case-variant spelling of the same dir —
     publishes once; the realpath when it cannot. A zero inode (some
-    Windows volumes report one) is no identity and falls back too."""
+    Windows volumes report one) is no identity and falls back too.
+
+    macOS is the exception: there the login's identity includes the
+    spelled dir string itself, because the Keychain service hashes it —
+    two spellings of one directory can hold two different logins, and
+    merging them would drop one spelling's login (and its repair
+    command) entirely. Each configured spelling keeps its own row."""
+    if sys.platform == "darwin":
+        return ("spelled", str(path))
     try:
         info = path.stat()
     except OSError:
@@ -676,13 +753,28 @@ def claude_roots(home, ccs_dir=None):
         if not is_dir:
             return
         try:
-            children = list(itertools.islice(base.iterdir(), MAX_ROOTS + 1))
+            # Only candidate homes count toward the bound: dot-prefixed
+            # entries are never homes, and seventy of them beside one
+            # real account must not read as truncated discovery. The
+            # raw scan stays bounded too; hitting either bound is
+            # reported, never silent.
+            children = []
+            scanned = 0
+            for child in base.iterdir():
+                scanned += 1
+                if scanned > MAX_SCAN_ENTRIES:
+                    complete = False
+                    break
+                if child.name.startswith("."):
+                    continue
+                children.append(child)
+                if len(children) > MAX_ROOTS:
+                    complete = False
+                    children = children[:MAX_ROOTS]
+                    break
         except OSError:
             complete = False
             return
-        if len(children) > MAX_ROOTS:
-            complete = False
-            children = children[:MAX_ROOTS]
         for child in sorted(children, key=lambda item: item.name):
             child_is_dir, child_failed = _dir_state(child)
             if child_failed:
@@ -728,38 +820,45 @@ def collect(home, now_ms, include_keychain=True, ccs_dir=None):
         # The Keychain and .credentials.json are two stores for the same
         # login (Claude Code's backend is keychain-with-plaintext-fallback):
         # the Keychain is the canonical store, read first, and the file is
-        # only its fallback for a locked Keychain. Each root therefore
-        # resolves through its Keychain candidates first and keeps the
-        # file verdict only when the Keychain cannot answer; the stores
-        # never publish as two logins, one failed beside one healthy.
+        # only its fallback for a store that cannot answer at all. Each
+        # root therefore probes its Keychain candidates in order and the
+        # first item that ANSWERS binds the row — including an answered
+        # `unavailable` (readable credentials whose lifetime is unknown):
+        # a stale fallback file must never speak over the canonical
+        # store's own verdict. The stores never publish as two logins,
+        # one failed beside one healthy.
         # profiles[i] matches roots[i] here; later rows are appended below.
         for index, (_label, root) in enumerate(roots):
             row = profiles[index]
             keychain = None
+            unanswered = None
             for service in _mac_keychain_services(root, index == 0):
                 candidate = mac_keychain_profile(now_ms, service)
-                if keychain is None:
-                    keychain = candidate
-                if candidate["state"] != "unavailable":
+                if candidate.get("answered"):
                     keychain = candidate
                     break
-            if keychain is None:
-                continue
-            if keychain["state"] != "unavailable":
+                if unanswered is None:
+                    unanswered = candidate
+            if keychain is not None:
+                # The row keeps its own configDir: the Keychain label's
+                # hash fingerprints the absolute path and names no dir
+                # the reader can act on.
                 row.update(
-                    configDir=keychain["configDir"],
                     accessExpiresAt=keychain["accessExpiresAt"],
                     refreshExpiresAt=keychain["refreshExpiresAt"],
                     loggedOutAt=keychain["loggedOutAt"],
                     state=keychain["state"],
                 )
-                row.pop("error", None)
-            elif index == 0 and row["state"] == "unavailable" and keychain.get("error"):
+                if keychain.get("error"):
+                    row["error"] = keychain["error"]
+                else:
+                    row.pop("error", None)
+            elif index == 0 and row["state"] == "unavailable" and unanswered and unanswered.get("error"):
                 # Neither default store could answer; the canonical
                 # store's cause names the failure. Per-account rows keep
                 # the file cause: a hashed item may simply not exist for
                 # a file-kept account, which says nothing unreadable.
-                row["error"] = keychain["error"]
+                row["error"] = unanswered["error"]
     codex = codex_profile(now_ms, home)
     if codex:
         profiles.append(codex)

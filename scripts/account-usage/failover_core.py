@@ -149,10 +149,15 @@ def _read_present(path, max_bytes):
                          | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
     try:
         # fdopen refuses a directory swapped in at the open; that refusal
-        # must not strand the raw descriptor.
+        # (OSError, or ValueError from a mode the descriptor cannot
+        # take) must not strand the raw descriptor, and closing an
+        # already-closed descriptor must not escape either.
         opened = os.fdopen(descriptor, "rb")
-    except OSError:
-        os.close(descriptor)
+    except (OSError, ValueError):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
         return None
     with opened as handle:
         actual = os.fstat(handle.fileno())

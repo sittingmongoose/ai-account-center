@@ -190,7 +190,12 @@ homes, the `~/.claude-t3/<name>` account dirs, and settings-defined homes),
 it reads only the two OAuth times and token presence. On macOS each dir
 also resolves through its Claude Code Keychain item — the canonical store
 there, named plainly for the default login and with a hash of the config
-dir for per-account logins — and the two stores publish as one row. `refreshTokenExpiresAt` is the
+dir for per-account logins — and the two stores publish as one row. The
+first Keychain item that can be read binds the row, spelled dir first,
+even when its verdict is `unavailable`; the credentials file speaks only
+when no item could be read at all. Because the service name hashes the
+spelled dir, two spellings of one macOS directory are two login
+identities and keep separate rows; elsewhere they publish once. `refreshTokenExpiresAt` is the
 hard end of the whole login; once it has passed, the login dies at the first
 access expiry after it. The row names that end only when the data supports
 one — a refresh-derived state is labeled as the refresh expiry's bound, never
@@ -205,7 +210,10 @@ form (`$HOME` on POSIX, `USERPROFILE` with its `HOMEDRIVE`+`HOMEPATH`
 fallback on Windows), so nothing under the home reaches
 `usage.json`/`usage.md` as an absolute path; a directory outside the home
 (a relocated `--ccs-dir` scope) is the one deliberate exception and is
-published as a quoted literal. The dashboard
+published as a quoted literal. Fix commands pin the credential selectors
+they depend on — unsetting `CLAUDE_SECURESTORAGE_CONFIG_DIR` and, for the
+default login, `CLAUDE_CONFIG_DIR` too — so a pasted command repairs the
+login its row names whatever the shell happens to export. The dashboard
 runs this collector on its own computer from the packaged file and on the
 configured Mac/Windows through the same in-memory SSH stdin stream the usage
 helper uses — nothing is installed on remote disks.

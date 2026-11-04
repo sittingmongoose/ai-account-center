@@ -514,10 +514,15 @@ export function downgradeCrossedSignInRows(
     if (row.state !== 'ok' && row.state !== 'warn' && row.state !== 'critical') return row;
     // The known login end counts crossed whenever it is already past at
     // `now` (a behind-clock remote), exactly as in the service; the
-    // renewable stamps count only inside (since, now].
+    // renewable stamps count only inside (since, now]. With no named
+    // end, a refresh end already past is the same skew shape: no
+    // single-clock collector emits it live, and a named future end
+    // (the legitimate dying window) exempts it.
     const end = row.loggedOutAt ? Date.parse(row.loggedOutAt) : NaN;
+    const refresh = row.refreshExpiresAt ? Date.parse(row.refreshExpiresAt) : NaN;
     const crossed =
       (!Number.isNaN(end) && end <= now) ||
+      (Number.isNaN(end) && !Number.isNaN(refresh) && refresh <= now) ||
       [row.accessExpiresAt, row.refreshExpiresAt].some((value) => {
         if (!value) return false;
         const at = Date.parse(value);
@@ -621,22 +626,38 @@ export function createSnapshotPublisher(
       await write(directory, SNAPSHOT_HISTORY, `${JSON.stringify(history)}\n`);
       // Rechecked against publication time, not the sample's, as late as
       // the writes allow: a deadline that crossed while the fetch, the
-      // folder check, the history write or the markdown write itself was
-      // still running publishes as awaiting-recheck in both remaining
-      // files. Downgrades only ever accumulate, so rechecking after each
-      // markdown write converges; the JSON is serialized only once the
-      // rows are stable at that instant.
+      // folder check, the history write or either remaining write itself
+      // was still running publishes as awaiting-recheck in both files.
+      // Downgrades only ever accumulate, so rechecking after each write
+      // — the JSON write included — converges: a crossing during one
+      // write retires at least one more live row, both files are
+      // rewritten, and the pass ends only when a full markdown+JSON
+      // pair lands with the rows stable across both writes.
       if (snapshot.signIn)
         snapshot.signIn = downgradeCrossedSignInRows(snapshot.signIn, signInStartedAt, Date.now());
       await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
-      while (snapshot.signIn) {
+      for (;;) {
+        if (snapshot.signIn) {
+          const rechecked = downgradeCrossedSignInRows(
+            snapshot.signIn,
+            signInStartedAt,
+            Date.now()
+          );
+          if (!rechecked.every((row, index) => row === snapshot.signIn?.[index])) {
+            snapshot.signIn = rechecked;
+            await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
+            continue;
+          }
+        }
+        // usage.json last in each pass: its time says every file of this
+        // sample is in place.
+        await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
+        if (!snapshot.signIn) break;
         const rechecked = downgradeCrossedSignInRows(snapshot.signIn, signInStartedAt, Date.now());
         if (rechecked.every((row, index) => row === snapshot.signIn?.[index])) break;
         snapshot.signIn = rechecked;
         await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
       }
-      // usage.json last: its time says every file of this sample is in place.
-      await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
       warned = null;
       // The setting can change without a restart, so this follows it; unchanged, it is not rewritten.
       const locations = renderSnapshotLocations(chosen.locations);

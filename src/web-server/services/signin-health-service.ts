@@ -170,10 +170,14 @@ export function publishableFixCommand(value: unknown): string {
   // Paste-to-shell text also refuses the bidi set inside CONTROL: those
   // characters cannot change what the quoted command does, but they can
   // change how it reads.
+  // The length bound leaves room for the longest real form — the
+  // scoped Windows command (selector clearing plus the USERPROFILE
+  // fallback expression) runs ~180 characters before the account
+  // suffix it carries — while still omitting runaway text whole.
   return CONTROL.test(value) ||
     UNPAIRED_SURROGATE.test(value) ||
     value.includes('`') ||
-    value.length > 200
+    value.length > 400
     ? ''
     : value;
 }
@@ -331,7 +335,8 @@ let cache: CacheEntry | null = null;
  * collection they are facts the row's state already accounts for. The
  * known login end is different: a live row whose end is already past
  * here cannot be a live future fact under any clock, so a remote whose
- * clock runs behind still counts as crossed. */
+ * clock runs behind still counts as crossed — and the same holds for
+ * a past refresh end when the row names no login end at all. */
 function stampCrossed(value: string | null | undefined, since: number, now: number): boolean {
   if (!value) return false;
   const at = Date.parse(value);
@@ -349,6 +354,16 @@ export function deadlineCrossedForRow(
 ): boolean {
   const end = row.loggedOutAt ? Date.parse(row.loggedOutAt) : NaN;
   if (!Number.isNaN(end) && end <= now) return true;
+  // With no named login end, a refresh end already past at `now` is the
+  // same skew shape through the other stamp: no single-clock collector
+  // emits it live (a past refresh end with no derivable end reads
+  // logged_out at the source), so it cannot be a live fact here either.
+  // A named future end exempts it — that is the legitimate dying
+  // window, living on its last access token until the named end.
+  if (Number.isNaN(end)) {
+    const refresh = row.refreshExpiresAt ? Date.parse(row.refreshExpiresAt) : NaN;
+    if (!Number.isNaN(refresh) && refresh <= now) return true;
+  }
   return (
     stampCrossed(row.accessExpiresAt, since, now) || stampCrossed(row.refreshExpiresAt, since, now)
   );
