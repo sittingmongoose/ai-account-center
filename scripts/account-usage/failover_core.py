@@ -190,7 +190,12 @@ def _children(home, value):
     try:
         # Bound directory enumeration as well as the number of returned homes.
         # A listing cut short by either bound is an incomplete read, never a
-        # silent one: record it so inventories built on it say so.
+        # silent one: record it so inventories built on it say so. Only
+        # candidate directories count toward the homes bound: plain files
+        # with safe names are not homes, and seventy of them beside one
+        # account must not read as a truncated inventory. An entry whose
+        # type cannot be read stays a candidate, as before, and records
+        # the failure for the downstream read to report.
         truncated = False
         with os.scandir(root) as iterator:
             entries = []
@@ -198,8 +203,18 @@ def _children(home, value):
                 if len(entries) >= MAX_FILES:
                     truncated = True
                     break
-                entries.append(entry.name)
-        homes = [root / name for name in sorted(entries) if SAFE_NAME.fullmatch(name)]
+                entries.append(entry)
+        homes = []
+        for entry in sorted(entries, key=lambda item: item.name):
+            if not SAFE_NAME.fullmatch(entry.name):
+                continue
+            try:
+                candidate = entry.is_dir()
+            except OSError:
+                read_failed()
+                candidate = True
+            if candidate:
+                homes.append(root / entry.name)
         if len(homes) > MAX_SOURCES:
             truncated = True
         if truncated:
@@ -264,10 +279,19 @@ def _settings_homes(home, provider):
                 # never reaches this branch — stay silent.
                 SETTINGS_HOME_FAILURES[0] += 1
                 continue
+            # The launcher trims and resolves the value before using
+            # it, so admission sees the same spelling: a padded value
+            # is a real home, a whitespace-only one is the unset
+            # placeholder, and `..` segments resolve as text even
+            # across folders that do not exist.
+            value = value.strip()
+            if not value:
+                continue
             if value == "~":
                 value = str(home)
             elif value.startswith(("~/", "~\\")):
                 value = str(home / value[2:])
+            value = os.path.normpath(value)
             if Path(value).is_absolute() and _within(home, Path(os.path.abspath(value))):
                 result.append(Path(value))
             elif value:

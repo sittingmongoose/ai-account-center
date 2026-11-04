@@ -170,12 +170,13 @@ export function publishableFixCommand(value: unknown): string {
   // Paste-to-shell text also refuses the bidi set inside CONTROL: those
   // characters cannot change what the quoted command does, but they can
   // change how it reads.
-  // The length bound leaves room for the longest real form — the
-  // scoped Windows command (save/clear/restore of every selector plus
-  // the USERPROFILE fallback expression) measures 692 characters with
-  // no path at all and ~870 carrying a 64-character account suffix or
-  // a 180-character literal path — while still omitting runaway text
-  // whole.
+  // The length bound leaves room for the longest measured forms —
+  // the scoped Windows command (save/clear/restore of every selector
+  // in a try/finally, plus the USERPROFILE fallback expression)
+  // measures 711 characters with no path at all, 878 carrying a
+  // 64-character account suffix and 888 a 180-character literal path.
+  // Longer extremes (a near-255-character directory name) omit whole
+  // rather than truncate, like every other unpublishable shape.
   return CONTROL.test(value) ||
     UNPAIRED_SURROGATE.test(value) ||
     value.includes('`') ||
@@ -197,6 +198,7 @@ const PROFILE_ERRORS = new Set([
   'expiry times unreadable',
   'keychain item unreadable',
   'keychain item holds no readable credentials',
+  'keychain locked or access not allowed',
   'auth file missing or unreadable',
   "profile discovery was incomplete; this machine's list may be missing homes",
   'sign-in state changed during collection; recheck pending',
@@ -310,9 +312,32 @@ export function parseRows(stdout: string, machine: string): SignInProfile[] {
   try {
     const value = JSON.parse(stdout);
     if (value && value.schemaVersion === 1 && Array.isArray(value.profiles)) {
-      return value.profiles
+      const rows: SignInProfile[] = value.profiles
         .map((row: unknown) => allowProfile(row, machine))
         .filter((row: SignInProfile | null): row is SignInProfile => row !== null);
+      // Uniqueness is allocated on the final published form, after
+      // sanitization and clipping: names that sanitize alike, and a
+      // raw name equal to a generated suffix, still publish
+      // distinctly — a name-keyed consumer must never lose a login.
+      // Every published name is reserved up front so a generated
+      // suffix never lands on another row's own name.
+      const reserved = new Set(rows.map((r) => r.name));
+      const used = new Set<string>();
+      for (const r of rows) {
+        if (!used.has(r.name)) {
+          used.add(r.name);
+          continue;
+        }
+        let n = 2;
+        let candidate = `${r.name.slice(0, 64 - `-${n}`.length)}-${n}`;
+        while (used.has(candidate) || reserved.has(candidate)) {
+          n += 1;
+          candidate = `${r.name.slice(0, 64 - `-${n}`.length)}-${n}`;
+        }
+        r.name = candidate;
+        used.add(candidate);
+      }
+      return rows;
     }
   } catch {
     /* a partial or unreadable answer reads as unavailable */
@@ -519,11 +544,13 @@ function refresh(): Promise<SignInHealth> {
       // here, and the short floor below lets the next sample recheck them.
       value = await collectOnce();
     } catch (error) {
-      // Host resolution is best effort by contract: the section simply
-      // stays absent, and the retry waits only the floor.
-      void error;
+      // A collection that could not even resolve its hosts is a failed
+      // collection, not an empty success: the rejection reaches the
+      // snapshot publisher, which publishes its named collection-
+      // failed row. Swallowing it into an empty map would silently
+      // drop the whole sign-in section. The retry waits only the floor.
       entry.until = Date.now() + CACHE_MIN_MS;
-      return { generatedAt: new Date().toISOString(), machines: {} };
+      throw error;
     }
     const settledAt = Date.now();
     const downgraded = downgradeCrossedRows(value, entry.collectedAt, settledAt);

@@ -137,6 +137,7 @@ describe('allowProfile', () => {
       'expiry times unreadable',
       'keychain item unreadable',
       'keychain item holds no readable credentials',
+      'keychain locked or access not allowed',
       'auth file missing or unreadable',
       "profile discovery was incomplete; this machine's list may be missing homes",
       'sign-in state changed during collection; recheck pending',
@@ -177,7 +178,7 @@ describe('allowProfile', () => {
       /(?:\[(?:"error"|'error')\]\s*=|(?:"error"|'error')\s*:|\berror\s*=)\s*(?:"([^"]+)"|'([^']+)')/g
     ))
       literals.add(match[1] ?? match[2]);
-    expect(literals.size).toBe(7);
+    expect(literals.size).toBe(8);
     for (const literal of literals) expect(publishableError(literal)).toBe(literal);
   });
 
@@ -278,6 +279,26 @@ describe('parseRows', () => {
     const rows = parseRows(envelope([row(), row({ name: 'party' })]), 'windows');
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.machine === 'windows' && r.platform === 'windows')).toBe(true);
+  });
+
+  it('allocates unique names after sanitization, reserving generated suffixes', () => {
+    // Uniqueness is allocated on the final published form: names that
+    // sanitize to the same string, and a raw name equal to a generated
+    // suffix, must still publish distinctly or name-keyed consumers
+    // lose a login.
+    const rows = parseRows(
+      envelope([
+        row({ name: 'a!' }),
+        row({ name: 'a?' }),
+        row({ name: 'same' }),
+        row({ name: 'same' }),
+        row({ name: 'same-2' }),
+      ]),
+      'mac'
+    );
+    const names = rows.map((r) => r.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.slice(0, 2)).toEqual(['a_', 'a_-2']);
   });
 
   it('reads banner-prefixed or unreadable output as nothing', () => {

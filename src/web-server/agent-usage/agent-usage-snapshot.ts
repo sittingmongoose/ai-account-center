@@ -549,7 +549,7 @@ export interface SnapshotPublisherDeps {
   isDirectory?: (directory: string) => Promise<boolean>;
   refreshSeconds?: () => number;
   syncClient?: (directory: string) => Promise<void>;
-  /** Sign-in expiry reports per machine; best effort, a failure publishes without them. */
+  /** Sign-in expiry reports per machine; a failed fetch publishes a named collection-failed row. */
   signIn?: () => Promise<SnapshotSignInProfile[]>;
 }
 
