@@ -100,6 +100,46 @@ class InventoryTests(unittest.TestCase):
         names = [path.name for path in core._children(self.home, base)]
         self.assertEqual(names, ["inlink", "real"])
 
+    def test_children_exclude_a_multi_hop_outside_link_without_a_read_failure(self):
+        # A link through another in-home link to an outside directory is
+        # a policy refusal (silent), never a failed read; only a chain
+        # that ends at nothing counts as one.
+        import desktop_helpers
+        base = self.home / ".claude-t3"
+        (base / "real").mkdir(parents=True)
+        external = tempfile.TemporaryDirectory()
+        self.addCleanup(external.cleanup)
+        outside = Path(external.name) / "outside"
+        outside.mkdir()
+        try:
+            (base / "hop").symlink_to(outside, target_is_directory=True)
+            (base / "twohop").symlink_to(base / "hop", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        desktop_helpers.READ_FAILURES = 0
+        names = [path.name for path in core._children(self.home, base)]
+        self.assertEqual(names, ["real"])
+        self.assertEqual(desktop_helpers.READ_FAILURES, 0)
+        (base / "dangling").symlink_to(base / "missing", target_is_directory=True)
+        desktop_helpers.READ_FAILURES = 0
+        core._children(self.home, base)
+        self.assertEqual(desktop_helpers.READ_FAILURES, 1)
+
+    def test_codex_settings_homes_keep_their_spelling(self):
+        # Only Claude NFC-normalizes its config dir; a Codex home is
+        # read exactly as configured.
+        import unicodedata as _ud
+        nfd = str(self.home / "codexhomes" / _ud.normalize("NFD", "café"))
+        userdata = self.home / ".t3" / "userdata"
+        userdata.mkdir(parents=True)
+        (userdata / "settings.json").write_text(json.dumps({"providerInstances": {
+            "codex-a": {"driver": "codex", "config": {"homePath": nfd}},
+            "claude-a": {"driver": "claudeAgent", "config": {"homePath": nfd}},
+        }}))
+        self.assertEqual(core._settings_homes(self.home, "codex"), [Path(nfd)])
+        self.assertEqual(core._settings_homes(self.home, "claude"),
+                         [Path(_ud.normalize("NFC", nfd))])
+
     def test_codex_inventory_default_saved_and_t3_homes(self):
         roots = [self.home / ".codex", self.home / ".ccs/codex-instances/saved",
                  self.home / ".codex-t3/personal", self.home / ".t3/userdata/providers/codex/configured/shadow",

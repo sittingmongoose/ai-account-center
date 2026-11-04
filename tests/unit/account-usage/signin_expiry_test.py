@@ -39,6 +39,16 @@ class SignInExpiryTests(unittest.TestCase):
         keychain = mock.patch.object(collector, "_mac_keychain_text", return_value=None)
         keychain.start()
         self.addCleanup(keychain.stop)
+        # The runner's own credential selectors must not leak into a
+        # fixture (a Claude Code session exports CLAUDE_CONFIG_DIR, and
+        # repairs pin a co-inherited one): every test starts with none
+        # and sets exactly the ones it models; the environment is
+        # restored afterwards.
+        environment = mock.patch.dict(collector.os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in collector.SELECTOR_ORDER:
+            collector.os.environ.pop(name, None)
 
     def _write(self, name, credentials):
         root = self.home / ".claude-t3" / name
@@ -1150,14 +1160,29 @@ class SignInExpiryTests(unittest.TestCase):
         self.assertIn(collector._keychain_service_for(str(configured)), asked)
         rows = {r["name"]: r for r in report["profiles"]}
         self.assertEqual(rows["ghostacct"]["state"], "ok")
+        # The same login behind a locked Keychain cannot be seen: no
+        # ghost row, but the report says its list may be incomplete.
+        with mock.patch.object(collector.sys, "platform", "darwin"), \
+                mock.patch.object(collector, "_mac_keychain_text",
+                                  return_value=collector.KEYCHAIN_LOCKED):
+            report = collector.collect(self.home, NOW, include_keychain=True)
+        names = [r["name"] for r in report["profiles"]]
+        self.assertNotIn("ghostacct", names)
+        self.assertIn("saved-profiles", names)
 
     def test_missing_dir_identities_without_store_evidence_publish_nothing(self):
         # No directory and no item evidence (absent, locked, or
         # indeterminate) is no store at all: ambient and configured
         # ghosts publish nothing, while the default row — the
         # selector-free identity — is never filtered away with them.
-        for answer in (None, collector.KEYCHAIN_LOCKED,
-                       collector.KEYCHAIN_INDETERMINATE):
+        # An item that could not be checked at all (locked or
+        # indeterminate) may still hold a login, so that drop is
+        # reported as incomplete discovery; a clean "no such item" is
+        # silent.
+        for answer, expected in ((None, ["default"]),
+                                 (collector.KEYCHAIN_LOCKED, ["default", "saved-profiles"]),
+                                 (collector.KEYCHAIN_INDETERMINATE,
+                                  ["default", "saved-profiles"])):
             with mock.patch.object(collector.sys, "platform", "darwin"), \
                     mock.patch.dict(collector.os.environ, {
                         "CLAUDE_CONFIG_DIR": str(self.home / ".claude")}), \
@@ -1165,7 +1190,7 @@ class SignInExpiryTests(unittest.TestCase):
                                       return_value=answer):
                 report = collector.collect(self.home, NOW, include_keychain=True)
             names = [r["name"] for r in report["profiles"]]
-            self.assertEqual(names, ["default"])
+            self.assertEqual(names, expected)
 
     def test_empty_securestorage_declares_no_ambient_identity(self):
         # Set-but-empty securestorage selects the plain store outright
@@ -1302,24 +1327,38 @@ class SignInExpiryTests(unittest.TestCase):
         self.assertEqual(states.get("café"), "ok")
         self.assertNotIn("saved-profiles", states)
 
-    def test_file_root_follows_os_resolution_when_dotdot_crosses_a_symlink(self):
-        # Textual normpath and OS resolution disagree when `..`
-        # crosses a symlink: upstream joins the raw spelling and the
-        # OS resolves it, so the file root must follow the OS.
-        import os as real_os
-        external = tempfile.TemporaryDirectory()
-        self.addCleanup(external.cleanup)
-        outside = pathlib.Path(external.name) / "outside"
-        outside.mkdir()
-        link = self.home / "esc"
+    def test_file_root_collapses_dotdot_textually_across_a_symlink(self):
+        # Upstream joins the credentials path with Node's path.join,
+        # which collapses `..` as text: `link/../acct` is the sibling
+        # `acct` even when `link` points into a nested folder, and the
+        # collector must read that same store, never the one the OS
+        # would reach by following the link first.
+        nested = self.home / "nested" / "child"
+        nested.mkdir(parents=True)
+        link = self.home / "link"
         try:
-            link.symlink_to(outside, target_is_directory=True)
+            link.symlink_to(nested, target_is_directory=True)
         except (OSError, NotImplementedError):
             self.skipTest("symlinks unavailable")
-        spelling = str(self.home / "esc" / ".." / "acct")
-        self.assertEqual(
-            collector._file_root_for(spelling, self.home),
-            pathlib.Path(real_os.path.realpath(spelling)))
+        for name, expiry in (("acct", NOW + 30 * H), ):
+            store = self.home / name
+            store.mkdir()
+            (store / ".credentials.json").write_text(json.dumps(
+                {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                                   "expiresAt": NOW + 2 * H,
+                                   "refreshTokenExpiresAt": expiry}}))
+        decoy = self.home / "nested" / "acct"
+        decoy.mkdir()
+        (decoy / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "x", "refreshToken": "y",
+                               "expiresAt": NOW - 2 * H,
+                               "refreshTokenExpiresAt": NOW - H}}))
+        spelling = str(link / ".." / "acct")
+        self.assertEqual(collector._file_root_for(spelling, self.home),
+                         self.home / "acct")
+        row = collector.claude_profile("acct", self.home / "acct", NOW, self.home,
+                                       kind="dir", spelling=spelling)
+        self.assertEqual(row["state"], "ok")
 
     def test_storage_dir_repair_pins_a_co_inherited_config_selector(self):
         # A securestorage repair must not clear a co-inherited
@@ -1335,9 +1374,30 @@ class SignInExpiryTests(unittest.TestCase):
                     store, self.home,
                     storage_var="CLAUDE_SECURESTORAGE_CONFIG_DIR",
                     spelling=str(store))
-            self.assertIn("CLAUDE_CONFIG_DIR='%s'" % other, command)
+            self.assertIn('CLAUDE_CONFIG_DIR="$HOME/.claude-t3/other"', command)
+            self.assertNotIn(str(self.home), command)
             unset = command.split("&&")[0]
             self.assertNotIn("CLAUDE_CONFIG_DIR", unset.split("unset", 1)[1])
+        # Outside the home the pinned value is the one quoted literal.
+        with mock.patch.dict(collector.os.environ,
+                             {"CLAUDE_CONFIG_DIR": "/srv/claude/other"}), \
+                mock.patch.object(collector.sys, "platform", "linux"):
+            command = collector.fix_command(
+                store, self.home,
+                storage_var="CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                spelling=str(store))
+        self.assertIn("CLAUDE_CONFIG_DIR='/srv/claude/other'", command)
+        win_home = "C:\\Users\\x"
+        with mock.patch.dict(collector.os.environ,
+                             {"CLAUDE_CONFIG_DIR": win_home + "\\.claude-t3\\other"}), \
+                mock.patch.object(collector.sys, "platform", "win32"):
+            command = collector.fix_command(
+                store, win_home,
+                storage_var="CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                spelling=win_home + "\\.claude-t3\\acct")
+        self.assertIn('\\.claude-t3\\other"', command)
+        self.assertIn("$env:CLAUDE_CONFIG_DIR = \"$(if (Test-Path env:USERPROFILE)", command)
+        self.assertNotIn(win_home, command)
         win_other = "C:\\Users\\x\\other"
         with mock.patch.dict(collector.os.environ,
                              {"CLAUDE_CONFIG_DIR": win_other}), \
@@ -1347,6 +1407,18 @@ class SignInExpiryTests(unittest.TestCase):
                 storage_var="CLAUDE_SECURESTORAGE_CONFIG_DIR",
                 spelling="C:\\Users\\x\\.claude-t3\\acct")
         self.assertIn("$env:CLAUDE_CONFIG_DIR = '%s'" % win_other, command)
+
+    def test_codex_publishes_only_known_field_names(self):
+        # A malformed auth.json key could itself be a credential: only
+        # the known, non-secret field names publish.
+        codex = self.home / ".codex"
+        codex.mkdir()
+        (codex / "auth.json").write_text(json.dumps({
+            "tokens": {}, "last_refresh": "x", "OPENAI_API_KEY": None,
+            "sk-ant-api03-abcdefgh": 1, "eyJhbGciOiJIUzI1NiJ9": 2}))
+        row = collector.codex_profile(NOW, self.home)
+        self.assertEqual(row["fieldsAvailable"],
+                         ["OPENAI_API_KEY", "last_refresh", "tokens"])
 
     def test_refused_profile_publishes_no_fix_command(self):
         # A containment-refused row must not carry a repair for the

@@ -44,6 +44,19 @@ const HOST_LIMIT_MS = 45_000;
 const COLLECTOR = 'signin_expiry.py';
 /** Accepted as-is; anything else is sanitized to a safe bounded identifier. */
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@+ -]{0,63}$/;
+/** The non-secret Codex auth.json field names an unsupported row may list:
+ * an arbitrary key from a malformed (or older remote) report could itself
+ * be a credential, so nothing else publishes. Mirrors the collector. */
+const CODEX_AUTH_FIELDS = new Set([
+  'OPENAI_API_KEY',
+  'auth_mode',
+  'last_refresh',
+  'tokens',
+  'access_token',
+  'refresh_token',
+  'id_token',
+  'account_id',
+]);
 /** A published timestamp must parse as a real calendar time; anything else reads as absent. */
 const STAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -248,7 +261,7 @@ export function allowProfile(raw: unknown, machine: string): SignInProfile | nul
     ...(row.state === 'unsupported' && Array.isArray(row.fieldsAvailable)
       ? {
           fieldsAvailable: row.fieldsAvailable
-            .filter((f): f is string => typeof f === 'string' && NAME_PATTERN.test(f))
+            .filter((f): f is string => typeof f === 'string' && CODEX_AUTH_FIELDS.has(f))
             .slice(0, 32),
         }
       : {}),

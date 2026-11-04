@@ -201,6 +201,11 @@ credentials file speaks only when the item does not exist, and no
 other spelling's or identity's item may substitute. Because the service name hashes the
 spelled dir, two spellings of one macOS directory are two login
 identities and keep separate rows; elsewhere they publish once.
+An identity with no directory and no evidence that its item exists
+publishes no row; when the item could not be checked at all (a
+locked Keychain, or a lookup that could not run), the report also
+says its list may be incomplete, since a Keychain-only login could
+be hiding there.
 A custom OAuth overlay stores under a suffixed service; when a custom
 OAuth URL is present in the probe's environment, a variant item that
 demonstrably exists publishes as its own row (without a generated fix command — its
@@ -214,7 +219,8 @@ as the login's end. A login whose store holds tokens but no readable times
 reads `unavailable`, not healthy; an access token with no refresh token
 cannot renew, so it reads `critical` until its expiry and `logged_out`
 after. Codex `auth.json` is probed and reported `unsupported` because it
-publishes no end-of-login time; only field names are shown, never values.
+publishes no end-of-login time; only known, non-secret field names are
+shown (an unexpected key could itself be a credential), never values.
 
 Published rows carry the config dir and fix command in home-relative
 form (`$HOME` on POSIX, `USERPROFILE` with its `HOMEDRIVE`+`HOMEPATH`
@@ -227,7 +233,9 @@ literal, and one that is relative or empty — whose meaning depends on
 the working directory it is pasted in — publishes with no command at
 all rather than a wrong one. Fix commands pin every credential
 selector — setting the one their identity needs and unsetting the rest,
-including the OAuth-variant selectors — and scope that to the invocation
+including the OAuth-variant selectors; an inherited securestorage
+identity also keeps the probe's own `CLAUDE_CONFIG_DIR`, where upstream
+writes that session's account metadata — and scope that to the invocation
 (a POSIX subshell; save/restore in PowerShell), so a pasted command
 repairs the login its row names, whatever the shell happens to export,
 and leaves the session's own selectors untouched. The dashboard

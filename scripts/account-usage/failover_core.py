@@ -84,11 +84,14 @@ def _within(root, path):
         return False
 
 
-def _local_path(home, value):
+def _local_path(home, value, missing=None):
     """Follow only bounded links whose written targets stay inside this home.
 
     Do not stat a UNC/network link target: offline mounts can outlive a process
     deadline. T3 shadow auth links into another local account home are allowed.
+    When `missing` is a list, a None result caused by an absent in-bounds
+    component (a dangling link) appends to it, so callers can tell that
+    failed read from a policy refusal (outside or network target).
     """
     root = Path(os.path.abspath(home))
     path = Path(os.path.abspath(value))
@@ -103,6 +106,8 @@ def _local_path(home, value):
             try:
                 info = current.lstat()
             except (FileNotFoundError, NotADirectoryError):
+                if missing is not None:
+                    missing.append(current)
                 return None
             except OSError:
                 read_failed()
@@ -221,20 +226,17 @@ def _children(home, value):
                     # mount can outlive the process deadline). The
                     # validated path's own lstat decides candidacy.
                     candidate = False
-                    validated = _local_path(home, root / entry.name)
+                    missing = []
+                    validated = _local_path(home, root / entry.name, missing)
                     if validated is not None:
                         candidate = stat.S_ISDIR(os.lstat(validated).st_mode)
-                    else:
-                        # Tell a policy rejection from a permitted
-                        # target that cannot resolve (a dangling
-                        # link) using the written target alone: the
-                        # latter is a failed read, the former a
-                        # silent exclusion.
-                        target = os.readlink(entry.path)
-                        if not target.startswith(("\\\\", "//")) and _within(
-                                Path(os.path.abspath(home)),
-                                Path(os.path.abspath(root / target))):
-                            read_failed()
+                    elif missing:
+                        # A permitted chain that ends at nothing (a
+                        # dangling link, at any hop) is a failed read;
+                        # a chain refused anywhere for leaving the home
+                        # or naming a network target is a silent
+                        # exclusion.
+                        read_failed()
                 else:
                     candidate = entry.is_dir(follow_symlinks=False)
             except OSError:
@@ -321,10 +323,13 @@ def _settings_homes(home, provider, ccs_dir=None):
             # Claude derives its config dir NFC-normalized, so its
             # files live under the NFC spelling: an NFD-configured
             # home is read there, not at the spelling as written.
-            try:
-                value = unicodedata.normalize("NFC", value)
-            except (ValueError, UnicodeError):
-                pass
+            # Codex does no such normalization: its homes stay as
+            # spelled.
+            if provider != "codex":
+                try:
+                    value = unicodedata.normalize("NFC", value)
+                except (ValueError, UnicodeError):
+                    pass
             value = os.path.normpath(value)
             # Admission roots match the sign-in layer's: the home, plus
             # the configured CCS scope when one is in play — a settings

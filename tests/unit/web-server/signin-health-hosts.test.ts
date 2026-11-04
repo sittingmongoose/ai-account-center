@@ -13,8 +13,12 @@ import { afterAll, describe, expect, it, mock } from 'bun:test';
  * a mock.module() replacement, so the overrides would otherwise
  * leak into any file imported later in the same process. */
 
-const actualTransport =
-  await import('../../../src/web-server/services/usage-failover-transport');
+// A snapshot, not the live namespace: Bun rewrites a mocked module's
+// namespace in place, so re-registering the namespace itself at
+// teardown would re-register the mocks.
+const actualTransport = {
+  ...(await import('../../../src/web-server/services/usage-failover-transport')),
+};
 
 mock.module('../../../src/web-server/services/usage-failover-transport', () => ({
   ...actualTransport,

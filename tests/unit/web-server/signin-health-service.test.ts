@@ -256,17 +256,23 @@ describe('allowProfile', () => {
     ).toBe('unavailable');
   });
 
-  it('caps fieldsAvailable on unsupported rows', () => {
+  it('lists only known non-secret Codex field names on unsupported rows', () => {
     const out = allowProfile(
       row({
         provider: 'codex',
         state: 'unsupported',
         fixCommand: '',
-        fieldsAvailable: [...Array(40).keys()].map((n) => `field_${n}`),
+        fieldsAvailable: [
+          'tokens',
+          'last_refresh',
+          'sk-ant-api03-abcdefgh',
+          'eyJhbGciOiJIUzI1NiJ9',
+          ...[...Array(40).keys()].map((n) => `field_${n}`),
+        ],
       }),
       'ubuntu'
     );
-    expect(out?.fieldsAvailable).toHaveLength(32);
+    expect(out?.fieldsAvailable).toEqual(['tokens', 'last_refresh']);
     const noFields = allowProfile(row({ state: 'unsupported', fieldsAvailable: 'nope' }), 'ubuntu');
     expect(noFields?.fieldsAvailable).toBeUndefined();
   });
