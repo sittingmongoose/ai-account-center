@@ -66,7 +66,7 @@ describe('allowProfile', () => {
 
   it('never drops a row over a bound; paths clip and overlong commands are omitted whole', () => {
     const clipped = allowProfile(
-      row({ configDir: 'x'.repeat(300), fixCommand: `${'claude auth login; '.repeat(30)}` }),
+      row({ configDir: 'x'.repeat(300), fixCommand: `${'claude auth login; '.repeat(60)}` }),
       'mac'
     );
     expect(clipped).not.toBeNull();
@@ -75,12 +75,13 @@ describe('allowProfile', () => {
     expect(clipped?.fixCommand).toBe('');
     const longButFitting = allowProfile(row({ fixCommand: 'x'.repeat(200) }), 'mac');
     expect(longButFitting?.fixCommand).toHaveLength(200);
-    // The scoped Windows form (selector clearing plus the USERPROFILE
-    // fallback expression) is long before the account suffix; the bound
-    // leaves room for a real one instead of dropping the command.
-    const atBound = allowProfile(row({ fixCommand: 'x'.repeat(400) }), 'mac');
-    expect(atBound?.fixCommand).toHaveLength(400);
-    expect(allowProfile(row({ fixCommand: 'x'.repeat(401) }), 'mac')?.fixCommand).toBe('');
+    // The scoped Windows form (save/clear/restore of every selector
+    // plus the USERPROFILE fallback expression) is long before the
+    // account suffix; the bound leaves room for a real one instead of
+    // dropping the command.
+    const atBound = allowProfile(row({ fixCommand: 'x'.repeat(1000) }), 'mac');
+    expect(atBound?.fixCommand).toHaveLength(1000);
+    expect(allowProfile(row({ fixCommand: 'x'.repeat(1001) }), 'mac')?.fixCommand).toBe('');
   });
 
   it('omits a repair command that cannot render byte-exact, never rewrites it', () => {

@@ -378,6 +378,10 @@ def sign_in_lines(snapshot, provider=None):
         if state == "unavailable":
             if row.get("error"):
                 line += " (%s)" % ascii(row["error"])
+            else:
+                line += " reason unknown."
+        elif state == "unsupported":
+            line += " no login end time is published by %s." % row.get("provider")
         elif state == "logged_out":
             end = parse_time(row.get("loggedOutAt"))
             if end and end <= now:
@@ -408,11 +412,15 @@ def sign_in_lines(snapshot, provider=None):
                     line += " %s: `%s`" % (advice, command)
                 elif omitted:
                     line += " re-login command omitted (non-ASCII path)."
-                elif not row.get("loggedOutAt"):
+                elif row.get("loggedOutAt"):
                     # No command published; usage.md still gives the advice.
+                    line += " re-login before then."
+                else:
                     line += " re-login when the window ends."
         elif state == "ok" and row.get("loggedOutAt"):
             line += " sign-in ends %s." % row["loggedOutAt"]
+        elif state == "ok" and row.get("refreshExpiresAt"):
+            line += " refresh expires %s." % row["refreshExpiresAt"]
         elif state == "ok":
             line += " no exact end published yet."
         print(line)

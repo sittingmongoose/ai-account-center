@@ -184,18 +184,26 @@ stores no keys, so a source saved for Nas1 relies on `discover`.
 
 ## Sign-in expiry (`signin_expiry.py`)
 
-A read-only probe of login lifetimes: for every Claude config dir on the
-computer it runs on (the default `~/.claude`, the saved `~/.ccs/instances`
-homes, the `~/.claude-t3/<name>` account dirs, and settings-defined homes),
-it reads only the two OAuth times and token presence. On macOS each dir
-also resolves through its Claude Code Keychain item — the canonical store
-there, named plainly for the default login and with a hash of the config
-dir for per-account logins — and the two stores publish as one row. The
-first Keychain item that can be read binds the row, spelled dir first,
-even when its verdict is `unavailable`; the credentials file speaks only
-when no item could be read at all. Because the service name hashes the
+A read-only probe of login lifetimes: for every Claude login identity on
+the computer it runs on (the default `~/.claude`, the saved
+`~/.ccs/instances` homes, the `~/.claude-t3/<name>` account dirs,
+settings-defined homes, a configured home naming the default dir as its
+own explicit identity, and any storage identity the probe process itself
+inherited), it reads only the two OAuth times and token presence. On
+macOS each identity also resolves through its own Claude Code Keychain
+item — the canonical store there, named plainly for the selector-free
+default login and with a hash of the identity's spelled dir otherwise,
+looked up under the account Claude Code writes to — and the two stores
+publish as one row. That one item binds the row whenever it can be read
+at all, even when its verdict is `unavailable`; the credentials file
+speaks only when the item does not answer, and no other spelling's or
+identity's item may substitute. Because the service name hashes the
 spelled dir, two spellings of one macOS directory are two login
-identities and keep separate rows; elsewhere they publish once. `refreshTokenExpiresAt` is the
+identities and keep separate rows; elsewhere they publish once.
+Custom/local OAuth overlays store under suffixed services; when their
+selectors are present in the probe's environment, an answered variant
+item publishes as its own row (without a generated fix command — its
+repair is re-running the existing overlay session). `refreshTokenExpiresAt` is the
 hard end of the whole login; once it has passed, the login dies at the first
 access expiry after it. The row names that end only when the data supports
 one — a refresh-derived state is labeled as the refresh expiry's bound, never
@@ -210,10 +218,12 @@ form (`$HOME` on POSIX, `USERPROFILE` with its `HOMEDRIVE`+`HOMEPATH`
 fallback on Windows), so nothing under the home reaches
 `usage.json`/`usage.md` as an absolute path; a directory outside the home
 (a relocated `--ccs-dir` scope) is the one deliberate exception and is
-published as a quoted literal. Fix commands pin the credential selectors
-they depend on — unsetting `CLAUDE_SECURESTORAGE_CONFIG_DIR` and, for the
-default login, `CLAUDE_CONFIG_DIR` too — so a pasted command repairs the
-login its row names whatever the shell happens to export. The dashboard
+published as a quoted literal. Fix commands pin every credential
+selector — setting the one their identity needs and unsetting the rest,
+including the OAuth-variant selectors — and scope that to the invocation
+(a POSIX subshell; save/restore in PowerShell), so a pasted command
+repairs the login its row names, whatever the shell happens to export,
+and leaves the session's own selectors untouched. The dashboard
 runs this collector on its own computer from the packaged file and on the
 configured Mac/Windows through the same in-memory SSH stdin stream the usage
 helper uses — nothing is installed on remote disks.

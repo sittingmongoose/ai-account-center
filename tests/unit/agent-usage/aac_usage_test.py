@@ -239,6 +239,11 @@ class ReaderTests(unittest.TestCase):
             {"provider": "claude", "machine": "ubuntu", "name": "openended", "state": "ok",
              "refreshExpiresAt": iso(generated + dt.timedelta(hours=30)),
              "accessExpiresAt": iso(generated + dt.timedelta(hours=2))},
+            {"provider": "claude", "machine": "ubuntu", "name": "nocmd-end", "state": "critical",
+             "loggedOutAt": iso(generated + dt.timedelta(hours=2)),
+             "fixCommand": ""},
+            {"provider": "codex", "machine": "ubuntu", "name": "plain", "state": "unsupported"},
+            {"provider": "claude", "machine": "ubuntu", "name": "mute", "state": "unavailable"},
         ]
         (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
         out = io.StringIO()
@@ -257,11 +262,21 @@ class ReaderTests(unittest.TestCase):
         self.assertIn("re-login when the window ends", later_line)
         # usage.md gives the same advice without a command when none is
         # published, and names the open end on a healthy row.
-        nocmd_line = next(line for line in text.splitlines() if "nocmd" in line)
+        nocmd_line = next(line for line in text.splitlines() if "/nocmd:" in line)
         self.assertIn("re-login when the window ends", nocmd_line)
         self.assertNotIn("`", nocmd_line)
         open_line = next(line for line in text.splitlines() if "openended" in line)
-        self.assertIn("no exact end published yet", open_line)
+        self.assertIn("refresh expires", open_line)
+        # The remaining shapes usage.md already words: advice without a
+        # command at a known end, the unsupported detail, and an
+        # unavailable row with no recorded cause.
+        nocmd_end = next(line for line in text.splitlines() if "nocmd-end" in line)
+        self.assertIn("re-login before then", nocmd_end)
+        self.assertNotIn("`", nocmd_end)
+        plain_line = next(line for line in text.splitlines() if "plain" in line)
+        self.assertIn("no login end time is published by codex", plain_line)
+        mute_line = next(line for line in text.splitlines() if "mute" in line)
+        self.assertIn("reason unknown", mute_line)
         stale_line = next(line for line in text.splitlines() if "stale-ok" in line)
         self.assertNotIn("healthy", stale_line)
 

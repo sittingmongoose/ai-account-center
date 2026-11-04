@@ -23,6 +23,7 @@
  */
 import { randomBytes } from 'crypto';
 import fs from 'fs';
+import { hostname } from 'os';
 import { ValidationError } from '../../errors/error-types';
 import path from 'path';
 import { createLogger } from '../../services/logging';
@@ -354,7 +355,9 @@ function renderSignInMarkdown(
         // warn/critical/logged-out words carry the fix command.
         return namesEnd
           ? `sign-in ends ${utc(row.loggedOutAt as string)}`
-          : 'no exact end published yet';
+          : row.refreshExpiresAt
+            ? `refresh expires ${utc(row.refreshExpiresAt)}`
+            : 'no exact end published yet';
       // warn/critical: the time is already in the word; the detail only
       // advises, and a missing access token renews on the next run rather
       // than needing a re-login.
@@ -369,7 +372,7 @@ function renderSignInMarkdown(
         return namesEnd
           ? `re-login before then: \`${row.fixCommand}\``
           : `re-login when the window ends: \`${row.fixCommand}\``;
-      return namesEnd ? '' : 're-login when the window ends';
+      return namesEnd ? 're-login before then' : 're-login when the window ends';
     };
     const detailText = detail();
     lines.push(
@@ -550,6 +553,24 @@ export interface SnapshotPublisherDeps {
   signIn?: () => Promise<SnapshotSignInProfile[]>;
 }
 
+/** The row a failed or timed-out sign-in fetch publishes: the section
+ * stays and names the failed collection, instead of the absence of a
+ * section reading as "no sign-in problems" on every machine. */
+function signInCollectionFailedRow(): SnapshotSignInProfile {
+  return {
+    name: 'sign-in collection',
+    provider: 'claude',
+    platform: hostname(),
+    machine: hostname(),
+    accessExpiresAt: null,
+    refreshExpiresAt: null,
+    loggedOutAt: null,
+    state: 'unavailable',
+    fixCommand: '',
+    error: 'sign-in collection failed',
+  };
+}
+
 /** Handles one sample; resolves whether the files were written. */
 export function createSnapshotPublisher(
   deps: SnapshotPublisherDeps = {}
@@ -607,16 +628,26 @@ export function createSnapshotPublisher(
       // A fetch that never returns is released at the limit: one lost
       // machine must not stop usage.json from updating for good.
       const signInStartedAt = Date.now();
-      const signInPending: Promise<SnapshotSignInProfile[]> = Promise.race([
-        Promise.resolve(signIn()).catch(() => []),
-        new Promise<SnapshotSignInProfile[]>((resolve) => {
-          const timer = setTimeout(() => resolve([]), SIGNIN_FETCH_LIMIT_MS);
-          timer.unref?.();
-        }),
-      ]);
+      // A rejected or timed-out fetch is a collection failure, not an
+      // empty result: it publishes as a named unavailable row below.
+      const signInPending: Promise<{ rows: SnapshotSignInProfile[]; failed: boolean }> =
+        Promise.race([
+          Promise.resolve(signIn()).then(
+            (rows) => ({ rows, failed: false }),
+            () => ({ rows: [], failed: true })
+          ),
+          new Promise<{ rows: SnapshotSignInProfile[]; failed: boolean }>((resolve) => {
+            const timer = setTimeout(
+              () => resolve({ rows: [], failed: true }),
+              SIGNIN_FETCH_LIMIT_MS
+            );
+            timer.unref?.();
+          }),
+        ]);
       if (!(await isDirectory(directory)))
         throw new ValidationError('The usage snapshot folder is not a folder.');
-      const signInProfiles = await signInPending;
+      const fetched = await signInPending;
+      const signInProfiles = fetched.failed ? [signInCollectionFailedRow()] : fetched.rows;
       const { snapshot, history } = buildSnapshotFiles(
         event,
         refreshSeconds(),
@@ -635,28 +666,54 @@ export function createSnapshotPublisher(
       // pair lands with the rows stable across both writes.
       if (snapshot.signIn)
         snapshot.signIn = downgradeCrossedSignInRows(snapshot.signIn, signInStartedAt, Date.now());
-      await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
-      for (;;) {
-        if (snapshot.signIn) {
+      // usage.json is the commit point of each pass — the last write,
+      // whose time says every file of this sample is in place. If a
+      // correction pass fails after it landed (a share dying
+      // mid-publish), one best-effort JSON rewrite still carries the
+      // latest downgraded rows: machines read the JSON, and it must
+      // not keep an expired login published as live. The failure
+      // itself still propagates.
+      let jsonCommitted = false;
+      try {
+        for (;;) {
+          await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
+          if (snapshot.signIn) {
+            const rechecked = downgradeCrossedSignInRows(
+              snapshot.signIn,
+              signInStartedAt,
+              Date.now()
+            );
+            if (!rechecked.every((row, index) => row === snapshot.signIn?.[index])) {
+              snapshot.signIn = rechecked;
+              continue;
+            }
+          }
+          await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
+          jsonCommitted = true;
+          if (!snapshot.signIn) break;
           const rechecked = downgradeCrossedSignInRows(
             snapshot.signIn,
             signInStartedAt,
             Date.now()
           );
-          if (!rechecked.every((row, index) => row === snapshot.signIn?.[index])) {
-            snapshot.signIn = rechecked;
-            await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
-            continue;
+          if (rechecked.every((row, index) => row === snapshot.signIn?.[index])) break;
+          snapshot.signIn = rechecked;
+        }
+      } catch (error) {
+        if (jsonCommitted) {
+          try {
+            if (snapshot.signIn)
+              snapshot.signIn = downgradeCrossedSignInRows(
+                snapshot.signIn,
+                signInStartedAt,
+                Date.now()
+              );
+            await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
+          } catch {
+            /* The original failure is the one that reports. */
           }
         }
-        // usage.json last in each pass: its time says every file of this
-        // sample is in place.
-        await write(directory, SNAPSHOT_JSON, `${JSON.stringify(snapshot, null, 2)}\n`);
-        if (!snapshot.signIn) break;
-        const rechecked = downgradeCrossedSignInRows(snapshot.signIn, signInStartedAt, Date.now());
-        if (rechecked.every((row, index) => row === snapshot.signIn?.[index])) break;
-        snapshot.signIn = rechecked;
-        await write(directory, SNAPSHOT_MARKDOWN, renderSnapshotMarkdown(snapshot, Date.now()));
+        throw error;
       }
       warned = null;
       // The setting can change without a restart, so this follows it; unchanged, it is not rewritten.

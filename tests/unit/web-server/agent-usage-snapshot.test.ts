@@ -1163,6 +1163,87 @@ describe('sign-in health section', () => {
     expect(liveRow.state).toBe('critical');
   });
 
+  it('corrects the JSON when the markdown correction itself fails', async () => {
+    const writes: Array<[string, string]> = [];
+    let markdownWrites = 0;
+    const liveRow = {
+      name: 'soon',
+      provider: 'claude',
+      platform: 'ubuntu',
+      machine: 'ubuntu',
+      state: 'critical' as const,
+      loggedOutAt: new Date(Date.now() + 80).toISOString(),
+      fixCommand: 'claude auth login',
+    };
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      isDirectory: async () => true,
+      refreshSeconds: () => 60,
+      signIn: async () => [liveRow],
+      // The deadline crosses during the JSON write; the markdown
+      // correction then fails (dead share). usage.json is the file
+      // machines read: it must not keep the expired row as live —
+      // a final JSON correction carries the downgraded rows.
+      write: async (_directory, name, body) => {
+        if (name === SNAPSHOT_JSON) await new Promise((resolve) => setTimeout(resolve, 200));
+        if (name === SNAPSHOT_MARKDOWN) {
+          markdownWrites += 1;
+          if (markdownWrites > 1) throw new Error('share gone');
+        }
+        writes.push([name, body]);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      false
+    );
+    const jsonWrites = writes.filter(([name]) => name === SNAPSHOT_JSON);
+    const finalJson = jsonWrites[jsonWrites.length - 1][1];
+    expect(JSON.parse(finalJson).signIn[0].state).toBe('unavailable');
+  });
+
+  it('marks the sign-in section when the fetch itself failed', async () => {
+    const writes = new Map<string, string>();
+    const publish = createSnapshotPublisher({
+      settings: async () => ({ version: 1, directory: '/share/aac-usage' }),
+      isDirectory: async () => true,
+      refreshSeconds: () => 60,
+      // A rejected (or timed-out) fetch must not read as "no sign-in
+      // problems": the section stays, naming the failed collection.
+      signIn: async () => {
+        throw new Error('collector exploded');
+      },
+      write: async (_directory, name, body) => {
+        writes.set(name, body);
+      },
+      syncClient: async () => {},
+    });
+    expect(await publish({ accounts: [account()], history: null, sampledAt: Date.now() })).toBe(
+      true
+    );
+    const published = JSON.parse(writes.get(SNAPSHOT_JSON) as string);
+    expect(published.signIn).toHaveLength(1);
+    expect(published.signIn[0].state).toBe('unavailable');
+    expect(published.signIn[0].error).toBe('sign-in collection failed');
+    expect(writes.get(SNAPSHOT_MARKDOWN)).toContain('sign-in collection failed');
+  });
+
+  it('advises before a known end even when no command is published', () => {
+    const markdown = renderSnapshotMarkdown(
+      snapshotWith([
+        row({ state: 'critical', fixCommand: '', loggedOutAt: '2026-10-16T12:00:00Z' }),
+        row({
+          name: 'refreshable',
+          state: 'ok',
+          loggedOutAt: null,
+          refreshExpiresAt: '2026-10-20T12:00:00Z',
+        }),
+      ])
+    );
+    expect(markdown).toContain('re-login before then');
+    expect(markdown).toContain('refresh expires 2026-10-20 12:00 UTC');
+  });
+
   it('never puts an unpaired surrogate from a repair command into the markdown', () => {
     // Production rows are screened upstream; the renderer is the last
     // line before UTF-8 bytes, so it refuses the command itself too.

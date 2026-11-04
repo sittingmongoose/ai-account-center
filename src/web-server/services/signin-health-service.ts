@@ -171,13 +171,15 @@ export function publishableFixCommand(value: unknown): string {
   // characters cannot change what the quoted command does, but they can
   // change how it reads.
   // The length bound leaves room for the longest real form — the
-  // scoped Windows command (selector clearing plus the USERPROFILE
-  // fallback expression) runs ~180 characters before the account
-  // suffix it carries — while still omitting runaway text whole.
+  // scoped Windows command (save/clear/restore of every selector plus
+  // the USERPROFILE fallback expression) measures 692 characters with
+  // no path at all and ~870 carrying a 64-character account suffix or
+  // a 180-character literal path — while still omitting runaway text
+  // whole.
   return CONTROL.test(value) ||
     UNPAIRED_SURROGATE.test(value) ||
     value.includes('`') ||
-    value.length > 400
+    value.length > 1000
     ? ''
     : value;
 }
