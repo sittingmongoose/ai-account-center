@@ -8,14 +8,16 @@
  *   aliases (the app-update hosts).
  * Parsers are pure and exported for tests; nothing here writes anywhere.
  */
-import { execFile } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
+import { DeadlineExceededError, withProcessDeadline } from '../../utils/settle-deadline';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
 import { isSafeUsageSshAlias } from '../services/additional-usage-transport';
 import { findSecret, MACHINES, type MachineId } from './report-schema';
+import { readRegularFile } from './share-read';
 
 // ---------------------------------------------------------------------------------------------
 // Commands
@@ -31,14 +33,25 @@ export interface CommandResult {
 export type CommandRunner = (
   file: string,
   args: string[],
-  options: { timeoutMs: number; maxBytes: number; env?: NodeJS.ProcessEnv; input?: string }
+  options: {
+    timeoutMs: number;
+    maxBytes: number;
+    env?: NodeJS.ProcessEnv;
+    input?: string;
+    /** Time after the timeout's SIGTERM before SIGKILL and settling. */
+    graceMs?: number;
+  }
 ) => Promise<CommandResult>;
 
-/** execFile without a shell; never rejects. */
-export const runCommand: CommandRunner = (file, args, options) =>
-  new Promise((resolve) => {
+/**
+ * execFile without a shell; never rejects, and always settles: a child that ignores the timeout's
+ * SIGTERM is killed after the grace, so a caller's `collecting` or `ringing` flag always clears.
+ */
+export const runCommand: CommandRunner = (file, args, options) => {
+  let child: ChildProcess | undefined;
+  const work = new Promise<CommandResult>((resolve) => {
     try {
-      const child = execFile(
+      child = execFile(
         file,
         args,
         {
@@ -66,6 +79,14 @@ export const runCommand: CommandRunner = (file, args, options) =>
       resolve({ code: null, stdout: '', timedOut: false, missing: true });
     }
   });
+  return withProcessDeadline(
+    work,
+    () => child,
+    options.timeoutMs,
+    () => new DeadlineExceededError('Command'),
+    options.graceMs
+  ).catch(() => ({ code: null, stdout: '', timedOut: true, missing: false }));
+};
 
 /** The dashboard's environment with Node's own folder on PATH (tool scripts start with `env node`). */
 export function childEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -207,7 +228,8 @@ export class PmMailRegistryReader {
       if (this.files.get(name)?.key === key) continue;
       let thread: RegistryThread | null = null;
       try {
-        thread = parseRegistryEntry(JSON.parse(await fs.promises.readFile(file, 'utf8')));
+        const bytes = await readRegularFile(file, 64 * 1024);
+        thread = parseRegistryEntry(JSON.parse(bytes.toString('utf8')));
       } catch {
         // A file mid-rewrite: keep the last good row and look again next time.
         const before = this.files.get(name);
@@ -501,6 +523,16 @@ export function busyBetween(
   const total = after.total - before.total;
   if (total <= 0) return null;
   return Math.max(0, Math.min(100, Math.round(((after.busy - before.busy) / total) * 100)));
+}
+
+/** Which of the four machines this server runs on, by the same host names the registry uses. */
+export function localMachineId(
+  host: string = os.hostname(),
+  platform: NodeJS.Platform = process.platform
+): MachineId {
+  if (platform === 'darwin') return 'mac';
+  if (platform === 'win32') return 'windows';
+  return registryMachine(host, null) === 'nas1' ? 'nas1' : 'vm';
 }
 
 /** This computer, read directly (no process). */

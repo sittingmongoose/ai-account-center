@@ -90,7 +90,7 @@ describe('agent reports reader', () => {
     expect(r.snapshot().threads[0].problem).toBeNull();
   });
 
-  it('ignores a lower seq than the one already accepted', async () => {
+  it('ignores a lower seq than the one already accepted, and says so', async () => {
     const root = dirs.make();
     const r = reader(root);
     writeReport(root, 'vm.lead', 'thread.json', threadDoc('vm.lead', { seq: 5, doing: 'Newer' }));
@@ -98,6 +98,10 @@ describe('agent reports reader', () => {
     writeReport(root, 'vm.lead', 'thread.json', threadDoc('vm.lead', { seq: 4, doing: 'Older!' }));
     await r.scan();
     expect(r.snapshot().threads[0].doc.doing).toBe('Newer');
+    expect(r.snapshot().problems.map((p) => p.file)).toEqual(['writers/vm.lead/thread.json']);
+    writeReport(root, 'vm.lead', 'thread.json', threadDoc('vm.lead', { seq: 6, doing: 'The newest' }));
+    await r.scan();
+    expect(r.snapshot().threads[0].doc.doing).toBe('The newest');
     expect(r.snapshot().problems).toEqual([]);
   });
 

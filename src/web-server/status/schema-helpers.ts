@@ -16,7 +16,8 @@ export type MachineId = (typeof MACHINES)[number];
 const WRITER = /^(vm|mac|windows|nas1)\.[a-z0-9][a-z0-9.-]*$/;
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const LOCAL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const PM_MAIL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** pm-mail's own name rule (`NAME_OK` in pm-mail): lowercase, no dots. */
+const PM_MAIL_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export const OPTION_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 /** Control characters other than tab and newline, and bidirectional overrides. */
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/;
@@ -24,15 +25,19 @@ const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/;
 
 export function isWriterName(value: unknown): value is string {
-  return typeof value === 'string' && value.length <= 64 && WRITER.test(value);
+  // A card id is `<writer>--<local id>`, split on the first `--`, so a writer name cannot hold one.
+  return (
+    typeof value === 'string' && value.length <= 64 && WRITER.test(value) && !value.includes('--')
+  );
 }
 
 export function writerMachine(writer: string): MachineId {
   return writer.slice(0, writer.indexOf('.')) as MachineId;
 }
 
+/** A name one card may ring. `all` is pm-mail's broadcast, which a card file must never reach. */
 export function isPmMailName(value: unknown): value is string {
-  return typeof value === 'string' && PM_MAIL_NAME.test(value);
+  return typeof value === 'string' && value !== 'all' && PM_MAIL_NAME.test(value);
 }
 
 /** A card id is `<writer>--<local id>`. */
@@ -46,29 +51,79 @@ export function isCardId(value: unknown): value is string {
  * Secret patterns: a file that matches one is refused whole (the format says no secrets). Each
  * entry names the kind it found; the matched text is never shown.
  */
-const SECRET_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
-  ['a private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
-  ['an API key', /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/],
-  ['a GitHub token', /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})/],
-  ['a Slack token', /\bxox[abposr]-[A-Za-z0-9-]{10,}/],
-  ['an AWS key', /\bAKIA[0-9A-Z]{16}\b/],
-  ['a Google API key', /\bAIza[0-9A-Za-z_-]{35}/],
-  ['a JSON web token', /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/],
-  ['a bearer token', /\bBearer\s+[A-Za-z0-9._~+/-]{20,}/i],
+const SECRET_PATTERNS: ReadonlyArray<readonly [string, (text: string) => boolean]> = [
+  ['a private key', matches(/-----BEGIN [A-Z ]*PRIVATE KEY-----/)],
+  ['an API key', matches(/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/)],
+  ['a GitHub token', matches(/\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})/)],
+  ['a Slack token', matches(/\bxox[abposr]-[A-Za-z0-9-]{10,}/)],
+  ['an AWS key', matches(/\bAKIA[0-9A-Z]{16}\b/)],
+  ['a Google API key', matches(/\bAIza[0-9A-Za-z_-]{35}/)],
+  ['a JSON web token', hasJsonWebToken],
+  ['a bearer token', matches(/\bBearer\s+[A-Za-z0-9._~+/-]{20,}/i)],
   [
     'a credential field',
-    /"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)"\s*:\s*"[^"]{6,}"/i,
+    matches(
+      /"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)"\s*:\s*"[^"]{6,}"/i
+    ),
   ],
   [
     'a credential in a URL',
-    /[?&](?:access_token|token|api_key|apikey|key|sig|signature|password|code)=[^&\s"]{8,}/i,
+    matches(
+      /[?&](?:access_token|token|api_key|apikey|key|sig|signature|password|code)=[^&\s"]{8,}/i
+    ),
   ],
-  ['an email address', /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/],
+  ['an email address', hasEmailAddress],
 ];
+
+function matches(pattern: RegExp): (text: string) => boolean {
+  return (text) => pattern.test(text);
+}
+
+/*
+ * These checks run on the main thread over files any writer can fill, up to 512 KB. A regex that
+ * starts with a repeat, or can start at every token of a long run, is O(n^2) on such a file (64 KB
+ * of `a` took 4.7 s), so the two that can are searched from their one literal instead.
+ */
+
+const EMAIL_LOCAL_CHAR = /[A-Za-z0-9._%+-]/;
+const EMAIL_DOMAIN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/;
+/** A domain is at most 253 characters (RFC 1035). */
+const EMAIL_DOMAIN_WINDOW = 256;
+
+/** `local@domain.tld`: one local character before an `@` and a domain after it. */
+function hasEmailAddress(text: string): boolean {
+  for (let at = text.indexOf('@'); at !== -1; at = text.indexOf('@', at + 1)) {
+    if (at === 0 || !EMAIL_LOCAL_CHAR.test(text[at - 1])) continue;
+    if (EMAIL_DOMAIN.test(text.slice(at + 1, at + 1 + EMAIL_DOMAIN_WINDOW))) return true;
+  }
+  return false;
+}
+
+const JWT_TAIL = /\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/y;
+const JWT_CHAR = /[A-Za-z0-9_-]/;
+const WORD_CHAR = /[A-Za-z0-9_]/;
+const JWT_HEAD_MIN = 8;
+
+/** `eyJ...` `.eyJ...` `.sig`, found from its `.eyJ`. Each scan stops at the next dot, so it is linear. */
+function hasJsonWebToken(text: string): boolean {
+  for (let dot = text.indexOf('.eyJ'); dot !== -1; dot = text.indexOf('.eyJ', dot + 1)) {
+    JWT_TAIL.lastIndex = dot;
+    if (!JWT_TAIL.test(text)) continue;
+    let start = dot;
+    while (start > 0 && JWT_CHAR.test(text[start - 1])) start -= 1;
+    // The earliest `eyJ` that starts a word leaves the longest head; a later one cannot do better.
+    let head = text.indexOf('eyJ', start);
+    while (head !== -1 && head + 3 + JWT_HEAD_MIN <= dot) {
+      if (head === 0 || !WORD_CHAR.test(text[head - 1])) return true;
+      head = text.indexOf('eyJ', head + 1);
+    }
+  }
+  return false;
+}
 
 /** The kind of secret a text contains, or null. */
 export function findSecret(text: string): string | null {
-  for (const [kind, pattern] of SECRET_PATTERNS) if (pattern.test(text)) return kind;
+  for (const [kind, found] of SECRET_PATTERNS) if (found(text)) return kind;
   return null;
 }
 

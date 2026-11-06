@@ -385,7 +385,7 @@ export function packagedCatalogDir(): string {
 
 /**
  * Writes each packaged seed into an existing `v1/catalog` folder where the folder lists no such file
- * (temporary dot file, then rename). Never overwrites: the owner edits these as data. Resolves the
+ * (temporary dot file, then a hard link). Never overwrites: the owner edits these as data. Resolves the
  * names it wrote; never throws.
  */
 export async function seedCatalog(
@@ -409,9 +409,12 @@ export async function seedCatalog(
       try {
         await fs.promises.copyFile(path.join(sourceDir, name), temp);
         await fs.promises.chmod(temp, 0o644).catch(() => undefined);
-        await fs.promises.rename(temp, destination);
+        // `link`, not `rename`: it fails on a file another machine wrote since the look above.
+        await fs.promises.link(temp, destination);
         written.push(name);
       } catch {
+        /* Already there, or not writable: the file on the share stands. */
+      } finally {
         await fs.promises.rm(temp, { force: true }).catch(() => undefined);
       }
     }

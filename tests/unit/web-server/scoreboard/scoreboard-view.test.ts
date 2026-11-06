@@ -11,7 +11,9 @@ import {
   type ScoreboardView,
 } from '../../../../src/web-server/scoreboard/scoreboard-view';
 import { ScoreboardService } from '../../../../src/web-server/scoreboard/scoreboard-service';
+import { run as projectRun } from '../../../../src/web-server/status/run-schema';
 import { NOW, tempDirs } from '../status/status-test-helpers';
+import { runDoc } from './scoreboard-test-helpers';
 
 const dirs = tempDirs();
 afterEach(() => dirs.cleanup());
@@ -457,5 +459,46 @@ describe('service', () => {
     const gone = path.join(root, 'not-mounted');
     await new ScoreboardService({ root: () => gone }).seed();
     expect(fs.existsSync(gone)).toBe(false);
+  });
+});
+
+describe('the runs Source', () => {
+  it('names outcomes it could not count, and says what they were left out of', () => {
+    const doc = (local: string, outcome: string) => ({
+      file: `writers/vm.lead/runs/2026-11-06/${local}.json`,
+      firstSeenAt: NOW,
+      doc: projectRun(
+        runDoc('vm.lead', local, { outcome }) as unknown as Record<string, unknown>,
+        'vm.lead'
+      ),
+    });
+    const view = buildScoreboardView({
+      now: NOW,
+      timeZone: 'UTC',
+      root: '/reports',
+      catalog: {
+        state: 'ok',
+        scannedAt: NOW,
+        missingFiles: [],
+        problems: [],
+        minRuns: 5,
+        models: [],
+        taskTypes: [],
+        measures: [],
+        uses: [],
+        benchmarks: [],
+      },
+      runs: {
+        state: 'ok',
+        scannedAt: NOW,
+        runs: [doc('A', 'done'), doc('B', 'partial'), doc('C', 'partial'), doc('D', 'blocked')],
+        writers: 1,
+        problems: [],
+      },
+    });
+    expect(view.sources[0].state).toBe('ok');
+    expect(view.sources[0].detail).toContain(
+      '3 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim, cost and speed: blocked (1 run), partial (2 runs).'
+    );
   });
 });

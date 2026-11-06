@@ -38,7 +38,12 @@ function sourceBase(
   };
 }
 
-export function runsSource(inputs: ScoreboardInputs, unscored: number, ignoredReviews: number) {
+export function runsSource(
+  inputs: ScoreboardInputs,
+  unscored: number,
+  ignoredReviews: number,
+  unknownOutcomes: ReadonlyMap<string, number> = new Map()
+) {
   const { runs, now, timeZone, root } = inputs;
   const base = sourceBase('scoreboard-runs', 'Agent runs', runs.scannedAt, now);
   if (runs.scannedAt === null)
@@ -67,6 +72,12 @@ export function runsSource(inputs: ScoreboardInputs, unscored: number, ignoredRe
     parts.push(
       `${plural(ignoredReviews, 'review')} ignored: not a review run, or no earlier known run.`
     );
+  if (unknownOutcomes.size > 0) {
+    const total = [...unknownOutcomes.values()].reduce((sum, value) => sum + value, 0);
+    parts.push(
+      `${plural(total, 'run')} with an outcome that is neither done nor a failure, left out of reliability, overclaim, cost and speed: ${counted(unknownOutcomes)}.`
+    );
+  }
   if (runs.problems.length > 0) {
     const since = Math.min(...runs.problems.map((problem) => problem.since));
     parts.unshift(

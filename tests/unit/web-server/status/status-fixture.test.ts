@@ -87,6 +87,7 @@ describe('status fixture', () => {
     });
     const image = await openCardFile(root, 'vm.pm-fo-lead', 'images/fo33-inside.png');
     expect(image.ok && image.contentType).toBe('image/png');
+    if (image.ok) await image.handle.close();
     expect(view.cards.answered.map((a) => a.answer.via).sort()).toEqual(['deck', 'recommended']);
     expect(view.threads.rows.filter((t) => t.source === 'report')).toHaveLength(8);
     expect(

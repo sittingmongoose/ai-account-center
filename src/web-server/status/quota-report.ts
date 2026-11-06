@@ -27,6 +27,7 @@ import {
   optText,
   text,
 } from './schema-helpers';
+import { readRegularFile } from './share-read';
 
 export const QUOTA_REPORT_SCHEMA = 'quota-report@1';
 export const QUOTA_REPORT_CAP = 512 * 1024;
@@ -268,7 +269,7 @@ export interface QuotaReaderFs {
 const nodeFs: QuotaReaderFs = {
   readdir: (dir) => fs.promises.readdir(dir),
   stat: (file) => fs.promises.stat(file),
-  readFile: (file) => fs.promises.readFile(file),
+  readFile: (file) => readRegularFile(file, QUOTA_REPORT_CAP),
 };
 
 export class QuotaReportReader {
@@ -318,6 +319,11 @@ export class QuotaReportReader {
       stat = await this.fs.stat(file);
     } catch (error) {
       if (!isTransientShareError(error)) this.setProblem('could not be read');
+      return done();
+    }
+    if (!stat.isFile()) {
+      this.statKey = '';
+      this.setProblem('is not a regular file');
       return done();
     }
     const statKey = `${stat.size}:${stat.mtimeMs}:${stat.ino}:${stat.ctimeMs}`;

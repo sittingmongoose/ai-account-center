@@ -4,9 +4,14 @@ import { hasOnlyKeys, sendError } from './account-route-guards';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { authKind } from '../middleware/request-auth';
 import { getStatusService, type StatusService } from '../status/status-service';
-import { answerDevice, deliveryView, type AnswerHistoryEntry } from '../status/answers';
-import fs from 'fs';
-import { openCardFile, parseByteRange } from '../status/status-files';
+import {
+  answerDevice,
+  deliveryView,
+  isClientSendId,
+  type AnswerHistoryEntry,
+  type EntryResult,
+} from '../status/answers';
+import { openCardFile, parseByteRange, sendFileBytes } from '../status/status-files';
 
 /**
  * The Status tab API (docs/status-tab.md):
@@ -151,18 +156,32 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
     if (!body) return;
     const entries = body.answers;
     if (
-      !hasOnlyKeys(body, ['answers']) ||
+      !hasOnlyKeys(body, ['answers'], ['sendId']) ||
       !Array.isArray(entries) ||
       entries.length === 0 ||
-      entries.length > MAX_ANSWER_ENTRIES
+      entries.length > MAX_ANSWER_ENTRIES ||
+      (body.sendId !== undefined && !isClientSendId(body.sendId))
     ) {
       invalid(res);
       return;
     }
-    const results = await service().answers.submitSet(
-      entries,
-      answerDevice(req.headers['user-agent'])
-    );
+    let results: EntryResult[];
+    try {
+      results = await service().answers.submitSet(
+        entries,
+        answerDevice(req.headers['user-agent']),
+        typeof body.sendId === 'string' ? body.sendId : null
+      );
+    } catch {
+      // submitSet answers per entry; this is what is left if it cannot. Some may be recorded.
+      sendError(
+        res,
+        500,
+        'answers_failed',
+        'The answers could not be finished. Some may have been recorded; reload before sending again.'
+      );
+      return;
+    }
     service().changed();
     res.json({ results });
   });
@@ -179,40 +198,41 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       sendError(res, status, media.reason, error);
       return;
     }
-    res.setHeader('Cache-Control', 'private, max-age=300');
-    res.setHeader('Content-Type', media.contentType);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-    res.setHeader('Accept-Ranges', 'bytes');
-    const range = parseByteRange(req.headers.range, media.size);
-    if (range === 'unsatisfiable') {
-      res.setHeader('Content-Range', `bytes */${media.size}`);
-      sendError(res, 416, 'range_not_satisfiable', 'The requested range is outside this file.');
+    try {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader('Accept-Ranges', 'bytes');
+      const range = parseByteRange(req.headers.range, media.size);
+      if (range === 'unsatisfiable') {
+        // A JSON refusal: the media type and the media's caching start below.
+        res.setHeader('Content-Range', `bytes */${media.size}`);
+        sendError(res, 416, 'range_not_satisfiable', 'The requested range is outside this file.');
+        return;
+      }
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.setHeader('Content-Type', media.contentType);
+      const start = range ? range.start : 0;
+      const end = range ? range.end : media.size - 1;
+      res.status(range ? 206 : 200);
+      if (range) res.setHeader('Content-Range', `bytes ${start}-${end}/${media.size}`);
+      res.setHeader('Content-Length', String(Math.max(0, end - start + 1)));
+      if (req.method === 'HEAD' || media.size === 0) {
+        res.end();
+        return;
+      }
+      await sendFileBytes(media.handle, res, start, end);
+    } finally {
+      await media.handle.close().catch(() => undefined);
+    }
+  });
+
+  // A path Express cannot decode (`%zz`) is a bad path: `404 not_found`, as the contract says.
+  router.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
+    if (error instanceof URIError && req.path.startsWith('/files/') && !res.headersSent) {
+      sendError(res, 404, 'not_found', FILE_REFUSALS.not_found[1]);
       return;
     }
-    const start = range ? range.start : 0;
-    const end = range ? range.end : media.size - 1;
-    res.status(range ? 206 : 200);
-    if (range) res.setHeader('Content-Range', `bytes ${start}-${end}/${media.size}`);
-    res.setHeader('Content-Length', String(Math.max(0, end - start + 1)));
-    if (req.method === 'HEAD' || media.size === 0) {
-      res.end();
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const stream = fs.createReadStream(media.file, { start, end });
-      stream.on('error', () => {
-        if (!res.headersSent) sendError(res, 404, 'not_found', FILE_REFUSALS.not_found[1]);
-        else res.destroy();
-        resolve();
-      });
-      stream.on('end', () => resolve());
-      res.on('close', () => {
-        stream.destroy();
-        resolve();
-      });
-      stream.pipe(res);
-    });
+    next(error);
   });
 
   return router;

@@ -115,6 +115,13 @@ function num(value: unknown, field: string): number | null {
   return value;
 }
 
+/** A time or an amount spent: known and at least 0, or null. */
+function amount(value: unknown, field: string): number | null {
+  const n = num(value, field);
+  if (n !== null && n < 0) fail(field);
+  return n;
+}
+
 function optCount(value: unknown, field: string): number | null {
   return value === null || value === undefined ? null : count(value, field);
 }
@@ -184,17 +191,17 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
     },
     startedAt: optIso(doc.startedAt, 'startedAt'),
     endedAt: iso(doc.endedAt, 'endedAt'),
-    wallSeconds: num(doc.wallSeconds, 'wallSeconds'),
+    wallSeconds: amount(doc.wallSeconds, 'wallSeconds'),
     outcome: text(doc.outcome, 'outcome', 40),
     cost: optObj(doc.cost, 'cost', (c) => ({
-      usd: num(c.usd, 'cost.usd'),
-      credits: num(c.credits, 'cost.credits'),
+      usd: amount(c.usd, 'cost.usd'),
+      credits: amount(c.credits, 'cost.credits'),
       quota: quota(c.quota, 'cost.quota'),
       tokens: tokens(c.tokens, 'cost.tokens'),
       estimate: optObj(c.estimate, 'cost.estimate', (e) => ({
         source: text(e.source, 'cost.estimate.source', 80),
         method: text(e.method, 'cost.estimate.method', 200),
-        credits: num(e.credits, 'cost.estimate.credits'),
+        credits: amount(e.credits, 'cost.estimate.credits'),
         quota: quota(e.quota, 'cost.estimate.quota'),
         tokens: tokens(e.tokens, 'cost.estimate.tokens'),
       })),
@@ -207,6 +214,8 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
     })),
     review: optObj(doc.review, 'review', (r) => {
       const findings = obj(r.findings, 'review.findings');
+      // It decides quality, so a missing one must not read as "not overturned".
+      if (typeof r.overturned !== 'boolean') fail('review.overturned');
       return {
         of: text(r.of, 'review.of', 200),
         verdict: oneOf(r.verdict, 'review.verdict', ['pass', 'fail', 'cannot-verify'] as const),
@@ -215,7 +224,7 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
           medium: count(findings.medium, 'review.findings.medium'),
           low: count(findings.low, 'review.findings.low'),
         },
-        overturned: bool(r.overturned, 'review.overturned', false),
+        overturned: r.overturned,
         by: optText(r.by, 'review.by', 120),
         disputed: bool(r.disputed, 'review.disputed', false),
       };

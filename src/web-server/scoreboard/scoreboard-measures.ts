@@ -18,6 +18,7 @@ export const LAZY_KINDS: ReadonlySet<string> = new Set(['incomplete-read', 'scop
 /** Outcomes that count against reliability; the format has no reason field. */
 export const FAILED_OUTCOMES: ReadonlySet<string> = new Set([
   'failed',
+  'failure',
   'cancelled',
   'canceled',
   'did-not-start',
@@ -25,11 +26,33 @@ export const FAILED_OUTCOMES: ReadonlySet<string> = new Set([
   'error',
   'crashed',
   'timed-out',
+  'timeout',
+  'aborted',
+  'killed',
+  'interrupted',
+  'abandoned',
 ]);
 const READ_FLOOR = 0.9;
 
-export function failedRun(run: RunDoc): boolean {
-  return FAILED_OUTCOMES.has(run.outcome.toLowerCase());
+/**
+ * `done` is the only success and the listed words the only failures. Anything else (`partial`,
+ * `blocked`, a word this server has never seen) says neither, so it counts as neither.
+ */
+export function outcomeOf(run: RunDoc): 'done' | 'failed' | 'unknown' {
+  const word = run.outcome.trim().toLowerCase().replace(/_/g, '-');
+  if (word === 'done') return 'done';
+  return FAILED_OUTCOMES.has(word) ? 'failed' : 'unknown';
+}
+
+/** The runs with an unknown outcome, by outcome word, for the runs Source. */
+export function unknownOutcomes(runs: readonly RunDoc[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const run of runs) {
+    if (outcomeOf(run) !== 'unknown') continue;
+    const word = run.outcome.replace(/\s+/g, ' ').trim().toLowerCase();
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** The reviews that count: `task.type` review, naming a known run, not ending before that run. */
@@ -147,7 +170,7 @@ function share(unit: string, of: number, per: number, n: number): MeasureValue {
 }
 
 function speed(runs: readonly RunDoc[], unit: TaskUnit): MeasureValue {
-  const finished = runs.filter((run) => !failedRun(run) && run.wallSeconds !== null);
+  const finished = runs.filter((run) => outcomeOf(run) === 'done' && run.wallSeconds !== null);
   const perUnit: number[] = [];
   for (const run of finished) {
     const units = unitsOf(run, unit);
@@ -260,8 +283,9 @@ function cheating(runs: readonly RunDoc[], unit: string): MeasureValue {
 }
 
 function reliability(runs: readonly RunDoc[], unit: string): MeasureValue {
-  const good = runs.filter((run) => !failedRun(run));
-  return share(unit, good.length, runs.length, runs.length);
+  const known = runs.filter((run) => outcomeOf(run) !== 'unknown');
+  const good = known.filter((run) => outcomeOf(run) === 'done');
+  return share(unit, good.length, known.length, known.length);
 }
 
 /**
@@ -272,7 +296,7 @@ function overclaim(runs: readonly RunDoc[], index: ReviewIndex, unit: string): M
   let claimed = 0;
   let overturned = 0;
   for (const run of runs) {
-    if (failedRun(run)) continue;
+    if (outcomeOf(run) !== 'done') continue;
     const reviews = index.of(run.id).filter(decisive);
     const standing = reviews.filter(
       (review) => !(review.review?.overturned && review.review.disputed)
@@ -298,10 +322,12 @@ function rate(
   for (const run of runs) {
     const cost = costOf(run);
     const units = unitsOf(run, unit);
-    if (cost === null || units === null) continue;
+    const outcome = outcomeOf(run);
+    // A failed run's cost is known waste; an unknown outcome is not known to be either.
+    if (cost === null || units === null || outcome === 'unknown') continue;
     n += 1;
     total += cost;
-    if (!failedRun(run) && !index.of(run.id).some(overturnedUndisputed)) accepted += units;
+    if (outcome === 'done' && !index.of(run.id).some(overturnedUndisputed)) accepted += units;
   }
   return {
     value: n > 0 && accepted > 0 ? significant(total / accepted) : null,

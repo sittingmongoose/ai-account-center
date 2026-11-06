@@ -49,11 +49,19 @@ the folder is listed. ENOENT and ESTALE (Node: "Unknown system error -116") on a
 folder, keep the last good copy and retry on the next scan; they never count as the thread going away. A file absent
 from its folder's listing keeps its last good copy for 2 minutes before it counts as removed. A file containing a NUL
 byte is refused (Mac SMB appends wrote NULs into shared files). The fresh card read behind every answer also lists
-`cards/` first.
+`cards/` first. Every share file is opened non-blocking and without following a link, and the open handle must be a
+regular file before a byte is read: a FIFO or a link where a report belongs is named as a problem and can never block
+a read. A lower `seq` than the one already read keeps the higher copy and names a problem until the writer writes a
+higher one; a card in that state has `answerable: false`, because an answer to it could only come back `card_changed`.
+A writer name cannot contain `--` (a card id is split on the first one); such a folder is named as a problem.
+
+**Scan limits.** One scan reads at most 200 writer folders (over that, the most recently changed), 500 card files and
+64 MB in total. Anything past a limit is not read and is named in the Source (`limits/writers`, `limits/cards`,
+`limits/bytes`), never dropped silently. The Scoreboard has its own limits (`docs/scoreboard.md`, Reading runs).
 
 **Collectors.** Agent reports: rescanned every 10 s (stat every file, read only changed ones; the share has no change
 notification). pm-mail registry: every 30 s. Machines (one short read-only command per host over the app-update ssh
-aliases; the VM from `/proc` and `statfs`), `browser-check slots --json` and `simlock status --json`: once a minute
+aliases; this computer, whichever of the four it is, from `/proc` and `statfs`), `browser-check slots --json` and `simlock status --json`: once a minute
 while `GET /api/status` was called in the last 15 minutes, and at once on the first read after a quiet spell (they
 start processes and ssh sessions; nobody watching, nothing runs). Usage: every dashboard analytics sample, never a
 provider refresh. quota-watch: its share report `<reports>/v1/quota/report.json`, read with the agent reports scan
@@ -75,7 +83,9 @@ provider refresh. quota-watch: its share report `<reports>/v1/quota/report.json`
   `206 Partial Content` with `Content-Range`, a range past the end gives `416`): iOS Safari plays no video without
   them. `HEAD` gives the headers only. `Cache-Control: private, max-age=300`, `X-Content-Type-Options: nosniff`.
   Refusals: `404 not_found` (missing, outside the folder, not a writer, bad path), `413 too_large`, `415 not_media`,
-  `416 range_not_satisfiable`.
+  `416 range_not_satisfiable` (a JSON body, `no-store`). A writer folder that is itself a link is `404`. The file is
+  checked and served from one open handle, so a swap after the check cannot change what is sent; a file that shrinks
+  mid-send ends in a broken connection rather than a short file under the promised `Content-Length`.
 - `/ws` sends `{ "type": "status-changed" }` to browser-session sockets when a source changes (at most one every 5 s);
   the page re-reads `/api/status`. The page also
   re-reads every `refresh.pollSeconds` while visible, so a missed hint only delays.
@@ -85,7 +95,8 @@ All routes: a browser session (`authKind(req) === 'session'`; no session `401 au
 `GET /api/status` takes no query (`400 unexpected_query`); the history takes only `limit` (1 to 500, default 50,
 else `400 invalid_limit`). POSTs: no query string (`400 unexpected_query`), the dashboard Origin
 (`403 origin_required`), `application/json` (`415 json_required`), at most 64 KB (`413 body_too_large`) and exactly
-the documented keys (`400 invalid_body`). The files route sets `Cache-Control: private, max-age=300` instead of
+the documented keys (`400 invalid_body`). Before routing, a body that is not JSON gets `400 invalid_json` and one over
+100 KB `413 body_too_large`, each `{ error, code }` that never echoes input. The files route sets `Cache-Control: private, max-age=300` instead of
 `no-store`.
 
 ## Shell iframe
@@ -136,7 +147,8 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
     "counts": { "openCards": 3, "blockedItems": 2, "workingThreads": 9, "staleSources": 1 }
   },
   "sources": [ Source ],
-  "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ] },
+  "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ],
+             "complete": true },
   "projects": [ Project ],
   "threads": { "source": "...", "rows": [ Thread ] },
   "machines": { "source": "...", "rows": [ Machine ] },
@@ -159,6 +171,14 @@ word, never 0. Times are ISO UTC; the page shows them as relative ages ("2m ago"
 ```
 A panel whose source is not `ok` draws its last good data greyed with the source's `detail` on top, or only the
 detail when there is no data. Nothing is ever shown as live when its source is stale.
+
+**`cards.complete`**: whether a card missing from this view is known to be gone. The page prunes the owner's local
+drafts of closed cards only while it is true. True only when the latest scan listed `v1/writers` and every writer and
+`cards/` folder, read every file it tried and reached no scan limit. A file refused for its content (bad JSON, NUL
+bytes, a secret, a schema miss) was read: it is a named problem and leaves this true. False before the first full scan
+after start; while the Source is `missing`, `error` or `stale`; when any listing failed (EIO, EACCES, ETIMEDOUT, ESTALE
+and the like, including on one writer's folder); when a file could not be read (a Source of `unreadable` for that
+reason); and when a scan limit was reached.
 
 **Card** (open): the card file's fields after validation (`id`, `label`, `writer`, `seq`, `project`, `stream`,
 `askedBy`, `kind`, `title`, `now`, `nowAsOf`, `oldAnswer`, `whatChanged`, `options[]`, `recommendation`, `multiple`,
@@ -226,7 +246,9 @@ share):
 "rang" | "failed" | "pending", at, detail, share: Step, doorbell: Step } } }`, newest first, at most 50 (the full
 history, notes included, is `GET /api/status/answers`). **Step**: `{ state: "pending" | "done" | "failed" |
 "skipped", at, detail, attempts }`. `failed` covers a share write or doorbell still being retried, one that gave up
-after 20 attempts, or a doorbell turned off on a test server (`skipped`); `detail` says which. A card with no
+after 20 attempts, a doorbell turned off on a test server (`skipped`), or an answer a newer answer to that card replaced
+before its signed copy reached the share (both steps `skipped`, `state: "failed"`, never written or rung, so the older
+answer cannot land over the newer one); `detail` says which. A card with no
 pm-mail name is delivered once its signed file is on the share: `state: "rang"` with `detail` "No mail name; the agent
 reads its answers file." (doorbell step `skipped`).
 
@@ -321,7 +343,7 @@ for a long deck. "Use the recommendations" fills every card still empty with its
 any of them before sending. Unsent choices and notes are kept on this device (browser storage) so leaving the page
 loses nothing; they are drafts, never answers.
 
-`POST /api/status/answers` body: `{ "answers": [ { "cardId", "cardSeq", "cardSha256", "choice": ["A"] | [], "note": "...",
+`POST /api/status/answers` body: `{ "sendId"?: "<id>", "answers": [ { "cardId", "cardSeq", "cardSha256", "choice": ["A"] | [], "note": "...",
 "via": "deck" | "recommended", "kind"?: "answer" | "note" | "object" | "done" } ] }`, 1 to 50 entries, at most 64 KB. Each entry is validated and recorded on its
 own, in order, one set at a time; the response is `{ "results": [ { cardId, outcome: "recorded" | "card_changed" |
 "refused", code, error } ] }`, one per entry in request order (HTTP 200 when the request itself is valid, even if some
@@ -330,7 +352,19 @@ card id). Entry codes: `card_changed`, `invalid_entry` (not the strict entry sha
 (no choice and no note), `invalid_note`, `invalid_via`, `invalid_kind` (the entry's kind does not fit the card's
 kind), `words_required` (an objection without the owner's words), `sample_card` (a format sample takes no answer),
 `judgement_anchored` (a judgement card that carries a recommendation), `answer_not_saved` (the private store could
-not be written; nothing else happened for that entry).
+not be written; nothing else happened for that entry), `share_unavailable` (the share did not answer in time, so the
+card could not be checked; nothing was recorded for that entry, and it can be sent again). If the send cannot finish at
+all the answer is `500 answers_failed`: some entries may have been recorded.
+- **Retry key:** the optional request `sendId` (16 to 64 characters of `[A-Za-z0-9_-]`, else `400 invalid_body`) is the
+  client's retry key. The page sends a content hash of the entries, so a retry of the same entries carries the same id,
+  even after a reload, and any edit makes a new one. A repeat answers with the first send's per-entry results and
+  records, writes and rings nothing; one that arrives while the first is still running waits its turn and answers the
+  same way. The last 200 ids are kept for 24 hours, in the private store, so this survives a restart. A send that recorded
+  nothing is not remembered, since a retry may yet succeed. It is only a dedupe key: it is never the summary's `sendId`
+  below, which the server makes and signs, and it never reaches the share or the mail.
+- **Time limits:** one card read has 5 s, one signed file 10 s, one ring 40 s, one whole send 30 s and one retry pass 45 s,
+  so a hung share cannot hold the answers queue. A record already stored when time runs out stays pending and the retry
+  writes it. A write that outlives its deadline is dropped before its rename.
 - Record kinds: `answer` (a choice, `question` and `judgement` cards), `note` (a note alone, any answerable card),
   `object` (`objection` cards: no choice, the owner's words required) and `done` (`action` cards: no choice, words
   optional). Without `kind`, an entry with a choice is an `answer` and one with only a note is a `note`; `object` and
@@ -352,8 +386,12 @@ not be written; nothing else happened for that entry).
   done goes to `<reports>/v1/answers/<card>.json` (a later answer to a newer version of the card replaces it); each
   note gets its own file `<card>.note-<12 hex>.json` and each objection `<card>.object-<12 hex>.json`, so none
   overwrites another or an answer. Each step's result is kept in the history; a failed share write, summary or ring is
-  retried every minute (up to 20 times) and shown, never hidden.
-- **Send summary:** every POST that records at least one entry is a send with its own `sendId` (a UUID), written
+  retried every minute (up to 20 times) and shown, never hidden. A retry never writes an answer or a done once a newer
+  one for that card exists, and checks again just before its rename. Nothing is written when `<reports>/v1` is not
+  there: only folders below it are created, so an unmounted share grows no local folder, and the step reads
+  "The reports share is not available."
+- **Send summary:** every POST that records at least one entry is a send with its own server-made `sendId` (a UUID, not
+  the request's retry key), written
   signed to `<reports>/v1/answers/batches/<sendId>.json`: `{ schema: "agent-reports/send@1", sendId, at, answeredBy:
   "owner", device, entries: [ { cardId, seq, cardSha256, kind, choice, note } ], signature }`, entries in the order
   sent, signed exactly like an answer (`verifySignedDocument(fileText, publicKeyPem, "agent-reports/send@1")`).
@@ -368,14 +406,18 @@ not be written; nothing else happened for that entry).
   both `<reports>/v1/keys/aac-answers.pub` and `<reports>/v1/keys/<keyId>.pub` (verifiers try `<keyId>.pub` first), with
   `keyId` = first 16 hex characters of the SHA-256 of the public key's DER (SPKI) bytes. `canonicalJson(value)` and
   `verifySignedAnswer(fileText, publicKeyPem)` in `src/web-server/status/answer-signing.ts` are what a reporter
-  mirrors.
+  mirrors. **A reporter must pin the key id it trusts.** `signature.keyId` comes from the file being checked, so anyone
+  able to write to the share could add `keys/<theirs>.pub` and sign with it: looking the key up by that id alone proves
+  nothing. Pin the id (or the key) out of band, and treat a new one as a rotation to confirm, not as proof.
 - **Doorbell:** one ring per asker (`replyTo.pmMail`) per send, not one per card: `pm-mail --as aac-answers send
   <asker> "<N> answer(s) from the owner (<batch, ...>)"` with the body on stdin (a send of 50 notes is longer than
   one command-line argument may be). It rings only after that asker's signed files are on the share. The body names
   the batch if any, the count and the card ids, then for each card its seq, record kind, the owner's exact choice (keys
   and labels) and words, the UTC time, the card's SHA-256 and its signed file, and says the signed files are the
   authority (naming the send summary and the key file). A card without a pm-mail name is recorded and signed normally
-  and not rung.
+  and not rung. Card text in the ring stays on its one line (newlines and control characters collapse to a space); the
+  owner's words stay exact. `replyTo.pmMail` follows pm-mail's own name rule (`^[a-z0-9][a-z0-9_-]{0,63}$`) and is never
+  `all`: a card that breaks it is unreadable, by name.
 - No agent path exists: the routes take a browser session only (not a device token, not localhost without auth).
 
 `cards.batches` is only a grouping (id, label, cardIds) that orders the deck; there is no approve-all endpoint.

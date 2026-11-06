@@ -64,8 +64,16 @@ const KIND_WORDS: Record<SignedAnswer['kind'], string> = {
   done: 'done',
 };
 
+/**
+ * Card files are written by agents and the ring is read by agents, so a card's words stay on the one
+ * line they were given: a newline in a label could otherwise forge lines of the owner's answer.
+ */
+function oneLine(value: string): string {
+  return value.replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim();
+}
+
 function batchesOf(records: SentRecord[]): string[] {
-  return [...new Set(records.flatMap((r) => (r.card.batch ? [r.card.batch] : [])))].sort();
+  return [...new Set(records.flatMap((r) => (r.card.batch ? [oneLine(r.card.batch)] : [])))].sort();
 }
 
 export function ringSubject(records: SentRecord[]): string {
@@ -80,7 +88,7 @@ function choiceText(record: SentRecord): string {
   const labels = new Map((record.card.options ?? []).map((option) => [option.key, option.label]));
   return record.answer.choice.length > 0
     ? record.answer.choice
-        .map((key) => `${key} (${labels.get(key) ?? 'unknown option'})`)
+        .map((key) => `${oneLine(key)} (${oneLine(labels.get(key) ?? 'unknown option')})`)
         .join(', ')
     : 'none';
 }
@@ -92,19 +100,19 @@ export function ringBody(sendId: string | null, records: SentRecord[], keyId: st
     `The owner sent ${records.length} ${records.length === 1 ? 'answer' : 'answers'} on the AI Account Center Status tab.`,
     ...(batches.length > 0 ? [`Batch: ${batches.join(', ')}`] : []),
     ...(sendId ? [`Send: ${sendId}`] : []),
-    `Cards: ${records.map((r) => r.answer.cardId).join(', ')}`,
+    `Cards: ${records.map((r) => oneLine(r.answer.cardId)).join(', ')}`,
     '',
   ];
   for (const record of records) {
     const { answer } = record;
     lines.push(
-      `Card ${answer.cardId} (seq ${answer.cardSeq})`,
+      `Card ${oneLine(answer.cardId)} (seq ${answer.cardSeq})`,
       `  Kind: ${KIND_WORDS[answer.kind] ?? answer.kind}`,
       `  Choice: ${choiceText(record)}`,
-      `  Words: ${answer.note ? answer.note.replace(/\n/g, '\n    ') : '(none)'}`,
+      `  Words: ${answer.note ? answer.note.replace(/\r\n?|\n/g, '\n    ') : '(none)'}`,
       `  Time (UTC): ${answer.answeredAt}`,
       `  Card sha256: ${answer.cardSha256}`,
-      `  Signed file: agent-reports/v1/answers/${record.file}`,
+      `  Signed file: agent-reports/v1/answers/${oneLine(record.file)}`,
       ''
     );
   }

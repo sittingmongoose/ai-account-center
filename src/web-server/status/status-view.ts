@@ -369,6 +369,13 @@ function cardView(
   };
 }
 
+/** Whether the shown cards are all there are: see `cards.complete` in status-view-types.ts. */
+function cardsComplete(inputs: StatusInputs): boolean {
+  const { state, complete, scannedAt } = inputs.reports;
+  if (state !== 'ok' || !complete || scannedAt === null) return false;
+  return (ageSeconds(inputs.now, scannedAt) ?? 0) <= STALE_AFTER_SECONDS['agent-reports'];
+}
+
 function buildCards(inputs: StatusInputs): StatusView['cards'] {
   // Answers and dones close a card version; notes and objections stay on the open card.
   const answers = inputs.answers.filter((e) => CLOSING_KINDS.has(e.answer.kind));
@@ -423,6 +430,7 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
       },
     })),
     batches: [...batches.values()],
+    complete: cardsComplete(inputs),
   };
 }
 

@@ -1,0 +1,1254 @@
+/** Regressions from the blind server review of the Status API (docs/status-tab.md). */
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { execFileSync } from 'child_process';
+import express from 'express';
+import fs from 'fs';
+import http, { type Server } from 'http';
+import type { AddressInfo } from 'net';
+import path from 'path';
+import { Writable } from 'stream';
+import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
+import {
+  agentReportsRoot,
+  AgentReportsReader,
+  DEFAULT_AGENT_REPORTS_DIR,
+  publishSchemas,
+  type ReaderFs,
+} from '../../../../src/web-server/status/agent-reports-reader';
+import { ringBody } from '../../../../src/web-server/status/answer-delivery';
+import {
+  deliveryView,
+  StatusAnswers,
+  type AnswerTiming,
+  type Doorbell,
+} from '../../../../src/web-server/status/answers';
+import { QuotaReportReader } from '../../../../src/web-server/status/quota-report';
+import {
+  findSecret,
+  isCardId,
+  isPmMailName,
+  isWriterName,
+  jsonFromBytes,
+  REPORT_SIZE_CAPS,
+} from '../../../../src/web-server/status/report-schema';
+import {
+  DEFAULT_PM_MAIL_REGISTRY,
+  localMachineId,
+  pmMailRegistryDir,
+  PmMailRegistryReader,
+  runCommand,
+} from '../../../../src/web-server/status/status-collectors';
+import { openCardFile, sendFileBytes } from '../../../../src/web-server/status/status-files';
+import { StatusService } from '../../../../src/web-server/status/status-service';
+import { buildStatusView } from '../../../../src/web-server/status/status-view';
+import { cardDoc, NOW, tempDirs, threadDoc, writeCard, writeReport } from './status-test-helpers';
+
+const dirs = tempDirs();
+let server: Server | undefined;
+afterEach(async () => {
+  if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
+  server = undefined;
+  dirs.cleanup();
+});
+
+const PNG = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(200, 7),
+]);
+const CARD = 'vm.lead--Q1';
+
+function setup(options: { doorbell?: Doorbell; timing?: Partial<AnswerTiming> } = {}) {
+  const root = dirs.make('ccs-status-reports-');
+  const store = path.join(dirs.make('ccs-status-store-'), 'status');
+  const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+  const rings: Array<{ to: string; subject: string; body: string }> = [];
+  const doorbell: Doorbell =
+    options.doorbell ??
+    (async (to, subject, body) => {
+      rings.push({ to, subject, body });
+      return { ok: true, detail: 'Rang.' };
+    });
+  const make = (extra: { readCard?: typeof reader.readCardNow; onChange?: () => void } = {}) =>
+    new StatusAnswers({
+      readCard: extra.readCard ?? ((id) => reader.readCardNow(id)),
+      storeDir: () => store,
+      reportsRoot: () => root,
+      doorbell,
+      now: () => NOW,
+      timing: options.timing,
+      onChange: extra.onChange,
+    });
+  fs.mkdirSync(path.join(root, 'v1'), { recursive: true });
+  return { root, store, reader, rings, answers: make(), make };
+}
+
+function entry(cardId: string, sha: string, fields: Record<string, unknown> = {}) {
+  return { cardId, cardSeq: 1, cardSha256: sha, choice: ['A'], via: 'deck', ...fields };
+}
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+/** Fails instead of hanging the whole test run when the work blocks. */
+function soon<T>(work: Promise<T>, ms = 3000): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('still blocked')), ms)),
+  ]);
+}
+
+/** The share stops answering under `v1`; every other path still does. */
+function hangShare() {
+  const hung = (file: fs.PathLike) => String(file).includes(`${path.sep}v1`);
+  const realStat = fs.promises.stat;
+  const realMkdir = fs.promises.mkdir;
+  const never = new Promise<never>(() => undefined);
+  const stat = spyOn(fs.promises, 'stat').mockImplementation(((file: fs.PathLike) =>
+    String(file).endsWith(`${path.sep}v1`) ? never : realStat(file)) as typeof fs.promises.stat);
+  const mkdir = spyOn(fs.promises, 'mkdir').mockImplementation(((
+    file: fs.PathLike,
+    options?: fs.MakeDirectoryOptions
+  ) => (hung(file) ? never : realMkdir(file, options))) as typeof fs.promises.mkdir);
+  return {
+    mockRestore() {
+      stat.mockRestore();
+      mkdir.mockRestore();
+    },
+  };
+}
+
+function fifo(file: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  execFileSync('mkfifo', [file]);
+}
+
+describe('the test environment', () => {
+  it('can never reach the real reports share', () => {
+    expect(agentReportsRoot()).not.toBe(DEFAULT_AGENT_REPORTS_DIR);
+    expect(pmMailRegistryDir()).not.toBe(DEFAULT_PM_MAIL_REGISTRY);
+    expect(process.env.AAC_STATUS_DOORBELL).toBe('off');
+  });
+});
+
+describe('secret search', () => {
+  const sizes = Object.entries({ ...REPORT_SIZE_CAPS, quota: 512 * 1024 });
+  for (const [name, bytes] of sizes)
+    it(`takes well under a second on hostile text at the ${name} cap (${bytes / 1024} KB)`, () => {
+      for (const unit of ['a', 'a@', 'a@a.', 'eyJ-', '.eyJaaaaaaaa', 'a.', '@']) {
+        const text = unit.repeat(Math.ceil(bytes / unit.length)).slice(0, bytes);
+        const started = performance.now();
+        findSecret(text);
+        expect([unit, performance.now() - started < 1000]).toEqual([unit, true]);
+      }
+    });
+
+  it('still finds real emails and tokens, and only those', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.abcdefghijklmnop';
+    for (const [text, kind] of [
+      ['write to jared.smith+x@mail.example.com now', 'an email address'],
+      ['a@b.co', 'an email address'],
+      ['"from":"x%y@host-1.example.org"', 'an email address'],
+      [jwt, 'a JSON web token'],
+      [`token ${jwt} end`, 'a JSON web token'],
+      [`-${jwt}`, 'a JSON web token'],
+    ] as const)
+      expect([text, findSecret(text)]).toEqual([text, kind]);
+    for (const text of [
+      'a@b',
+      '@example.com',
+      'see @ home.example.com',
+      'user@host_name',
+      'a@b.c',
+      'a@b.com_x',
+      'xeyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.abcdefghijklmnop',
+      'eyJshort.eyJzdWIiOiIxMjM0NTYifQ.abcdefghijklmnop',
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ',
+    ])
+      expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  it('agrees with the old patterns on a mix of text', () => {
+    const email = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/;
+    const jwt = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/;
+    const pieces = ['a', 'eyJ', '.', '@', '-', '_', 'bcdefghij', ' ', 'com', 'x.y', '"', '%'];
+    let state = 12345;
+    const next = () => {
+      state = (state * 1103515245 + 12345) % 2147483648;
+      return state;
+    };
+    for (let round = 0; round < 3000; round += 1) {
+      let text = '';
+      for (let i = next() % 14; i >= 0; i -= 1) text += pieces[next() % pieces.length];
+      const kind = findSecret(text);
+      expect([text, kind === 'an email address' || (kind !== null && email.test(text))]).toEqual([
+        text,
+        email.test(text),
+      ]);
+      if (!email.test(text))
+        expect([text, kind === 'a JSON web token']).toEqual([text, jwt.test(text)]);
+    }
+  });
+
+  it('jsonFromBytes refuses a 512 KB run of `a` in fixed words, quickly', () => {
+    const started = performance.now();
+    expect(jsonFromBytes(Buffer.alloc(512 * 1024, 'a'), 512 * 1024).ok).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+});
+
+describe('an older answer cannot replace a newer one', () => {
+  const answerFile = (root: string) => path.join(root, 'v1', 'answers', `${CARD}.json`);
+  const onShare = (root: string) => JSON.parse(fs.readFileSync(answerFile(root), 'utf8')).cardSeq;
+
+  it('skips the retry of a record a newer answer has replaced, and says so', async () => {
+    const { root, answers, rings } = setup();
+    const first = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const blocker = path.join(root, 'v1', 'answers');
+    fs.writeFileSync(blocker, 'blocker');
+    await answers.submitSet([entry(CARD, first)], 'Mac');
+    await settle();
+    fs.rmSync(blocker);
+    const second = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+    await answers.submitSet([entry(CARD, second, { cardSeq: 2 })], 'Mac');
+    await settle();
+    expect(onShare(root)).toBe(2);
+    await answers.retryPending();
+    expect(onShare(root)).toBe(2);
+    const old = answers.list()[0];
+    expect(old.share.state).toBe('skipped');
+    expect(old.doorbell.state).toBe('skipped');
+    const shown = deliveryView(old);
+    expect(shown.state).toBe('failed');
+    expect(shown.detail).toContain('newer answer');
+    expect(rings).toHaveLength(1);
+    // A later pass and a restart change nothing.
+    const attempts = old.share.attempts;
+    await answers.retryPending();
+    expect(answers.list()[0].share.attempts).toBe(attempts);
+  });
+
+  it('survives a restart: the skipped step is read back from the store', async () => {
+    const { root, answers, make } = setup();
+    const first = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    fs.writeFileSync(path.join(root, 'v1', 'answers'), 'blocker');
+    await answers.submitSet([entry(CARD, first)], 'Mac');
+    fs.rmSync(path.join(root, 'v1', 'answers'));
+    const second = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+    await answers.submitSet([entry(CARD, second, { cardSeq: 2 })], 'Mac');
+    await answers.retryPending();
+    const again = make();
+    await again.retryPending();
+    expect(onShare(root)).toBe(2);
+    expect(again.list()[0].share.state).toBe('skipped');
+  });
+
+  it('drops a write that wakes up after its deadline, before its rename', async () => {
+    const { root, answers } = setup({ timing: { shareMs: 40 } });
+    const first = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    let release = () => undefined as void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realOpen = fs.promises.open;
+    let held = 0;
+    const open = spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      if (String(args[0]).includes(`.${CARD}.json.tmp-`) && held === 0) {
+        held += 1;
+        await gate;
+      }
+      return realOpen(...args);
+    }) as typeof fs.promises.open);
+    try {
+      await answers.submitSet([entry(CARD, first)], 'Mac');
+      expect(answers.list()[0].share.state).toBe('failed');
+      const second = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+      await answers.submitSet([entry(CARD, second, { cardSeq: 2 })], 'Mac');
+      expect(onShare(root)).toBe(2);
+      release();
+      await settle();
+      expect(onShare(root)).toBe(2);
+      expect(
+        fs.readdirSync(path.join(root, 'v1', 'answers')).filter((f) => f.startsWith('.'))
+      ).toEqual([]);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('never skips a note: each has its own file', async () => {
+    const { root, answers } = setup();
+    fs.writeFileSync(path.join(root, 'v1', 'answers'), 'blocker');
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    await answers.submitSet([entry(CARD, sha, { choice: [], note: 'first' })], 'Mac');
+    await answers.submitSet([entry(CARD, sha)], 'Mac');
+    fs.rmSync(path.join(root, 'v1', 'answers'));
+    await answers.retryPending();
+    expect(answers.list().map((e) => e.share.state)).toEqual(['done', 'done']);
+  });
+});
+
+describe('special files on the share', () => {
+  it('reads past a FIFO where the quota report belongs and names it', async () => {
+    const root = dirs.make();
+    fifo(path.join(root, 'v1', 'quota', 'report.json'));
+    const reader = new QuotaReportReader({ root: () => root, now: () => NOW });
+    await soon(reader.scan());
+    expect(reader.snapshot().problem?.reason).toBe('is not a regular file');
+  });
+
+  it('does not open a FIFO a card file names', async () => {
+    const root = dirs.make();
+    fifo(path.join(root, 'v1', 'writers', 'vm.lead', 'images', 'a.png'));
+    expect(await soon(openCardFile(root, 'vm.lead', 'images/a.png'))).toEqual({
+      ok: false,
+      reason: 'not_found',
+    });
+  });
+
+  it('names a FIFO where a report belongs, and refuses one if it appears after the stat', async () => {
+    const root = dirs.make();
+    fifo(path.join(root, 'v1', 'writers', 'vm.lead', 'thread.json'));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await soon(reader.scan());
+    expect(reader.snapshot().problems.map((p) => p.reason)).toEqual(['is not a regular file']);
+    // The share's own reader, on a file swapped for a FIFO between the stat and the read.
+    const { nodeReaderFs } = await import('../../../../src/web-server/status/agent-reports-reader');
+    await expect(
+      soon(nodeReaderFs.readFile(path.join(root, 'v1', 'writers', 'vm.lead', 'thread.json'), 1024))
+    ).rejects.toThrow('not a regular file');
+  });
+
+  it('refuses a link through the share reader', async () => {
+    const root = dirs.make();
+    const outside = path.join(dirs.make(), 'secret.json');
+    fs.writeFileSync(outside, JSON.stringify(threadDoc('vm.lead')));
+    const folder = path.join(root, 'v1', 'writers', 'vm.lead');
+    fs.mkdirSync(folder, { recursive: true });
+    fs.symlinkSync(outside, path.join(folder, 'thread.json'));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    expect(reader.snapshot().threads).toEqual([]);
+    expect(reader.snapshot().problems.map((p) => p.reason)).toEqual(['could not be read']);
+  });
+
+  it('holds no more than its cap of a file that grew after the stat', async () => {
+    const { nodeReaderFs } = await import('../../../../src/web-server/status/agent-reports-reader');
+    const file = path.join(dirs.make(), 'big.json');
+    fs.writeFileSync(file, Buffer.alloc(100_000, 'x'));
+    expect((await nodeReaderFs.readFile(file, 1000)).length).toBe(1001);
+  });
+
+  it('does not hang on a FIFO in the schemas, the keys or the registry', async () => {
+    const root = dirs.make();
+    const source = dirs.make();
+    fs.writeFileSync(path.join(source, 'card.json'), '{}');
+    fifo(path.join(root, 'v1', 'schemas', 'card.json'));
+    await soon(publishSchemas(root, source));
+    expect(fs.readFileSync(path.join(root, 'v1', 'schemas', 'card.json'), 'utf8')).toBe('{}');
+
+    const registry = dirs.make();
+    fifo(path.join(registry, 'x.json'));
+    expect((await soon(new PmMailRegistryReader(() => registry).scan())).threads).toEqual([]);
+
+    const { root: shared, answers } = setup();
+    const sha = writeCard(shared, cardDoc('vm.lead', 'Q1'));
+    fifo(path.join(shared, 'v1', 'keys', 'aac-answers.pub'));
+    await soon(answers.submitSet([entry(CARD, sha)], 'Mac'));
+    expect(answers.list()[0].share.state).toBe('done');
+  });
+});
+
+describe('media confinement', () => {
+  function media(root: string, writer: string, name = 'a.png', bytes = PNG) {
+    const dir = path.join(root, 'v1', 'writers', writer, 'images');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, name), bytes);
+  }
+
+  it('refuses a writer folder that is a link, wherever it points', async () => {
+    const root = dirs.make();
+    media(root, 'vm.real');
+    const outside = dirs.make();
+    fs.writeFileSync(path.join(outside, 'secret.png'), PNG);
+    const writers = path.join(root, 'v1', 'writers');
+    fs.symlinkSync(outside, path.join(writers, 'vm.evil'));
+    fs.symlinkSync(path.join(writers, 'vm.real'), path.join(writers, 'vm.alias'));
+    expect(await openCardFile(root, 'vm.evil', 'secret.png')).toEqual({
+      ok: false,
+      reason: 'not_found',
+    });
+    expect(await openCardFile(root, 'vm.alias', 'images/a.png')).toEqual({
+      ok: false,
+      reason: 'not_found',
+    });
+    const real = await openCardFile(root, 'vm.real', 'images/a.png');
+    expect(real.ok).toBe(true);
+    if (real.ok) await real.handle.close();
+  });
+
+  it('serves a root that is itself reached through a link', async () => {
+    const real = dirs.make();
+    media(real, 'vm.real');
+    const link = path.join(dirs.make(), 'share');
+    fs.symlinkSync(real, link);
+    const opened = await openCardFile(link, 'vm.real', 'images/a.png');
+    expect(opened.ok).toBe(true);
+    if (opened.ok) await opened.handle.close();
+  });
+
+  it('sniffs and sends one file: a swap after the check serves what was checked', async () => {
+    const root = dirs.make();
+    media(root, 'vm.real');
+    const file = path.join(root, 'v1', 'writers', 'vm.real', 'images', 'a.png');
+    const opened = await openCardFile(root, 'vm.real', 'images/a.png');
+    if (!opened.ok) throw new Error('not opened');
+    const swapped = `${file}.new`;
+    fs.writeFileSync(swapped, '<script>not media</script>');
+    fs.renameSync(swapped, file);
+    const chunks: Buffer[] = [];
+    const out = new Writable({
+      write(chunk, _encoding, done) {
+        chunks.push(chunk);
+        done();
+      },
+    });
+    await sendFileBytes(opened.handle, out, 0, opened.size - 1);
+    await opened.handle.close();
+    expect(Buffer.concat(chunks).equals(PNG)).toBe(true);
+  });
+
+  it('destroys the response when the file shrank under it', async () => {
+    const file = path.join(dirs.make(), 'a.png');
+    fs.writeFileSync(file, PNG);
+    const handle = await fs.promises.open(file, 'r');
+    fs.truncateSync(file, 50);
+    let written = 0;
+    let finished = false;
+    const out = new Writable({
+      write(chunk, _encoding, done) {
+        written += chunk.length;
+        done();
+      },
+      final(done) {
+        finished = true;
+        done();
+      },
+    });
+    out.on('error', () => undefined);
+    await sendFileBytes(handle, out, 0, PNG.length - 1);
+    await handle.close();
+    expect(written).toBe(50);
+    expect(out.destroyed).toBe(true);
+    expect(finished).toBe(false);
+  });
+});
+
+describe('an unavailable share', () => {
+  it('grows no local folder when the share is not mounted, and says so', async () => {
+    const parent = dirs.make();
+    const root = path.join(parent, 'agent-reports');
+    const store = path.join(dirs.make(), 'status');
+    const card = cardDoc('vm.lead', 'Q1');
+    const sha = 'a'.repeat(64);
+    const rings: string[] = [];
+    const answers = new StatusAnswers({
+      readCard: async () => ({ doc: card as never, sha256: sha }) as never,
+      storeDir: () => store,
+      reportsRoot: () => root,
+      doorbell: async (to) => {
+        rings.push(to);
+        return { ok: true, detail: 'Rang.' };
+      },
+      now: () => NOW,
+    });
+    const results = await answers.submitSet([entry(CARD, sha)], 'Mac');
+    expect(results[0].outcome).toBe('recorded');
+    await settle();
+    expect(fs.existsSync(root)).toBe(false);
+    const [record] = answers.list();
+    expect(record.share.state).toBe('failed');
+    expect(deliveryView(record).detail).toContain('share is not available');
+    expect(rings).toEqual([]);
+    // Mounted again: the retry writes it.
+    fs.mkdirSync(path.join(root, 'v1'), { recursive: true });
+    await answers.retryPending();
+    expect(answers.list()[0].share.state).toBe('done');
+    expect(fs.existsSync(path.join(root, 'v1', 'answers', `${CARD}.json`))).toBe(true);
+  });
+
+  it('a hung card read refuses the entry and frees the queue', async () => {
+    const { root, make } = setup({ timing: { readMs: 20 } });
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const answers = make({ readCard: () => new Promise(() => undefined) });
+    const results = await soon(
+      answers.submitSet([entry(CARD, sha), entry(CARD, sha, { note: 'x' })], 'Mac')
+    );
+    expect(results.map((r) => r.code)).toEqual(['share_unavailable', 'share_unavailable']);
+    expect(results[0].outcome).toBe('refused');
+    expect(answers.list()).toEqual([]);
+    expect((await soon(answers.submitSet([entry(CARD, sha)], 'Mac')))[0].code).toBe(
+      'share_unavailable'
+    );
+  });
+
+  it('a send on a hung share ends inside its budget; what is stored is retried', async () => {
+    const { root, answers } = setup({ timing: { shareMs: 30, sendBudgetMs: 60 } });
+    const cards = ['Q1', 'Q2', 'Q3', 'Q4'].map((id) => {
+      const sha = writeCard(root, cardDoc('vm.lead', id));
+      return entry(`vm.lead--${id}`, sha);
+    });
+    const stat = hangShare();
+    let results;
+    const started = Date.now();
+    try {
+      results = await soon(answers.submitSet(cards, 'Mac'));
+    } finally {
+      stat.mockRestore();
+    }
+    expect(Date.now() - started).toBeLessThan(1000);
+    // Recorded while the budget lasted; the entries after it were not checked, so not recorded.
+    const outcomes = results.map((r) => r.code ?? r.outcome);
+    expect(outcomes).toContain('recorded');
+    expect(outcomes.at(-1)).toBe('share_unavailable');
+    const stored = outcomes.filter((outcome) => outcome === 'recorded').length;
+    expect(answers.list()).toHaveLength(stored);
+    expect(answers.list().every((e) => e.share.state === 'failed')).toBe(true);
+    expect(answers.sendList()[0].summary.state).toBe('pending');
+    await answers.retryPending();
+    expect(answers.list().every((e) => e.share.state === 'done')).toBe(true);
+    expect(answers.sendList()[0].summary.state).toBe('done');
+  });
+
+  it('a retry pass on a hung share ends inside its budget, and the flag clears', async () => {
+    const { root, answers } = setup({ timing: { shareMs: 20, retryBudgetMs: 50 } });
+    fs.writeFileSync(path.join(root, 'v1', 'answers'), 'blocker');
+    const cards = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8'].map((id) =>
+      entry(`vm.lead--${id}`, writeCard(root, cardDoc('vm.lead', id)))
+    );
+    await answers.submitSet(cards, 'Mac');
+    fs.rmSync(path.join(root, 'v1', 'answers'));
+    const attempts = () => answers.list().reduce((sum, e) => sum + e.share.attempts, 0);
+    const before = attempts();
+    const share = hangShare();
+    try {
+      await soon(answers.retryPending(), 1000);
+    } finally {
+      share.mockRestore();
+    }
+    // Out of budget before the last record: what is left waits, its attempts uncounted.
+    expect(attempts() - before).toBeLessThan(cards.length);
+    await answers.retryPending();
+    expect(answers.list().every((e) => e.share.state === 'done')).toBe(true);
+  });
+
+  it('a doorbell that never answers still settles and the record can ring again', async () => {
+    let calls = 0;
+    const { root, answers } = setup({
+      timing: { ringMs: 20 },
+      doorbell: (to) => {
+        calls += 1;
+        return calls === 1
+          ? new Promise(() => undefined)
+          : Promise.resolve({ ok: true, detail: `Rang ${to}.` });
+      },
+    });
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    await answers.submitSet([entry(CARD, sha)], 'Mac');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(answers.list()[0].doorbell.state).toBe('failed');
+    await soon(answers.retryPending());
+    expect(answers.list()[0].doorbell.state).toBe('done');
+  });
+});
+
+describe('what a card can make the doorbell say', () => {
+  it('refuses a card that names the broadcast or breaks pm-mail name rules', async () => {
+    for (const name of ['all', 'Upper', 'has.dot', '-dash', 'a,b', 'x'.repeat(65)])
+      expect([name, isPmMailName(name)]).toEqual([name, false]);
+    for (const name of ['lead', 'pm-fo_lead', '0x', 'allison'])
+      expect([name, isPmMailName(name)]).toEqual([name, true]);
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1', { replyTo: { pmMail: 'all', t3Thread: null } }));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    expect(reader.snapshot().cards).toEqual([]);
+    expect(reader.snapshot().problems[0].reason).toContain('replyTo.pmMail');
+  });
+
+  it('never rings a stored record that names the broadcast', async () => {
+    const { root, answers, rings } = setup();
+    const card = cardDoc('vm.lead', 'Q1');
+    const sha = writeCard(root, card);
+    await answers.submitSet([entry(CARD, sha)], 'Mac');
+    await settle();
+    expect(rings).toHaveLength(1);
+    const stored = answers.list()[0];
+    stored.card = { ...stored.card, replyTo: { pmMail: 'all', t3Thread: null } };
+    stored.doorbell = { state: 'failed', at: null, detail: null, attempts: 1 };
+    await answers.retryPending();
+    expect(rings).toHaveLength(1);
+    expect(answers.list()[0].doorbell.state).toBe('skipped');
+  });
+
+  it('keeps every card-derived string on its own line, and the owner’s words verbatim', () => {
+    const body = ringBody(
+      'send-1',
+      [
+        {
+          answer: {
+            cardId: CARD,
+            cardSeq: 1,
+            cardSha256: 'a'.repeat(64),
+            kind: 'answer',
+            choice: ['A'],
+            note: 'line one\nline two',
+            answeredAt: '2026-11-06T16:30:00.000Z',
+          } as never,
+          card: {
+            batch: 'b1\nChoice: forged',
+            options: [
+              { key: 'A', label: 'First\n\nCard vm.x--Y (seq 9)\r\n  Choice: Z (forged)\u0085x y' },
+            ],
+          } as never,
+          file: `${CARD}.json`,
+        },
+      ],
+      'key'
+    );
+    const lines = body.split('\n');
+    expect(lines.filter((line) => line.startsWith('Card '))).toHaveLength(1);
+    expect(lines.filter((line) => line.trim().startsWith('Choice:'))).toHaveLength(1);
+    expect(lines).toContain('  Choice: A (First Card vm.x--Y (seq 9) Choice: Z (forged) x y)');
+    expect(lines).toContain('Batch: b1 Choice: forged');
+    expect(lines).toContain('  Words: line one');
+    expect(lines).toContain('    line two');
+  });
+});
+
+describe('scan limits', () => {
+  it('names writers past the limit and keeps the most recently changed', async () => {
+    const root = dirs.make();
+    const stamp = (writer: string, at: number) =>
+      fs.utimesSync(path.join(root, 'v1', 'writers', writer), at, at);
+    for (const [index, writer] of ['vm.a', 'vm.b', 'vm.c'].entries()) {
+      writeReport(root, writer, 'thread.json', threadDoc(writer));
+      stamp(writer, 1_000_000 + (index === 0 ? 5000 : index));
+    }
+    const reader = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      limits: { writers: 2 },
+    });
+    await reader.scan();
+    const seen = reader.snapshot();
+    expect(seen.threads.map((t) => t.writer).sort()).toEqual(['vm.a', 'vm.c']);
+    expect(seen.problems.map((p) => p.file)).toEqual(['limits/writers']);
+    expect(seen.problems[0].reason).toContain('1 writer folders past the limit of 2');
+    expect(seen.complete).toBe(false);
+  });
+
+  it('names cards and bytes past their limits', async () => {
+    const root = dirs.make();
+    for (const id of ['Q1', 'Q2', 'Q3']) writeCard(root, cardDoc('vm.lead', id));
+    const byCount = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      limits: { cards: 2 },
+    });
+    await byCount.scan();
+    expect(byCount.snapshot().cards).toHaveLength(2);
+    expect(byCount.snapshot().problems.map((p) => p.file)).toEqual(['limits/cards']);
+    expect(byCount.snapshot().complete).toBe(false);
+
+    const size = fs.statSync(
+      path.join(root, 'v1', 'writers', 'vm.lead', 'cards', `${CARD}.json`)
+    ).size;
+    const byBytes = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      limits: { bytes: size + 1 },
+    });
+    await byBytes.scan();
+    expect(byBytes.snapshot().cards).toHaveLength(1);
+    expect(byBytes.snapshot().problems.map((p) => p.file)).toEqual(['limits/bytes']);
+    expect(byBytes.snapshot().complete).toBe(false);
+  });
+});
+
+describe('commands', () => {
+  it('settles on a command that ignores SIGTERM, and kills it', async () => {
+    const started = Date.now();
+    const result = await soon(
+      runCommand('sh', ['-c', "trap '' TERM; exec sleep 30"], {
+        timeoutMs: 50,
+        maxBytes: 1024,
+        graceMs: 50,
+      })
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(result).toMatchObject({ code: null, timedOut: true, missing: false });
+  });
+
+  it('still answers normally', async () => {
+    const result = await runCommand('sh', ['-c', 'cat'], {
+      timeoutMs: 5000,
+      maxBytes: 1024,
+      input: 'hello',
+    });
+    expect(result).toMatchObject({ code: 0, stdout: 'hello', timedOut: false });
+  });
+});
+
+describe('lower seq on disk', () => {
+  it('names a problem and makes the card unanswerable until a higher seq', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 5 }));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 4, title: 'Older' }));
+    await reader.scan();
+    const view = () =>
+      buildStatusView({
+        now: NOW,
+        timeZone: 'UTC',
+        reports: reader.snapshot(),
+        registry: { data: [], asOf: NOW, error: null },
+        machines: Object.fromEntries(
+          ['vm', 'mac', 'windows', 'nas1'].map((id) => [
+            id,
+            { data: null, asOf: null, error: null },
+          ])
+        ) as never,
+        browsers: { data: null, asOf: null, error: null },
+        simlock: { data: null, asOf: null, error: null },
+        usage: null,
+        answers: [],
+        hiddenThreadNames: [],
+        quota: { state: 'missing', scannedAt: null, good: null, problem: null },
+      });
+    const card = view().cards.open[0];
+    expect(card.seq).toBe(5);
+    expect(card.answerable).toBe(false);
+    expect(card.problem).toContain('seq');
+    writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 6 }));
+    await reader.scan();
+    expect(view().cards.open[0].answerable).toBe(true);
+  });
+});
+
+describe('writer names', () => {
+  it('forbids `--`, so a card id has one reading', async () => {
+    expect(isWriterName('vm.a--b')).toBe(false);
+    expect(isWriterName('vm.a-b')).toBe(true);
+    // The first `--` ends the writer, and now no writer can hold one.
+    expect(isCardId('vm.a--b--Q1')).toBe(true);
+    const root = dirs.make();
+    writeReport(root, 'vm.a--b', 'thread.json', threadDoc('vm.a--b'));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    expect(reader.snapshot().problems.map((p) => p.file)).toEqual(['writers/vm.a--b']);
+  });
+});
+
+describe('double ring', () => {
+  it('a retry during the first ring does not ring a later group too', async () => {
+    let release = () => undefined as void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const rung: string[] = [];
+    const { root, answers } = setup({
+      doorbell: async (to) => {
+        rung.push(to);
+        if (rung.length === 1) await gate;
+        return { ok: true, detail: 'Rang.' };
+      },
+    });
+    const a = writeCard(root, cardDoc('vm.one', 'Q1'));
+    const b = writeCard(root, cardDoc('vm.two', 'Q1'));
+    await answers.submitSet([entry('vm.one--Q1', a), entry('vm.two--Q1', b)], 'Mac');
+    await settle();
+    expect(rung).toEqual(['one']);
+    await answers.retryPending();
+    expect(rung).toEqual(['one']);
+    release();
+    await settle();
+    expect(rung).toEqual(['one', 'two']);
+  });
+});
+
+describe('the client send id', () => {
+  const ID = '0123456789abcdef0123456789abcdef';
+
+  it('answers a repeat from the first results: nothing recorded, written or rung again', async () => {
+    const { root, answers, rings } = setup();
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const note = [entry(CARD, sha, { choice: [], note: 'hello' }), { nonsense: true }];
+    const first = await answers.submitSet(note, 'Mac', ID);
+    await settle();
+    expect(first.map((r) => r.outcome)).toEqual(['recorded', 'refused']);
+    const files = fs.readdirSync(path.join(root, 'v1', 'answers'), { recursive: true }).sort();
+    const again = await answers.submitSet(note, 'Mac', ID);
+    await settle();
+    expect(again).toEqual(first);
+    expect(answers.list()).toHaveLength(1);
+    expect(answers.sendList()).toHaveLength(1);
+    expect(rings).toHaveLength(1);
+    expect(fs.readdirSync(path.join(root, 'v1', 'answers'), { recursive: true }).sort()).toEqual(
+      files
+    );
+  });
+
+  it('keeps the server’s batch id apart from the client id', async () => {
+    const { root, answers, rings } = setup();
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    await answers.submitSet([entry(CARD, sha)], 'Mac', ID);
+    await settle();
+    const [send] = answers.sendList();
+    expect(send.sendId).not.toBe(ID);
+    expect(send.sendId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(fs.readdirSync(path.join(root, 'v1', 'answers', 'batches'))).toEqual([
+      `${send.sendId}.json`,
+    ]);
+    expect(rings[0].body).toContain(`Send: ${send.sendId}`);
+    expect(rings[0].body).not.toContain(ID);
+  });
+
+  it('processes an overlapping duplicate in turn and answers it from the first', async () => {
+    const { root, make, rings } = setup();
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    let release = () => undefined as void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { reader } = setup();
+    let reads = 0;
+    const answers = make({
+      readCard: async (id) => {
+        reads += 1;
+        await gate;
+        return (
+          new AgentReportsReader({ root: () => root, now: () => NOW }).readCardNow(id) ??
+          reader.readCardNow(id)
+        );
+      },
+    });
+    const body = [entry(CARD, sha, { choice: [], note: 'once only' })];
+    const first = answers.submitSet(body, 'Mac', ID);
+    const second = answers.submitSet(body, 'Mac', ID);
+    await settle();
+    expect(reads).toBe(1);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    await settle();
+    expect(a[0].outcome).toBe('recorded');
+    expect(b).toEqual(a);
+    expect(reads).toBe(1);
+    expect(answers.list()).toHaveLength(1);
+    expect(rings).toHaveLength(1);
+  });
+
+  it('remembers across a restart', async () => {
+    const { root, answers, make, rings } = setup();
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const body = [entry(CARD, sha, { choice: [], note: 'once only' })];
+    const first = await answers.submitSet(body, 'Mac', ID);
+    await settle();
+    const restarted = make();
+    expect(await restarted.submitSet(body, 'Mac', ID)).toEqual(first);
+    await settle();
+    expect(restarted.list()).toHaveLength(1);
+    expect(rings).toHaveLength(1);
+  });
+
+  it('forgets after a day and past 200 ids, and never remembers a send that recorded nothing', async () => {
+    const root = dirs.make();
+    fs.mkdirSync(path.join(root, 'v1'), { recursive: true });
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    let now = NOW;
+    const answers = new StatusAnswers({
+      readCard: (id) => reader.readCardNow(id),
+      storeDir: () => path.join(root, 'store'),
+      reportsRoot: () => root,
+      doorbell: async () => ({ ok: true, detail: 'Rang.' }),
+      now: () => now,
+    });
+    const note = (text: string) => [entry(CARD, sha, { choice: [], note: text })];
+    const refusedOnly = await answers.submitSet([{ nonsense: true }], 'Mac', ID);
+    expect(refusedOnly[0].outcome).toBe('refused');
+    expect((await answers.submitSet(note('real'), 'Mac', ID))[0].outcome).toBe('recorded');
+    expect(answers.list()).toHaveLength(1);
+    now += 24 * 60 * 60 * 1000;
+    await answers.submitSet(note('real'), 'Mac', ID);
+    expect(answers.list()).toHaveLength(2);
+    for (let i = 0; i < 200; i += 1)
+      await answers.submitSet(note(`n${i}`), 'Mac', `other-id-${String(i).padStart(8, '0')}`);
+    const count = answers.list().length;
+    await answers.submitSet(note('real'), 'Mac', ID);
+    expect(answers.list()).toHaveLength(count + 1);
+  }, 20_000);
+
+  it('a throw after a record costs no results', async () => {
+    const { root, make } = setup();
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const answers = make({
+      onChange: () => {
+        throw new Error('listener failed');
+      },
+    });
+    const results = await answers.submitSet([entry(CARD, sha)], 'Mac');
+    expect(results[0].outcome).toBe('recorded');
+    expect(answers.list()).toHaveLength(1);
+  });
+
+  it('a card read that throws refuses that entry and answers the rest', async () => {
+    const { root, make } = setup();
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const answers = make({
+      readCard: () => {
+        throw new Error('boom');
+      },
+    });
+    const results = await answers.submitSet([entry(CARD, sha), { nonsense: true }], 'Mac');
+    expect(results.map((r) => r.code)).toEqual(['share_unavailable', 'invalid_entry']);
+  });
+});
+
+describe('cards.complete', () => {
+  function faulty(fail: (dir: string) => boolean, code: string): ReaderFs {
+    return {
+      readdir: async (dir) => {
+        if (fail(dir)) throw Object.assign(new Error('fault'), { code });
+        return fs.promises.readdir(dir, { withFileTypes: true });
+      },
+      stat: (file) => fs.promises.stat(file),
+      readFile: (file) => fs.promises.readFile(file),
+    };
+  }
+  const empty = { data: null, asOf: null, error: null };
+  const complete = (reader: AgentReportsReader, now = NOW) =>
+    buildStatusView({
+      now,
+      timeZone: 'UTC',
+      reports: reader.snapshot(),
+      registry: { data: [], asOf: NOW, error: null },
+      machines: { vm: empty, mac: empty, windows: empty, nas1: empty },
+      browsers: empty,
+      simlock: empty,
+      usage: null,
+      answers: [],
+      hiddenThreadNames: [],
+      quota: { state: 'missing', scannedAt: null, good: null, problem: null },
+    }).cards.complete;
+
+  it('is false before the first scan and true after a clean one', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    expect(complete(reader)).toBe(false);
+    await reader.scan();
+    expect(complete(reader)).toBe(true);
+  });
+
+  it('is false with no reports folder', async () => {
+    const reader = new AgentReportsReader({ root: () => dirs.make(), now: () => NOW });
+    await reader.scan();
+    expect(reader.snapshot().state).toBe('missing');
+    expect(complete(reader)).toBe(false);
+  });
+
+  it('is false after a restart while the share returns EIO, and recovers', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    let broken = true;
+    const reader = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      fs: faulty(() => broken, 'EIO'),
+    });
+    await reader.scan();
+    expect(reader.snapshot().state).toBe('error');
+    expect(reader.snapshot().scannedAt).toBe(NOW);
+    expect(complete(reader)).toBe(false);
+    broken = false;
+    await reader.scan();
+    expect(complete(reader)).toBe(true);
+  });
+
+  it('turns false again when a whole share goes wrong later, and on a stale handle', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    let code: string | null = null;
+    const reader = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      fs: {
+        ...faulty(() => false, ''),
+        readdir: async (dir) => {
+          if (code) throw Object.assign(new Error('fault'), { code });
+          return fs.promises.readdir(dir, { withFileTypes: true });
+        },
+      },
+    });
+    await reader.scan();
+    expect(complete(reader)).toBe(true);
+    code = 'ESTALE';
+    await reader.scan();
+    expect(complete(reader)).toBe(false);
+    code = null;
+    await reader.scan();
+    expect(complete(reader)).toBe(true);
+    code = 'ETIMEDOUT';
+    await reader.scan();
+    expect(complete(reader)).toBe(false);
+  });
+
+  for (const code of ['EIO', 'EACCES', 'ETIMEDOUT', 'ESTALE', 'ENOENT'])
+    it(`is false when one writer folder fails with ${code}`, async () => {
+      const root = dirs.make();
+      writeCard(root, cardDoc('vm.good', 'Q1'));
+      writeCard(root, cardDoc('vm.bad', 'Q1'));
+      const reader = new AgentReportsReader({
+        root: () => root,
+        now: () => NOW,
+        fs: faulty((dir) => dir.endsWith(`${path.sep}vm.bad`), code),
+      });
+      await reader.scan();
+      expect(reader.snapshot().cards.map((c) => c.writer)).toEqual(['vm.good']);
+      expect(complete(reader)).toBe(false);
+    });
+
+  it('is false when a cards folder cannot be listed', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const reader = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      fs: faulty((dir) => dir.endsWith(`${path.sep}cards`), 'EIO'),
+    });
+    await reader.scan();
+    expect(complete(reader)).toBe(false);
+  });
+
+  for (const code of ['EIO', 'ESTALE'])
+    it(`is false when a card file fails to read with ${code}`, async () => {
+      const root = dirs.make();
+      writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const reader = new AgentReportsReader({
+        root: () => root,
+        now: () => NOW,
+        fs: {
+          ...faulty(() => false, ''),
+          readFile: async () => {
+            throw Object.assign(new Error('fault'), { code });
+          },
+        },
+      });
+      await reader.scan();
+      expect(complete(reader)).toBe(false);
+    });
+
+  it('stays true for a file refused for its content, which is a named problem', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    writeReport(root, 'vm.lead', `cards/vm.lead--Q2.json`, Buffer.from('not json'));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    expect(reader.snapshot().problems).toHaveLength(1);
+    expect(complete(reader)).toBe(true);
+  });
+
+  it('is false when the last scan is stale, however whole it was', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    expect(complete(reader, NOW + 10 * 60_000)).toBe(false);
+  });
+});
+
+describe('the routes', () => {
+  async function start(answersOverride?: { submitSet: () => Promise<never> }) {
+    const { root, answers, reader } = setup();
+    const service = new StatusService({
+      reader,
+      answers: (answersOverride ?? answers) as StatusAnswers,
+      registryReader: new PmMailRegistryReader(() => path.join(root, 'none')),
+      run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+      readLocalMachine: async () => {
+        throw new Error('not in tests');
+      },
+      readRemoteMachine: async () => {
+        throw new Error('not in tests');
+      },
+      timeZone: () => 'UTC',
+      notify: () => undefined,
+    });
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      Object.assign(req, { session: { authenticated: true } });
+      next();
+    });
+    app.use(
+      '/api/status',
+      createStatusRouter(() => service)
+    );
+    server = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    return {
+      root,
+      answers,
+      base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    };
+  }
+
+  /** `fetch` normalises some paths and refuses others; this sends the bytes as written. */
+  function raw(base: string, url: string, headers: Record<string, string> = {}) {
+    return new Promise<{ status: number; type: string; cache: string; body: string }>(
+      (resolve, reject) => {
+        const { hostname, port } = new URL(base);
+        http
+          .get({ hostname, port, path: url, headers }, (res) => {
+            let body = '';
+            res.on('data', (chunk) => {
+              body += chunk;
+            });
+            res.on('end', () =>
+              resolve({
+                status: res.statusCode ?? 0,
+                type: String(res.headers['content-type']),
+                cache: String(res.headers['cache-control']),
+                body,
+              })
+            );
+          })
+          .on('error', reject);
+      }
+    );
+  }
+
+  it('answers a bad range as JSON, typed as JSON and not cached as media', async () => {
+    const { base, root } = await start();
+    const dir = path.join(root, 'v1', 'writers', 'vm.lead', 'c');
+    fs.mkdirSync(dir, { recursive: true });
+    const mp4 = Buffer.concat([
+      Buffer.from([0, 0, 0, 0x18]),
+      Buffer.from('ftypisom'),
+      Buffer.alloc(100),
+    ]);
+    fs.writeFileSync(path.join(dir, 'v.mp4'), mp4);
+    const res = await raw(base, '/api/status/files/vm.lead/c/v.mp4', { range: 'bytes=9999-' });
+    expect(res.status).toBe(416);
+    expect(res.type).toContain('application/json');
+    expect(res.cache).toBe('no-store');
+    expect(JSON.parse(res.body).code).toBe('range_not_satisfiable');
+    const ok = await raw(base, '/api/status/files/vm.lead/c/v.mp4', { range: 'bytes=0-11' });
+    expect(ok.status).toBe(206);
+    expect(ok.type).toBe('video/mp4');
+    expect(ok.cache).toBe('private, max-age=300');
+  });
+
+  it('answers an undecodable path 404, as the contract says', async () => {
+    const { base } = await start();
+    for (const url of ['/api/status/files/vm.lead/%zz', '/api/status/files/%zz/a.png']) {
+      const res = await raw(base, url);
+      expect([url, res.status]).toEqual([url, 404]);
+      expect(JSON.parse(res.body).code).toBe('not_found');
+    }
+  });
+
+  it('takes a valid sendId and refuses a bad one, without echoing it', async () => {
+    const { base, root, answers } = await start();
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const post = (body: unknown) =>
+      fetch(`${base}/api/status/answers`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: base },
+        body: JSON.stringify(body),
+      });
+    const one = entry(CARD, sha, { choice: [], note: 'once' });
+    for (const bad of [
+      'short',
+      'x'.repeat(65),
+      'has space in it here',
+      'dots.not.allowed.here',
+      7,
+      null,
+    ]) {
+      const res = await post({ sendId: bad, answers: [one] });
+      expect([bad, res.status]).toEqual([bad, 400]);
+      expect((await res.json()).code).toBe('invalid_body');
+    }
+    const id = 'a'.repeat(32);
+    const first = await (await post({ sendId: id, answers: [one] })).json();
+    const again = await (await post({ sendId: id, answers: [one] })).json();
+    expect(first.results[0].outcome).toBe('recorded');
+    expect(again).toEqual(first);
+    expect(answers.list()).toHaveLength(1);
+  });
+
+  it('answers a stable 500 if the send itself throws', async () => {
+    const { base } = await start({
+      submitSet: () => Promise.reject(new Error('secret words')),
+    });
+    const res = await fetch(`${base}/api/status/answers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ answers: [{}] }),
+    });
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.code).toBe('answers_failed');
+    expect(body.error).toContain('may have been recorded');
+    expect(JSON.stringify(body)).not.toContain('secret words');
+  });
+});
+
+describe('the machine rows', () => {
+  it('maps this computer by its real name', () => {
+    expect(localMachineId('ubuntuserver', 'linux')).toBe('vm');
+    expect(localMachineId('Jareds-MacBook.local', 'darwin')).toBe('mac');
+    expect(localMachineId('DESKTOP-1', 'win32')).toBe('windows');
+    expect(localMachineId('nas1', 'linux')).toBe('nas1');
+    expect(localMachineId('anything', 'linux')).toBe('vm');
+  });
+
+  it('labels the local reading with this computer, and never rings ssh for it', async () => {
+    const sample = {
+      cores: 4,
+      load1: 1,
+      busyPct: null,
+      memAvailableBytes: 1024 ** 3,
+      memTotalBytes: 2 * 1024 ** 3,
+      disk: null,
+      cpuTimes: null,
+    };
+    const remote: string[] = [];
+    const service = new StatusService({
+      reader: new AgentReportsReader({ root: () => dirs.make(), now: () => NOW }),
+      registryReader: new PmMailRegistryReader(() => dirs.make()),
+      run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+      localMachine: () => 'mac',
+      readLocalMachine: async () => sample,
+      readRemoteMachine: async (machine) => {
+        remote.push(machine);
+        throw new Error('no answer');
+      },
+      timeZone: () => 'UTC',
+      notify: () => undefined,
+      now: () => NOW,
+    });
+    await service.collectMachines();
+    const rows = service.view().machines.rows;
+    const row = (id: string) => rows.find((machine) => machine.id === id);
+    expect(row('mac')?.cpu.cores).toBe(4);
+    expect(row('vm')?.cpu?.cores ?? null).toBeNull();
+    expect([...new Set(remote)].sort()).toEqual(['nas1', 'windows']);
+  });
+});

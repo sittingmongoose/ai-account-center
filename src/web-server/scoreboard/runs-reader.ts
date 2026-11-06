@@ -23,6 +23,13 @@ import { byFile, ShareFiles, type ShareFile } from './share-files';
 
 const DATE_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * What one scan reads (docs/scoreboard.md), so the share cannot grow the server without bound. More
+ * writers than the Status reader's: an old writer's runs are still history. Past a limit the rest
+ * is named in the runs Source.
+ */
+export const RUN_LIMITS = { writers: 1000, runs: 5000, bytes: 64 * 1024 * 1024 };
+
 export interface RunsState {
   /** missing: no `v1/writers` folder; error: the folder could not be listed. */
   state: 'ok' | 'missing' | 'error';
@@ -40,7 +47,14 @@ export class RunsReader {
   private scannedAt: number | null = null;
   private scanning: Promise<void> | null = null;
 
-  constructor(private readonly options: { root: () => string; now?: () => number; fs?: ReaderFs }) {
+  constructor(
+    private readonly options: {
+      root: () => string;
+      now?: () => number;
+      fs?: ReaderFs;
+      limits?: Partial<typeof RUN_LIMITS>;
+    }
+  ) {
     this.files = new ShareFiles<RunDoc>({
       fs: () => this.fs,
       now: () => this.now(),
@@ -88,6 +102,7 @@ export class RunsReader {
       return;
     }
     this.state = 'ok';
+    const limits = { ...RUN_LIMITS, ...this.options.limits };
     const seen = new Set<string>();
     const folderProblems = new Map<string, ReportProblem>();
     const folderProblem = (file: string, reason: string) => {
@@ -108,10 +123,18 @@ export class RunsReader {
         return null;
       }
     };
-    for (const writer of writers) {
-      const name = writer.name;
-      // A folder that is not a writer name is the Status reader's problem to name; no runs in it.
-      if (name.startsWith('.') || !writer.isDirectory() || !isWriterName(name)) continue;
+    // A folder that is not a writer name is the Status reader's problem to name; no runs in it.
+    const names = writers
+      .filter((w) => !w.name.startsWith('.') && w.isDirectory() && isWriterName(w.name))
+      .map((w) => w.name)
+      .sort();
+    if (names.length > limits.writers)
+      folderProblem(
+        'limits/run-writers',
+        `${names.length - limits.writers} writer folders past the limit of ${limits.writers} were not read`
+      );
+    const candidates: Array<{ date: string; absolute: string; rel: string }> = [];
+    for (const name of names.slice(0, limits.writers)) {
       const writerRel = `writers/${name}`;
       const inWriter = await listing(path.join(writersDir, name), writerRel);
       if (!inWriter?.some((entry) => entry.name === 'runs')) continue;
@@ -128,10 +151,28 @@ export class RunsReader {
         for (const file of (await listing(dateDir, dateRel)) ?? []) {
           if (file.name.startsWith('.') || !file.name.endsWith('.json') || !file.isFile()) continue;
           if (!showable(file.name)) continue;
-          await this.files.visit(path.join(dateDir, file.name), `${dateRel}/${file.name}`, seen);
+          candidates.push({
+            date: date.name,
+            absolute: path.join(dateDir, file.name),
+            rel: `${dateRel}/${file.name}`,
+          });
         }
       }
     }
+    // Over a limit the newest days are the ones kept, whichever writer they came from.
+    candidates.sort((a, b) => b.date.localeCompare(a.date) || a.rel.localeCompare(b.rel));
+    let visited = 0;
+    let bytes = 0;
+    for (const candidate of candidates) {
+      if (visited >= limits.runs || bytes >= limits.bytes) break;
+      bytes += await this.files.visit(candidate.absolute, candidate.rel, seen);
+      visited += 1;
+    }
+    if (visited < candidates.length)
+      folderProblem(
+        'limits/runs',
+        `${candidates.length - visited} run files past the limit of ${limits.runs} runs or ${limits.bytes / (1024 * 1024)} MB were not read (the newest days are kept)`
+      );
     this.files.sweep(seen);
     this.folderProblems.clear();
     for (const [key, value] of folderProblems) this.folderProblems.set(key, value);
