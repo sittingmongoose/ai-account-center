@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { CatalogMeasure, TaskUnit } from '../../../../src/web-server/scoreboard/catalog';
 import {
   buildReviewIndex,
+  negativeQuotaRuns,
   canonicalModel,
   computeMeasures,
   unitsOf,
@@ -389,8 +390,9 @@ describe('outcomes', () => {
     expect(out.reliability.n).toBe(9);
     expect(out.speed.value).toBe(100);
     expect(out.speed.n).toBe(2);
-    expect(out.cost.n).toBe(2);
-    expect(out.cost.value).toBe(1);
+    // Spent is spent: the unknown runs' 1,500 credits count, and they buy no accepted units.
+    expect(out.cost.n).toBe(5);
+    expect(out.cost.value).toBe(751);
   });
 
   it('counts only done as a claim for overclaim', () => {
@@ -473,5 +475,20 @@ describe('amounts', () => {
       { task: { id: 'x', type: 'build', title: 'X', size: { tasks: -1 } } },
     ])
       expect(() => doc('n', fields)).toThrow('not valid');
+  });
+});
+
+describe('negative quota', () => {
+  it('leaves the run out of that quota rate, keeps the run, and names it', () => {
+    const defs = new Map<string, CatalogMeasure>([['cost', def('cost')]]);
+    const quota = (deltaPct: number) => ({ account: 'a', window: '5h', deltaPct });
+    const runs = [
+      doc('up', { cost: { credits: 1, quota: quota(4) } }),
+      doc('reset', { cost: { credits: 1, quota: quota(-60) } }),
+    ];
+    const out = computeMeasures(runs, 'task', ['cost'], defs, buildReviewIndex(runs));
+    expect(out.cost.n).toBe(2);
+    expect(out.cost.quota).toEqual([{ window: '5h', value: 4, unit: '%/task', n: 1 }]);
+    expect(negativeQuotaRuns(runs)).toEqual([`${W}--reset`]);
   });
 });

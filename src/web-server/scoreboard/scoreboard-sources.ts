@@ -1,7 +1,7 @@
 /** The Scoreboard's two Sources (the shape in docs/status-tab.md): what was read, and what was not. */
 import type { ReportProblem } from '../status/agent-reports-reader';
 import { ageSeconds, clockText, iso, plural } from '../status/status-view-words';
-import type { CatalogState } from './catalog';
+import type { CatalogState, SeedFailure } from './catalog';
 import type { RunsState } from './runs-reader';
 import type { ScoreboardSource } from './scoreboard-view-types';
 
@@ -13,6 +13,8 @@ export interface ScoreboardInputs {
   root: string;
   catalog: CatalogState;
   runs: RunsState;
+  /** Catalog seeds this server could not write at start. */
+  seedFailures?: readonly SeedFailure[];
 }
 
 function problemList(problems: readonly ReportProblem[]): string {
@@ -42,7 +44,8 @@ export function runsSource(
   inputs: ScoreboardInputs,
   unscored: number,
   ignoredReviews: number,
-  unknownOutcomes: ReadonlyMap<string, number> = new Map()
+  unknownOutcomes: ReadonlyMap<string, number> = new Map(),
+  negativeQuota: readonly string[] = []
 ) {
   const { runs, now, timeZone, root } = inputs;
   const base = sourceBase('scoreboard-runs', 'Agent runs', runs.scannedAt, now);
@@ -75,7 +78,13 @@ export function runsSource(
   if (unknownOutcomes.size > 0) {
     const total = [...unknownOutcomes.values()].reduce((sum, value) => sum + value, 0);
     parts.push(
-      `${plural(total, 'run')} with an outcome that is neither done nor a failure, left out of reliability, overclaim, cost and speed: ${counted(unknownOutcomes)}.`
+      `${plural(total, 'run')} with an outcome that is neither done nor a failure, left out of reliability, overclaim and speed and counted as no accepted units: ${counted(unknownOutcomes)}.`
+    );
+  }
+  if (negativeQuota.length > 0) {
+    const more = negativeQuota.length > 5 ? `, and ${negativeQuota.length - 5} more` : '';
+    parts.push(
+      `${plural(negativeQuota.length, 'run')} with a negative quota move left out of the quota rates: ${negativeQuota.slice(0, 5).join(', ')}${more}.`
     );
   }
   if (runs.problems.length > 0) {
@@ -127,12 +136,17 @@ export function catalogSource(
       detail: `${plural(catalog.problems.length, 'catalog file')} unreadable since ${clockText(since, timeZone)}: ${problemList(catalog.problems)}.`,
     } as const;
   }
-  if (catalog.missingFiles.length > 0)
+  if (catalog.missingFiles.length > 0) {
+    const seeds = (inputs.seedFailures ?? [])
+      .filter((failure) => catalog.missingFiles.includes(failure.file))
+      .map((failure) => ` Could not seed ${failure.file}: ${failure.code}.`)
+      .join('');
     return {
       ...base,
       state: 'missing',
-      detail: `Catalog files missing: ${catalog.missingFiles.join(', ')}.`,
+      detail: `Catalog files missing: ${catalog.missingFiles.join(', ')}.${seeds}`,
     } as const;
+  }
   const parts = [`Catalog read ${clockText(catalog.scannedAt, timeZone)}.`];
   if (missingTypes.size > 0)
     parts.push(`Task types in runs but not in the catalog, not scored: ${counted(missingTypes)}.`);

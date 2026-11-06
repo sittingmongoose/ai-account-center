@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 import { CatalogReader, type CatalogUse } from '../../../../src/web-server/scoreboard/catalog';
@@ -498,7 +498,69 @@ describe('the runs Source', () => {
     });
     expect(view.sources[0].state).toBe('ok');
     expect(view.sources[0].detail).toContain(
-      '3 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim, cost and speed: blocked (1 run), partial (2 runs).'
+      '3 runs with an outcome that is neither done nor a failure, left out of reliability, overclaim and speed and counted as no accepted units: blocked (1 run), partial (2 runs).'
     );
+  });
+});
+
+describe('what the Sources name', () => {
+  const catalog = (missingFiles: string[]) => ({
+    state: 'ok' as const,
+    scannedAt: NOW,
+    missingFiles,
+    problems: [],
+    minRuns: 5,
+    models: [],
+    taskTypes: [],
+    measures: [],
+    uses: [],
+    benchmarks: [],
+  });
+
+  it('names runs with a negative quota move', () => {
+    const run = projectRun(
+      runDoc('vm.lead', 'A', {
+        cost: { quota: { account: 'a', window: '5h', deltaPct: -3 } },
+      }) as unknown as Record<string, unknown>,
+      'vm.lead'
+    );
+    const view = buildScoreboardView({
+      now: NOW,
+      timeZone: 'UTC',
+      root: '/reports',
+      catalog: catalog([]),
+      runs: {
+        state: 'ok',
+        scannedAt: NOW,
+        runs: [{ file: 'x', firstSeenAt: NOW, doc: run }],
+        writers: 1,
+        problems: [],
+      },
+    });
+    expect(view.sources[0].detail).toContain('negative quota move');
+    expect(view.sources[0].detail).toContain('vm.lead--A');
+  });
+
+  it('names a catalog seed the server could not write, by file and code', async () => {
+    const root = dirs.make('ccs-scoreboard-');
+    fs.mkdirSync(path.join(root, 'v1', 'catalog'), { recursive: true });
+    const link = spyOn(fs.promises, 'link').mockImplementation((async () => {
+      throw Object.assign(new Error('words from the system'), { code: 'EPERM' });
+    }) as typeof fs.promises.link);
+    const service = new ScoreboardService({
+      root: () => root,
+      now: () => NOW,
+      timeZone: () => 'UTC',
+    });
+    try {
+      await service.seed();
+    } finally {
+      link.mockRestore();
+    }
+    const { detail, state } = (await service.view()).sources[1];
+    expect(state).toBe('missing');
+    expect(detail).toContain('Could not seed models.json: EPERM.');
+    expect(detail).not.toContain('words from the system');
+    expect(fs.readdirSync(path.join(root, 'v1', 'catalog'))).toEqual([]);
   });
 });

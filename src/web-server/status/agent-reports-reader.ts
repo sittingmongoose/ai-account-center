@@ -230,6 +230,35 @@ function boardPaths(threads: SeenReport<ThreadDoc>[], tasks: SeenReport<TasksDoc
   return [...paths];
 }
 
+const NEWEST_STATS_AT_ONCE = 16;
+
+/**
+ * At most `limit` names: all of them when they fit, else those whose folder changed most recently
+ * (never read, 0, last), with a bounded number of stats running: a share can hold many thousands.
+ */
+export async function newestFolders(
+  names: string[],
+  limit: number,
+  statOf: (name: string) => Promise<fs.Stats>
+): Promise<string[]> {
+  if (names.length <= limit) return names;
+  const dated: Array<{ name: string; mtime: number }> = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < names.length) {
+      const name = names[next++];
+      const mtime = await statOf(name).then(
+        (stat) => stat.mtimeMs,
+        () => 0
+      );
+      dated.push({ name, mtime });
+    }
+  };
+  await Promise.all(Array.from({ length: NEWEST_STATS_AT_ONCE }, worker));
+  dated.sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name));
+  return dated.slice(0, limit).map((row) => row.name);
+}
+
 export class AgentReportsReader {
   private readonly entries = new Map<string, Entry>();
   private readonly folderProblems = new Map<string, ReportProblem>();
@@ -331,7 +360,9 @@ export class AgentReportsReader {
       }
       names.push(name);
     }
-    const kept = await this.newestWriters(names, writersDir, limits.writers);
+    const kept = await newestFolders(names, limits.writers, (name) =>
+      this.fs.stat(path.join(writersDir, name))
+    );
     if (kept.length < names.length) {
       this.scanPartial = true;
       folderProblem(
@@ -374,10 +405,16 @@ export class AgentReportsReader {
         keepWriter(name, 'cards/');
       }
       for (const card of [...cards].sort((a, b) => a.name.localeCompare(b.name))) {
-        if (card.name.startsWith('.') || !card.name.endsWith('.json') || !card.isFile()) continue;
+        if (card.name.startsWith('.') || !card.name.endsWith('.json')) continue;
         const id = card.name.slice(0, -'.json'.length);
         const rel = `writers/${name}/cards/${card.name}`;
         if (!showable(card.name)) continue;
+        if (!card.isFile()) {
+          // A FIFO or a link where a card belongs: it may stand for an open card nobody can read.
+          this.scanPartial = true;
+          folderProblem(rel, 'is not a regular file');
+          continue;
+        }
         if (cardsVisited >= limits.cards) {
           cardsOver += 1;
           continue;
@@ -427,22 +464,6 @@ export class AgentReportsReader {
     return changed;
   }
 
-  /** At most `limit` writers: all of them when they fit, else the folders changed most recently. */
-  private async newestWriters(names: string[], dir: string, limit: number): Promise<string[]> {
-    if (names.length <= limit) return names;
-    const dated = await Promise.all(
-      names.map(async (name) => {
-        try {
-          return { name, mtime: (await this.fs.stat(path.join(dir, name))).mtimeMs };
-        } catch {
-          return { name, mtime: 0 };
-        }
-      })
-    );
-    dated.sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name));
-    return dated.slice(0, limit).map((row) => row.name);
-  }
-
   /** Stat and, when changed, read one file. Resolves whether it changed what the view shows. */
   private async visit(
     file: string,
@@ -466,11 +487,14 @@ export class AgentReportsReader {
       seen.add(rel);
       return this.setProblem(rel, kind, writer, 'is not a regular file');
     }
-    if (this.scanBytes + stat.size > (this.options.limits?.bytes ?? REPORT_LIMITS.bytes)) {
-      this.overBytes += 1;
-      return false;
+    // A file over its own cap is never read or held, so it takes nothing from the other files' budget.
+    if (stat.size <= REPORT_SIZE_CAPS[kind]) {
+      if (this.scanBytes + stat.size > (this.options.limits?.bytes ?? REPORT_LIMITS.bytes)) {
+        this.overBytes += 1;
+        return false;
+      }
+      this.scanBytes += stat.size;
     }
-    this.scanBytes += stat.size;
     seen.add(rel);
     const statKey = `${stat.size}:${stat.mtimeMs}:${stat.ino}:${stat.ctimeMs}`;
     const entry = this.entries.get(rel);
@@ -605,25 +629,31 @@ export class AgentReportsReader {
 
   /**
    * The card as it is on disk now (for an answer): read fresh, never from the last scan. Null when
-   * the file is gone or does not pass the reader's rules.
+   * the share says the card is not there or the file does not pass the reader's rules. Rejects when
+   * the share cannot say: that is not the card changing, and the owner must not be told it did.
    */
   async readCardNow(cardId: string): Promise<ParsedReport<CardDoc> | null> {
     const writer = cardId.slice(0, cardId.indexOf('--'));
     if (!isWriterName(writer)) return null;
     const folder = path.join(this.root, 'v1', 'writers', writer, 'cards');
     const file = path.join(folder, `${cardId}.json`);
+    // List, then read (see the reading rules above).
+    let listed: fs.Dirent[];
     try {
-      // List, then read (see the reading rules above).
-      const listed = await this.fs.readdir(folder);
-      if (!listed.some((entry) => entry.name === `${cardId}.json`)) return null;
-      const stat = await this.fs.stat(file);
-      if (!stat.isFile() || stat.size > REPORT_SIZE_CAPS.card) return null;
-      const bytes = await this.fs.readFile(file, REPORT_SIZE_CAPS.card);
-      const parsed = parseReportFile('card', bytes, writer, cardId);
-      return parsed.ok ? parsed.value : null;
-    } catch {
+      listed = await this.fs.readdir(folder);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+      // No `cards/` under a share that is there means no such card. An unmounted root looks the
+      // same from here, so ask `v1`; this stat rejects if the share itself is gone.
+      await this.fs.stat(path.join(this.root, 'v1'));
       return null;
     }
+    if (!listed.some((entry) => entry.name === `${cardId}.json`)) return null;
+    const stat = await this.fs.stat(file);
+    if (!stat.isFile() || stat.size > REPORT_SIZE_CAPS.card) return null;
+    const bytes = await this.fs.readFile(file, REPORT_SIZE_CAPS.card);
+    const parsed = parseReportFile('card', bytes, writer, cardId);
+    return parsed.ok ? parsed.value : null;
   }
 }
 

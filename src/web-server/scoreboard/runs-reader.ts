@@ -8,6 +8,7 @@
 import path from 'path';
 import {
   isTransientShareError,
+  newestFolders,
   nodeReaderFs,
   showable,
   type ReaderFs,
@@ -128,13 +129,17 @@ export class RunsReader {
       .filter((w) => !w.name.startsWith('.') && w.isDirectory() && isWriterName(w.name))
       .map((w) => w.name)
       .sort();
-    if (names.length > limits.writers)
+    // By `runs/`, not the writer folder: a new day's folder changes the first and not the second.
+    const kept = await newestFolders(names, limits.writers, (name) =>
+      this.fs.stat(path.join(writersDir, name, 'runs'))
+    );
+    if (kept.length < names.length)
       folderProblem(
         'limits/run-writers',
-        `${names.length - limits.writers} writer folders past the limit of ${limits.writers} were not read`
+        `${names.length - kept.length} writer folders past the limit of ${limits.writers} were not read (the most recently changed are kept)`
       );
     const candidates: Array<{ date: string; absolute: string; rel: string }> = [];
-    for (const name of names.slice(0, limits.writers)) {
+    for (const name of kept) {
       const writerRel = `writers/${name}`;
       const inWriter = await listing(path.join(writersDir, name), writerRel);
       if (!inWriter?.some((entry) => entry.name === 'runs')) continue;
@@ -149,8 +154,12 @@ export class RunsReader {
         }
         const dateDir = path.join(writersDir, name, 'runs', date.name);
         for (const file of (await listing(dateDir, dateRel)) ?? []) {
-          if (file.name.startsWith('.') || !file.name.endsWith('.json') || !file.isFile()) continue;
+          if (file.name.startsWith('.') || !file.name.endsWith('.json')) continue;
           if (!showable(file.name)) continue;
+          if (!file.isFile()) {
+            folderProblem(`${dateRel}/${file.name}`, 'is not a regular file');
+            continue;
+          }
           candidates.push({
             date: date.name,
             absolute: path.join(dateDir, file.name),

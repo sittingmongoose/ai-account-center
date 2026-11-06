@@ -45,6 +45,24 @@ export function refused(cardId: string | null, code: RefusalCode): EntryResult {
 }
 
 const CLIENT_SEND_ID = /^[A-Za-z0-9_-]{16,64}$/;
+const ENTRY_ID = /^[0-9a-f]{32}$/;
+
+/** The page's id for one draft: a retry of that draft carries it, a new draft never does. */
+export function isEntryId(value: unknown): value is string {
+  return typeof value === 'string' && ENTRY_ID.test(value);
+}
+
+/** Whether a body's `entryId`s are all valid and none repeats. Other shape checks come later. */
+export function validEntryIds(entries: readonly unknown[]): boolean {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || !('entryId' in entry)) continue;
+    const id = (entry as { entryId: unknown }).entryId;
+    if (!isEntryId(id) || seen.has(id)) return false;
+    seen.add(id);
+  }
+  return true;
+}
 
 /**
  * The client's retry key for a send (the request's `sendId`): a content hash of the entries. It is
@@ -101,9 +119,20 @@ export interface AnswerEntry {
   via: 'deck' | 'recommended';
   /** Needed for `object` and `done`; `answer`/`note` follow from the choice when absent. */
   kind?: AnswerKind;
+  /** The draft's id; a repeat answers from the record it already made. */
+  entryId?: string;
 }
 
-const ENTRY_KEYS = new Set(['cardId', 'cardSeq', 'cardSha256', 'choice', 'note', 'via', 'kind']);
+const ENTRY_KEYS = new Set([
+  'cardId',
+  'cardSeq',
+  'cardSha256',
+  'choice',
+  'note',
+  'via',
+  'kind',
+  'entryId',
+]);
 const SHA256 = /^[0-9a-f]{64}$/;
 
 /** The strict shape of one entry of an answer set, or null. */
@@ -111,7 +140,8 @@ export function parseAnswerEntry(raw: unknown): AnswerEntry | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const rec = raw as Record<string, unknown>;
   if (!Object.keys(rec).every((key) => ENTRY_KEYS.has(key))) return null;
-  const { cardId, cardSeq, cardSha256, choice, note, via, kind } = rec;
+  const { cardId, cardSeq, cardSha256, choice, note, via, kind, entryId } = rec;
+  if (entryId !== undefined && !isEntryId(entryId)) return null;
   if (kind !== undefined && !ANSWER_KINDS.includes(kind as AnswerKind)) return null;
   if (!isCardId(cardId)) return null;
   if (typeof cardSeq !== 'number' || !Number.isSafeInteger(cardSeq) || cardSeq < 0) return null;
@@ -132,6 +162,7 @@ export function parseAnswerEntry(raw: unknown): AnswerEntry | null {
     ...(note !== undefined ? { note } : {}),
     via,
     ...(kind !== undefined ? { kind: kind as AnswerKind } : {}),
+    ...(entryId !== undefined ? { entryId } : {}),
   };
 }
 

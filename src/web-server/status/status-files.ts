@@ -15,6 +15,8 @@ export const MAX_CARD_IMAGE_BYTES = 2 * 1024 * 1024;
 export const MAX_CARD_VIDEO_BYTES = 50 * 1024 * 1024;
 const SNIFF_BYTES = 64;
 const SEND_CHUNK_BYTES = 64 * 1024;
+/** A client that takes no bytes for this long gives up its open file; a browser asks again by range. */
+const SEND_STALL_MS = 120_000;
 
 export type CardFileType = 'image/png' | 'image/jpeg' | 'image/webp' | 'video/mp4' | 'video/webm';
 
@@ -94,8 +96,13 @@ export async function sendFileBytes(
   handle: fs.promises.FileHandle,
   res: Writable,
   start: number,
-  end: number
+  end: number,
+  stallMs: number = SEND_STALL_MS
 ): Promise<void> {
+  // A client that left while the file was being opened: `close` has already fired, a write returns
+  // false, and neither `drain` nor `close` will ever come.
+  const gone = () => res.destroyed || res.closed;
+  if (gone()) return;
   let closed = false;
   const onClose = () => {
     closed = true;
@@ -103,7 +110,7 @@ export async function sendFileBytes(
   res.once('close', onClose);
   try {
     let position = start;
-    while (position <= end && !closed) {
+    while (position <= end && !closed && !gone()) {
       // A fresh buffer each time: a queued write keeps a reference to the one it was given.
       const chunk = Buffer.allocUnsafe(Math.min(SEND_CHUNK_BYTES, end - position + 1));
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
@@ -112,18 +119,23 @@ export async function sendFileBytes(
         return;
       }
       position += bytesRead;
-      if (!res.write(chunk.subarray(0, bytesRead)) && !closed)
+      if (!res.write(chunk.subarray(0, bytesRead)) && !closed && !gone())
         await new Promise<void>((resolve) => {
           const done = () => {
+            clearTimeout(timer);
             res.off('drain', done);
             res.off('close', done);
             resolve();
           };
+          const timer = setTimeout(() => {
+            res.destroy();
+            done();
+          }, stallMs);
           res.once('drain', done);
           res.once('close', done);
         });
     }
-    if (!closed) res.end();
+    if (!closed && !gone()) res.end();
   } catch {
     res.destroy();
   } finally {

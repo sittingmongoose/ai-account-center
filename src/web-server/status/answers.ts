@@ -13,7 +13,7 @@
  * A failed share write, summary or ring is retried by `retryPending()` and shown, never hidden.
  * Every entry is checked against the card as it is on disk at that moment.
  */
-import { randomBytes, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
@@ -38,6 +38,7 @@ import {
   refused,
   shareFileName,
   validChoice,
+  type AnswerEntry,
   type AnswerKind,
   type EntryResult,
   type RefusalCode,
@@ -49,6 +50,7 @@ import {
   type AnswerKey,
   type SignedAnswer,
   type UnsignedAnswer,
+  canonicalJson,
 } from './answer-signing';
 import {
   ANSWER_SCHEMA,
@@ -89,6 +91,28 @@ export type AnswerTiming = typeof DEFAULT_TIMING;
 /** The client ids a duplicate send is recognised by: the last 200, for at most a day. */
 const MAX_REMEMBERED_SENDS = 200;
 const REMEMBER_SEND_MS = 24 * 60 * 60 * 1000;
+/** Draft ids: every one from the last day, and the newest 1,000 whatever their age. */
+const MIN_REMEMBERED_ENTRIES = 1000;
+const REMEMBER_ENTRY_MS = 24 * 60 * 60 * 1000;
+
+function contentHash(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+/**
+ * What a draft says, for telling a retry of it from another use of its id. The card's version is
+ * left out on purpose: an agent may reply on the card between a lost response and the retry, and
+ * the words the owner already sent must not be recorded a second time for that.
+ */
+function draftHash(entry: AnswerEntry, note: string): string {
+  return contentHash({
+    cardId: entry.cardId,
+    choice: entry.choice,
+    note,
+    via: entry.via,
+    kind: entry.kind ?? null,
+  });
+}
 
 const SUPERSEDED_DETAIL =
   'Not delivered: a newer answer to this card replaced this one before it reached the share.';
@@ -278,10 +302,18 @@ export class StatusAnswers {
   private queue: Promise<unknown> = Promise.resolve();
   private key: AnswerKey | null = null;
   private retrying = false;
-  /** Records whose ring is running now, so a retry never rings twice at once. */
+  /**
+   * Records a retry must not ring: from the moment a send creates them until its own ring is over
+   * (the send rings them itself, whole), and while any ring of them is running.
+   */
   private readonly ringing = new Set<string>();
   /** Client send id -> what that send answered, oldest first. Never the server's own batch id. */
-  private readonly replays = new Map<string, { at: number; results: EntryResult[] }>();
+  private readonly replays = new Map<
+    string,
+    { at: number; results: EntryResult[]; entriesHash: string | null }
+  >();
+  /** Draft id -> the content it was recorded with and when, oldest first. */
+  private readonly drafts = new Map<string, { at: number; hash: string }>();
   private readonly timing: AnswerTiming;
 
   constructor(private readonly deps: StatusAnswersDeps) {
@@ -356,6 +388,12 @@ export class StatusAnswers {
         };
         entries.push(entry);
         byId.set(entry.id, entry);
+        if (typeof record.entryId === 'string' && typeof record.entryHash === 'string')
+          this.rememberDraft(
+            record.entryId,
+            typeof record.at === 'string' ? Date.parse(record.at) : 0,
+            record.entryHash
+          );
       } else if (record.type === 'send' && typeof record.sendId === 'string') {
         this.sends.set(record.sendId, {
           sendId: record.sendId,
@@ -370,7 +408,8 @@ export class StatusAnswers {
           this.remember(
             record.clientSendId,
             typeof record.at === 'string' ? Date.parse(record.at) : 0,
-            record.results as EntryResult[]
+            record.results as EntryResult[],
+            typeof record.entriesHash === 'string' ? record.entriesHash : null
           );
       } else if (record.type === 'delivery' && typeof record.id === 'string') {
         if (record.step === 'summary') {
@@ -435,20 +474,40 @@ export class StatusAnswers {
     this.notifyChange();
   }
 
-  private remember(clientSendId: string, at: number, results: EntryResult[]): void {
+  private rememberDraft(entryId: string, at: number, hash: string): void {
+    this.drafts.delete(entryId);
+    this.drafts.set(entryId, { at, hash });
+    const now = this.now();
+    for (const [oldest, held] of this.drafts) {
+      if (this.drafts.size <= MIN_REMEMBERED_ENTRIES || now - held.at < REMEMBER_ENTRY_MS) break;
+      this.drafts.delete(oldest);
+    }
+  }
+
+  private remember(
+    clientSendId: string,
+    at: number,
+    results: EntryResult[],
+    entriesHash: string | null
+  ): void {
     this.replays.delete(clientSendId);
-    this.replays.set(clientSendId, { at, results });
+    this.replays.set(clientSendId, { at, results, entriesHash });
     for (const oldest of this.replays.keys()) {
       if (this.replays.size <= MAX_REMEMBERED_SENDS) break;
       this.replays.delete(oldest);
     }
   }
 
-  /** What an earlier send with this client id answered, while it is still remembered. */
-  private replayOf(clientSendId: string): EntryResult[] | null {
+  /**
+   * What an earlier send with this client id answered, while it is still remembered and only for the
+   * same entries (draft ids included): the id is the client's claim, and different entries under it
+   * are a new send. Sends stored before the hash existed cannot be compared and count as the same.
+   */
+  private replayOf(clientSendId: string, entriesHash: string): EntryResult[] | null {
     this.list();
     const held = this.replays.get(clientSendId);
-    return held && this.now() - held.at < REMEMBER_SEND_MS ? held.results : null;
+    if (!held || this.now() - held.at >= REMEMBER_SEND_MS) return null;
+    return held.entriesHash === null || held.entriesHash === entriesHash ? held.results : null;
   }
 
   /**
@@ -583,6 +642,7 @@ export class StatusAnswers {
     >();
     for (const entry of entries) {
       if (entry.share.state !== 'done' || this.ringing.has(entry.id)) continue;
+      if (entry.doorbell.state === 'done' || entry.doorbell.state === 'skipped') continue;
       const to = entry.card.replyTo?.pmMail;
       if (!to || !isPmMailName(to)) {
         this.recordStep(entry, 'doorbell', 'skipped', NO_MAIL_DETAIL);
@@ -641,7 +701,9 @@ export class StatusAnswers {
     via: UnsignedAnswer['via'],
     kind: AnswerKind,
     sendId: string,
-    budget: Budget
+    budget: Budget,
+    recorded: AnswerHistoryEntry[],
+    draft: { entryId: string; hash: string } | null
   ): Promise<AnswerHistoryEntry | null> {
     const unsigned: UnsignedAnswer = {
       schema: ANSWER_SCHEMA,
@@ -674,11 +736,16 @@ export class StatusAnswers {
         at: unsigned.answeredAt,
         answer: entry.answer,
         card: entry.card,
+        ...(draft ? { entryId: draft.entryId, entryHash: draft.hash } : {}),
       });
     } catch {
       return null;
     }
+    // No await since the line was written: a retry sees the record only with its claim on it.
     this.list().push(entry);
+    this.ringing.add(entry.id);
+    recorded.push(entry);
+    if (draft) this.rememberDraft(draft.entryId, this.now(), draft.hash);
     this.notifyChange();
     // Out of time, the record stays pending and the retry writes it: it is already stored.
     const left = budget.left();
@@ -726,6 +793,14 @@ export class StatusAnswers {
     if (!entry) return refused(isCardId(named) ? named : null, 'invalid_entry');
     const note = normalizeNote(entry.note);
     if (note === null) return refused(entry.cardId, 'invalid_note');
+    // Before the card is read: a retried answer's card has closed since, and that is no refusal.
+    this.list();
+    const hash = entry.entryId ? draftHash(entry, note) : null;
+    const held = entry.entryId ? this.drafts.get(entry.entryId) : undefined;
+    if (held) {
+      if (held.hash !== hash) return refused(entry.cardId, 'invalid_entry');
+      return { cardId: entry.cardId, outcome: 'recorded', code: null, error: null };
+    }
     const parsed = await this.openCard(entry.cardId, entry.cardSeq, entry.cardSha256, budget);
     if (parsed === 'no_answer') return refused(entry.cardId, 'share_unavailable');
     if (!parsed) return refused(entry.cardId, 'card_changed');
@@ -748,10 +823,11 @@ export class StatusAnswers {
       entry.via,
       kind as AnswerKind,
       sendId,
-      budget
+      budget,
+      recorded,
+      entry.entryId && hash ? { entryId: entry.entryId, hash } : null
     );
     if (!done) return refused(entry.cardId, 'answer_not_saved');
-    recorded.push(done);
     return { cardId: entry.cardId, outcome: 'recorded', code: null, error: null };
   }
 
@@ -763,6 +839,7 @@ export class StatusAnswers {
    * names and signs the batch. The look-up runs inside the queue, so a duplicate that arrives while
    * the first send is still running waits for it and answers from its results: nothing is recorded,
    * written or rung again. A send that recorded nothing is not remembered; a retry may yet succeed.
+   * Each entry's own `entryId` is the finer guard: see `recordEntry`.
    */
   async submitSet(
     entries: unknown[],
@@ -771,53 +848,59 @@ export class StatusAnswers {
   ): Promise<EntryResult[]> {
     const sendId = randomUUID();
     const recorded: AnswerHistoryEntry[] = [];
-    const results = await this.serial(async () => {
-      const replay = clientSendId ? this.replayOf(clientSendId) : null;
-      if (replay) return replay;
-      const budget = startBudget(this.timing.sendBudgetMs);
-      const out: EntryResult[] = [];
-      for (const raw of entries) {
-        const before = recorded.length;
-        try {
-          out.push(await this.recordEntry(raw, device, sendId, recorded, budget));
-        } catch {
-          // Whatever went wrong, the other entries still get their answers. A record that exists
-          // says so: its delivery is retried like any other.
-          const named = (raw as { cardId?: unknown } | null)?.cardId;
-          const cardId = isCardId(named) ? named : null;
-          out.push(
-            recorded.length > before
-              ? { cardId, outcome: 'recorded', code: null, error: null }
-              : refused(cardId, 'answer_not_saved')
-          );
+    const entriesHash = clientSendId ? contentHash(entries) : null;
+    try {
+      return await this.serial(async () => {
+        const replay =
+          clientSendId && entriesHash ? this.replayOf(clientSendId, entriesHash) : null;
+        if (replay) return replay;
+        const budget = startBudget(this.timing.sendBudgetMs);
+        const out: EntryResult[] = [];
+        for (const raw of entries) {
+          const before = recorded.length;
+          try {
+            out.push(await this.recordEntry(raw, device, sendId, recorded, budget));
+          } catch {
+            // Whatever went wrong, the other entries still get their answers. A record that exists
+            // says so: its delivery is retried like any other.
+            const named = (raw as { cardId?: unknown } | null)?.cardId;
+            const cardId = isCardId(named) ? named : null;
+            out.push(
+              recorded.length > before
+                ? { cardId, outcome: 'recorded', code: null, error: null }
+                : refused(cardId, 'answer_not_saved')
+            );
+          }
         }
-      }
-      if (recorded.length > 0) {
-        const send: SendRecord = {
-          sendId,
-          at: new Date(this.now()).toISOString(),
-          device,
-          entryIds: recorded.map((entry) => entry.id),
-          summary: { ...PENDING },
-        };
-        this.record({
-          type: 'send',
-          sendId,
-          at: send.at,
-          device,
-          entryIds: send.entryIds,
-          ...(clientSendId ? { clientSendId, results: out } : {}),
-        });
-        this.sends.set(sendId, send);
-        if (clientSendId) this.remember(clientSendId, this.now(), out);
-        // Out of time, the summary stays pending and the retry writes it.
-        const left = budget.left();
-        if (left > 0) await this.writeSummary(send, Math.min(this.timing.shareMs, left));
-      }
-      return out;
-    });
-    if (recorded.length > 0) void this.ringGroups(recorded).catch(() => undefined);
-    return results;
+        if (recorded.length > 0) {
+          const send: SendRecord = {
+            sendId,
+            at: new Date(this.now()).toISOString(),
+            device,
+            entryIds: recorded.map((entry) => entry.id),
+            summary: { ...PENDING },
+          };
+          this.record({
+            type: 'send',
+            sendId,
+            at: send.at,
+            device,
+            entryIds: send.entryIds,
+            ...(clientSendId ? { clientSendId, results: out, entriesHash } : {}),
+          });
+          this.sends.set(sendId, send);
+          if (clientSendId) this.remember(clientSendId, this.now(), out, entriesHash);
+          // Out of time, the summary stays pending and the retry writes it.
+          const left = budget.left();
+          if (left > 0) await this.writeSummary(send, Math.min(this.timing.shareMs, left));
+        }
+        return out;
+      });
+    } finally {
+      // The claim passes to the ring in one step: it takes its records back before its first await.
+      for (const entry of recorded) this.ringing.delete(entry.id);
+      if (recorded.length > 0) void this.ringGroups(recorded).catch(() => undefined);
+    }
   }
 
   /** Retries every share write, send summary and ring that has not succeeded and has attempts left. */
@@ -829,17 +912,22 @@ export class StatusAnswers {
       const budget = startBudget(this.timing.retryBudgetMs);
       const shareLimit = () => Math.min(this.timing.shareMs, budget.left());
       for (const entry of this.list()) {
-        if (entry.share.state !== 'pending' && entry.share.state !== 'failed') continue;
-        if (entry.share.attempts >= MAX_DELIVERY_ATTEMPTS) continue;
+        const wanted = () =>
+          (entry.share.state === 'pending' || entry.share.state === 'failed') &&
+          entry.share.attempts < MAX_DELIVERY_ATTEMPTS;
+        if (!wanted()) continue;
         await this.serial(async () => {
-          if (shareLimit() > 0) await this.writeShare(entry, shareLimit());
+          // Asked again in the queue: a send that was running may have written it meanwhile.
+          if (wanted() && shareLimit() > 0) await this.writeShare(entry, shareLimit());
         });
       }
       for (const send of this.sendList()) {
-        if (send.summary.state !== 'done' && send.summary.attempts < MAX_DELIVERY_ATTEMPTS)
-          await this.serial(async () => {
-            if (shareLimit() > 0) await this.writeSummary(send, shareLimit());
-          });
+        const wanted = () =>
+          send.summary.state !== 'done' && send.summary.attempts < MAX_DELIVERY_ATTEMPTS;
+        if (!wanted()) continue;
+        await this.serial(async () => {
+          if (wanted() && shareLimit() > 0) await this.writeSummary(send, shareLimit());
+        });
       }
       await this.ringGroups(
         this.list().filter(

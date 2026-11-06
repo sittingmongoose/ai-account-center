@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -211,6 +212,39 @@ describe('runs reader', () => {
 });
 
 describe('scan limits', () => {
+  it('past the writer limit keeps the writers whose runs changed last, not the first by name', async () => {
+    const root = dirs.make();
+    for (const writer of ['vm.a', 'vm.b', 'vm.c']) writeRun(root, runDoc(writer, 'R'));
+    const stamp = (writer: string, at: number) =>
+      fs.utimesSync(path.join(root, 'v1', 'writers', writer, 'runs'), at, at);
+    stamp('vm.a', 1000);
+    stamp('vm.b', 3000);
+    stamp('vm.c', 2000);
+    const r = new RunsReader({ root: () => root, now: () => NOW, limits: { writers: 2 } });
+    await r.scan();
+    expect(
+      r
+        .snapshot()
+        .runs.map((run) => run.doc.writer)
+        .sort()
+    ).toEqual(['vm.b', 'vm.c']);
+    expect(r.snapshot().problems.map((p) => p.file)).toEqual(['limits/run-writers']);
+  });
+
+  it('names a FIFO or a link in a run folder', async () => {
+    const root = dirs.make();
+    const file = writeRun(root, runDoc('vm.a', 'R'));
+    fs.symlinkSync(file, path.join(path.dirname(file), 'vm.a--link.json'));
+    execFileSync('mkfifo', [path.join(path.dirname(file), 'vm.a--pipe.json')]);
+    const r = reader(root);
+    await r.scan();
+    expect(r.snapshot().runs).toHaveLength(1);
+    expect(r.snapshot().problems.map((p) => [p.file.split('/').pop(), p.reason])).toEqual([
+      ['vm.a--link.json', 'is not a regular file'],
+      ['vm.a--pipe.json', 'is not a regular file'],
+    ]);
+  });
+
   it('names run files past the limit and keeps the newest days', async () => {
     const root = dirs.make();
     writeRun(root, runDoc('vm.old', 'A'), '2026-01-01');

@@ -378,6 +378,12 @@ export class CatalogReader {
   }
 }
 
+/** A seed that could not be written: the file, and the system's error code (never its message). */
+export interface SeedFailure {
+  file: string;
+  code: string;
+}
+
 /** The catalog seeds this package ships (docs/agent-reports/catalog). */
 export function packagedCatalogDir(): string {
   return path.resolve(__dirname, '../../../docs/agent-reports/catalog');
@@ -390,7 +396,8 @@ export function packagedCatalogDir(): string {
  */
 export async function seedCatalog(
   root: string,
-  sourceDir: string = packagedCatalogDir()
+  sourceDir: string = packagedCatalogDir(),
+  onFailure: (failure: SeedFailure) => void = () => undefined
 ): Promise<string[]> {
   const target = path.join(root, 'v1', 'catalog');
   const written: string[] = [];
@@ -412,8 +419,11 @@ export async function seedCatalog(
         // `link`, not `rename`: it fails on a file another machine wrote since the look above.
         await fs.promises.link(temp, destination);
         written.push(name);
-      } catch {
-        /* Already there, or not writable: the file on the share stands. */
+      } catch (error) {
+        // Already there: the file on the share stands. Anything else leaves the file missing.
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (code !== 'EEXIST')
+          onFailure({ file: name, code: code && /^[A-Z0-9_]+$/.test(code) ? code : 'failed' });
       } finally {
         await fs.promises.rm(temp, { force: true }).catch(() => undefined);
       }

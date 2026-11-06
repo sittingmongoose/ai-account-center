@@ -51,12 +51,12 @@ from its folder's listing keeps its last good copy for 2 minutes before it count
 byte is refused (Mac SMB appends wrote NULs into shared files). The fresh card read behind every answer also lists
 `cards/` first. Every share file is opened non-blocking and without following a link, and the open handle must be a
 regular file before a byte is read: a FIFO or a link where a report belongs is named as a problem and can never block
-a read. A lower `seq` than the one already read keeps the higher copy and names a problem until the writer writes a
+a read; in `cards/` it also makes `cards.complete` false. A lower `seq` than the one already read keeps the higher copy and names a problem until the writer writes a
 higher one; a card in that state has `answerable: false`, because an answer to it could only come back `card_changed`.
 A writer name cannot contain `--` (a card id is split on the first one); such a folder is named as a problem.
 
 **Scan limits.** One scan reads at most 200 writer folders (over that, the most recently changed), 500 card files and
-64 MB in total. Anything past a limit is not read and is named in the Source (`limits/writers`, `limits/cards`,
+64 MB in total. A file over its own size cap is never read, so it takes nothing from the 64 MB. Anything past a limit is not read and is named in the Source (`limits/writers`, `limits/cards`,
 `limits/bytes`), never dropped silently. The Scoreboard has its own limits (`docs/scoreboard.md`, Reading runs).
 
 **Collectors.** Agent reports: rescanned every 10 s (stat every file, read only changed ones; the share has no change
@@ -351,25 +351,36 @@ for a long deck. "Use the recommendations" fills every card still empty with its
 any of them before sending. Unsent choices and notes are kept on this device (browser storage) so leaving the page
 loses nothing; they are drafts, never answers.
 
-`POST /api/status/answers` body: `{ "sendId"?: "<id>", "answers": [ { "cardId", "cardSeq", "cardSha256", "choice": ["A"] | [], "note": "...",
+`POST /api/status/answers` body: `{ "sendId"?: "<id>", "answers": [ { "entryId"?: "<32 hex>", "cardId", "cardSeq", "cardSha256", "choice": ["A"] | [], "note": "...",
 "via": "deck" | "recommended", "kind"?: "answer" | "note" | "object" | "done" } ] }`, 1 to 50 entries, at most 64 KB. Each entry is validated and recorded on its
 own, in order, one set at a time; the response is `{ "results": [ { cardId, outcome: "recorded" | "card_changed" |
 "refused", code, error } ] }`, one per entry in request order (HTTP 200 when the request itself is valid, even if some
 entries are refused; `code` and `error` are null for `recorded`; `cardId` is null when the entry did not name a valid
-card id). Entry codes: `card_changed`, `invalid_entry` (not the strict entry shape), `invalid_choice`, `empty_entry`
+card id). Entry codes: `card_changed`, `invalid_entry` (not the strict entry shape, or an `entryId` already used with other content), `invalid_choice`, `empty_entry`
 (no choice and no note), `invalid_note`, `invalid_via`, `invalid_kind` (the entry's kind does not fit the card's
 kind), `words_required` (an objection without the owner's words), `sample_card` (a format sample takes no answer),
 `judgement_anchored` (a judgement card that carries a recommendation), `answer_not_saved` (the private store could
-not be written; nothing else happened for that entry), `share_unavailable` (the share did not answer in time, so the
-card could not be checked; nothing was recorded for that entry, and it can be sent again). If the send cannot finish at
+not be written; nothing else happened for that entry), `share_unavailable` (the share failed or did not answer in time, so the
+card could not be checked; nothing was recorded for that entry, and it can be sent again). `card_changed` means the share
+answered: the card is not there, or is not that version. If the send cannot finish at
 all the answer is `500 answers_failed`: some entries may have been recorded.
 - **Retry key:** the optional request `sendId` (16 to 64 characters of `[A-Za-z0-9_-]`, else `400 invalid_body`) is the
   client's retry key. The page sends a content hash of the entries, so a retry of the same entries carries the same id,
-  even after a reload, and any edit makes a new one. A repeat answers with the first send's per-entry results and
-  records, writes and rings nothing; one that arrives while the first is still running waits its turn and answers the
-  same way. The last 200 ids are kept for 24 hours, in the private store, so this survives a restart. A send that recorded
-  nothing is not remembered, since a retry may yet succeed. It is only a dedupe key: it is never the summary's `sendId`
-  below, which the server makes and signs, and it never reaches the share or the mail.
+  even after a reload, and any edit makes a new one. A repeat with the same entries answers with the first send's
+  per-entry results and records, writes and rings nothing; one that arrives while the first is still running waits its
+  turn and answers the same way. The same id with different entries (draft ids included) is a new send. The last 200 ids
+  are kept for 24 hours, in the private store, so this survives a restart. A send that recorded nothing is not remembered,
+  since a retry may yet succeed. It is only a dedupe key: it is never the summary's `sendId` below, which the server makes
+  and signs, and it never reaches the share or the mail.
+- **Draft key:** the optional entry `entryId` (32 lowercase hex; anything else, or the same id twice in one body, is
+  `400 invalid_body`) is the real guard against recording twice. The page makes it from a random per-draft nonce plus the
+  entry's content, so a retry of one draft carries the same id, even alone after the rest of its send closed, and a new
+  draft with identical words gets a new one. An entry whose id is already recorded answers `recorded` as it did the first
+  time and is not recorded, signed, written or rung again, nor counted in the new send's ring or summary. The same id
+  with other content (card, choice, note, via or kind) is refused `invalid_entry`. The card's `seq` and hash are not part
+  of that content, so an agent's reply on the card between a lost response and the retry does not record the words again.
+  Ids are kept with their records in the private store: all from the last 24 hours and the newest 1,000 whatever their
+  age. An entry that was refused is not remembered and may be sent again. The id never reaches the share or the mail.
 - **Time limits:** one card read has 5 s, one signed file 10 s, one ring 40 s, one whole send 30 s and one retry pass 45 s,
   so a hung share cannot hold the answers queue. A record already stored when time runs out stays pending and the retry
   writes it. A write that outlives its deadline is dropped before its rename.
