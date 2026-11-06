@@ -5,7 +5,7 @@
  * presented as live.
  */
 import type { ReportProblem, SeenReport } from './agent-reports-reader';
-import { deliveryView } from './answers';
+import { CLOSING_KINDS, deliveryView } from './answers';
 import {
   ITEM_STATES,
   MACHINES,
@@ -302,6 +302,10 @@ function sectionView(writer: string, item: CardSection): SectionView {
   return item as SectionView;
 }
 
+/** Shown on a judgement card that carries a recommendation (the owner is never anchored). */
+export const JUDGEMENT_ANCHORED =
+  'This judgement card carries a recommendation, so it cannot be answered: a judgement must not anchor the answer.';
+
 function cardView(
   inputs: StatusInputs,
   doc: CardDoc,
@@ -311,6 +315,7 @@ function cardView(
 ): CardView {
   const asked = Date.parse(doc.askedAt);
   // Stored history cards are read back as written; missing fields read as empty.
+  const anchored = doc.kind === 'judgement' && Boolean(doc.recommendation);
   return {
     id: doc.id,
     label: doc.label ?? doc.id.slice(doc.id.indexOf('--') + 2),
@@ -331,6 +336,7 @@ function cardView(
       costs: option.costs ?? null,
       media: (option.media ?? []).map((item) => mediaView(doc.writer, item)),
       sections: (option.sections ?? []).map((item) => sectionView(doc.writer, item)),
+      stance: option.stance ?? null,
     })),
     recommendation: doc.recommendation ?? null,
     multiple: doc.multiple === true,
@@ -344,26 +350,35 @@ function cardView(
     neededBy: doc.neededBy ?? null,
     exception: doc.exception ?? null,
     reversible: doc.reversible ?? null,
+    verdict: doc.verdict ?? null,
+    group: doc.group ?? null,
+    agreement: doc.agreement ?? null,
+    doubt: doc.doubt ?? null,
+    appliesTo: doc.appliesTo ?? null,
+    changesCanon: doc.changesCanon ?? [],
+    related: doc.related ?? [],
     askedAt: doc.askedAt,
     ageSeconds: ageSeconds(inputs.now, asked) ?? 0,
     askerState: askerState(inputs, doc.writer),
     cardSha256: sha256,
     notes,
-    problem: problem?.reason ?? null,
-    answerable: problem === null,
+    problem: problem?.reason ?? (anchored ? JUDGEMENT_ANCHORED : null),
+    answerable: problem === null && !anchored && doc.kind !== 'sample',
   };
 }
 
 function buildCards(inputs: StatusInputs): StatusView['cards'] {
-  const answers = inputs.answers.filter((e) => e.answer.kind !== 'note');
+  // Answers and dones close a card version; notes and objections stay on the open card.
+  const answers = inputs.answers.filter((e) => CLOSING_KINDS.has(e.answer.kind));
   const answered = new Set(
     answers.map((e) => `${e.answer.cardId}\n${e.answer.cardSeq}\n${e.answer.cardSha256}`)
   );
   const notes = new Map<string, CardNoteView[]>();
   for (const entry of inputs.answers) {
-    if (entry.answer.kind !== 'note') continue;
+    if (CLOSING_KINDS.has(entry.answer.kind)) continue;
     const list = notes.get(entry.answer.cardId) ?? [];
     list.push({
+      kind: entry.answer.kind === 'object' ? 'object' : 'note',
       note: entry.answer.note,
       at: entry.answer.answeredAt,
       delivery: deliveryView(entry),
@@ -396,7 +411,7 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
     answered: history.map((entry) => ({
       card: cardView(inputs, entry.card, entry.answer.cardSha256, null),
       answer: {
-        kind: entry.answer.kind as 'answer' | 'object' | 'done',
+        kind: entry.answer.kind as 'answer' | 'done',
         choice: entry.answer.choice,
         note: entry.answer.note,
         via: entry.answer.via,

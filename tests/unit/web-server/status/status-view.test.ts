@@ -207,6 +207,7 @@ describe('status view', () => {
       answers: [
         {
           id: 'n',
+          sendId: null,
           answer: {
             schema: 'agent-reports/answer@1',
             cardId: 'vm.lead--Q1',
@@ -227,6 +228,7 @@ describe('status view', () => {
         },
         {
           id: 'x',
+          sendId: null,
           answer: {
             schema: 'agent-reports/answer@1',
             cardId: 'vm.lead--Q4',
@@ -259,7 +261,12 @@ describe('status view', () => {
     expect(view.cards.answered[0].answer.kind).toBe('answer');
     const open1 = view.cards.open.find((c) => c.id === 'vm.lead--Q1');
     expect(open1?.notes).toEqual([
-      { note: 'A third way?', at: ago(2000), delivery: expect.objectContaining({ state: 'rang' }) },
+      {
+        kind: 'note',
+        note: 'A third way?',
+        at: ago(2000),
+        delivery: expect.objectContaining({ state: 'rang' }),
+      },
     ]);
     expect(open1?.label).toBe('S-Q1');
     expect(open1?.options[0].media).toEqual([
@@ -280,6 +287,7 @@ describe('status view', () => {
       costs: null,
       media: [],
       sections: [],
+      stance: null,
     });
     expect(view.headline.tone).toBe('bad');
     expect(view.headline.runs[0]).toEqual({ text: '3 questions', strong: true, tone: 'warn' });

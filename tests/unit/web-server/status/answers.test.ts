@@ -146,18 +146,22 @@ describe('answers', () => {
     const shared = fs.readFileSync(path.join(root, 'v1', 'answers', 'vm.lead--Q1.json'), 'utf8');
     const pub = fs.readFileSync(path.join(root, 'v1', 'keys', 'aac-answers.pub'), 'utf8');
     expect(verifySignedAnswer(shared, pub).ok).toBe(true);
-    expect(fs.readdirSync(path.join(root, 'v1', 'answers'))).toEqual(['vm.lead--Q1.json']);
+    expect(fs.readdirSync(path.join(root, 'v1', 'answers')).sort()).toEqual([
+      'batches',
+      'vm.lead--Q1.json',
+    ]);
     await settle();
     expect(rings).toHaveLength(1);
     expect(rings[0].to).toBe('lead');
-    expect(rings[0].subject).toBe('Answer for vm.lead--Q1');
+    expect(rings[0].subject).toBe('1 answer from the owner');
     // The doorbell carries the card id, the exact choice and words, the UTC time and the card hash.
     expect(rings[0].body).toContain('Card vm.lead--Q1 (seq 3)');
     expect(rings[0].body).toContain('Choice: A (First)');
-    expect(rings[0].body).toContain('Words: Keep it inside — but test at 320 px.\n  Thanks');
+    expect(rings[0].body).toContain('Words: Keep it inside — but test at 320 px.\n      Thanks');
     expect(rings[0].body).toContain(`Time (UTC): ${recorded.answer.answeredAt}`);
     expect(rings[0].body).toContain(`Card sha256: ${sha}`);
-    expect(rings[0].body).toContain('The signed file is the authority');
+    expect(rings[0].body).toContain('The signed files are the authority');
+    expect(rings[0].body).toContain(`Signed file: agent-reports/v1/answers/vm.lead--Q1.json`);
     const keyId = recorded.answer.signature.keyId;
     expect(fs.readFileSync(path.join(root, 'v1', 'keys', `${keyId}.pub`), 'utf8')).toBe(pub);
     expect(deliveryView(answers.history(1)[0]).state).toBe('rang');
@@ -244,7 +248,10 @@ describe('answers', () => {
     expect(answers.isAnswered('vm.lead--Q1', 1, sha)).toBe(false);
     const notes = answers.history();
     expect(notes.map((n) => n.answer.kind)).toEqual(['note', 'note']);
-    const files = fs.readdirSync(path.join(root, 'v1', 'answers')).sort();
+    const files = fs
+      .readdirSync(path.join(root, 'v1', 'answers'))
+      .filter((f) => f !== 'batches')
+      .sort();
     expect(files).toHaveLength(2);
     expect(files.every((f) => /^vm\.lead--Q1\.note-[0-9a-f]{12}\.json$/.test(f))).toBe(true);
     const pub = fs.readFileSync(path.join(root, 'v1', 'keys', 'aac-answers.pub'), 'utf8');
@@ -253,7 +260,9 @@ describe('answers', () => {
         verifySignedAnswer(fs.readFileSync(path.join(root, 'v1', 'answers', file)), pub).ok
       ).toBe(true);
     await settle();
-    expect(rings.map((r) => r.subject)).toEqual(['Note on vm.lead--Q1', 'Note on vm.lead--Q1']);
+    // One send, one asker: one ring naming both notes.
+    expect(rings.map((r) => r.subject)).toEqual(['2 answers from the owner']);
+    expect(rings[0].body.match(/Card vm\.lead--Q1 /g)).toHaveLength(2);
     // The card can still be answered.
     const answered = await answers.submitSet([entry('vm.lead--Q1', sha)], 'iPhone');
     expect(answered[0].outcome).toBe('recorded');
@@ -289,15 +298,16 @@ describe('answers', () => {
       'invalid_choice',
       'recorded',
       'recorded',
-      'card_changed',
+      'recorded',
       'invalid_kind',
       'invalid_entry',
     ]);
-    expect(answers.isAnswered('vm.lead--O1', 1, obj)).toBe(true);
+    // An objection leaves the card open for the agent's reply; done closes the action card.
+    expect(answers.isAnswered('vm.lead--O1', 1, obj)).toBe(false);
     expect(answers.isAnswered('vm.lead--D1', 1, act)).toBe(true);
-    expect(answers.history().map((e) => e.answer.kind)).toEqual(['done', 'object']);
+    expect(answers.history().map((e) => e.answer.kind)).toEqual(['object', 'done', 'object']);
     await settle();
-    expect(rings.map((r) => r.subject)).toEqual(['Objection to vm.lead--O1', 'Done: vm.lead--D1']);
+    expect(rings.map((r) => r.subject)).toEqual(['3 answers from the owner']);
     expect(rings[0].body).toContain('Words: Keep the old layout.');
     expect(rings[0].body).toContain('Choice: none');
   });
@@ -368,9 +378,10 @@ describe('answers', () => {
     );
     await answers.submitSet([entry('vm.lead--Q1', sha)], 'Mac');
     await settle();
+    // No mail name: recorded normally, nobody rung, the agent reads its answers file.
     const view = deliveryView(answers.history(1)[0]);
-    expect(view.state).toBe('failed');
-    expect(view.detail).toContain('no pm-mail recipient');
+    expect(view.state).toBe('rang');
+    expect(view.detail).toBe('No mail name; the agent reads its answers file.');
     const sha2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
     await answers.submitSet([entry('vm.lead--Q2', sha2)], 'Mac');
     await settle();

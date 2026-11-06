@@ -23,7 +23,8 @@
  * so it reads only the fixture and never sends pm-mail.
  *
  * F-Q3 also gets a short H.264 MP4 with a poster when ffmpeg is installed (`--no-video` skips it),
- * for the Range-request playback check on phones. `--with-kinds` adds an objection card and an action card (7 open cards then).
+ * for the Range-request playback check on phones. `--with-kinds` adds an objection, an action, a
+ * judgement and a sample card (9 open cards then).
  * `--with-problems` adds a malformed tasks.json and a card with NUL bytes (the unreadable state).
  * Times are relative to now, so run it just before the test. It refuses a folder that already
  * holds v1/writers.
@@ -395,6 +396,13 @@ export function writeStatusFixture(
       neededBy: fields.neededBy ?? null,
       exception: fields.exception ?? null,
       reversible: fields.reversible ?? null,
+      verdict: fields.verdict ?? null,
+      group: fields.group ?? null,
+      agreement: fields.agreement ?? null,
+      doubt: fields.doubt ?? null,
+      appliesTo: fields.appliesTo ?? null,
+      changesCanon: fields.changesCanon ?? [],
+      related: fields.related ?? [],
       askedAt: at(ago),
     };
     const bytes = writeJson(path.join(writers, writer, 'cards', `${id}.json`), doc);
@@ -517,6 +525,10 @@ export function writeStatusFixture(
     ],
     recommendation: { key: 'A', why: 'The eye lands on the top first.' },
     batch,
+    verdict: 'adapt',
+    group: 'toasts',
+    agreement: { same: false, note: 'Two reviewers split on this one.' },
+    related: ['vm.pm-fo-lead--Q3'],
   });
   card('vm.pm-fo-lead', 'Q5', 90 * MIN, {
     label: 'F-Q5',
@@ -533,6 +545,9 @@ export function writeStatusFixture(
     recommendation: { key: 'A', why: 'Nobody has turned it on since PM6.' },
     urgency: 'this-week',
     batch,
+    appliesTo: { count: 4, description: 'Every feature still behind a PM6 flag' },
+    changesCanon: [{ ref: 'PM7 plan > Flags', what: 'Old flags are removed, not kept' }],
+    doubt: 'One tester may still use the old splash on a slow machine.',
   });
   card('vm.tools-lead', 'Q1', 25 * MIN, {
     label: 'T-Q1',
@@ -622,6 +637,32 @@ export function writeStatusFixture(
     ],
     recommendation: { key: 'B', why: 'Nothing moves while you read.' },
     urgency: 'whenever',
+    sections: [
+      {
+        type: 'quote',
+        title: 'What the Status contract says',
+        fold: false,
+        items: [
+          {
+            text: 'Nothing is ever shown as live when its source is stale.',
+            where: 'GET /api/status > Source',
+            context: ['Agreed 2026-11-06'],
+            source: 'docs/status-tab.md',
+            link: null,
+            version: 'v1',
+          },
+        ],
+      },
+      {
+        type: 'planChange',
+        title: null,
+        fold: true,
+        doc: 'docs/status-tab.md',
+        unit: 'Thread',
+        now: 'Stale threads take a full row.',
+        proposed: 'Stale threads are greyed in place.',
+      },
+    ],
     replies: [
       { at: at(10 * MIN), text: 'Both are in the screenshot set now; greyed is on the left.' },
     ],
@@ -648,6 +689,31 @@ export function writeStatusFixture(
       options: [],
       urgency: 'now',
       exception: { rule: 'Agents never sign in for you', text: 'This one needs your hands.' },
+    });
+  }
+  if (withKinds) {
+    card('vm.pm-closure-lead', 'J1', 50 * MIN, {
+      kind: 'judgement',
+      label: 'C-J1',
+      project: 'puppet-master',
+      stream: 'C',
+      title: 'Do these two summaries say the same thing?',
+      now: 'A measurement card: your answer becomes part of the answer key.',
+      options: [
+        option('same', 'Same meaning'),
+        option('different', 'Different meaning'),
+        option('cant-tell', 'Can’t tell'),
+      ],
+      group: 'retention-key',
+      batch: 'C-judgements',
+    });
+    card('vm.pm-closure-lead', 'S1', 45 * MIN, {
+      kind: 'sample',
+      label: 'C-S1',
+      project: 'puppet-master',
+      stream: 'C',
+      title: 'Format sample: a card with a quote section',
+      options: [option('A', 'First'), option('B', 'Second')],
     });
   }
   const answeredIds = [

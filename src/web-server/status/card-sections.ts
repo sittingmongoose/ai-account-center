@@ -48,6 +48,18 @@ export type CardSection =
   | (SectionBase & { type: 'callout'; tone: 'info' | 'warn' | 'crit'; body: string })
   | (SectionBase & { type: 'links'; items: BlockLink[] })
   | (SectionBase & { type: 'media'; items: CardMedia[] })
+  | (SectionBase & {
+      type: 'quote';
+      items: Array<{
+        text: string;
+        where: string | null;
+        context: string[];
+        source: string | null;
+        link: BlockLink | null;
+        version: string | null;
+      }>;
+    })
+  | (SectionBase & { type: 'planChange'; doc: string; unit: string; now: string; proposed: string })
   | (SectionBase & { type: string; unknown: true });
 
 const BLOCK_TYPE = /^[A-Za-z][A-Za-z0-9-]{0,39}$/;
@@ -196,6 +208,32 @@ export function section(value: unknown, field: string): CardSection {
       return { ...base, type: 'links', items: items(20, blockLink) };
     case 'media':
       return { ...base, type: 'media', items: items(12, media) };
+    case 'quote':
+      // Verbatim words copied by code: shown exactly, never reworded.
+      return {
+        ...base,
+        type: 'quote',
+        items: items(20, (item, at) => {
+          const r = obj(item, at);
+          return {
+            text: text(r.text, `${at}.text`, 4000),
+            where: optText(r.where, `${at}.where`, 300),
+            context: list(r.context, `${at}.context`, 10, line(300)),
+            source: optText(r.source, `${at}.source`, 300),
+            link: r.link === null || r.link === undefined ? null : blockLink(r.link, `${at}.link`),
+            version: optText(r.version, `${at}.version`, 60),
+          };
+        }),
+      };
+    case 'planChange':
+      return {
+        ...base,
+        type: 'planChange',
+        doc: text(raw.doc, `${field}.doc`, 300),
+        unit: text(raw.unit, `${field}.unit`, 200),
+        now: text(raw.now, `${field}.now`, 4000),
+        proposed: text(raw.proposed, `${field}.proposed`, 4000),
+      };
     default:
       // A type this server does not know: shown as "a section this page can't show yet".
       return { ...base, type: raw.type, unknown: true };

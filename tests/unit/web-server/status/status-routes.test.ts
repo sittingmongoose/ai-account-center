@@ -191,7 +191,8 @@ describe('status routes', () => {
     expect(Object.keys(result.results[0]).sort()).toEqual(['cardId', 'code', 'error', 'outcome']);
     expect(JSON.stringify(result)).not.toContain('script');
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(rings).toEqual(['lead', 'lead']);
+    // One ring per asker per send.
+    expect(rings).toEqual(['lead']);
     const history = await fetch(`${base}/api/status/answers?limit=1`, { headers: session });
     expect(history.headers.get('cache-control')).toBe('no-store');
     const answers = (await history.json()).answers;

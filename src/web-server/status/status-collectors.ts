@@ -31,7 +31,7 @@ export interface CommandResult {
 export type CommandRunner = (
   file: string,
   args: string[],
-  options: { timeoutMs: number; maxBytes: number; env?: NodeJS.ProcessEnv }
+  options: { timeoutMs: number; maxBytes: number; env?: NodeJS.ProcessEnv; input?: string }
 ) => Promise<CommandResult>;
 
 /** execFile without a shell; never rejects. */
@@ -60,7 +60,8 @@ export const runCommand: CommandRunner = (file, args, options) =>
           });
         }
       );
-      child.stdin?.end();
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.end(options.input ?? '');
     } catch {
       resolve({ code: null, stdout: '', timedOut: false, missing: true });
     }

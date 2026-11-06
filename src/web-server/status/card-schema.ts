@@ -5,6 +5,7 @@
  */
 import {
   bool,
+  count,
   CARD_SCHEMA,
   head,
   OPTION_KEY,
@@ -41,8 +42,12 @@ export const CARD_STATES = ['open', 'withdrawn', 'superseded'] as const;
 /**
  * question: options, answered in the deck. objection: a call the agent already made; the owner may
  * object, silence is not an answer. action: something only the owner can do; a Done button.
+ * judgement: a measurement card ("can't tell" is a valid option); one that carries a
+ * recommendation is shown as a problem and cannot be answered, so the owner is never anchored.
+ * sample: a format sample, shown with "no answer wanted" and never sent.
  */
-export const CARD_KINDS = ['question', 'objection', 'action'] as const;
+export const CARD_KINDS = ['question', 'objection', 'action', 'judgement', 'sample'] as const;
+export const OPTION_STANCES = ['keep', 'borrow', 'own'] as const;
 export type CardKind = (typeof CARD_KINDS)[number];
 export const URGENCIES = ['now', 'today', 'this-week', 'whenever'] as const;
 export type Urgency = (typeof URGENCIES)[number];
@@ -56,6 +61,8 @@ export interface CardOption {
   costs: string | null;
   media: CardMedia[];
   sections: CardSection[];
+  /** keep = the plan as written, borrow = take the outside approach, own = our own fix. */
+  stance: (typeof OPTION_STANCES)[number] | null;
 }
 
 export interface CardRecommendation {
@@ -103,6 +110,18 @@ export interface CardDoc extends DocHead {
   /** The owner's rule this card loosens, and how. Shown before anything else. */
   exception: { rule: string; text: string } | null;
   reversible: { yes: boolean; how: string | null } | null;
+  /** A badge such as adopt / adapt / keep ours / reject; the deck can filter on it. */
+  verdict: string | null;
+  /** A group within a batch, with its own "use the recommendations for this group". */
+  group: string | null;
+  /** Whether the judges agreed; the owner's time goes to split ones. */
+  agreement: { same: boolean | null; note: string | null } | null;
+  doubt: string | null;
+  /** A rule card that settles a whole class. */
+  appliesTo: { count: number | null; description: string } | null;
+  changesCanon: Array<{ ref: string; what: string }>;
+  /** Related card ids. */
+  related: string[];
 }
 
 export function card(doc: Record<string, unknown>, writer: string, fileId: string): CardDoc {
@@ -123,12 +142,19 @@ export function card(doc: Record<string, unknown>, writer: string, fileId: strin
       costs: optText(option.costs, `${at}.costs`, 1000),
       media: list(option.media, `${at}.media`, MAX_OPTION_MEDIA, media),
       sections: list(option.sections, `${at}.sections`, MAX_OPTION_SECTIONS, section),
+      stance:
+        option.stance === null || option.stance === undefined
+          ? null
+          : oneOf(option.stance, `${at}.stance`, OPTION_STANCES),
     };
   });
   const kind = oneOf(doc.kind ?? 'question', 'kind', CARD_KINDS);
-  if (kind === 'question' && options.length < 2) throw new Invalid('a card needs 2 to 4 options');
-  if (kind === 'objection' && options.length === 1)
-    throw new Invalid('an objection has no options or 2 to 4');
+  if ((kind === 'question' || kind === 'judgement') && options.length < 2)
+    throw new Invalid('a card needs 2 to 4 options');
+  if ((kind === 'objection' || kind === 'sample') && options.length === 1)
+    throw new Invalid(
+      `${kind === 'sample' ? 'a sample' : 'an objection'} has no options or 2 to 4`
+    );
   if (kind === 'action' && options.length > 0) throw new Invalid('an action card has no options');
   if (new Set(options.map((option) => option.key)).size !== options.length)
     throw new Invalid('options repeat a key');
@@ -197,6 +223,29 @@ export function card(doc: Record<string, unknown>, writer: string, fileId: strin
       if (typeof value.yes !== 'boolean') fail('reversible.yes');
       return { yes: value.yes, how: optText(value.how, 'reversible.how', 500) };
     }),
+    verdict: optText(doc.verdict, 'verdict', 40),
+    group: optText(doc.group, 'group', 80),
+    agreement: optObj(doc.agreement, 'agreement', (value) => {
+      if (value.same !== null && value.same !== undefined && typeof value.same !== 'boolean')
+        fail('agreement.same');
+      return {
+        same: typeof value.same === 'boolean' ? value.same : null,
+        note: optText(value.note, 'agreement.note', 500),
+      };
+    }),
+    doubt: optText(doc.doubt, 'doubt', 1000),
+    appliesTo: optObj(doc.appliesTo, 'appliesTo', (value) => ({
+      count:
+        value.count === null || value.count === undefined
+          ? null
+          : count(value.count, 'appliesTo.count'),
+      description: text(value.description, 'appliesTo.description', 500),
+    })),
+    changesCanon: list(doc.changesCanon, 'changesCanon', 20, (value, at) => {
+      const item = obj(value, at);
+      return { ref: text(item.ref, `${at}.ref`, 200), what: text(item.what, `${at}.what`, 500) };
+    }),
+    related: list(doc.related, 'related', 20, (value, at) => text(value, at, 130)),
     replies: list(doc.replies, 'replies', 50, (value, at) => {
       const reply = obj(value, at);
       return { at: iso(reply.at, `${at}.at`), text: text(reply.text, `${at}.text`, 2000) };

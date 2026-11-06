@@ -7,6 +7,7 @@ import type {
   CardSection,
   CardDoc,
   CardMedia,
+  CardOption,
   CardRecommendation,
   ItemState,
   MachineId,
@@ -104,10 +105,13 @@ export interface CardOptionView {
   costs: string | null;
   media: MediaView[];
   sections: SectionView[];
+  stance: CardOption['stance'];
 }
 
 /** A note the owner already sent on an open card. */
 export interface CardNoteView {
+  /** note, or object (an objection, in the owner's words). */
+  kind: 'note' | 'object';
   note: string;
   at: string;
   delivery: AnswerDelivery;
@@ -141,13 +145,24 @@ export interface CardView {
   neededBy: CardDoc['neededBy'];
   exception: CardDoc['exception'];
   reversible: CardDoc['reversible'];
+  verdict: string | null;
+  group: string | null;
+  agreement: CardDoc['agreement'];
+  doubt: string | null;
+  appliesTo: CardDoc['appliesTo'];
+  changesCanon: CardDoc['changesCanon'];
+  related: string[];
   askedAt: string;
   ageSeconds: number;
   askerState: ThreadDoc['state'] | 'gone' | 'unknown';
   cardSha256: string;
   /** The owner's notes already sent on this card, oldest first. */
   notes: CardNoteView[];
-  /** The card file's current problem: the copy shown is the last good one and cannot be answered. */
+  /**
+   * Why this card cannot be answered: the file's current problem (the copy shown is the last good
+   * one), or a judgement card that carries a recommendation. A sample card has no problem but is
+   * not answerable either.
+   */
   problem: string | null;
   answerable: boolean;
 }
@@ -155,8 +170,8 @@ export interface CardView {
 export interface AnsweredCardView {
   card: CardView;
   answer: {
-    /** answer (a choice), object (an objection card, with the owner's words) or done (an action card). */
-    kind: 'answer' | 'object' | 'done';
+    /** answer (a choice) or done (an action card); notes and objections stay on the open card. */
+    kind: 'answer' | 'done';
     choice: string[];
     note: string;
     via: 'deck' | 'recommended';

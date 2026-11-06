@@ -98,7 +98,7 @@ describe('status fixture', () => {
     expect(() => writeStatusFixture(root, { ccsDir })).toThrow('already holds');
   });
 
-  it('adds an objection card and an action card on request', async () => {
+  it('adds objection, action, judgement and sample cards on request', async () => {
     const root = dirs.make();
     writeStatusFixture(root, { withKinds: true });
     const reader = new AgentReportsReader({ root: () => root });
@@ -108,7 +108,12 @@ describe('status fixture', () => {
       .snapshot()
       .cards.map((c) => c.doc.kind)
       .sort();
-    expect(kinds.filter((k) => k !== 'question')).toEqual(['action', 'objection']);
+    expect(kinds.filter((k) => k !== 'question')).toEqual([
+      'action',
+      'judgement',
+      'objection',
+      'sample',
+    ]);
   });
 
   it('adds named problems on request', async () => {

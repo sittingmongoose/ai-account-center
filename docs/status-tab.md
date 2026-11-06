@@ -29,9 +29,19 @@ Test servers also set `AAC_PM_MAIL_REGISTRY_DIR` (default `/mnt/Cursor/Inbox/reg
 **Reports folder.** At startup AAC creates `<reports>/v1/`, `v1/writers/` (mode 0777) and `v1/answers/`,
 `v1/keys/`, `v1/schemas/`, `v1/catalog/` when missing, but never the reports root itself (an unmounted share must not
 grow a local folder). Writers are `<machine>.<pm-mail name>`, or `<machine>.t3-<first 8 hex of sha256(T3 thread
-id)>` for a T3 thread with no pm-mail name. Runs carry `seq` like every other document; their `cost.estimate` (`{
-source, method, credits, quota, tokens: { in, out, cached } }`) is kept apart from measured cost. The Status server
-does not read runs yet (they feed the Scoreboard).
+id)>` for a T3 thread with no pm-mail name. After creating the folders AAC publishes the JSON Schemas it ships
+(`docs/agent-reports/schemas/<kind>.json`: answer, card, run, tasks, thread; packaged with the server) into
+`v1/schemas/`, replacing a file only when it is missing or different (temporary file and rename).
+
+**Unknowns stay null.** Thread, run and card `project` and `stream`; thread `doing` and every `agent.*` field; run
+`startedAt`, `task.type` and `model.id|provider|harness|effort|account`; card `replyTo.pmMail`. A hook never guesses
+them, and the view shows null as unknown.
+
+**Runs** (`writers/<writer>/runs/<YYYY-MM-DD>/<run>.json`, 32 KB cap) carry `seq` like every other document. The
+validator (`src/web-server/status/run-schema.ts`) accepts `model.account`, `process { id, version, sha256 }`,
+`metrics { name: number | null }`, `imported { from, at }`, `review.by`, `review.disputed` and `cost.estimate` (`{
+source, method, credits, quota, tokens: { in, out, cached } }`, kept apart from measured cost). The Status server does
+not read runs yet (they feed the Scoreboard).
 
 **Reading rules.** For each writer the reader lists the folder (and `cards/`) first and then reads what the listing
 names: a Mac rename-over through SMB is a delete then a rename, and NFS caches a missed lookup for about 20 s unless
@@ -118,7 +128,8 @@ detail when there is no data. Nothing is ever shown as live when its source is s
 `urgency`, `blocks`, `sections[]`, `batch`, `evidence[]`, `replies[]`, `neededBy`, `exception`, `reversible`,
 `askedAt`) plus `ageSeconds`, `askerState` (the asking thread's state,
 `"gone"` when its thread is stale, `"unknown"` when the writer has no `thread.json`), `cardSha256` (SHA-256 of the card
-file's bytes), `notes[]` (the owner's notes already sent on this card, oldest first, each `{ note, at, delivery }`),
+file's bytes), `notes[]` (the owner's notes and objections already sent on this card, oldest first, each `{ kind:
+"note" | "object", note, at, delivery }`),
 `problem` (the file's current problem, or null) and `answerable` (false while the shown copy is the last good one of a
 file that no longer reads). Sorted by urgency, then age (oldest first). A card version that has an answer leaves
 `open`; a card rewritten with a higher `seq` after its answer is open again (the old answer stays in the history,
@@ -145,16 +156,28 @@ share):
   (every row as wide as `columns`; cells may be empty), `compare { items: [ { name, does, problem, link: { label, url }
   | null, version } ] }`, `notCopying { items: [ { what, why } ] }`, `unknowns { items }`, `terms { items: [ { term,
   meaning } ] }`, `callout { tone: "info" | "warn" | "crit", body }`, `links { items: [ { label, url } ] }` (an http(s)
-  URL opens in a new tab; a share path is shown to copy; anything else is refused) and `media { items: [ Media ] }`.
+  URL opens in a new tab; a share path is shown to copy; anything else is refused), `media { items: [ Media ] }`,
+  `quote { items: [ { text, where, context: [], source, link: { label, url } | null, version } ] }` (verbatim words
+  copied by code, never reworded; `where` is the heading path, `context` nearby status notes such as "Superseded
+  2026-10-09") and `planChange { doc, unit, now, proposed }`. Order on a phone: title, now, options, recommendation,
+  then the folded sections.
   Known types are validated strictly (a bad one makes the card file unreadable, by name); a type this server does not
   know arrives as `{ type, title, fold, unknown: true }` and the page says it has a section it cannot show yet. The
   card's 64 KB cap includes its sections.
 - `replies[]` `{ at, text }`: the agent's replies to the owner's notes, in the card file (a new `seq`).
 - `kind`: `question` (the default; two to four options, answered in the deck), `objection` (a call the agent already
   made, "tell me if you object": shown in a quiet list with the decision, the reason and an Object button; no options
-  or two to four; silence is not an answer, nothing is signed unless the owner objects, and the card stays listed) or
-  `action` (something only the owner can do, such as signing in or changing a NAS setting: a Done button, no
-  options).
+  or two to four; silence is not an answer, nothing is signed unless the owner objects, and the card stays listed
+  until the agent replies or withdraws it), `action` (something only the owner can do, such as signing in or changing
+  a NAS setting: a Done button, no options), `judgement` (a measurement card: two to four options, "Can't tell" is a
+  valid one; a judgement card that carries a `recommendation` is shown with `problem` saying so and `answerable:
+  false`, so the owner is never anchored) or `sample` (a format sample: shown with "no answer wanted",
+  `answerable: false`, never sent; no options or two to four).
+- Passed through for the page: `verdict` (a badge such as adopt / adapt / keep ours / reject; the deck can filter on
+  it), `group` (a group within a batch, with its own "use the recommendations for this group"), `agreement { same:
+  true | false | null, note }` (did the judges agree), `doubt`, `appliesTo { count | null, description }` (a rule
+  card that settles a whole class), `changesCanon [ { ref, what } ]`, `related [ card ids ]` and option `stance`
+  (`keep` = the plan as written, `borrow` = take the outside approach, `own` = our own fix, or null).
 - `neededBy` `{ at: ISO | null, ifNoAnswer }` | null: when an answer is needed and what happens or starts costing
   without one. `exception` `{ rule, text }` | null: the owner's rule this card loosens and how; shown before anything
   else. `reversible` `{ yes: true | false, how }` | null.
@@ -162,11 +185,13 @@ share):
 - A count or premise that changes after a card was shown: the agent supersedes the card; the new card's `whatChanged`
   gives old and new values and `oldAnswer` quotes any earlier answer.
 
-**AnsweredCard**: `{ card: Card, answer: { kind: "answer" | "object" | "done", choice, note, via, answeredAt, device, delivery: { state:
+**AnsweredCard**: `{ card: Card, answer: { kind: "answer" | "done", choice, note, via, answeredAt, device, delivery: { state:
 "rang" | "failed" | "pending", at, detail, share: Step, doorbell: Step } } }`, newest first, at most 50 (the full
 history, notes included, is `GET /api/status/answers`). **Step**: `{ state: "pending" | "done" | "failed" |
 "skipped", at, detail, attempts }`. `failed` covers a share write or doorbell still being retried, one that gave up
-after 20 attempts, and a card with no pm-mail recipient (`skipped` doorbell); `detail` says which.
+after 20 attempts, or a doorbell turned off on a test server (`skipped`); `detail` says which. A card with no
+pm-mail name is delivered once its signed file is on the share: `state: "rang"` with `detail` "No mail name; the agent
+reads its answers file." (doorbell step `skipped`).
 
 **Batch**: `{ id, label, cardIds: [...] }`: open cards that share `batch`, kept together in the deck.
 
@@ -227,12 +252,14 @@ own, in order, one set at a time; the response is `{ "results": [ { cardId, outc
 entries are refused; `code` and `error` are null for `recorded`; `cardId` is null when the entry did not name a valid
 card id). Entry codes: `card_changed`, `invalid_entry` (not the strict entry shape), `invalid_choice`, `empty_entry`
 (no choice and no note), `invalid_note`, `invalid_via`, `invalid_kind` (the entry's kind does not fit the card's
-kind), `words_required` (an objection without the owner's words), `answer_not_saved` (the private store could not be
-written; nothing else happened for that entry).
-- Record kinds: `answer` (a choice, `question` cards only), `note` (a note alone, any card; the card stays open),
+kind), `words_required` (an objection without the owner's words), `sample_card` (a format sample takes no answer),
+`judgement_anchored` (a judgement card that carries a recommendation), `answer_not_saved` (the private store could
+not be written; nothing else happened for that entry).
+- Record kinds: `answer` (a choice, `question` and `judgement` cards), `note` (a note alone, any answerable card),
   `object` (`objection` cards: no choice, the owner's words required) and `done` (`action` cards: no choice, words
   optional). Without `kind`, an entry with a choice is an `answer` and one with only a note is a `note`; `object` and
-  `done` must be sent as `kind`. `answer`, `object` and `done` close the card version; `note` does not.
+  `done` must be sent as `kind`. `answer` and `done` close the card version; `note` and `object` leave it open (the
+  agent replies on the card or withdraws it), and both show on the open card in `notes[]`.
 - The card must be open on disk at that `seq` and hash (read fresh, not from the last scan) and that version not yet
   answered. Otherwise that entry is `card_changed` and the page reloads the card.
 - `choice` keys must be the card's option keys, without repeats (one unless `multiple`).
@@ -245,11 +272,15 @@ written; nothing else happened for that entry).
 - The note is stored exactly as typed (trimmed of surrounding whitespace only), at most 4,000 characters, no control
   characters other than tab and newlines.
 - Stored in `<ccsDir>/status/answers.jsonl` (append, local disk, this server only), then written signed to the share
-  (temporary file and rename), then the asker is rung through pm-mail. An answer goes to
-  `<reports>/v1/answers/<card>.json` (a later answer to a newer version of the card replaces it); each note gets its
-  own file, `<reports>/v1/answers/<card>.note-<12 hex>.json`, so no note overwrites another or an answer; `object` and
-  `done` go to `<card>.json` like an answer. Each step's
-  result is kept in the history; a failed share write or doorbell is retried and shown, never hidden.
+  (temporary file and rename), then a signed send summary, then the askers are rung through pm-mail. An answer or a
+  done goes to `<reports>/v1/answers/<card>.json` (a later answer to a newer version of the card replaces it); each
+  note gets its own file `<card>.note-<12 hex>.json` and each objection `<card>.object-<12 hex>.json`, so none
+  overwrites another or an answer. Each step's result is kept in the history; a failed share write, summary or ring is
+  retried every minute (up to 20 times) and shown, never hidden.
+- **Send summary:** every POST that records at least one entry is a send with its own `sendId` (a UUID), written
+  signed to `<reports>/v1/answers/batches/<sendId>.json`: `{ schema: "agent-reports/send@1", sendId, at, answeredBy:
+  "owner", device, entries: [ { cardId, seq, cardSha256, kind, choice, note } ], signature }`, entries in the order
+  sent, signed exactly like an answer (`verifySignedDocument(fileText, publicKeyPem, "agent-reports/send@1")`).
 - The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind: "answer" | "note" |
   "object" | "done", choice, note, via,
   answeredAt, answeredBy: "owner", device, signature }`. `device` is a word from the browser (`iPhone`, `iPad`,
@@ -262,10 +293,13 @@ written; nothing else happened for that entry).
   `keyId` = first 16 hex characters of the SHA-256 of the public key's DER (SPKI) bytes. `canonicalJson(value)` and
   `verifySignedAnswer(fileText, publicKeyPem)` in `src/web-server/status/answer-signing.ts` are what a reporter
   mirrors.
-- The doorbell rings only the asker (`replyTo.pmMail`): `pm-mail --as aac-answers send <asker> "Answer for <card>" |
-  "Note on <card>" | "Objection to <card>" | "Done: <card>" -m "<body>"`, only after the signed copy is on the share.
-  The body carries the card id and seq, the record kind, the owner's exact choice (keys and labels) and words, the
-  UTC time and the card's SHA-256, and says the signed file is the authority (naming it and the key file).
+- **Doorbell:** one ring per asker (`replyTo.pmMail`) per send, not one per card: `pm-mail --as aac-answers send
+  <asker> "<N> answer(s) from the owner (<batch, ...>)"` with the body on stdin (a send of 50 notes is longer than
+  one command-line argument may be). It rings only after that asker's signed files are on the share. The body names
+  the batch if any, the count and the card ids, then for each card its seq, record kind, the owner's exact choice (keys
+  and labels) and words, the UTC time, the card's SHA-256 and its signed file, and says the signed files are the
+  authority (naming the send summary and the key file). A card without a pm-mail name is recorded and signed normally
+  and not rung.
 - No agent path exists: the routes take a browser session only (not a device token, not localhost without auth).
 
 `cards.batches` is only a grouping (id, label, cardIds) that orders the deck; there is no approve-all endpoint.

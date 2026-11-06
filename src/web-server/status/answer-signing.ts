@@ -122,6 +122,17 @@ export function signAnswer(answer: UnsignedAnswer, key: AnswerKey): SignedAnswer
   return { ...answer, signature: { alg: 'ed25519', keyId: key.keyId, value } };
 }
 
+/** Signs any AAC document the same way as an answer (used for the send summary). */
+export function signDocument<T extends object>(
+  doc: T,
+  key: AnswerKey
+): T & { signature: AnswerSignature } {
+  const value = sign(null, Buffer.from(canonicalJson(doc), 'utf8'), key.privateKey).toString(
+    'base64'
+  );
+  return { ...doc, signature: { alg: 'ed25519', keyId: key.keyId, value } };
+}
+
 export type AnswerCheck = { ok: true; answer: SignedAnswer } | { ok: false; reason: string };
 
 /**
@@ -130,6 +141,17 @@ export type AnswerCheck = { ok: true; answer: SignedAnswer } | { ok: false; reas
  * not an answer.
  */
 export function verifySignedAnswer(fileText: string | Buffer, publicKeyPem: string): AnswerCheck {
+  return verifySignedDocument(fileText, publicKeyPem, ANSWER_SCHEMA) as AnswerCheck;
+}
+
+/** The same check for any signed AAC document whose `schema` must equal `schema`. */
+export function verifySignedDocument(
+  fileText: string | Buffer,
+  publicKeyPem: string,
+  schema: string
+):
+  | { ok: true; answer: Record<string, unknown> & { signature: AnswerSignature } }
+  | { ok: false; reason: string } {
   let doc: unknown;
   try {
     doc = JSON.parse(typeof fileText === 'string' ? fileText : fileText.toString('utf8'));
@@ -139,7 +161,7 @@ export function verifySignedAnswer(fileText: string | Buffer, publicKeyPem: stri
   if (!doc || typeof doc !== 'object' || Array.isArray(doc))
     return { ok: false, reason: 'not an answer' };
   const record = doc as Record<string, unknown>;
-  if (record.schema !== ANSWER_SCHEMA) return { ok: false, reason: 'not an answer' };
+  if (record.schema !== schema) return { ok: false, reason: 'not an answer' };
   const signature = record.signature as Record<string, unknown> | undefined;
   if (
     !signature ||
@@ -170,6 +192,6 @@ export function verifySignedAnswer(fileText: string | Buffer, publicKeyPem: stri
     good = false;
   }
   return good
-    ? { ok: true, answer: record as unknown as SignedAnswer }
+    ? { ok: true, answer: record as Record<string, unknown> & { signature: AnswerSignature } }
     : { ok: false, reason: 'bad signature' };
 }

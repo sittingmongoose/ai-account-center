@@ -4,6 +4,7 @@
  */
 
 export const THREAD_SCHEMA = 'agent-reports/thread@1';
+export const RUN_SCHEMA = 'agent-reports/run@1';
 export const TASKS_SCHEMA = 'agent-reports/tasks@1';
 export const CARD_SCHEMA = 'agent-reports/card@1';
 export const ANSWER_SCHEMA = 'agent-reports/answer@1';

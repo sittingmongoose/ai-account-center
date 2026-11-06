@@ -64,6 +64,46 @@ export async function ensureReportsLayout(root: string): Promise<string[]> {
   return created;
 }
 
+/** The JSON Schemas this package ships (docs/agent-reports/schemas), published to `<reports>/v1/schemas`. */
+export function packagedSchemasDir(): string {
+  return path.resolve(__dirname, '../../../docs/agent-reports/schemas');
+}
+
+/**
+ * Copies every packaged `<kind>.json` schema to `<reports>/v1/schemas/` when it is missing there or
+ * different (temporary dot file, then rename). Only into an existing `v1/schemas` folder. Resolves
+ * the names it wrote; never throws.
+ */
+export async function publishSchemas(
+  root: string,
+  sourceDir: string = packagedSchemasDir()
+): Promise<string[]> {
+  const target = path.join(root, 'v1', 'schemas');
+  const written: string[] = [];
+  try {
+    if (!(await fs.promises.stat(target)).isDirectory()) return written;
+    const names = (await fs.promises.readdir(sourceDir)).filter((name) =>
+      /^[a-z][a-z0-9-]*\.json$/.test(name)
+    );
+    for (const name of names.sort()) {
+      const body = await fs.promises.readFile(path.join(sourceDir, name));
+      const current = await fs.promises.readFile(path.join(target, name)).catch(() => null);
+      if (current && current.equals(body)) continue;
+      const temp = path.join(target, `.${name}.tmp-${process.pid}-${Date.now()}`);
+      try {
+        await fs.promises.writeFile(temp, body, { mode: 0o644 });
+        await fs.promises.rename(temp, path.join(target, name));
+        written.push(name);
+      } catch {
+        await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+      }
+    }
+  } catch {
+    /* No schemas folder or no packaged schemas: nothing to publish. */
+  }
+  return written;
+}
+
 export interface ReportProblem {
   /** Relative to `<reports>/v1`, such as `writers/vm.foo/tasks.json`. */
   file: string;

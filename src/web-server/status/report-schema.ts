@@ -6,16 +6,18 @@
  */
 import { createHash } from 'crypto';
 
-export type ReportKind = 'thread' | 'tasks' | 'card';
+export type ReportKind = 'thread' | 'tasks' | 'card' | 'run';
 
 /** Size caps from the format (bytes). */
 export const REPORT_SIZE_CAPS: Readonly<Record<ReportKind, number>> = Object.freeze({
   thread: 16 * 1024,
   tasks: 512 * 1024,
   card: 64 * 1024,
+  run: 32 * 1024,
 });
 
 import { card, type CardDoc } from './card-schema';
+import { run, type RunDoc } from './run-schema';
 import {
   count,
   fail,
@@ -40,6 +42,7 @@ import {
 
 export * from './schema-helpers';
 export * from './card-schema';
+export * from './run-schema';
 
 export const THREAD_STATES = ['working', 'waiting', 'blocked', 'paused', 'idle', 'done'] as const;
 export type ThreadState = (typeof THREAD_STATES)[number];
@@ -223,7 +226,7 @@ function tasks(doc: Record<string, unknown>, writer: string): TasksDoc {
   };
 }
 
-export type ReportDoc = ThreadDoc | TasksDoc | CardDoc;
+export type ReportDoc = ThreadDoc | TasksDoc | CardDoc | RunDoc;
 
 export interface ParsedReport<T extends ReportDoc = ReportDoc> {
   doc: T;
@@ -250,6 +253,11 @@ export function parseReportFile(
   writer: string,
   cardId: string
 ): Parsed<ParsedReport<CardDoc>>;
+export function parseReportFile(
+  kind: 'run',
+  bytes: Buffer,
+  writer: string
+): Parsed<ParsedReport<RunDoc>>;
 export function parseReportFile(
   kind: ReportKind,
   bytes: Buffer,
@@ -281,7 +289,9 @@ export function parseReportFile(
         ? thread(doc, writer)
         : kind === 'tasks'
           ? tasks(doc, writer)
-          : card(doc, writer, cardId);
+          : kind === 'run'
+            ? run(doc, writer)
+            : card(doc, writer, cardId);
     return {
       ok: true,
       value: { doc: value, sha256: createHash('sha256').update(bytes).digest('hex') },

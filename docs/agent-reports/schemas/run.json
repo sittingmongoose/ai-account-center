@@ -1,0 +1,501 @@
+{
+  "$defs": {
+    "quota": {
+      "additionalProperties": false,
+      "description": "Quota window movement.",
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "deltaPct": {
+          "type": "number"
+        },
+        "window": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account",
+        "deltaPct",
+        "window"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "timestamp": {
+      "description": "ISO 8601 UTC, e.g. 2026-11-06T16:00:00Z.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+      "type": "string"
+    },
+    "tokens": {
+      "additionalProperties": false,
+      "description": "Token counts. Unknown numbers stay null, never 0.",
+      "properties": {
+        "cached": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "in": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "out": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cached",
+        "in",
+        "out"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "agent-reports/run@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One finished run or review. Size cap: 32 KB (see spec).",
+  "properties": {
+    "benchmark": {
+      "description": "Benchmark id, for source benchmark.",
+      "type": "string"
+    },
+    "cost": {
+      "additionalProperties": false,
+      "description": "Measured cost. Unknown numbers stay null, never 0.",
+      "properties": {
+        "credits": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "estimate": {
+          "additionalProperties": false,
+          "description": "Cost estimate, kept apart from measured values; the scoreboard labels estimates.",
+          "properties": {
+            "credits": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "method": {
+              "description": "Estimation method, e.g. token-share at list price.",
+              "type": "string"
+            },
+            "quota": {
+              "$ref": "#/$defs/quota"
+            },
+            "source": {
+              "description": "What produced the estimate, e.g. quota-watch.",
+              "type": "string"
+            },
+            "tokens": {
+              "$ref": "#/$defs/tokens"
+            }
+          },
+          "required": [
+            "method",
+            "source"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "quota": {
+          "$ref": "#/$defs/quota"
+        },
+        "tokens": {
+          "$ref": "#/$defs/tokens"
+        },
+        "usd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "endedAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When the run ended."
+    },
+    "evidence": {
+      "description": "Supporting evidence links.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "path"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "flags": {
+      "description": "Conduct flags, each with evidence.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "cheating",
+              "fabricated",
+              "false-claim",
+              "incomplete-read",
+              "scope-cut",
+              "shortcut",
+              "test-weakened"
+            ],
+            "type": "string"
+          },
+          "reportedBy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "evidence",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "id": {
+      "description": "Run id: <writer>--<local id>.",
+      "type": "string"
+    },
+    "model": {
+      "additionalProperties": false,
+      "description": "Model that did the work. New models are data in catalog/, never schema changes.",
+      "properties": {
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Provider account label (e.g. claude_work), or null."
+        }
+      },
+      "required": [
+        "harness",
+        "id",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "outcome": {
+      "description": "Run outcome; the spec shows done.",
+      "type": "string"
+    },
+    "project": {
+      "description": "Project id, e.g. puppet-master.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "review": {
+      "additionalProperties": false,
+      "description": "Review record for task.type review, or null.",
+      "properties": {
+        "findings": {
+          "additionalProperties": false,
+          "properties": {
+            "high": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "low": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "medium": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "high",
+            "low",
+            "medium"
+          ],
+          "type": "object"
+        },
+        "of": {
+          "description": "Run id reviewed.",
+          "type": "string"
+        },
+        "overturned": {
+          "description": "True when the reviewer found the reviewed work wrong, not merely improvable.",
+          "type": "boolean"
+        },
+        "verdict": {
+          "enum": [
+            "cannot-verify",
+            "fail",
+            "pass"
+          ],
+          "type": "string"
+        },
+        "by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The reviewer model (provider/model and effort), or null."
+        },
+        "disputed": {
+          "type": "boolean",
+          "description": "True when the overturn itself is disputed."
+        }
+      },
+      "required": [
+        "findings",
+        "of",
+        "overturned",
+        "verdict"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "schema": {
+      "const": "agent-reports/run@1",
+      "description": "Schema id of this document."
+    },
+    "scope": {
+      "additionalProperties": false,
+      "description": "Assigned versus covered scope.",
+      "properties": {
+        "filesAssigned": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "filesRead": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recordsAssigned": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recordsJudged": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "seq": {
+      "description": "Increases on every write by this writer.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "description": "Observed is real agent work; benchmark is a planned benchmark run.",
+      "enum": [
+        "benchmark",
+        "observed"
+      ],
+      "type": "string"
+    },
+    "startedAt": {
+      "description": "When the run started.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stream": {
+      "description": "Stream id within the project, e.g. C.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "task": {
+      "additionalProperties": false,
+      "description": "Task worked on. New task types are data in catalog/, never schema changes.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "size": {
+          "additionalProperties": false,
+          "description": "Task size.",
+          "properties": {
+            "records": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "description": "Task type from catalog/task-types.json.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "type"
+      ],
+      "type": "object"
+    },
+    "wallSeconds": {
+      "description": "Wall-clock seconds the run took.",
+      "minimum": 0,
+      "type": "number"
+    },
+    "writer": {
+      "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-closure-lead.",
+      "pattern": "^(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "type": "string"
+    },
+    "writtenAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When this record was written."
+    },
+    "process": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "The process or harness version behind the result (prompt hash, script version). Results are compared only within one process version where it matters (Scout).",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Task-specific numbers (factsKept, factsTotal, repairs, tokensGenerated...). Unknown values stay null. Measures in catalog/measures.json name which metric they read.",
+      "additionalProperties": {
+        "type": [
+          "number",
+          "null"
+        ]
+      }
+    },
+    "imported": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "Set when the run was imported from earlier evidence rather than reported live.",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "required": [
+        "from",
+        "at"
+      ]
+    }
+  },
+  "required": [
+    "endedAt",
+    "id",
+    "model",
+    "outcome",
+    "project",
+    "schema",
+    "seq",
+    "source",
+    "startedAt",
+    "stream",
+    "task",
+    "writer",
+    "writtenAt"
+  ],
+  "type": "object"
+}
