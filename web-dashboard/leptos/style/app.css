@@ -147,7 +147,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 400 var(--t-body) / 1.45 var(--sans);
+  font: 400 var(--t-body) / 1.45 var(--sans); font-variation-settings: 'wght' 400;
   -webkit-font-smoothing: antialiased;
   overflow-wrap: anywhere;
 }
@@ -240,7 +240,7 @@ code, .num { font-family: var(--mono); font-size: 0.86em; font-variant-numeric: 
 .jump > button:last-child { margin-right: 20px; }
 .jump button {
   flex: none; min-width: 58px; height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--rule-strong);
-  background: transparent; color: var(--ink-3); font: 600 var(--t-small) / 1 var(--mono);
+  background: transparent; color: var(--ink-3); font: 600 var(--t-small) / 1 var(--mono); font-variation-settings: 'wght' 600;
 }
 .jump button[data-state='done'] { background: var(--paper-3); color: var(--ink); border-color: transparent; }
 .jump button[data-state='done']::before { content: '\2713\00a0'; color: var(--good-text); }
@@ -253,7 +253,7 @@ code, .num { font-family: var(--mono); font-size: 0.86em; font-variant-numeric: 
   font-size: var(--t-small); line-height: 1.45; }
 .card-meta { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; font-size: var(--t-caption); color: var(--ink-3); }
 .card-meta .asked { margin-left: auto; }
-.card-label { font: 700 var(--t-small) / 1.2 var(--mono); color: var(--ink); }
+.card-label { font: 700 var(--t-small) / 1.2 var(--mono); font-variation-settings: 'wght' 700; color: var(--ink); }
 .kind-word { margin: 10px 0 0; font-size: var(--t-caption); font-weight: 600; font-variation-settings: 'wght' 600; color: var(--accent-text); text-transform: uppercase; letter-spacing: .04em; }
 .card-title { font-size: var(--t-title); font-weight: 650; font-variation-settings: 'wght' 650; margin: 8px 0 0; line-height: 1.3; letter-spacing: -0.005em; }
 .now { margin: 8px 0 0; color: var(--ink-2); line-height: 1.5; }
@@ -273,8 +273,11 @@ code, .num { font-family: var(--mono); font-size: 0.86em; font-variant-numeric: 
 .opt-pick { display: grid; gap: 3px; width: 100%; text-align: left; padding: 10px 12px; background: none; border: 0; color: inherit;
   -webkit-tap-highlight-color: transparent; }
 .opt-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.opt-key { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
-  font: 700 var(--t-small) / 1 var(--mono); background: var(--paper); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--rule-strong); }
+/* A round badge for one-letter keys that grows into a pill for longer ones ("vm", "windows"), never wrapping. */
+.opt-key { min-width: 26px; height: 26px; padding: 0 7px; box-sizing: border-box; border-radius: 999px; display: inline-grid;
+  place-items: center; white-space: nowrap; flex: none;
+  font: 700 var(--t-small) / 1 var(--mono); font-variation-settings: 'wght' 700; background: var(--paper); color: var(--ink-2);
+  box-shadow: inset 0 0 0 1px var(--rule-strong); }
 .option[data-checked='1'] .opt-key { background: var(--accent); color: var(--accent-ink); }
 .rec-tag { font-size: var(--t-caption); font-weight: 700; font-variation-settings: 'wght' 700; color: var(--good-text); background: color-mix(in srgb, var(--good-text) 12%, transparent);
   padding: 2px 8px; border-radius: 999px; }
@@ -452,7 +455,7 @@ blockquote { margin: 4px 0; padding: 4px 10px; border-left: 3px solid var(--rule
   padding: 2px 0 4px; min-height: 32px; flex-wrap: wrap;
 }
 .stream-head:disabled { cursor: default; }
-.stream-id { font: 600 var(--t-small) / 1 var(--mono); color: var(--ink-2); }
+.stream-id { font: 600 var(--t-small) / 1 var(--mono); font-variation-settings: 'wght' 600; color: var(--ink-2); }
 .stream-label { font-weight: 600; font-variation-settings: 'wght' 600; }
 .owner { font-size: var(--t-small); }
 .path { font: var(--t-caption) / 1.4 var(--mono); color: var(--ink-4); margin-top: 2px; user-select: all; -webkit-user-select: all; }
@@ -461,7 +464,7 @@ blockquote { margin: 4px 0; padding: 4px 10px; border-left: 3px solid var(--rule
 .item[data-state='blocked'] { border-left-color: var(--crit); }
 .item[data-state='landed'], .item[data-state='done'] { border-left-color: var(--calm); }
 .item .item-note { flex-basis: 100%; margin: 0; }
-.item-id { font: 500 var(--t-small) / 1.2 var(--mono); color: var(--ink-3); }
+.item-id { font: 500 var(--t-small) / 1.2 var(--mono); font-variation-settings: 'wght' 500; color: var(--ink-3); }
 
 /* Threads */
 .thread { padding: 8px 0; border-top: 1px solid var(--rule-2); }

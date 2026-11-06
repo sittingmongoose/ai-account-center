@@ -69,6 +69,10 @@ export const tests = {
 		await t.goto('/app/status', { settleMs: 300 });
 		await t.page.waitForSelector('.deck .card');
 		await t.text('.deck-sub', /9 open/);
+		// The fixture's first card has word keys ("vm", "windows"): each fits its badge on one line.
+		await t.check('option keys fit their badges', async () =>
+			t.page.evaluate(() => [...document.querySelectorAll('.opt-key')].every((k) => k.scrollWidth <= k.clientWidth + 1 && k.getBoundingClientRect().height <= 27))
+		);
 		await t.check('card video plays from the server (byte ranges)', async () =>
 			t.page.evaluate(async () => {
 				const v = [...document.querySelectorAll('.media video')][0];
