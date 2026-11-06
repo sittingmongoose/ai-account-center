@@ -28,6 +28,7 @@ const ALLOWED_KEYWORDS = new Set([
   'minimum',
   'maximum',
   'oneOf',
+  'anyOf',
   'description',
 ]);
 
