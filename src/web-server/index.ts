@@ -66,6 +66,7 @@ import {
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { startScoreboardService } from './scoreboard/scoreboard-service';
 import { startStatusService } from './status/status-service';
 import { getSignInHealth } from './services/signin-health-service';
 import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
@@ -408,6 +409,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       });
       // Status tab readers and collectors (read-only; process collectors run only while viewed).
       stopStatusService = startStatusService();
+      // Scoreboard catalog seeds (runs are read on demand).
+      startScoreboardService();
       startAccountAnalyticsSampling();
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();

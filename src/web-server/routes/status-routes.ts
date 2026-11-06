@@ -1,4 +1,4 @@
-import type { Request, Response, Router } from 'express';
+import type { NextFunction, Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { hasOnlyKeys, sendError } from './account-route-guards';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
@@ -101,21 +101,24 @@ const FILE_REFUSALS = {
   not_media: [415, 'This file is not a PNG, JPEG or WebP image or an MP4 or WebM video.'],
 } as const;
 
+/** `no-store`, and a browser session only (the Status and Scoreboard routes share this). */
+export function requireBrowserSession(req: Request, res: Response, next: NextFunction): void {
+  res.setHeader('Cache-Control', 'no-store');
+  const kind = authKind(req);
+  if (kind === 'device') {
+    sendError(res, 403, 'device_scope', 'This page needs a signed-in dashboard session.');
+    return;
+  }
+  if (kind !== 'session') {
+    sendError(res, 401, 'auth_required', 'Authentication required');
+    return;
+  }
+  next();
+}
+
 export function createStatusRouter(service: () => StatusService = getStatusService): Router {
   const router = createApiRouter();
-  router.use((req, res, next) => {
-    res.setHeader('Cache-Control', 'no-store');
-    const kind = authKind(req);
-    if (kind === 'device') {
-      sendError(res, 403, 'device_scope', 'This page needs a signed-in dashboard session.');
-      return;
-    }
-    if (kind !== 'session') {
-      sendError(res, 401, 'auth_required', 'Authentication required');
-      return;
-    }
-    next();
-  });
+  router.use(requireBrowserSession);
 
   router.get('/', (req, res) => {
     if (req.originalUrl.includes('?')) {
