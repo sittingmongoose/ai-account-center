@@ -1,0 +1,1033 @@
+{
+  "version": 1,
+  "generatedAt": "2026-11-06T16:30:00.000Z",
+  "refresh": {
+    "pollSeconds": 30
+  },
+  "headline": {
+    "tone": "warn",
+    "runs": [
+      {
+        "text": "4 questions",
+        "strong": true,
+        "tone": "warn"
+      },
+      {
+        "text": " for you · "
+      },
+      {
+        "text": "61 of 97",
+        "strong": true
+      },
+      {
+        "text": " items landed · "
+      },
+      {
+        "text": "2 blocked",
+        "strong": true,
+        "tone": "crit"
+      }
+    ],
+    "counts": {
+      "openCards": 4,
+      "blockedItems": 2,
+      "workingThreads": 9,
+      "staleSources": 1
+    }
+  },
+  "sources": [
+    {
+      "id": "agent-reports",
+      "label": "Agent reports",
+      "state": "ok",
+      "asOf": "2026-11-06T16:29:51.000Z",
+      "ageSeconds": 9,
+      "staleAfterSeconds": 120,
+      "detail": "14 writers, 1 file unreadable since 4:02 PM: mac.fo-chat/thread.json"
+    },
+    {
+      "id": "pm-mail",
+      "label": "pm-mail registry",
+      "state": "ok",
+      "asOf": "2026-11-06T16:29:55.000Z",
+      "ageSeconds": 5,
+      "staleAfterSeconds": 300,
+      "detail": "Threads that do not report yet come from pm-mail."
+    },
+    {
+      "id": "machines",
+      "label": "Machines",
+      "state": "ok",
+      "asOf": "2026-11-06T16:29:30.000Z",
+      "ageSeconds": 30,
+      "staleAfterSeconds": 180,
+      "detail": "4 of 4 machines answered."
+    },
+    {
+      "id": "browsers",
+      "label": "Browsers and recordings",
+      "state": "ok",
+      "asOf": "2026-11-06T16:29:10.000Z",
+      "ageSeconds": 50,
+      "staleAfterSeconds": 180,
+      "detail": "From browser-check slots."
+    },
+    {
+      "id": "simlock",
+      "label": "Simlock",
+      "state": "stale",
+      "asOf": "2026-11-06T16:21:00.000Z",
+      "ageSeconds": 540,
+      "staleAfterSeconds": 180,
+      "detail": "simlock status timed out at 4:24 PM; showing the 4:21 PM reading."
+    },
+    {
+      "id": "usage",
+      "label": "Account usage",
+      "state": "ok",
+      "asOf": "2026-11-06T16:29:44.000Z",
+      "ageSeconds": 16,
+      "staleAfterSeconds": 300,
+      "detail": "From AI Account Center's own readings."
+    },
+    {
+      "id": "quota-watch",
+      "label": "Spending per stream",
+      "state": "unconfigured",
+      "asOf": null,
+      "ageSeconds": null,
+      "staleAfterSeconds": null,
+      "detail": "Per-stream spending appears once tools-lead's quota-watch publishes it."
+    }
+  ],
+  "cards": {
+    "source": "agent-reports",
+    "open": [
+      {
+        "id": "vm.pm-fo-lead--Q3",
+        "seq": 2,
+        "cardSha256": "6b1f0c2d",
+        "project": "puppet-master",
+        "stream": "F",
+        "askedBy": "pm-fo-lead",
+        "askerState": "working",
+        "title": "How should the lines chart label its end value (FO-33)?",
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "A",
+            "label": "Move the label above the line",
+            "gets": "Never covers a point",
+            "costs": "Taller chart",
+            "image": null
+          },
+          {
+            "key": "B",
+            "label": "Hide the label below 400 px",
+            "gets": "No layout change",
+            "costs": "Phones lose the end value",
+            "image": null
+          },
+          {
+            "key": "C",
+            "label": "Keep it, fade the point under it",
+            "gets": "Fast",
+            "costs": "Astra flagged this kind of fix before",
+            "image": null
+          }
+        ],
+        "recommendation": {
+          "key": "A",
+          "why": "It is the only option that keeps the value on phones without hiding data."
+        },
+        "multiple": false,
+        "urgency": "today",
+        "blocks": "FO-33 landing in group 4",
+        "batch": null,
+        "evidence": [
+          {
+            "label": "Screenshots",
+            "path": "/mnt/Cursor/PuppetMaster-Evidence/tests/pm7-fo-20261104/lines/"
+          }
+        ],
+        "askedAt": "2026-11-05T18:10:00.000Z",
+        "ageSeconds": 80400,
+        "label": "F-Q3",
+        "now": "The lines chart prints the last value at the right edge. On narrow windows the label covers the newest point. Astra failed the current fix because the label still overlaps at 360 px.",
+        "nowAsOf": "2026-11-06T13:02:00.000Z",
+        "oldAnswer": null,
+        "replies": [],
+        "notes": []
+      },
+      {
+        "id": "vm.pm-closure-lead--Q5a",
+        "seq": 1,
+        "cardSha256": "a91e22aa",
+        "project": "puppet-master",
+        "stream": "C",
+        "askedBy": "pm-closure-lead",
+        "askerState": "waiting",
+        "title": "Land Q5 over its 3 missing_ref rows?",
+        "whatChanged": "The referenced plan units were merged into DL-333 in September.",
+        "options": [
+          {
+            "key": "A",
+            "label": "Land now, fix the 3 rows after",
+            "gets": "Rows are marked missing_ref until fixed.",
+            "costs": "",
+            "image": null
+          },
+          {
+            "key": "B",
+            "label": "Fix the rows first",
+            "gets": "About half a day.",
+            "costs": "",
+            "image": null
+          }
+        ],
+        "recommendation": {
+          "key": "A",
+          "why": "The rows are labelled honestly and nothing reads them before the harness run."
+        },
+        "multiple": false,
+        "urgency": "this-week",
+        "blocks": "E's harness run",
+        "batch": "C-2026-11-06",
+        "evidence": [],
+        "askedAt": "2026-11-06T13:05:00.000Z",
+        "ageSeconds": 12300,
+        "label": "C-Q5a",
+        "now": "Q5's command definitions pass review, but 3 rows point at references that no longer exist after the August canon changes.",
+        "nowAsOf": "2026-11-06T13:02:00.000Z",
+        "oldAnswer": {
+          "text": "\"Fix every missing reference before landing.\"",
+          "at": "2026-10-02T15:00:00.000Z"
+        },
+        "replies": [],
+        "notes": []
+      },
+      {
+        "id": "vm.pm-closure-lead--Q5b",
+        "seq": 1,
+        "cardSha256": "c03b19e0",
+        "project": "puppet-master",
+        "stream": "C",
+        "askedBy": "pm-closure-lead",
+        "askerState": "waiting",
+        "title": "Keep unit-scoped hashes for closed items?",
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "A",
+            "label": "Yes, unit-scoped",
+            "gets": "",
+            "costs": "",
+            "image": null
+          },
+          {
+            "key": "B",
+            "label": "No, whole-file hashes",
+            "gets": "",
+            "costs": "",
+            "image": null
+          }
+        ],
+        "recommendation": {
+          "key": "A",
+          "why": "Whole-file hashes reopened 120 closures for unrelated edits last week."
+        },
+        "multiple": false,
+        "urgency": "this-week",
+        "blocks": null,
+        "batch": "C-2026-11-06",
+        "evidence": [],
+        "askedAt": "2026-11-06T13:06:00.000Z",
+        "ageSeconds": 12240,
+        "label": "C-Q5b",
+        "now": "Unit-scoped hashes make a closure stale only when its own unit changes.",
+        "nowAsOf": "2026-11-06T13:02:00.000Z",
+        "oldAnswer": null,
+        "replies": [],
+        "notes": []
+      },
+      {
+        "id": "vm.pm-closure-lead--Q5c",
+        "seq": 1,
+        "cardSha256": "f00d7711",
+        "project": "puppet-master",
+        "stream": "C",
+        "askedBy": "pm-closure-lead",
+        "askerState": "waiting",
+        "title": "Recheck the 12 closures from the GLM batch B09 by hand?",
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "A",
+            "label": "Yes, Opus rereads all 12",
+            "gets": "",
+            "costs": "",
+            "image": null
+          },
+          {
+            "key": "B",
+            "label": "Only the 4 that changed state",
+            "gets": "",
+            "costs": "",
+            "image": null
+          }
+        ],
+        "recommendation": {
+          "key": "A",
+          "why": "None of B09's verdicts can be trusted."
+        },
+        "multiple": false,
+        "urgency": "today",
+        "blocks": null,
+        "batch": "C-2026-11-06",
+        "evidence": [
+          {
+            "label": "LEAD-STATE B09",
+            "path": "/mnt/Cursor/PuppetMaster-Evidence/closure-reaudit-20261104/LEAD-STATE.md"
+          }
+        ],
+        "askedAt": "2026-11-06T13:07:00.000Z",
+        "ageSeconds": 12180,
+        "label": "C-Q5c",
+        "now": "A GLM worker wrote a script to assign verdicts in batch B09 instead of judging each record.",
+        "nowAsOf": "2026-11-06T13:02:00.000Z",
+        "oldAnswer": null,
+        "replies": [
+          {
+            "at": "2026-11-06T15:22:00.000Z",
+            "text": "B09 had 40; 28 were already reread by Opus on Nov 4. These 12 are the rest."
+          }
+        ],
+        "notes": [
+          {
+            "note": "Why only 12? I thought B09 had 40 records.",
+            "at": "2026-11-06T15:10:00.000Z",
+            "delivery": {
+              "state": "rang",
+              "at": "2026-11-06T15:10:02.000Z",
+              "detail": ""
+            }
+          }
+        ]
+      }
+    ],
+    "answered": [
+      {
+        "card": {
+          "id": "vm.pm-fo-lead--Q2",
+          "seq": 1,
+          "cardSha256": "77aa",
+          "project": "puppet-master",
+          "stream": "F",
+          "askedBy": "pm-fo-lead",
+          "askerState": "working",
+          "title": "Should onboarding default to Auto?",
+          "whatChanged": null,
+          "options": [
+            {
+              "key": "A",
+              "label": "Yes",
+              "gets": "",
+              "costs": "",
+              "image": null
+            },
+            {
+              "key": "B",
+              "label": "No",
+              "gets": "",
+              "costs": "",
+              "image": null
+            }
+          ],
+          "recommendation": {
+            "key": "A",
+            "why": ""
+          },
+          "multiple": false,
+          "urgency": "whenever",
+          "blocks": null,
+          "batch": null,
+          "evidence": [],
+          "askedAt": "2026-11-05T15:00:00.000Z",
+          "ageSeconds": 91800,
+          "label": "F-Q2",
+          "now": "",
+          "nowAsOf": "2026-11-06T13:02:00.000Z",
+          "oldAnswer": null,
+          "replies": [],
+          "notes": []
+        },
+        "answer": {
+          "choice": [
+            "A"
+          ],
+          "note": "Yes, but keep the manual option one tap away.",
+          "via": "card",
+          "answeredAt": "2026-11-05T17:31:00.000Z",
+          "delivery": {
+            "state": "rang",
+            "at": "2026-11-05T17:31:02.000Z",
+            "detail": "Rang pm-fo-lead."
+          },
+          "kind": "answer"
+        }
+      }
+    ],
+    "batches": [
+      {
+        "id": "C-2026-11-06",
+        "label": "Audit closure questions",
+        "cardIds": [
+          "vm.pm-closure-lead--Q5a",
+          "vm.pm-closure-lead--Q5b",
+          "vm.pm-closure-lead--Q5c"
+        ]
+      }
+    ]
+  },
+  "projects": [
+    {
+      "id": "puppet-master",
+      "label": "Puppet Master",
+      "counts": {
+        "total": 97,
+        "landed": 58,
+        "done": 3,
+        "ready": 6,
+        "review": 9,
+        "fixing": 7,
+        "working": 9,
+        "blocked": 2,
+        "todo": 3,
+        "dropped": 1
+      },
+      "streams": [
+        {
+          "id": "F",
+          "label": "PM7 follow-ups",
+          "owner": "pm-fo-lead",
+          "goal": "Fix every PM7 follow-up before the owner's QA round",
+          "board": {
+            "path": "/mnt/Cursor/share/puppet-master/2026-11-04-program/streams/F.md",
+            "ageSeconds": 1200
+          },
+          "source": "tasks",
+          "asOf": "2026-11-06T16:20:00.000Z",
+          "stale": false,
+          "counts": {
+            "total": 62,
+            "landed": 44,
+            "done": 0,
+            "ready": 5,
+            "review": 5,
+            "fixing": 4,
+            "working": 2,
+            "blocked": 1,
+            "todo": 1,
+            "dropped": 0
+          },
+          "completion": {
+            "done": 44,
+            "of": 62
+          },
+          "items": [
+            {
+              "id": "FO-40",
+              "title": "Welcome PiP look glitch",
+              "state": "landed",
+              "owner": "fo-welcome",
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-04T22:33:00.000Z"
+              },
+              "reviews": [
+                {
+                  "by": "Sol 6.1 max",
+                  "verdict": "pass"
+                },
+                {
+                  "by": "Astra max",
+                  "verdict": "pass"
+                }
+              ],
+              "blockedOn": null,
+              "ageSeconds": 150000
+            },
+            {
+              "id": "FO-33",
+              "title": "Lines chart end label overlaps",
+              "state": "blocked",
+              "owner": "fo-lines",
+              "landed": null,
+              "reviews": [
+                {
+                  "by": "Astra max",
+                  "verdict": "fail"
+                }
+              ],
+              "blockedOn": {
+                "kind": "owner",
+                "what": "Question Q3",
+                "since": "2026-11-05T18:10:00.000Z"
+              },
+              "ageSeconds": 80400
+            },
+            {
+              "id": "FO-41",
+              "title": "Lines chart re-entry",
+              "state": "review",
+              "owner": "fo-lines",
+              "landed": null,
+              "reviews": [],
+              "blockedOn": null,
+              "ageSeconds": 3000
+            },
+            {
+              "id": "SW-09",
+              "title": "Stall source in renderApp",
+              "state": "working",
+              "owner": "fo-perf",
+              "landed": null,
+              "reviews": [],
+              "blockedOn": null,
+              "ageSeconds": 600
+            }
+          ]
+        },
+        {
+          "id": "TOOLS",
+          "label": "Tool improvements",
+          "owner": "tools-lead",
+          "goal": "Tool improvements 1-24",
+          "board": {
+            "path": "/mnt/Cursor/share/puppet-master/2026-11-04-program/streams/TOOLS.md",
+            "ageSeconds": 420
+          },
+          "source": "tasks",
+          "asOf": "2026-11-06T16:25:00.000Z",
+          "stale": false,
+          "counts": {
+            "total": 21,
+            "landed": 0,
+            "done": 6,
+            "ready": 1,
+            "review": 4,
+            "fixing": 0,
+            "working": 8,
+            "blocked": 1,
+            "todo": 1,
+            "dropped": 0
+          },
+          "completion": {
+            "done": 6,
+            "of": 21
+          },
+          "items": [
+            {
+              "id": "18",
+              "title": "Agent reporter",
+              "state": "blocked",
+              "owner": "tools-lead",
+              "landed": null,
+              "reviews": [],
+              "blockedOn": {
+                "kind": "agent",
+                "what": "Format from aac-status-lead",
+                "since": "2026-11-06T14:25:00.000Z"
+              },
+              "ageSeconds": 7500
+            }
+          ]
+        },
+        {
+          "id": "C",
+          "label": "Audit closure",
+          "owner": "pm-closure-lead",
+          "goal": "Recheck all 654 closures, then unit-scoped hashes",
+          "board": {
+            "path": "/mnt/Cursor/share/puppet-master/2026-11-04-program/streams/C.md",
+            "ageSeconds": 9000
+          },
+          "source": "board-only",
+          "asOf": null,
+          "stale": false,
+          "counts": null,
+          "completion": null,
+          "items": []
+        },
+        {
+          "id": "E",
+          "label": "Event Authority and PNC-019",
+          "owner": "pm-ea-lead",
+          "goal": "Sealed denominator and a real PNC-019 harness run",
+          "board": {
+            "path": "/mnt/Cursor/share/puppet-master/2026-11-04-program/streams/E.md",
+            "ageSeconds": 30000
+          },
+          "source": "tasks",
+          "asOf": "2026-11-06T08:10:00.000Z",
+          "stale": true,
+          "counts": {
+            "total": 14,
+            "landed": 14,
+            "done": 3,
+            "ready": 0,
+            "review": 0,
+            "fixing": 3,
+            "working": 0,
+            "blocked": 0,
+            "todo": 2,
+            "dropped": 1
+          },
+          "completion": {
+            "done": 14,
+            "of": 14
+          },
+          "items": []
+        }
+      ]
+    },
+    {
+      "id": "ai-account-center",
+      "label": "AI Account Center",
+      "counts": {
+        "total": 9,
+        "landed": 0,
+        "done": 1,
+        "ready": 0,
+        "review": 0,
+        "fixing": 0,
+        "working": 3,
+        "blocked": 0,
+        "todo": 5,
+        "dropped": 0
+      },
+      "streams": [
+        {
+          "id": "status-tabs",
+          "label": "Status and Scoreboard tabs",
+          "owner": "aac-status-lead",
+          "goal": "Live Status tab, then the Model Scoreboard, in Leptos",
+          "board": null,
+          "source": "tasks",
+          "asOf": "2026-11-06T16:29:00.000Z",
+          "stale": false,
+          "counts": {
+            "total": 9,
+            "landed": 0,
+            "done": 1,
+            "ready": 0,
+            "review": 0,
+            "fixing": 0,
+            "working": 3,
+            "blocked": 0,
+            "todo": 5,
+            "dropped": 0
+          },
+          "completion": {
+            "done": 1,
+            "of": 9
+          },
+          "items": [
+            {
+              "id": "format",
+              "title": "Agent report format",
+              "state": "done",
+              "owner": "aac-status-lead",
+              "landed": null,
+              "reviews": [],
+              "blockedOn": null,
+              "ageSeconds": 1700
+            },
+            {
+              "id": "api",
+              "title": "Status API and collectors",
+              "state": "working",
+              "owner": "worker",
+              "landed": null,
+              "reviews": [],
+              "blockedOn": null,
+              "ageSeconds": 900
+            },
+            {
+              "id": "page",
+              "title": "Leptos Status page",
+              "state": "working",
+              "owner": "aac-status-lead",
+              "landed": null,
+              "reviews": [],
+              "blockedOn": null,
+              "ageSeconds": 60
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "threads": {
+    "source": "agent-reports",
+    "rows": [
+      {
+        "name": "pm7-build",
+        "machine": "vm",
+        "project": "puppet-master",
+        "stream": null,
+        "state": "working",
+        "doing": "Coordinating streams; F group 6 first",
+        "blockedOn": null,
+        "progress": null,
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
+        "account": "claude_plum",
+        "source": "report",
+        "lastSeen": "2026-11-06T16:28:00.000Z",
+        "ageSeconds": 120,
+        "stale": false
+      },
+      {
+        "name": "pm-fo-lead",
+        "machine": "vm",
+        "project": "puppet-master",
+        "stream": "F",
+        "state": "working",
+        "doing": "Group 6 landing run",
+        "blockedOn": null,
+        "progress": {
+          "done": 44,
+          "total": 62,
+          "unit": "items"
+        },
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
+        "account": "claude_work",
+        "source": "report",
+        "lastSeen": "2026-11-06T16:29:00.000Z",
+        "ageSeconds": 60,
+        "stale": false
+      },
+      {
+        "name": "tools-lead",
+        "machine": "vm",
+        "project": "puppet-master",
+        "stream": "TOOLS",
+        "state": "waiting",
+        "doing": "Blind Opus pre-check of browser-check 2.1",
+        "blockedOn": null,
+        "progress": {
+          "done": 6,
+          "total": 21,
+          "unit": "items"
+        },
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
+        "account": "claude_work",
+        "source": "report",
+        "lastSeen": "2026-11-06T16:27:00.000Z",
+        "ageSeconds": 180,
+        "stale": false
+      },
+      {
+        "name": "pm-closure-lead",
+        "machine": "vm",
+        "project": "puppet-master",
+        "stream": "C",
+        "state": "blocked",
+        "doing": "Waiting on 3 questions",
+        "blockedOn": {
+          "kind": "owner",
+          "what": "Questions Q5a-c",
+          "since": "2026-11-06T13:07:00.000Z"
+        },
+        "progress": null,
+        "model": null,
+        "effort": null,
+        "account": null,
+        "source": "pm-mail",
+        "lastSeen": "2026-11-06T15:40:00.000Z",
+        "ageSeconds": 3000,
+        "stale": false
+      },
+      {
+        "name": "fo-chat",
+        "machine": "mac",
+        "project": "puppet-master",
+        "stream": "F",
+        "state": "working",
+        "doing": "SW-01 chat redesign controls",
+        "blockedOn": null,
+        "progress": null,
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "account": "codex_plum",
+        "source": "report",
+        "lastSeen": "2026-11-06T15:58:00.000Z",
+        "ageSeconds": 1920,
+        "stale": true
+      },
+      {
+        "name": "aac-status-lead",
+        "machine": "vm",
+        "project": "ai-account-center",
+        "stream": "status-tabs",
+        "state": "working",
+        "doing": "Leptos Status page",
+        "blockedOn": null,
+        "progress": {
+          "done": 1,
+          "total": 9,
+          "unit": "items"
+        },
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
+        "account": "claude_work",
+        "source": "report",
+        "lastSeen": "2026-11-06T16:29:30.000Z",
+        "ageSeconds": 30,
+        "stale": false
+      }
+    ]
+  },
+  "machines": {
+    "source": "machines",
+    "rows": [
+      {
+        "id": "vm",
+        "label": "Ubuntu VM",
+        "state": "ok",
+        "asOf": "2026-11-06T16:29:30.000Z",
+        "cpu": {
+          "cores": 16,
+          "load1": 9.4,
+          "busyPct": 59
+        },
+        "memory": {
+          "availableGb": 12.1,
+          "totalGb": 38.0
+        },
+        "disk": [
+          {
+            "mount": "/",
+            "freeGb": 104,
+            "totalGb": 489
+          }
+        ],
+        "browsers": {
+          "running": 6,
+          "max": 12
+        },
+        "recordings": {
+          "running": 1,
+          "max": 4
+        },
+        "gpuPct": null,
+        "warnings": []
+      },
+      {
+        "id": "mac",
+        "label": "MacBook Air",
+        "state": "ok",
+        "asOf": "2026-11-06T16:29:28.000Z",
+        "cpu": {
+          "cores": 10,
+          "load1": 3.1,
+          "busyPct": 31
+        },
+        "memory": {
+          "availableGb": 6.4,
+          "totalGb": 24.0
+        },
+        "disk": [
+          {
+            "mount": "/",
+            "freeGb": 17.7,
+            "totalGb": 494
+          }
+        ],
+        "browsers": {
+          "running": 2,
+          "max": 8
+        },
+        "recordings": {
+          "running": 0,
+          "max": 2
+        },
+        "gpuPct": 12,
+        "warnings": [
+          "Disk 17.7 GB free, under the 50 GB floor"
+        ]
+      },
+      {
+        "id": "windows",
+        "label": "Windows PC",
+        "state": "ok",
+        "asOf": "2026-11-06T16:29:31.000Z",
+        "cpu": {
+          "cores": 24,
+          "load1": null,
+          "busyPct": 22
+        },
+        "memory": {
+          "availableGb": 14.3,
+          "totalGb": 64.0
+        },
+        "disk": [
+          {
+            "mount": "C:",
+            "freeGb": 210,
+            "totalGb": 1863
+          }
+        ],
+        "browsers": {
+          "running": 4,
+          "max": 16
+        },
+        "recordings": {
+          "running": 0,
+          "max": 4
+        },
+        "gpuPct": 20,
+        "warnings": []
+      },
+      {
+        "id": "nas1",
+        "label": "Nas1",
+        "state": "unreachable",
+        "asOf": "2026-11-06T16:12:00.000Z",
+        "cpu": {
+          "cores": 8,
+          "load1": 2.2,
+          "busyPct": 27
+        },
+        "memory": {
+          "availableGb": 9.8,
+          "totalGb": 32.0
+        },
+        "disk": [
+          {
+            "mount": "/",
+            "freeGb": 61,
+            "totalGb": 234
+          }
+        ],
+        "browsers": {
+          "running": 0,
+          "max": 8
+        },
+        "recordings": {
+          "running": 0,
+          "max": 2
+        },
+        "gpuPct": null,
+        "warnings": [
+          "Did not answer since 4:12 PM"
+        ]
+      }
+    ]
+  },
+  "simlock": {
+    "source": "simlock",
+    "capacity": [
+      {
+        "platform": "ios",
+        "running": 1,
+        "max": 1,
+        "reserved": 0,
+        "overLimit": false
+      },
+      {
+        "platform": "android",
+        "running": 0,
+        "max": 1,
+        "reserved": 0,
+        "overLimit": false
+      }
+    ],
+    "leases": [
+      {
+        "device": "iPhone 17 Pro (iOS 27.2)",
+        "platform": "ios",
+        "holder": "pm-fo-lead / fo-visual",
+        "since": "2026-11-06T16:05:00.000Z",
+        "expiresAt": "2026-11-06T17:05:00.000Z"
+      }
+    ]
+  },
+  "usage": {
+    "source": "usage",
+    "warnings": [
+      {
+        "tone": "warn",
+        "text": "Claude work: full in 1d 11h, before its Nov 12 reset"
+      },
+      {
+        "tone": "crit",
+        "text": "Claude plum: at its weekly limit until Nov 10"
+      },
+      {
+        "tone": "warn",
+        "text": "Codex: weekly quota out until Nov 11; extra credits reserved for PM7"
+      }
+    ],
+    "accounts": [
+      {
+        "provider": "claude",
+        "label": "Claude · work",
+        "window": "Weekly",
+        "usedPct": 27,
+        "resetsAt": "2026-11-12T21:00:00.000Z",
+        "projectedFullAt": "2026-11-08T03:30:00.000Z",
+        "runsOutBeforeReset": true,
+        "atLimit": false,
+        "stale": false
+      },
+      {
+        "provider": "claude",
+        "label": "Claude · alt",
+        "window": "Weekly",
+        "usedPct": 5,
+        "resetsAt": "2026-11-12T20:00:00.000Z",
+        "projectedFullAt": null,
+        "runsOutBeforeReset": false,
+        "atLimit": false,
+        "stale": false
+      },
+      {
+        "provider": "claude",
+        "label": "Claude · plum",
+        "window": "Weekly",
+        "usedPct": 100,
+        "resetsAt": "2026-11-10T20:00:00.000Z",
+        "projectedFullAt": null,
+        "runsOutBeforeReset": false,
+        "atLimit": true,
+        "stale": false
+      },
+      {
+        "provider": "codex",
+        "label": "Codex · plum",
+        "window": "Weekly",
+        "usedPct": 100,
+        "resetsAt": "2026-11-11T05:00:00.000Z",
+        "projectedFullAt": null,
+        "runsOutBeforeReset": false,
+        "atLimit": true,
+        "stale": false
+      },
+      {
+        "provider": "codex",
+        "label": "Codex · personal",
+        "window": "Credits",
+        "usedPct": null,
+        "resetsAt": null,
+        "projectedFullAt": null,
+        "runsOutBeforeReset": false,
+        "atLimit": false,
+        "stale": false
+      }
+    ]
+  }
+}
