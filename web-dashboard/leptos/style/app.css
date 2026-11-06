@@ -558,3 +558,12 @@ blockquote { margin: 4px 0; padding: 4px 10px; border-left: 3px solid var(--rule
 .sb-recent-list > li > strong { grid-column: 2; }
 .sb-recent-list > li > .muted { grid-column: 2; }
 .sb-recent-list > li > .sb-run { grid-column: 1 / -1; }
+
+/* Spend by stream: one line per account and meter, the value on the right. */
+.spend-streams { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 8px; }
+.spend-streams > li[data-bucket='1'] .spend-stream { color: var(--ink-3); font-style: italic; }
+.spend-stream { font-weight: 600; font-variation-settings: 'wght' 600; font-size: var(--t-small); }
+.spend-rows { list-style: none; padding: 0; margin: 2px 0 0; display: grid; gap: 2px; font-size: var(--t-small); }
+.spend-rows li { display: flex; gap: 8px; justify-content: space-between; min-width: 0; }
+.spend-rows li .muted { overflow-wrap: anywhere; }
+.spend-rows li .num { white-space: nowrap; font-variant-numeric: tabular-nums; }

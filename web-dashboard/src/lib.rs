@@ -1357,7 +1357,14 @@ pub fn probe_tick() {
     });
 }
 
-/// "home" | "analytics" | "accounts"; the shell animates the change.
+/// The Status and Scoreboard iframe asks for the content area and its cover: the shell answers through the
+/// `content-rect` and `content-cover` actions (it also sends them itself whenever they change).
+#[wasm_bindgen]
+pub fn report_content_area() {
+    with_ui(|ui| ui.invoke_report_content());
+}
+
+/// "home" | "analytics" | "accounts" | "status" | "scoreboard"; the shell animates the change.
 #[wasm_bindgen]
 pub fn set_current_page(page: &str) {
     with_ui(|ui| {
@@ -1365,6 +1372,8 @@ pub fn set_current_page(page: &str) {
             match page {
                 "analytics" => "analytics",
                 "accounts" => "accounts",
+                "status" => "status",
+                "scoreboard" => "scoreboard",
                 _ => "home",
             }
             .into(),

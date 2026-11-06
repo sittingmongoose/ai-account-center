@@ -37,6 +37,8 @@ pub struct StatusView {
     pub machines: Rows<Machine>,
     pub simlock: Simlock,
     pub usage: Usage,
+    /// Estimated spend per work stream from quota-watch; absent from servers that don't read it yet.
+    pub spend: Option<Spend>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -100,6 +102,97 @@ impl Source {
     pub fn is_ok(&self) -> bool {
         self.state == "ok"
     }
+}
+
+/// quota-watch's estimates, as the server words them. Every value here is an estimate except rows marked otherwise.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Spend {
+    #[serde(deserialize_with = "nullable")]
+    pub source: String,
+    pub as_of: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub method: String,
+    #[serde(deserialize_with = "nullable")]
+    pub periods: Vec<SpendPeriod>,
+    #[serde(deserialize_with = "nullable")]
+    pub budgets: Vec<SpendBudget>,
+    #[serde(deserialize_with = "nullable")]
+    pub unattributed: Vec<SpendUnattributed>,
+    #[serde(deserialize_with = "nullable")]
+    pub machines_not_scanned: Vec<SpendMachine>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendPeriod {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    pub coverage_text: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub streams: Vec<SpendStream>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendStream {
+    #[serde(deserialize_with = "nullable")]
+    pub stream: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    /// A bucket such as "(no stream)" rather than a real stream.
+    pub bucket: bool,
+    #[serde(deserialize_with = "nullable")]
+    pub rows: Vec<SpendRow>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendRow {
+    #[serde(deserialize_with = "nullable")]
+    pub account: String,
+    #[serde(deserialize_with = "nullable")]
+    pub meter_label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub value_text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendBudget {
+    #[serde(deserialize_with = "nullable")]
+    pub stream_label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub desc: String,
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
+    pub over_limit: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendUnattributed {
+    #[serde(deserialize_with = "nullable")]
+    pub account: String,
+    #[serde(deserialize_with = "nullable")]
+    pub meter_label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub amount_text: String,
+    #[serde(deserialize_with = "nullable")]
+    pub reason: String,
+    #[serde(deserialize_with = "nullable")]
+    pub why: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendMachine {
+    #[serde(deserialize_with = "nullable")]
+    pub name: String,
+    pub error: Option<String>,
+    pub runs_missed: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -1008,6 +1101,20 @@ mod tests {
             .find(|s| s.id == "agent-reports")
             .unwrap();
         assert_eq!(reports.state, "unreadable");
+        // quota-watch's estimates: three periods, budgets and unattributed rows, every value worded by the server.
+        let spend = view.spend.as_ref().expect("spend section");
+        assert_eq!(spend.source, "quota-watch");
+        let ids: Vec<&str> = spend.periods.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["day", "week", "window"]);
+        assert!(spend.budgets.iter().any(|b| b.over_limit));
+        assert!(!spend.unattributed.is_empty());
+        assert!(
+            spend
+                .periods
+                .iter()
+                .flat_map(|p| &p.streams)
+                .all(|s| s.rows.iter().all(|r| !r.value_text.is_empty()))
+        );
     }
 
     #[test]

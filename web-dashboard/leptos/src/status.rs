@@ -120,7 +120,7 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
                     <div class="col main"><CardsPanel/></div>
                     <div class="side">
                         <div class="col"><ProgressPanel/><ThreadsPanel/></div>
-                        <div class="col"><MachinesPanel/><SimlockPanel/><UsagePanel/></div>
+                        <div class="col"><MachinesPanel/><SimlockPanel/><UsagePanel/><SpendPanel/></div>
                     </div>
                 </div>
             </Show>
@@ -535,4 +535,91 @@ fn UsagePanel() -> impl IntoView {
             }}
         </Panel>
     }
+}
+
+/// Estimated spend per stream (quota-watch). Every number is an estimate split by token share; the panel says so.
+#[component]
+fn SpendPanel() -> impl IntoView {
+    let live = expect_context::<Live>();
+    let spend = Memo::new(move |_| live.view.with(|v| v.as_ref().and_then(|v| v.spend.clone())));
+    let source = source_of(live, |v| {
+        v.spend
+            .as_ref()
+            .map(|s| s.source.clone())
+            .unwrap_or_else(|| "quota-watch".into())
+    });
+    let period = RwSignal::new("day".to_string());
+    view! {
+        <Panel title="Spend by stream (estimates)" source=source id="spend">
+            {move || match spend.get() {
+                None => view! { <p class="empty">"This server doesn't read quota-watch's report yet."</p> }.into_any(),
+                Some(s) => {
+                    let current = s.periods.iter().find(|p| p.id == period.get()).or(s.periods.first()).cloned();
+                    view! {
+                        <div class="sb-uses" role="tablist" aria-label="Period">
+                            {s.periods.iter().map(|p| {
+                                let id = p.id.clone();
+                                let selected = { let id = id.clone(); move || current_id(&spend, &period) == id };
+                                view! {
+                                    <button role="tab" class="chip-btn" aria-selected=move || selected().to_string()
+                                        on:click=move |_| period.set(id.clone())>{p.label.clone()}</button>
+                                }
+                            }).collect_view()}
+                        </div>
+                        {current.map(|p| view! {
+                            {p.coverage_text.clone().map(|c| view! { <p class="item-note" data-tone="warn">{format!("This period's estimate {c}.")}</p> })}
+                            <ul class="spend-streams">
+                                {p.streams.into_iter().map(|st| view! {
+                                    <li data-bucket=st.bucket.then_some("1")>
+                                        <span class="spend-stream">{if st.label.is_empty() { st.stream.clone() } else { st.label.clone() }}</span>
+                                        <ul class="spend-rows">
+                                            {st.rows.into_iter().map(|r| view! {
+                                                <li><span class="muted">{format!("{} · {}", r.account, r.meter_label)}</span><span class="num">{r.value_text}</span></li>
+                                            }).collect_view()}
+                                        </ul>
+                                    </li>
+                                }).collect_view()}
+                            </ul>
+                        })}
+                        {(!s.budgets.is_empty()).then(|| view! {
+                            <ul class="warnings">
+                                {s.budgets.iter().map(|b| view! {
+                                    <li data-tone=if b.over_limit { "crit" } else { "" }>{format!("{} · {}: {}", b.stream_label, b.desc, b.text)}</li>
+                                }).collect_view()}
+                            </ul>
+                        })}
+                        {(!s.machines_not_scanned.is_empty()).then(|| view! {
+                            <p class="item-note" data-tone="warn">{format!("Not scanned: {}. Their use sits inside the other estimates.",
+                                s.machines_not_scanned.iter().map(|m| m.name.clone()).collect::<Vec<_>>().join(", "))}</p>
+                        })}
+                        {(!s.unattributed.is_empty()).then(|| view! {
+                            <details class="sb-thin">
+                                <summary>{format!("Not attributed to a stream ({})", s.unattributed.len())}</summary>
+                                <ul class="spend-rows">
+                                    {s.unattributed.iter().map(|u| view! {
+                                        <li><span class="muted">{format!("{} · {} · {}", u.account, u.meter_label, u.reason)}</span><span class="num">{u.amount_text.clone()}</span></li>
+                                    }).collect_view()}
+                                </ul>
+                            </details>
+                        })}
+                        {(!s.method.is_empty()).then(|| view! { <p class="fine">{format!("How: {}", s.method)}</p> })}
+                    }.into_any()
+                }
+            }}
+        </Panel>
+    }
+}
+
+fn current_id(spend: &Memo<Option<Spend>>, period: &RwSignal<String>) -> String {
+    spend
+        .with(|s| {
+            let s = s.as_ref()?;
+            let want = period.get();
+            s.periods
+                .iter()
+                .find(|p| p.id == want)
+                .or(s.periods.first())
+                .map(|p| p.id.clone())
+        })
+        .unwrap_or_default()
 }

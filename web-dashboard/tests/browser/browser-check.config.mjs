@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url';
 // audits leave them out by name until the row gives them room; every other control on the page is audited.
 export const KNOWN_SMALL = [/^acct-(show|tray):/];
 
-const CONTROL = /^(signin-(user|pass|submit|remember)$|update-apps$|install-app$|status-(line|block)$|home-legend$|analytics-provider$|included-usage$|tab-(home|analytics|accounts)$|(show|tray|add|add-key|row|acct-show|acct-tray|remove|signin-again|signin|session-signin|recheck):|recheck$|logout$|logsource-add$|cleanup-now$|all-(ask|do)$|network$|others-out$|pw-(cur|new|conf|toggle|submit|cancel)$)/;
+const CONTROL = /^(signin-(user|pass|submit|remember)$|update-apps$|install-app$|status-(line|block)$|home-legend$|analytics-provider$|included-usage$|(tab|nav)-(home|analytics|accounts|status|scoreboard)$|(show|tray|add|add-key|row|acct-show|acct-tray|remove|signin-again|signin|session-signin|recheck):|recheck$|logout$|logsource-add$|cleanup-now$|all-(ask|do)$|network$|others-out$|pw-(cur|new|conf|toggle|submit|cancel)$)/;
 
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
