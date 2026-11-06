@@ -38,8 +38,13 @@ function code(error: unknown): string {
   return (error as NodeJS.ErrnoException)?.code ?? '';
 }
 
-/** A field, or null once the process is gone; any other failure is incomplete. */
-function readField<T>(read: () => T, tolerated: ReadonlySet<string> = GONE): T | null {
+/** A field; an exited process throws ProcessGone, any other failure is incomplete. */
+function readField<T>(read: () => T): T {
+  return readTolerant(read, new Set()) as T;
+}
+
+/** As readField, but the tolerated error codes read as null. */
+function readTolerant<T>(read: () => T, tolerated: ReadonlySet<string>): T | null {
   try {
     return read();
   } catch (error) {
@@ -49,14 +54,25 @@ function readField<T>(read: () => T, tolerated: ReadonlySet<string> = GONE): T |
   }
 }
 
-/** The roots as named and as resolved, so either spelling of a path matches. */
+/**
+ * A path as named and as resolved, so either spelling matches. A missing tail
+ * (a root folder that was removed) is rejoined onto its deepest existing
+ * ancestor's real path, so a symlink above it still resolves.
+ */
 function spellings(file: string): string[] {
   const resolved = path.resolve(file);
-  try {
-    const real = fs.realpathSync(resolved);
-    return real === resolved ? [resolved] : [resolved, real];
-  } catch {
-    return [resolved];
+  let existing = resolved;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = path.join(fs.realpathSync(existing), ...tail);
+      return real === resolved ? [resolved] : [resolved, real];
+    } catch {
+      const parent = path.dirname(existing);
+      if (parent === existing) return [resolved];
+      tail.unshift(path.basename(existing));
+      existing = parent;
+    }
   }
 }
 
@@ -127,7 +143,7 @@ export function censusAntigravityProcesses(options: {
     const resolved = path.resolve(file);
     return natives.includes(resolved) || roots.some((root) => within(resolved, root));
   };
-  const deniedExe = new Set([...GONE, 'EACCES', 'EPERM']);
+  const deniedExe = new Set(['EACCES', 'EPERM']);
   let running = 0;
   try {
     for (const name of entries) {
@@ -138,18 +154,17 @@ export function censusAntigravityProcesses(options: {
       try {
         if (readField(() => fs.statSync(directory).uid) !== uid) continue;
         const comm = readField(() => fs.readFileSync(path.join(directory, 'comm'), 'utf8').trim());
-        if (comm !== null && ANTIGRAVITY_NAMES.has(comm)) {
+        if (ANTIGRAVITY_NAMES.has(comm)) {
           running += 1;
           continue;
         }
-        const exe = readField(() => fs.readlinkSync(path.join(directory, 'exe')), deniedExe);
+        const exe = readTolerant(() => fs.readlinkSync(path.join(directory, 'exe')), deniedExe);
         if (exe !== null && isAntigravityPath(exe)) {
           running += 1;
           continue;
         }
         const cmdline = readField(() => readCmdline(path.join(directory, 'cmdline')));
         if (
-          cmdline !== null &&
           cmdline
             .split('\0')
             .filter(Boolean)

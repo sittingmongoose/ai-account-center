@@ -390,7 +390,8 @@ if (require.main === module) {
   const parsed = managedUpdateArguments(process.argv.slice(2));
   void (
     parsed
-      ? runInstalledManagedAntigravityUpdate(os.homedir(), parsed)
+      ? // Only idleOnly crosses the command line; the releaseFile seam never does.
+        runInstalledManagedAntigravityUpdate(os.homedir(), { idleOnly: parsed.idleOnly })
       : Promise.resolve(failedCommandResult(false))
   )
     .then((result) => process.stdout.write(JSON.stringify(result) + '\n'))

@@ -220,6 +220,30 @@ describe('runtime-free Antigravity process census', () => {
     expect(value.census({ home: linked })).toEqual({ complete: true, running: 1 });
   });
 
+  test('a symlinked ~/.gemini matches a helper run from its real path', () => {
+    const value = procFixture();
+    const real = path.join(value.root, 'real-gemini');
+    fs.mkdirSync(path.join(real, 'antigravity-cli/bin'), { recursive: true });
+    fs.symlinkSync(real, path.join(value.home, '.gemini'));
+    value.add(820, 'helper', path.join(real, 'antigravity-cli/bin/unlisted-helper'), ['x']);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a symlinked ~/.gemini whose root folder was removed still matches by real path', () => {
+    const value = procFixture();
+    const real = path.join(value.root, 'real-gemini-removed');
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, path.join(value.home, '.gemini'));
+    // ~/.gemini/antigravity-cli is gone; the helper still runs from its old real path.
+    value.add(
+      830,
+      'helper',
+      `${path.join(real, 'antigravity-cli/bin/unlisted-helper')} (deleted)`,
+      ['x']
+    );
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
   test('a symlinked home matches a helper whose root folder no longer exists', () => {
     const value = procFixture();
     const linked = path.join(value.root, 'linked-home-missing-root');
@@ -437,6 +461,35 @@ describe('managed Antigravity update while switching is paused', () => {
     expect(freshAtUpdate).toBe(true);
   });
 
+  test('nothing is awaited before the update even through the command wrapper', async () => {
+    const value = fixture();
+    let fresh = false;
+    let freshAtUpdate: boolean | null = null;
+    const result = await runManagedAntigravityUpdateCommand({
+      nativeBinary: value.nativeBinary,
+      ccsDirectory: value.ccsDirectory,
+      runCommand: async (binary, args, capture) => {
+        if (args[0] === 'update') freshAtUpdate = fresh;
+        return value.runCommand(binary, args, capture);
+      },
+      execute: (native) =>
+        updatePausedAntigravity({
+          registry: value.registry,
+          native,
+          census: () => {
+            fresh = true;
+            queueMicrotask(() => {
+              fresh = false;
+            });
+            return idle();
+          },
+          stillPaused: async () => true,
+        }),
+    });
+    expect(result).toMatchObject({ status: 'current', updateAttempted: true });
+    expect(freshAtUpdate).toBe(true);
+  });
+
   test('agy update runs while the account lock is held', async () => {
     const value = fixture();
     const lock = path.join(value.ccsDirectory, 'antigravity-profiles/.transaction-lock');
@@ -501,7 +554,29 @@ describe('managed Antigravity update while switching is paused', () => {
         runtimePaused: true,
       });
       expect(value.calls).toEqual([['--version']]);
+      // The first census and the recovery check refuse before any backup.
+      if (variant !== 'runtime-back') expect(fs.existsSync(value.backup)).toBe(false);
     }
+  });
+
+  test('an incomplete final census after the backup never updates', async () => {
+    const value = fixture();
+    const answers = [idle(), { complete: false, running: 0 }];
+    const result = await updatePausedAntigravity({
+      registry: value.registry,
+      native: value.native,
+      census: () => answers.shift() ?? idle(),
+      stillPaused: async () => true,
+    });
+    expect(result).toEqual({
+      status: 'failed',
+      previousVersion: '1.4.12',
+      version: '1.4.12',
+      restartedProcesses: 0,
+      updateAttempted: false,
+      runtimePaused: true,
+    });
+    expect(value.calls).toEqual([['--version']]);
   });
 
   test('a failed agy update is a runtime_paused failure that records its attempt', async () => {

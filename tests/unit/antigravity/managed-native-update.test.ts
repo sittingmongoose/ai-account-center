@@ -600,6 +600,7 @@ describe('managed Antigravity native updater: public files and injected commands
       ['--idle-only=false'],
       ['--restart'],
       ['--idle-only', 'x'],
+      ['--release-file', 'x'],
       [''],
     ])
       expect(managedUpdateArguments(args)).toBeNull();
