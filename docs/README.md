@@ -26,6 +26,7 @@ Do not restore retired features to satisfy outdated prose.
 | Current work | [Project direction](project-roadmap.md) |
 | Local packaging and retained automation | [Release process](release-process.md) |
 | Structured diagnostics | [Logging contract](logging-contract.md) |
+| History database (design for review, not built) | [Store design](store.md) |
 | Source-tree measurements | [Hardening method](hardening-debt-burndown.md) |
 | Slint UI and licensing | [Dashboard guide](../web-dashboard/README.md) |
 | Native clients | [Mac](../macos-bar/README.md), [Windows](../windows-bar/README.md) |
