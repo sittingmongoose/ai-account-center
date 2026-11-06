@@ -965,6 +965,9 @@ pub async fn fetch_status() -> Result<StatusView, FetchError> {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnswerEntry {
+    /// This entry's dedupe key: the draft's nonce with the entry's content. A retry of the same draft carries it again
+    /// and the server records it once, even when the rest of the send has changed.
+    pub entry_id: String,
     /// "answer", "note", "object" or "done".
     pub kind: String,
     pub card_id: String,
@@ -983,11 +986,27 @@ struct SubmitRequest<'a> {
     answers: &'a [AnswerEntry],
 }
 
-/// A send's identity, taken from what is sent: the same entries sent again (a retry after the connection dropped,
-/// even after a reload) carry the same id and the server records them once; any change to them makes a new id. Two
-/// 64-bit FNV-1a hashes with different starting points give 32 hex characters.
+/// A send's identity, taken from what is sent (each entry's id included): a retry of the same drafts carries the same
+/// id. Entries are deduped on their own `entryId` too, which also covers a retry whose set of entries has changed.
 pub fn send_id(answers: &[AnswerEntry]) -> String {
-    let text = serde_json::to_string(answers).unwrap_or_default();
+    hex_id(&serde_json::to_string(answers).unwrap_or_default())
+}
+
+/// An entry's id: its draft's random nonce plus what it says (its own id field left out). A retry of the same draft
+/// is the same entry; a new draft with the same words is a new one.
+pub fn entry_id(nonce: &str, entry: &AnswerEntry) -> String {
+    let content = AnswerEntry {
+        entry_id: String::new(),
+        ..entry.clone()
+    };
+    hex_id(&format!(
+        "{nonce}\n{}",
+        serde_json::to_string(&content).unwrap_or_default()
+    ))
+}
+
+/// Two 64-bit FNV-1a hashes with different starting points: 32 hex characters.
+fn hex_id(text: &str) -> String {
     let fnv = |basis: u64| {
         text.bytes().fold(basis, |h, b| {
             (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
@@ -1126,11 +1145,10 @@ mod tests {
         assert!(c.completion.is_none());
     }
 
-    /// A view the server branch built from scripts/status-fixture.mjs (--with-kinds --with-problems): the page must read
-    /// what the server actually sends, nulls included.
     #[test]
     fn a_resend_of_the_same_entries_keeps_its_id() {
         let entry = |note: &str| AnswerEntry {
+            entry_id: "0".repeat(32),
             kind: "note".into(),
             card_id: "vm.a--c1".into(),
             card_seq: 3,
@@ -1150,6 +1168,20 @@ mod tests {
         })
         .unwrap();
         assert!(body.starts_with(&format!(r#"{{"sendId":"{first}","answers":["#)));
+        assert!(body.contains(r#""entryId":"#), "{body}");
+        // an entry's id: the same draft and words keep it, another draft (nonce) or other words change it
+        let id = entry_id("n1", &entry("go"));
+        assert_eq!(id.len(), 32);
+        assert_eq!(id, entry_id("n1", &entry("go")));
+        assert_ne!(id, entry_id("n2", &entry("go")));
+        assert_ne!(id, entry_id("n1", &entry("go now")));
+        let mut carrying = entry("go");
+        carrying.entry_id = id.clone();
+        assert_eq!(
+            entry_id("n1", &carrying),
+            id,
+            "its own id field is left out"
+        );
     }
 
     #[test]
@@ -1178,6 +1210,8 @@ mod tests {
         assert_eq!((p.done, p.total), (None, None));
     }
 
+    /// A view the server branch built from scripts/status-fixture.mjs (--with-kinds --with-problems): the page must read
+    /// what the server actually sends, nulls included.
     #[test]
     fn the_server_view_reads() {
         let text = include_str!("../fixtures/server-view.json");

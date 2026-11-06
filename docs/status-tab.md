@@ -347,9 +347,9 @@ last good copy for 2 minutes; NUL bytes, over 512 KB, a secret, a schema other t
 
 The owner answers in a deck: one card at a time with Back and Next, a row of card labels to jump, and nothing is sent
 until the review screen at the end ("Send N answers"). "Send current selections" jumps to that review screen early,
-for a long deck. "Use the recommendations" fills every card still empty with its recommendation; the owner can change
-any of them before sending. Unsent choices and notes are kept on this device (browser storage) so leaving the page
-loses nothing; they are drafts, never answers.
+for a long deck. "Use the recommendations" fills every plain question still empty with its recommendation (never a
+judgement, objection or action card); the owner can change any of them before sending. Unsent choices and notes are
+kept on this device (browser storage) so leaving the page loses nothing; they are drafts, never answers.
 
 `POST /api/status/answers` body: `{ "sendId"?: "<id>", "answers": [ { "cardId", "cardSeq", "cardSha256", "choice": ["A"] | [], "note": "...",
 "via": "deck" | "recommended", "kind"?: "answer" | "note" | "object" | "done" } ] }`, 1 to 50 entries, at most 64 KB. Each entry is validated and recorded on its

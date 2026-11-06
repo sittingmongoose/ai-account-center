@@ -141,7 +141,9 @@ pub fn CardsPanel() -> impl IntoView {
     view! {
         <Panel title="Questions for you" source=source id="cards">
             <Show
-                when=move || !open.with(|o| o.is_empty()) || matches!(deck_view.get(), DeckView::Sent(_))
+                // the review and sent screens stay while the cards empty under them, so a send's result (or its
+                // failure) is still shown when a read lands mid-send
+                when=move || !open.with(|o| o.is_empty()) || !matches!(deck_view.get(), DeckView::Cards)
                 fallback=|| view! { <p class="empty">"No questions waiting."</p> }
             >
                 <Deck open=open drafts=drafts at=at deck_view=deck_view/>
@@ -326,7 +328,7 @@ fn Deck(
         <div class="deck">
             <div class="deck-sub">
                 <span>{move || format!("{} open · {} ready to send", open.with(|o| o.len()), ready())}</span>
-                <Show when=move || deck_view.get() == DeckView::Cards && open.with(|cards| cards.iter().any(|c| c.recommendation.is_some() && c.can_answer() && !c.is_judgement()))>
+                <Show when=move || deck_view.get() == DeckView::Cards && open.with(|cards| cards.iter().any(|c| c.recommendation.is_some() && c.can_answer() && c.is_question()))>
                     <button class="link" on:click=move |_| { open.with_untracked(|cards| drafts.update(|d| { drafts::use_recommendations(d, cards); })); }>
                         "Use recommendations"
                     </button>
@@ -339,10 +341,11 @@ fn Deck(
                     {move || verdicts.get().into_iter().map(|v| {
                         let label = verdict_label(&v);
                         let pick = v.clone();
-                        let count = open.with_untracked(|cards| cards.iter().filter(|c| c.verdict.as_deref() == Some(v.as_str())).count());
+                        let counted = v.clone();
+                        let count = move || open.with(|cards| cards.iter().filter(|c| c.verdict.as_deref() == Some(counted.as_str())).count());
                         view! {
                             <button class="chip-btn" data-verdict=v.clone() aria-pressed=move || verdict.with(|x| x.as_deref() == Some(pick.as_str())).to_string()
-                                on:click=move |_| { current_id.set(None); at.set(0); verdict.set(Some(v.clone())); }>{format!("{label} ({count})")}</button>
+                                on:click=move |_| { current_id.set(None); at.set(0); verdict.set(Some(v.clone())); }>{move || format!("{label} ({})", count())}</button>
                         }
                     }).collect_view()}
                 </div>
@@ -429,8 +432,12 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
         })
         .collect();
     let fold_sections = narrow();
-    let initial_note =
-        drafts.with_untracked(|d| d.get(&c.id).map(|x| x.note.clone()).unwrap_or_default());
+    // The box follows the draft, so a change from another tab (or a send there) shows; typing sets the same text back,
+    // which leaves the cursor where it is.
+    let note_text = {
+        let id = c.id.clone();
+        move || drafts.with(|d| d.get(&id).map(|x| x.note.clone()).unwrap_or_default())
+    };
     let place = [
         Some(c.project.clone()).filter(|p| !p.is_empty()),
         c.stream.clone().map(|s| format!("stream {s}")),
@@ -657,7 +664,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                     maxlength="4000"
                     disabled=locked
                     placeholder=note_hint
-                    prop:value=initial_note
+                    prop:value=note_text
                     on:input=move |ev| { let text = event_target_value(&ev); drafts.update(|d| drafts::set_note(d, &card.get_value(), text)); }
                 ></textarea>
             </label>

@@ -23,6 +23,43 @@ pub struct Draft {
     pub version: String,
     /// The card version the note was last written on.
     pub note_version: String,
+    /// Random, made with the draft and kept until it is recorded: with the content it makes the entry's `entryId`, so a
+    /// retry of this draft is recorded once and a new draft with the same words is a new entry.
+    pub nonce: String,
+}
+
+/// A new draft's nonce: 128 random bits from the browser (a counter in native tests).
+fn fresh_nonce() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut bytes = [0u8; 16];
+        let filled = web_sys::window()
+            .and_then(|w| w.crypto().ok())
+            .and_then(|c| c.get_random_values_with_u8_array(&mut bytes).ok())
+            .is_some();
+        if !filled {
+            for chunk in bytes.chunks_mut(4) {
+                let r = (js_sys::Math::random() * f64::from(u32::MAX)) as u32;
+                chunk.copy_from_slice(&r.to_le_bytes());
+            }
+        }
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        format!("{:032x}", NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// The draft for a card, made (with its nonce) on first use.
+fn draft_for<'a>(drafts: &'a mut Drafts, card: &Card) -> &'a mut Draft {
+    let d = drafts.entry(card.id.clone()).or_default();
+    if d.nonce.is_empty() {
+        d.nonce = fresh_nonce();
+    }
+    d
 }
 
 impl Draft {
@@ -87,7 +124,7 @@ pub fn entry_kind(card: &Card, draft: &Draft) -> &'static str {
 
 /// Tap an option: one choice unless the card takes several; tapping the chosen one clears it.
 pub fn toggle(drafts: &mut Drafts, card: &Card, key: &str) {
-    let d = drafts.entry(card.id.clone()).or_default();
+    let d = draft_for(drafts, card);
     // A choice made on an older version of the question is not carried over: the first tap starts afresh.
     if d.version != card.version_key() {
         d.choice.clear();
@@ -108,7 +145,7 @@ pub fn toggle(drafts: &mut Drafts, card: &Card, key: &str) {
 }
 
 pub fn set_note(drafts: &mut Drafts, card: &Card, note: String) {
-    let d = drafts.entry(card.id.clone()).or_default();
+    let d = draft_for(drafts, card);
     d.note = note;
     d.note_version = card.version_key();
     if d.via.is_empty() {
@@ -124,7 +161,7 @@ pub fn use_recommendations(drafts: &mut Drafts, cards: &[Card]) -> usize {
         let Some(rec) = card.recommendation.as_ref() else {
             continue;
         };
-        let d = drafts.entry(card.id.clone()).or_default();
+        let d = draft_for(drafts, card);
         if d.choice.is_empty() && card.options.iter().any(|o| o.key == rec.key) {
             d.choice = vec![rec.key.clone()];
             d.via = "recommended".into();
@@ -148,7 +185,8 @@ pub fn entries(drafts: &Drafts, cards: &[Card]) -> Vec<AnswerEntry> {
         .map(|c| {
             let d = &drafts[&c.id];
             let kind = entry_kind(c, d);
-            AnswerEntry {
+            let mut entry = AnswerEntry {
+                entry_id: String::new(),
                 kind: kind.to_string(),
                 card_id: c.id.clone(),
                 card_seq: c.seq,
@@ -164,7 +202,9 @@ pub fn entries(drafts: &Drafts, cards: &[Card]) -> Vec<AnswerEntry> {
                 } else {
                     "deck".into()
                 },
-            }
+            };
+            entry.entry_id = crate::api::entry_id(&d.nonce, &entry);
+            entry
         })
         .collect()
 }
@@ -187,6 +227,9 @@ fn parse(text: &str) -> Drafts {
     for d in drafts.values_mut() {
         if d.note_version.is_empty() && !d.note.is_empty() {
             d.note_version = d.version.clone();
+        }
+        if d.nonce.is_empty() {
+            d.nonce = fresh_nonce();
         }
     }
     drafts
@@ -263,6 +306,28 @@ mod tests {
         let loaded = parse(saved);
         assert_eq!(loaded["x"].note_version, loaded["x"].version);
         assert_eq!(standing(&loaded, &old), Standing::Ready);
+    }
+
+    #[test]
+    fn a_draft_keeps_its_entry_id_until_recorded_and_a_new_draft_gets_a_new_one() {
+        let a = card("a", 1, None);
+        let n = card("n", 1, None);
+        let mut d = Drafts::new();
+        toggle(&mut d, &a, "A");
+        set_note(&mut d, &n, "check the logs".into());
+        let both = entries(&d, &[a.clone(), n.clone()]);
+        assert_eq!(both.len(), 2);
+        // the answered card closes while the response is lost: the note alone goes again with its id
+        d.remove("a");
+        let alone = entries(&d, &[n.clone()]);
+        assert_eq!(alone[0].entry_id, both[1].entry_id);
+        // once recorded the draft goes; the same words typed later are a new entry
+        d.remove("n");
+        set_note(&mut d, &n, "check the logs".into());
+        assert_ne!(entries(&d, &[n.clone()])[0].entry_id, both[1].entry_id);
+        // an edit is a new entry too
+        set_note(&mut d, &n, "check the logs again".into());
+        assert_ne!(entries(&d, &[n])[0].entry_id, both[1].entry_id);
     }
 
     #[test]

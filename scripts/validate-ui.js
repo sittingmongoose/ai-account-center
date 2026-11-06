@@ -52,7 +52,17 @@ function validateUi(options = {}) {
   }
   // The Leptos pages (Status, Scoreboard) are checked the same way when the crate is present.
   const leptosCrate = path.join(crate, 'leptos');
-  if (fs.existsSync(path.join(leptosCrate, 'Cargo.toml'))) {
+  // lstat, not existsSync: a dangling link where the crate or its manifest should be is checked (and refused), never
+  // taken for "no pages here"
+  const present = (file) => {
+    try {
+      fs.lstatSync(file);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (present(leptosCrate) || present(path.join(leptosCrate, 'Cargo.toml'))) {
     run(
       toolPath('cargo', cargoBin),
       ['fmt', '--manifest-path', path.join(leptosCrate, 'Cargo.toml'), '--check'],
