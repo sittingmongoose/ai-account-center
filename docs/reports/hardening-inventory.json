@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1349,
+    "totalOccurrences": 1351,
     "filesAffected": 135,
     "hotpathOccurrences": 698,
     "hotpathFilesAffected": 79,
@@ -533,11 +533,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 704,
+      "totalThrows": 706,
       "typedThrows": 195,
       "plainThrows": 72,
-      "otherThrows": 437,
-      "adoptionRatio": 0.277,
+      "otherThrows": 439,
+      "adoptionRatio": 0.2762,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -547,7 +547,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 164,
+          "count": 166,
           "typed": 0,
           "plain": 0
         },
@@ -615,8 +615,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 42,
-      "totalSourceFiles": 456,
-      "coverageRatio": 0.0921,
+      "totalSourceFiles": 457,
+      "coverageRatio": 0.0919,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -643,7 +643,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 183,
+          "count": 184,
           "withLogger": 26
         },
         {

@@ -2057,7 +2057,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
         self.assertEqual(argv[2:], ['--idle-only'])
         self.assertEqual((row['status'], row['version']), ('updated', '1.5.2'))
         self.assertEqual(updater.mark_unreviewed(row, self.REVIEWED)['messageCode'], 'updated_unreviewed')
-        for code, attempted in (('runtime_paused', True), ('runtime_paused', False), ('runtime_unavailable', False)):
+        for code, attempted in (('runtime_paused', True), ('runtime_paused_blocked', False), ('runtime_unavailable', False)):
             with self.subTest(code=code, attempted=attempted):
                 failed = {'appId': 'antigravity-cli', 'platform': 'ubuntu', 'manager': 'native', 'status': 'failed',
                           'messageCode': code, 'updateAttempted': attempted, 'restartedProcesses': 0}

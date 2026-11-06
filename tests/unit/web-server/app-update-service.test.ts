@@ -274,6 +274,15 @@ describe('fixed app update service', () => {
     );
     expect(paused).toMatchObject({ status: 'failed', previousVersion: '1.4.12' });
     expect(paused.message).toBe(MESSAGES.runtime_paused);
+    // A refusal before agy update ran has its own wording.
+    const blocked = normalizeAppUpdateRow(
+      { ...base, messageCode: 'runtime_paused_blocked', updateAttempted: false },
+      'antigravity-cli',
+      'ubuntu'
+    );
+    expect(blocked.message).toBe(MESSAGES.runtime_paused_blocked);
+    expect(blocked.message).toContain('pending switch recovery');
+    expect(blocked.message).toContain('nothing was installed');
     // Only the Ubuntu managed Antigravity bridge reports them, and only as failures;
     // a runtime that did not answer never ran the updater.
     for (const [row, appId, platform] of [
@@ -290,6 +299,16 @@ describe('fixed app update service', () => {
       ],
       [
         { ...base, messageCode: 'runtime_unavailable', updateAttempted: true },
+        'antigravity-cli',
+        'ubuntu',
+      ],
+      [
+        { ...base, messageCode: 'runtime_paused', updateAttempted: false },
+        'antigravity-cli',
+        'ubuntu',
+      ],
+      [
+        { ...base, messageCode: 'runtime_paused_blocked', updateAttempted: true },
         'antigravity-cli',
         'ubuntu',
       ],

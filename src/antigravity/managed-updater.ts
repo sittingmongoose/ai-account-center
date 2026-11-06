@@ -13,6 +13,8 @@ export interface ManagedNativeUpdate {
   rollback(): Promise<boolean>;
 }
 
+export type NativeReviewState = 'reviewed' | 'unreviewed' | 'unknown';
+
 export interface ManagedUpdateResult {
   status: 'current' | 'updated' | 'failed' | 'restart_failed' | 'in_use';
   previousVersion: string;
@@ -243,8 +245,11 @@ export async function updatePausedAntigravity(deps: {
       let attempted = false;
       try {
         await native.backup();
+        // The slow recheck (it re-hashes the native) runs first; the census runs
+        // last, with no await between it and the update.
+        if (!(await deps.stillPaused())) return failed;
         const latest = deps.census();
-        if (!latest.complete || !(await deps.stillPaused())) return failed;
+        if (!latest.complete) return failed;
         if (latest.running) return inUse;
         attempted = true;
         await native.update();
@@ -267,8 +272,8 @@ export async function updatePausedAntigravity(deps: {
 
 /**
  * Chooses the managed coordinator or the paused-runtime path. The paused path
- * runs only when the installed build matches no reviewed native AND nothing
- * listens on the runtime socket. A live (or unclear) runtime always keeps the
+ * runs only when nothing listens on the runtime socket AND the installed build
+ * was read and matches no reviewed native (a read failure is not proof). A live (or unclear) runtime always keeps the
  * coordinator, and a reviewed build with a stopped runtime still fails there
  * (runtime unavailable) instead of updating without it.
  */
@@ -277,11 +282,14 @@ export async function routeManagedAntigravityUpdate(deps: {
   driver: AntigravitySwitchDriver;
   native: ManagedNativeUpdate;
   idleOnly?: boolean;
-  nativeReviewed: () => boolean;
+  /** Hashes the native once; only 'unreviewed' can take the paused path. */
+  nativeReview: () => NativeReviewState;
   runtimeSocket: () => Promise<RuntimeSocketState>;
   census: () => NativeProcessCensus;
 }): Promise<ManagedUpdateResult> {
-  const paused = async () => !deps.nativeReviewed() && (await deps.runtimeSocket()) === 'stopped';
+  // The cheap socket probe runs before the hash, which is skipped for a live runtime.
+  const paused = async () =>
+    (await deps.runtimeSocket()) === 'stopped' && deps.nativeReview() === 'unreviewed';
   if (await paused())
     return updatePausedAntigravity({
       registry: deps.registry,

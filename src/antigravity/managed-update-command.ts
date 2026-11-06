@@ -7,12 +7,13 @@ import { execFile } from 'child_process';
 import { AntigravityProfileRegistry } from './registry';
 import {
   createInstalledAntigravityComponents,
-  verifyOwnedAntigravityNativePin,
+  hashOwnedAntigravityNative,
 } from './production-runtime';
 import {
   routeManagedAntigravityUpdate,
   type ManagedNativeUpdate,
   type ManagedUpdateResult,
+  type NativeReviewState,
 } from './managed-updater';
 import { defaultNativeReleaseFile, readNativeRelease } from './native-version';
 import { censusAntigravityProcesses } from './native-process-census';
@@ -40,9 +41,14 @@ type ManagedCoordinatorResult = ManagedUpdateResult;
  * Why a managed update failed before it could finish, beyond update_failed:
  * runtime_unavailable - the resident runtime did not answer (nothing ran);
  * runtime_paused - switching is paused on an unreviewed build, the runtime is
- * stopped, and the update without it could not finish.
+ * stopped, and `agy update` ran without it but did not finish;
+ * runtime_paused_blocked - the same, but it refused before `agy update` ran.
  */
-export type ManagedFailureCode = 'update_failed' | 'runtime_unavailable' | 'runtime_paused';
+export type ManagedFailureCode =
+  | 'update_failed'
+  | 'runtime_unavailable'
+  | 'runtime_paused'
+  | 'runtime_paused_blocked';
 
 export interface ManagedUpdateCommandOptions extends ManagedNativeUpdateOptions {
   /** Explicit coordinator injection; importing or constructing options performs no work. */
@@ -253,6 +259,11 @@ function failedCommandResult(
   };
 }
 
+/** Paused-path failures say whether `agy update` itself ran. */
+function pausedCode(attempted: boolean): ManagedFailureCode {
+  return attempted ? 'runtime_paused' : 'runtime_paused_blocked';
+}
+
 function safeVersion(value: unknown): value is string {
   return (
     typeof value === 'string' && value.length <= 128 && /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(value)
@@ -294,7 +305,9 @@ export async function runManagedAntigravityUpdateCommand(
       // A running Antigravity kept an idle-only update from starting: nothing changed.
       status: value.status === 'in_use' ? 'action_required' : value.status,
       messageCode:
-        value.status === 'failed' && value.runtimePaused === true ? 'runtime_paused' : value.status,
+        value.status === 'failed' && value.runtimePaused === true
+          ? pausedCode(attempted)
+          : value.status,
       previousVersion: value.previousVersion,
       version: value.version,
       updateAttempted: attempted,
@@ -308,20 +321,23 @@ export async function runManagedAntigravityUpdateCommand(
       message === 'antigravity-runtime-unavailable' && !attempted
         ? 'runtime_unavailable'
         : message === 'update-runtime-paused'
-          ? 'runtime_paused'
+          ? pausedCode(attempted)
           : 'update_failed'
     );
   }
 }
 
-/** True when the installed native matches a reviewed build; false when unusable or unknown. */
-export function nativeMatchesReviewedBuild(nativeBinary: string, releaseFile?: string): boolean {
+/**
+ * Whether the installed native is a reviewed build, hashed once. Only a native
+ * that was read in full and matched no reviewed hash is 'unreviewed'; a read
+ * failure or an unusable review list is 'unknown' and never counts as paused.
+ */
+export function nativeReviewState(nativeBinary: string, releaseFile?: string): NativeReviewState {
   const release = readNativeRelease(releaseFile ?? defaultNativeReleaseFile());
-  // An unreadable review list never counts as paused: the coordinator keeps it.
-  if (!release.reviewed.length) return true;
-  return release.reviewed.some((entry) =>
-    verifyOwnedAntigravityNativePin(nativeBinary, entry.sha256)
-  );
+  if (!release.reviewed.length) return 'unknown';
+  const digest = hashOwnedAntigravityNative(nativeBinary);
+  if (digest === null) return 'unknown';
+  return release.reviewed.some((entry) => entry.sha256 === digest) ? 'reviewed' : 'unreviewed';
 }
 
 export async function runInstalledManagedAntigravityUpdate(
@@ -343,7 +359,7 @@ export async function runInstalledManagedAntigravityUpdate(
           driver: components.driver,
           native,
           idleOnly,
-          nativeReviewed: () => nativeMatchesReviewedBuild(nativeBinary),
+          nativeReview: () => nativeReviewState(nativeBinary),
           runtimeSocket: () => probeRuntimeSocket(socketPath),
           census: () => censusAntigravityProcesses({ home, nativeBinary }),
         }),

@@ -4,10 +4,11 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
-import { spawnSync } from 'child_process';
+import { execFile, spawn, spawnSync, type ChildProcess } from 'child_process';
 import {
   createManagedNativeUpdate,
-  nativeMatchesReviewedBuild,
+  nativeReviewState,
+  runInstalledManagedAntigravityUpdate,
   runManagedAntigravityUpdateCommand,
   type ManagedNativeCommand,
 } from '../../../src/antigravity/managed-update-command';
@@ -135,15 +136,21 @@ describe('runtime-free Antigravity process census', () => {
       fs.symlinkSync(exe, path.join(directory, 'exe'));
       fs.writeFileSync(path.join(directory, 'cmdline'), args.map((arg) => `${arg}\0`).join(''));
     };
-    const census = () =>
-      censusAntigravityProcesses({ home, nativeBinary: native, procRoot: proc, selfPid: 7 });
-    return { home, native, proc, add, census };
+    // The census requires its own pid in the listing.
+    add(7, 'node', '/opt/fixture-runtime/node', ['node', 'managed-update-command.js']);
+    const census = (overrides: { home?: string } = {}) =>
+      censusAntigravityProcesses({
+        home: overrides.home ?? home,
+        nativeBinary: native,
+        procRoot: proc,
+        selfPid: 7,
+      });
+    return { root, home, native, proc, add, census };
   }
 
   test('no Antigravity process: complete and idle; unrelated, self and pid 1 are ignored', () => {
     const value = procFixture();
     value.add(1, 'agy', value.native, [value.native]);
-    value.add(7, 'node', '/opt/fixture-runtime/node', ['node', 'managed-update-command.js']);
     value.add(200, 'bash', '/usr/bin/bash', ['bash']);
     fs.mkdirSync(path.join(value.proc, 'self'));
     expect(value.census()).toEqual({ complete: true, running: 0 });
@@ -171,10 +178,57 @@ describe('runtime-free Antigravity process census', () => {
     expect(value.census()).toEqual({ complete: true, running: 6 });
   });
 
-  test('an unlistable /proc is an incomplete census', () => {
+  test('an unlistable /proc, or one without this process, is an incomplete census', () => {
     const value = procFixture();
+    fs.rmSync(path.join(value.proc, '7'), { recursive: true });
+    expect(value.census()).toEqual({ complete: false, running: 0 });
     fs.rmSync(value.proc, { recursive: true });
     expect(value.census()).toEqual({ complete: false, running: 0 });
+  });
+
+  test('a read failure other than the process exiting makes the census incomplete', () => {
+    for (const broken of ['comm', 'cmdline', 'exe'] as const) {
+      const value = procFixture();
+      value.add(500, 'bash', '/usr/bin/bash', ['bash']);
+      const field = path.join(value.proc, '500', broken);
+      fs.rmSync(field);
+      // A directory where a field should be: EISDIR / EINVAL, not ENOENT.
+      fs.mkdirSync(field);
+      expect(value.census()).toEqual({ complete: false, running: 0 });
+    }
+  });
+
+  test('a process gone between listing and reading is skipped, not incomplete', () => {
+    const value = procFixture();
+    value.add(600, 'bash', '/usr/bin/bash', ['bash']);
+    fs.rmSync(path.join(value.proc, '600', 'cmdline'));
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+  });
+
+  test('a long command line is read in part, so its native argument still counts', () => {
+    const value = procFixture();
+    value.add(700, 'sh', '/usr/bin/dash', ['/bin/sh', value.native, 'x'.repeat(200_000)]);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a symlinked home still matches helpers and runtime processes by their real path', () => {
+    const value = procFixture();
+    const linked = path.join(value.root, 'linked-home');
+    fs.mkdirSync(path.join(value.home, '.gemini/antigravity-cli/bin'), { recursive: true });
+    fs.symlinkSync(value.home, linked);
+    value.add(800, 'helper', path.join(value.home, '.gemini/antigravity-cli/bin/agentapi'), ['x']);
+    expect(value.census({ home: linked })).toEqual({ complete: true, running: 1 });
+  });
+
+  test('the real /proc census is complete despite non-dumpable same-user processes', () => {
+    // Read-only; any native path works. systemd --user, ssh-agent and sshd-session
+    // deny their exe link, which must not make the census incomplete forever.
+    const root = temporary('aac-agy-real-proc-');
+    const census = censusAntigravityProcesses({
+      home: root,
+      nativeBinary: path.join(root, '.local/bin/agy'),
+    });
+    expect(census.complete).toBe(true);
   });
 
   test('another user`s processes are not counted', () => {
@@ -185,24 +239,44 @@ describe('runtime-free Antigravity process census', () => {
         home: value.home,
         nativeBinary: value.native,
         procRoot: value.proc,
+        selfPid: 7,
         uid: (process.getuid?.() ?? 0) + 1,
       })
     ).toEqual({ complete: true, running: 0 });
   });
 });
 
-describe('runtime socket probe', () => {
+/**
+ * The installed bridge runs under Node, so the probe runs there too: Bun reports
+ * every failed unix-socket connect as ENOENT, which would hide the very error
+ * codes these cases distinguish.
+ */
+function probeUnderNode(socketPath: string): Promise<string> {
+  const module = path.resolve(import.meta.dir, '../../../src/antigravity/runtime-socket-probe.ts');
+  const script = `const m = await import(${JSON.stringify(module)});
+process.stdout.write(await m.probeRuntimeSocket(${JSON.stringify(socketPath)}));`;
+  return new Promise((resolve, reject) => {
+    execFile(
+      'node',
+      ['--experimental-strip-types', '--no-warnings', '--input-type=module', '-e', script],
+      { timeout: 20_000 },
+      (error, stdout) => (error ? reject(error) : resolve(stdout))
+    );
+  });
+}
+
+describe('runtime socket probe (under Node)', () => {
   test('absent folder or socket is stopped; a listener is listening; a leftover socket file is stopped', async () => {
     const root = temporary('aac-agy-sock-');
     const runtime = path.join(root, 'antigravity-runtime');
     const socketPath = path.join(runtime, 'control.sock');
-    expect(await probeRuntimeSocket(socketPath)).toBe('stopped');
+    expect(await probeUnderNode(socketPath)).toBe('stopped');
     fs.mkdirSync(runtime, { mode: 0o700 });
-    expect(await probeRuntimeSocket(socketPath)).toBe('stopped');
+    expect(await probeUnderNode(socketPath)).toBe('stopped');
     const server = net.createServer((socket) => socket.destroy());
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
     try {
-      expect(await probeRuntimeSocket(socketPath)).toBe('listening');
+      expect(await probeUnderNode(socketPath)).toBe('listening');
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -216,10 +290,26 @@ describe('runtime socket probe', () => {
     ]);
     expect(bound.status).toBe(0);
     expect(fs.lstatSync(leftover).isSocket()).toBe(true);
-    expect(await probeRuntimeSocket(leftover)).toBe('stopped');
+    expect(await probeUnderNode(leftover)).toBe('stopped');
     const plain = path.join(runtime, 'plain-file');
     fs.writeFileSync(plain, 'not a socket');
-    expect(await probeRuntimeSocket(plain)).toBe('unknown');
+    expect(await probeUnderNode(plain)).toBe('unknown');
+  });
+
+  test('a connect refused for permission (EACCES) is unknown, never stopped', async () => {
+    if (process.getuid?.() === 0) return; // root ignores socket permissions
+    const root = temporary('aac-agy-sock-eacces-');
+    const socketPath = path.join(root, 'control.sock');
+    const server = net.createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      fs.chmodSync(socketPath, 0o000);
+      expect(await probeUnderNode(socketPath)).toBe('unknown');
+      // Under Bun the same refusal reads as ENOENT; a present file still keeps it unknown.
+      expect(await probeRuntimeSocket(socketPath)).toBe('unknown');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 
@@ -280,6 +370,68 @@ describe('managed Antigravity update while switching is paused', () => {
     });
     expect(result.status).toBe('in_use');
     expect(value.calls).toEqual([['--version']]);
+  });
+
+  test('a process starting while stillPaused re-hashes the native answers in_use', async () => {
+    const value = fixture();
+    value.installNewBuild();
+    let started = false;
+    const result = await updatePausedAntigravity({
+      registry: value.registry,
+      native: value.native,
+      census: () => (started ? { complete: true, running: 1 } : idle()),
+      stillPaused: async () => {
+        started = true; // agy starts during the slow re-hash
+        return true;
+      },
+    });
+    expect(result.status).toBe('in_use');
+    expect(value.calls).toEqual([['--version']]);
+  });
+
+  test('agy update runs while the account lock is held', async () => {
+    const value = fixture();
+    const lock = path.join(value.ccsDirectory, 'antigravity-profiles/.transaction-lock');
+    let locked: boolean | null = null;
+    value.setUpdate(async () => {
+      locked = fs.existsSync(lock);
+      return '';
+    });
+    const result = await updatePausedAntigravity({
+      registry: value.registry,
+      native: value.native,
+      census: idle,
+      stillPaused: async () => true,
+    });
+    expect(result.status).toBe('current');
+    expect(locked).toBe(true);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  test('a failed backup never runs agy update and is a blocked paused failure', async () => {
+    const value = fixture();
+    const backups = path.join(value.ccsDirectory, 'antigravity-switching/native-backups');
+    fs.mkdirSync(backups, { recursive: true, mode: 0o755 });
+    fs.chmodSync(backups, 0o755);
+    const result = await runManagedAntigravityUpdateCommand({
+      nativeBinary: value.nativeBinary,
+      ccsDirectory: value.ccsDirectory,
+      runCommand: value.runCommand,
+      execute: (native) =>
+        updatePausedAntigravity({
+          registry: value.registry,
+          native,
+          census: idle,
+          stillPaused: async () => true,
+        }),
+    });
+    expect(result).toMatchObject({
+      status: 'failed',
+      messageCode: 'runtime_paused_blocked',
+      updateAttempted: false,
+    });
+    expect(value.calls).toEqual([['--version']]);
+    expect(fs.existsSync(value.backup)).toBe(false);
   });
 
   test('an incomplete census, a pending recovery or a runtime that came back never updates', async () => {
@@ -350,7 +502,7 @@ describe('managed Antigravity update while switching is paused', () => {
           stillPaused: async () => true,
         }),
     });
-    expect(result).toMatchObject({ status: 'failed', messageCode: 'runtime_paused' });
+    expect(result).toMatchObject({ status: 'failed', messageCode: 'runtime_paused_blocked' });
     expect(result.updateAttempted).toBe(false);
   });
 });
@@ -370,7 +522,7 @@ describe('managed update routing', () => {
           driver,
           native,
           idleOnly: true,
-          nativeReviewed: () => false,
+          nativeReview: () => 'unreviewed',
           runtimeSocket: async () => 'stopped',
           census: idle,
         }),
@@ -398,7 +550,7 @@ describe('managed update routing', () => {
           registry: value.registry,
           driver,
           native,
-          nativeReviewed: () => false,
+          nativeReview: () => 'unreviewed',
           runtimeSocket: async () => 'stopped',
           census: () => ({ complete: true, running: 2 }),
         }),
@@ -413,9 +565,10 @@ describe('managed update routing', () => {
   });
 
   for (const [label, reviewed, socket] of [
-    ['a listening runtime on an unreviewed build', false, 'listening'],
-    ['an unclear runtime socket on an unreviewed build', false, 'unknown'],
-    ['a reviewed build with a stopped runtime', true, 'stopped'],
+    ['a listening runtime on an unreviewed build', 'unreviewed', 'listening'],
+    ['an unclear runtime socket on an unreviewed build', 'unreviewed', 'unknown'],
+    ['a reviewed build with a stopped runtime', 'reviewed', 'stopped'],
+    ['an unreadable native with a stopped runtime', 'unknown', 'stopped'],
   ] as const)
     test(`${label} keeps the coordinator; a down runtime is runtime_unavailable`, async () => {
       const value = fixture();
@@ -431,7 +584,7 @@ describe('managed update routing', () => {
             driver,
             native,
             idleOnly: true,
-            nativeReviewed: () => reviewed,
+            nativeReview: () => reviewed,
             runtimeSocket: async () => socket,
             census: () => {
               censused = true;
@@ -467,7 +620,7 @@ describe('managed update routing', () => {
       driver,
       native: value.native,
       idleOnly: true,
-      nativeReviewed: () => false,
+      nativeReview: () => 'unreviewed',
       runtimeSocket: async () => 'listening',
       census: () => {
         throw new Error('the runtime-free census ran beside a live runtime');
@@ -486,14 +639,174 @@ describe('reviewed-build check', () => {
     return file;
   }
 
-  test('matches a reviewed hash, refuses an unreviewed one, and treats an unusable list as reviewed', () => {
+  test('reviewed, unreviewed, and unknown when the list or the native cannot be read', () => {
     const value = fixture();
     const reviewed = release(value.root, [{ nativeVersion: '1.3.5', nativeSha256: sha(ORIGINAL) }]);
-    expect(nativeMatchesReviewedBuild(value.nativeBinary, reviewed)).toBe(true);
+    expect(nativeReviewState(value.nativeBinary, reviewed)).toBe('reviewed');
     const other = release(value.root, [{ nativeVersion: '1.3.5', nativeSha256: sha(REPLACEMENT) }]);
-    expect(nativeMatchesReviewedBuild(value.nativeBinary, other)).toBe(false);
+    expect(nativeReviewState(value.nativeBinary, other)).toBe('unreviewed');
     const broken = path.join(value.root, 'broken.json');
     fs.writeFileSync(broken, '{');
-    expect(nativeMatchesReviewedBuild(value.nativeBinary, broken)).toBe(true);
+    expect(nativeReviewState(value.nativeBinary, broken)).toBe('unknown');
+    expect(nativeReviewState(path.join(value.root, 'missing-agy'), other)).toBe('unknown');
+  });
+
+  test('routing probes the socket first and never hashes beside a live runtime', async () => {
+    const value = fixture();
+    const order: string[] = [];
+    const { driver } = recordingDriver({ complete: true, processes: [], continuity: null });
+    await routeManagedAntigravityUpdate({
+      registry: value.registry,
+      driver,
+      native: value.native,
+      idleOnly: true,
+      nativeReview: () => {
+        order.push('hash');
+        return 'unreviewed';
+      },
+      runtimeSocket: async () => {
+        order.push('socket');
+        return 'listening';
+      },
+      census: idle,
+    });
+    expect(order).toEqual(['socket']);
+  });
+});
+
+/**
+ * The installed entry point with a temporary home: a real descriptor, the real
+ * /proc census, the real socket probe and a fixture shell script as agy. The
+ * script is not Antigravity; it only prints a version and replaces itself.
+ */
+describe('installed managed update wiring (temporary home)', () => {
+  const children: ChildProcess[] = [];
+  const servers: net.Server[] = [];
+  afterEach(async () => {
+    for (const child of children.splice(0)) child.kill('SIGKILL');
+    for (const server of servers.splice(0))
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  function installedHome() {
+    const home = temporary('aac-agy-installed-');
+    const ccs = path.join(home, '.ccs');
+    const switching = path.join(ccs, 'antigravity-switching');
+    fs.mkdirSync(switching, { recursive: true, mode: 0o700 });
+    fs.chmodSync(ccs, 0o700);
+    fs.chmodSync(switching, 0o700);
+    const native = path.join(home, '.local/bin/agy');
+    fs.mkdirSync(path.dirname(native), { recursive: true, mode: 0o700 });
+    const script = [
+      '#!/bin/sh',
+      'home=$(dirname "$(dirname "$(dirname "$0")")")',
+      'case "$1" in',
+      '  --version) echo "Fixture agy 1.4.12" ;;',
+      '  --hold) sleep 30 ;;',
+      '  update)',
+      '    if [ -e "$home/.ccs/antigravity-profiles/.transaction-lock" ]; then echo locked; else echo unlocked; fi > "$home/update-log"',
+      '    sed "s/1[.]4[.]12/1.5.2/" "$0" > "$0.new" && chmod 700 "$0.new" && mv "$0.new" "$0" ;;',
+      'esac',
+      '',
+    ].join('\n');
+    fs.writeFileSync(native, script, { mode: 0o700 });
+    fs.writeFileSync(
+      path.join(switching, 'runtime-installation.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        bundleDirectory: path.join(
+          home,
+          '.local/share/ai-account-center/antigravity-runtime/bundles',
+          'c'.repeat(64)
+        ),
+        nativeBinary: native,
+        nativeSha256: 'b'.repeat(64),
+        socketPath: path.join(ccs, 'antigravity-runtime/control.sock'),
+      }),
+      { mode: 0o600 }
+    );
+    return {
+      home,
+      ccs,
+      native,
+      log: path.join(home, 'update-log'),
+      backups: path.join(switching, 'native-backups'),
+      originalSha: sha(fs.readFileSync(native)),
+    };
+  }
+
+  test('a running fixture agy is in_use; nothing is backed up or updated', async () => {
+    const value = installedHome();
+    const child = spawn(value.native, ['--hold'], { stdio: 'ignore' });
+    children.push(child);
+    for (let i = 0; i < 100; i++) {
+      try {
+        if (fs.readFileSync(`/proc/${child.pid}/comm`, 'utf8').trim() === 'agy') break;
+      } catch {
+        /* not started yet */
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const result = await runInstalledManagedAntigravityUpdate(value.home);
+    expect(result).toEqual({
+      appId: 'antigravity-cli',
+      platform: 'ubuntu',
+      manager: 'native',
+      status: 'action_required',
+      messageCode: 'in_use',
+      previousVersion: '1.4.12',
+      version: '1.4.12',
+      updateAttempted: false,
+      restartedProcesses: 0,
+    });
+    expect(fs.existsSync(value.log)).toBe(false);
+    expect(fs.existsSync(value.backups)).toBe(false);
+  });
+
+  test('a listening runtime socket keeps the coordinator, which reports runtime_unavailable', async () => {
+    const value = installedHome();
+    const runtime = path.join(value.ccs, 'antigravity-runtime');
+    fs.mkdirSync(runtime, { mode: 0o700 });
+    const socketPath = path.join(runtime, 'control.sock');
+    const server = net.createServer((socket) => socket.destroy());
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    fs.chmodSync(socketPath, 0o600);
+    const result = await runInstalledManagedAntigravityUpdate(value.home);
+    expect(result).toEqual({
+      appId: 'antigravity-cli',
+      platform: 'ubuntu',
+      manager: 'native',
+      status: 'failed',
+      messageCode: 'runtime_unavailable',
+      updateAttempted: false,
+      restartedProcesses: 0,
+    });
+    expect(fs.existsSync(value.log)).toBe(false);
+    expect(fs.existsSync(value.backups)).toBe(false);
+  });
+
+  test('with nothing running the paused path backs up and updates under the lock', async () => {
+    const value = installedHome();
+    // The real census also sees this machine's own processes; it cannot be idle
+    // while a real Antigravity runs here, and that case is covered above.
+    if (censusAntigravityProcesses({ home: value.home, nativeBinary: value.native }).running)
+      return;
+    const result = await runInstalledManagedAntigravityUpdate(value.home);
+    expect(result).toEqual({
+      appId: 'antigravity-cli',
+      platform: 'ubuntu',
+      manager: 'native',
+      status: 'updated',
+      messageCode: 'updated',
+      previousVersion: '1.4.12',
+      version: '1.5.2',
+      updateAttempted: true,
+      restartedProcesses: 0,
+    });
+    expect(fs.readFileSync(value.log, 'utf8').trim()).toBe('locked');
+    expect(sha(fs.readFileSync(path.join(value.backups, value.originalSha)))).toBe(
+      value.originalSha
+    );
   });
 });

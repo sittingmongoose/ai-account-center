@@ -16,23 +16,64 @@ const ANTIGRAVITY_NAMES = new Set([
 const MAX_PROC_ENTRIES = 1_000_000;
 
 export interface NativeProcessCensus {
-  /** False when /proc could not be listed: nobody can say nothing runs. */
+  /** False unless every same-user process was read: nobody can then say nothing runs. */
   complete: boolean;
   /** Same-user Antigravity processes seen; any of them makes an update in_use. */
   running: number;
 }
+
+const CMDLINE_BYTES = 65_536;
+/** Only these mean the process exited between the listing and the read. */
+const GONE = new Set(['ENOENT', 'ESRCH']);
+
+class CensusIncomplete extends Error {}
+class ProcessGone extends Error {}
 
 function within(child: string, root: string): boolean {
   const relative = path.relative(root, child);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function readOptional(read: () => string): string | null {
+function code(error: unknown): string {
+  return (error as NodeJS.ErrnoException)?.code ?? '';
+}
+
+/** A field, or null once the process is gone; any other failure is incomplete. */
+function readField<T>(read: () => T, tolerated: ReadonlySet<string> = GONE): T | null {
   try {
     return read();
+  } catch (error) {
+    if (GONE.has(code(error))) throw new ProcessGone();
+    if (tolerated.has(code(error))) return null;
+    throw new CensusIncomplete();
+  }
+}
+
+/** The roots as named and as resolved, so either spelling of a path matches. */
+function spellings(file: string): string[] {
+  const resolved = path.resolve(file);
+  try {
+    const real = fs.realpathSync(resolved);
+    return real === resolved ? [resolved] : [resolved, real];
   } catch {
-    // The process exited, or the kernel hides this field: the other signals decide.
-    return null;
+    return [resolved];
+  }
+}
+
+function readCmdline(file: string): string {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY);
+  try {
+    // Only the first arguments decide; a long command line is read in part, not skipped.
+    const buffer = Buffer.alloc(CMDLINE_BYTES);
+    let total = 0;
+    while (total < buffer.length) {
+      const count = fs.readSync(fd, buffer, total, buffer.length - total, null);
+      if (count <= 0) break;
+      total += count;
+    }
+    return buffer.subarray(0, total).toString('utf8');
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -42,8 +83,14 @@ function readOptional(read: () => string): string | null {
  * switching review, so it holds no managed session to preserve. It counts
  * every process that could be Antigravity: a matching process name, the native
  * binary (also once replaced, " (deleted)"), its helper folder, or anything run
- * from the managed runtime (launcher shim, foreground launcher, resident).
+ * from the managed runtime folder (launcher shim, foreground launcher, resident).
  * It errs toward "running": a false match only reports in_use.
+ *
+ * Complete only when every same-user process was read: a read failure other
+ * than the process exiting makes it incomplete, and so does a listing that
+ * lacks this process itself. One exception: the kernel denies the exe link of
+ * a non-dumpable process (systemd --user, ssh-agent, gpg-agent, sshd-session),
+ * so EACCES/EPERM there leaves its name and command line to decide.
  */
 export function censusAntigravityProcesses(options: {
   home: string;
@@ -53,69 +100,67 @@ export function censusAntigravityProcesses(options: {
   uid?: number;
   selfPid?: number;
 }): NativeProcessCensus {
+  const incomplete = { complete: false, running: 0 };
   const procRoot = options.procRoot ?? '/proc';
   const uid = options.uid ?? process.getuid?.();
   const self = options.selfPid ?? process.pid;
-  if (typeof uid !== 'number' || !Number.isSafeInteger(uid)) return { complete: false, running: 0 };
+  if (typeof uid !== 'number' || !Number.isSafeInteger(uid)) return incomplete;
   const home = path.resolve(options.home);
-  const native = path.resolve(options.nativeBinary);
-  const nativeReal = readOptional(() => fs.realpathSync(native)) ?? native;
-  const helpers = path.join(home, '.gemini/antigravity-cli');
-  const runtime = path.join(home, '.local/share/ai-account-center/antigravity-runtime');
+  const natives = spellings(options.nativeBinary);
+  const roots = [
+    ...spellings(path.join(home, '.gemini/antigravity-cli')),
+    ...spellings(path.join(home, '.local/share/ai-account-center/antigravity-runtime')),
+  ];
   let entries: string[];
   try {
     entries = fs.readdirSync(procRoot);
   } catch {
-    return { complete: false, running: 0 };
+    return incomplete;
   }
-  if (entries.length > MAX_PROC_ENTRIES) return { complete: false, running: 0 };
+  if (entries.length > MAX_PROC_ENTRIES || !entries.includes(String(self))) return incomplete;
   const isAntigravityPath = (value: string) => {
     const file = value.endsWith(' (deleted)') ? value.slice(0, -' (deleted)'.length) : value;
     if (!path.isAbsolute(file)) return false;
     const resolved = path.resolve(file);
-    return (
-      resolved === native ||
-      resolved === nativeReal ||
-      within(resolved, helpers) ||
-      within(resolved, runtime)
-    );
+    return natives.includes(resolved) || roots.some((root) => within(resolved, root));
   };
+  const deniedExe = new Set([...GONE, 'EACCES', 'EPERM']);
   let running = 0;
-  for (const name of entries) {
-    if (!/^\d{1,10}$/.test(name)) continue;
-    const pid = Number(name);
-    if (pid <= 1 || pid === self) continue;
-    const directory = path.join(procRoot, name);
-    let owner: number;
-    try {
-      owner = fs.statSync(directory).uid;
-    } catch {
-      continue; // Exited between the listing and this read.
+  try {
+    for (const name of entries) {
+      if (!/^\d{1,10}$/.test(name)) continue;
+      const pid = Number(name);
+      if (pid <= 1 || pid === self) continue;
+      const directory = path.join(procRoot, name);
+      try {
+        if (readField(() => fs.statSync(directory).uid) !== uid) continue;
+        const comm = readField(() => fs.readFileSync(path.join(directory, 'comm'), 'utf8').trim());
+        if (comm !== null && ANTIGRAVITY_NAMES.has(comm)) {
+          running += 1;
+          continue;
+        }
+        const exe = readField(() => fs.readlinkSync(path.join(directory, 'exe')), deniedExe);
+        if (exe !== null && isAntigravityPath(exe)) {
+          running += 1;
+          continue;
+        }
+        const cmdline = readField(() => readCmdline(path.join(directory, 'cmdline')));
+        if (
+          cmdline !== null &&
+          cmdline
+            .split('\0')
+            .filter(Boolean)
+            .slice(0, 4)
+            .some((argument) => isAntigravityPath(argument))
+        )
+          running += 1;
+      } catch (error) {
+        if (error instanceof ProcessGone) continue;
+        throw error;
+      }
     }
-    if (owner !== uid) continue;
-    const comm = readOptional(() => fs.readFileSync(path.join(directory, 'comm'), 'utf8').trim());
-    if (comm !== null && ANTIGRAVITY_NAMES.has(comm)) {
-      running += 1;
-      continue;
-    }
-    const exe = readOptional(() => fs.readlinkSync(path.join(directory, 'exe')));
-    if (exe !== null && isAntigravityPath(exe)) {
-      running += 1;
-      continue;
-    }
-    const cmdline = readOptional(() => {
-      const raw = fs.readFileSync(path.join(directory, 'cmdline'));
-      return raw.length > 65_536 ? '' : raw.toString('utf8');
-    });
-    if (
-      cmdline !== null &&
-      cmdline
-        .split('\0')
-        .filter(Boolean)
-        .slice(0, 4)
-        .some((argument) => isAntigravityPath(argument))
-    )
-      running += 1;
+  } catch {
+    return incomplete;
   }
   return { complete: true, running };
 }

@@ -40,8 +40,17 @@ export async function probeRuntimeSocket(
     };
     const timer = setTimeout(() => finish('unknown'), timeoutMs);
     socket.on('connect', () => finish('listening'));
-    socket.on('error', (error: NodeJS.ErrnoException) =>
-      finish(error.code === 'ECONNREFUSED' || error.code === 'ENOENT' ? 'stopped' : 'unknown')
-    );
+    socket.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ECONNREFUSED') finish('stopped');
+      else if (error.code !== 'ENOENT') finish('unknown');
+      else
+        // ENOENT is proof only while the file is really gone; some runtimes
+        // (Bun) also report a permission refusal as ENOENT.
+        void lstat(socketPath).then(
+          () => finish('unknown'),
+          (missing: NodeJS.ErrnoException) =>
+            finish(missing.code === 'ENOENT' ? 'stopped' : 'unknown')
+        );
+    });
   });
 }
