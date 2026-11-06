@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1343,
+    "totalOccurrences": 1344,
     "filesAffected": 134,
     "hotpathOccurrences": 698,
     "hotpathFilesAffected": 79,
@@ -615,8 +615,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 42,
-      "totalSourceFiles": 453,
-      "coverageRatio": 0.0927,
+      "totalSourceFiles": 454,
+      "coverageRatio": 0.0925,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -643,7 +643,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 182,
+          "count": 183,
           "withLogger": 26
         },
         {
@@ -763,7 +763,7 @@
     },
     "largeFiles": {
       "countOver400": 61,
-      "countOver600": 23,
+      "countOver600": 24,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
@@ -783,7 +783,7 @@
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1066
+          "loc": 1076
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
@@ -795,7 +795,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 931
+          "loc": 938
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
@@ -810,6 +810,10 @@
           "loc": 871
         },
         {
+          "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
+          "loc": 865
+        },
+        {
           "file": "src/web-server/usage/native-quota-collector.ts",
           "loc": 848
         },
@@ -820,10 +824,6 @@
         {
           "file": "src/web-server/usage/aggregator.ts",
           "loc": 767
-        },
-        {
-          "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
-          "loc": 762
         }
       ]
     }
