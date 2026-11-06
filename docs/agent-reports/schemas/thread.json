@@ -1,1 +1,244 @@
-{"$defs": {"blockedOn": {"additionalProperties": false, "description": "What the thread waits on.", "properties": {"kind": {"description": "What kind of thing blocks the thread.", "enum": ["agent", "lock", "owner", "quota", "resource", "review"], "type": "string"}, "since": {"$ref": "#/$defs/timestamp", "description": "When the block started."}, "what": {"description": "What is waited on.", "type": "string"}}, "required": ["kind", "since", "what"], "type": ["object", "null"]}, "timestamp": {"description": "ISO 8601 UTC, e.g. 2026-11-06T16:00:00Z.", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$", "type": "string"}}, "$id": "agent-reports/thread@1", "$schema": "https://json-schema.org/draft/2020-12/schema", "additionalProperties": false, "description": "The latest status of one agent thread. Size cap: 16 KB (see spec).", "properties": {"agent": {"additionalProperties": false, "description": "Which agent this thread runs.", "properties": {"account": {"description": "Provider account label, if any.", "type": "string"}, "effort": {"description": "Model effort setting, if any.", "type": "string"}, "harness": {"description": "Harness the agent runs in, e.g. claude-code.", "type": "string"}, "machine": {"description": "Machine the agent runs on.", "enum": ["mac", "nas1", "vm", "windows"], "type": "string"}, "model": {"description": "Model id, if known.", "type": "string"}, "name": {"description": "pm-mail name, or t3-<hash> for a T3 thread with no pm-mail name.", "type": "string"}, "parent": {"description": "Parent thread name, if this thread was delegated.", "type": "string"}, "t3Thread": {"description": "T3 thread id, or null when there is none.", "type": ["string", "null"]}}, "required": ["harness", "machine", "name"], "type": "object"}, "blockedOn": {"$ref": "#/$defs/blockedOn", "description": "What the thread waits on, or null."}, "doing": {"description": "What the thread is doing right now.", "type": "string"}, "links": {"description": "Links to boards or records.", "items": {"additionalProperties": false, "properties": {"label": {"type": "string"}, "path": {"type": "string"}}, "required": ["label", "path"], "type": "object"}, "type": "array"}, "progress": {"additionalProperties": false, "description": "Progress within the current work, when measurable.", "properties": {"done": {"minimum": 0, "type": "integer"}, "total": {"minimum": 0, "type": "integer"}, "unit": {"type": "string"}}, "required": ["done", "total", "unit"], "type": "object"}, "project": {"description": "Project id, e.g. puppet-master.", "type": "string"}, "schema": {"const": "agent-reports/thread@1", "description": "Schema id of this document."}, "seq": {"description": "Increases on every write by this writer.", "minimum": 0, "type": "integer"}, "state": {"description": "Thread state.", "enum": ["blocked", "done", "idle", "paused", "waiting", "working"], "type": "string"}, "stream": {"description": "Stream id within the project, e.g. TOOLS.", "type": "string"}, "ttlSeconds": {"description": "Seconds after writtenAt before the thread shows as stale. May be null when state is waiting, idle, done or paused.", "minimum": 0, "type": ["integer", "null"]}, "writer": {"description": "Writer id: <machine>.<pm-mail name>, e.g. vm.tools-lead.", "pattern": "^(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$", "type": "string"}, "writtenAt": {"$ref": "#/$defs/timestamp", "description": "When this version was written."}}, "required": ["agent", "blockedOn", "doing", "project", "schema", "seq", "state", "stream", "ttlSeconds", "writer", "writtenAt"], "type": "object"}
+{
+  "$defs": {
+    "blockedOn": {
+      "additionalProperties": false,
+      "description": "What the thread waits on.",
+      "properties": {
+        "kind": {
+          "description": "What kind of thing blocks the thread.",
+          "enum": [
+            "agent",
+            "lock",
+            "owner",
+            "quota",
+            "resource",
+            "review"
+          ],
+          "type": "string"
+        },
+        "since": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the block started."
+        },
+        "what": {
+          "description": "What is waited on.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "since",
+        "what"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "timestamp": {
+      "description": "ISO 8601 UTC, e.g. 2026-11-06T16:00:00Z.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+      "type": "string"
+    }
+  },
+  "$id": "agent-reports/thread@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The latest status of one agent thread. Size cap: 16 KB (see spec).",
+  "properties": {
+    "agent": {
+      "additionalProperties": false,
+      "description": "Which agent this thread runs.",
+      "properties": {
+        "account": {
+          "description": "Provider account label, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "description": "Model effort setting, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "description": "Harness the agent runs in, e.g. claude-code.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machine": {
+          "description": "Machine the agent runs on.",
+          "enum": [
+            "mac",
+            "nas1",
+            "vm",
+            "windows"
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Model id, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "pm-mail name, or t3-<hash> for a T3 thread with no pm-mail name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "description": "Parent thread name, if this thread was delegated.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "t3Thread": {
+          "description": "T3 thread id, or null when there is none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "harness",
+        "machine",
+        "name"
+      ],
+      "type": "object"
+    },
+    "blockedOn": {
+      "$ref": "#/$defs/blockedOn",
+      "description": "What the thread waits on, or null."
+    },
+    "doing": {
+      "description": "What the thread is doing right now.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "links": {
+      "description": "Links to boards or records.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "path"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "progress": {
+      "additionalProperties": false,
+      "description": "Progress within the current work, when measurable.",
+      "properties": {
+        "done": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "done",
+        "total",
+        "unit"
+      ],
+      "type": "object"
+    },
+    "project": {
+      "description": "Project id, e.g. puppet-master.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema": {
+      "const": "agent-reports/thread@1",
+      "description": "Schema id of this document."
+    },
+    "seq": {
+      "description": "Increases on every write by this writer.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state": {
+      "description": "Thread state.",
+      "enum": [
+        "blocked",
+        "done",
+        "idle",
+        "paused",
+        "waiting",
+        "working"
+      ],
+      "type": "string"
+    },
+    "stream": {
+      "description": "Stream id within the project, e.g. TOOLS.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ttlSeconds": {
+      "description": "Seconds after writtenAt before the thread shows as stale. May be null when state is waiting, idle, done or paused.",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "writer": {
+      "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.tools-lead.",
+      "pattern": "^(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "type": "string"
+    },
+    "writtenAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When this version was written."
+    }
+  },
+  "required": [
+    "agent",
+    "blockedOn",
+    "doing",
+    "project",
+    "schema",
+    "seq",
+    "state",
+    "stream",
+    "ttlSeconds",
+    "writer",
+    "writtenAt"
+  ],
+  "type": "object"
+}
