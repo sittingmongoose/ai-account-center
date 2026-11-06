@@ -6,8 +6,8 @@
  *   SHA-256) and served by content negotiation. Nothing here is compressed on
  *   the fly; /api JSON is encoded per request (api-compression.ts).
  * - Cache-Control by path: pkg/<buildId>/** is immutable; everything else revalidates.
- * - Page routes: /, /login, /analytics, /accounts and /accounts/<provider> answer
- *   with index.html; a few aliases redirect; anything else goes back to /.
+ * - Page routes: /, /login, /analytics, /accounts, /accounts/<provider>, /status and
+ *   /scoreboard answer with index.html; a few aliases redirect; anything else goes back to /.
  */
 
 import crypto from 'crypto';
@@ -73,7 +73,7 @@ const STATIC_ICON_ALIASES: ReadonlyMap<string, string> = new Map<string, string>
   ['/favicon.ico', 'icons/apple-touch-icon-180-v2.png'],
 ]);
 
-const PAGES = new Set(['/', '/login', '/analytics', '/accounts']);
+const PAGES = new Set(['/', '/login', '/analytics', '/accounts', '/status', '/scoreboard']);
 const PAGE_ALIASES = new Map([
   ['/settings', '/accounts'],
   ['/home', '/'],

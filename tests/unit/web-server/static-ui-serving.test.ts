@@ -367,7 +367,7 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
 });
 
 describe('page routes and deep links', () => {
-  it.each(['/', '/login', '/analytics', '/accounts', '/accounts/zai', '/accounts/kimi-code'])(
+  it.each(['/', '/login', '/analytics', '/accounts', '/accounts/zai', '/accounts/kimi-code', '/status', '/scoreboard'])(
     'serves index.html for %s with the page headers',
     async (route) => {
       for (const encoding of [undefined, 'br']) {
