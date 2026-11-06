@@ -33,6 +33,7 @@ import antigravityRoutes from './antigravity-routes';
 import authRoutes from './auth-routes';
 import claudeDesktopRoutes from './claude-desktop-routes';
 import barRoutes from './bar-routes';
+import statusRoutes from './status-routes';
 
 // Create the main API router (case-sensitive; handler errors stay in the request)
 export const apiRoutes = createApiRouter();
@@ -89,7 +90,7 @@ apiRoutes.use((req, res, next) => {
   }
 });
 
-// Only the account dashboard and native account controls are mounted.
+// The account dashboard, native account controls and the Status tab are mounted.
 apiRoutes.use('/accounts', accountDashboardRoutes);
 apiRoutes.use('/accounts', accountPreferencesRoutes);
 apiRoutes.use('/accounts', accountRefreshSettingsRoutes);
@@ -102,6 +103,7 @@ apiRoutes.use('/claude', claudeDesktopRoutes);
 apiRoutes.use('/codex', codexRoutes);
 apiRoutes.use('/antigravity', antigravityRoutes);
 apiRoutes.use('/bar', barRoutes);
+apiRoutes.use('/status', statusRoutes);
 
 // Public process liveness compatibility; no configuration details or repair actions.
 apiRoutes.get('/health', (_req, res) => res.json({ status: 'ok' }));

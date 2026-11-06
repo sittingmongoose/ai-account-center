@@ -1,0 +1,565 @@
+#!/usr/bin/env node
+/**
+ * Writes a realistic agent reports folder for the Status tab's page and phone tests.
+ *
+ *   node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems]
+ *
+ * <reports-dir> gets v1/writers/** (2 projects, 4 streams with tasks.json and 1 board-only stream,
+ * 8 threads in mixed states, 5 open cards including a batch of 3 with recommendations, and 2 cards
+ * already answered), stream boards under boards/, and a pm-mail registry copy under
+ * pm-mail-registry/ (2 threads that do not report yet).
+ *
+ * The 2 answers live in the server's private store, so they need the server's ccs folder:
+ * `--ccs-dir <dir>` (else CCS_DIR, else CCS_HOME/.ccs). The script writes
+ * <dir>/status/answer-key.pem (created when absent), appends the two answers to
+ * <dir>/status/answers.jsonl and writes their signed copies to <reports-dir>/v1/answers/.
+ *
+ * Start the test server with:
+ *   AAC_AGENT_REPORTS_DIR=<reports-dir> AAC_PM_MAIL_REGISTRY_DIR=<reports-dir>/pm-mail-registry \
+ *   AAC_STATUS_DOORBELL=off CCS_DIR=<dir>
+ * so it reads only the fixture and never sends pm-mail.
+ *
+ * `--with-problems` adds a malformed tasks.json and a card with NUL bytes (the unreadable state).
+ * Times are relative to now, so run it just before the test. It refuses a folder that already
+ * holds v1/writers.
+ */
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  randomUUID,
+  sign,
+} from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const keys = Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+}
+
+function writeJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const body = `${JSON.stringify(value, null, 2)}\n`;
+  fs.writeFileSync(file, body);
+  return Buffer.from(body);
+}
+
+function answerKey(storeDir) {
+  fs.mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+  const file = path.join(storeDir, 'answer-key.pem');
+  if (!fs.existsSync(file)) {
+    const { privateKey } = generateKeyPairSync('ed25519');
+    fs.writeFileSync(file, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  }
+  const privateKey = createPrivateKey(fs.readFileSync(file, 'utf8'));
+  const publicKey = createPublicKey(privateKey);
+  const keyId = createHash('sha256')
+    .update(publicKey.export({ type: 'spki', format: 'der' }))
+    .digest('hex')
+    .slice(0, 16);
+  return {
+    privateKey,
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    keyId,
+  };
+}
+
+const option = (key, label, detail = null, pros = [], cons = []) => ({
+  key,
+  label,
+  detail,
+  pros,
+  cons,
+});
+
+/** Writes the fixture; returns what it wrote (for tests). */
+export function writeStatusFixture(
+  root,
+  { ccsDir = null, withProblems = false, now = Date.now() } = {}
+) {
+  const v1 = path.join(root, 'v1');
+  if (fs.existsSync(path.join(v1, 'writers')))
+    throw new Error(`${root} already holds v1/writers; use an empty folder.`);
+  const at = (ago) => new Date(now - ago).toISOString();
+  const writers = path.join(v1, 'writers');
+  const seqs = new Map();
+  const head = (schema, writer, ago) => {
+    const seq = (seqs.get(writer) ?? 10) + 1;
+    seqs.set(writer, seq);
+    return { schema, writer, seq, writtenAt: at(ago) };
+  };
+  const boards = path.join(root, 'boards');
+  const board = (name, ago) => {
+    const file = path.join(boards, `${name}.md`);
+    fs.mkdirSync(boards, { recursive: true });
+    fs.writeFileSync(file, `# ${name} board\n\nThe human record of this stream.\n`);
+    const time = new Date(now - ago);
+    fs.utimesSync(file, time, time);
+    return file;
+  };
+
+  // Threads (8): mixed states, one stale, one blocked on the owner.
+  const thread = (writer, ago, fields) => {
+    const name = writer.slice(writer.indexOf('.') + 1);
+    writeJson(path.join(writers, writer, 'thread.json'), {
+      ...head('agent-reports/thread@1', writer, ago),
+      ttlSeconds: 1800,
+      agent: {
+        name,
+        harness: fields.harness ?? 'claude-code',
+        model: fields.model ?? 'claude-opus-5-5',
+        effort: fields.effort ?? 'high',
+        account: fields.account ?? 'claude_main',
+        machine: writer.slice(0, writer.indexOf('.')),
+        t3Thread: null,
+        parent: fields.parent ?? null,
+      },
+      project: fields.project ?? null,
+      stream: fields.stream ?? null,
+      state: fields.state,
+      doing: fields.doing ?? null,
+      blockedOn: fields.blockedOn ?? null,
+      progress: fields.progress ?? null,
+      links: fields.links ?? [],
+    });
+  };
+  const closureBoard = board('C-closure', 3 * HOUR);
+  thread('vm.pm-fo-lead', 4 * MIN, {
+    project: 'puppet-master',
+    stream: 'F',
+    state: 'working',
+    doing: 'Landing group 4 of the PM7 follow-ups',
+    progress: { done: 7, total: 12, unit: 'items' },
+  });
+  thread('vm.tools-lead', 9 * MIN, {
+    project: 'puppet-master',
+    stream: 'TOOLS',
+    state: 'waiting',
+    doing: 'Blind pre-check of browser-check 2.1',
+    effort: 'xhigh',
+  });
+  thread('vm.aac-status-lead', 2 * MIN, {
+    project: 'ai-account-center',
+    stream: 'STATUS',
+    state: 'working',
+    doing: 'Status tab page and phone layout',
+    progress: { done: 3, total: 8, unit: 'items' },
+  });
+  thread('mac.aac-claude-relogin', 50 * MIN, {
+    project: 'ai-account-center',
+    stream: 'SIGNIN',
+    state: 'done',
+    doing: 'Sign-in renewal landed; runner reinstalled',
+  });
+  thread('vm.pm-closure-lead', 12 * MIN, {
+    project: 'puppet-master',
+    stream: 'C',
+    state: 'blocked',
+    doing: 'Re-audit batch B09',
+    blockedOn: { kind: 'owner', what: 'Which reviewer pair to trust for B09', since: at(40 * MIN) },
+    links: [{ label: 'Board', path: closureBoard }],
+  });
+  thread('windows.pm-win-build', 3 * HOUR, {
+    project: 'puppet-master',
+    stream: 'F',
+    state: 'paused',
+    doing: 'Windows release build (waiting for a quiet PC)',
+    model: 'gpt-6.1-sol',
+    harness: 'codex',
+    account: 'codex_main',
+    parent: 'pm-fo-lead',
+  });
+  thread('nas1.nas-backup', 20 * MIN, {
+    state: 'idle',
+    doing: 'Nightly share backup check',
+    model: 'glm-5.3',
+    harness: 'zcode',
+    account: 'zcode',
+  });
+  thread('vm.fo-welcome', 6 * MIN, {
+    project: 'puppet-master',
+    stream: 'F',
+    state: 'working',
+    doing: 'Welcome PiP look glitch (FO-41)',
+    parent: 'pm-fo-lead',
+  });
+
+  // Streams with tasks.json (4).
+  const item = (id, title, state, ago, extra = {}) => ({
+    id,
+    title,
+    state,
+    owner: extra.owner ?? null,
+    branch: extra.branch ?? null,
+    head: extra.head ?? null,
+    reviews: extra.reviews ?? [],
+    landed: state === 'landed' ? { sha: extra.sha ?? 'c76d1cf756', at: at(ago) } : null,
+    blockedOn: extra.blockedOn ?? null,
+    why: extra.why ?? null,
+    updatedAt: at(ago),
+  });
+  const tasks = (writer, ago, fields, items) =>
+    writeJson(path.join(writers, writer, 'tasks.json'), {
+      ...head('agent-reports/tasks@1', writer, ago),
+      ...fields,
+      items,
+    });
+  tasks(
+    'vm.pm-fo-lead',
+    5 * MIN,
+    {
+      project: 'puppet-master',
+      projectLabel: 'Puppet Master',
+      stream: 'F',
+      streamLabel: 'PM7 follow-ups',
+      owner: 'pm-fo-lead',
+      goal: 'Fix every PM7 follow-up before the owner’s QA round',
+      board: board('F-follow-ups', 30 * MIN),
+    },
+    [
+      item('FO-38', 'Welcome screen focus ring', 'landed', 26 * HOUR, {
+        reviews: [{ by: 'gpt-6.1-sol/max', verdict: 'pass', at: at(27 * HOUR) }],
+      }),
+      item('FO-39', 'Settings search highlights', 'landed', 20 * HOUR),
+      item('FO-40', 'Welcome PiP look glitch', 'landed', 5 * HOUR, {
+        owner: 'fo-welcome',
+        branch: 't3/fix/welcome-pip-look-glitches',
+        head: '369a1bcdfa',
+      }),
+      item('FO-41', 'PiP shadow on resize', 'working', 6 * MIN, { owner: 'fo-welcome' }),
+      item('FO-33', 'Lines chart label placement', 'blocked', 2 * HOUR, {
+        blockedOn: { kind: 'owner', what: 'Card vm.pm-fo-lead--Q3', since: at(2 * HOUR) },
+      }),
+      item('FO-34', 'Empty state copy', 'review', 40 * MIN),
+      item('FO-35', 'Toast stacking order', 'fixing', 25 * MIN),
+      item('FO-36', 'Export button spacing', 'ready', 15 * MIN),
+      item('FO-37', 'Keyboard shortcut sheet', 'todo', 3 * HOUR),
+      item('FO-42', 'Old splash animation', 'dropped', 8 * HOUR, {
+        why: 'Replaced by the new welcome',
+      }),
+      item('FO-43', 'Docs link in About', 'done', 9 * HOUR),
+      item('FO-44', 'Window title casing', 'todo', 4 * HOUR),
+    ]
+  );
+  tasks(
+    'vm.tools-lead',
+    10 * MIN,
+    {
+      project: 'puppet-master',
+      projectLabel: 'Puppet Master',
+      stream: 'TOOLS',
+      streamLabel: 'Agent tools',
+      owner: 'tools-lead',
+      goal: 'Shared tools every agent can rely on',
+      board: board('TOOLS', 2 * HOUR),
+    },
+    [
+      item('T-16', 'browser-check 2.1 slots', 'review', 30 * MIN),
+      item('T-17', 'simlock iOS warm pool', 'working', 50 * MIN),
+      item('T-18', 'agent-report command', 'working', 20 * MIN),
+      item('T-14', 'quota-watch per-stream attribution', 'landed', 2 * HOUR),
+      item('T-15', 'pm-mail rings through T3', 'landed', 30 * HOUR),
+      item('T-19', 'Recording codec fallback', 'blocked', 3 * HOUR, {
+        blockedOn: { kind: 'resource', what: 'Windows GPU busy', since: at(3 * HOUR) },
+      }),
+    ]
+  );
+  tasks(
+    'vm.aac-status-lead',
+    3 * MIN,
+    {
+      project: 'ai-account-center',
+      projectLabel: 'AI Account Center',
+      stream: 'STATUS',
+      streamLabel: 'Status tab',
+      owner: 'aac-status-lead',
+      goal: 'One page that answers "how are we looking?"',
+      board: board('STATUS', 20 * MIN),
+    },
+    [
+      item('ST-1', 'Contract', 'landed', 6 * HOUR),
+      item('ST-2', 'Server view and answers', 'review', 10 * MIN),
+      item('ST-3', 'Leptos page', 'working', 15 * MIN),
+      item('ST-4', 'Shell tab and iframe', 'working', 25 * MIN),
+      item('ST-5', 'Phone layout', 'todo', HOUR),
+      item('ST-6', 'Scoreboard tab', 'todo', HOUR),
+    ]
+  );
+  tasks(
+    'mac.aac-claude-relogin',
+    55 * MIN,
+    {
+      project: 'ai-account-center',
+      projectLabel: 'AI Account Center',
+      stream: 'SIGNIN',
+      streamLabel: 'Sign-in renewal',
+      owner: 'aac-claude-relogin',
+      goal: 'Claude sign-ins renew by themselves',
+      board: null,
+    },
+    [
+      item('SR-1', 'Runner on the Mac', 'landed', 30 * HOUR),
+      item('SR-2', 'CAPTCHA wait clean-up', 'landed', 2 * HOUR),
+      item('SR-3', 'Windows runner', 'done', 3 * HOUR),
+    ]
+  );
+
+  // Cards: 5 open (a batch of 3 with recommendations) and 2 to be answered.
+  const cards = {};
+  const card = (writer, local, ago, fields) => {
+    const id = `${writer}--${local}`;
+    const doc = {
+      ...head('agent-reports/card@1', writer, ago),
+      id,
+      project: fields.project ?? null,
+      stream: fields.stream ?? null,
+      askedBy: writer.slice(writer.indexOf('.') + 1),
+      replyTo: { pmMail: writer.slice(writer.indexOf('.') + 1), t3Thread: null },
+      state: 'open',
+      title: fields.title,
+      context: fields.context ?? null,
+      whatChanged: fields.whatChanged ?? null,
+      options: fields.options,
+      recommendation: fields.recommendation ?? null,
+      allowNote: fields.allowNote ?? true,
+      multiple: fields.multiple ?? false,
+      urgency: fields.urgency ?? 'today',
+      blocks: fields.blocks ?? null,
+      batch: fields.batch ?? null,
+      evidence: fields.evidence ?? [],
+      askedAt: at(ago),
+    };
+    const bytes = writeJson(path.join(writers, writer, 'cards', `${id}.json`), doc);
+    cards[id] = { doc, sha256: createHash('sha256').update(bytes).digest('hex') };
+    return id;
+  };
+  const batch = 'F-questions-2026-11-05';
+  card('vm.pm-fo-lead', 'Q3', 2 * HOUR, {
+    project: 'puppet-master',
+    stream: 'F',
+    title: 'How should the lines chart label FO-33?',
+    context: 'The label overlaps the newest point on small windows.',
+    options: [
+      option(
+        'A',
+        'Keep the label inside the plot',
+        'Moves left when it would cover a point.',
+        ['No layout change'],
+        ['Can still crowd at 320 px']
+      ),
+      option(
+        'B',
+        'Move it under the axis',
+        null,
+        ['Never covers data'],
+        ['Further from the line it names']
+      ),
+    ],
+    recommendation: { key: 'A', why: 'Matches the other charts.' },
+    blocks: 'FO-33 landing (group 4)',
+    batch,
+  });
+  card('vm.pm-fo-lead', 'Q4', 100 * MIN, {
+    project: 'puppet-master',
+    stream: 'F',
+    title: 'Toasts: newest on top or bottom?',
+    options: [option('A', 'Newest on top'), option('B', 'Newest at the bottom')],
+    recommendation: { key: 'A', why: 'The eye lands on the top first.' },
+    batch,
+  });
+  card('vm.pm-fo-lead', 'Q5', 90 * MIN, {
+    project: 'puppet-master',
+    stream: 'F',
+    title: 'Drop the old splash animation for good?',
+    options: [option('A', 'Drop it'), option('B', 'Keep it behind a setting')],
+    recommendation: { key: 'A', why: 'Nobody has turned it on since PM6.' },
+    urgency: 'this-week',
+    batch,
+  });
+  card('vm.tools-lead', 'Q1', 25 * MIN, {
+    project: 'puppet-master',
+    stream: 'TOOLS',
+    title: 'Which machines may record during the owner’s streaming hours?',
+    context: 'Recording on the VM drops frames while Moonlight streams.',
+    options: [
+      option('vm', 'Ubuntu VM'),
+      option('mac', 'Mac'),
+      option('windows', 'Windows PC'),
+      option('nas1', 'Nas1'),
+    ],
+    multiple: true,
+    urgency: 'now',
+    blocks: 'T-19',
+    evidence: [{ label: 'Frame drop log', path: path.join(root, 'boards', 'TOOLS.md') }],
+  });
+  card('vm.aac-status-lead', 'Q2', 40 * MIN, {
+    project: 'ai-account-center',
+    stream: 'STATUS',
+    title: 'Show stale threads collapsed or greyed?',
+    whatChanged: 'Added a screenshot of both.',
+    options: [option('A', 'Collapsed under "quiet"'), option('B', 'Greyed in place')],
+    recommendation: { key: 'B', why: 'Nothing moves while you read.' },
+    urgency: 'whenever',
+  });
+  const answeredIds = [
+    card('vm.pm-closure-lead', 'Q1', 5 * HOUR, {
+      project: 'puppet-master',
+      stream: 'C',
+      title: 'Re-audit B09 with a second reviewer pair?',
+      options: [option('A', 'Yes, Sol and Astra'), option('B', 'No, one pass is enough')],
+      recommendation: { key: 'A', why: 'B09 had a shortcut flag.' },
+    }),
+    card('mac.aac-claude-relogin', 'Q7', 26 * HOUR, {
+      project: 'ai-account-center',
+      stream: 'SIGNIN',
+      title: 'Renew Windows sign-ins from the Mac runner?',
+      options: [option('A', 'Yes'), option('B', 'No, give Windows its own runner')],
+      recommendation: { key: 'B' },
+    }),
+  ];
+
+  if (withProblems) {
+    const broken = path.join(writers, 'vm.fo-welcome', 'tasks.json');
+    fs.writeFileSync(broken, '{"schema": "agent-reports/tasks@1", "writer": ');
+    const nul = path.join(writers, 'vm.fo-welcome', 'cards', 'vm.fo-welcome--Q1.json');
+    fs.mkdirSync(path.dirname(nul), { recursive: true });
+    fs.writeFileSync(nul, Buffer.concat([Buffer.from('{"schema":'), Buffer.alloc(32)]));
+  }
+
+  // pm-mail registry copy: 2 threads not reporting yet, 1 quiet for days (left out).
+  const registry = path.join(root, 'pm-mail-registry');
+  fs.mkdirSync(registry, { recursive: true });
+  const reg = (name, ago, about, machine) =>
+    writeJson(path.join(registry, `${name}.json`), {
+      name,
+      kind: 'claude',
+      cwd: machine === 'mac' ? '/Users/agent/work' : '/home/agent/work',
+      about,
+      registered: at(ago + HOUR),
+      last_seen: at(ago),
+      machine: machine === 'mac' ? 'agent-mac.local' : 'ubuntuserver',
+    });
+  reg('pm-docs-sweep', 15 * MIN, 'Docs sweep for PM7 release notes', 'vm');
+  reg('aac-mac-bar', 45 * MIN, 'Mac bar quota colours', 'mac');
+  reg('old-scout', 4 * 24 * HOUR, 'Scouting run from last week', 'vm');
+
+  // Answers: the private store and the signed share copies.
+  let storeDir = null;
+  if (ccsDir) {
+    storeDir = path.join(ccsDir, 'status');
+    const key = answerKey(storeDir);
+    fs.mkdirSync(path.join(v1, 'keys'), { recursive: true });
+    fs.writeFileSync(path.join(v1, 'keys', 'aac-answers.pub'), key.publicKeyPem);
+    const lines = [];
+    const answers = [
+      {
+        id: answeredIds[1],
+        choice: ['B'],
+        note: 'Windows gets its own runner; keep the Mac one simple.',
+        ago: 20 * HOUR,
+      },
+      { id: answeredIds[0], choice: ['A'], note: '', ago: 3 * HOUR },
+    ];
+    for (const entry of answers) {
+      const { doc, sha256 } = cards[entry.id];
+      const unsigned = {
+        schema: 'agent-reports/answer@1',
+        cardId: entry.id,
+        cardSeq: doc.seq,
+        cardSha256: sha256,
+        choice: entry.choice,
+        note: entry.note,
+        via: 'card',
+        answeredAt: at(entry.ago),
+        answeredBy: 'owner',
+        device: 'iPhone',
+      };
+      const signature = {
+        alg: 'ed25519',
+        keyId: key.keyId,
+        value: sign(null, Buffer.from(canonicalJson(unsigned), 'utf8'), key.privateKey).toString(
+          'base64'
+        ),
+      };
+      const answer = { ...unsigned, signature };
+      writeJson(path.join(v1, 'answers', `${entry.id}.json`), answer);
+      const id = randomUUID();
+      const done = (step, detail) => ({
+        type: 'delivery',
+        id,
+        step,
+        state: 'done',
+        at: at(entry.ago - MIN),
+        detail,
+      });
+      lines.push(
+        { type: 'answer', id, at: unsigned.answeredAt, answer, card: doc },
+        done('share', 'Signed copy written to the share.'),
+        done('doorbell', `Rang ${doc.replyTo.pmMail} through pm-mail.`)
+      );
+    }
+    fs.appendFileSync(
+      path.join(storeDir, 'answers.jsonl'),
+      lines.map((l) => `${JSON.stringify(l)}\n`).join(''),
+      {
+        mode: 0o600,
+      }
+    );
+  }
+  return { root, storeDir, cards: Object.keys(cards), answered: ccsDir ? answeredIds : [] };
+}
+
+function main(argv) {
+  const args = argv.slice(2);
+  const take = (flag) => {
+    const at = args.indexOf(flag);
+    if (at < 0) return null;
+    const [, value] = args.splice(at, 2);
+    return value ?? null;
+  };
+  const withProblems = args.includes('--with-problems');
+  if (withProblems) args.splice(args.indexOf('--with-problems'), 1);
+  const ccsDir =
+    take('--ccs-dir') ??
+    process.env.CCS_DIR ??
+    (process.env.CCS_HOME ? path.join(process.env.CCS_HOME, '.ccs') : null);
+  const root = args[0];
+  if (!root || args.length !== 1) {
+    process.stderr.write(
+      'Usage: node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems]\n'
+    );
+    return 2;
+  }
+  const result = writeStatusFixture(path.resolve(root), {
+    ccsDir: ccsDir ? path.resolve(ccsDir) : null,
+    withProblems,
+  });
+  process.stdout.write(
+    [
+      `Wrote ${result.cards.length} cards to ${result.root}.`,
+      result.storeDir
+        ? `Answered ${result.answered.length} of them in ${result.storeDir}.`
+        : 'No ccs folder given: the 2 answered cards show as open (pass --ccs-dir).',
+      'Server environment:',
+      `  AAC_AGENT_REPORTS_DIR=${result.root}`,
+      `  AAC_PM_MAIL_REGISTRY_DIR=${path.join(result.root, 'pm-mail-registry')}`,
+      '  AAC_STATUS_DOORBELL=off',
+      result.storeDir ? `  CCS_DIR=${path.dirname(result.storeDir)}` : '',
+      '',
+    ].join('\n')
+  );
+  return 0;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href)
+  process.exitCode = main(process.argv);

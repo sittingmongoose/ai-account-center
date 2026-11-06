@@ -66,6 +66,7 @@ import {
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { startStatusService } from './status/status-service';
 import { getSignInHealth } from './services/signin-health-service';
 import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
@@ -294,6 +295,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let httpsServer: https.Server | null = null;
   let stopCgroupForeignCheck: (() => void) | null = null;
   let stopAgentUsageSnapshot: (() => void) | null = null;
+  let stopStatusService: (() => void) | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   const codexRenewal = getCodexProfileRenewalService();
@@ -317,6 +319,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopAccountAnalyticsSampling();
     stopAgentUsageSnapshot?.();
     stopAgentUsageSnapshot = null;
+    stopStatusService?.();
+    stopStatusService = null;
     stopCgroupForeignCheck?.();
     stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
@@ -402,6 +406,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
             : null;
         },
       });
+      // Status tab readers and collectors (read-only; process collectors run only while viewed).
+      stopStatusService = startStatusService();
       startAccountAnalyticsSampling();
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();

@@ -14,7 +14,11 @@ import type { SignInJob } from './services/signin-jobs';
  * device token or nobody) and whether it came over a secure transport
  * (CONTRACT-registry-lifecycle section 1 rule 5 and section 6.6).
  */
-export type DashboardEvent = { type: 'accounts-changed' } | { type: 'signin-job'; job: SignInJob };
+export type DashboardEvent =
+  | { type: 'accounts-changed' }
+  | { type: 'signin-job'; job: SignInJob }
+  /** A Status tab source changed; the page re-reads /api/status. Browser sessions only. */
+  | { type: 'status-changed' };
 
 export interface DashboardEventClient {
   /**

@@ -1,0 +1,203 @@
+/** The machines and usage panels of the Status tab view. */
+import { MACHINES, type MachineId } from './report-schema';
+import type { MachineSample } from './status-collectors';
+import type {
+  MachineView,
+  Source,
+  StatusInputs,
+  StatusView,
+  UsageAccountView,
+  UsageWarning,
+} from './status-view-types';
+import {
+  ageSeconds,
+  clockText,
+  dayText,
+  DISK_FLOOR_GB,
+  gb,
+  iso,
+  MEMORY_FLOOR_GB,
+  round1,
+  spanText,
+  STALE_AFTER_SECONDS,
+} from './status-view-words';
+
+// ---------------------------------------------------------------------------------------------
+// Machines, Simlock, usage
+
+const MACHINE_LABELS: Record<MachineId, string> = {
+  vm: 'Ubuntu VM',
+  mac: 'Mac',
+  windows: 'Windows PC',
+  nas1: 'Nas1',
+};
+
+/** Floor warnings for one reading. */
+export function machineWarnings(sample: MachineSample | null): string[] {
+  if (!sample) return [];
+  const warnings: string[] = [];
+  const free = gb(sample.disk?.freeBytes ?? null);
+  if (free !== null && free < DISK_FLOOR_GB)
+    warnings.push(`Disk ${free.toFixed(1)} GB free, under the ${DISK_FLOOR_GB} GB floor`);
+  const available = gb(sample.memAvailableBytes);
+  if (available !== null && available < MEMORY_FLOOR_GB)
+    warnings.push(
+      `Memory ${available.toFixed(1)} GB available, under the ${MEMORY_FLOOR_GB} GB floor`
+    );
+  return warnings;
+}
+
+export function machineView(inputs: StatusInputs, id: MachineId): MachineView {
+  const { now, timeZone } = inputs;
+  const collected = inputs.machines[id];
+  const sample = collected.data;
+  const age = ageSeconds(now, collected.asOf);
+  const staleAfter = STALE_AFTER_SECONDS.machines;
+  let state: MachineView['state'] = 'ok';
+  let detail: string | null = null;
+  if (collected.error) {
+    state = 'unreachable';
+    detail = `${collected.error.reason.replace(/\.$/, '')} (since ${clockText(collected.error.since, timeZone)}).`;
+    if (collected.asOf !== null)
+      detail += ` Showing the reading from ${clockText(collected.asOf, timeZone)}.`;
+  } else if (collected.asOf === null) {
+    state = 'stale';
+    detail = 'Waiting for the first reading.';
+  } else if ((age ?? 0) > staleAfter) {
+    state = 'stale';
+    detail = `No new reading since ${clockText(collected.asOf, timeZone)}.`;
+  }
+  const browser = (inputs.browsers.data ?? []).find((row) => row.machine === id) ?? null;
+  return {
+    id,
+    label: MACHINE_LABELS[id],
+    state,
+    asOf: iso(collected.asOf),
+    ageSeconds: age,
+    detail,
+    cpu: sample
+      ? { cores: sample.cores, load1: round1(sample.load1), busyPct: sample.busyPct }
+      : null,
+    memory: sample
+      ? { availableGb: gb(sample.memAvailableBytes), totalGb: gb(sample.memTotalBytes) }
+      : null,
+    disk: sample?.disk
+      ? [
+          {
+            mount: sample.disk.mount,
+            freeGb: gb(sample.disk.freeBytes) ?? 0,
+            totalGb: gb(sample.disk.totalBytes) ?? 0,
+          },
+        ]
+      : [],
+    browsers: browser ? browser.browsers : null,
+    recordings: browser ? browser.recordings : null,
+    gpuPct: browser?.gpuPct ?? null,
+    sessions: browser?.sessions ?? [],
+    warnings: machineWarnings(sample),
+  };
+}
+
+export function machinesSource(inputs: StatusInputs, rows: MachineView[]): Source {
+  const { now, timeZone } = inputs;
+  const times = MACHINES.map((id) => inputs.machines[id].asOf).filter(
+    (t): t is number => t !== null
+  );
+  const asOf = times.length > 0 ? Math.max(...times) : null;
+  const base = {
+    id: 'machines' as const,
+    label: 'Machines',
+    asOf: iso(asOf),
+    ageSeconds: ageSeconds(now, asOf),
+    staleAfterSeconds: STALE_AFTER_SECONDS.machines,
+  };
+  if (asOf === null && rows.every((row) => row.state !== 'unreachable'))
+    return { ...base, state: 'missing', detail: 'Waiting for the first reading.' };
+  const off = rows.filter((row) => row.state !== 'ok');
+  if (off.length === 0)
+    return {
+      ...base,
+      state: 'ok',
+      detail: `All four machines read by ${clockText(asOf ?? now, timeZone)}.`,
+    };
+  return {
+    ...base,
+    state: 'stale',
+    detail: off.map((row) => `${row.label} ${row.state}: ${row.detail ?? ''}`.trim()).join(' '),
+  };
+}
+
+const USAGE_KINDS = new Set(['rate_limit', 'balance']);
+
+export function buildUsage(inputs: StatusInputs, source: Source): StatusView['usage'] {
+  const { usage, now, timeZone } = inputs;
+  if (!usage) return { source: 'usage', warnings: [], accounts: [] };
+  const sampleStale = source.state !== 'ok';
+  const accounts: UsageAccountView[] = [];
+  const warnings: Array<UsageWarning & { rank: number }> = [];
+  for (const account of usage.accounts) {
+    if (account.hidden) continue;
+    for (const window of account.windows) {
+      if (!USAGE_KINDS.has(window.kind)) continue;
+      // Only a current reading of a fresh sample can raise a warning.
+      const stale = sampleStale || account.status !== 'ok' || window.cached || window.resetPassed;
+      const atLimit =
+        window.usedPercent !== null && window.usedPercent >= 100 && !window.resetPassed;
+      const burn = window.burn;
+      const row: UsageAccountView = {
+        id: account.id,
+        provider: account.provider,
+        label: account.label,
+        host: account.host,
+        active: account.active,
+        window: window.label,
+        kind: window.kind,
+        usedPct: round1(window.usedPercent),
+        remaining: window.remaining,
+        limit: window.limit,
+        unit: window.unit,
+        resetsAt: window.resetAt,
+        projectedFullAt: burn?.projectedFullAt ?? null,
+        runsOutBeforeReset: burn?.runsOutBeforeReset ?? null,
+        atLimit,
+        stale,
+      };
+      accounts.push(row);
+      if (stale) continue;
+      const who = `${account.provider} ${account.label} (${window.label})`;
+      const reset = window.resetAt ? Date.parse(window.resetAt) : NaN;
+      if (atLimit) {
+        warnings.push({
+          tone: 'bad',
+          rank: 0,
+          text: Number.isFinite(reset)
+            ? `${who}: at its limit until its ${dayText(reset, timeZone)} ${clockText(reset, timeZone)} reset`
+            : `${who}: at its limit`,
+        });
+        continue;
+      }
+      const full = row.projectedFullAt ? Date.parse(row.projectedFullAt) : NaN;
+      if (row.runsOutBeforeReset === true && Number.isFinite(full) && full > now) {
+        warnings.push({
+          tone: 'warn',
+          rank: full - now,
+          text: Number.isFinite(reset)
+            ? `${who}: full in ${spanText((full - now) / 1000)}, before its ${dayText(reset, timeZone)} reset`
+            : `${who}: full in ${spanText((full - now) / 1000)}`,
+        });
+      }
+    }
+  }
+  accounts.sort(
+    (a, b) =>
+      a.provider.localeCompare(b.provider) ||
+      a.label.localeCompare(b.label) ||
+      a.window.localeCompare(b.window)
+  );
+  warnings.sort((a, b) => a.rank - b.rank);
+  return {
+    source: 'usage',
+    warnings: warnings.map(({ tone, text }) => ({ tone, text })),
+    accounts,
+  };
+}
