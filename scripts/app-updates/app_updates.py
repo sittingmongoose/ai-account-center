@@ -644,8 +644,11 @@ def update_cli(install, deadline, restart_managed=False):
         # protocol, not an idle TUI/PTY restart. It is handled by the fixed bridge.
         # An npm-global Codex (Nas1) has no AAC shared daemon and is not covered by the
         # bridge's fixed ~/.local/bin/codex runtime: it takes the ordinary CLI path below.
+        # A marker for the installed version comes here even with no daemon running: a daemon relaunch
+        # that failed leaves exactly that, and only the bridge can say nothing is left to restart.
         if (install.app_id == "codex-cli" and install.platform == "ubuntu" and install.manager != "npm" and
-                any("app-server" in item.args for item in family(install, processes))):
+                (any("app-server" in item.args for item in family(install, processes)) or
+                 (pending_version(pending) == before and (pathlib.Path.home() / ".local/bin/codex").exists()))):
             contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])
             check_terminal(install.platform, contexts)
             bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
@@ -729,11 +732,7 @@ def update_cli(install, deadline, restart_managed=False):
             raise UpdateFailure("version_unknown")
         if newest and npm_version_key(refreshed.version) < npm_version_key(newest):
             raise UpdateFailure("version_unknown")
-        marker_version = None
-        try:
-            marker_version = json.loads(pending.read_text(encoding="utf-8")).get("version")
-        except (OSError, ValueError):
-            pass
+        marker_version = pending_version(pending)
         needs_restart = marker_version == refreshed.version and marker_version != before
         if refreshed.version == before and not needs_restart:
             if install.app_id == "muse-code" and muse_update_busy(install.path.parent):
@@ -785,6 +784,14 @@ def update_cli(install, deadline, restart_managed=False):
         if pre_stopped:
             relaunch_after_failed_install(install, contexts, pending)
         return outcome(result(install.app_id, install.platform, "failed", before, before, install.manager, "update_failed", attempted))
+
+
+def pending_version(pending):
+    """The version a pending-restart marker names, or None without a readable one."""
+    try:
+        return json.loads(pending.read_text(encoding="utf-8")).get("version")
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 def relaunch_after_failed_install(install, contexts, pending):

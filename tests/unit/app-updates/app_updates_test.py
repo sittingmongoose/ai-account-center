@@ -481,6 +481,77 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(value['status'], 'restart_failed')
         self.assertEqual(value['messageCode'], 'restart_failed')
 
+    def test_systemd_run_uses_this_process_runtime_dir_not_the_apps(self):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+        item = mock.Mock(args=['/fixture/claude-desktop'], cwd='/fixture', env={'XDG_RUNTIME_DIR': '/run/user/stale'}, pid=1, ppid=0)
+        with mock.patch.dict(os.environ, {'XDG_RUNTIME_DIR': '/run/user/dashboard'}), \
+                mock.patch.object(processes, 'in_service_cgroup', return_value=True), \
+                mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'command') as run, mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            processes.restart_desktops(install, [item])
+        self.assertEqual(run.call_args.kwargs['env']['XDG_RUNTIME_DIR'], '/run/user/dashboard')
+
+    def test_captured_loader_settings_stay_out_of_systemd_run_and_off_the_argv(self):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+        item = mock.Mock(args=['/fixture/claude-desktop'], cwd='/fixture', pid=1, ppid=0,
+                         env={'LD_PRELOAD': '/secret/preload.so', 'LD_LIBRARY_PATH': '/secret/lib'})
+        with mock.patch.object(processes, 'in_service_cgroup', return_value=True), \
+                mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'command') as run, mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            processes.restart_desktops(install, [item])
+        argv, env = run.call_args.args[0], run.call_args.kwargs['env']
+        self.assertNotIn('/secret', ' '.join(argv))
+        self.assertIn('--setenv=AAC_LOADER_LD_PRELOAD', argv)
+        self.assertNotIn('--setenv=LD_PRELOAD', argv)
+        self.assertNotIn('LD_PRELOAD', env)
+        self.assertNotIn('LD_LIBRARY_PATH', env)
+        self.assertEqual(env['AAC_LOADER_LD_LIBRARY_PATH'], '/secret/lib')
+        command = argv[argv.index('--') + 1:]
+        self.assertEqual(command[:2], ['/bin/sh', '-c'])
+        self.assertEqual(command[3:], ['sh', '/fixture/claude-desktop'])
+        self.assertNotRegex(command[2], r'(^|[^$])\$([^$]|$)', 'an unescaped $ would be expanded by systemd onto the argv')
+        seen = subprocess.run(['/bin/sh', '-c', command[2].replace('$$', '$'), 'sh', '/bin/sh', '-c', 'echo "$LD_LIBRARY_PATH|$AAC_LOADER_LD_LIBRARY_PATH"'],
+                              env={'AAC_LOADER_LD_LIBRARY_PATH': '/nonexistent/lib'}, capture_output=True, text=True, check=True)
+        self.assertEqual(seen.stdout.strip(), '/nonexistent/lib|')
+
+    def _click_codex_cli(self, root, version, marker=None, manager='native', binary=True, running=()):
+        install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), version, manager)
+        state = root / '.ccs/app-updates'
+        state.mkdir(parents=True, exist_ok=True)
+        if marker is not None:
+            (state / 'codex-cli-pending-restart.json').write_text(json.dumps({'version': marker}), encoding='utf-8')
+        if binary:
+            (root / '.local/bin').mkdir(parents=True, exist_ok=True)
+            (root / '.local/bin/codex').write_text('', encoding='utf-8')
+        answer = {'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'restart_failed', 'previousVersion': version,
+                  'version': version, 'manager': manager, 'messageCode': 'restart_not_running', 'updateAttempted': True,
+                  'restartedProcesses': 0, 'forcedStops': 0}
+        with mock.patch.object(pathlib.Path, 'home', return_value=root), \
+                mock.patch.object(updater, 'scan', return_value=list(running)), \
+                mock.patch.object(updater, 'family', return_value=list(running)), \
+                mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
+                mock.patch.object(updater, 'cli_instances', return_value=([], [], [])), \
+                mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'detect_cli', return_value=install), \
+                mock.patch.object(updater, 'command', return_value=json.dumps(answer)) as run:
+            value = updater.update_cli(install, time.monotonic() + 600)
+        bridged = any('app_update_codex.cjs' in ' '.join(str(arg) for arg in call.args[0]) for call in run.call_args_list)
+        return value, bridged
+
+    def test_a_cli_retry_with_no_daemon_goes_to_the_bridge_not_current(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker='2.0.0')
+        self.assertTrue(bridged)
+        self.assertEqual(value['status'], 'restart_failed')
+        self.assertEqual(value['messageCode'], 'restart_not_running')
+
+    def test_a_cli_click_with_no_daemon_and_no_matching_marker_stays_on_the_ordinary_path(self):
+        cases = ({'marker': None}, {'marker': '1.0.0'}, {'marker': '2.0.0', 'manager': 'npm'}, {'marker': '2.0.0', 'binary': False})
+        for case in cases:
+            with tempfile.TemporaryDirectory() as directory:
+                _, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', **case)
+            self.assertFalse(bridged, case)
+
     def test_desktop_relaunch_from_a_session_starts_directly(self):
         run, popen = self._restart_ubuntu_desktop(False)
         run.assert_not_called()
@@ -492,6 +563,9 @@ class UpdaterTests(unittest.TestCase):
             '0::/user.slice/user-1000.slice/session-3.scope\n': False,
             '0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-agents.slice\n': False,
             '0::/system.slice/ssh.service\n': False,
+            '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service/sub\n': True,
+            '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service/sub.scope\n': True,
+            '0::/user.slice/user-1000.slice/user@1000.service/init.scope\n': False,
         }
         for text, expected in cases.items():
             with mock.patch('builtins.open', mock.mock_open(read_data=text)):

@@ -143,6 +143,60 @@ function harness(initial: CodexProcessSnapshot[]) {
   };
 }
 
+describe('Codex Desktop update retry on the real runtime', () => {
+  const bridge = require('../../../scripts/app-updates/app_update_codex.cjs');
+
+  it('reports restart_not_running, never updated, while the desktop stays closed', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    fake.failDesktop();
+    let installed = '1.0.0';
+    let marker: { version: string; desktop: boolean } | null = null;
+    const deps = {
+      now: () => 0,
+      sleep: async () => {},
+      readVersion: async () => installed,
+      update: async () => {
+        installed = '2.0.0';
+      },
+      pending: (expected: string) => marker?.version === expected,
+      markedDesktop: () => marker?.desktop,
+      mark: (wanted: boolean) => {
+        marker = { version: installed, desktop: wanted };
+      },
+      clear: () => {
+        marker = null;
+      },
+      hasOldProxies: async () => false,
+      desktopRunning: async () => bridge.desktopRunning(fake.current()),
+      serverRunning: async () => bridge.serverRunning(fake.current(), home),
+      runtime: () =>
+        createCodexActivationRuntime(home, {
+          ...fake.deps,
+          launch: (target, isDesktop) =>
+            bridge.relaunch(target, isDesktop, fake.deps.launch, { inside: () => true }),
+        }),
+      operation: 'desktop',
+    };
+    bridge.output.restartedProcesses = 0;
+    bridge.output.status = 'failed';
+    const first = { ...(await bridge.execute({ ...deps, expectedCandidate: '2.0.0' })) };
+    expect(first.status).toBe('restart_failed');
+    expect(first.restartedProcesses).toBe(1);
+    expect(marker).toEqual({ version: '2.0.0', desktop: true });
+    expect(bridge.desktopRunning(fake.current())).toBe(false);
+
+    bridge.output.restartedProcesses = 0;
+    const second = {
+      ...(await bridge.execute({ ...deps, expectedCandidate: '2.0.0', restartOnly: true })),
+    };
+    expect(second.restartedProcesses).toBe(1);
+    expect(second.status).toBe('restart_failed');
+    expect(second.messageCode).toBe('restart_not_running');
+    expect(bridge.desktopRunning(fake.current())).toBe(false);
+    expect(marker).toBeNull();
+  });
+});
+
 describe('Codex process launch', () => {
   const roots: string[] = [];
   const tempHome = (): string => {

@@ -710,11 +710,16 @@ transient unit on Ubuntu, wherever it runs.
 These units keep `KillMode=process`, so quitting an app does not kill what it started, and discard
 GUI output. A failed `systemd-run` fails the relaunch instead of starting the app inside the cgroup,
 and so does an older runtime that offers no launcher. Variable values stay off `systemd-run`'s
-argv, and names systemd refuses are left out rather than failing the relaunch. The Codex daemon
+argv, and names systemd refuses are left out rather than failing the relaunch. A captured
+`LD_PRELOAD` or `LD_LIBRARY_PATH` reaches the app through a small `sh` step and never loads into
+`systemd-run`. The Codex daemon
 logs to `app-server-control/app-server.log`, which moves to `.1` at launch once past 5 MB.
 
-A pending-marker retry restarts only what it finds running. If it stops and starts nothing, the row
-is `restart_failed` with `restart_not_running` rather than `updated`, and the marker is cleared.
+A pending-marker retry restarts only what it finds running, since the launch snapshot of the failed
+run is gone. The marker records whether that run closed a Codex Desktop, and `update_cli` routes a
+marker for the installed version to the bridge even with no daemon running. A retry that leaves the
+captured desktop closed, or stops and starts nothing, is `restart_failed` with `restart_not_running`
+rather than `updated`. The marker is then cleared, so the next click reports the row as it stands.
 
 ## Deployment and setup
 

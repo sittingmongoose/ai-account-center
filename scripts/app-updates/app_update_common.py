@@ -84,6 +84,31 @@ def systemd_can_carry(key, value):
     return True
 
 
+LOADER_ENV = ("LD_PRELOAD", "LD_LIBRARY_PATH")
+LOADER_ENV_PREFIX = "AAC_LOADER_"
+# Puts the loader settings back for the app alone. systemd-run and this shell run without them, the
+# values stay off every argv, and exec keeps the unit's main process id. systemd expands $NAME in a
+# command line before it runs, which would put the value on this shell's argv, so every $ is $$.
+LOADER_TRAMPOLINE = "; ".join(
+    ['if [ "$${%s%s+x}" ]; then export %s="$$%s%s"; unset %s%s; fi' % (LOADER_ENV_PREFIX, name, name, LOADER_ENV_PREFIX, name, LOADER_ENV_PREFIX, name)
+     for name in LOADER_ENV] + ['exec "$$@"'])
+
+
+def _unit_environment(env):
+    """What systemd-run receives to hand on: entries as given, with loader settings renamed, since
+    a captured LD_PRELOAD or LD_LIBRARY_PATH (AppImage, snap) would load into systemd-run itself."""
+    return {(LOADER_ENV_PREFIX + key if key in LOADER_ENV else key): value for key, value in env.items()}
+
+
+def systemd_run_environment(env):
+    """The environment systemd-run runs with: the app's values for its bare --setenv flags, and this
+    process's XDG_RUNTIME_DIR, which is how systemd-run reaches the user manager."""
+    values = _unit_environment(env)
+    if os.environ.get("XDG_RUNTIME_DIR"):
+        values["XDG_RUNTIME_DIR"] = os.environ["XDG_RUNTIME_DIR"]
+    return values
+
+
 def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple", properties=()):
     """Wrap argv so it starts in a transient user service OUTSIDE our cgroup.
 
@@ -97,7 +122,8 @@ def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple", prope
     rather than cage the session in the service cgroup.
 
     Values never go on this argv, which any local user can read: a bare
-    --setenv=KEY takes the value from systemd-run's own environment.
+    --setenv=KEY takes the value from systemd-run's own environment, so run it
+    with systemd_run_environment(env).
     """
     runner = shutil.which("systemd-run")
     if runner is None:
@@ -108,10 +134,12 @@ def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple", prope
     wrapped.extend("--property=" + item for item in properties)
     if cwd:
         wrapped.append("--working-directory=" + str(cwd))
-    for key, value in strip_dashboard_secrets(env or {}).items():
-        if systemd_can_carry(key, value):
-            wrapped.append("--setenv=" + key)
+    names = [key for key, value in strip_dashboard_secrets(_unit_environment(env or {})).items()
+             if systemd_can_carry(key, value)]
+    wrapped.extend("--setenv=" + key for key in names)
     wrapped.append("--")
+    if any(key.startswith(LOADER_ENV_PREFIX) for key in names):
+        wrapped.extend(["/bin/sh", "-c", LOADER_TRAMPOLINE, "sh"])
     wrapped.extend(argv)
     return wrapped
 
@@ -122,7 +150,7 @@ def in_service_cgroup():
     memory.peak stay alive across restarts. An ssh session or a plain shell needs no transient unit."""
     try:
         with open("/proc/self/cgroup", encoding="utf-8") as lines:
-            return any(re.search(r"/user@\d+\.service/.*\.service$", line.strip()) for line in lines)
+            return any(re.search(r"/user@\d+\.service/(?:.*/)?[^/]+\.service(?:/|$)", line.strip()) for line in lines)
     except OSError:
         return False
 

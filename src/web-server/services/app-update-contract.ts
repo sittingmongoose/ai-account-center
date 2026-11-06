@@ -108,8 +108,7 @@ export const MESSAGES = {
   update_failed: 'The app update failed; check its supported installer.',
   version_unknown: 'The installed version could not be verified after the update.',
   restart_failed: 'The update finished, but an original instance could not restart.',
-  restart_not_running:
-    'The update finished, but no Codex process was left to restart. Start Codex again when you need it.',
+  restart_not_running: 'Updated, but Codex did not restart. Start it again when you need it.',
   host_unavailable: 'This computer could not complete the update request.',
   helper_invalid: 'The update helper returned an unsupported result.',
   helper_sync_failed:
@@ -329,6 +328,12 @@ function rowStrays(row: Record<string, unknown>, appId: UpdateAppId): AppUpdateS
   return STRAY_APPS.includes(appId) ? normalizeStrays(row.strays) : [];
 }
 
+function processCount(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 10000
+    ? value
+    : 0;
+}
+
 /** One helper row for a known app; anything unexpected becomes a fixed helper_invalid row. */
 export function normalizeAppUpdateRow(
   row: Record<string, unknown> | undefined,
@@ -343,23 +348,10 @@ export function normalizeAppUpdateRow(
   )
     return failure(platform, appId, 'helper_invalid');
   const code = row.messageCode as MessageCode;
-  const count =
-    typeof row.restartedProcesses === 'number' &&
-    Number.isSafeInteger(row.restartedProcesses) &&
-    row.restartedProcesses >= 0 &&
-    row.restartedProcesses <= 10000
-      ? row.restartedProcesses
-      : 0;
-  const forced =
-    typeof row.forcedStops === 'number' &&
-    Number.isSafeInteger(row.forcedStops) &&
-    row.forcedStops >= 0 &&
-    row.forcedStops <= 10000
-      ? row.forcedStops
-      : 0;
-  // The Linux computers (Ubuntu and Nas1) restart T3 through its systemd service;
-  // the Mac and Windows restart its desktop app. Windows alone also closes and
-  // reopens a running Codex, Claude or ZCode desktop app; the Mac asks to quit first.
+  const count = processCount(row.restartedProcesses);
+  const forced = processCount(row.forcedStops);
+  // The Linux computers restart T3 through its systemd service; the Mac and Windows its desktop
+  // app. Windows alone also closes and reopens a running Codex, Claude or ZCode desktop app.
   const linux = HOST_OS[platform] === 'linux';
   const reopensDesktop =
     HOST_OS[platform] === 'windows' &&

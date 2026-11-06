@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { ChildProcess } from 'child_process';
+import { execFileSync, type ChildProcess } from 'child_process';
 import {
   buildSystemdRunArgs,
   launchApp,
@@ -113,6 +113,53 @@ describe('app-launcher', () => {
     const setenv = buildSystemdRunArgs(spec, 'unit').filter((a) => a.startsWith('--setenv'));
     expect(setenv).toEqual(['--setenv=KEEP']);
     expect(systemdRunEnvironment(spec, {})).toEqual({ KEEP: 'yes' });
+  });
+
+  it('keeps a captured loader setting out of systemd-run and off the argv, and gives it to the app', () => {
+    const spec = {
+      app: 'codex-desktop',
+      exe: '/opt/app',
+      args: ['--flag'],
+      env: { KEEP: 'yes', LD_PRELOAD: '/secret/preload.so', LD_LIBRARY_PATH: '/secret/lib' },
+    };
+    const argv = buildSystemdRunArgs(spec, 'unit');
+    expect(argv.join(' ')).not.toContain('/secret');
+    expect(argv).toContain('--setenv=AAC_LOADER_LD_PRELOAD');
+    expect(argv).toContain('--setenv=AAC_LOADER_LD_LIBRARY_PATH');
+    expect(argv.some((a) => a === '--setenv=LD_PRELOAD' || a === '--setenv=LD_LIBRARY_PATH')).toBe(
+      false
+    );
+    const command = argv.slice(argv.indexOf('--') + 1);
+    expect(command.slice(0, 2)).toEqual(['/bin/sh', '-c']);
+    expect(command.slice(3)).toEqual(['sh', '/opt/app', '--flag']);
+    const own = systemdRunEnvironment(spec, {}) ?? {};
+    expect(own.LD_PRELOAD).toBeUndefined();
+    expect(own.LD_LIBRARY_PATH).toBeUndefined();
+    expect(own.AAC_LOADER_LD_PRELOAD).toBe('/secret/preload.so');
+    // Every $ is escaped, or systemd would expand the value into this shell's argv.
+    expect(command[2]).not.toMatch(/(^|[^$])\$([^$]|$)/);
+    // The step as systemd hands it to sh: the app sees the values under their own names.
+    const seen = execFileSync(
+      '/bin/sh',
+      [
+        '-c',
+        command[2].replaceAll('$$', '$'),
+        'sh',
+        '/bin/sh',
+        '-c',
+        'echo "$LD_LIBRARY_PATH|$AAC_LOADER_LD_LIBRARY_PATH|$KEEP"',
+      ],
+      { env: { KEEP: 'yes', AAC_LOADER_LD_LIBRARY_PATH: '/nonexistent/lib' }, encoding: 'utf8' }
+    );
+    expect(seen.trim()).toBe('/nonexistent/lib||yes');
+  });
+
+  it('runs the app directly when no loader setting was captured', () => {
+    const argv = buildSystemdRunArgs(
+      { app: 'app', exe: '/opt/app', args: [], env: { KEEP: 'yes' } },
+      'unit'
+    );
+    expect(argv.slice(argv.indexOf('--') + 1)).toEqual(['/opt/app']);
   });
 
   it('lets systemd-run inherit this environment when the spec names none', () => {

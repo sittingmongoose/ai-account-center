@@ -19,7 +19,7 @@ import time
 import uuid
 
 from app_update_common import (
-    UpdateFailure, command, environment, in_service_cgroup, powershell, sanitize_unit_fragment, systemd_user_service_argv,
+    UpdateFailure, command, environment, in_service_cgroup, powershell, sanitize_unit_fragment, systemd_run_environment, systemd_user_service_argv,
 )
 
 # T3's own server and desktop, by exact location. A CLI process started below
@@ -858,7 +858,7 @@ def restart_desktops(install, contexts):
             # relaunch, a terminal), as a Type=simple unit's default control-group would.
             command(systemd_user_service_argv(unit, item.cwd, values, [str(install.path), *args],
                                               properties=("KillMode=process", "StandardOutput=null", "StandardError=null")),
-                    timeout=15, env=values, preserve_env=True)
+                    timeout=15, env=systemd_run_environment(values), preserve_env=True)
         else:
             subprocess.Popen([str(install.path), *args], cwd=item.cwd, env=environment(item.env), stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)

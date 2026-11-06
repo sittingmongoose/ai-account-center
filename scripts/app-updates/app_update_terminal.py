@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 
-from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, sanitize_unit_fragment, strip_dashboard_secrets, systemd_user_service_argv
+from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, sanitize_unit_fragment, strip_dashboard_secrets, systemd_run_environment, systemd_user_service_argv
 from app_update_processes import scan, user_family
 
 
@@ -138,7 +138,7 @@ def restart_cli(install, contexts):
             # Type=simple unit would go inactive and lose track of the server.
             argv = systemd_user_service_argv(unit, context.cwd, restart_environment(context),
                                             tmux_argv, service_type="forking")
-            command(argv, timeout=15, env=restart_environment(context), preserve_env=True)
+            command(argv, timeout=15, env=systemd_run_environment(restart_environment(context)), preserve_env=True)
             sessions.append({"kind": "tmux", "server": server, "session": session})
         else:
             _broker_terminal(install, context, args)

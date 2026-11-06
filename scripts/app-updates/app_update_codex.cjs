@@ -34,7 +34,7 @@ const version = (text) => typeof text === 'string' ? text.match(/\d+\.\d+(?:\.\d
 // and with KillMode=process would keep its cgroup, and so its memory.peak, alive across restarts.
 // An ssh session or a plain shell has no such cgroup and needs no transient unit.
 function insideServiceCgroup(read = () => fs.readFileSync('/proc/self/cgroup', 'utf8')) {
-  try { return read().split('\n').some((line) => /\/user@\d+\.service\/.*\.service$/.test(line.trim())); } catch { return false; }
+  try { return read().split('\n').some((line) => /\/user@\d+\.service\/(?:.*\/)?[^/]+\.service(?:\/|$)/.test(line.trim())); } catch { return false; }
 }
 /** Restart one captured process from the updated install, outside the dashboard's cgroup. */
 async function relaunch(target, desktop, outside, deps = {}) {
@@ -56,6 +56,18 @@ async function relaunch(target, desktop, outside, deps = {}) {
 function createUpdateRuntime(createRuntime, deps = {}) {
   return createRuntime(path.join(home, '.codex'), { scan: async () => privateScan(),
     launch: (target, desktop, outside) => relaunch(target, desktop, outside, deps) });
+}
+/** A Codex Desktop main process, not one of its renderers or helpers. */
+function desktopRunning(processes) {
+  return processes.some((item) => item.exe === '/usr/lib/chatgpt/ChatGPT' && !item.args.join(' ').includes('--type='));
+}
+/** A Codex app server on this home. Proxies don't count, nor do servers on another home (T3's). */
+function serverRunning(processes, codexHome = path.join(home, '.codex')) {
+  return processes.some((item) => {
+    const index = item.args.indexOf('app-server');
+    if (path.basename(item.exe) !== 'codex' || index < 0 || item.args[index + 1] === 'proxy') return false;
+    return path.resolve(item.env.CODEX_HOME || path.join(item.env.HOME || home, '.codex')) === path.resolve(codexHome);
+  });
 }
 function run(binary, args, timeout = 10000) {
   return new Promise((resolve, reject) => execFile(binary, args, { timeout, maxBuffer: 65536, encoding: 'utf8',
@@ -93,10 +105,12 @@ function privateScan() {
   return values;
 }
 function markerFile() { return path.join(home, '.ccs/app-updates', output.appId + '-pending-restart.json'); }
-function markPending() {
+function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'utf8')); } catch { return null; } }
+/** `desktop`: a Codex Desktop this update closed, which a retry must see running again. */
+function markPending(desktop) {
   fs.mkdirSync(path.dirname(markerFile()), { recursive: true, mode: 0o700 });
   const temporary = markerFile() + '.' + process.pid + '.tmp';
-  fs.writeFileSync(temporary, JSON.stringify({ version: output.version }), { mode: 0o600 });
+  fs.writeFileSync(temporary, JSON.stringify({ version: output.version, desktop }), { mode: 0o600 });
   fs.renameSync(temporary, markerFile());
 }
 async function execute(deps) {
@@ -109,6 +123,13 @@ async function execute(deps) {
   try {
     output.previousVersion = output.version = version(await deps.readVersion());
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
+    // A retry restarts only what its own stop() finds, because the launch snapshot of a failed
+    // earlier run is gone. The marker says what that run closed. A desktop marker from before this
+    // field always counts: it exists because of a desktop. A CLI one (the Python path writes those
+    // too) counts only when it says so.
+    const retried = restartOnly || deps.pending(output.previousVersion);
+    const marked = deps.markedDesktop();
+    const wantsDesktop = await deps.desktopRunning() || (retried && (mode === 'desktop' ? marked !== false : marked === true));
     if (mode === 'cli') {
       output.updateAttempted = true;
       await deps.update();
@@ -118,7 +139,7 @@ async function execute(deps) {
       if (output.version === output.previousVersion && !deps.pending(output.version)) {
         output.status = 'current'; output.messageCode = 'current'; return output;
       }
-      deps.mark();
+      deps.mark(wantsDesktop);
     }
     runtime = deps.runtime();
     while (true) {
@@ -134,23 +155,23 @@ async function execute(deps) {
       if (!restartOnly) await deps.update();
       output.version = version(await deps.readVersion());
       if (!output.version || (!restartOnly && output.version === output.previousVersion) || (expected && output.version !== version(expected))) throw new Error('Candidate not installed.');
-      deps.mark();
+      deps.mark(wantsDesktop);
     }
     await deps.restartProxies?.();
     await runtime.start(); stopped = false;
     if (await deps.hasOldProxies()) throw new Error('An old proxy has no verified restart supervisor.');
-    // A retry from the pending marker restarts only what its own stop() found. The launch snapshot
-    // of a failed earlier run is gone, so stopping and starting nothing proves no restart: say so
-    // once. The marker goes too, since nothing here could ever finish it.
-    const retried = mode === 'desktop' ? restartOnly : output.version === output.previousVersion;
-    if (retried && output.restartedProcesses === 0 && !(await deps.running())) {
+    // Stopping and starting nothing, or leaving the captured desktop closed, is not a restart: say
+    // so once. The marker goes too, since nothing here could ever finish it.
+    if (retried && (wantsDesktop ? !(await deps.desktopRunning())
+      : output.restartedProcesses === 0 && !(await deps.serverRunning()) && !(await deps.desktopRunning()))) {
       deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running';
       return output;
     }
     deps.clear(); output.status = 'updated'; output.messageCode = 'updated';
   } catch {
     // start() does nothing once it has released the lock, so a launch that failed there is not
-    // retried here. The marker stays, and the next click reports what it finds (restart_not_running).
+    // retried here. The marker stays, and the next click reports what it finds (restart_not_running):
+    // the updaters send a matching marker here even with no daemon running.
     if (stopped) { try { await runtime.start(); } catch { /* Reported below as restart_failed. */ } }
     if (busy) {
       // Nothing was stopped. The CLI package may already be new (the pending
@@ -172,20 +193,8 @@ function loadRuntime(candidates = modules) {
   const { createCodexActivationRuntime, lockfile } = require(selected);
   return { selected, createCodexActivationRuntime, lockfile: lockfile ?? require('module').createRequire(selected)('proper-lockfile') };
 }
-async function main() {
-  const loaded = fs.existsSync(executable) ? loadRuntime() : null;
-  if (!loaded) return output;
-  const { createCodexActivationRuntime, lockfile } = loaded;
-  let release;
-  try {
-    release = await lockfile.lock(path.join(home, '.codex'), { realpath: false,
-      lockfilePath: path.join(home, '.codex/.ccs-activation.lock'), stale: 120000, update: 5000,
-      retries: { retries: Math.max(1, Math.floor(Math.min(seconds, LOCK_WAIT_SECONDS) / 5)), factor: 1, minTimeout: 5000, maxTimeout: 5000 } });
-  } catch {
-    // An account switch holds the Codex lock; come back when it is done.
-    output.status = 'action_required'; output.messageCode = 'codex_busy'; return output;
-  }
-  try {
+/** Everything execute() needs on a real host, with the runtime wired through createUpdateRuntime. */
+function bridgeDeps(createCodexActivationRuntime) {
   const initial = privateScan();
   const oldProxies = initial.filter((item) => item.args.includes('app-server') && item.args.includes('proxy') &&
     (item.exe === executable || item.exe.startsWith(path.join(home, '.codex/packages/standalone/releases') + path.sep)));
@@ -202,10 +211,10 @@ async function main() {
     }
     return false;
   });
-  return await execute({ now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  return { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     readVersion: () => operation === 'desktop' ? run('/usr/bin/dpkg-query', ['-W', '-f=${Version}', 'chatgpt']) : run(executable, ['--version']),
     update: () => operation === 'desktop' ? run('/usr/bin/sudo', ['-n', '/usr/bin/apt-get', 'install', '--only-upgrade', '-y', 'chatgpt'], 180000) : run(executable, ['update'], 180000),
-    pending: (expected) => { try { return JSON.parse(fs.readFileSync(markerFile(), 'utf8')).version === expected; } catch { return false; } },
+    pending: (expected) => readMarker()?.version === expected,
     mark: markPending, clear: () => { try { fs.unlinkSync(markerFile()); } catch {} },
     restartProxies: async () => {
       if (operation !== 'cli') return;
@@ -233,9 +242,27 @@ async function main() {
       return true;
     },
     runtime: () => createUpdateRuntime(createCodexActivationRuntime),
-    running: () => privateScan().some((item) => path.basename(item.exe) === 'codex' || item.exe === '/usr/lib/chatgpt/ChatGPT'),
-  });
+    markedDesktop: () => readMarker()?.desktop,
+    desktopRunning: () => desktopRunning(privateScan()),
+    serverRunning: () => serverRunning(privateScan()),
+    };
+}
+async function main() {
+  const loaded = fs.existsSync(executable) ? loadRuntime() : null;
+  if (!loaded) return output;
+  const { createCodexActivationRuntime, lockfile } = loaded;
+  let release;
+  try {
+    release = await lockfile.lock(path.join(home, '.codex'), { realpath: false,
+      lockfilePath: path.join(home, '.codex/.ccs-activation.lock'), stale: 120000, update: 5000,
+      retries: { retries: Math.max(1, Math.floor(Math.min(seconds, LOCK_WAIT_SECONDS) / 5)), factor: 1, minTimeout: 5000, maxTimeout: 5000 } });
+  } catch {
+    // An account switch holds the Codex lock; come back when it is done.
+    output.status = 'action_required'; output.messageCode = 'codex_busy'; return output;
+  }
+  try {
+    return await execute(bridgeDeps(createCodexActivationRuntime));
   } finally { await release(); }
 }
-module.exports = { createUpdateRuntime, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
+module.exports = { bridgeDeps, createUpdateRuntime, desktopRunning, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, serverRunning, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

@@ -99,6 +99,31 @@ function carriedEnvironment(env: Record<string, string | undefined>): Record<str
   return carried;
 }
 
+/** Loader settings the app needs but systemd-run must not load (an AppImage's or snap's libraries). */
+const LOADER_ENV = ['LD_PRELOAD', 'LD_LIBRARY_PATH'];
+const LOADER_ENV_PREFIX = 'AAC_LOADER_';
+/**
+ * Puts the loader settings back for the app alone. systemd-run and this shell run without them, the
+ * values stay off every argv, and exec keeps the unit's main process id. systemd expands $NAME in a
+ * command line before it runs, which would put the value on this shell's argv, so every $ is $$.
+ */
+const LOADER_TRAMPOLINE = [
+  ...LOADER_ENV.map(
+    (name) =>
+      `if [ "\$\${${LOADER_ENV_PREFIX}${name}+x}" ]; then export ${name}="\$\$${LOADER_ENV_PREFIX}${name}"; unset ${LOADER_ENV_PREFIX}${name}; fi`
+  ),
+  'exec "$$@"',
+].join('; ');
+
+/** What systemd-run receives to hand on: carried entries, with the loader settings renamed. */
+function unitEnvironment(env: Record<string, string | undefined>): Record<string, string> {
+  const unit: Record<string, string> = {};
+  for (const [key, value] of Object.entries(carriedEnvironment(env))) {
+    unit[LOADER_ENV.includes(key) ? `${LOADER_ENV_PREFIX}${key}` : key] = value;
+  }
+  return unit;
+}
+
 /**
  * Build the systemd-run argv for a launch. Exported for tests.
  * --collect drops the unit once the app exits so repeated launches never collide.
@@ -115,16 +140,19 @@ export function buildSystemdRunArgs(spec: AppLaunchSpec, unit: string): string[]
   if (spec.cwd !== undefined && spec.cwd !== '') {
     argv.push(`--working-directory=${spec.cwd}`);
   }
-  if (spec.env !== undefined) {
-    for (const key of Object.keys(carriedEnvironment(spec.env))) argv.push(`--setenv=${key}`);
-  }
+  const names = spec.env === undefined ? [] : Object.keys(unitEnvironment(spec.env));
+  for (const key of names) argv.push(`--setenv=${key}`);
   if (spec.logFile !== undefined && spec.logFile !== '') {
     argv.push(`--property=StandardOutput=append:${spec.logFile}`);
     argv.push(`--property=StandardError=append:${spec.logFile}`);
   } else {
     argv.push('--property=StandardOutput=null', '--property=StandardError=null');
   }
-  argv.push('--', spec.exe, ...spec.args);
+  argv.push('--');
+  if (names.some((key) => key.startsWith(LOADER_ENV_PREFIX))) {
+    argv.push('/bin/sh', '-c', LOADER_TRAMPOLINE, 'sh');
+  }
+  argv.push(spec.exe, ...spec.args);
   return argv;
 }
 
@@ -138,7 +166,7 @@ export function systemdRunEnvironment(
   inherited: NodeJS.ProcessEnv = process.env
 ): Record<string, string> | undefined {
   if (spec.env === undefined) return undefined;
-  const env = carriedEnvironment(spec.env);
+  const env = unitEnvironment(spec.env);
   if (inherited.XDG_RUNTIME_DIR) env.XDG_RUNTIME_DIR = inherited.XDG_RUNTIME_DIR;
   return env;
 }
