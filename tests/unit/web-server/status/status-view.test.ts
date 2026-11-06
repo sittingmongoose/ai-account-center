@@ -44,7 +44,11 @@ function sample(fields: Partial<MachineSample> = {}): MachineSample {
 async function inputs(root: string, extra: Partial<StatusInputs> = {}): Promise<StatusInputs> {
   const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
   await reader.scan();
-  const ok = (data: MachineSample): Collected<MachineSample> => ({ data, asOf: NOW - 30_000, error: null });
+  const ok = (data: MachineSample): Collected<MachineSample> => ({
+    data,
+    asOf: NOW - 30_000,
+    error: null,
+  });
   return {
     now: NOW,
     timeZone: 'America/New_York',
@@ -103,8 +107,18 @@ describe('status view', () => {
   it('marks stale threads, leaves out quiet ones unless blocked, and adds pm-mail threads', async () => {
     const root = dirs.make();
     writeReport(root, 'vm.fresh', 'thread.json', threadDoc('vm.fresh'));
-    writeReport(root, 'vm.stale', 'thread.json', threadDoc('vm.stale', { writtenAt: ago(3600_000) }));
-    writeReport(root, 'vm.quiet', 'thread.json', threadDoc('vm.quiet', { writtenAt: ago(2 * 86_400_000) }));
+    writeReport(
+      root,
+      'vm.stale',
+      'thread.json',
+      threadDoc('vm.stale', { writtenAt: ago(3600_000) })
+    );
+    writeReport(
+      root,
+      'vm.quiet',
+      'thread.json',
+      threadDoc('vm.quiet', { writtenAt: ago(2 * 86_400_000) })
+    );
     writeReport(
       root,
       'mac.stuck',
@@ -120,8 +134,20 @@ describe('status view', () => {
         registry: {
           data: [
             { name: 'fresh', kind: 'claude', machine: 'vm', about: 'dup', lastSeen: ago(60_000) },
-            { name: 'helper', kind: 'claude', machine: 'mac', about: 'Helping', lastSeen: ago(60_000) },
-            { name: 'old', kind: 'claude', machine: 'vm', about: 'Old', lastSeen: ago(3 * 86_400_000) },
+            {
+              name: 'helper',
+              kind: 'claude',
+              machine: 'mac',
+              about: 'Helping',
+              lastSeen: ago(60_000),
+            },
+            {
+              name: 'old',
+              kind: 'claude',
+              machine: 'vm',
+              about: 'Old',
+              lastSeen: ago(3 * 86_400_000),
+            },
             { name: 'aac-answers', kind: null, machine: 'vm', about: null, lastSeen: ago(1000) },
           ],
           asOf: NOW,
@@ -143,16 +169,51 @@ describe('status view', () => {
   it('sorts open cards by urgency then age, hides answered versions and builds batches', async () => {
     const root = dirs.make();
     writeReport(root, 'vm.lead', 'thread.json', threadDoc('vm.lead', { writtenAt: ago(3600_000) }));
-    writeCard(root, cardDoc('vm.lead', 'Q1', { urgency: 'whenever', batch: 'b1' }));
-    writeCard(root, cardDoc('vm.lead', 'Q2', { urgency: 'now', batch: 'b1', recommendation: null }));
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'Q1', {
+        urgency: 'whenever',
+        batch: 'b1',
+        options: [
+          { key: 'A', label: 'First', image: { path: 'images/a-b.png', kind: 'mockup' } },
+          { key: 'B', label: 'Second' },
+        ],
+      })
+    );
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'Q2', { urgency: 'now', batch: 'b1', recommendation: null })
+    );
     writeCard(root, cardDoc('vm.lead', 'Q3', { urgency: 'today', askedAt: ago(9_000_000) }));
     writeCard(root, cardDoc('vm.lead', 'Q4', { urgency: 'today', askedAt: ago(1_000_000) }));
     writeCard(root, cardDoc('vm.lead', 'Q5', { state: 'withdrawn' }));
     const base = await inputs(root);
     const q4 = base.reports.cards.find((c) => c.doc.id === 'vm.lead--Q4');
+    const q1 = base.reports.cards.find((c) => c.doc.id === 'vm.lead--Q1');
+    const done = { state: 'done' as const, at: ago(900), detail: 'ok', attempts: 1 };
     const view = buildStatusView({
       ...base,
       answers: [
+        {
+          id: 'n',
+          answer: {
+            schema: 'agent-reports/answer@1',
+            cardId: 'vm.lead--Q1',
+            cardSeq: 1,
+            cardSha256: q1?.sha256 ?? '',
+            kind: 'note',
+            choice: [],
+            note: 'A third way?',
+            via: 'deck',
+            answeredAt: ago(2000),
+            answeredBy: 'owner',
+            device: 'iPhone',
+            signature: { alg: 'ed25519', keyId: 'k', value: 'v' },
+          },
+          card: q1?.doc as never,
+          share: done,
+          doorbell: done,
+        },
         {
           id: 'x',
           answer: {
@@ -160,9 +221,10 @@ describe('status view', () => {
             cardId: 'vm.lead--Q4',
             cardSeq: 1,
             cardSha256: q4?.sha256 ?? '',
+            kind: 'answer',
             choice: ['A'],
             note: '',
-            via: 'card',
+            via: 'deck',
             answeredAt: ago(1000),
             answeredBy: 'owner',
             device: 'Mac',
@@ -180,8 +242,26 @@ describe('status view', () => {
     expect(view.cards.answered[0].card.id).toBe('vm.lead--Q4');
     expect(view.cards.answered[0].answer.delivery.state).toBe('rang');
     expect(view.cards.batches).toEqual([
-      { id: 'b1', label: 'b1', cardIds: ['vm.lead--Q2', 'vm.lead--Q1'], withRecommendation: 1 },
+      { id: 'b1', label: 'b1', cardIds: ['vm.lead--Q2', 'vm.lead--Q1'] },
     ]);
+    expect(view.cards.answered).toHaveLength(1);
+    expect(view.cards.answered[0].answer.kind).toBe('answer');
+    const open1 = view.cards.open.find((c) => c.id === 'vm.lead--Q1');
+    expect(open1?.notes).toEqual([
+      { note: 'A third way?', at: ago(2000), delivery: expect.objectContaining({ state: 'rang' }) },
+    ]);
+    expect(open1?.label).toBe('S-Q1');
+    expect(open1?.options[0].image).toEqual({
+      url: '/api/status/files/vm.lead/images/a-b.png',
+      kind: 'mockup',
+    });
+    expect(open1?.options[1]).toEqual({
+      key: 'B',
+      label: 'Second',
+      gets: null,
+      costs: null,
+      image: null,
+    });
     expect(view.headline.tone).toBe('bad');
     expect(view.headline.runs[0]).toEqual({ text: '3 questions', strong: true, tone: 'warn' });
   });
@@ -192,7 +272,9 @@ describe('status view', () => {
     const view = buildStatusView(await inputs(root));
     const source = view.sources.find((s) => s.id === 'agent-reports');
     expect(source?.state).toBe('unreadable');
-    expect(source?.detail).toBe('1 file unreadable since 11:30 AM: vm.lead/tasks.json (not valid JSON).');
+    expect(source?.detail).toBe(
+      '1 file unreadable since 11:30 AM: vm.lead/tasks.json (not valid JSON).'
+    );
     expect(view.sources.find((s) => s.id === 'quota-watch')?.state).toBe('unconfigured');
     expect(view.sources.find((s) => s.id === 'usage')?.state).toBe('missing');
   });
@@ -204,7 +286,9 @@ describe('status view', () => {
         machines: {
           vm: { data: sample(), asOf: NOW - 10_000, error: null },
           mac: {
-            data: sample({ disk: { mount: '/System/Volumes/Data', freeBytes: 17.7 * GIB, totalBytes: 460 * GIB } }),
+            data: sample({
+              disk: { mount: '/System/Volumes/Data', freeBytes: 17.7 * GIB, totalBytes: 460 * GIB },
+            }),
             asOf: NOW - 10_000,
             error: null,
           },

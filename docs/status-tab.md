@@ -38,10 +38,13 @@ provider refresh. quota-watch: `unconfigured` until its report format is agreed.
 - `/app/status` and `/app/scoreboard`: the Leptos pages themselves. `?embed=1` hides the page's own header when the
   shell shows it in its iframe. Both need the same signed-in session as the dashboard.
 - `GET /api/status`: the whole view below. `Cache-Control: no-store`. The service worker never touches `/api`.
-- `POST /api/status/answers`: one answer. `POST /api/status/answers/batch`: "approve all, except ...".
-- `GET /api/status/answers?limit=N`: the read-only answer history, newest first: `{ answers: [ { id, card: { id, seq,
-  title, project, stream, askedBy, options, recommendation, cardSha256 }, answer: { choice, note, via, batchAnswer,
-  answeredAt, device, delivery } } ] }`.
+- `POST /api/status/answers`: the owner's answers and notes, sent together from the deck's review screen.
+- `GET /api/status/answers?limit=N`: the read-only answer history (answers and notes), newest first: `{ answers: [ {
+  id, card: { id, label, seq, title, project, stream, askedBy, options: [ { key, label } ], recommendation, cardSha256
+  }, answer: { kind, choice, note, via, answeredAt, device, delivery } } ] }`.
+- `GET /api/status/files/<writer>/<path>`: an image a card names, from that writer's own folder only (no `..`, no
+  links out of the folder, PNG/JPEG/WebP by content, at most 2 MB, `Cache-Control: private, max-age=300`). Refusals:
+  `404 not_found` (missing, outside the folder, not a writer, bad path), `413 too_large`, `415 not_an_image`.
 - `/ws` sends `{ "type": "status-changed" }` to browser-session sockets when a source changes (at most one every 5 s);
   the page re-reads `/api/status`. The page also
   re-reads every `refresh.pollSeconds` while visible, so a missed hint only delays.
@@ -50,8 +53,9 @@ All routes: a browser session (`authKind(req) === 'session'`; no session `401 au
 `403 device_scope`), `Cache-Control: no-store`, errors `{ error, code }` with fixed sentences that never echo input.
 `GET /api/status` takes no query (`400 unexpected_query`); the history takes only `limit` (1 to 500, default 50,
 else `400 invalid_limit`). POSTs: no query string (`400 unexpected_query`), the dashboard Origin
-(`403 origin_required`), `application/json` (`415 json_required`), at most 16 KB (`413 body_too_large`) and exactly
-the documented keys (`400 invalid_body`).
+(`403 origin_required`), `application/json` (`415 json_required`), at most 64 KB (`413 body_too_large`) and exactly
+the documented keys (`400 invalid_body`). The image route sets `Cache-Control: private, max-age=300` instead of
+`no-store`.
 
 ## GET /api/status (view v1)
 
@@ -89,23 +93,38 @@ word, never 0. Times are ISO UTC; the page shows them as relative ages ("2m ago"
 A panel whose source is not `ok` draws its last good data greyed with the source's `detail` on top, or only the
 detail when there is no data. Nothing is ever shown as live when its source is stale.
 
-**Card** (open): the card file's fields after validation (`id`, `writer`, `seq`, `project`, `stream`, `askedBy`,
-`title`, `context`, `whatChanged`, `options[]` (`key, label, detail, pros[], cons[]`), `recommendation`, `allowNote`,
-`multiple`, `urgency`, `blocks`, `batch`, `evidence[]`, `askedAt`) plus `ageSeconds`, `askerState` (the asking thread's
-state, `"gone"` when its thread is stale, `"unknown"` when the writer has no `thread.json`), `cardSha256` (SHA-256 of the
-card file's bytes), `problem` (the file's current problem, or null) and `answerable` (false while the shown copy is the
-last good one of a file that no longer reads). Sorted by urgency, then age (oldest first). A card version that has an
-answer leaves `open`; a card rewritten with a higher `seq` after its answer is open again (the old answer stays in the
-history, naming the version it answered).
+**Card** (open): the card file's fields after validation (`id`, `label`, `writer`, `seq`, `project`, `stream`,
+`askedBy`, `title`, `now`, `nowAsOf`, `oldAnswer`, `whatChanged`, `options[]`, `recommendation`, `multiple`, `urgency`,
+`blocks`, `batch`, `evidence[]`, `replies[]`, `askedAt`) plus `ageSeconds`, `askerState` (the asking thread's state,
+`"gone"` when its thread is stale, `"unknown"` when the writer has no `thread.json`), `cardSha256` (SHA-256 of the card
+file's bytes), `notes[]` (the owner's notes already sent on this card, oldest first, each `{ note, at, delivery }`),
+`problem` (the file's current problem, or null) and `answerable` (false while the shown copy is the last good one of a
+file that no longer reads). Sorted by urgency, then age (oldest first). A card version that has an answer leaves
+`open`; a card rewritten with a higher `seq` after its answer is open again (the old answer stays in the history,
+naming the version it answered). Card fields (from the earlier card decks, research in `CARDS-RESEARCH.md` on the
+share):
+- `label`: a short id the owner can quote anywhere ("F-Q3"); never reused or relabelled. A file without one shows its
+  local id (the part after `--`).
+- `title`: the question itself. `now`: the situation today in plain words, no internal ids in its first sentence,
+  with `nowAsOf` (when the counts in it were taken). The reader accepts `context` as an alias of `now`.
+- `oldAnswer` `{ text, at }` and `whatChanged`: when a question comes back because its premise moved, the earlier
+  answer quoted and what changed. Otherwise both null: an answer that still holds is never asked again.
+- `options[]`: `{ key: "A", label, gets, costs, image: { url, kind: "built" | "mockup" } | null }`, two to four
+  options. `gets`: what the owner sees or gets; `costs`: what it costs or changes elsewhere. In the card file `image`
+  is `{ path, kind }` with `path` relative to the writer's own folder (plain segments, no `..`); the view turns it
+  into `url` = `/api/status/files/<writer>/<path>` (PNG, JPEG or WebP, at most 2 MB), shown under the option.
+- `recommendation` `{ key, why }`: marked on its option and again with the one-line reason.
+- `blocks`: what waits on the answer, or null for "nothing waits on this".
+- `replies[]` `{ at, text }`: the agent's replies to the owner's notes, in the card file (a new `seq`).
+- A withdrawn card may carry `reason` ("Settled by your note"). There is no `allowNote`: the note box is always there.
 
-**AnsweredCard**: `{ card: Card, answer: { choice, note, via, batchAnswer, answeredAt, device, delivery: { state:
+**AnsweredCard**: `{ card: Card, answer: { kind: "answer", choice, note, via, answeredAt, device, delivery: { state:
 "rang" | "failed" | "pending", at, detail, share: Step, doorbell: Step } } }`, newest first, at most 50 (the full
-history is `GET /api/status/answers`). **Step**: `{ state: "pending" | "done" | "failed" | "skipped", at, detail,
-attempts }`. `failed` covers a share write or doorbell still being retried, one that gave up after 20 attempts, and a
-card with no pm-mail recipient (`skipped` doorbell); `detail` says which.
+history, notes included, is `GET /api/status/answers`). **Step**: `{ state: "pending" | "done" | "failed" |
+"skipped", at, detail, attempts }`. `failed` covers a share write or doorbell still being retried, one that gave up
+after 20 attempts, and a card with no pm-mail recipient (`skipped` doorbell); `detail` says which.
 
-**Batch**: `{ id, label, cardIds: [...], withRecommendation: N }`: open cards that share `batch`, for the
-"Approve all, except ..." control. Only cards that have a recommendation can be approved that way.
+**Batch**: `{ id, label, cardIds: [...] }`: open cards that share `batch`, kept together in the deck.
 
 **Project**: `{ id, label, streams: [ Stream ], counts, completion }` (sums of its `tasks` streams). **Stream**: `{ id,
 label, owner, goal, writer, board: { path, ageSeconds } | null, source: "tasks" | "board-only", asOf, ageSeconds, stale,
@@ -149,35 +168,50 @@ reset", `warn` "claude main (7-day): full in 1d 11h, before its Nov 12 reset".
 
 ## Answers
 
-`POST /api/status/answers` body: `{ "cardId": "...", "cardSeq": 2, "cardSha256": "...", "choice": ["A"], "note": "..." }`.
+The owner answers in a deck: one card at a time with Back and Next, a row of card labels to jump, and nothing is sent
+until the review screen at the end ("Send N answers"). "Send current selections" jumps to that review screen early,
+for a long deck. "Use the recommendations" fills every card still empty with its recommendation; the owner can change
+any of them before sending. Unsent choices and notes are kept on this device (browser storage) so leaving the page
+loses nothing; they are drafts, never answers.
+
+`POST /api/status/answers` body: `{ "answers": [ { "cardId", "cardSeq", "cardSha256", "choice": ["A"] | [], "note": "...",
+"via": "deck" | "recommended" } ] }`, 1 to 50 entries, at most 64 KB. Each entry is validated and recorded on its
+own, in order, one set at a time; the response is `{ "results": [ { cardId, outcome: "recorded" | "card_changed" |
+"refused", code, error } ] }`, one per entry in request order (HTTP 200 when the request itself is valid, even if some
+entries are refused; `code` and `error` are null for `recorded`; `cardId` is null when the entry did not name a valid
+card id). Entry codes: `card_changed`, `invalid_entry` (not the strict entry shape), `invalid_choice`, `empty_entry`
+(no choice and no note), `invalid_note`, `invalid_via`, `answer_not_saved` (the private store could not be written;
+nothing else happened for that entry).
 - The card must be open on disk at that `seq` and hash (read fresh, not from the last scan) and that version not yet
-  answered. Otherwise `409 card_changed` and the page reloads the card. Answers run one at a time.
-- `choice` keys must be the card's option keys, without repeats (one unless `multiple`); a note alone is allowed when
-  `allowNote`, and a note on a card without `allowNote` is refused. Otherwise `400 invalid_choice`.
+  answered. Otherwise that entry is `card_changed` and the page reloads the card.
+- `choice` keys must be the card's option keys, without repeats (one unless `multiple`).
+- One note box serves a different answer, a comment and a question. With a choice, the record is `kind: "answer"` and
+  the card closes. With only a note, the record is `kind: "note"`: it is signed and delivered the same way, but the
+  card stays open, showing the note (`notes[]`); the agent replies on the card (`replies[]`) or withdraws the card
+  with `reason` (for example "Settled by your note"). Agents never write an answer.
+- `via: "recommended"` marks an answer filled by "Use the recommendations" and not changed by the owner; the server
+  checks the choice is exactly the card's recommendation (`invalid_via` otherwise).
 - The note is stored exactly as typed (trimmed of surrounding whitespace only), at most 4,000 characters, no control
-  characters other than tab and newlines (`400 invalid_note`).
-- `200 { answer: { id, card, answer } }`; `500 answer_not_saved` when the private store could not be written (nothing
-  else happens then).
-- Stored in `<ccsDir>/status/answers.jsonl` (append, local disk, this server only), then written signed to
-  `<reports>/v1/answers/<card>.json` (temporary file and rename), then the asker is rung through pm-mail. Each step's
+  characters other than tab and newlines.
+- Stored in `<ccsDir>/status/answers.jsonl` (append, local disk, this server only), then written signed to the share
+  (temporary file and rename), then the asker is rung through pm-mail. An answer goes to
+  `<reports>/v1/answers/<card>.json` (a later answer to a newer version of the card replaces it); each note gets its
+  own file, `<reports>/v1/answers/<card>.note-<12 hex>.json`, so no note overwrites another or an answer. Each step's
   result is kept in the history; a failed share write or doorbell is retried and shown, never hidden.
+- The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind, choice, note, via,
+  answeredAt, answeredBy: "owner", device, signature }`. `device` is a word from the browser (`iPhone`, `iPad`,
+  `Android`, `Mac`, `Windows`, `Linux`, `browser`).
 - Signature: Ed25519 over the canonical JSON of the answer without `signature` (object keys sorted at every depth, no
   whitespace, values as `JSON.stringify` writes them). The key pair lives in `<ccsDir>/status/answer-key.pem` (PKCS#8,
   0600), created on first use; the public key (SPKI PEM) is published at `<reports>/v1/keys/aac-answers.pub` with
-  `keyId` = first 16 hex characters of the SHA-256 of the public key's DER (SPKI) bytes. `answeredBy` is `"owner"`;
-  `device` is a word from the browser (`iPhone`, `iPad`, `Android`, `Mac`, `Windows`, `Linux`, `browser`).
+  `keyId` = first 16 hex characters of the SHA-256 of the public key's DER (SPKI) bytes.
   `verifySignedAnswer(fileText, publicKeyPem)` in `src/web-server/status/answer-signing.ts` is the check a reporter
   mirrors.
-- The doorbell runs `pm-mail --as aac-answers send <replyTo.pmMail> "Answer for <card>" -m "<body>"` only after the
-  signed copy is on the share; the body names the card and the answer file, never the note.
+- The doorbell runs `pm-mail --as aac-answers send <replyTo.pmMail> "Answer for <card>" | "Note on <card>" -m
+  "<body>"` only after the signed copy is on the share; the body names the card and the signed file, never the note.
 - No agent path exists: the routes take a browser session only (not a device token, not localhost without auth).
 
-`POST /api/status/answers/batch` body: `{ "batch": "id", "cards": [ { "id", "seq", "cardSha256" } ], "except": [ ids ] }`
-approves the recommendation of every listed card not in `except`, each as its own answer with
-`via: "approve-all-except"` and the same `batchAnswer` id. The exceptions stay open. A card that changed is refused
-individually (`card_changed`) and the rest proceed; the result lists each card's outcome: `200 { batchAnswer, results:
-[ { id, outcome: "answered" | "excepted" | "card_changed" | "not_in_batch" | "no_recommendation" |
-"answer_not_saved", answer? } ] }`. At most 50 cards.
+`cards.batches` is only a grouping (id, label, cardIds) that orders the deck; there is no approve-all endpoint.
 
 ## Web UI move
 

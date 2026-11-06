@@ -54,9 +54,10 @@ describe('answer signing', () => {
     cardId: 'vm.lead--Q1',
     cardSeq: 2,
     cardSha256: 'a'.repeat(64),
+    kind: 'answer',
     choice: ['A'],
     note: 'Ünïcode note, "quoted"\nsecond line',
-    via: 'card',
+    via: 'deck',
     answeredAt: '2026-11-06T17:02:11.000Z',
     answeredBy: 'owner',
     device: 'iPhone',
@@ -96,19 +97,32 @@ describe('answer signing', () => {
   });
 });
 
+type Entry = Record<string, unknown>;
+const entry = (cardId: string, sha: string, fields: Entry = {}): Entry => ({
+  cardId,
+  cardSeq: 1,
+  cardSha256: sha,
+  choice: ['A'],
+  via: 'deck',
+  ...fields,
+});
+
 describe('answers', () => {
   it('stores, signs, shares and rings, in that order, with the note verbatim', async () => {
     const { root, store, answers, rings } = setup();
     const sha = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 3 }));
     const note = '  Keep it inside — but test at 320 px.\n  Thanks  ';
-    const outcome = await answers.submit(
-      { cardId: 'vm.lead--Q1', cardSeq: 3, cardSha256: sha, choice: ['A'], note },
+    const results = await answers.submitSet(
+      [entry('vm.lead--Q1', sha, { cardSeq: 3, note })],
       'iPhone'
     );
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(outcome.entry.answer.note).toBe('Keep it inside — but test at 320 px.\n  Thanks');
-    expect(outcome.entry.answer.answeredBy).toBe('owner');
+    expect(results).toEqual([
+      { cardId: 'vm.lead--Q1', outcome: 'recorded', code: null, error: null },
+    ]);
+    const recorded = answers.history(1)[0];
+    expect(recorded.answer.note).toBe('Keep it inside — but test at 320 px.\n  Thanks');
+    expect(recorded.answer.kind).toBe('answer');
+    expect(recorded.answer.answeredBy).toBe('owner');
     const line = fs.readFileSync(path.join(store, 'answers.jsonl'), 'utf8').split('\n')[0];
     expect(JSON.parse(line).answer.cardSha256).toBe(sha);
     const shared = fs.readFileSync(path.join(root, 'v1', 'answers', 'vm.lead--Q1.json'), 'utf8');
@@ -118,10 +132,9 @@ describe('answers', () => {
     await settle();
     expect(rings).toHaveLength(1);
     expect(rings[0].to).toBe('lead');
-    expect(rings[0].body).toContain('vm.lead--Q1');
+    expect(rings[0].subject).toBe('Answer for vm.lead--Q1');
     expect(rings[0].body).not.toContain('320 px');
     expect(deliveryView(answers.history(1)[0]).state).toBe('rang');
-    // A second store reads the same history back.
     const again = new StatusAnswers({
       readCard: async () => null,
       storeDir: () => store,
@@ -131,88 +144,118 @@ describe('answers', () => {
     expect(again.isAnswered('vm.lead--Q1', 3, sha)).toBe(true);
   });
 
-  it('refuses every way an answer can be wrong', async () => {
+  it('records each entry of a set on its own and refuses every way an entry can be wrong', async () => {
     const { root, answers } = setup();
     const sha = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
-    const base = { cardId: 'vm.lead--Q1', cardSeq: 2, cardSha256: sha, choice: ['A'] };
-    const code = async (input: Partial<typeof base> & { note?: string }) => {
-      const outcome = await answers.submit({ ...base, ...input }, 'Mac');
-      return outcome.ok ? 'ok' : `${outcome.status} ${outcome.code}`;
-    };
-    expect(await code({ cardSeq: 1 })).toBe('409 card_changed');
-    expect(await code({ cardSha256: 'b'.repeat(64) })).toBe('409 card_changed');
-    expect(await code({ cardId: 'vm.lead--Q9' })).toBe('409 card_changed');
-    expect(await code({ choice: ['C'] })).toBe('400 invalid_choice');
-    expect(await code({ choice: ['A', 'B'] })).toBe('400 invalid_choice');
-    expect(await code({ choice: ['A', 'A'] })).toBe('400 invalid_choice');
-    expect(await code({ choice: [] })).toBe('400 invalid_choice');
-    expect(await code({ note: 'x'.repeat(ANSWER_NOTE_MAX + 1) })).toBe('400 invalid_note');
-    expect(await code({ note: 'bad \u0000 byte' })).toBe('400 invalid_note');
-    // A note alone is allowed when the card allows a note.
-    expect(await code({ choice: [], note: 'Something else entirely' })).toBe('ok');
-    // That version is answered now.
-    expect(await code({})).toBe('409 card_changed');
-    // A withdrawn card and a card that forbids notes.
-    const withdrawn = writeCard(root, cardDoc('vm.lead', 'Q2', { state: 'withdrawn' }));
-    expect(await code({ cardId: 'vm.lead--Q2', cardSeq: 1, cardSha256: withdrawn })).toBe(
-      '409 card_changed'
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2', { state: 'withdrawn' }));
+    const q3 = writeCard(root, cardDoc('vm.lead', 'Q3', { multiple: true }));
+    const q4 = writeCard(root, cardDoc('vm.lead', 'Q4', { recommendation: null }));
+    const base = entry('vm.lead--Q1', sha, { cardSeq: 2 });
+    const results = await answers.submitSet(
+      [
+        { ...base, cardSeq: 1 },
+        { ...base, cardSha256: 'b'.repeat(64) },
+        { ...base, cardId: 'vm.lead--Q9' },
+        { ...base, choice: ['C'] },
+        { ...base, choice: ['A', 'B'] },
+        { ...base, choice: ['A', 'A'] },
+        { ...base, choice: [] },
+        { ...base, note: 'x'.repeat(ANSWER_NOTE_MAX + 1) },
+        { ...base, note: 'bad \u0000 byte' },
+        { ...base, via: 'card' },
+        { ...base, extra: 1 },
+        'not an entry',
+        { ...base, choice: ['B'], via: 'recommended' },
+        entry('vm.lead--Q2', q2),
+        entry('vm.lead--Q3', q3, { choice: ['B', 'A'] }),
+        entry('vm.lead--Q4', q4, { via: 'recommended' }),
+        base,
+        base,
+      ],
+      'Mac'
     );
-    const noNote = writeCard(root, cardDoc('vm.lead', 'Q3', { allowNote: false }));
-    expect(
-      await code({ cardId: 'vm.lead--Q3', cardSeq: 1, cardSha256: noNote, note: 'hi' })
-    ).toBe('400 invalid_choice');
-    const multi = writeCard(root, cardDoc('vm.lead', 'Q4', { multiple: true }));
-    expect(
-      await code({ cardId: 'vm.lead--Q4', cardSeq: 1, cardSha256: multi, choice: ['B', 'A'] })
-    ).toBe('ok');
+    expect(results.map((r) => r.code ?? r.outcome)).toEqual([
+      'card_changed',
+      'card_changed',
+      'card_changed',
+      'invalid_choice',
+      'invalid_choice',
+      'invalid_choice',
+      'empty_entry',
+      'invalid_note',
+      'invalid_note',
+      'invalid_entry',
+      'invalid_entry',
+      'invalid_entry',
+      'invalid_via',
+      'card_changed',
+      'recorded',
+      'invalid_via',
+      'recorded',
+      'card_changed',
+    ]);
+    expect(results[0]).toEqual({
+      cardId: 'vm.lead--Q1',
+      outcome: 'card_changed',
+      code: 'card_changed',
+      error: 'This card changed or is no longer open. Reload it and answer again.',
+    });
+    expect(results[3].outcome).toBe('refused');
+    expect(results[11].cardId).toBeNull();
   });
 
-  it('serializes two answers to the same card version: one wins, one is told it changed', async () => {
-    const { root, answers } = setup();
-    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
-    const input = { cardId: 'vm.lead--Q1', cardSeq: 1, cardSha256: sha, choice: ['A'] };
-    const [a, b] = await Promise.all([answers.submit(input, 'Mac'), answers.submit(input, 'iPhone')]);
-    expect([a.ok, b.ok].sort()).toEqual([false, true]);
-  });
-
-  it('approves a batch except the exceptions, refusing a changed card individually', async () => {
+  it('records a note alone as a note: signed and rung, but the card stays open', async () => {
     const { root, answers, rings } = setup();
-    const batch = 'F-questions';
-    const shaQ1 = writeCard(root, cardDoc('vm.lead', 'Q1', { batch }));
-    const shaQ2 = writeCard(root, cardDoc('vm.lead', 'Q2', { batch, recommendation: { key: 'B' } }));
-    const shaQ3 = writeCard(root, cardDoc('vm.lead', 'Q3', { batch }));
-    const shaQ4 = writeCard(root, cardDoc('vm.lead', 'Q4', { batch, recommendation: null }));
-    const shaQ5 = writeCard(root, cardDoc('vm.lead', 'Q5', { batch: 'other' }));
-    // Q3 changes after the page loaded it.
-    writeCard(root, cardDoc('vm.lead', 'Q3', { batch, seq: 2, whatChanged: 'New option' }));
-    const result = await answers.submitBatch(
-      {
-        batch,
-        cards: [
-          { id: 'vm.lead--Q1', seq: 1, cardSha256: shaQ1 },
-          { id: 'vm.lead--Q2', seq: 1, cardSha256: shaQ2 },
-          { id: 'vm.lead--Q3', seq: 1, cardSha256: shaQ3 },
-          { id: 'vm.lead--Q4', seq: 1, cardSha256: shaQ4 },
-          { id: 'vm.lead--Q5', seq: 1, cardSha256: shaQ5 },
-        ],
-        except: ['vm.lead--Q1'],
-      },
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const results = await answers.submitSet(
+      [
+        entry('vm.lead--Q1', sha, { choice: [], note: 'What about a third way?' }),
+        entry('vm.lead--Q1', sha, { choice: [], note: 'And a second note.' }),
+      ],
+      'iPhone'
+    );
+    expect(results.map((r) => r.outcome)).toEqual(['recorded', 'recorded']);
+    expect(answers.isAnswered('vm.lead--Q1', 1, sha)).toBe(false);
+    const notes = answers.history();
+    expect(notes.map((n) => n.answer.kind)).toEqual(['note', 'note']);
+    const files = fs.readdirSync(path.join(root, 'v1', 'answers')).sort();
+    expect(files).toHaveLength(2);
+    expect(files.every((f) => /^vm\.lead--Q1\.note-[0-9a-f]{12}\.json$/.test(f))).toBe(true);
+    const pub = fs.readFileSync(path.join(root, 'v1', 'keys', 'aac-answers.pub'), 'utf8');
+    for (const file of files)
+      expect(
+        verifySignedAnswer(fs.readFileSync(path.join(root, 'v1', 'answers', file)), pub).ok
+      ).toBe(true);
+    await settle();
+    expect(rings.map((r) => r.subject)).toEqual(['Note on vm.lead--Q1', 'Note on vm.lead--Q1']);
+    // The card can still be answered.
+    const answered = await answers.submitSet([entry('vm.lead--Q1', sha)], 'iPhone');
+    expect(answered[0].outcome).toBe('recorded');
+    expect(answers.isAnswered('vm.lead--Q1', 1, sha)).toBe(true);
+  });
+
+  it('marks unchanged recommendations as recommended', async () => {
+    const { root, answers } = setup();
+    const sha = writeCard(
+      root,
+      cardDoc('vm.lead', 'Q1', { recommendation: { key: 'B', why: null } })
+    );
+    const results = await answers.submitSet(
+      [entry('vm.lead--Q1', sha, { choice: ['B'], via: 'recommended' })],
       'iPad'
     );
-    expect(result.results.map((r) => [r.id, r.outcome])).toEqual([
-      ['vm.lead--Q1', 'excepted'],
-      ['vm.lead--Q2', 'answered'],
-      ['vm.lead--Q3', 'card_changed'],
-      ['vm.lead--Q4', 'no_recommendation'],
-      ['vm.lead--Q5', 'not_in_batch'],
+    expect(results[0].outcome).toBe('recorded');
+    expect(answers.history(1)[0].answer.via).toBe('recommended');
+  });
+
+  it('serializes two sets answering the same card version: one wins, one is told it changed', async () => {
+    const { root, answers } = setup();
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const [a, b] = await Promise.all([
+      answers.submitSet([entry('vm.lead--Q1', sha)], 'Mac'),
+      answers.submitSet([entry('vm.lead--Q1', sha)], 'iPhone'),
     ]);
-    const answered = result.results[1].entry?.answer;
-    expect(answered?.choice).toEqual(['B']);
-    expect(answered?.via).toBe('approve-all-except');
-    expect(answered?.batchAnswer).toBe(result.batchAnswer);
-    expect(answers.isAnswered('vm.lead--Q1', 1, shaQ1)).toBe(false);
-    await settle();
-    expect(rings.map((r) => r.subject)).toEqual(['Answer for vm.lead--Q2']);
+    expect([a[0].outcome, b[0].outcome].sort()).toEqual(['card_changed', 'recorded']);
   });
 
   it('records a failed doorbell, shows it, and retries until it rings', async () => {
@@ -222,10 +265,7 @@ describe('answers', () => {
         ok ? { ok: true, detail: 'Rang.' } : { ok: false, detail: 'pm-mail failed.' },
     });
     const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
-    await answers.submit(
-      { cardId: 'vm.lead--Q1', cardSeq: 1, cardSha256: sha, choice: ['A'] },
-      'Mac'
-    );
+    await answers.submitSet([entry('vm.lead--Q1', sha)], 'Mac');
     await settle();
     let view = deliveryView(answers.history(1)[0]);
     expect(view.state).toBe('failed');
@@ -240,13 +280,9 @@ describe('answers', () => {
   it('records a failed share write, never rings before the signed copy exists, and retries', async () => {
     const { root, answers, rings } = setup();
     const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
-    // A file where the answers folder should be makes the share write fail.
     fs.writeFileSync(path.join(root, 'v1', 'answers'), 'blocker');
-    const outcome = await answers.submit(
-      { cardId: 'vm.lead--Q1', cardSeq: 1, cardSha256: sha, choice: ['A'] },
-      'Mac'
-    );
-    expect(outcome.ok).toBe(true);
+    const results = await answers.submitSet([entry('vm.lead--Q1', sha)], 'Mac');
+    expect(results[0].outcome).toBe('recorded');
     await settle();
     expect(rings).toHaveLength(0);
     expect(deliveryView(answers.history(1)[0]).state).toBe('failed');
@@ -262,17 +298,19 @@ describe('answers', () => {
       root,
       cardDoc('vm.lead', 'Q1', { replyTo: { pmMail: null, t3Thread: null } })
     );
-    await answers.submit({ cardId: 'vm.lead--Q1', cardSeq: 1, cardSha256: sha, choice: ['A'] }, 'Mac');
+    await answers.submitSet([entry('vm.lead--Q1', sha)], 'Mac');
     await settle();
     const view = deliveryView(answers.history(1)[0]);
     expect(view.state).toBe('failed');
     expect(view.detail).toContain('no pm-mail recipient');
     const sha2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
-    await answers.submit({ cardId: 'vm.lead--Q2', cardSeq: 1, cardSha256: sha2, choice: ['A'] }, 'Mac');
+    await answers.submitSet([entry('vm.lead--Q2', sha2)], 'Mac');
     await settle();
     for (let i = 0; i < MAX_DELIVERY_ATTEMPTS + 3; i += 1) await answers.retryPending();
     expect(answers.history(1)[0].doorbell.attempts).toBe(MAX_DELIVERY_ATTEMPTS);
-    expect(deliveryView(answers.history(1)[0]).detail).toContain(`after ${MAX_DELIVERY_ATTEMPTS} attempts`);
+    expect(deliveryView(answers.history(1)[0]).detail).toContain(
+      `after ${MAX_DELIVERY_ATTEMPTS} attempts`
+    );
   });
 
   it('turns the doorbell off for test servers', async () => {
@@ -287,7 +325,7 @@ describe('answers', () => {
     const before = process.env.AAC_STATUS_DOORBELL;
     process.env.AAC_STATUS_DOORBELL = 'off';
     try {
-      await answers.submit({ cardId: 'vm.lead--Q1', cardSeq: 1, cardSha256: sha, choice: ['A'] }, 'Mac');
+      await answers.submitSet([entry('vm.lead--Q1', sha)], 'Mac');
       await settle();
     } finally {
       if (before === undefined) delete process.env.AAC_STATUS_DOORBELL;

@@ -84,6 +84,60 @@ describe('agent report documents', () => {
     expect(dup).toEqual({ ok: false, reason: 'items repeat an id' });
   });
 
+  it('reads the deck card fields: label, now (context alias), old answer, gets/costs, images, replies', () => {
+    const parse = (fields: Record<string, unknown>) =>
+      parseReportFile('card', json(cardDoc('vm.lead', 'Q1', fields)), 'vm.lead', 'vm.lead--Q1');
+    const full = parse({
+      oldAnswer: { text: 'Keep it', at: '2026-11-01T10:00:00Z' },
+      whatChanged: 'It shipped',
+      options: [
+        {
+          key: 'A',
+          label: 'First',
+          gets: 'g',
+          costs: 'c',
+          image: { path: 'images/a.png', kind: 'mockup' },
+        },
+        { key: 'B', label: 'Second', gets: null, costs: null, image: null },
+      ],
+      replies: [{ at: '2026-11-06T16:00:00Z', text: 'Done' }],
+      allowNote: false,
+    });
+    expect(full.ok).toBe(true);
+    if (full.ok) {
+      expect(full.value.doc.label).toBe('S-Q1');
+      expect(full.value.doc.oldAnswer?.text).toBe('Keep it');
+      expect(full.value.doc.options[0].image).toEqual({ path: 'images/a.png', kind: 'mockup' });
+      expect(full.value.doc.replies).toHaveLength(1);
+      expect('allowNote' in full.value.doc).toBe(false);
+    }
+    const alias = parse({ now: undefined, context: 'Old field', label: undefined });
+    expect(alias.ok && alias.value.doc.now).toBe('Old field');
+    expect(alias.ok && alias.value.doc.label).toBe('Q1');
+    const option = (key: string) => ({ key, label: key });
+    expect(parse({ options: [option('A')], recommendation: null })).toEqual({
+      ok: false,
+      reason: 'a card needs 2 to 4 options',
+    });
+    expect(parse({ options: ['A', 'B', 'C', 'D', 'E'].map(option), recommendation: null }).ok).toBe(
+      false
+    );
+    for (const bad of [
+      '../x.png',
+      '/etc/x.png',
+      'a/../../x.png',
+      'C:\\x.png',
+      'a//b.png',
+      '.hidden/x.png',
+    ])
+      expect(
+        parse({
+          options: [{ ...option('A'), image: { path: bad, kind: 'built' } }, option('B')],
+          recommendation: null,
+        })
+      ).toEqual({ ok: false, reason: 'options[0].image.path is missing or not valid' });
+  });
+
   it('refuses files with secrets and says what kind, never the text', () => {
     const cases: Array<[unknown, string]> = [
       [{ doing: 'key sk-ant-abcdefghijklmnopqrstuvwxyz0123' }, 'an API key'],
@@ -94,7 +148,11 @@ describe('agent report documents', () => {
       [{ doing: '-----BEGIN PRIVATE KEY-----' }, 'a private key'],
     ];
     for (const [fields, kind] of cases) {
-      const result = parseReportFile('thread', json({ ...threadDoc('vm.lead'), ...(fields as object) }), 'vm.lead');
+      const result = parseReportFile(
+        'thread',
+        json({ ...threadDoc('vm.lead'), ...(fields as object) }),
+        'vm.lead'
+      );
       expect(result).toEqual({ ok: false, reason: `refused: it contains what looks like ${kind}` });
     }
     expect(findSecret('/mnt/Cursor/share/x 0cbf3355 thread 8ba2e5d2')).toBeNull();

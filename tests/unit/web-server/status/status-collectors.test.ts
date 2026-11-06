@@ -32,8 +32,19 @@ describe('status collectors', () => {
             gpu_util: 39,
             mem_gb: 15.44,
             sessions: [
-              { id: 'abc123', url: 'http://10.0.0.5:8963/head.html?cb=1&token=secret#x', owner: 'pid 5', recording: true, age_s: 466 },
-              { id: 'def456', url: 'file:///tmp/run/page%20one.html?x=1', owner: 'thread:abc', age_s: 10 },
+              {
+                id: 'abc123',
+                url: 'http://10.0.0.5:8963/head.html?cb=1&token=secret#x',
+                owner: 'pid 5',
+                recording: true,
+                age_s: 466,
+              },
+              {
+                id: 'def456',
+                url: 'file:///tmp/run/page%20one.html?x=1',
+                owner: 'thread:abc',
+                age_s: 10,
+              },
             ],
           },
         },
@@ -44,7 +55,10 @@ describe('status collectors', () => {
     expect(rows[0].browsers).toEqual({ running: 2, max: 12 });
     expect(rows[0].recordings).toEqual({ running: 1, max: 5 });
     expect(rows[0].memGb).toBe(15.4);
-    expect(rows[0].sessions.map((s) => s.url)).toEqual(['10.0.0.5:8963/head.html', '/tmp/run/page one.html']);
+    expect(rows[0].sessions.map((s) => s.url)).toEqual([
+      '10.0.0.5:8963/head.html',
+      '/tmp/run/page one.html',
+    ]);
     expect(sessionUrl('javascript:alert(1)')).toBeNull();
     expect(() => parseBrowserSlots({})).toThrow('unknown shape');
   });
@@ -107,16 +121,27 @@ describe('status collectors', () => {
     );
     expect(windows?.load1).toBeNull();
     expect(windows?.busyPct).toBe(40);
-    expect(windows?.disk).toEqual({ mount: 'C:', freeBytes: 218592583680, totalBytes: 1999342923776 });
+    expect(windows?.disk).toEqual({
+      mount: 'C:',
+      freeBytes: 218592583680,
+      totalBytes: 1999342923776,
+    });
     expect(parseMachineProbe('linux', 'garbage')).toBeNull();
-    expect(machineProbeCommand('windows')).toStartWith('powershell.exe -NoProfile -NonInteractive -EncodedCommand ');
+    expect(machineProbeCommand('windows')).toStartWith(
+      'powershell.exe -NoProfile -NonInteractive -EncodedCommand '
+    );
   });
 
   it('reads a remote machine with one ssh command and reports a silent host in fixed words', async () => {
     const calls: string[][] = [];
     const run: CommandRunner = async (file, args) => {
       calls.push([file, ...args]);
-      return { code: 255, stdout: 'Permission denied for user secret', timedOut: false, missing: false };
+      return {
+        code: 255,
+        stdout: 'Permission denied for user secret',
+        timedOut: false,
+        missing: false,
+      };
     };
     await expect(readRemoteMachine('nas1', run)).rejects.toThrow('ssh failed.');
     expect(calls[0][0]).toBe('ssh');
@@ -136,16 +161,30 @@ describe('status collectors', () => {
     const dir = dirs.make();
     fs.writeFileSync(
       path.join(dir, 'lead.json'),
-      JSON.stringify({ name: 'lead', kind: 'claude', about: 'Working', last_seen: '2026-11-06T16:00:00Z', machine: 'ubuntuserver' })
+      JSON.stringify({
+        name: 'lead',
+        kind: 'claude',
+        about: 'Working',
+        last_seen: '2026-11-06T16:00:00Z',
+        machine: 'ubuntuserver',
+      })
     );
     fs.writeFileSync(path.join(dir, 'broken.json'), '{');
     const reader = new PmMailRegistryReader(() => dir);
     const first = await reader.scan();
     expect(first.threads).toEqual([
-      { name: 'lead', kind: 'claude', machine: 'vm', about: 'Working', lastSeen: '2026-11-06T16:00:00.000Z' },
+      {
+        name: 'lead',
+        kind: 'claude',
+        machine: 'vm',
+        about: 'Working',
+        lastSeen: '2026-11-06T16:00:00.000Z',
+      },
     ]);
     expect((await reader.scan()).changed).toBe(false);
     expect(fs.readdirSync(dir).sort()).toEqual(['broken.json', 'lead.json']);
-    await expect(new PmMailRegistryReader(() => path.join(dir, 'nope')).scan()).rejects.toThrow('missing');
+    await expect(new PmMailRegistryReader(() => path.join(dir, 'nope')).scan()).rejects.toThrow(
+      'missing'
+    );
   });
 });

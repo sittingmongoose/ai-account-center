@@ -4,28 +4,21 @@ import { hasOnlyKeys, sendError } from './account-route-guards';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { authKind } from '../middleware/request-auth';
 import { getStatusService, type StatusService } from '../status/status-service';
-import {
-  answerDevice,
-  deliveryView,
-  type AnswerHistoryEntry,
-  type AnswerInput,
-  type BatchInput,
-} from '../status/answers';
-import { isCardId } from '../status/report-schema';
+import { answerDevice, deliveryView, type AnswerHistoryEntry } from '../status/answers';
+import { readCardImage } from '../status/status-files';
 
 /**
  * The Status tab API (docs/status-tab.md):
  * - `GET /api/status`: the whole view;
- * - `GET /api/status/answers?limit=N`: the owner's answer history, newest first;
- * - `POST /api/status/answers`: one answer;
- * - `POST /api/status/answers/batch`: "approve all, except ...".
- * Every route: a browser session only (never a device token, never localhost without sign-in),
- * `Cache-Control: no-store`. POSTs: no query string, the dashboard Origin, application/json and a
- * strict body of at most 16 KB. Errors are `{ error, code }` with fixed sentences.
+ * - `GET /api/status/answers?limit=N`: the owner's answers and notes, newest first;
+ * - `POST /api/status/answers`: an answer set from the deck, one result per entry;
+ * - `GET /api/status/files/<writer>/<path>`: an option image from that writer's own folder.
+ * Every route: a browser session only (never a device token, never localhost without sign-in).
+ * The POST: no query string, the dashboard Origin, application/json and a strict body of at most
+ * 64 KB. Errors are `{ error, code }` with fixed sentences.
  */
-export const MAX_STATUS_BODY_BYTES = 16 * 1024;
-const SHA256 = /^[0-9a-f]{64}$/;
-const BATCH_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const MAX_STATUS_BODY_BYTES = 64 * 1024;
+export const MAX_ANSWER_ENTRIES = 50;
 
 function invalid(res: Response): void {
   sendError(res, 400, 'invalid_body', 'The request body is not valid for this action.');
@@ -71,75 +64,41 @@ function postBody(req: Request, res: Response): Record<string, unknown> | null {
   return body as Record<string, unknown>;
 }
 
-function isSeq(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isKeyList(value: unknown, max: number): value is string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= max &&
-    value.every((key) => typeof key === 'string' && key.length > 0 && key.length <= 32)
-  );
-}
-
-/** The strict shape of one answer, or null. */
-export function parseAnswerBody(body: Record<string, unknown>): AnswerInput | null {
-  if (!hasOnlyKeys(body, ['cardId', 'cardSeq', 'cardSha256', 'choice'], ['note'])) return null;
-  const { cardId, cardSeq, cardSha256, choice, note } = body;
-  if (!isCardId(cardId) || !isSeq(cardSeq)) return null;
-  if (typeof cardSha256 !== 'string' || !SHA256.test(cardSha256)) return null;
-  if (!isKeyList(choice, 12)) return null;
-  if (note !== undefined && typeof note !== 'string') return null;
-  return { cardId, cardSeq, cardSha256, choice, ...(note !== undefined ? { note } : {}) };
-}
-
-/** The strict shape of a batch, or null. */
-export function parseBatchBody(body: Record<string, unknown>): BatchInput | null {
-  if (!hasOnlyKeys(body, ['batch', 'cards', 'except'])) return null;
-  const { batch, cards, except } = body;
-  if (typeof batch !== 'string' || !BATCH_ID.test(batch)) return null;
-  if (!Array.isArray(cards) || cards.length === 0 || cards.length > 50) return null;
-  const parsed: BatchInput['cards'] = [];
-  for (const card of cards) {
-    if (!card || typeof card !== 'object' || Array.isArray(card)) return null;
-    const row = card as Record<string, unknown>;
-    if (!hasOnlyKeys(row, ['id', 'seq', 'cardSha256'])) return null;
-    if (!isCardId(row.id) || !isSeq(row.seq)) return null;
-    if (typeof row.cardSha256 !== 'string' || !SHA256.test(row.cardSha256)) return null;
-    parsed.push({ id: row.id, seq: row.seq, cardSha256: row.cardSha256 });
-  }
-  if (new Set(parsed.map((card) => card.id)).size !== parsed.length) return null;
-  if (!Array.isArray(except) || except.length > 50 || !except.every((id) => isCardId(id)))
-    return null;
-  return { batch, cards: parsed, except: except as string[] };
-}
-
 function entryView(entry: AnswerHistoryEntry) {
   return {
     id: entry.id,
     card: {
       id: entry.card.id,
+      label: entry.card.label ?? null,
       seq: entry.card.seq,
       title: entry.card.title,
       project: entry.card.project,
       stream: entry.card.stream,
       askedBy: entry.card.askedBy,
-      options: entry.card.options,
+      options: (entry.card.options ?? []).map((option) => ({
+        key: option.key,
+        label: option.label,
+      })),
       recommendation: entry.card.recommendation,
       cardSha256: entry.answer.cardSha256,
     },
     answer: {
+      kind: entry.answer.kind,
       choice: entry.answer.choice,
       note: entry.answer.note,
       via: entry.answer.via,
-      batchAnswer: entry.answer.batchAnswer ?? null,
       answeredAt: entry.answer.answeredAt,
       device: entry.answer.device,
       delivery: deliveryView(entry),
     },
   };
 }
+
+const IMAGE_REFUSALS = {
+  not_found: [404, 'This file is not available.'],
+  too_large: [413, 'This image is larger than 2 MB.'],
+  not_an_image: [415, 'This file is not a PNG, JPEG or WebP image.'],
+} as const;
 
 export function createStatusRouter(service: () => StatusService = getStatusService): Router {
   const router = createApiRouter();
@@ -186,41 +145,41 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
   router.post('/answers', async (req, res) => {
     const body = postBody(req, res);
     if (!body) return;
-    const input = parseAnswerBody(body);
-    if (!input) {
+    const entries = body.answers;
+    if (
+      !hasOnlyKeys(body, ['answers']) ||
+      !Array.isArray(entries) ||
+      entries.length === 0 ||
+      entries.length > MAX_ANSWER_ENTRIES
+    ) {
       invalid(res);
       return;
     }
-    const outcome = await service().answers.submit(input, answerDevice(req.headers['user-agent']));
-    if (!outcome.ok) {
-      sendError(res, outcome.status, outcome.code, outcome.error);
-      return;
-    }
-    service().changed();
-    res.json({ answer: entryView(outcome.entry) });
-  });
-
-  router.post('/answers/batch', async (req, res) => {
-    const body = postBody(req, res);
-    if (!body) return;
-    const input = parseBatchBody(body);
-    if (!input) {
-      invalid(res);
-      return;
-    }
-    const result = await service().answers.submitBatch(
-      input,
+    const results = await service().answers.submitSet(
+      entries,
       answerDevice(req.headers['user-agent'])
     );
     service().changed();
-    res.json({
-      batchAnswer: result.batchAnswer,
-      results: result.results.map((row) => ({
-        id: row.id,
-        outcome: row.outcome,
-        ...(row.entry ? { answer: entryView(row.entry) } : {}),
-      })),
-    });
+    res.json({ results });
+  });
+
+  router.get(/^\/files\/([^/]+)\/(.+)$/, async (req, res) => {
+    if (req.originalUrl.includes('?')) {
+      sendError(res, 400, 'unexpected_query', 'This request does not take a query string.');
+      return;
+    }
+    const params = req.params as unknown as Record<string, string>;
+    const image = await readCardImage(service().reader.root, params[0], params[1]);
+    if (!image.ok) {
+      const [status, error] = IMAGE_REFUSALS[image.reason];
+      sendError(res, status, image.reason, error);
+      return;
+    }
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Content-Type', image.contentType);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.send(image.bytes);
   });
 
   return router;

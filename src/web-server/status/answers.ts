@@ -75,36 +75,40 @@ export interface AnswerDelivery {
   doorbell: StepState;
 }
 
-export type AnswerOutcome =
-  | { ok: true; entry: AnswerHistoryEntry }
-  | {
-      ok: false;
-      status: number;
-      code: 'card_changed' | 'invalid_choice' | 'invalid_note' | 'answer_not_saved';
-      error: string;
-    };
-
+/** Why one entry of an answer set was not recorded (fixed sentences, never input). */
 const REFUSALS = {
-  card_changed: {
-    status: 409,
-    error: 'This card changed or is no longer open. Reload it and answer again.',
-  },
-  invalid_choice: { status: 400, error: 'The choice does not match this card’s options.' },
-  invalid_note: {
-    status: 400,
-    error: `The note must be at most ${ANSWER_NOTE_MAX} characters of plain text.`,
-  },
-  answer_not_saved: { status: 500, error: 'The answer could not be saved. Nothing was sent.' },
+  card_changed: 'This card changed or is no longer open. Reload it and answer again.',
+  invalid_entry: 'This entry is not a valid answer.',
+  invalid_choice: 'The choice does not match this card’s options.',
+  empty_entry: 'Choose an option or write a note.',
+  invalid_note: `The note must be at most ${ANSWER_NOTE_MAX} characters of plain text.`,
+  invalid_via: 'Only an unchanged recommendation can be sent as recommended.',
+  answer_not_saved: 'The answer could not be saved. Nothing was sent.',
 } as const;
 
-type Refusal = Extract<AnswerOutcome, { ok: false }>;
+export type RefusalCode = keyof typeof REFUSALS;
 
-/** An answer stored and shared; `ring` sends the doorbell (absent when the share write failed). */
-type CardAnswer = { ok: true; entry: AnswerHistoryEntry; ring?: () => Promise<void> } | Refusal;
-
-function refuse(code: keyof typeof REFUSALS): Refusal {
-  return { ok: false, code, ...REFUSALS[code] };
+/** One entry's outcome, in the order the entries were sent. */
+export interface EntryResult {
+  cardId: string | null;
+  outcome: 'recorded' | 'card_changed' | 'refused';
+  code: RefusalCode | null;
+  error: string | null;
 }
+
+function refused(cardId: string | null, code: RefusalCode): EntryResult {
+  return {
+    cardId,
+    outcome: code === 'card_changed' ? 'card_changed' : 'refused',
+    code,
+    error: REFUSALS[code],
+  };
+}
+
+/** A record stored and shared; `ring` sends the doorbell (absent when the share write failed). */
+type CardAnswer =
+  | { ok: true; entry: AnswerHistoryEntry; ring?: () => Promise<void> }
+  | { ok: false };
 
 /** The device word for an answer, from the browser's User-Agent. */
 export function answerDevice(userAgent: unknown): string {
@@ -131,15 +135,58 @@ export function normalizeNote(note: unknown): string | null {
   return trimmed;
 }
 
-/** Whether a choice (option keys) and note are a valid answer to this card. */
-export function validChoice(card: CardDoc, choice: string[], note: string): boolean {
+/** Whether a choice (option keys, possibly none) fits this card. A note is always allowed. */
+export function validChoice(card: CardDoc, choice: string[]): boolean {
   const keys = new Set(card.options.map((option) => option.key));
   if (new Set(choice).size !== choice.length) return false;
   if (!choice.every((key) => keys.has(key))) return false;
-  if (!card.multiple && choice.length > 1) return false;
-  if (note && !card.allowNote) return false;
-  if (choice.length === 0) return card.allowNote && note.length > 0;
-  return true;
+  return card.multiple || choice.length <= 1;
+}
+
+export interface AnswerEntry {
+  cardId: string;
+  cardSeq: number;
+  cardSha256: string;
+  choice: string[];
+  note?: string;
+  via: 'deck' | 'recommended';
+}
+
+const ENTRY_KEYS = new Set(['cardId', 'cardSeq', 'cardSha256', 'choice', 'note', 'via']);
+const SHA256 = /^[0-9a-f]{64}$/;
+
+/** The strict shape of one entry of an answer set, or null. */
+export function parseAnswerEntry(raw: unknown): AnswerEntry | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  if (!Object.keys(rec).every((key) => ENTRY_KEYS.has(key))) return null;
+  const { cardId, cardSeq, cardSha256, choice, note, via } = rec;
+  if (!isCardId(cardId)) return null;
+  if (typeof cardSeq !== 'number' || !Number.isSafeInteger(cardSeq) || cardSeq < 0) return null;
+  if (typeof cardSha256 !== 'string' || !SHA256.test(cardSha256)) return null;
+  if (
+    !Array.isArray(choice) ||
+    choice.length > 4 ||
+    !choice.every((key) => typeof key === 'string' && key.length > 0 && key.length <= 32)
+  )
+    return null;
+  if (note !== undefined && typeof note !== 'string') return null;
+  if (via !== 'deck' && via !== 'recommended') return null;
+  return {
+    cardId,
+    cardSeq,
+    cardSha256,
+    choice: choice as string[],
+    ...(note !== undefined ? { note } : {}),
+    via,
+  };
+}
+
+/** Where a record's signed copy goes: an answer replaces `<card>.json`; each note gets its own file. */
+export function shareFileName(answer: SignedAnswer, recordId: string): string {
+  return answer.kind === 'note'
+    ? `${answer.cardId}.note-${recordId.replace(/-/g, '').slice(0, 12)}.json`
+    : `${answer.cardId}.json`;
 }
 
 export interface RingResult {
@@ -230,33 +277,6 @@ export function deliveryView(entry: AnswerHistoryEntry): AnswerDelivery {
   return { ...base, state: 'pending', at: null, detail: 'Delivering.' };
 }
 
-export interface AnswerInput {
-  cardId: string;
-  cardSeq: number;
-  cardSha256: string;
-  choice: string[];
-  note?: string;
-}
-
-export interface BatchInput {
-  batch: string;
-  cards: Array<{ id: string; seq: number; cardSha256: string }>;
-  except: string[];
-}
-
-export type BatchCardOutcome =
-  | 'answered'
-  | 'excepted'
-  | 'card_changed'
-  | 'not_in_batch'
-  | 'no_recommendation'
-  | 'answer_not_saved';
-
-export interface BatchResult {
-  batchAnswer: string;
-  results: Array<{ id: string; outcome: BatchCardOutcome; entry?: AnswerHistoryEntry }>;
-}
-
 export interface StatusAnswersDeps {
   storeDir?: () => string;
   reportsRoot?: () => string;
@@ -326,9 +346,10 @@ export class StatusAnswers {
         record.answer &&
         record.card
       ) {
+        const answer = record.answer as SignedAnswer;
         const entry: AnswerHistoryEntry = {
           id: record.id,
-          answer: record.answer as SignedAnswer,
+          answer: answer.kind === 'note' ? answer : { ...answer, kind: 'answer' },
           card: record.card as CardDoc,
           share: { ...PENDING },
           doorbell: { ...PENDING },
@@ -357,10 +378,11 @@ export class StatusAnswers {
     return this.list().slice().reverse().slice(0, Math.max(0, limit));
   }
 
-  /** Whether this exact card version already has an answer. */
+  /** Whether this exact card version already has an answer (a note does not close a card). */
   isAnswered(cardId: string, seq: number, sha256: string): boolean {
     return this.list().some(
       (entry) =>
+        entry.answer.kind === 'answer' &&
         entry.answer.cardId === cardId &&
         entry.answer.cardSeq === seq &&
         entry.answer.cardSha256 === sha256
@@ -399,7 +421,7 @@ export class StatusAnswers {
           const current = await fs.promises.readFile(pub, 'utf8').catch(() => '');
           if (current !== key.publicKeyPem) await writeAtomic(pub, key.publicKeyPem);
           await writeAtomic(
-            path.join(v1, 'answers', `${entry.answer.cardId}.json`),
+            path.join(v1, 'answers', shareFileName(entry.answer, entry.id)),
             `${JSON.stringify(entry.answer, null, 2)}\n`
           );
         })(),
@@ -450,11 +472,14 @@ export class StatusAnswers {
       );
       return;
     }
-    const { cardId, cardSeq } = entry.answer;
-    const subject = `Answer for ${cardId}`;
+    const { cardId, cardSeq, kind } = entry.answer;
+    const note = kind === 'note';
+    const subject = note ? `Note on ${cardId}` : `Answer for ${cardId}`;
     const body = [
-      `The owner answered card ${cardId} (seq ${cardSeq}) on the AI Account Center Status tab.`,
-      `The signed answer file is the authority: agent-reports/v1/answers/${cardId}.json`,
+      note
+        ? `The owner sent a note on card ${cardId} (seq ${cardSeq}); the card stays open. Reply on the card or withdraw it.`
+        : `The owner answered card ${cardId} (seq ${cardSeq}) on the AI Account Center Status tab.`,
+      `The signed file is the authority: agent-reports/v1/answers/${shareFileName(entry.answer, entry.id)}`,
       '(public key agent-reports/v1/keys/aac-answers.pub). This mail is only a doorbell.',
     ].join('\n');
     let result: RingResult;
@@ -472,18 +497,17 @@ export class StatusAnswers {
     choice: string[],
     note: string,
     device: string,
-    via: UnsignedAnswer['via'],
-    batchAnswer?: string
+    via: UnsignedAnswer['via']
   ): Promise<CardAnswer> {
     const unsigned: UnsignedAnswer = {
       schema: ANSWER_SCHEMA,
       cardId: parsed.doc.id,
       cardSeq: parsed.doc.seq,
       cardSha256: parsed.sha256,
+      kind: choice.length > 0 ? 'answer' : 'note',
       choice,
       note,
       via,
-      ...(batchAnswer ? { batchAnswer } : {}),
       answeredAt: new Date(this.now()).toISOString(),
       answeredBy: 'owner',
       device,
@@ -506,7 +530,7 @@ export class StatusAnswers {
         card: entry.card,
       });
     } catch {
-      return refuse('answer_not_saved');
+      return { ok: false };
     }
     this.list().push(entry);
     this.deps.onChange?.();
@@ -524,64 +548,47 @@ export class StatusAnswers {
     return parsed;
   }
 
-  async submit(input: AnswerInput, device: string): Promise<AnswerOutcome> {
-    const outcome = await this.serial(async (): Promise<CardAnswer> => {
-      const note = normalizeNote(input.note);
-      if (note === null) return refuse('invalid_note');
-      const parsed = await this.openCard(input.cardId, input.cardSeq, input.cardSha256);
-      if (!parsed) return refuse('card_changed');
-      if (!validChoice(parsed.doc, input.choice, note)) return refuse('invalid_choice');
-      return this.answerCard(parsed, input.choice, note, device, 'card');
-    });
-    if (!outcome.ok) return outcome;
-    if (outcome.ring) void outcome.ring();
-    return { ok: true, entry: outcome.entry };
+  /** One entry of a set; must run inside `serial`. */
+  private async recordEntry(
+    raw: unknown,
+    device: string,
+    rings: Array<() => Promise<void>>
+  ): Promise<EntryResult> {
+    const entry = parseAnswerEntry(raw);
+    const named = (raw as { cardId?: unknown } | null)?.cardId;
+    if (!entry) return refused(isCardId(named) ? named : null, 'invalid_entry');
+    const note = normalizeNote(entry.note);
+    if (note === null) return refused(entry.cardId, 'invalid_note');
+    const parsed = await this.openCard(entry.cardId, entry.cardSeq, entry.cardSha256);
+    if (!parsed) return refused(entry.cardId, 'card_changed');
+    if (!validChoice(parsed.doc, entry.choice)) return refused(entry.cardId, 'invalid_choice');
+    if (entry.choice.length === 0 && !note) return refused(entry.cardId, 'empty_entry');
+    if (
+      entry.via === 'recommended' &&
+      (!parsed.doc.recommendation ||
+        entry.choice.length !== 1 ||
+        entry.choice[0] !== parsed.doc.recommendation.key)
+    )
+      return refused(entry.cardId, 'invalid_via');
+    const done = await this.answerCard(parsed, entry.choice, note, device, entry.via);
+    if (!done.ok) return refused(entry.cardId, 'answer_not_saved');
+    if (done.ring) rings.push(done.ring);
+    return { cardId: entry.cardId, outcome: 'recorded', code: null, error: null };
   }
 
-  /** "Approve all, except ...": each listed card not excepted gets its recommendation. */
-  async submitBatch(input: BatchInput, device: string): Promise<BatchResult> {
-    const batchAnswer = randomUUID();
+  /**
+   * An answer set from the deck: each entry validated and recorded on its own, one result per
+   * entry in order. Doorbells ring after every entry is recorded.
+   */
+  async submitSet(entries: unknown[], device: string): Promise<EntryResult[]> {
     const rings: Array<() => Promise<void>> = [];
     const results = await this.serial(async () => {
-      const except = new Set(input.except);
-      const out: BatchResult['results'] = [];
-      for (const card of input.cards) {
-        if (except.has(card.id)) {
-          out.push({ id: card.id, outcome: 'excepted' });
-          continue;
-        }
-        const parsed = await this.openCard(card.id, card.seq, card.cardSha256);
-        if (!parsed) {
-          out.push({ id: card.id, outcome: 'card_changed' });
-          continue;
-        }
-        if (parsed.doc.batch !== input.batch) {
-          out.push({ id: card.id, outcome: 'not_in_batch' });
-          continue;
-        }
-        if (!parsed.doc.recommendation) {
-          out.push({ id: card.id, outcome: 'no_recommendation' });
-          continue;
-        }
-        const answered = await this.answerCard(
-          parsed,
-          [parsed.doc.recommendation.key],
-          '',
-          device,
-          'approve-all-except',
-          batchAnswer
-        );
-        if (!answered.ok) {
-          out.push({ id: card.id, outcome: 'answer_not_saved' });
-          continue;
-        }
-        if (answered.ring) rings.push(answered.ring);
-        out.push({ id: card.id, outcome: 'answered', entry: answered.entry });
-      }
+      const out: EntryResult[] = [];
+      for (const raw of entries) out.push(await this.recordEntry(raw, device, rings));
       return out;
     });
     for (const ring of rings) void ring();
-    return { batchAnswer, results };
+    return results;
   }
 
   /** Retries every share write and doorbell that has not succeeded and has attempts left. */

@@ -18,6 +18,7 @@ import {
 import { buildUsage, machinesSource, machineView } from './status-view-panels';
 import type {
   BatchView,
+  CardNoteView,
   CardView,
   Collected,
   HeadlineRun,
@@ -273,50 +274,84 @@ function askerState(inputs: StatusInputs, writer: string): CardView['askerState'
   return threadStale(thread, inputs.now) ? 'gone' : thread.doc.state;
 }
 
+/** The URL an option image is served from: the writer's folder and the path, each segment encoded. */
+export function cardFileUrl(writer: string, file: string): string {
+  return `/api/status/files/${encodeURIComponent(writer)}/${file
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}`;
+}
+
 function cardView(
   inputs: StatusInputs,
   doc: CardDoc,
   sha256: string,
-  problem: ReportProblem | null
+  problem: ReportProblem | null,
+  notes: CardNoteView[] = []
 ): CardView {
   const asked = Date.parse(doc.askedAt);
+  // Stored history cards are read back as written; missing fields read as empty.
   return {
     id: doc.id,
+    label: doc.label ?? doc.id.slice(doc.id.indexOf('--') + 2),
     writer: doc.writer,
     seq: doc.seq,
-    project: doc.project,
-    stream: doc.stream,
-    askedBy: doc.askedBy,
+    project: doc.project ?? null,
+    stream: doc.stream ?? null,
+    askedBy: doc.askedBy ?? null,
     title: doc.title,
-    context: doc.context,
-    whatChanged: doc.whatChanged,
-    options: doc.options,
-    recommendation: doc.recommendation,
-    allowNote: doc.allowNote,
-    multiple: doc.multiple,
+    now: doc.now ?? null,
+    nowAsOf: doc.nowAsOf ?? null,
+    oldAnswer: doc.oldAnswer ?? null,
+    whatChanged: doc.whatChanged ?? null,
+    options: (doc.options ?? []).map((option) => ({
+      key: option.key,
+      label: option.label,
+      gets: option.gets ?? null,
+      costs: option.costs ?? null,
+      image: option.image
+        ? { url: cardFileUrl(doc.writer, option.image.path), kind: option.image.kind }
+        : null,
+    })),
+    recommendation: doc.recommendation ?? null,
+    multiple: doc.multiple === true,
     urgency: doc.urgency,
-    blocks: doc.blocks,
-    batch: doc.batch,
-    evidence: doc.evidence,
+    blocks: doc.blocks ?? null,
+    batch: doc.batch ?? null,
+    evidence: doc.evidence ?? [],
+    replies: doc.replies ?? [],
     askedAt: doc.askedAt,
     ageSeconds: ageSeconds(inputs.now, asked) ?? 0,
     askerState: askerState(inputs, doc.writer),
     cardSha256: sha256,
+    notes,
     problem: problem?.reason ?? null,
     answerable: problem === null,
   };
 }
 
 function buildCards(inputs: StatusInputs): StatusView['cards'] {
+  const answers = inputs.answers.filter((e) => e.answer.kind !== 'note');
   const answered = new Set(
-    inputs.answers.map((e) => `${e.answer.cardId}\n${e.answer.cardSeq}\n${e.answer.cardSha256}`)
+    answers.map((e) => `${e.answer.cardId}\n${e.answer.cardSeq}\n${e.answer.cardSha256}`)
   );
+  const notes = new Map<string, CardNoteView[]>();
+  for (const entry of inputs.answers) {
+    if (entry.answer.kind !== 'note') continue;
+    const list = notes.get(entry.answer.cardId) ?? [];
+    list.push({
+      note: entry.answer.note,
+      at: entry.answer.answeredAt,
+      delivery: deliveryView(entry),
+    });
+    notes.set(entry.answer.cardId, list);
+  }
   const open = inputs.reports.cards
     .filter(
       (row) =>
         row.doc.state === 'open' && !answered.has(`${row.doc.id}\n${row.doc.seq}\n${row.sha256}`)
     )
-    .map((row) => cardView(inputs, row.doc, row.sha256, row.problem))
+    .map((row) => cardView(inputs, row.doc, row.sha256, row.problem, notes.get(row.doc.id)))
     .sort(
       (a, b) =>
         URGENCIES.indexOf(a.urgency) - URGENCIES.indexOf(b.urgency) ||
@@ -326,27 +361,21 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
   const batches = new Map<string, BatchView>();
   for (const card of open) {
     if (!card.batch) continue;
-    const batch = batches.get(card.batch) ?? {
-      id: card.batch,
-      label: card.batch,
-      cardIds: [],
-      withRecommendation: 0,
-    };
+    const batch = batches.get(card.batch) ?? { id: card.batch, label: card.batch, cardIds: [] };
     batch.cardIds.push(card.id);
-    if (card.recommendation && card.answerable) batch.withRecommendation += 1;
     batches.set(card.batch, batch);
   }
-  const history = inputs.answers.slice().reverse().slice(0, 50);
+  const history = answers.slice().reverse().slice(0, 50);
   return {
     source: 'agent-reports',
     open,
     answered: history.map((entry) => ({
       card: cardView(inputs, entry.card, entry.answer.cardSha256, null),
       answer: {
+        kind: 'answer' as const,
         choice: entry.answer.choice,
         note: entry.answer.note,
         via: entry.answer.via,
-        batchAnswer: entry.answer.batchAnswer ?? null,
         answeredAt: entry.answer.answeredAt,
         device: entry.answer.device,
         delivery: deliveryView(entry),

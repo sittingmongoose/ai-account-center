@@ -69,7 +69,9 @@ describe('agent reports reader', () => {
     );
     await r.scan();
     state = r.snapshot();
-    expect(state.problems.map((p) => p.reason)).toEqual(['contains NUL bytes from a damaged write']);
+    expect(state.problems.map((p) => p.reason)).toEqual([
+      'contains NUL bytes from a damaged write',
+    ]);
     expect(state.threads[0].doc.doing).toBe('First');
     // A file with no good copy is still listed by name.
     writeReport(root, 'mac.other', 'tasks.json', Buffer.from('not json'));
@@ -145,7 +147,9 @@ describe('agent reports reader', () => {
   it('maps share paths from every machine onto this computer and nothing outside it', () => {
     const root = '/mnt/Cursor/agent-reports';
     expect(shareLocalPath('/Volumes/Cursor/share/a/F.md', root)).toBe('/mnt/Cursor/share/a/F.md');
-    expect(shareLocalPath('\\\\TRUENAS\\Cursor\\share\\a\\F.md', root)).toBe('/mnt/Cursor/share/a/F.md');
+    expect(shareLocalPath('\\\\TRUENAS\\Cursor\\share\\a\\F.md', root)).toBe(
+      '/mnt/Cursor/share/a/F.md'
+    );
     expect(shareLocalPath('/mnt/Cursor/share/../../../etc/passwd', root)).toBeNull();
     expect(shareLocalPath('/etc/passwd', root)).toBeNull();
     expect(shareLocalPath('relative/F.md', root)).toBeNull();

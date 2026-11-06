@@ -31,7 +31,11 @@ export function threadDoc(writer: string, fields: Record<string, unknown> = {}) 
     seq: 1,
     writtenAt: ago(60_000),
     ttlSeconds: 1800,
-    agent: { name: writer.slice(writer.indexOf('.') + 1), model: 'claude-opus-5-5', effort: 'high' },
+    agent: {
+      name: writer.slice(writer.indexOf('.') + 1),
+      model: 'claude-opus-5-5',
+      effort: 'high',
+    },
     project: 'proj',
     stream: 'S',
     state: 'working',
@@ -43,7 +47,11 @@ export function threadDoc(writer: string, fields: Record<string, unknown> = {}) 
   };
 }
 
-export function tasksDoc(writer: string, items: Array<Record<string, unknown>>, fields: Record<string, unknown> = {}) {
+export function tasksDoc(
+  writer: string,
+  items: Array<Record<string, unknown>>,
+  fields: Record<string, unknown> = {}
+) {
   return {
     schema: 'agent-reports/tasks@1',
     writer,
@@ -77,20 +85,23 @@ export function cardDoc(writer: string, local: string, fields: Record<string, un
     askedBy: writer.slice(writer.indexOf('.') + 1),
     replyTo: { pmMail: writer.slice(writer.indexOf('.') + 1), t3Thread: null },
     state: 'open',
+    label: `S-${local}`,
     title: `Question ${local}`,
-    context: 'Plain words.',
+    now: 'Plain words.',
+    nowAsOf: null,
+    oldAnswer: null,
     whatChanged: null,
     options: [
-      { key: 'A', label: 'First', detail: null, pros: [], cons: [] },
-      { key: 'B', label: 'Second', detail: null, pros: [], cons: [] },
+      { key: 'A', label: 'First', gets: 'Simple', costs: null, image: null },
+      { key: 'B', label: 'Second', gets: null, costs: 'More work', image: null },
     ],
     recommendation: { key: 'A', why: 'Simpler.' },
-    allowNote: true,
     multiple: false,
     urgency: 'today',
     blocks: null,
     batch: null,
     evidence: [],
+    replies: [],
     askedAt: ago(600_000),
     ...fields,
   };

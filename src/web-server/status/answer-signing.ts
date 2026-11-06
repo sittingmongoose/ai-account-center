@@ -28,10 +28,12 @@ export interface UnsignedAnswer {
   cardId: string;
   cardSeq: number;
   cardSha256: string;
+  /** answer: a choice that closes the card; note: a note alone, the card stays open. */
+  kind: 'answer' | 'note';
   choice: string[];
   note: string;
-  via: 'card' | 'approve-all-except';
-  batchAnswer?: string;
+  /** recommended: filled by "Use the recommendations" and not changed by the owner. */
+  via: 'deck' | 'recommended';
   answeredAt: string;
   answeredBy: 'owner';
   device: string;

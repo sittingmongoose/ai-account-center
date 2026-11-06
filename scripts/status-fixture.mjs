@@ -9,10 +9,12 @@
  * already answered), stream boards under boards/, and a pm-mail registry copy under
  * pm-mail-registry/ (2 threads that do not report yet).
  *
- * The 2 answers live in the server's private store, so they need the server's ccs folder:
+ * The 2 answers and 1 note (a note alone on an open card) live in the server's private store, so
+ * they need the server's ccs folder:
  * `--ccs-dir <dir>` (else CCS_DIR, else CCS_HOME/.ccs). The script writes
- * <dir>/status/answer-key.pem (created when absent), appends the two answers to
+ * <dir>/status/answer-key.pem (created when absent), appends the records to
  * <dir>/status/answers.jsonl and writes their signed copies to <reports-dir>/v1/answers/.
+ * One card (F-Q3) has option images under the writer's images/ folder.
  *
  * Start the test server with:
  *   AAC_AGENT_REPORTS_DIR=<reports-dir> AAC_PM_MAIL_REGISTRY_DIR=<reports-dir>/pm-mail-registry \
@@ -74,13 +76,19 @@ function answerKey(storeDir) {
   };
 }
 
-const option = (key, label, detail = null, pros = [], cons = []) => ({
+const option = (key, label, gets = null, costs = null, image = null) => ({
   key,
   label,
-  detail,
-  pros,
-  cons,
+  gets,
+  costs,
+  image,
 });
+
+/** A 2x2 PNG, so the page has a real option image to show. */
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DwHwyBNAMDA8MZBgBVlgf5j5xnFAAAAABJRU5ErkJggg==',
+  'base64'
+);
 
 /** Writes the fixture; returns what it wrote (for tests). */
 export function writeStatusFixture(
@@ -321,48 +329,57 @@ export function writeStatusFixture(
     const doc = {
       ...head('agent-reports/card@1', writer, ago),
       id,
+      label: fields.label,
       project: fields.project ?? null,
       stream: fields.stream ?? null,
       askedBy: writer.slice(writer.indexOf('.') + 1),
       replyTo: { pmMail: writer.slice(writer.indexOf('.') + 1), t3Thread: null },
       state: 'open',
       title: fields.title,
-      context: fields.context ?? null,
+      now: fields.now ?? null,
+      nowAsOf: fields.nowAsOf ?? null,
+      oldAnswer: fields.oldAnswer ?? null,
       whatChanged: fields.whatChanged ?? null,
       options: fields.options,
       recommendation: fields.recommendation ?? null,
-      allowNote: fields.allowNote ?? true,
       multiple: fields.multiple ?? false,
       urgency: fields.urgency ?? 'today',
       blocks: fields.blocks ?? null,
       batch: fields.batch ?? null,
       evidence: fields.evidence ?? [],
+      replies: fields.replies ?? [],
       askedAt: at(ago),
     };
     const bytes = writeJson(path.join(writers, writer, 'cards', `${id}.json`), doc);
     cards[id] = { doc, sha256: createHash('sha256').update(bytes).digest('hex') };
     return id;
   };
+  const images = path.join(writers, 'vm.pm-fo-lead', 'images');
+  fs.mkdirSync(images, { recursive: true });
+  fs.writeFileSync(path.join(images, 'fo33-inside.png'), TINY_PNG);
+  fs.writeFileSync(path.join(images, 'fo33-under-axis.png'), TINY_PNG);
   const batch = 'F-questions-2026-11-05';
   card('vm.pm-fo-lead', 'Q3', 2 * HOUR, {
+    label: 'F-Q3',
     project: 'puppet-master',
     stream: 'F',
-    title: 'How should the lines chart label FO-33?',
-    context: 'The label overlaps the newest point on small windows.',
+    title: 'Where should the lines chart put its label?',
+    now: 'On small windows the chart label covers the newest point, so the latest value is hidden.',
+    nowAsOf: at(2 * HOUR),
     options: [
       option(
         'A',
         'Keep the label inside the plot',
-        'Moves left when it would cover a point.',
-        ['No layout change'],
-        ['Can still crowd at 320 px']
+        'The label moves left when it would cover a point.',
+        'Can still feel crowded on a phone.',
+        { path: 'images/fo33-inside.png', kind: 'mockup' }
       ),
       option(
         'B',
         'Move it under the axis',
-        null,
-        ['Never covers data'],
-        ['Further from the line it names']
+        'The label never covers data.',
+        'It sits further from the line it names.',
+        { path: 'images/fo33-under-axis.png', kind: 'mockup' }
       ),
     ],
     recommendation: { key: 'A', why: 'Matches the other charts.' },
@@ -370,32 +387,50 @@ export function writeStatusFixture(
     batch,
   });
   card('vm.pm-fo-lead', 'Q4', 100 * MIN, {
+    label: 'F-Q4',
     project: 'puppet-master',
     stream: 'F',
-    title: 'Toasts: newest on top or bottom?',
-    options: [option('A', 'Newest on top'), option('B', 'Newest at the bottom')],
+    title: 'Should the newest toast appear on top or at the bottom?',
+    now: 'Toasts stack in arrival order, so a new one can appear under older ones.',
+    options: [
+      option('A', 'Newest on top', 'The latest message is where the eye lands first.', null),
+      option(
+        'B',
+        'Newest at the bottom',
+        'Reads like a chat log.',
+        'New messages push older ones up.'
+      ),
+    ],
     recommendation: { key: 'A', why: 'The eye lands on the top first.' },
     batch,
   });
   card('vm.pm-fo-lead', 'Q5', 90 * MIN, {
+    label: 'F-Q5',
     project: 'puppet-master',
     stream: 'F',
     title: 'Drop the old splash animation for good?',
-    options: [option('A', 'Drop it'), option('B', 'Keep it behind a setting')],
+    now: 'The new welcome screen replaced it; the old one is still in the build behind a flag.',
+    oldAnswer: { text: 'Keep it for one more release.', at: at(9 * 24 * HOUR) },
+    whatChanged: 'That release shipped and nobody turned the flag on.',
+    options: [
+      option('A', 'Drop it', 'A smaller build and one less setting.', null),
+      option('B', 'Keep it behind a setting', null, 'Another setting to test every release.'),
+    ],
     recommendation: { key: 'A', why: 'Nobody has turned it on since PM6.' },
     urgency: 'this-week',
     batch,
   });
   card('vm.tools-lead', 'Q1', 25 * MIN, {
+    label: 'T-Q1',
     project: 'puppet-master',
     stream: 'TOOLS',
     title: 'Which machines may record during the owner’s streaming hours?',
-    context: 'Recording on the VM drops frames while Moonlight streams.',
+    now: 'Recording on the VM drops frames while Moonlight streams.',
     options: [
-      option('vm', 'Ubuntu VM'),
+      option('vm', 'Ubuntu VM', 'Smoothest video.', 'Drops frames while streaming.'),
       option('mac', 'Mac'),
-      option('windows', 'Windows PC'),
-      option('nas1', 'Nas1'),
+      option('windows', 'Windows PC', 'Fastest encoder.', 'It is the owner’s own PC.'),
+      option('nas1', 'Nas1', null, 'No GPU encoder.'),
     ],
     multiple: true,
     urgency: 'now',
@@ -403,23 +438,41 @@ export function writeStatusFixture(
     evidence: [{ label: 'Frame drop log', path: path.join(root, 'boards', 'TOOLS.md') }],
   });
   card('vm.aac-status-lead', 'Q2', 40 * MIN, {
+    label: 'ST-Q2',
     project: 'ai-account-center',
     stream: 'STATUS',
     title: 'Show stale threads collapsed or greyed?',
-    whatChanged: 'Added a screenshot of both.',
-    options: [option('A', 'Collapsed under "quiet"'), option('B', 'Greyed in place')],
+    now: 'Threads that stopped reporting still take a full row.',
+    options: [
+      option('A', 'Collapsed under "quiet"', 'A shorter list.', 'One tap to see them.'),
+      option('B', 'Greyed in place', 'Nothing moves while you read.', 'A longer list.'),
+    ],
     recommendation: { key: 'B', why: 'Nothing moves while you read.' },
     urgency: 'whenever',
+    replies: [
+      { at: at(10 * MIN), text: 'Both are in the screenshot set now; greyed is on the left.' },
+    ],
   });
   const answeredIds = [
     card('vm.pm-closure-lead', 'Q1', 5 * HOUR, {
+      label: 'C-Q1',
       project: 'puppet-master',
       stream: 'C',
       title: 'Re-audit B09 with a second reviewer pair?',
-      options: [option('A', 'Yes, Sol and Astra'), option('B', 'No, one pass is enough')],
+      now: 'B09 passed one review but carries a shortcut flag.',
+      options: [
+        option(
+          'A',
+          'Yes, Sol and Astra',
+          'A second opinion on the flagged batch.',
+          'About an hour of quota.'
+        ),
+        option('B', 'No, one pass is enough', 'Saves the quota.', 'The flag stays unexplained.'),
+      ],
       recommendation: { key: 'A', why: 'B09 had a shortcut flag.' },
     }),
     card('mac.aac-claude-relogin', 'Q7', 26 * HOUR, {
+      label: 'SR-Q7',
       project: 'ai-account-center',
       stream: 'SIGNIN',
       title: 'Renew Windows sign-ins from the Mac runner?',
@@ -466,9 +519,18 @@ export function writeStatusFixture(
         id: answeredIds[1],
         choice: ['B'],
         note: 'Windows gets its own runner; keep the Mac one simple.',
+        via: 'deck',
         ago: 20 * HOUR,
       },
-      { id: answeredIds[0], choice: ['A'], note: '', ago: 3 * HOUR },
+      { id: answeredIds[0], choice: ['A'], note: '', via: 'recommended', ago: 3 * HOUR },
+      // A note alone: the card stays open and shows it.
+      {
+        id: 'vm.aac-status-lead--Q2',
+        choice: [],
+        note: 'Could you show both side by side first?',
+        via: 'deck',
+        ago: 30 * MIN,
+      },
     ];
     for (const entry of answers) {
       const { doc, sha256 } = cards[entry.id];
@@ -477,9 +539,10 @@ export function writeStatusFixture(
         cardId: entry.id,
         cardSeq: doc.seq,
         cardSha256: sha256,
+        kind: entry.choice.length > 0 ? 'answer' : 'note',
         choice: entry.choice,
         note: entry.note,
-        via: 'card',
+        via: entry.via,
         answeredAt: at(entry.ago),
         answeredBy: 'owner',
         device: 'iPhone',
@@ -492,8 +555,12 @@ export function writeStatusFixture(
         ),
       };
       const answer = { ...unsigned, signature };
-      writeJson(path.join(v1, 'answers', `${entry.id}.json`), answer);
       const id = randomUUID();
+      const file =
+        answer.kind === 'note'
+          ? `${entry.id}.note-${id.replace(/-/g, '').slice(0, 12)}.json`
+          : `${entry.id}.json`;
+      writeJson(path.join(v1, 'answers', file), answer);
       const done = (step, detail) => ({
         type: 'delivery',
         id,
@@ -516,7 +583,13 @@ export function writeStatusFixture(
       }
     );
   }
-  return { root, storeDir, cards: Object.keys(cards), answered: ccsDir ? answeredIds : [] };
+  return {
+    root,
+    storeDir,
+    cards: Object.keys(cards),
+    answered: ccsDir ? answeredIds : [],
+    noted: ccsDir ? ['vm.aac-status-lead--Q2'] : [],
+  };
 }
 
 function main(argv) {

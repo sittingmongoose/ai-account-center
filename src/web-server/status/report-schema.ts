@@ -356,34 +356,72 @@ export const CARD_STATES = ['open', 'withdrawn', 'superseded'] as const;
 export const URGENCIES = ['now', 'today', 'this-week', 'whenever'] as const;
 export type Urgency = (typeof URGENCIES)[number];
 
+/** An image an option shows: a path inside the writer's own folder. */
+export interface OptionImage {
+  path: string;
+  kind: 'built' | 'mockup';
+}
+
 export interface CardOption {
   key: string;
   label: string;
-  detail: string | null;
-  pros: string[];
-  cons: string[];
+  /** What the owner sees or gets with this option. */
+  gets: string | null;
+  /** What it costs or changes elsewhere. */
+  costs: string | null;
+  image: OptionImage | null;
 }
 
 export interface CardDoc extends DocHead {
   id: string;
+  /** A short id the owner can quote ("F-Q3"); the local id when the file names none. */
+  label: string;
   project: string | null;
   stream: string | null;
   askedBy: string | null;
   replyTo: { pmMail: string | null; t3Thread: string | null };
   state: (typeof CARD_STATES)[number];
   supersededBy: string | null;
+  /** Why a withdrawn card was withdrawn ("Settled by your note"). */
+  reason: string | null;
   title: string;
-  context: string | null;
+  /** The situation today in plain words (`context` is read as an alias). */
+  now: string | null;
+  nowAsOf: string | null;
+  oldAnswer: { text: string; at: string | null } | null;
   whatChanged: string | null;
   options: CardOption[];
   recommendation: { key: string; why: string | null } | null;
-  allowNote: boolean;
   multiple: boolean;
   urgency: Urgency;
   blocks: string | null;
   batch: string | null;
   evidence: ReportLink[];
+  /** The agent's replies to the owner's notes. */
+  replies: Array<{ at: string; text: string }>;
   askedAt: string;
+}
+
+/** A relative path inside a writer's folder: plain segments, no `..`, no absolute or Windows paths. */
+const IMAGE_PATH = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}){0,5}$/;
+
+export function isWriterFilePath(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 300 &&
+    IMAGE_PATH.test(value) &&
+    !value.split('/').some((segment) => segment === '.' || segment === '..')
+  );
+}
+
+function optionImage(value: unknown, field: string): OptionImage | null {
+  if (value === null || value === undefined) return null;
+  const image = obj(value, field);
+  if (!isWriterFilePath(image.path)) fail(`${field}.path`);
+  return {
+    path: image.path,
+    kind: oneOf(image.kind, `${field}.kind`, ['built', 'mockup'] as const),
+  };
 }
 
 function card(doc: Record<string, unknown>, writer: string, fileId: string): CardDoc {
@@ -394,21 +432,20 @@ function card(doc: Record<string, unknown>, writer: string, fileId: string): Car
     doc.replyTo === undefined || doc.replyTo === null ? {} : obj(doc.replyTo, 'replyTo');
   const pmMail = replyTo.pmMail === undefined || replyTo.pmMail === null ? null : replyTo.pmMail;
   if (pmMail !== null && !isPmMailName(pmMail)) fail('replyTo.pmMail');
-  const options = list(doc.options, 'options', 12, (value, at): CardOption => {
+  const options = list(doc.options, 'options', 4, (value, at): CardOption => {
     const option = obj(value, at);
     if (typeof option.key !== 'string' || !OPTION_KEY.test(option.key)) fail(`${at}.key`);
     return {
       key: option.key,
       label: text(option.label, `${at}.label`, 300),
-      detail: optText(option.detail, `${at}.detail`, 2000),
-      pros: list(option.pros, `${at}.pros`, 10, (entry, where) => text(entry, where, 300)),
-      cons: list(option.cons, `${at}.cons`, 10, (entry, where) => text(entry, where, 300)),
+      gets: optText(option.gets, `${at}.gets`, 1000),
+      costs: optText(option.costs, `${at}.costs`, 1000),
+      image: optionImage(option.image, `${at}.image`),
     };
   });
+  if (options.length < 2) throw new Invalid('a card needs 2 to 4 options');
   if (new Set(options.map((option) => option.key)).size !== options.length)
     throw new Invalid('options repeat a key');
-  const allowNote = bool(doc.allowNote, 'allowNote', true);
-  if (options.length === 0 && !allowNote) throw new Invalid('a card needs options or a note');
   let recommendation: CardDoc['recommendation'] = null;
   if (doc.recommendation !== null && doc.recommendation !== undefined) {
     const value = obj(doc.recommendation, 'recommendation');
@@ -418,27 +455,43 @@ function card(doc: Record<string, unknown>, writer: string, fileId: string): Car
       why: optText(value.why, 'recommendation.why', 1000),
     };
   }
+  let oldAnswer: CardDoc['oldAnswer'] = null;
+  if (doc.oldAnswer !== null && doc.oldAnswer !== undefined) {
+    const value = obj(doc.oldAnswer, 'oldAnswer');
+    oldAnswer = {
+      text: text(value.text, 'oldAnswer.text', 2000),
+      at: optIso(value.at, 'oldAnswer.at'),
+    };
+  }
   const state = oneOf(doc.state ?? 'open', 'state', CARD_STATES);
+  const local = fileId.slice(fileId.indexOf('--') + 2);
   return {
     ...base,
     id: fileId,
+    label: optText(doc.label, 'label', 32) ?? local,
     project: optSlug(doc.project, 'project'),
     stream: optSlug(doc.stream, 'stream'),
     askedBy: optText(doc.askedBy, 'askedBy', 64),
     replyTo: { pmMail, t3Thread: optText(replyTo.t3Thread, 'replyTo.t3Thread', 200) },
     state,
     supersededBy: state === 'superseded' ? optText(doc.supersededBy, 'supersededBy', 130) : null,
+    reason: state === 'open' ? null : optText(doc.reason, 'reason', 500),
     title: text(doc.title, 'title', 300),
-    context: optText(doc.context, 'context', 4000),
+    now: optText(doc.now ?? doc.context, 'now', 4000),
+    nowAsOf: optIso(doc.nowAsOf, 'nowAsOf'),
+    oldAnswer,
     whatChanged: optText(doc.whatChanged, 'whatChanged', 2000),
     options,
     recommendation,
-    allowNote,
     multiple: bool(doc.multiple, 'multiple', false),
     urgency: oneOf(doc.urgency ?? 'whenever', 'urgency', URGENCIES),
     blocks: optText(doc.blocks, 'blocks', 300),
     batch: optSlug(doc.batch, 'batch'),
     evidence: list(doc.evidence, 'evidence', 20, link),
+    replies: list(doc.replies, 'replies', 50, (value, at) => {
+      const reply = obj(value, at);
+      return { at: iso(reply.at, `${at}.at`), text: text(reply.text, `${at}.text`, 2000) };
+    }),
     askedAt: iso(doc.askedAt ?? doc.writtenAt, 'askedAt'),
   };
 }

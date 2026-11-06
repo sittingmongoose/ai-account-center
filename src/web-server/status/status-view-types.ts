@@ -5,7 +5,6 @@ import type { AnswerDelivery, AnswerHistoryEntry } from './answers';
 import type {
   BlockedOn,
   CardDoc,
-  CardOption,
   ItemState,
   MachineId,
   ReportLink,
@@ -87,28 +86,49 @@ export interface HeadlineRun {
   tone?: Tone;
 }
 
+export interface CardOptionView {
+  key: string;
+  label: string;
+  gets: string | null;
+  costs: string | null;
+  /** `url` is `/api/status/files/<writer>/<path>` (session only). */
+  image: { url: string; kind: 'built' | 'mockup' } | null;
+}
+
+/** A note the owner already sent on an open card. */
+export interface CardNoteView {
+  note: string;
+  at: string;
+  delivery: AnswerDelivery;
+}
+
 export interface CardView {
   id: string;
+  label: string;
   writer: string;
   seq: number;
   project: string | null;
   stream: string | null;
   askedBy: string | null;
   title: string;
-  context: string | null;
+  now: string | null;
+  nowAsOf: string | null;
+  oldAnswer: { text: string; at: string | null } | null;
   whatChanged: string | null;
-  options: CardOption[];
+  options: CardOptionView[];
   recommendation: { key: string; why: string | null } | null;
-  allowNote: boolean;
   multiple: boolean;
   urgency: CardDoc['urgency'];
   blocks: string | null;
   batch: string | null;
   evidence: ReportLink[];
+  replies: Array<{ at: string; text: string }>;
   askedAt: string;
   ageSeconds: number;
   askerState: ThreadDoc['state'] | 'gone' | 'unknown';
   cardSha256: string;
+  /** The owner's notes already sent on this card, oldest first. */
+  notes: CardNoteView[];
   /** The card file's current problem: the copy shown is the last good one and cannot be answered. */
   problem: string | null;
   answerable: boolean;
@@ -117,21 +137,21 @@ export interface CardView {
 export interface AnsweredCardView {
   card: CardView;
   answer: {
+    kind: 'answer';
     choice: string[];
     note: string;
-    via: 'card' | 'approve-all-except';
-    batchAnswer: string | null;
+    via: 'deck' | 'recommended';
     answeredAt: string;
     device: string;
     delivery: AnswerDelivery;
   };
 }
 
+/** Open cards that share `batch`: kept together in the deck's order. */
 export interface BatchView {
   id: string;
   label: string;
   cardIds: string[];
-  withRecommendation: number;
 }
 
 export type ItemCounts = Record<'total' | ItemState, number>;
