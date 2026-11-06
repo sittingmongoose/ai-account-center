@@ -56,7 +56,8 @@ notification). pm-mail registry: every 30 s. Machines (one short read-only comma
 aliases; the VM from `/proc` and `statfs`), `browser-check slots --json` and `simlock status --json`: once a minute
 while `GET /api/status` was called in the last 15 minutes, and at once on the first read after a quiet spell (they
 start processes and ssh sessions; nobody watching, nothing runs). Usage: every dashboard analytics sample, never a
-provider refresh. quota-watch: `unconfigured` until its report format is agreed.
+provider refresh. quota-watch: its share report `<reports>/v1/quota/report.json`, read with the agent reports scan
+(every 10 s, by the same reading rules; see Spend).
 
 ## URLs
 - `/status` and `/scoreboard`: the Slint shell with that tab selected (page routes, like `/analytics`).
@@ -105,7 +106,8 @@ the documented keys (`400 invalid_body`). The files route sets `Cache-Control: p
   "threads": { "source": "...", "rows": [ Thread ] },
   "machines": { "source": "...", "rows": [ Machine ] },
   "simlock": { "source": "...", "capacity": [ Capacity ], "leases": [ Lease ] },
-  "usage": { "source": "...", "warnings": [ UsageWarning ], "accounts": [ UsageAccount ] }
+  "usage": { "source": "...", "warnings": [ UsageWarning ], "accounts": [ UsageAccount ] },
+  "spend": Spend
 }
 ```
 
@@ -236,6 +238,45 @@ projectedFullAt, runsOutBeforeReset, atLimit, stale }`, one row per rate-limit w
 `aac-usage` (no extra provider refresh). Accounts hidden on the dashboard are left out. **UsageWarning**: `{ tone,
 text }`, worst first, only from current readings: `bad` "claude main (7-day): at its limit until its Nov 12 4:00 PM
 reset", `warn` "claude main (7-day): full in 1d 11h, before its Nov 12 reset".
+
+**Spend** (source `quota-watch`): quota-watch's per-stream estimates of how much of each account meter a stream used,
+from `<reports>/v1/quota/report.json` (`quota-report@1`, one writer, rewritten whole every 10 minutes, 512 KB cap;
+field table: quota-watch README, "Share copy"). It is read with the agent-reports rules: the `quota/` folder is listed
+before the file is read; ENOENT and ESTALE keep the last good copy and retry; a file gone from the listing keeps its
+last good copy for 2 minutes; NUL bytes, over 512 KB, a secret, a schema other than `quota-report@1`, `estimate` not
+`true` or a field that does not validate make it unreadable by name (the last good copy stays, marked); a lower
+`seq` than one already accepted is ignored.
+```jsonc
+{ "source": "quota-watch", "estimate": true, "asOf", "generatedAt", "writer", "methodId", "method",
+  "periods": [ { "id": "day" | "week" | "window", "label": "Today" | "This week" | "Last 6 hours", "period", "start",
+                 "end", "coverage", "coverageText": "covers 9% of the week" | null,
+                 "streams": [ { "stream", "label", "bucket", "rows": [ { "account", "meter", "meterLabel", "unit",
+                                "value", "valueText", "estimate" } ] } ] } ],
+  "budgets": [ { "stream", "streamLabel", "desc", "accounts", "unit", "meter", "meterLabel", "per", "limit", "use",
+                 "known", "percent", "period", "coverage", "coverageText", "overLimit", "estimate", "text" } ],
+  "unattributed": [ { "account", "meter", "meterLabel", "unit", "amount", "amountText", "reason", "why", "estimate" } ],
+  "machinesNotScanned": [ { "name", "thisPass", "error", "runsMissed", "runsInWindow" } ],
+  "overLimitBudgets": 0 }
+```
+- Every number here is an estimate (`estimate: true` on the section and every row; a row the report marks measured,
+  such as unattributed `(no session seen)`, says `estimate: false`). `method` is the report's method in words.
+- `unit` is `credits` or `percent` (percentage points of the meter's window). Credits and points are never added
+  together and the view makes no total across units or accounts. `value` is rounded (credits to 0.01, points to 0.1)
+  and `valueText` words it: "≈ 17.77 credits", "≈ 4.7 points of the 7-day window", "≈ under 0.01 credits". An unknown
+  stays null and reads "not read", never 0.
+- `label`: the stream's label from the agent reports when exactly one tasks stream has that id (two different labels:
+  the id); buckets such as "(no stream)" keep their words (`bucket: true`, listed last).
+- `coverageText` is set when coverage is under 0.5 ("covers 9% of the week") or unknown ("coverage of the week not
+  known"); otherwise null.
+- Budgets pass `limit`, `use` and `percent` through as the report gives them (null stays null); `known: false` means
+  `use` is a lower bound ("at least ≈ …"). `overLimit` is true when `percent` ≥ 100, or `use` ≥ `limit` with both
+  known. `text` words the row ("≈ 18.28 credits today; no limit set.", "at least ≈ 5.3 of 20.0 points of the
+  7-day window this week (27%).").
+- The headline adds "N budget(s) at or over its limit (estimate)" (tone `bad`) only while the source is `ok`.
+- Source states: `missing` (no `quota/` folder or no report, or before the first scan), `ok` (with its age), `stale`
+  (no new report for 30 minutes, three missed passes; the age is the older of `writtenAt` and when AAC first saw that
+  version), `unreadable` (the reason, and the time of the last good copy if any), `error` (the folder could not be
+  listed). Without a report the section is empty (`periods: []`).
 
 ## Answers
 

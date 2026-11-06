@@ -3,7 +3,7 @@
  * Writes a realistic agent reports folder for the Status tab's page and phone tests.
  *
  *   node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems] [--with-kinds]
- *     [--no-video]
+ *     [--no-video] [--no-quota]
  *
  * <reports-dir> gets v1/writers/** (2 projects, 4 streams with tasks.json and 1 board-only stream,
  * 8 threads in mixed states, 5 open cards including a batch of 3 with recommendations, and 2 cards
@@ -22,6 +22,9 @@
  *   AAC_STATUS_DOORBELL=off CCS_DIR=<dir>
  * so it reads only the fixture and never sends pm-mail.
  *
+ * v1/quota/report.json gets a quota-watch report (quota-report@1) with neutral account labels:
+ * per-stream estimates for the day, week and window, budgets (one over its limit), unattributed
+ * use and an unscanned machine (`--no-quota` skips it).
  * F-Q3 also gets a short H.264 MP4 with a poster when ffmpeg is installed (`--no-video` skips it),
  * for the Range-request playback check on phones. `--with-kinds` adds an objection, an action, a
  * judgement and a sample card (9 open cards then).
@@ -125,6 +128,165 @@ const TINY_PNG = Buffer.from(
   'base64'
 );
 
+/** A quota-watch share report (quota-report@1) with neutral account labels. */
+function quotaReport(at) {
+  const method = 'token-share-at-list-price';
+  const row = (stream, account, meter, unit, value) => ({
+    stream,
+    account,
+    meter,
+    unit,
+    value,
+    estimate: true,
+    method,
+  });
+  const rows = (scale) => [
+    row('F', 'codex:account-a', 'credits_balance', 'credits', 18.28 * scale),
+    row('F', 'claude:account-b', 'seven_day', 'percent', 4.4 * scale),
+    row('TOOLS', 'codex:account-a', 'credits_balance', 'credits', 6.1 * scale),
+    row('TOOLS', 'claude:account-b', 'five_hour', 'percent', 12.5 * scale),
+    row('STATUS', 'claude:account-c', 'seven_day', 'percent', 2.2 * scale),
+    row('(no stream)', 'claude:account-b', 'five_hour', 'percent', 34.3 * scale),
+    row('(no stream)', 'codex:account-a', 'credits_balance', 'credits', null),
+  ];
+  const period = (id, start, coverage, scale) => ({
+    period: id,
+    start: at(start),
+    end: at(3 * MIN),
+    coverage,
+    estimate: true,
+    method,
+    rows: rows(scale),
+  });
+  const budget = (
+    stream,
+    desc,
+    account,
+    unit,
+    meter,
+    per,
+    limit,
+    use,
+    known,
+    percent,
+    coverage
+  ) => ({
+    stream,
+    index: 0,
+    desc,
+    accounts: [account],
+    unit,
+    meter,
+    per,
+    limit,
+    use,
+    known,
+    percent,
+    period: per === 'window' ? null : `${per}-fixture`,
+    coverage,
+    estimate: true,
+    method,
+  });
+  return {
+    schema: 'quota-report@1',
+    writer: 'vm.quota-watch',
+    seq: 42,
+    writtenAt: at(3 * MIN),
+    generatedAt: at(3 * MIN),
+    estimate: true,
+    methodId: method,
+    method:
+      "Each account meter's observed use over the window (credits spent, or percentage points of a usage window, from AI Account Center's readings) is split by each session's share of that account's tokens, weighted by list prices per model. Every per-thread and per-stream number is an estimate.",
+    streamEstimates: {
+      day: period('day-fixture', 10 * HOUR, 0.67, 1),
+      week: period('week-fixture', 4 * 24 * HOUR, 0.09, 2.4),
+      window: { ...period(null, 6 * HOUR, 1, 0.8), period: null },
+    },
+    budgetRows: [
+      budget(
+        'F',
+        'Codex credits',
+        'codex:account-a',
+        'credits',
+        'credits_balance',
+        'day',
+        null,
+        18.28,
+        true,
+        null,
+        0.67
+      ),
+      budget(
+        'TOOLS',
+        'Claude 5-hour',
+        'claude:account-b',
+        'percent',
+        'five_hour',
+        'window',
+        25,
+        26.1,
+        true,
+        104.4,
+        1
+      ),
+      budget(
+        'STATUS',
+        'Claude weekly',
+        'claude:account-c',
+        'percent',
+        'seven_day',
+        'week',
+        20,
+        5.3,
+        false,
+        26.5,
+        0.09
+      ),
+    ],
+    unattributedRows: [
+      {
+        account: 'codex:account-a',
+        meter: 'credits_balance',
+        unit: 'credits',
+        amount: 470.53,
+        reason: '(no stream)',
+        why: 'threads no stream rule claims',
+        estimate: true,
+        method,
+      },
+      {
+        account: 'claude:account-b',
+        meter: 'seven_day',
+        unit: 'percent',
+        amount: null,
+        reason: '(no reading)',
+        why: 'the meter had no reading in the window',
+        estimate: true,
+        method,
+      },
+      {
+        account: 'claude:account-c',
+        meter: 'five_hour',
+        unit: 'percent',
+        amount: 1.2,
+        reason: '(no session seen)',
+        why: 'measured use with no session to split it',
+        estimate: false,
+        method,
+      },
+    ],
+    machinesNotScanned: [
+      {
+        name: 'windows',
+        thisPass: true,
+        error: 'ssh: connect timed out',
+        runsMissed: 2,
+        runsInWindow: 36,
+      },
+    ],
+  };
+}
+
 /** Writes the fixture; returns what it wrote (for tests). */
 export function writeStatusFixture(
   root,
@@ -133,6 +295,7 @@ export function writeStatusFixture(
     withProblems = false,
     withKinds = false,
     withVideo = false,
+    withQuota = true,
     now = Date.now(),
   } = {}
 ) {
@@ -752,6 +915,8 @@ export function writeStatusFixture(
     fs.writeFileSync(nul, Buffer.concat([Buffer.from('{"schema":'), Buffer.alloc(32)]));
   }
 
+  if (withQuota) writeJson(path.join(v1, 'quota', 'report.json'), quotaReport(at));
+
   // pm-mail registry copy: 2 threads not reporting yet, 1 quiet for days (left out).
   const registry = path.join(root, 'pm-mail-registry');
   fs.mkdirSync(registry, { recursive: true });
@@ -868,6 +1033,8 @@ function main(argv) {
   if (withProblems) args.splice(args.indexOf('--with-problems'), 1);
   const withKinds = args.includes('--with-kinds');
   const withVideo = !args.includes('--no-video');
+  const withQuota = !args.includes('--no-quota');
+  if (!withQuota) args.splice(args.indexOf('--no-quota'), 1);
   if (!withVideo) args.splice(args.indexOf('--no-video'), 1);
   if (withKinds) args.splice(args.indexOf('--with-kinds'), 1);
   const ccsDir =
@@ -877,7 +1044,7 @@ function main(argv) {
   const root = args[0];
   if (!root || args.length !== 1) {
     process.stderr.write(
-      'Usage: node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems] [--with-kinds] [--no-video]\n'
+      'Usage: node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems] [--with-kinds] [--no-video] [--no-quota]\n'
     );
     return 2;
   }
@@ -886,6 +1053,7 @@ function main(argv) {
     withProblems,
     withKinds,
     withVideo,
+    withQuota,
   });
   process.stdout.write(
     [

@@ -615,8 +615,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 43,
-      "totalSourceFiles": 472,
-      "coverageRatio": 0.0911,
+      "totalSourceFiles": 474,
+      "coverageRatio": 0.0907,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -643,7 +643,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 201,
+          "count": 203,
           "withLogger": 27
         },
         {

@@ -1,4 +1,6 @@
 /** The Status tab view's types (docs/status-tab.md, GET /api/status v1) and the collected inputs. */
+import type { QuotaReportState } from './quota-report';
+import type { SpendView } from './status-view-quota';
 import type { SnapshotAccount } from '../agent-usage/agent-usage-snapshot';
 import type { AgentReportsState } from './agent-reports-reader';
 import type { AnswerDelivery, AnswerHistoryEntry } from './answers';
@@ -58,6 +60,8 @@ export interface StatusInputs {
   answers: AnswerHistoryEntry[];
   /** Names that never appear as threads (the doorbell's own pm-mail name). */
   hiddenThreadNames?: readonly string[];
+  /** quota-watch's share copy; absent when the server does not read it (shown as unconfigured). */
+  quota?: QuotaReportState;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -305,4 +309,6 @@ export interface StatusView {
   machines: { source: 'machines'; rows: MachineView[] };
   simlock: { source: 'simlock'; capacity: SimlockCapacity[]; leases: SimlockLease[] };
   usage: { source: 'usage'; warnings: UsageWarning[]; accounts: UsageAccountView[] };
+  /** quota-watch's per-stream estimates (docs/status-tab.md, Spend). */
+  spend: SpendView;
 }

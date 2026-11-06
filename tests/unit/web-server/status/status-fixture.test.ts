@@ -4,6 +4,8 @@ import path from 'path';
 import { AgentReportsReader } from '../../../../src/web-server/status/agent-reports-reader';
 import { verifySignedAnswer } from '../../../../src/web-server/status/answer-signing';
 import { openCardFile } from '../../../../src/web-server/status/status-files';
+import { QuotaReportReader } from '../../../../src/web-server/status/quota-report';
+import { buildSpend, quotaSource } from '../../../../src/web-server/status/status-view-quota';
 import { StatusAnswers } from '../../../../src/web-server/status/answers';
 import { PmMailRegistryReader } from '../../../../src/web-server/status/status-collectors';
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
@@ -18,7 +20,13 @@ const { writeStatusFixture } = (await import(
 )) as {
   writeStatusFixture: (
     root: string,
-    options: { ccsDir?: string | null; withProblems?: boolean; withKinds?: boolean; now?: number }
+    options: {
+      ccsDir?: string | null;
+      withProblems?: boolean;
+      withKinds?: boolean;
+      withQuota?: boolean;
+      now?: number;
+    }
   ) => { root: string; storeDir: string | null; cards: string[]; answered: string[] };
 };
 
@@ -114,6 +122,26 @@ describe('status fixture', () => {
       'objection',
       'sample',
     ]);
+  });
+
+  it('writes a quota-watch report with neutral labels that reads as current', async () => {
+    const root = dirs.make();
+    const now = Date.now();
+    writeStatusFixture(root, { now });
+    const quota = new QuotaReportReader({ root: () => root, now: () => now });
+    await quota.scan();
+    const snapshot = quota.snapshot();
+    expect(snapshot.problem).toBeNull();
+    expect(quotaSource(snapshot, now, 'UTC').state).toBe('ok');
+    const spend = buildSpend(snapshot, new Map([['F', 'PM7 follow-ups']]));
+    expect(spend.periods.map((p) => p.id)).toEqual(['day', 'week', 'window']);
+    expect(spend.periods[1].coverageText).toBe('covers 9% of the week');
+    expect(spend.periods[0].streams[0].label).toBe('PM7 follow-ups');
+    expect(spend.overLimitBudgets).toBe(1);
+    expect(JSON.stringify(spend)).not.toMatch(/@/);
+    const none = dirs.make();
+    writeStatusFixture(none, { withQuota: false });
+    expect(fs.existsSync(path.join(none, 'v1', 'quota'))).toBe(false);
   });
 
   it('adds named problems on request', async () => {

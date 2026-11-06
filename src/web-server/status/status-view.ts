@@ -18,6 +18,7 @@ import {
   type ThreadDoc,
 } from './report-schema';
 import { buildUsage, machinesSource, machineView } from './status-view-panels';
+import { buildSpend, quotaSource } from './status-view-quota';
 import type {
   BatchView,
   SectionView,
@@ -49,6 +50,7 @@ import {
 } from './status-view-words';
 
 export * from './status-view-types';
+export * from './status-view-quota';
 export { machineWarnings } from './status-view-panels';
 export {
   clockText,
@@ -535,6 +537,7 @@ function buildProjects(inputs: StatusInputs): ProjectView[] {
 export function buildStatusView(inputs: StatusInputs): StatusView {
   const { now, timeZone } = inputs;
   const machineRows = MACHINES.map((id) => machineView(inputs, id));
+  const quotaSrc = quotaSource(inputs.quota, now, timeZone);
   const usageSrc = usageSource(inputs);
   const sources: Source[] = [
     reportsSource(inputs),
@@ -564,20 +567,15 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
       timeZone
     ),
     usageSrc,
-    {
-      id: 'quota-watch',
-      label: 'Quota watch',
-      state: 'unconfigured',
-      asOf: null,
-      ageSeconds: null,
-      staleAfterSeconds: null,
-      detail: 'Per-stream quota attribution is not connected yet (no agreed report format).',
-    },
+    quotaSrc,
   ];
   const cards = buildCards(inputs);
   const projects = buildProjects(inputs);
   const threads = buildThreads(inputs);
   const usage = buildUsage(inputs, usageSrc);
+  const spend = buildSpend(inputs.quota, streamLabels(inputs));
+  // Only a current report can raise the budget warning.
+  const overLimit = quotaSrc.state === 'ok' ? spend.overLimitBudgets : 0;
 
   const total = emptyCounts();
   for (const project of projects) addCounts(total, project.counts);
@@ -597,6 +595,14 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   if (done) runs.push({ text: ` · ${done.done} of ${done.of} items landed` });
   if (blockedItems > 0)
     runs.push({ text: ' · ' }, { text: `${blockedItems} blocked`, tone: 'warn' });
+  if (overLimit > 0)
+    runs.push(
+      { text: ' · ' },
+      {
+        text: `${plural(overLimit, 'budget')} at or over ${overLimit === 1 ? 'its' : 'their'} limit (estimate)`,
+        tone: 'bad',
+      }
+    );
   if (staleSources > 0)
     runs.push(
       { text: ' · ' },
@@ -606,7 +612,8 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   const bad =
     cards.open.some((card) => card.urgency === 'now') ||
     machineRows.some((row) => row.warnings.length > 0 || row.state === 'unreachable') ||
-    usage.warnings.some((w) => w.tone === 'bad');
+    usage.warnings.some((w) => w.tone === 'bad') ||
+    overLimit > 0;
   const warn = openCards > 0 || blockedItems > 0 || staleSources > 0 || usage.warnings.length > 0;
 
   return {
@@ -629,5 +636,20 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
       leases: inputs.simlock.data?.leases ?? [],
     },
     usage,
+    spend,
   };
+}
+
+/** Stream ids the agent reports name, with their labels; an id two projects label differently keeps its id. */
+function streamLabels(inputs: StatusInputs): Map<string, string> {
+  const labels = new Map<string, string>();
+  const clash = new Set<string>();
+  for (const row of inputs.reports.tasks) {
+    const label = row.doc.streamLabel ?? row.doc.stream;
+    const seen = labels.get(row.doc.stream);
+    if (seen !== undefined && seen !== label) clash.add(row.doc.stream);
+    labels.set(row.doc.stream, label);
+  }
+  for (const id of clash) labels.delete(id);
+  return labels;
 }
