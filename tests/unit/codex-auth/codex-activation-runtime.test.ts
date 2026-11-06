@@ -8,6 +8,8 @@ import {
   CodexActivationRuntimeDependencies,
   CodexProcessSnapshot,
   createCodexActivationRuntime,
+  launchCodexProcess,
+  prepareAppServerLog,
   readRolloutLifecycle,
 } from '../../../src/codex-auth/codex-activation-runtime';
 import type { CodexActivationStopPlan } from '../../../src/codex-auth/codex-activation-confirmation';
@@ -140,6 +142,63 @@ function harness(initial: CodexProcessSnapshot[]) {
     },
   };
 }
+
+describe('Codex process launch', () => {
+  const roots: string[] = [];
+  const tempHome = (): string => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-launch-'));
+    roots.push(root);
+    return root;
+  };
+  afterEach(() => {
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  });
+  const launched = async (codexHome: string, desktop: boolean) => {
+    const specs: Array<{ app: string; logFile?: string }> = [];
+    await launchCodexProcess(codexHome, daemon, desktop, async (spec) => {
+      specs.push(spec);
+      return { route: 'direct' };
+    });
+    return specs[0];
+  };
+
+  it('creates the missing control folder and a private log before starting the daemon', async () => {
+    const codexHome = tempHome();
+    const spec = await launched(codexHome, false);
+    const log = path.join(codexHome, 'app-server-control', 'app-server.log');
+    expect(spec.logFile).toBe(log);
+    expect(fs.statSync(log).mode & 0o777).toBe(0o600);
+  });
+
+  it('gives a desktop app no log file', async () => {
+    const codexHome = tempHome();
+    const spec = await launched(codexHome, true);
+    expect(spec.logFile).toBeUndefined();
+    expect(fs.existsSync(path.join(codexHome, 'app-server-control'))).toBe(false);
+  });
+
+  it('rotates the log past its cap at launch and keeps a smaller one', () => {
+    const log = path.join(tempHome(), 'control', 'app-server.log');
+    prepareAppServerLog(log);
+    fs.writeFileSync(log, 'small');
+    prepareAppServerLog(log);
+    expect(fs.readFileSync(log, 'utf8')).toBe('small');
+    expect(fs.existsSync(`${log}.1`)).toBe(false);
+    fs.writeFileSync(log, Buffer.alloc(5 * 1024 * 1024 + 1));
+    prepareAppServerLog(log);
+    expect(fs.statSync(log).size).toBe(0);
+    expect(fs.statSync(log).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(`${log}.1`).size).toBe(5 * 1024 * 1024 + 1);
+  });
+
+  it('reports a failed launch without its detail', async () => {
+    await expect(
+      launchCodexProcess(tempHome(), daemon, false, async () => {
+        throw new Error('private detail');
+      })
+    ).rejects.toThrow('Could not launch Codex.');
+  });
+});
 
 describe('Codex activation process lifecycle', () => {
   it('stops desktop and every server before the auth install, preserving display and daemon command', async () => {

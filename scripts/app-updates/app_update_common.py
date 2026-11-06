@@ -72,7 +72,19 @@ def sanitize_unit_fragment(value):
     return cleaned or "app"
 
 
-def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple"):
+def systemd_can_carry(key, value):
+    """Whether systemd accepts this variable. A name like BASH_FUNC_ml%% or a.b, or a value that is
+    not UTF-8, fails the whole systemd-run; the app would stay closed after its update."""
+    if value is None or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        return False
+    try:
+        str(value).encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple", properties=()):
     """Wrap argv so it starts in a transient user service OUTSIDE our cgroup.
 
     Why: the dashboard runs as a systemd user unit with KillMode=control-group.
@@ -83,6 +95,9 @@ def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple"):
     this host's systemd aborts `--scope` units, so scope launches silently do
     nothing. When systemd-run is missing there is no safe launch: fail closed
     rather than cage the session in the service cgroup.
+
+    Values never go on this argv, which any local user can read: a bare
+    --setenv=KEY takes the value from systemd-run's own environment.
     """
     runner = shutil.which("systemd-run")
     if runner is None:
@@ -90,14 +105,12 @@ def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple"):
     wrapped = [runner, "--user", "--unit=" + unit, "--collect"]
     if service_type != "simple":
         wrapped.append("--service-type=" + service_type)
+    wrapped.extend("--property=" + item for item in properties)
     if cwd:
         wrapped.append("--working-directory=" + str(cwd))
     for key, value in strip_dashboard_secrets(env or {}).items():
-        if value is None:
-            continue
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-            raise UpdateFailure("restart_context")
-        wrapped.append("--setenv=" + key)
+        if systemd_can_carry(key, value):
+            wrapped.append("--setenv=" + key)
     wrapped.append("--")
     wrapped.extend(argv)
     return wrapped

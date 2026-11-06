@@ -701,11 +701,20 @@ it.
 Anything the dashboard starts from its own service stays in that service's cgroup: its memory
 counts against the dashboard's `MemoryMax`, and with `KillMode=process` one leftover process keeps
 the cgroup, and so `memory.peak` and `memory.swap.peak`, alive across dashboard restarts. A Linux
-relaunch therefore goes through a transient `systemd-run --user` unit (`aac-launch-*`) whenever the
-helper runs inside a user service: Codex and Codex Desktop (`app_update_codex.cjs`), desktop apps
-(`restart_desktops`) and CLI terminals (`systemd_user_service_argv`). A failed `systemd-run` fails
-the relaunch instead of starting the app inside the cgroup. Over ssh (Nas1) the helper is in a session
-scope, which no dashboard limit covers, so it starts the app directly as before.
+relaunch of Codex and Codex Desktop (`app_update_codex.cjs`) and of desktop apps
+(`restart_desktops`) therefore goes through a transient `systemd-run --user` unit (`aac-launch-*`)
+whenever the helper runs inside a user service. Over ssh (Nas1) the helper is in a session scope,
+which no dashboard limit covers, so it starts those apps directly. `restart_cli` always uses a
+transient unit on Ubuntu, wherever it runs.
+
+These units keep `KillMode=process`, so quitting an app does not kill what it started, and discard
+GUI output. A failed `systemd-run` fails the relaunch instead of starting the app inside the cgroup,
+and so does an older runtime that offers no launcher. Variable values stay off `systemd-run`'s
+argv, and names systemd refuses are left out rather than failing the relaunch. The Codex daemon
+logs to `app-server-control/app-server.log`, which moves to `.1` at launch once past 5 MB.
+
+A pending-marker retry restarts only what it finds running. If it stops and starts nothing, the row
+is `restart_failed` with `restart_not_running` rather than `updated`, and the marker is cleared.
 
 ## Deployment and setup
 

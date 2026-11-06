@@ -33,7 +33,7 @@ export interface AppLaunchSpec {
   cwd?: string;
   /** Full replacement environment for the launched app. */
   env?: Record<string, string | undefined>;
-  /** Daemon log file (appended stdout+stderr). GUI apps omit it. */
+  /** Daemon log file (appended stdout+stderr). GUI apps omit it, and their output is discarded. */
   logFile?: string;
 }
 
@@ -85,26 +85,62 @@ function defaultSystemdRunPath(): string | null {
   return null;
 }
 
+/** What systemd accepts as a variable name; `BASH_FUNC_ml%%` or `a.b` fails the whole launch. */
+const SYSTEMD_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The environment entries systemd can carry; the rest are left out, never a failed launch. */
+function carriedEnvironment(env: Record<string, string | undefined>): Record<string, string> {
+  const carried: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && SYSTEMD_ENV_NAME.test(key) && !value.includes('\0')) {
+      carried[key] = value;
+    }
+  }
+  return carried;
+}
+
 /**
  * Build the systemd-run argv for a launch. Exported for tests.
  * --collect drops the unit once the app exits so repeated launches never collide.
+ *
+ * Environment values never go on this argv, which any local user can read through ps or /proc:
+ * a bare --setenv=KEY takes the value from systemd-run's own environment (systemdRunEnvironment).
+ *
+ * KillMode=process keeps what the old session start gave: quitting the app does not kill what it
+ * started, such as an Electron in-app relaunch or a terminal. A Type=simple transient unit would
+ * otherwise default to control-group and stop them when its main process exits.
  */
 export function buildSystemdRunArgs(spec: AppLaunchSpec, unit: string): string[] {
-  const argv = ['--user', `--unit=${unit}`, '--collect'];
+  const argv = ['--user', `--unit=${unit}`, '--collect', '--property=KillMode=process'];
   if (spec.cwd !== undefined && spec.cwd !== '') {
     argv.push(`--working-directory=${spec.cwd}`);
   }
   if (spec.env !== undefined) {
-    for (const [key, value] of Object.entries(spec.env)) {
-      if (value !== undefined) argv.push(`--setenv=${key}=${value}`);
-    }
+    for (const key of Object.keys(carriedEnvironment(spec.env))) argv.push(`--setenv=${key}`);
   }
   if (spec.logFile !== undefined && spec.logFile !== '') {
     argv.push(`--property=StandardOutput=append:${spec.logFile}`);
     argv.push(`--property=StandardError=append:${spec.logFile}`);
+  } else {
+    argv.push('--property=StandardOutput=null', '--property=StandardError=null');
   }
   argv.push('--', spec.exe, ...spec.args);
   return argv;
+}
+
+/**
+ * The environment systemd-run itself runs with: the app's values, for its bare --setenv flags,
+ * and this process's XDG_RUNTIME_DIR, which is how systemd-run reaches the user manager. Undefined
+ * when the spec names no environment, so systemd-run inherits this process's. Exported for tests.
+ */
+export function systemdRunEnvironment(
+  spec: AppLaunchSpec,
+  inherited: NodeJS.ProcessEnv = process.env
+): Record<string, string> | undefined {
+  if (spec.env === undefined) return undefined;
+  const env = carriedEnvironment(spec.env);
+  if (inherited.XDG_RUNTIME_DIR) env.XDG_RUNTIME_DIR = inherited.XDG_RUNTIME_DIR;
+  return env;
 }
 
 function waitForExit(child: ChildProcess): Promise<number | null> {
@@ -151,7 +187,11 @@ export async function launchApp(
   const pid = deps.pid ?? process.pid;
   const suffix = deps.randomSuffix ? deps.randomSuffix() : defaultRandomSuffix();
   const unit = transientUnitName(spec.app, pid, suffix);
-  const child = spawnFn(systemdRun, buildSystemdRunArgs(spec, unit), { stdio: 'ignore' });
+  const env = systemdRunEnvironment(spec);
+  const child = spawnFn(systemdRun, buildSystemdRunArgs(spec, unit), {
+    stdio: 'ignore',
+    ...(env === undefined ? {} : { env }),
+  });
   let code: number | null;
   try {
     code = await waitForExit(child);

@@ -450,6 +450,36 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn('--setenv=KEEP', argv)
         self.assertFalse(any('CCS_SESSION_SECRET' in value for value in argv))
         self.assertNotIn('CCS_SESSION_SECRET', run.call_args.kwargs['env'])
+        for wanted in ('--property=KillMode=process', '--property=StandardOutput=null', '--property=StandardError=null'):
+            self.assertIn(wanted, argv)
+
+    def test_systemd_argv_leaves_out_what_systemd_refuses(self):
+        values = {'KEEP': 'yes', 'BASH_FUNC_ml%%': '() { :; }', 'a.b': '1', '1BAD': '1', 'NONE': None, 'BAD_BYTES': 'a\udcffb'}
+        with mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            argv = common.systemd_user_service_argv('unit', '/tmp', values, ['app'])
+        self.assertEqual([item for item in argv if item.startswith('--setenv')], ['--setenv=KEEP'])
+        self.assertFalse(any('() {' in item for item in argv))
+
+    def test_failed_systemd_run_never_falls_back_to_a_plain_start(self):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+        item = mock.Mock(args=['/fixture/claude-desktop'], cwd='/fixture', env={}, pid=1, ppid=0)
+        newer = common.Install('claude-desktop', 'ubuntu', install.path, '2.0.0', 'apt', 'claude-desktop')
+        with mock.patch.object(processes, 'in_service_cgroup', return_value=True), \
+                mock.patch.object(processes, 'command', side_effect=common.UpdateFailure('update_failed')), \
+                mock.patch.object(processes.subprocess, 'Popen') as popen, \
+                mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            with self.assertRaises(common.UpdateFailure):
+                processes.restart_desktops(install, [item])
+            popen.assert_not_called()
+            policy = 'claude-desktop:\n  Installed: 1.0.0\n  Candidate: 2.0.0\n  Version table:\n *** 2.0.0 500\n        500 https://example.invalid stable/main amd64 Packages\n'
+            with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                    mock.patch.object(desktop, 'command', side_effect=lambda argv, **kwargs: policy if 'policy' in argv else ''), \
+                    mock.patch.object(desktop, 'main_contexts', return_value=[item]), mock.patch.object(desktop, 'scan', return_value=[]), \
+                    mock.patch.object(desktop, 'terminate_desktops', return_value=0), mock.patch.object(desktop, 'detect_desktop', return_value=newer):
+                value = desktop.update_linux(install)
+            popen.assert_not_called()
+        self.assertEqual(value['status'], 'restart_failed')
+        self.assertEqual(value['messageCode'], 'restart_failed')
 
     def test_desktop_relaunch_from_a_session_starts_directly(self):
         run, popen = self._restart_ubuntu_desktop(False)

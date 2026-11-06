@@ -854,7 +854,10 @@ def restart_desktops(install, contexts):
             # count against the dashboard's memory limit and outlive its restarts there.
             unit = "aac-launch-%s-%s" % (sanitize_unit_fragment(install.app_id), uuid.uuid4().hex[:12])
             values = environment(item.env)
-            command(systemd_user_service_argv(unit, item.cwd, values, [str(install.path), *args]),
+            # KillMode=process: quitting the app must not kill what it started (an Electron in-app
+            # relaunch, a terminal), as a Type=simple unit's default control-group would.
+            command(systemd_user_service_argv(unit, item.cwd, values, [str(install.path), *args],
+                                              properties=("KillMode=process", "StandardOutput=null", "StandardError=null")),
                     timeout=15, env=values, preserve_env=True)
         else:
             subprocess.Popen([str(install.path), *args], cwd=item.cwd, env=environment(item.env), stdin=subprocess.DEVNULL,

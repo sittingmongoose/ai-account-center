@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1344,
+    "totalOccurrences": 1346,
     "filesAffected": 134,
     "hotpathOccurrences": 698,
     "hotpathFilesAffected": 79,
@@ -783,7 +783,7 @@
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1076
+          "loc": 1101
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",

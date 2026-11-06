@@ -40,7 +40,9 @@ function insideServiceCgroup(read = () => fs.readFileSync('/proc/self/cgroup', '
 async function relaunch(target, desktop, outside, deps = {}) {
   const actual = desktop ? target.exe : (deps.executable ?? executable);
   const env = cleanEnvironment(target.env);
-  if (outside && (deps.inside ?? insideServiceCgroup)()) {
+  if ((deps.inside ?? insideServiceCgroup)()) {
+    // An older runtime offers no launcher. Starting here would cage the app in the dashboard.
+    if (!outside) throw new Error('Launch failed.');
     await outside({ ...target, exe: actual, env }, desktop);
   } else {
     const child = (deps.spawn ?? spawn)(actual, target.args.slice(1), { cwd: target.cwd, env, detached: true,
@@ -49,6 +51,11 @@ async function relaunch(target, desktop, outside, deps = {}) {
     child.unref();
   }
   output.restartedProcesses++;
+}
+/** The update bridge's process runtime: its launches stay outside the dashboard cgroup. */
+function createUpdateRuntime(createRuntime, deps = {}) {
+  return createRuntime(path.join(home, '.codex'), { scan: async () => privateScan(),
+    launch: (target, desktop, outside) => relaunch(target, desktop, outside, deps) });
 }
 function run(binary, args, timeout = 10000) {
   return new Promise((resolve, reject) => execFile(binary, args, { timeout, maxBuffer: 65536, encoding: 'utf8',
@@ -132,9 +139,19 @@ async function execute(deps) {
     await deps.restartProxies?.();
     await runtime.start(); stopped = false;
     if (await deps.hasOldProxies()) throw new Error('An old proxy has no verified restart supervisor.');
+    // A retry from the pending marker restarts only what its own stop() found. The launch snapshot
+    // of a failed earlier run is gone, so stopping and starting nothing proves no restart: say so
+    // once. The marker goes too, since nothing here could ever finish it.
+    const retried = mode === 'desktop' ? restartOnly : output.version === output.previousVersion;
+    if (retried && output.restartedProcesses === 0 && !(await deps.running())) {
+      deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running';
+      return output;
+    }
     deps.clear(); output.status = 'updated'; output.messageCode = 'updated';
   } catch {
-    if (stopped) { try { await runtime.start(); } catch { /* A later explicit click retries using the private marker. */ } }
+    // start() does nothing once it has released the lock, so a launch that failed there is not
+    // retried here. The marker stays, and the next click reports what it finds (restart_not_running).
+    if (stopped) { try { await runtime.start(); } catch { /* Reported below as restart_failed. */ } }
     if (busy) {
       // Nothing was stopped. The CLI package may already be new (the pending
       // marker stays, so the next click restarts the daemon once Codex is idle);
@@ -215,11 +232,10 @@ async function main() {
       } while (Date.now() < limit);
       return true;
     },
-    runtime: () => createCodexActivationRuntime(path.join(home, '.codex'), { scan: async () => privateScan(),
-      launch: (target, desktop, outside) => relaunch(target, desktop, outside),
-    }),
+    runtime: () => createUpdateRuntime(createCodexActivationRuntime),
+    running: () => privateScan().some((item) => path.basename(item.exe) === 'codex' || item.exe === '/usr/lib/chatgpt/ChatGPT'),
   });
   } finally { await release(); }
 }
-module.exports = { execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
+module.exports = { createUpdateRuntime, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

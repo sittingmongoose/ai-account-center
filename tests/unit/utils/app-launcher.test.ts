@@ -4,6 +4,7 @@ import {
   buildSystemdRunArgs,
   launchApp,
   sanitizeAppName,
+  systemdRunEnvironment,
   transientUnitName,
 } from '../../../src/utils/app-launcher';
 
@@ -43,9 +44,10 @@ describe('app-launcher', () => {
     expect(argv).toContain('--unit=aac-launch-codex-app-server-123-abcdef');
     expect(argv).toContain('--collect');
     expect(argv).toContain('--working-directory=/tmp/work');
-    expect(argv).toContain('--setenv=HOME=/home/u');
-    expect(argv).toContain('--setenv=PATH=/usr/bin');
-    expect(argv.some((a) => a.startsWith('--setenv=EMPTY='))).toBe(false);
+    expect(argv).toContain('--setenv=HOME');
+    expect(argv).toContain('--setenv=PATH');
+    expect(argv.some((a) => a.startsWith('--setenv=EMPTY'))).toBe(false);
+    expect(argv).toContain('--property=KillMode=process');
     expect(argv).toContain('--property=StandardOutput=append:/tmp/app-server.log');
     expect(argv).toContain('--property=StandardError=append:/tmp/app-server.log');
     expect(argv).not.toContain('--scope');
@@ -54,13 +56,68 @@ describe('app-launcher', () => {
     expect(argv.slice(sep + 1)).toEqual(['/usr/bin/codex', 'app-server']);
   });
 
-  it('omits log properties for GUI apps', () => {
+  it('discards the output of GUI apps', () => {
     const argv = buildSystemdRunArgs(
       { app: 'codex-desktop', exe: '/usr/lib/chatgpt/ChatGPT', args: [] },
       'aac-launch-codex-desktop-1-x'
     );
-    expect(argv.some((a) => a.startsWith('--property='))).toBe(false);
+    expect(argv).toContain('--property=StandardOutput=null');
+    expect(argv).toContain('--property=StandardError=null');
+    expect(argv).toContain('--property=KillMode=process');
     expect(argv.slice(argv.indexOf('--') + 1)).toEqual(['/usr/lib/chatgpt/ChatGPT']);
+  });
+
+  it('never puts an environment value on the argv and hands it to systemd-run instead', async () => {
+    const secrets = { OPENAI_API_KEY: 'sk-fixture-secret', GH_TOKEN: 'ghp-fixture-secret' };
+    const calls: Array<{ args: string[]; options: { env?: Record<string, string> } }> = [];
+    const saved = process.env.XDG_RUNTIME_DIR;
+    process.env.XDG_RUNTIME_DIR = '/run/user/dashboard';
+    try {
+      await launchApp(
+        {
+          app: 'codex-app-server',
+          exe: '/usr/bin/codex',
+          args: ['app-server'],
+          env: { ...secrets, XDG_RUNTIME_DIR: '/run/user/stale' },
+        },
+        {
+          platform: 'linux',
+          systemdRunPath: '/usr/bin/systemd-run',
+          spawn: ((_file: string, args: string[], options: { env?: Record<string, string> }) => {
+            calls.push({ args, options });
+            return fakeChild({ code: 0 });
+          }) as unknown as typeof import('child_process').spawn,
+        }
+      );
+    } finally {
+      if (saved === undefined) delete process.env.XDG_RUNTIME_DIR;
+      else process.env.XDG_RUNTIME_DIR = saved;
+    }
+    const argv = calls[0].args.join(' ');
+    for (const value of Object.values(secrets)) expect(argv).not.toContain(value);
+    expect(calls[0].args).toContain('--setenv=OPENAI_API_KEY');
+    expect(calls[0].args).toContain('--setenv=GH_TOKEN');
+    expect(calls[0].options.env?.OPENAI_API_KEY).toBe(secrets.OPENAI_API_KEY);
+    expect(calls[0].options.env?.GH_TOKEN).toBe(secrets.GH_TOKEN);
+    // The dashboard's runtime folder is how systemd-run reaches the user manager.
+    expect(calls[0].options.env?.XDG_RUNTIME_DIR).toBe('/run/user/dashboard');
+  });
+
+  it('leaves out names systemd refuses instead of failing the launch', () => {
+    const spec = {
+      app: 'codex-desktop',
+      exe: '/usr/lib/chatgpt/ChatGPT',
+      args: [],
+      env: { KEEP: 'yes', 'BASH_FUNC_ml%%': '() { :; }', 'a.b': '1', '1BAD': '1', NUL: 'a\0b' },
+    };
+    const setenv = buildSystemdRunArgs(spec, 'unit').filter((a) => a.startsWith('--setenv'));
+    expect(setenv).toEqual(['--setenv=KEEP']);
+    expect(systemdRunEnvironment(spec, {})).toEqual({ KEEP: 'yes' });
+  });
+
+  it('lets systemd-run inherit this environment when the spec names none', () => {
+    const spec = { app: 'app', exe: '/bin/true', args: [] };
+    expect(systemdRunEnvironment(spec, { XDG_RUNTIME_DIR: '/run/user/1' })).toBeUndefined();
   });
 
   it('sanitizes unit names', () => {

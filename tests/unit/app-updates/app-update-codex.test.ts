@@ -52,6 +52,7 @@ function fixture() {
         events.push('proxy-reconnect');
       },
       hasOldProxies: async () => false,
+      running: async () => true,
       runtime: () => ({
         stop: async () => {
           events.push('stop');
@@ -354,6 +355,39 @@ describe('Codex relaunch after an update', () => {
     expect(bridge.output.restartedProcesses).toBe(1);
   });
 
+  it('fails closed when an older runtime offers no launcher inside the dashboard', async () => {
+    const { calls, spawn } = spawned();
+    await expect(
+      bridge.relaunch(target, false, undefined, { spawn, inside: () => true })
+    ).rejects.toThrow('Launch failed.');
+    expect(calls).toEqual([]);
+    expect(bridge.output.restartedProcesses).toBe(0);
+  });
+
+  it('hands the runtime launcher through the update runtime factory', async () => {
+    const { calls, spawn } = spawned();
+    const outside: unknown[][] = [];
+    let overrides: {
+      launch: (t: unknown, d: boolean, o: (...args: unknown[]) => Promise<void>) => Promise<void>;
+      scan: unknown;
+    } | null = null;
+    const created = bridge.createUpdateRuntime(
+      (codexHome: string, given: NonNullable<typeof overrides>) => {
+        overrides = given;
+        return codexHome;
+      },
+      { spawn, inside: () => true, executable: '/new/codex' }
+    );
+    expect(created.endsWith('.codex')).toBe(true);
+    await overrides!.launch(target, false, async (...args: unknown[]) => {
+      outside.push(args);
+    });
+    expect(calls).toEqual([]);
+    expect(outside.length).toBe(1);
+    expect((outside[0][0] as { exe: string }).exe).toBe('/new/codex');
+    expect(typeof overrides!.scan).toBe('function');
+  });
+
   it('tells a user service from a session, a slice and an unreadable file', () => {
     expect(bridge.insideServiceCgroup(() => dashboard)).toBe(true);
     for (const cgroup of [
@@ -367,5 +401,75 @@ describe('Codex relaunch after an update', () => {
         throw new Error('no proc');
       })
     ).toBe(false);
+  });
+});
+
+describe('Pending-marker retry that finds nothing to restart', () => {
+  beforeEach(() => {
+    bridge.output.restartedProcesses = 0;
+  });
+  function retry(running: boolean) {
+    const value = fixture();
+    value.deps.mark();
+    return { value, deps: { ...value.deps, running: async () => running, operation: 'cli' } };
+  }
+
+  it('does not report a restart when it stopped and started nothing', async () => {
+    const { value, deps } = retry(false);
+    deps.runtime = () => ({
+      stop: async () => {},
+      start: async () => {},
+      dispose: async () => {},
+    });
+    deps.update = async () => {};
+    const result = await bridge.execute(deps);
+    expect(result.status).toBe('restart_failed');
+    expect(result.messageCode).toBe('restart_not_running');
+    expect(value.pending()).toBe(false);
+  });
+
+  it('stays updated when a retry really restarted something', async () => {
+    const { value, deps } = retry(false);
+    deps.runtime = () => ({
+      stop: async () => {},
+      start: async () => {
+        bridge.output.restartedProcesses++;
+      },
+      dispose: async () => {},
+    });
+    deps.update = async () => {};
+    const result = await bridge.execute(deps);
+    expect(result.status).toBe('updated');
+    expect(value.pending()).toBe(false);
+  });
+
+  it('stays updated when the daemon is already running on the new version', async () => {
+    const { deps } = retry(true);
+    deps.runtime = () => ({ stop: async () => {}, start: async () => {}, dispose: async () => {} });
+    deps.update = async () => {};
+    expect((await bridge.execute(deps)).status).toBe('updated');
+  });
+
+  it('applies to a desktop restart-only retry too', async () => {
+    const { deps } = retry(false);
+    deps.runtime = () => ({ stop: async () => {}, start: async () => {}, dispose: async () => {} });
+    const result = await bridge.execute({
+      ...deps,
+      operation: 'desktop',
+      expectedCandidate: '1.0.0',
+      restartOnly: true,
+    });
+    expect(result.messageCode).toBe('restart_not_running');
+  });
+
+  it('never applies to a first update, where the version changed', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      running: async () => false,
+      operation: 'cli',
+      runtime: () => ({ stop: async () => {}, start: async () => {}, dispose: async () => {} }),
+    });
+    expect(result.status).toBe('updated');
   });
 });

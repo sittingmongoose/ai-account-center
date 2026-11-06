@@ -792,37 +792,7 @@ function createDependencies(codexHome: string): CodexActivationRuntimeDependenci
         }
       }
     },
-    launch: async (target, desktop) => {
-      // The app-server log keeps tokens out of the journal; pre-create it 0600
-      // so the transient service below only ever appends. GUI output goes to
-      // the journal (systemd default), same as a desktop-session start.
-      const logFile = desktop
-        ? undefined
-        : path.join(codexHome, 'app-server-control', 'app-server.log');
-      if (logFile !== undefined) {
-        fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
-        const stream = fs.openSync(logFile, 'a', 0o600);
-        fs.closeSync(stream);
-      }
-      // launchApp starts the app OUTSIDE the dashboard cgroup (see
-      // src/utils/app-launcher.ts): a detached spawn would cage it -- and
-      // everything it starts -- in ccs-dashboard.service, where the next
-      // dashboard restart would kill it (KillMode=control-group).
-      // Note: argv0 is no longer preserved; the app now starts with argv0 set
-      // to its exe path, i.e. the standard absolute-path invocation form.
-      try {
-        await launchApp({
-          app: desktop ? 'codex-desktop' : 'codex-app-server',
-          exe: target.exe,
-          args: target.args.slice(1),
-          cwd: target.cwd,
-          env: target.env,
-          ...(logFile === undefined ? {} : { logFile }),
-        });
-      } catch {
-        throw new CodexActivationRuntimeError('Could not launch Codex.');
-      }
-    },
+    launch: (target, desktop) => launchCodexProcess(codexHome, target, desktop),
     prepareCli: (target) => runCliRestartHelper(target, true),
     launchCli: (target) => runCliRestartHelper(target, false),
     verifyDaemon: async (target) => {
@@ -860,6 +830,61 @@ function createDependencies(codexHome: string): CodexActivationRuntimeDependenci
     sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
     now: Date.now,
   };
+}
+
+/** The app-server log past this size moves to `.1` at the next launch, replacing the older copy. */
+const APP_SERVER_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The daemon log, ready for a unit to append to: its folder exists, the file is 0600 before the
+ * transient service below opens it, and one over the cap has rotated. A failed rotation keeps
+ * appending; it never stops a relaunch. Exported for tests.
+ */
+export function prepareAppServerLog(logFile: string): void {
+  fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
+  try {
+    const stats = fs.lstatSync(logFile);
+    if (stats.isFile() && stats.size > APP_SERVER_LOG_MAX_BYTES) {
+      fs.renameSync(logFile, `${logFile}.1`);
+    }
+  } catch {
+    /* First launch, or a rotation that could not happen. */
+  }
+  const stream = fs.openSync(logFile, 'a', 0o600);
+  fs.closeSync(stream);
+}
+
+/** Starts one captured Codex process through launchApp. Exported for tests. */
+export async function launchCodexProcess(
+  codexHome: string,
+  target: CodexProcessSnapshot,
+  desktop: boolean,
+  launcher: typeof launchApp = launchApp
+): Promise<void> {
+  // The app-server log keeps tokens out of the journal. GUI output is discarded, as it
+  // was when a desktop-session start sent it nowhere.
+  const logFile = desktop
+    ? undefined
+    : path.join(codexHome, 'app-server-control', 'app-server.log');
+  if (logFile !== undefined) prepareAppServerLog(logFile);
+  // launchApp starts the app OUTSIDE the dashboard cgroup (see
+  // src/utils/app-launcher.ts): a detached spawn would cage it -- and
+  // everything it starts -- in ccs-dashboard.service, where the next
+  // dashboard restart would kill it (KillMode=control-group).
+  // Note: argv0 is no longer preserved; the app now starts with argv0 set
+  // to its exe path, i.e. the standard absolute-path invocation form.
+  try {
+    await launcher({
+      app: desktop ? 'codex-desktop' : 'codex-app-server',
+      exe: target.exe,
+      args: target.args.slice(1),
+      cwd: target.cwd,
+      env: target.env,
+      ...(logFile === undefined ? {} : { logFile }),
+    });
+  } catch {
+    throw new CodexActivationRuntimeError('Could not launch Codex.');
+  }
 }
 
 async function assertDaemonIdle(daemon: CodexProcessSnapshot, codexHome: string): Promise<void> {
