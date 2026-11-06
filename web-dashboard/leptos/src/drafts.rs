@@ -37,13 +37,34 @@ pub enum Standing {
     Ready,
     /// The question changed after the owner chose; not sent until looked at again.
     Changed,
+    /// An objection with no words yet: an objection must say why.
+    NeedsWords,
 }
 
 pub fn standing(drafts: &Drafts, card: &Card) -> Standing {
     match drafts.get(&card.id) {
         Some(d) if d.has_answer() && d.version != card.version_key() => Standing::Changed,
+        Some(d)
+            if card.kind == "objection"
+                && d.choice.iter().any(|k| k == "object")
+                && d.note.trim().is_empty() =>
+        {
+            Standing::NeedsWords
+        }
         Some(d) if d.has_answer() => Standing::Ready,
         _ => Standing::Empty,
+    }
+}
+
+/// The answer kind the server records: a choice is an answer (or "done" / "object" on those cards), words alone a note.
+pub fn entry_kind(card: &Card, draft: &Draft) -> &'static str {
+    if draft.choice.is_empty() {
+        return "note";
+    }
+    match card.kind.as_str() {
+        "action" => "done",
+        "objection" => "object",
+        _ => "answer",
     }
 }
 
@@ -104,11 +125,17 @@ pub fn entries(drafts: &Drafts, cards: &[Card]) -> Vec<AnswerEntry> {
         .filter(|c| standing(drafts, c) == Standing::Ready)
         .map(|c| {
             let d = &drafts[&c.id];
+            let kind = entry_kind(c, d);
             AnswerEntry {
+                kind: kind.to_string(),
                 card_id: c.id.clone(),
                 card_seq: c.seq,
                 card_sha256: c.card_sha256.clone(),
-                choice: d.choice.clone(),
+                choice: if kind == "answer" {
+                    d.choice.clone()
+                } else {
+                    Vec::new()
+                },
                 note: d.note.trim().to_string(),
                 via: if d.via == "recommended" {
                     "recommended".into()
@@ -157,7 +184,7 @@ mod tests {
                 .collect(),
             recommendation: rec.map(|k| Recommendation {
                 key: k.into(),
-                why: String::new(),
+                ..Default::default()
             }),
             ..Default::default()
         }
@@ -224,6 +251,33 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].note, "a question");
         assert!(sent[0].choice.is_empty());
+    }
+
+    #[test]
+    fn objections_need_words_and_actions_send_done() {
+        let mut objection = card("o", 1, None);
+        objection.kind = "objection".into();
+        let mut action = card("t", 1, None);
+        action.kind = "action".into();
+        let mut d = Drafts::new();
+        toggle(&mut d, &objection, "object");
+        assert_eq!(standing(&d, &objection), Standing::NeedsWords);
+        assert!(entries(&d, &[objection.clone()]).is_empty());
+        set_note(&mut d, &objection, "Keep it opt-in".into());
+        toggle(&mut d, &action, "done");
+        let sent = entries(&d, &[objection.clone(), action.clone()]);
+        assert_eq!(
+            sent.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+            vec!["object", "done"]
+        );
+        assert!(sent.iter().all(|e| e.choice.is_empty()));
+        // Recommendations never fill objections or actions.
+        let mut d2 = Drafts::new();
+        objection.recommendation = Some(Recommendation {
+            key: "object".into(),
+            ..Default::default()
+        });
+        assert_eq!(use_recommendations(&mut d2, &[objection, action]), 0);
     }
 
     #[test]

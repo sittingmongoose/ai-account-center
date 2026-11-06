@@ -3,9 +3,11 @@
 //! the server refuses an answer to a card that changed after it was shown.
 
 use crate::api::*;
+use crate::blocks::Blocks;
 use crate::drafts::{self, Drafts, Standing};
 use crate::fmt;
 use crate::live::Live;
+use crate::media::MediaList;
 use crate::status::Panel;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -172,7 +174,7 @@ fn Deck(
                         let label = card.short();
                         let state = move || drafts.with(|d| match drafts::standing(d, &card) {
                             Standing::Ready => "done",
-                            Standing::Changed => "changed",
+                            Standing::Changed | Standing::NeedsWords => "changed",
                             Standing::Empty => "",
                         });
                         view! {
@@ -231,20 +233,69 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
     .flatten()
     .collect::<Vec<_>>()
     .join(" · ");
-    let changed =
-        move || drafts.with(|d| drafts::standing(d, &card.get_value()) == Standing::Changed);
+    let standing = move || drafts.with(|d| drafts::standing(d, &card.get_value()));
+    let chosen = move |key: &str| {
+        drafts.with(|d| {
+            d.get(&card.get_value().id)
+                .is_some_and(|x| x.choice.iter().any(|k| k == key))
+        })
+    };
+    let kind_word = match c.kind.as_str() {
+        "action" => Some("Only you can do this"),
+        "objection" => Some("Already decided · object if you disagree"),
+        _ => None,
+    };
+    let mut facts: Vec<(&'static str, String)> = Vec::new();
+    facts.push((
+        "Holding up",
+        c.blocks
+            .clone()
+            .unwrap_or_else(|| "Nothing waits on this".into()),
+    ));
+    if let Some(n) = c.needed_by.clone() {
+        let when = n.at.as_deref().map(fmt::clock).unwrap_or_default();
+        let what = n.if_no_answer.unwrap_or_default();
+        let words = [when, what]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if !words.is_empty() {
+            facts.push(("Needed by", words));
+        }
+    }
+    if let Some(r) = c.reversible.clone() {
+        let words = match (r.yes, r.how) {
+            (true, Some(how)) if !how.is_empty() => format!("Yes: {how}"),
+            (true, _) => "Yes".to_string(),
+            (false, Some(how)) if !how.is_empty() => format!("No: {how}"),
+            (false, _) => "No".to_string(),
+        };
+        facts.push(("Reversible", words));
+    }
+    let note_hint = match c.kind.as_str() {
+        "objection" => "Say why you object, or leave a note. It goes to the agent word for word.",
+        "action" => "Note for the agent (optional). It goes word for word.",
+        _ => "Note, a different answer or a question. It goes to the agent word for word.",
+    };
 
     view! {
-        <article class="card" data-urgency=c.urgency.clone()>
+        <article class="card" data-urgency=c.urgency.clone() data-kind=c.kind.clone()>
+            {c.exception.clone().map(|e| view! {
+                <p class="exception"><strong>{format!("Exception to your rule: {}", e.rule)}</strong>{(!e.text.is_empty()).then(|| format!(". {}", e.text))}</p>
+            })}
             <div class="card-meta">
                 <span class="card-label">{c.short()}</span>
                 <span class="chip" data-urgency=c.urgency.clone()>{urgency_label(&c.urgency)}</span>
                 <span>{place}</span>
-                <span>{format!("Asked by {} · {}", c.asked_by, fmt::clock(&c.asked_at))}</span>
+                <span class="asked">{format!("{} · {}", c.asked_by, fmt::clock(&c.asked_at))}</span>
             </div>
+            {kind_word.map(|w| view! { <p class="kind-word">{w}</p> })}
             <h3 class="card-title">{c.title.clone()}</h3>
-            <p class="now">{c.now.clone()}</p>
-            {c.now_as_of.as_deref().map(|t| view! { <p class="asof">{format!("As of {}", fmt::clock(t))}</p> })}
+            <p class="now">
+                {c.now.clone()}
+                {c.now_as_of.as_deref().map(|t| view! { <span class="asof">{format!(" As of {}.", fmt::clock(t))}</span> })}
+            </p>
             {(c.old_answer.is_some() || c.what_changed.is_some()).then(|| view! {
                 <div class="old">
                     {c.old_answer.clone().map(|o| view! {
@@ -253,42 +304,70 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
                     {c.what_changed.clone().map(|w| view! { <p><strong>"What changed: "</strong>{w}</p> })}
                 </div>
             })}
-            <p class="holds">{c.blocks.clone().map(|b| format!("Holding up: {b}")).unwrap_or_else(|| "Nothing waits on this.".into())}</p>
-            <Show when=changed>
+            <dl class="card-facts">
+                {facts.into_iter().map(|(k, v)| view! { <div><dt>{k}</dt><dd>{v}</dd></div> }).collect_view()}
+            </dl>
+            <Blocks blocks=c.sections.clone()/>
+            <Show when=move || standing() == Standing::Changed>
                 <p class="item-note" data-tone="warn">"This question changed after you chose. Look again; your choice is kept but not sent until you touch it."</p>
             </Show>
 
-            <div class="options" role=if c.multiple { "group" } else { "radiogroup" }>
-                {c.options.clone().into_iter().map(|o| {
-                    let key = o.key.clone();
-                    let key_state = key.clone();
-                    let key_click = key.clone();
-                    let is_rec = key == recommended;
-                    view! {
-                        <button
-                            class="option"
-                            role=if c.multiple { "checkbox" } else { "radio" }
-                            aria-checked=move || drafts.with(|d| d.get(&card.get_value().id).is_some_and(|x| x.choice.contains(&key_state))).to_string()
-                            on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), &key_click))
-                        >
-                            <span class="opt-key">{key.clone()}</span>
-                            <span class="opt-body">
-                                <span class="opt-label">{o.label.clone()}{is_rec.then(|| view! { <span class="rec-tag">"Recommended"</span> })}</span>
-                                {(!o.gets.is_empty()).then(|| view! { <span class="gc"><strong>"Gets: "</strong>{o.gets.clone()}</span> })}
-                                {(!o.costs.is_empty()).then(|| view! { <span class="gc"><strong>"Costs: "</strong>{o.costs.clone()}</span> })}
-                                {o.image.clone().map(|img| view! {
-                                    <span class="shot">
-                                        <img src=img.url alt=format!("Option {}", o.key) loading="lazy"/>
-                                        <span>{format!("Screenshot · {} · option {}", if img.kind == "built" { "built" } else { "mockup" }, o.key)}</span>
-                                    </span>
-                                })}
-                            </span>
-                        </button>
-                    }
-                }).collect_view()}
-            </div>
+            {match c.kind.as_str() {
+                "action" => view! {
+                    <button class="toggle" aria-pressed=move || chosen("done").to_string()
+                        on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), "done"))>
+                        {move || if chosen("done") { "Marked done (sent when you review)" } else { "Mark done" }}
+                    </button>
+                }.into_any(),
+                "objection" => view! {
+                    <button class="toggle" data-tone="warn" aria-pressed=move || chosen("object").to_string()
+                        on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), "object"))>
+                        {move || if chosen("object") { "You object: say why below" } else { "Object" }}
+                    </button>
+                    <Show when=move || standing() == Standing::NeedsWords>
+                        <p class="item-note" data-tone="warn">"An objection needs a reason before it can be sent."</p>
+                    </Show>
+                }.into_any(),
+                _ => view! {
+                    <div class="options" role=if c.multiple { "group" } else { "radiogroup" }>
+                        {c.options.clone().into_iter().map(|o| {
+                            let key = o.key.clone();
+                            let key_state = key.clone();
+                            let key_click = key.clone();
+                            let is_rec = key == recommended;
+                            view! {
+                                <div class="option" data-checked=move || chosen(&key_state).then_some("1")>
+                                    <button
+                                        class="opt-pick"
+                                        role=if c.multiple { "checkbox" } else { "radio" }
+                                        aria-checked={let k = key.clone(); move || chosen(&k).to_string()}
+                                        on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), &key_click))
+                                    >
+                                        <span class="opt-top">
+                                            <span class="opt-key">{key.clone()}</span>
+                                            {is_rec.then(|| view! { <span class="rec-tag">"Recommended"</span> })}
+                                        </span>
+                                        <span class="opt-label">{o.label.clone()}</span>
+                                        {(!o.gets.is_empty()).then(|| view! { <span class="gc"><strong>"Gets "</strong>{o.gets.clone()}</span> })}
+                                        {(!o.costs.is_empty()).then(|| view! { <span class="gc"><strong>"Costs "</strong>{o.costs.clone()}</span> })}
+                                    </button>
+                                    <MediaList items=o.media.clone()/>
+                                    <Blocks blocks=o.sections.clone()/>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                    {c.recommendation.clone().map(|r| view! {
+                        <div class="why">
+                            <p><strong>{format!("Why {}: ", r.key)}</strong>{r.why}
+                                {r.confidence.filter(|x| !x.is_empty()).map(|x| view! { <span class="muted">{format!(" Confidence: {x}.")}</span> })}
+                            </p>
+                            {r.flip.filter(|x| !x.is_empty()).map(|f| view! { <p class="muted"><strong>"What would change it: "</strong>{f}</p> })}
+                        </div>
+                    })}
+                }.into_any(),
+            }}
 
-            {c.recommendation.clone().map(|r| view! { <p class="why"><strong>{format!("Why {}: ", r.key)}</strong>{r.why}</p> })}
             {(!c.evidence.is_empty()).then(|| view! {
                 <details class="evidence">
                     <summary>"Evidence"</summary>
@@ -310,7 +389,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
                 <textarea
                     rows="2"
                     maxlength="4000"
-                    placeholder="Note, a different answer or a question. It goes to the agent word for word."
+                    placeholder=note_hint
                     prop:value=initial_note
                     on:input=move |ev| { let text = event_target_value(&ev); drafts.update(|d| drafts::set_note(d, &card.get_value(), text)); }
                 ></textarea>
@@ -401,8 +480,13 @@ fn Review(
                         let draft = d.get(&c.id).cloned().unwrap_or_default();
                         match drafts::standing(d, &c) {
                             Standing::Changed => ("Changed since you chose · look again".to_string(), "warn"),
+                            Standing::NeedsWords => ("Objection without a reason · add one to send it".to_string(), "warn"),
+                            Standing::Empty if c.kind == "objection" => ("No objection · nothing is sent".to_string(), "muted"),
+                            Standing::Empty if c.kind == "action" => ("Not done yet · stays open".to_string(), "muted"),
                             Standing::Empty => ("Not answered · stays open for later".to_string(), "muted"),
                             Standing::Ready if draft.choice.is_empty() => ("Note only · the question stays open".to_string(), "note"),
+                            Standing::Ready if c.kind == "action" => ("Done".to_string(), "good"),
+                            Standing::Ready if c.kind == "objection" => ("You object".to_string(), "warn"),
                             Standing::Ready => {
                                 let labels = draft.choice.iter().map(|k| {
                                     let label = c.options.iter().find(|o| &o.key == k).map(|o| o.label.clone()).unwrap_or_default();

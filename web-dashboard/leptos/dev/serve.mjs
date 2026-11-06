@@ -11,13 +11,27 @@ const dashboard = path.resolve(crate, '..');
 const port = Number(process.argv[2] || 8790);
 const fixture = process.argv[3] || path.join(crate, 'fixtures/status-view.json');
 let view = JSON.parse(fs.readFileSync(fixture, 'utf8'));
-const types = { '.js': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.html': 'text/html; charset=utf-8', '.json': 'application/json' };
+const types = { '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.png': 'image/png', '.js': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.html': 'text/html; charset=utf-8', '.json': 'application/json' };
 
 function file(res, p) {
   fs.readFile(p, (err, body) => {
     if (err) { res.writeHead(404).end('not found'); return; }
     res.writeHead(200, { 'Content-Type': types[path.extname(p)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
     res.end(body);
+  });
+}
+
+// Media with HTTP Range support: iOS Safari plays a video only when the server answers ranges.
+function ranged(req, res, p) {
+  fs.stat(p, (err, st) => {
+    if (err) { res.writeHead(404).end('not found'); return; }
+    const type = types[path.extname(p)] || (p.endsWith('.mp4') ? 'video/mp4' : p.endsWith('.jpg') ? 'image/jpeg' : 'application/octet-stream');
+    const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+    if (!m) { res.writeHead(200, { 'Content-Type': type, 'Content-Length': st.size, 'Accept-Ranges': 'bytes' }); fs.createReadStream(p).pipe(res); return; }
+    const start = m[1] ? Number(m[1]) : st.size - Number(m[2]);
+    const end = m[1] && m[2] ? Math.min(Number(m[2]), st.size - 1) : st.size - 1;
+    res.writeHead(206, { 'Content-Type': type, 'Content-Length': end - start + 1, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Accept-Ranges': 'bytes' });
+    fs.createReadStream(p, { start, end }).pipe(res);
   });
 }
 
@@ -43,6 +57,7 @@ http.createServer((req, res) => {
   else if (p === '/app/app.css') file(res, path.join(crate, 'style/app.css'));
   else if (p === '/app/MartianMono.ttf') file(res, path.join(dashboard, 'ui/fonts/MartianMono.ttf'));
   else if (p.startsWith('/assets/')) file(res, path.join(dashboard, 'public/assets', path.basename(p)));
+  else if (p.startsWith('/api/status/files/')) ranged(req, res, path.join(crate, 'fixtures/media', path.basename(p)));
   else if (p === '/api/status' && req.method === 'GET') json(res, 200, { ...view, generatedAt: new Date().toISOString() });
   else if (p === '/api/status/answers' && req.method === 'POST') {
     let body = '';
@@ -52,6 +67,10 @@ http.createServer((req, res) => {
       const results = (data.answers || []).map((e) => {
         const card = view.cards.open.find((x) => x.id === e.cardId);
         if (!card || card.seq !== e.cardSeq || card.cardSha256 !== e.cardSha256) return { cardId: e.cardId, outcome: 'card_changed', code: 'card_changed', error: 'The question changed.' };
+        if (e.kind === 'done' || e.kind === 'object') {
+          answer(card, [e.kind], e.note, e.via);
+          return { cardId: e.cardId, outcome: 'recorded', code: '', error: '' };
+        }
         if (!e.choice.length) {
           card.notes.push({ note: e.note, at: new Date().toISOString(), delivery: { state: 'rang', at: new Date().toISOString(), detail: '' } });
           return { cardId: e.cardId, outcome: 'recorded', code: '', error: '' };

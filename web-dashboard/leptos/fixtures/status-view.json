@@ -8,7 +8,7 @@
     "tone": "warn",
     "runs": [
       {
-        "text": "4 questions",
+        "text": "6 questions",
         "strong": true,
         "tone": "warn"
       },
@@ -111,7 +111,7 @@
         "stream": "F",
         "askedBy": "pm-fo-lead",
         "askerState": "working",
-        "title": "How should the lines chart label its end value (FO-33)?",
+        "title": "How should the lines chart show its end value?",
         "whatChanged": null,
         "options": [
           {
@@ -119,26 +119,47 @@
             "label": "Move the label above the line",
             "gets": "Never covers a point",
             "costs": "Taller chart",
-            "image": null
+            "media": [
+              {
+                "kind": "image",
+                "url": "/api/status/files/vm.pm-fo-lead/cards/F-Q3.assets/option-a.jpg",
+                "posterUrl": null,
+                "caption": "At 1440 px",
+                "label": "built"
+              }
+            ],
+            "sections": []
           },
           {
             "key": "B",
             "label": "Hide the label below 400 px",
             "gets": "No layout change",
             "costs": "Phones lose the end value",
-            "image": null
+            "media": [
+              {
+                "kind": "video",
+                "url": "/api/status/files/vm.pm-fo-lead/cards/F-Q3.assets/option-b.mp4",
+                "posterUrl": "/api/status/files/vm.pm-fo-lead/cards/F-Q3.assets/option-b-poster.jpg",
+                "caption": "Resizing from 900 to 360 px",
+                "label": "mockup"
+              }
+            ],
+            "sections": []
           },
           {
             "key": "C",
             "label": "Keep it, fade the point under it",
             "gets": "Fast",
             "costs": "Astra flagged this kind of fix before",
-            "image": null
+            "media": [],
+            "sections": []
           }
         ],
         "recommendation": {
           "key": "A",
-          "why": "It is the only option that keeps the value on phones without hiding data."
+          "why": "It is the only option that keeps the value on phones without hiding data.",
+          "confidence": "high",
+          "flip": "If phones never show this chart, B is simpler."
         },
         "multiple": false,
         "urgency": "today",
@@ -153,11 +174,154 @@
         "askedAt": "2026-11-05T18:10:00.000Z",
         "ageSeconds": 80400,
         "label": "F-Q3",
-        "now": "The lines chart prints the last value at the right edge. On narrow windows the label covers the newest point. Astra failed the current fix because the label still overlaps at 360 px.",
+        "now": "The chart prints the newest value at its right edge. On narrow windows that label covers the newest point, and the last fix still failed review at 360 px wide.",
         "nowAsOf": "2026-11-06T13:02:00.000Z",
         "oldAnswer": null,
         "replies": [],
-        "notes": []
+        "notes": [],
+        "kind": "question",
+        "sections": [],
+        "neededBy": {
+          "at": "2026-11-07T17:00:00.000Z",
+          "ifNoAnswer": "group 4 lands without the chart fix"
+        },
+        "exception": null,
+        "reversible": {
+          "yes": true,
+          "how": "one CSS change"
+        }
+      },
+      {
+        "id": "vm.scout--S1",
+        "label": "S-Q1",
+        "kind": "question",
+        "seq": 1,
+        "cardSha256": "5c0u7",
+        "project": "puppet-master",
+        "stream": "Scout",
+        "askedBy": "scout",
+        "askerState": "working",
+        "title": "Should Scout read a project's whole history or only the last 90 days?",
+        "now": "Scout reads every commit before planning a feature. On large projects that takes 17 minutes and keeps facts that no longer matter.",
+        "nowAsOf": "2026-11-06T15:00:00.000Z",
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "A",
+            "label": "Last 90 days, plus files the feature touches",
+            "gets": "About 8 minutes; fewer stale facts",
+            "costs": "Misses old design reasons unless a file points to them",
+            "media": [],
+            "sections": []
+          },
+          {
+            "key": "B",
+            "label": "Whole history",
+            "gets": "Nothing missed",
+            "costs": "17 minutes; more stale facts to filter",
+            "media": [],
+            "sections": []
+          },
+          {
+            "key": "C",
+            "label": "Ask each time",
+            "gets": "You decide per project",
+            "costs": "One more question in every plan",
+            "media": [],
+            "sections": []
+          }
+        ],
+        "recommendation": {
+          "key": "A",
+          "why": "It kept 72 of 127 key facts in test runs against 3 for the old method, in about the same time.",
+          "confidence": "medium",
+          "flip": "If a test project shows a missed design reason that mattered."
+        },
+        "multiple": false,
+        "urgency": "this-week",
+        "blocks": "Scout v3 settings",
+        "batch": null,
+        "evidence": [
+          {
+            "label": "Speed runs",
+            "path": "/mnt/Cursor/share/puppet-master/scout-v3/RESULTS.md"
+          }
+        ],
+        "sections": [
+          {
+            "type": "compare",
+            "title": null,
+            "fold": false,
+            "items": [
+              {
+                "name": "Cursor",
+                "does": "Indexes the whole repository once, then updates it",
+                "problem": "Index goes stale between sessions",
+                "link": null,
+                "version": "2.4"
+              },
+              {
+                "name": "Claude Code",
+                "does": "Reads files on demand, no history",
+                "problem": "Misses why code is the way it is",
+                "link": null,
+                "version": "2.1"
+              },
+              {
+                "name": "Aider",
+                "does": "Repository map of symbols, no history",
+                "problem": "Same as above",
+                "link": {
+                  "label": "aider.chat",
+                  "url": "https://aider.chat"
+                },
+                "version": "0.86"
+              }
+            ]
+          },
+          {
+            "type": "notCopying",
+            "title": null,
+            "fold": true,
+            "items": [
+              {
+                "what": "A permanent index",
+                "why": "Stale between sessions and costs disk on every project"
+              }
+            ]
+          },
+          {
+            "type": "unknowns",
+            "title": null,
+            "fold": true,
+            "items": [
+              "How often old design reasons matter on real projects",
+              "Whether 90 days fits slow-moving projects"
+            ]
+          },
+          {
+            "type": "terms",
+            "title": null,
+            "fold": true,
+            "items": [
+              {
+                "term": "Fact",
+                "meaning": "A statement Scout extracts, such as \"the API uses OAuth\""
+              }
+            ]
+          }
+        ],
+        "neededBy": null,
+        "exception": null,
+        "reversible": {
+          "yes": true,
+          "how": "a setting"
+        },
+        "replies": [],
+        "notes": [],
+        "askedAt": "2026-11-06T15:05:00.000Z",
+        "ageSeconds": 5000
       },
       {
         "id": "vm.pm-closure-lead--Q5a",
@@ -175,19 +339,23 @@
             "label": "Land now, fix the 3 rows after",
             "gets": "Rows are marked missing_ref until fixed.",
             "costs": "",
-            "image": null
+            "media": [],
+            "sections": []
           },
           {
             "key": "B",
             "label": "Fix the rows first",
             "gets": "About half a day.",
             "costs": "",
-            "image": null
+            "media": [],
+            "sections": []
           }
         ],
         "recommendation": {
           "key": "A",
-          "why": "The rows are labelled honestly and nothing reads them before the harness run."
+          "why": "The rows are labelled honestly and nothing reads them before the harness run.",
+          "confidence": null,
+          "flip": null
         },
         "multiple": false,
         "urgency": "this-week",
@@ -204,7 +372,15 @@
           "at": "2026-10-02T15:00:00.000Z"
         },
         "replies": [],
-        "notes": []
+        "notes": [],
+        "kind": "question",
+        "sections": [],
+        "neededBy": null,
+        "exception": {
+          "rule": "Land only when every reference resolves",
+          "text": "3 rows would land marked missing_ref"
+        },
+        "reversible": null
       },
       {
         "id": "vm.pm-closure-lead--Q5b",
@@ -214,41 +390,28 @@
         "stream": "C",
         "askedBy": "pm-closure-lead",
         "askerState": "waiting",
-        "title": "Keep unit-scoped hashes for closed items?",
+        "title": "Unit-scoped hashes are kept for closed items",
         "whatChanged": null,
-        "options": [
-          {
-            "key": "A",
-            "label": "Yes, unit-scoped",
-            "gets": "",
-            "costs": "",
-            "image": null
-          },
-          {
-            "key": "B",
-            "label": "No, whole-file hashes",
-            "gets": "",
-            "costs": "",
-            "image": null
-          }
-        ],
-        "recommendation": {
-          "key": "A",
-          "why": "Whole-file hashes reopened 120 closures for unrelated edits last week."
-        },
+        "options": [],
+        "recommendation": null,
         "multiple": false,
         "urgency": "this-week",
         "blocks": null,
-        "batch": "C-2026-11-06",
+        "batch": null,
         "evidence": [],
         "askedAt": "2026-11-06T13:06:00.000Z",
         "ageSeconds": 12240,
         "label": "C-Q5b",
-        "now": "Unit-scoped hashes make a closure stale only when its own unit changes.",
+        "now": "Each closure is re-checked only when its own unit changes. Whole-file hashes reopened 120 closures for unrelated edits last week.",
         "nowAsOf": "2026-11-06T13:02:00.000Z",
         "oldAnswer": null,
         "replies": [],
-        "notes": []
+        "notes": [],
+        "kind": "objection",
+        "sections": [],
+        "neededBy": null,
+        "exception": null,
+        "reversible": null
       },
       {
         "id": "vm.pm-closure-lead--Q5c",
@@ -266,19 +429,23 @@
             "label": "Yes, Opus rereads all 12",
             "gets": "",
             "costs": "",
-            "image": null
+            "media": [],
+            "sections": []
           },
           {
             "key": "B",
             "label": "Only the 4 that changed state",
             "gets": "",
             "costs": "",
-            "image": null
+            "media": [],
+            "sections": []
           }
         ],
         "recommendation": {
           "key": "A",
-          "why": "None of B09's verdicts can be trusted."
+          "why": "None of B09's verdicts can be trusted.",
+          "confidence": null,
+          "flip": null
         },
         "multiple": false,
         "urgency": "today",
@@ -312,7 +479,43 @@
               "detail": ""
             }
           }
-        ]
+        ],
+        "kind": "question",
+        "sections": [],
+        "neededBy": null,
+        "exception": null,
+        "reversible": null
+      },
+      {
+        "id": "vm.tools-lead--A1",
+        "label": "T-A1",
+        "kind": "action",
+        "seq": 1,
+        "cardSha256": "ac710n",
+        "project": "puppet-master",
+        "stream": "TOOLS",
+        "askedBy": "tools-lead",
+        "askerState": "waiting",
+        "title": "Sign in to Codex on the Mac",
+        "now": "The Mac's Codex sign-in expired at 2:10 PM. Reviews that run on the Mac wait until you sign in again in the Codex app.",
+        "nowAsOf": null,
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [],
+        "recommendation": null,
+        "multiple": false,
+        "urgency": "today",
+        "blocks": "2 reviews on the Mac",
+        "batch": null,
+        "evidence": [],
+        "sections": [],
+        "neededBy": null,
+        "exception": null,
+        "reversible": null,
+        "replies": [],
+        "notes": [],
+        "askedAt": "2026-11-06T14:20:00.000Z",
+        "ageSeconds": 9000
       }
     ],
     "answered": [

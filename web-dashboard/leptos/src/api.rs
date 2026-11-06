@@ -95,6 +95,8 @@ pub struct Cards {
 #[serde(rename_all = "camelCase", default)]
 pub struct Card {
     pub id: String,
+    /// "question" (default), "objection" (a call already made; the owner may object) or "action" (owner-only task).
+    pub kind: String,
     /// The short id the owner can quote anywhere ("F-Q3").
     pub label: String,
     pub seq: u64,
@@ -115,6 +117,11 @@ pub struct Card {
     pub blocks: Option<String>,
     pub batch: Option<String>,
     pub evidence: Vec<Link>,
+    /// Optional sections, only what this question needs (comparisons, tables, media...).
+    pub sections: Vec<Block>,
+    pub needed_by: Option<NeededBy>,
+    pub exception: Option<Exception>,
+    pub reversible: Option<Reversible>,
     pub replies: Vec<Reply>,
     pub notes: Vec<SentNote>,
     pub asked_at: String,
@@ -125,6 +132,10 @@ impl Card {
     /// A card's identity for drafts and keyed lists: a new version of the question is a new card.
     pub fn version_key(&self) -> String {
         format!("{}#{}#{}", self.id, self.seq, self.card_sha256)
+    }
+
+    pub fn is_question(&self) -> bool {
+        self.kind.is_empty() || self.kind == "question"
     }
 
     pub fn short(&self) -> String {
@@ -150,14 +161,59 @@ pub struct CardOption {
     pub label: String,
     pub gets: String,
     pub costs: String,
-    pub image: Option<OptionImage>,
+    pub media: Vec<Media>,
+    pub sections: Vec<Block>,
+}
+
+/// A screenshot or a video; `url`/`posterUrl` are served by AAC from the asking writer's own folder.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Media {
+    pub kind: String,
+    pub url: String,
+    pub poster_url: Option<String>,
+    pub caption: Option<String>,
+    /// "built" or "mockup".
+    pub label: Option<String>,
+}
+
+/// An optional section of a card. Fields beyond `type`, `title` and `fold` depend on the type; the page reads the
+/// ones its type uses and shows an unknown type as such, never silently drops it.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Block {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub title: Option<String>,
+    pub fold: bool,
+    pub unknown: bool,
+    pub body: Option<String>,
+    pub tone: Option<String>,
+    pub ordered: bool,
+    pub columns: Vec<String>,
+    pub items: Vec<serde_json::Value>,
+    pub rows: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct OptionImage {
-    pub url: String,
-    pub kind: String,
+pub struct NeededBy {
+    pub at: Option<String>,
+    pub if_no_answer: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Exception {
+    pub rule: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Reversible {
+    pub yes: bool,
+    pub how: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -165,6 +221,10 @@ pub struct OptionImage {
 pub struct Recommendation {
     pub key: String,
     pub why: String,
+    /// "low", "medium" or "high".
+    pub confidence: Option<String>,
+    /// What would change the recommendation.
+    pub flip: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -533,6 +593,8 @@ pub async fn fetch_status() -> Result<StatusView, FetchError> {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnswerEntry {
+    /// "answer", "note", "object" or "done".
+    pub kind: String,
     pub card_id: String,
     pub card_seq: u64,
     pub card_sha256: String,
@@ -626,8 +688,17 @@ mod tests {
         let text = include_str!("../fixtures/status-view.json");
         let view: StatusView = serde_json::from_str(text).expect("fixture parses");
         assert_eq!(view.version, STATUS_VIEW_VERSION);
-        assert_eq!(view.cards.open.len(), 4);
+        assert_eq!(view.cards.open.len(), 6);
         assert_eq!(view.cards.batches[0].card_ids.len(), 3);
+        // Each card kind and the optional parts are read, not dropped.
+        let kinds: Vec<&str> = view.cards.open.iter().map(|c| c.kind.as_str()).collect();
+        assert!(kinds.contains(&"objection") && kinds.contains(&"action"));
+        let scout = view.cards.open.iter().find(|c| c.label == "S-Q1").unwrap();
+        assert_eq!(scout.sections[0].kind, "compare");
+        assert_eq!(scout.sections[0].items.len(), 3);
+        let chart = &view.cards.open[0];
+        assert_eq!(chart.options[1].media[0].kind, "video");
+        assert!(chart.options[1].media[0].poster_url.is_some());
         // A missing reading stays missing.
         let windows = view
             .machines

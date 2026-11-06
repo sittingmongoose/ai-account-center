@@ -5,10 +5,12 @@
 //! (`{type: "aac-theme", mode}`); standalone, the page follows the system setting.
 
 pub mod api;
+mod blocks;
 mod cards;
 mod drafts;
 pub mod fmt;
 mod live;
+mod media;
 mod status;
 
 use leptos::prelude::*;
@@ -96,9 +98,13 @@ pub fn start() {
     mount_to_body(move || {
         let live = live::start();
         provide_context(live);
-        match page {
-            Page::Status => view! { <status::StatusPage embedded=embed/> }.into_any(),
-            Page::Scoreboard => view! { <ScoreboardPage embedded=embed/> }.into_any(),
+        media::provide_viewer();
+        view! {
+            {match page {
+                Page::Status => view! { <status::StatusPage embedded=embed/> }.into_any(),
+                Page::Scoreboard => view! { <ScoreboardPage embedded=embed/> }.into_any(),
+            }}
+            <media::ViewerOverlay/>
         }
     });
 }
