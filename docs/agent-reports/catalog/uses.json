@@ -1,0 +1,59 @@
+{
+  "schema": "catalog-uses@1",
+  "uses": [
+    {
+      "id": "planning",
+      "label": "Scout, planning wizard, WorkNode creation",
+      "description": "Which models to use for planning work.",
+      "taskTypes": [
+        "scout",
+        "plan",
+        "worknode-create"
+      ],
+      "weights": {
+        "quality": 3,
+        "cheating": 3,
+        "thoroughness": 2,
+        "facts-kept": 3,
+        "speed": 1,
+        "cost": 1
+      }
+    },
+    {
+      "id": "building",
+      "label": "Building WorkNodes",
+      "description": "Which models to use to build, fix, test and review WorkNodes.",
+      "taskTypes": [
+        "worknode-build",
+        "build",
+        "fix",
+        "test",
+        "review"
+      ],
+      "weights": {
+        "quality": 3,
+        "cheating": 3,
+        "overclaim": 2,
+        "laziness": 2,
+        "reliability": 1,
+        "speed": 1,
+        "cost": 1
+      }
+    },
+    {
+      "id": "pm-users",
+      "label": "Advice for Puppet Master users",
+      "description": "For each kind of task, in plain words: Recommended, Fine, Avoid for this, Not enough data yet.",
+      "taskTypes": [
+        "*"
+      ],
+      "weights": {
+        "quality": 3,
+        "cheating": 3,
+        "reliability": 2,
+        "speed": 1,
+        "cost": 2
+      }
+    }
+  ]
+}

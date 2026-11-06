@@ -381,9 +381,25 @@
         },
         "size": {
           "additionalProperties": false,
-          "description": "Task size.",
+          "description": "Task size, in the units the task type counts (catalog/task-types.json `unit`).",
           "properties": {
+            "files": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "records": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tasks": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "words": {
               "minimum": 0,
               "type": "integer"
             }

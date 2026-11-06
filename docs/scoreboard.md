@@ -9,7 +9,8 @@ built to be honest: every number shows its sample size and evidence, ranks only 
 only within one task type.
 
 ## Identity (shared with Puppet Master)
-A row is one **model on one runtime at one effort**, the way Puppet Master's Models System names them:
+A row is one **model on one runtime at one effort** (and, where the catalog says so, one process version), the way
+Puppet Master's Models System names them:
 - `model`: canonical `provider_id/model_id` (for example `anthropic/claude-opus-5-5`, `zai/glm-5.3`). Display labels
   never change it.
 - `runtime`: the surface that ran it (`claude-code`, `codex`, `zcode`, `muse`, `omp`, `cursor`, `antigravity`, ...).
@@ -23,17 +24,27 @@ Accounts are not part of the identity (they change cost, not the model); they st
 3. **Imported history:** earlier evidence (for example the closure re-audit, where the same rows were judged by
    different models) imported once as observed runs with `imported: { from: "<path>", at }`, so the scoreboard does
    not start empty. Imports are reviewed like any other data change.
-4. **Catalog** (`<reports>/v1/catalog/`, owned by AAC, edited as data):
-   - `models.json`: `[{ model, label, family, runtimes: [], efforts: [], prices: { input, output, cachedInput, unit,
-     asOf } | null, notes }]`
-   - `task-types.json`: `[{ id, label, description, unit: "record" | "file" | "item" | "task", measures: [ids] }]`
-   - `measures.json`: `[{ id, label, better: "lower" | "higher", unit, description }]`
-   - `uses.json`: the views, `[{ id, label, description, taskTypes: [ids], weights: { measureId: number } }]`
-   - `benchmarks.json`: `[{ id, label, taskType, description, items, scoring }]`
+4. **Catalog** (`<reports>/v1/catalog/`, owned by AAC, edited as data). The seeds are in
+   `docs/agent-reports/catalog/`; AAC writes a seed only where the share has no file yet, so edits on the share stay.
+   Each file is `{ "schema": "catalog-<kind>@1", "<kind>": [...] }`:
+   - `models.json`: `models: [{ model, label, family, runtimes: [], efforts: [], prices: { input, output, cachedInput,
+     unit, asOf } | null, notes }]`. `model` is `<run.model.provider>/<run.model.id>`, or `run.model.id` alone when
+     it already starts with `<provider>/`. Prices stay null until someone enters real ones.
+   - `task-types.json`: `taskTypes: [{ id, label, description, unit: "record" | "file" | "item" | "word" | "task",
+     measures: [ids], byProcess }]`. `byProcess: true` keys rows by `process.id` + `process.version` too. A run's
+     size in that unit is `task.size.<unit>s` (`records`, `files`, `items`, `words`, `tasks`).
+   - `measures.json`: `minRuns` (runs a row needs in a task type before it is ranked) and `measures: [{ id, label,
+     better: "lower" | "higher", unit, description, metric? }]`. `metric: { of, per }` names the run `metrics` a
+     task-specific measure reads (Scout's `factsKept` per `factsTotal`).
+     `preliminaryUnless: "<metric>"` labels a value "preliminary" unless every run behind it has that metric at 1
+     (planning's answer key is final only once the owner's cards are answered).
+   - `uses.json`: the views, `uses: [{ id, label, description, taskTypes: [ids] | ["*"], weights: { measureId: number }
+     }]`.
+   - `benchmarks.json`: `benchmarks: [{ id, label, taskType, description, items, scoring }]`.
 
 ## Measures (v1)
 Computed per row within one task type, from that row's runs only:
-- **speed**: median wall seconds per unit of work (`wallSeconds / task.size.<unit>`), and per task.
+- **speed**: median wall seconds per unit of work (`wallSeconds / task.size.<unit>s`), and per task.
 - **quality**: share of the row's work that a later blind review passed without overturning
   (`review.overturned == false`), with the rounds until pass.
 - **thoroughness**: files read / files assigned and records judged / records assigned (median); for review tasks,
@@ -43,6 +54,10 @@ Computed per row within one task type, from that row's runs only:
   such run is listed with its evidence, never only counted.
 - **cost**: measured credits or quota per accepted unit; estimates (`cost.estimate`) are shown, labelled "estimate".
 - **reliability**: share of runs that failed to start or ended `failed` / `cancelled` for infrastructure reasons.
+- **overclaim**: share of runs that reported passing checks which a later review overturned (builders reporting
+  "42/42 pass" while reviewers found majors).
+- Task-specific measures read run `metrics` (Scout: **facts kept**, **verdict drift**). A Scout row is keyed by
+  `process.id` + `process.version` as well as the model, because the process moved quality more than the model did.
 
 ## Honesty rules
 - Every value carries `n` (runs behind it). Rates carry a 90% Wilson interval; medians carry the range.

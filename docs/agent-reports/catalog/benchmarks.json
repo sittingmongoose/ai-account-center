@@ -1,0 +1,21 @@
+{
+  "schema": "catalog-benchmarks@1",
+  "benchmarks": [
+    {
+      "id": "scout-sv3-t9",
+      "label": "Scout test bed SV3/t9",
+      "taskType": "scout",
+      "description": "One 4-capability Scout test bed with 127 known plan-changing facts. Controlled experiments: compare only within one process version.",
+      "items": 127,
+      "scoring": "Facts kept in the final decisions, picked by id; verdicts compared with the reference model."
+    },
+    {
+      "id": "plan-pilot2",
+      "label": "Planning wizard pilot 2",
+      "taskType": "plan",
+      "description": "12 planning documents; each stage extracts the obligations the plan places on the product (requirements, bans, checks, scope exclusions, conditions). The key is the 1,075 claims two blind judges agree on; the owner's sampled and disputed items are not settled yet, so quality numbers are preliminary.",
+      "items": 12,
+      "scoring": "Silent misses on judge-agreed obligations (lower is better), and model seconds per 1,000 words."
+    }
+  ]
+}
