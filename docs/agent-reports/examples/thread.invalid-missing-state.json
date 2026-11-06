@@ -1,0 +1,1 @@
+{"agent": {"harness": "claude-code", "machine": "vm", "name": "tools-lead"}, "blockedOn": null, "doing": "Blind Opus pre-check of browser-check 2.1", "project": "puppet-master", "schema": "agent-reports/thread@1", "seq": 42, "stream": "TOOLS", "ttlSeconds": 1800, "writer": "vm.tools-lead", "writtenAt": "2026-11-06T16:00:00Z"}
