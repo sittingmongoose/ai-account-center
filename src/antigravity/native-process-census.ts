@@ -107,10 +107,13 @@ export function censusAntigravityProcesses(options: {
   if (typeof uid !== 'number' || !Number.isSafeInteger(uid)) return incomplete;
   const home = path.resolve(options.home);
   const natives = spellings(options.nativeBinary);
-  const roots = [
-    ...spellings(path.join(home, '.gemini/antigravity-cli')),
-    ...spellings(path.join(home, '.local/share/ai-account-center/antigravity-runtime')),
-  ];
+  // Resolve the home first, then join each root onto every spelling of it, so a
+  // missing root folder under a symlinked home still matches its real path.
+  const roots = spellings(home).flatMap((base) =>
+    ['.gemini/antigravity-cli', '.local/share/ai-account-center/antigravity-runtime'].flatMap(
+      (relative) => spellings(path.join(base, relative))
+    )
+  );
   let entries: string[];
   try {
     entries = fs.readdirSync(procRoot);

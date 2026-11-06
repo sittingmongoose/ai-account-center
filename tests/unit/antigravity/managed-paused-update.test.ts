@@ -220,6 +220,30 @@ describe('runtime-free Antigravity process census', () => {
     expect(value.census({ home: linked })).toEqual({ complete: true, running: 1 });
   });
 
+  test('a symlinked home matches a helper whose root folder no longer exists', () => {
+    const value = procFixture();
+    const linked = path.join(value.root, 'linked-home-missing-root');
+    fs.symlinkSync(value.home, linked);
+    // No ~/.gemini folder at all: the root cannot be realpath'd, only joined.
+    value.add(
+      810,
+      'helper',
+      `${path.join(value.home, '.gemini/antigravity-cli/bin/agentapi')} (deleted)`,
+      ['x']
+    );
+    expect(value.census({ home: linked })).toEqual({ complete: true, running: 1 });
+  });
+
+  test('unreadable comm or cmdline is incomplete: only the exe link may be denied', () => {
+    if (process.getuid?.() === 0) return; // root reads mode-000 files
+    for (const field of ['comm', 'cmdline'] as const) {
+      const value = procFixture();
+      value.add(900, 'bash', '/usr/bin/bash', ['bash']);
+      fs.chmodSync(path.join(value.proc, '900', field), 0o000);
+      expect(value.census()).toEqual({ complete: false, running: 0 });
+    }
+  });
+
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {
     // Read-only; any native path works. systemd --user, ssh-agent and sshd-session
     // deny their exe link, which must not make the census incomplete forever.
@@ -389,6 +413,30 @@ describe('managed Antigravity update while switching is paused', () => {
     expect(value.calls).toEqual([['--version']]);
   });
 
+  test('nothing is awaited between the final census and the update command', async () => {
+    const value = fixture();
+    let fresh = false;
+    let freshAtUpdate: boolean | null = null;
+    value.setUpdate(async () => {
+      freshAtUpdate = fresh;
+      return '';
+    });
+    const result = await updatePausedAntigravity({
+      registry: value.registry,
+      native: value.native,
+      census: () => {
+        fresh = true;
+        queueMicrotask(() => {
+          fresh = false;
+        });
+        return idle();
+      },
+      stillPaused: async () => true,
+    });
+    expect(result.status).toBe('current');
+    expect(freshAtUpdate).toBe(true);
+  });
+
   test('agy update runs while the account lock is held', async () => {
     const value = fixture();
     const lock = path.join(value.ccsDirectory, 'antigravity-profiles/.transaction-lock');
@@ -536,6 +584,36 @@ describe('managed update routing', () => {
     });
     expect(actions).toEqual([]);
     expect(fs.readFileSync(value.backup)).toEqual(ORIGINAL);
+  });
+
+  test('a failed paused result never falls through to the coordinator', async () => {
+    const value = fixture();
+    const { driver, actions } = recordingDriver({
+      complete: true,
+      processes: [],
+      continuity: null,
+    });
+    const result = await runManagedAntigravityUpdateCommand({
+      nativeBinary: value.nativeBinary,
+      ccsDirectory: value.ccsDirectory,
+      runCommand: value.runCommand,
+      execute: (native) =>
+        routeManagedAntigravityUpdate({
+          registry: value.registry,
+          driver,
+          native,
+          nativeReview: () => 'unreviewed',
+          runtimeSocket: async () => 'stopped',
+          census: () => ({ complete: false, running: 0 }),
+        }),
+    });
+    expect(result).toMatchObject({
+      status: 'failed',
+      messageCode: 'runtime_paused_blocked',
+      updateAttempted: false,
+    });
+    expect(actions).toEqual([]);
+    expect(value.calls).toEqual([['--version']]);
   });
 
   test('a running process on the paused path is action_required / in_use', async () => {
@@ -763,6 +841,75 @@ describe('installed managed update wiring (temporary home)', () => {
     expect(fs.existsSync(value.backups)).toBe(false);
   });
 
+  async function holdUntilVisible(argv: string[], marker: string) {
+    const child = spawn(argv[0], argv.slice(1), { stdio: 'ignore' });
+    children.push(child);
+    for (let i = 0; i < 100; i++) {
+      try {
+        if (fs.readFileSync(`/proc/${child.pid}/cmdline`, 'utf8').includes(marker)) return;
+      } catch {
+        /* not started yet */
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error('fixture process never appeared');
+  }
+
+  const IN_USE = {
+    appId: 'antigravity-cli',
+    platform: 'ubuntu',
+    manager: 'native',
+    status: 'action_required',
+    messageCode: 'in_use',
+    previousVersion: '1.4.12',
+    version: '1.4.12',
+    updateAttempted: false,
+    restartedProcesses: 0,
+  };
+
+  test('the native run through /bin/sh is in_use (matched by its argument, not its name)', async () => {
+    const value = installedHome();
+    await holdUntilVisible(['/bin/sh', value.native, '--hold'], value.native);
+    expect(await runInstalledManagedAntigravityUpdate(value.home)).toEqual(IN_USE);
+    expect(fs.existsSync(value.log)).toBe(false);
+  });
+
+  test('a script run from the managed runtime folder is in_use', async () => {
+    const value = installedHome();
+    const bin = path.join(value.home, '.local/share/ai-account-center/antigravity-runtime/bin');
+    fs.mkdirSync(bin, { recursive: true, mode: 0o700 });
+    const script = path.join(bin, 'fixture-hold.sh');
+    fs.writeFileSync(script, 'sleep 30\n:\n', { mode: 0o700 });
+    await holdUntilVisible(['/bin/sh', script], script);
+    expect(await runInstalledManagedAntigravityUpdate(value.home)).toEqual(IN_USE);
+    expect(fs.existsSync(value.log)).toBe(false);
+  });
+
+  test('a release file that reviews the installed build keeps the coordinator', async () => {
+    const value = installedHome();
+    const release = path.join(value.home, 'fixture-release.json');
+    fs.writeFileSync(
+      release,
+      JSON.stringify({
+        reviewedNatives: [{ nativeVersion: '1.4.12', nativeSha256: value.originalSha }],
+      })
+    );
+    // No socket at all: only the reviewed verdict keeps it off the paused path.
+    expect(
+      await runInstalledManagedAntigravityUpdate(value.home, { releaseFile: release })
+    ).toEqual({
+      appId: 'antigravity-cli',
+      platform: 'ubuntu',
+      manager: 'native',
+      status: 'failed',
+      messageCode: 'runtime_unavailable',
+      updateAttempted: false,
+      restartedProcesses: 0,
+    });
+    expect(fs.existsSync(value.log)).toBe(false);
+    expect(fs.existsSync(value.backups)).toBe(false);
+  });
+
   test('a listening runtime socket keeps the coordinator, which reports runtime_unavailable', async () => {
     const value = installedHome();
     const runtime = path.join(value.ccs, 'antigravity-runtime');
@@ -786,27 +933,33 @@ describe('installed managed update wiring (temporary home)', () => {
     expect(fs.existsSync(value.backups)).toBe(false);
   });
 
-  test('with nothing running the paused path backs up and updates under the lock', async () => {
-    const value = installedHome();
-    // The real census also sees this machine's own processes; it cannot be idle
-    // while a real Antigravity runs here, and that case is covered above.
-    if (censusAntigravityProcesses({ home: value.home, nativeBinary: value.native }).running)
-      return;
-    const result = await runInstalledManagedAntigravityUpdate(value.home);
-    expect(result).toEqual({
-      appId: 'antigravity-cli',
-      platform: 'ubuntu',
-      manager: 'native',
-      status: 'updated',
-      messageCode: 'updated',
-      previousVersion: '1.4.12',
-      version: '1.5.2',
-      updateAttempted: true,
-      restartedProcesses: 0,
-    });
-    expect(fs.readFileSync(value.log, 'utf8').trim()).toBe('locked');
-    expect(sha(fs.readFileSync(path.join(value.backups, value.originalSha)))).toBe(
-      value.originalSha
-    );
+  // The real census also sees this machine's own processes: it cannot be idle
+  // while a real Antigravity runs here (the in_use cases above still run).
+  const hostCensus = censusAntigravityProcesses({
+    home: path.join(os.tmpdir(), 'aac-agy-no-such-home'),
+    nativeBinary: path.join(os.tmpdir(), 'aac-agy-no-such-home/.local/bin/agy'),
   });
+  test.skipIf(!hostCensus.complete || hostCensus.running > 0)(
+    'with nothing running the paused path backs up and updates under the lock' +
+      ' (skipped while a real Antigravity process runs on this host)',
+    async () => {
+      const value = installedHome();
+      const result = await runInstalledManagedAntigravityUpdate(value.home);
+      expect(result).toEqual({
+        appId: 'antigravity-cli',
+        platform: 'ubuntu',
+        manager: 'native',
+        status: 'updated',
+        messageCode: 'updated',
+        previousVersion: '1.4.12',
+        version: '1.5.2',
+        updateAttempted: true,
+        restartedProcesses: 0,
+      });
+      expect(fs.readFileSync(value.log, 'utf8').trim()).toBe('locked');
+      expect(sha(fs.readFileSync(path.join(value.backups, value.originalSha)))).toBe(
+        value.originalSha
+      );
+    }
+  );
 });

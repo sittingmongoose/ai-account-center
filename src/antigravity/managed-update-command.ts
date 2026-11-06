@@ -342,7 +342,14 @@ export function nativeReviewState(nativeBinary: string, releaseFile?: string): N
 
 export async function runInstalledManagedAntigravityUpdate(
   home = os.homedir(),
-  { idleOnly = true }: { idleOnly?: boolean } = {}
+  {
+    idleOnly = true,
+    releaseFile,
+  }: {
+    idleOnly?: boolean;
+    /** Owned fixture injection only; production reads the packaged release file. */
+    releaseFile?: string;
+  } = {}
 ) {
   try {
     const ccs = path.join(home, '.ccs');
@@ -359,7 +366,7 @@ export async function runInstalledManagedAntigravityUpdate(
           driver: components.driver,
           native,
           idleOnly,
-          nativeReview: () => nativeReviewState(nativeBinary),
+          nativeReview: () => nativeReviewState(nativeBinary, releaseFile),
           runtimeSocket: () => probeRuntimeSocket(socketPath),
           census: () => censusAntigravityProcesses({ home, nativeBinary }),
         }),
