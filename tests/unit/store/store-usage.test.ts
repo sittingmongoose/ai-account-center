@@ -1,0 +1,344 @@
+/**
+ * The history store with the real native module (dist/native, built by `bun run store:build`).
+ * Skipped, and said so, when this computer has no module. Every store lives in a temporary
+ * folder; never the real home.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as zlib from 'zlib';
+import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
+import { AacStore } from '../../../src/store/store-service';
+import { backfillUsageHistory } from '../../../src/store/usage-backfill';
+import {
+  AccountAnalyticsService,
+  type AccountAnalyticsSampleEvent,
+  onAccountAnalyticsSample,
+} from '../../../src/web-server/services/account-analytics-service';
+import {
+  appendAccountAnalyticsSnapshot,
+  FileAccountAnalyticsHistoryStore,
+  type AccountAnalyticsHistoryData,
+  type AccountAnalyticsHistoryStore,
+} from '../../../src/web-server/services/account-analytics-history';
+import { usageHistory } from '../../../src/web-server/agent-usage/agent-usage-history';
+import { projectAgentUsage } from '../../../src/web-server/agent-usage/agent-usage-projection';
+import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import type {
+  AccountDashboard,
+  DashboardAccount,
+} from '../../../src/web-server/services/account-dashboard-types';
+import type { AccountAnalyticsActivity } from '../../../src/web-server/services/account-analytics-types';
+
+const MODULE = path.resolve(__dirname, '../../../dist/native', nativeModuleName());
+const loaded = loadNativeStore({ env: {}, file: MODULE });
+const haveModule = loaded.module !== null;
+if (!haveModule)
+  console.warn(`[!] ${MODULE} is not built: the store tests are skipped (bun run store:build).`);
+
+const MIN = 60_000;
+const HOUR = 3_600_000;
+const START = Date.parse('2026-10-01T10:00:00Z');
+
+let sandbox = '';
+let previousHome: string | undefined;
+beforeAll(() => {
+  previousHome = process.env.CCS_HOME;
+  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-store-usage-'));
+  process.env.CCS_HOME = sandbox;
+});
+afterAll(() => {
+  if (previousHome === undefined) delete process.env.CCS_HOME;
+  else process.env.CCS_HOME = previousHome;
+  fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
+async function openStore(dir: string): Promise<AacStore> {
+  if (!loaded.module) throw new Error('no module');
+  const handle = new loaded.module.NativeStore();
+  await handle.call('open', JSON.stringify({ dir, retentionDays: 90 }));
+  return new AacStore(handle, dir);
+}
+
+/** Two accounts; the first burns a point every 7 minutes, then resets at START + 90 min. */
+function accountsAt(now: number): DashboardAccount[] {
+  const minute = Math.round((now - START) / MIN);
+  const reset = START + 90 * MIN;
+  const used = now < reset ? 20 + Math.floor(minute / 7) : 2 + Math.floor((minute - 90) / 7);
+  const base = (id: string, windows: DashboardAccount['windows']): DashboardAccount => ({
+    id,
+    provider: 'codex',
+    providerLabel: 'Codex',
+    label: id.split(':')[1],
+    email: null,
+    plan: 'pro',
+    platform: 'ubuntu',
+    source: 'Codex quota',
+    status: 'ok',
+    message: null,
+    fetchedAt: new Date(now).toISOString(),
+    sampledAt: new Date(now).toISOString(),
+    isActive: id === 'codex:first',
+    capabilities: { codexProfile: id.split(':')[1], claudeProfileId: null, claudePlatforms: [] },
+    windows,
+  });
+  return [
+    base('codex:first', [
+      {
+        key: 'five_hour',
+        label: '5 hour',
+        usedPercent: used,
+        remainingPercent: 100 - used,
+        resetAt: new Date(now < reset ? reset : START + 390 * MIN).toISOString(),
+        windowMinutes: 300,
+        used: null,
+        limit: null,
+        unit: null,
+      },
+      {
+        key: 'seven_day',
+        label: 'week',
+        usedPercent: 40,
+        remainingPercent: 60,
+        resetAt: '2026-10-05T00:00:00Z',
+        windowMinutes: 10080,
+        used: null,
+        limit: null,
+        unit: null,
+      },
+    ]),
+    base('codex:second', [
+      {
+        key: 'credits',
+        label: 'Credits',
+        kind: 'balance',
+        usedPercent: null,
+        remainingPercent: null,
+        resetAt: null,
+        windowMinutes: null,
+        used: null,
+        limit: null,
+        remaining: 500 - Math.floor(minute / 10) * 3,
+        unit: 'credits',
+      },
+    ]),
+  ];
+}
+
+const noActivity = {
+  status: 'unavailable',
+  scope: 'multi-host-cli',
+  timezone: 'UTC',
+  accountAttribution: 'unavailable',
+  costBasis: 'estimated-api-equivalent',
+  fetchedAt: null,
+  message: 'none',
+  totals: null,
+  providers: [],
+  byDay: [],
+  byHour: [],
+  models: [],
+} as unknown as AccountAnalyticsActivity;
+
+function dashboardAt(now: number): AccountDashboard {
+  return {
+    schemaVersion: 1,
+    updatedAt: new Date(now).toISOString(),
+    accounts: accountsAt(now),
+    settings: { refreshIntervalSeconds: 60 },
+  } as unknown as AccountDashboard;
+}
+
+function memory(): AccountAnalyticsHistoryStore & { data: AccountAnalyticsHistoryData | null } {
+  return {
+    data: null,
+    async read() {
+      return this.data;
+    },
+    async write(data) {
+      this.data = structuredClone(data);
+    },
+  };
+}
+
+describe.skipIf(!haveModule)('history store with the native module', () => {
+  it('serves the analytics route and burn rates as the JSON history did', async () => {
+    const dir = fs.mkdtempSync(path.join(sandbox, 'equal-'));
+    const store = await openStore(path.join(dir, 'store'));
+    try {
+      let clock = START;
+      const jsonService = new AccountAnalyticsService({
+        getDashboard: async () => dashboardAt(clock),
+        getActivity: async () => ({ ...noActivity, coverage: null }) as never,
+        createHistoryStore: () => memory(),
+        now: () => clock,
+        scope: () => path.join(dir, 'json'),
+      });
+      const storeService = new AccountAnalyticsService({
+        getDashboard: async () => dashboardAt(clock),
+        getActivity: async () => ({ ...noActivity, coverage: null }) as never,
+        usageStore: async () => store,
+        now: () => clock,
+        scope: () => path.join(dir, 'store-scope'),
+      });
+      const events: AccountAnalyticsSampleEvent[] = [];
+      const stop = onAccountAnalyticsSample((event) => {
+        events.push(event);
+      });
+      for (let minute = 0; minute <= 180; minute++) {
+        clock = START + minute * MIN;
+        await jsonService.sample();
+        await storeService.sample();
+      }
+      stop();
+      const query = { platform: 'mac', range: '24h', provider: 'all', account: 'all' } as const;
+      const fromJson = await jsonService.get({ ...query, tz: 'UTC' });
+      const fromStore = await storeService.get({ ...query, tz: 'UTC' });
+      expect(fromStore.history.status).toBe('ok');
+      expect(fromStore.history.retentionDays).toBe(90);
+      for (const account of fromJson.accounts) {
+        const other = fromStore.accounts.find((candidate) => candidate.id === account.id);
+        expect(other).toBeDefined();
+        for (const window of account.windows) {
+          const twin = other?.windows.find((candidate) => candidate.key === window.key);
+          const value = (p: { usedPercent: number | null; remaining: number | null }) =>
+            p.usedPercent ?? p.remaining;
+          // The same measured value in every bucket both show, and the same latest reading.
+          const bucket = fromJson.range.bucketMinutes * MIN;
+          const byBucket = new Map(
+            window.points.map((p) => [Math.floor(Date.parse(p.sampledAt) / bucket), value(p)])
+          );
+          for (const point of twin?.points ?? []) {
+            const key = Math.floor(Date.parse(point.sampledAt) / bucket);
+            if (byBucket.has(key)) expect(value(point)).toBe(byBucket.get(key) as number);
+          }
+          expect(value(twin?.points.at(-1) as never)).toBe(value(window.points.at(-1) as never));
+          expect((twin?.points.length ?? 0) > 0).toBe(true);
+        }
+      }
+      // Burn rates from the store-backed history equal the JSON history's for every span.
+      const jsonEvent = events[events.length - 2];
+      const storeEvent = events[events.length - 1];
+      const rows = storeEvent.accounts;
+      const projected = projectAgentUsage(rows, { now: clock, includeHidden: true }).accounts;
+      const a = usageHistory(rows, projected, jsonEvent.history, clock);
+      const b = usageHistory(rows, projected, storeEvent.history, clock);
+      for (const [id, rates] of a.rates) {
+        for (const [key, rate] of rates) {
+          const other = b.rates.get(id)?.get(key);
+          expect({ key, ...other }).toEqual({ key, ...rate });
+        }
+      }
+      // The snapshot carries the 7- and 30-day burn only with the store.
+      expect(storeEvent.longBurn?.size).toBeGreaterThan(0);
+      const files = buildSnapshotFiles(storeEvent, 60);
+      const burn = files.snapshot.accounts
+        .flatMap((acc) => acc.windows)
+        .find((w) => w.key === 'five_hour')?.burn;
+      expect(burn && 'coverage7Days' in burn).toBe(true);
+      expect(burn?.last7Days).toBeNull(); // three hours of readings cover under half of 7 days
+      const jsonFiles = buildSnapshotFiles(jsonEvent, 60);
+      const jsonBurn = jsonFiles.snapshot.accounts
+        .flatMap((acc) => acc.windows)
+        .find((w) => w.key === 'five_hour')?.burn;
+      expect(jsonBurn && 'last7Days' in jsonBurn).toBe(false);
+      // Reset periods and consumption across the reset.
+      const status = await store.status();
+      expect(status.state).toBe('ready');
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('imports the JSON history and every readable archive file, counting the rest', async () => {
+    const home = fs.mkdtempSync(path.join(sandbox, 'backfill-'));
+    const base = path.join(home, 'account-analytics');
+    const archive = path.join(base, 'archive');
+    fs.mkdirSync(path.join(archive, 'nested'), { recursive: true });
+    // Older history in the archive, newer in the main file.
+    let old: AccountAnalyticsHistoryData | null = null;
+    for (let minute = 0; minute < 60; minute += 5)
+      old = appendAccountAnalyticsSnapshot(
+        old,
+        accountsAt(START + minute * MIN),
+        START + minute * MIN
+      );
+    let current: AccountAnalyticsHistoryData | null = null;
+    for (let minute = 60; minute < 120; minute += 5)
+      current = appendAccountAnalyticsSnapshot(
+        current,
+        accountsAt(START + minute * MIN),
+        START + minute * MIN
+      );
+    await new FileAccountAnalyticsHistoryStore(home).write(current as AccountAnalyticsHistoryData);
+    const records = (old as AccountAnalyticsHistoryData).records;
+    fs.writeFileSync(path.join(archive, 'quota-history-2026-10-21.json'), JSON.stringify(old));
+    fs.writeFileSync(
+      path.join(archive, 'part.jsonl'),
+      [
+        JSON.stringify(records[0]),
+        '{not json',
+        JSON.stringify({ identity: 'bad' }),
+        JSON.stringify(records[1]),
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(archive, 'nested', 'old.json.gz'),
+      zlib.gzipSync(JSON.stringify(records.slice(2, 4)))
+    );
+    fs.writeFileSync(path.join(archive, 'garbage.bin'), Buffer.from([0, 255, 1, 2, 3]));
+    fs.writeFileSync(path.join(archive, 'broken.json.gz'), Buffer.from('not gzip'));
+    fs.writeFileSync(path.join(archive, 'empty.json'), '');
+    const store = await openStore(path.join(home, 'store'));
+    try {
+      const report = await backfillUsageHistory(store, home);
+      expect(report.filesUnreadable).toBe(2); // garbage.bin and broken.json.gz
+      expect(report.files).toBe(5); // 4 readable archive files and the main file
+      expect(report.recordsSkipped).toBe(2); // the two bad JSON lines
+      expect(report.rejected).toBe(0);
+      expect(report.sampled).toBeGreaterThan(0);
+      expect(report.duplicates).toBeGreaterThan(0); // the archive's overlapping copies
+      const all = await store.historyRecords({
+        fromMs: START,
+        toMs: START + 2 * HOUR,
+        nowMs: START + 2 * HOUR,
+        thinning: { kind: 'none' },
+      });
+      const times = all.map((r) => Date.parse(r.sampledAt));
+      expect(Math.min(...times)).toBe(START);
+      expect(Math.max(...times)).toBe(START + 115 * MIN);
+      // A second run imports nothing again, and the sources are untouched.
+      const before = fs.readFileSync(path.join(base, 'quota-history-v1.json'));
+      const again = await backfillUsageHistory(store, home);
+      expect(again.filesAlreadyImported).toBe(5);
+      expect(again.records).toBe(0);
+      expect(fs.readFileSync(path.join(base, 'quota-history-v1.json'))).toEqual(before);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe('the dashboard without the native module', () => {
+  it('keeps the JSON history path when no store is available', async () => {
+    const dir = fs.mkdtempSync(path.join(sandbox, 'nostore-'));
+    const service = new AccountAnalyticsService({
+      getDashboard: async () => dashboardAt(START),
+      getActivity: async () => ({ ...noActivity, coverage: null }) as never,
+      usageStore: async () => null,
+      createHistoryStore: () => memory(),
+      now: () => START,
+      scope: () => dir,
+    });
+    const result = await service.get({
+      platform: 'mac',
+      range: '24h',
+      provider: 'all',
+      account: 'all',
+      tz: 'UTC',
+    });
+    expect(result.history.retentionDays).toBe(30);
+    expect(result.accounts.length).toBe(2);
+  });
+});

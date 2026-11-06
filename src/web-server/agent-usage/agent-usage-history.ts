@@ -61,6 +61,15 @@ export interface BurnRate {
   runsOutBeforeReset: boolean | null;
   /** When the current reset period's first recorded reading was taken. */
   periodStartedAt: string | null;
+  /**
+   * With the history store only: percentage points used per hour over the last 7 and 30 days,
+   * across resets, from hourly rollups; null when readings cover under half the span.
+   */
+  last7Days?: number | null;
+  last30Days?: number | null;
+  /** The share of each span the readings cover, 0 to 1. */
+  coverage7Days?: number;
+  coverage30Days?: number;
 }
 
 /**

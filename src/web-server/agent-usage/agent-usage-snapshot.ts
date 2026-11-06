@@ -28,9 +28,18 @@ import { ValidationError } from '../../errors/error-types';
 import path from 'path';
 import { createLogger } from '../../services/logging';
 import {
+  longBurnKey,
   onAccountAnalyticsSample,
   type AccountAnalyticsSampleEvent,
 } from '../services/account-analytics-service';
+import { getAacStore, type LongBurnSpan } from '../../store/store-service';
+import {
+  buildRollupExports,
+  exportHour,
+  SNAPSHOT_HISTORY_DAILY,
+  SNAPSHOT_HISTORY_HOURLY,
+  type RollupExportFile,
+} from '../../store/usage-exports';
 import { getAccountRefreshIntervalSeconds } from '../services/account-refresh-settings';
 import {
   readSnapshotSettings,
@@ -159,15 +168,35 @@ export function buildSnapshotFiles(
     const sampled = Date.parse(window.sampledAt ?? '');
     return Number.isFinite(sampled) && now - sampled <= freshMs;
   };
+  // With the history store, a current pace also carries the 7- and 30-day burn across resets.
+  const longFor = (accountId: string, window: AgentUsageWindow): Partial<BurnRate> => {
+    if (!event.longBurn) return {};
+    const row = event.accounts.find((candidate) => candidate.id === accountId);
+    const source = row?.windows?.find(
+      (candidate) =>
+        candidate.key === window.key &&
+        (candidate.unit ?? null) === window.unit &&
+        (candidate.poolId ?? null) === window.poolId
+    );
+    const long = row && source ? event.longBurn.get(longBurnKey(row, source)) : undefined;
+    if (!long) return {};
+    const rate = (span: LongBurnSpan): number | null => (span.coverage >= 0.5 ? span.rate : null);
+    return {
+      last7Days: rate(long.last7Days),
+      last30Days: rate(long.last30Days),
+      coverage7Days: long.last7Days.coverage,
+      coverage30Days: long.last30Days.coverage,
+    };
+  };
   const accounts: SnapshotAccount[] = projected.accounts.map((account) => ({
     ...account,
-    windows: account.windows.map((window) => ({
-      ...window,
-      burn:
+    windows: account.windows.map((window) => {
+      const rate =
         window.resetPassed || !current(account, window)
           ? null
-          : (rates.get(account.id)?.get(burnKey(window.key, window.unit, window.poolId)) ?? null),
-    })),
+          : (rates.get(account.id)?.get(burnKey(window.key, window.unit, window.poolId)) ?? null);
+      return { ...window, burn: rate ? { ...rate, ...longFor(account.id, window) } : null };
+    }),
   }));
   const generatedAt = new Date(now).toISOString();
   return {
@@ -649,6 +678,10 @@ export interface SnapshotPublisherDeps {
   signIn?: () => Promise<SnapshotSignInProfile[]>;
   /** The renewal runner's summary (claude-signins.json in the same folder); best effort. */
   signInRenewal?: () => Promise<SnapshotSignInRenewal | null>;
+  /** The history store's hourly and daily rollup files, or null without the store. */
+  rollupExports?: (
+    event: AccountAnalyticsSampleEvent
+  ) => Promise<{ hourly: RollupExportFile; daily: RollupExportFile } | null>;
 }
 
 /** The row a failed or timed-out sign-in fetch publishes: the section
@@ -682,6 +715,18 @@ export function createSnapshotPublisher(
   const syncClient = deps.syncClient ?? ((directory: string) => syncSnapshotClient(directory));
   const signIn = deps.signIn ?? (async () => []);
   const signInRenewal = deps.signInRenewal ?? (async () => null);
+  const rollupExports =
+    deps.rollupExports ??
+    (async (event: AccountAnalyticsSampleEvent) => {
+      const store = getAacStore();
+      if (!store) return null;
+      const projected = projectAgentUsage(event.accounts, {
+        now: event.sampledAt,
+        includeHidden: true,
+      });
+      return buildRollupExports(store, event.accounts, projected.accounts, event.sampledAt);
+    });
+  let rollupsWritten: string | null = null;
   const recent = new RecentReadings();
   let busy = false;
   let busySince = 0;
@@ -819,6 +864,20 @@ export function createSnapshotPublisher(
         throw error;
       }
       warned = null;
+      // The store's hourly and daily files, once an hour (after usage.json, which commits a pass).
+      const hourKey = `${directory}\n${exportHour(event.sampledAt)}`;
+      if (rollupsWritten !== hourKey) {
+        try {
+          const files = await rollupExports(event);
+          if (files) {
+            await write(directory, SNAPSHOT_HISTORY_HOURLY, `${JSON.stringify(files.hourly)}\n`);
+            await write(directory, SNAPSHOT_HISTORY_DAILY, `${JSON.stringify(files.daily)}\n`);
+          }
+          rollupsWritten = hourKey;
+        } catch {
+          /* The snapshot itself was written; the next sample retries. */
+        }
+      }
       // The setting can change without a restart, so this follows it; unchanged, it is not rewritten.
       const locations = renderSnapshotLocations(chosen.locations);
       if (locationsWritten !== `${directory}\n${locations}`) {

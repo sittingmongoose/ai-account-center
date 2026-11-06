@@ -165,8 +165,9 @@ kept session out at the next start (`~/.ccs/auth/credential.json` holds a digest
 known credential).
 Trays pair once with the password and then use a revocable
 [device token](../../src/web-server/services/dashboard-device-store.ts) as
-`Authorization: Bearer`; only its SHA-256 is stored, it reaches only the tray routes
-([allowlist](../../src/web-server/middleware/api-request-guard.ts)), rotates every 30 days
+`Authorization: Bearer`; only its SHA-256 is stored, it reaches only the tray routes and the
+history store's read-only GET routes (`/api/store/status`, `/api/usage/*`, `/api/cost/*`; see
+[the store design](../store.md)) ([allowlist](../../src/web-server/middleware/api-request-guard.ts)), rotates every 30 days
 and expires after 90 days unused. Password, setup, pairing and rotation need a secure
 transport; `dashboard_tls` in config.yaml (a trusted TLS proxy - local on loopback, or
 `lan-https-proxy` with exact private `trusted_proxy_addresses` on another computer, set with

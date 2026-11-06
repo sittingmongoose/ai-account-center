@@ -9,6 +9,7 @@ import { Server as HTTPServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { ok } from '../utils/ui';
 import { closeDashboardSessions } from './middleware/auth-middleware';
+import { closeAacStore } from '../store/store-service';
 
 /**
  * Setup shutdown handlers for SIGINT and SIGTERM
@@ -26,9 +27,14 @@ export function setupGracefulShutdown(
       cleanup();
     }
 
-    // Close the server, save the sign-ins (at most 2 s), then exit.
+    // Close the server, save the sign-ins (at most 2 s) and close the history store (it seals
+    // its logs; at most 3 s), then exit. Every acknowledged event is already on disk.
     server.close();
-    void closeDashboardSessions().finally(() => process.exit(0));
+    const storeClosed = Promise.race([
+      closeAacStore(),
+      new Promise<void>((resolve) => setTimeout(resolve, 3000).unref?.()),
+    ]);
+    void Promise.allSettled([closeDashboardSessions(), storeClosed]).finally(() => process.exit(0));
   };
 
   process.on('SIGINT', shutdown);

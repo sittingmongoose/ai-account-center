@@ -113,6 +113,10 @@ export function showConfigCommandHelp(writeLine: (line: string) => void = consol
   writeLine('  proxy status       Show whether the LAN HTTPS reverse proxy is trusted');
   writeLine('  proxy set --address <ip> --origin <https url>   Trust the LAN HTTPS proxy');
   writeLine('  proxy off          Stop trusting the LAN HTTPS proxy');
+  writeLine('  store status       Show the history store state and last backup');
+  writeLine(
+    '  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)'
+  );
   writeLine('');
   writeLine('Options:');
   writeLine('  --port, -p PORT    Server port (default: auto-detect)');

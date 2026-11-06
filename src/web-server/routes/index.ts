@@ -33,6 +33,7 @@ import antigravityRoutes from './antigravity-routes';
 import authRoutes from './auth-routes';
 import claudeDesktopRoutes from './claude-desktop-routes';
 import barRoutes from './bar-routes';
+import { storeRoutes, usageRoutes } from './store-routes';
 
 // Create the main API router (case-sensitive; handler errors stay in the request)
 export const apiRoutes = createApiRouter();
@@ -102,6 +103,9 @@ apiRoutes.use('/claude', claudeDesktopRoutes);
 apiRoutes.use('/codex', codexRoutes);
 apiRoutes.use('/antigravity', antigravityRoutes);
 apiRoutes.use('/bar', barRoutes);
+// The history store (docs/store.md 8.1): read-only, sessions and paired devices.
+apiRoutes.use('/store', storeRoutes);
+apiRoutes.use('/usage', usageRoutes);
 
 // Public process liveness compatibility; no configuration details or repair actions.
 apiRoutes.get('/health', (_req, res) => res.json({ status: 'ok' }));

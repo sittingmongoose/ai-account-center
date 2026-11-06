@@ -65,7 +65,8 @@ import {
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
-import { startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { openAacStore, startAacStoreMaintenance } from '../store/store-service';
 import { getSignInHealth } from './services/signin-health-service';
 import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
@@ -294,6 +295,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let httpsServer: https.Server | null = null;
   let stopCgroupForeignCheck: (() => void) | null = null;
   let stopAgentUsageSnapshot: (() => void) | null = null;
+  let stopStoreMaintenance: (() => void) | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   const codexRenewal = getCodexProfileRenewalService();
@@ -317,6 +319,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopAccountAnalyticsSampling();
     stopAgentUsageSnapshot?.();
     stopAgentUsageSnapshot = null;
+    stopStoreMaintenance?.();
+    stopStoreMaintenance = null;
     stopCgroupForeignCheck?.();
     stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
@@ -401,6 +405,18 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
               }
             : null;
         },
+      });
+      // The history store (docs/store.md): opened before the first sample, which waits for it;
+      // without the native module the dashboard runs as before, without stored history.
+      void openAacStore().then((opened) => {
+        if (opened.store)
+          stopStoreMaintenance = startAacStoreMaintenance({
+            snapshotDirectory: async () => (await readSnapshotSettings())?.directory ?? null,
+          });
+        else if (opened.reason && opened.reason !== 'missing' && opened.reason !== 'disabled')
+          logger.warn('store.unavailable', 'The history store is unavailable', {
+            reason: opened.reason,
+          });
       });
       startAccountAnalyticsSampling();
       // Warn when launched apps leaked into the dashboard cgroup (read-only).

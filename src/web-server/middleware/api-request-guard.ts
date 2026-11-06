@@ -24,8 +24,9 @@ import {
  * 2. Public routes, as exact method and path pairs (any letter case).
  * 3. `Authorization: Bearer` is checked before the cookie and never falls back
  *    to it: a bad token is 401 `invalid_token`, `device_revoked` or
- *    `device_expired`; a good one may reach only the tray routes, everything
- *    else is 403 `device_scope`.
+ *    `device_expired`; a good one may reach only the tray routes and the
+ *    history store's read-only GET routes; everything else is 403
+ *    `device_scope`.
  * 4. A browser session from an older epoch is signed out (401
  *    `session_revoked`); a current one passes; nothing else does (401).
  *
@@ -45,7 +46,10 @@ const PUBLIC_ROUTES: ReadonlyArray<readonly [Method, string]> = [
   ['GET', '/health'],
 ];
 
-/** The tray routes a device token may call (contract section 6), relative to /api. */
+/**
+ * The routes a device token may call, relative to /api: the tray routes (contract section 6)
+ * and the history store's read-only GET routes.
+ */
 const DEVICE_SCOPE: ReadonlyArray<readonly [Method, RegExp]> = [
   ['GET', /^\/accounts\/dashboard\/?$/],
   ['POST', /^\/codex\/profiles\/[^/]+\/activate\/?$/],
@@ -61,6 +65,10 @@ const DEVICE_SCOPE: ReadonlyArray<readonly [Method, RegExp]> = [
   ['GET', /^\/auth\/devices\/me\/?$/],
   ['POST', /^\/auth\/devices\/me\/rotate\/?$/],
   ['DELETE', /^\/auth\/devices\/me\/?$/],
+  // The history store's read-only routes (docs/store.md 8.1, approved device-scope change).
+  ['GET', /^\/store\/status\/?$/],
+  ['GET', /^\/usage\/[a-z][a-z-]{0,31}\/?$/],
+  ['GET', /^\/cost\/[a-z][a-z-]{0,31}\/?$/],
 ];
 
 /** GET routes also answer HEAD. */

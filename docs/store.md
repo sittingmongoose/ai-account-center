@@ -1,6 +1,7 @@
 # AAC store: design
 
-Status: **design for review, not implemented.** This document is the contract for the store. Code that
+Status: **phases 0 and 1 built** (usage readings; section 11 records what changed from the design and
+what was measured); phases 2 to 5 are design. This document is the contract for the store. Code that
 disagrees with it is a bug in one of the two; fix whichever is wrong and update this document in the same
 change.
 
@@ -79,8 +80,8 @@ append whose key is already there returns the original sequence and writes nothi
 
 | `event_type` | Log | Durability | Idempotency key | Payload fields |
 |---|---|---|---|---|
-| `usage.sampled` | readings | group | `account.identity:observed_at_ms` | `account {identity, provider, account_id, plan, platform, source, status, is_active}`, `sampled_at_ms`, `observed_at_ms`, `windows[] {identity, key, label, kind, unit, used_pct, remaining_pct, used, limit, remaining, reset_at_ms, expires_at_ms, window_minutes, unlimited, enabled, cached_sampled_at_ms, pool_id, pool_id_source, pool_label, model_ids[]}`, `import_ref` (backfill only) |
-| `usage.seen` | readings | group | `account.identity:observed_at_ms` | `account_identity`, `sampled_at_ms`, `observed_at_ms` (the account's windows are unchanged) |
+| `usage.sampled` | readings | group | the projector's per-account rule (11.1) | `observations[]`, one per changed account of a sampling tick: `account {identity, provider, account_id, plan, platform, source, status, is_active}`, `sampled_at_ms`, `observed_at_ms`, `windows[] {identity, key, label, kind, unit, used_pct, remaining_pct, used, limit, remaining, reset_at_ms, expires_at_ms, window_minutes, unlimited, enabled, cached_sampled_at_ms, pool_id, pool_id_source, pool_label, model_ids[]}`, `import_ref` (backfill only) |
+| `usage.seen` | readings | group | the projector's per-account rule (11.1) | `accounts[]`, one per unchanged account of a sampling tick: `account_identity`, `sampled_at_ms`, `observed_at_ms`, `import_ref` |
 | `usage.day_closed` | ledger | group | `day` | `day` (UTC), `series[] {account meta, window meta, hours[24] rollup, day rollup, periods[] touched}` |
 | `activity.hour` | ledger | group | `tool:host:hour_ms:row_sha256` | `tool`, `host`, `provider`, `profile`, `hour_ms`, `models[] {model, provider, input, output, cache_create, cache_read, requests, cost_usd, fallback_cost_usd}`. Appended once per source and hour, 2 hours after the hour ends; a later correction appends a new row and the latest wins. The live current hour stays in the activity service's memory |
 | `attribution.pass` | ledger | group | `writer:seq` | `writer`, `seq`, `start_ms`, `end_ms`, `generated_at_ms`, `method_id`, `rates_sha256`, `machines[] {name, scanned, error}` |
@@ -166,7 +167,7 @@ recovered.
 | Invalid bytes after the durable watermark in an active segment (torn tail) | adopt every whole valid frame, truncate the rest under an intent, sync, publish the watermark | `clean`: these appends were never acknowledged |
 | Bad frame at or below the watermark in an active segment | stop, seal the segment `degraded`, resynchronise only at a fully validated frame, record `store.integrity_detected` with the byte range and the bounded sequence range | a gap |
 | Sealed segment whose SHA-256 or zstd checksum fails | never modify it; mark it `degraded`; restore that file from a backup with the same name and hash if one exists; otherwise salvage the valid frames on both sides of the hole and project those | a gap with exact or bounded range |
-| Loss in the **ledger** log (answers, runs, switches) | as above, and Status answers become read-only until a backup restore or `ai-account-center store accept-loss` (`store.loss_accepted`) | blocking banner |
+| Loss in the **ledger** log (answers, runs, switches) | as above, and Status answers become read-only until a backup restore or `ai-account-center dashboard store accept-loss` (later) (`store.loss_accepted`) | blocking banner |
 | Loss in the **readings** log | as above; writing continues | a history gap (shown as no reading, never as zero) |
 | Manifest missing or unreadable, segments present | rebuild the manifest by validating every frame; the watermark becomes the last valid frame | `store.integrity_detected` |
 | `aac.redb` fails to open or `check_integrity()` fails | move it to `quarantine/`, create a new file, replay both logs from the start | rebuild in progress |
@@ -304,13 +305,13 @@ its checkpoint at zero; that is the migration path (4.8).
 | 4.2 Cache | redb `set_cache_size(32 MiB)` (redb's default is 1 GiB). `AAC_STORE_CACHE_MB`, 8 to 256 | bounded; the working set (latest rows, today's readings, recent rollups) is a few MiB |
 | 4.3 Durability | log: group commit (2.5), `barrier` for answers, switches and store events. redb: `Durability::Immediate` with `set_quick_repair(true)`, one commit per projector batch | the log is the durability point; redb commits carry their checkpoint, so a lost redb commit is replayed, never doubled. Volume is about one batch a minute, so an fsync per commit costs nothing and keeps restart replay short |
 | 4.4 One writer | the dashboard server process. It holds `store.lock` (`flock` or `LockFileEx`, as PM's `pm.lock`) for its lifetime, and redb runs in `ConcurrencyMode::ExclusiveWriter` (its own file lock). Writes and queries run on store threads; every JS call returns a Promise | a second process gets `lock_held` and reads through the API. redb 4.5's `SingleWriter` mode would let local readers open the file, but needs local file locks; ExclusiveWriter is chosen so nothing reads the file over a network share |
-| 4.5 How others read | the CLI on the dashboard machine calls the dashboard API as a paired device (bearer token); this needs the read-only store routes added to the device scope (L6). When the dashboard is stopped, `ai-account-center store ...` takes the lock and opens the store itself. Agents everywhere read the share export (8.3) | |
+| 4.5 How others read | the CLI on the dashboard machine calls the dashboard API as a paired device (bearer token); the read-only store routes are in the device scope (L6, approved). When the dashboard is stopped, `ai-account-center dashboard store ...` takes the lock and opens the store itself. Agents everywhere read the share export (8.3) | |
 | 4.6 Integrity at start | logs: manifest, every frame of each active segment, the watermark and checkpoints. Sealed segments: SHA-256 on first read and in the weekly check. redb: `check_integrity()` at every start while the file is under 512 MiB (about 0.5 s per 100 MB), otherwise after an unclean shutdown and weekly | catches a bad file before anything trusts it |
 | 4.7 Backups | daily: copy newly sealed segments (immutable, so incremental) and both manifests to `store/backups/<id>/` with a backup manifest (relative files, SHA-256, sizes, store version, durable boundary per log); weekly: a redb snapshot (projector paused, final commit, file copy, reopen; under a second). Keep 7 daily and 4 weekly. Off-machine copy: decision D3 | logs alone can rebuild everything; the redb snapshot only shortens a restore |
-| Restore | `ai-account-center store restore <backup>` with the dashboard stopped: verify every hash, stage under `tmp/`, move current files to `quarantine/`, promote, then replay from the snapshot's checkpoints. An interrupted restore finishes or rolls back from its intent | |
+| Restore | `ai-account-center dashboard store restore <backup-dir>` with the dashboard stopped: verify every hash, stage under `tmp/`, move current files to `quarantine/`, promote, then replay from the snapshot's checkpoints. An interrupted restore finishes or rolls back from its intent | |
 | 4.8 Versions and migrations | `store_schema_version` u32 in `meta`; frame version 2 and header version 1; each event type has its own `schema_version`; each projector has a version in its checkpoint. A projector change bumps its version and rebuilds its tables from the logs. An event change adds a reader for the new version; old events are read by their own reader, never rewritten. Newer than the code: `blocked_newer_store` | redb tables are all derived, so there are no in-place data migrations |
 | 4.9 Compaction | readings: whole-segment expiry (section 5). redb: janitor every 6 hours deletes expired rows in batches of at most 10,000 keys per transaction (PM's numbers), then `compact()` weekly when free pages exceed 25% of the file | |
-| 4.10 No native module | the loader catches the failed `require`. The dashboard keeps live accounts, switching and the in-memory one-hour burn rates; Analytics says "History is unavailable: the storage module is not installed on this computer." Nothing is invented and the old JSON file is not written | Mac and Windows dashboards may run without a prebuilt module |
+| 4.10 No native module | the loader catches the failed `require`, and the dashboard keeps the JSON history file path it had before the store; `/api/usage/*` answers 503 `store_unavailable` and `/api/store/status` says why | a machine without the module (the VM until its Linux build) keeps its history |
 | 4.11 Bounded memory | redb cache 32 MiB; one open group at most 1 MiB; projector batches at most 4,096 events; query responses at most 20,000 points per page; import caps: a run 32 KB, a quota report 512 KB, a quota ledger file 4 MiB. The 32 MB history file is no longer parsed or rewritten whole on each sample | target: under 64 MiB resident for the module (phase 1 check) |
 | Kill switch | `AAC_STORE=off` disables the store: the dashboard behaves as 4.10 | rollback during phase 1 (section 10) |
 
@@ -360,7 +361,7 @@ the same fixture.
 | Source | Import | Check |
 |---|---|---|
 | `account-analytics/quota-history-v1.json` | decoded by today's `decodeAccountAnalyticsHistory`; each observation becomes `usage.sampled` (or `usage.seen` when unchanged) in `sampledAt` order, with `source_at_ms` set and `import_ref = {file, sha256, index}`. Identities are today's hashes, so live accounts match | count of imported readings equals the file's window readings; `/api/accounts/analytics` returns the same series on the fixture as the old code |
-| After a verified import | the file is renamed `quota-history-v1.json.imported` and left for 30 days (rollback); then deleted by the janitor | |
+| After a verified import | the files are left untouched (the rollback path reads them); each imported file is marked by its SHA-256, so a later run imports only what changed | |
 | Share `aac-usage/history.json` | not imported: it is a 7-day copy of the same readings | |
 | Share agent-report runs | scan `agent-reports/v1/writers/*/runs/*/*.json` with the Status tab's reading rules (list first, skip dot files, reject NUL bytes, validate `run@1`, 32 KB cap); each becomes `run.recorded` with `import_ref` | count equals the valid files; rejected files listed with reasons |
 | `status/answers.jsonl` (phase 4) | every line in order: `answer` to `answer.recorded`, `send` to `answer.sent`, `delivery` to `answer.delivery`; malformed lines quarantined | the answer history API returns the same list before and after |
@@ -446,6 +447,15 @@ Code, read the thread's effort from T3's state database (as quota-watch already 
 `t3`. Runs would join more reliably if `run@1` carried an optional `t3Thread` (today the join goes
 through the writer's `thread.json`).
 
+Agreed with quota-watch's owner (2026-11-06); `quota-ledger@1` ships after their scrubber fix:
+
+- **Estimated effort is marked.** A row with `effortHow: "t3"` also carries `estimate: true` on that
+  field, so nothing reads an effort T3 recorded as the provider's. The importer keeps that mark and the
+  cost model labels such rows as estimates (7.2).
+- **Files are write-once, and `seq` has gaps.** A pass whose write fails writes the next `seq`; it never
+  retries under the same name. The importer dedupes by `(writer, seq)` and treats a missing `seq` as a
+  pass that was not published, never as an error or as zero use.
+
 ## 8. API and CLI
 
 ### 8.1 Server routes
@@ -467,8 +477,8 @@ errors `{error, code}` with fixed sentences.
 
 ### 8.2 CLI on the dashboard machine
 
-`ai-account-center store status | check | backup | restore <id> | export | accept-loss`. Through the API
-while the dashboard runs (read-only commands, needs L6; `restore` and `accept-loss` only with the dashboard
+`ai-account-center dashboard store status | check | backup | restore <dir>` (built); `export` and `accept-loss` come later. Through the API
+while the dashboard runs (read-only commands, L6; `restore` and `accept-loss` only with the dashboard
 stopped); with the lock when it is stopped.
 
 ### 8.3 Share export and `aac-usage` for agents
@@ -556,42 +566,102 @@ minutes (redb, zstd) and seconds after that with `target/` cached; the pre-push 
 | 4 | Status answers on the ledger (after `t3/ce359811` lands) | answer history identical before and after; an answer is acknowledged only after its barrier fsync; a crash between append and share copy resumes delivery |
 | 5 | switch history, update-job history | every switch path (auto, manual, CLI) writes one `switch.recorded`; history visible in the dashboard |
 
-**Phase 1 cut-over and rollback.** No dual writing. After a verified backfill the old file is kept
-untouched for 30 days. Rolling back means `AAC_STORE=off` and the previous build: the old code resumes
-from the old file with a gap for the store's days.
+**Phase 1 cut-over and rollback.** No dual writing. The backfill leaves the JSON files untouched.
+Rolling back means `AAC_STORE=off` (or the previous build): the JSON path resumes from the old file,
+with a gap for the store's days.
 
-## Decisions for the owner
+## 11. Implementation (phases 0 and 1)
 
-**D1. Retention lengths.**
-- A: readings 90 days, per-session tokens 365 days, hourly rollups for good. About 230 MB after a year,
-  then about 100 MB more each year. **Recommended:** long-period burn and effort comparisons need hourly
-  data for good, and it is about 37 MB a year.
-- B: readings 30 days, per-session tokens 90 days, hourly rollups for 2 years, then daily. About 140 MB
-  after a year.
-- C: everything for good. About 490 MB after a year, and about that much more each year.
+Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 
-**D2. What moves in phase 1.**
-- A: usage readings only. **Recommended:** it replaces the file that is rewritten on every sample and
-  proves the log, recovery and backups on the data with the most volume.
-- B: usage readings and token activity hours together. Activity history starts surviving its source logs
-  a phase earlier, but phase 1 gets bigger.
+### 11.1 Changes from the design above
 
-**D3. Off-machine backups.**
-- A: daily copy of new sealed segments and a weekly redb snapshot to
-  `share/ai-account-center/store-backups/` on the Cursor share. **Recommended:** a VM disk loss would
-  otherwise lose all history; sealed segments are immutable, so the copy is small and incremental.
-- B: local backups on the VM only.
+| Area | Built | Why |
+|---|---|---|
+| Usage events (2.2) | one `usage.sampled` (`{observations: [...]}`) and one `usage.seen` (`{accounts: [...]}`) per sampling tick, not one per account | a frame's envelope is about 380 bytes; per-account "seen" frames doubled the log |
+| Usage dedupe (2.2) | the projector's per-account rule (sample time never goes back, an unchanged sample in the same 5-minute bucket is skipped); `idem` is kept for ledger events from phase 2 | an `idem` row per reading would cost more than the reading |
+| Event id (2.3) | `<log>-<sequence hex>` (`r-000000000000002a`) | unique for the store's life because sequences are never reused; no random source needed |
+| Intents (2.4, 2.6) | crash steps are reconciled from file presence, names and hashes at open (seal, compress, retire); restore keeps an intent file | each step is provable from the files, so no separate intent is needed |
+| Spans (3.1) | a reading row is a span; an unchanged sighting more than 10 minutes after the last one starts a new span, so gaps stay visible; the open span lives in `latest` and its `reading` row is rewritten when it closes | no copy-on-write churn of the readings tree every 5 minutes |
+| Row and rollup values (3.1) | `Row`: version, flags, presence mask, `last_seen`, then the present fields; `Rollup`: presence mask, percentages as f32, credits f64 | fewer bytes per row; rollups are summaries shown to two decimals |
+| Tables (3.2) | added `account_state` (account status spans) and `day_closed` (closed days) | the history reconstruction and day closing need them |
+| Reconstruction | `historyRecords` rebuilds the JSON history's account records from the spans, adding readings on its grid (every 5 minutes within a day, hourly beyond) inside observed spans | the analytics route, burn rates and `history.json` keep their exact inputs |
+| zstd (2.4) | level 9 | 50.7x on real segments against 54x at level 19, at 1/75 of the time and far less memory |
+| redb integrity (4.6) | `set_check_integrity_on_open` below 512 MiB (every page checksum at open); a read-only version probe first, guarded against redb panics on damaged pages | redb may panic on a damaged file opened without the check |
+| No module (4.10) | the JSON history file path keeps running (as before the store) | a machine without the module, such as the VM until its Linux build, keeps its history |
+| Backfill (6) | the JSON file and every readable file under `account-analytics/archive/` (JSON object, array, JSON lines, `.gz`, nested folders); unreadable files and records are counted and skipped; sources are left untouched; each imported file is marked by its SHA-256 | the rollback path reads the JSON file; the archive's format is not fixed |
+| Backups (4.7) | `<root>/pool/<log>/<segment>` plus `<root>/sets/<id>/backup.json`; local root `store/backups/`; share root `share/ai-account-center/store-backups/<instance>` (or `AAC_STORE_SHARE_BACKUP_DIR`), used only when `share/ai-account-center` exists beside the usage snapshot folder | an unmounted share never grows a local folder |
+| CLI (8.2) | `ai-account-center dashboard store status|check|backup|restore <dir>` | it follows `dashboard usage-snapshot`; status uses `AAC_DASHBOARD_URL` and `AAC_DEVICE_TOKEN` while the dashboard runs |
+| Analytics (8.1) | `/api/accounts/analytics` keeps its 31-day range; the 90 days are served by `/api/usage/*` | no Slint range change in this phase |
+| Build (9.2) | `bun run store:build` compiles into `native/aac-store/prebuilt/` (gitignored, with a `.json` note of its sources) and copies into `dist/native/`; every `build` copies an existing prebuilt module; `verify-bundle` warns when it is absent | `build:all` and `prepack` delete `dist/`; the Linux module cannot be built yet |
+| CI gate (9.4) | `bun run store:check` and `store:build` in the parity gate and GitHub CI; `AAC_STORE_RUST=off` skips them | machines that may not run Rust builds |
+| MessagePack | the decoder caps nesting at 64 (PM: iterative, no cap) | AAC payloads are shallow |
+| Folder fsync | Unix fsyncs folders; Windows cannot, and relies on NTFS metadata journaling | |
 
-**D4. Effort for Claude Code sessions.**
-- A: take it from the T3 thread's effort setting, labelled as an estimate. **Recommended:** it is the only
-  source; without it there is no Opus high-versus-xhigh comparison.
-- B: show effort only where the log records it (Codex). Claude models get no effort split.
+### 11.2 Owner decisions (answered 2026-11-06)
 
-**D5. Record switch history (new data).**
-- A: yes, every automatic, manual and CLI switch with its reason and outcome, in phase 5.
-  **Recommended:** today only the latest Antigravity switch is kept and Codex switches live in a 7-day
-  log.
-- B: no.
+| | Answer |
+|---|---|
+| D1 Retention | A: readings 90 days, per-session tokens 365 days, hourly rollups for good |
+| D2 Phase 1 | A: usage readings only |
+| D3 Off-machine backups | A: daily new sealed segments and a weekly redb snapshot to the share |
+| D4 Claude effort | A: from the T3 thread's setting, labelled an estimate (phase 2) |
+| D5 Switch history | A: record it (phase 5) |
+| L6 Device scope | approved and built: paired device tokens may `GET /api/store/status`, `/api/usage/*` and `/api/cost/*`, and nothing else new |
+
+### 11.3 Acceptance
+
+| Check | Result |
+|---|---|
+| Frame, crash-cut (a cut at every byte offset of a torn tail and of the acknowledged region), corruption (bit flips in sealed segments, a damaged redb, a damaged manifest) | pass (`bun run store:test`: 23 Rust tests) |
+| Sequences never reused; a newer store left byte-for-byte untouched; a second writer refused | pass |
+| Replay from nothing and from a mid-way checkpoint gives identical tables | pass |
+| Analytics output and burn rates equal to the JSON history on the same samples | pass (`tests/unit/store/store-usage.test.ts`) |
+| Backfill of the JSON file and a mixed archive folder; re-run imports nothing | pass |
+| Closed days keep rollups and final periods after their readings retire and redb is rebuilt | pass |
+| Backup to a local root and a mirror, restore from the mirror reproduces the tables; a tampered backup is refused | pass |
+| Kill during sampling loses no acknowledged reading | pass (`tests/unit/store/store-kill.test.ts`, 5 of 5 runs) |
+| Device token reaches only the new GET routes | pass (`tests/unit/store/store-routes.test.ts`) |
+| Dashboard without the module, and with `AAC_STORE=off` | pass (JSON path) |
+| Memory: a store-only process over 10 days (16 accounts, minute samples, daily maintenance) | 43 MiB peak working set: pass |
+| Bytes per reading below today's | **fails**: see 11.4 |
+| `.node` built on the dashboard VM | not done: Rust builds are not allowed on the VM now; see 11.5 |
+
+### 11.4 Measured size (Windows, synthetic busy workload)
+
+16 accounts with 4 windows each, a sample every minute for 30 days, daily maintenance and a final
+compaction:
+
+| | JSON history (today) | Store |
+|---|---:|---:|
+| Kept | 30 days, thinned (hourly beyond a day): 15,780 records, 62,952 window readings | every change for 90 days: 67,691 reading spans, 46,080 hourly rollups, 2,848 periods |
+| Bytes | 17.5 MB | redb 30.6 MB (7.2 MB of rows in 15.3 MB of pages) and the readings log about 6 MB (117 MB raw, 50x smaller sealed, plus at most a day raw) |
+| Per stored reading | 277 B | about 585 B |
+
+The store holds more (every change, rollups kept for good), but it does not yet meet "less space than
+today's files". Two causes: redb leaves B-tree leaves half full, and while a database fits in its
+first allocation region redb doubles the file to grow it (its region size is not configurable outside
+redb's own tests). Proposed follow-up, estimated to bring the same 30 days near 15 MB: pack each
+series' readings and its hourly rollups into one value per series and day (fewer, fuller pages), and
+serve "changes between two times" by per-series scans instead of the `reading_by_time` index.
+
+### 11.5 Linux
+
+The dashboard runs on Linux and needs `aac-store.linux-x64.node`. One command, on the VM or on Nas1 (same
+or older glibc than the VM):
+
+```bash
+bun run store:build
+```
+
+It needs cargo with rustup (the crate's `rust-toolchain.toml` pins 1.98.0 and installs it), a C
+compiler for zstd (`build-essential`), and glibc no newer than the VM's. No napi CLI is needed: cargo
+builds the cdylib and the script copies it as `.node`. Copy `native/aac-store/prebuilt/` to the VM's
+checkout when built elsewhere; the next `bun run build` puts it in `dist/native/`. Until then the VM's
+dashboard keeps its JSON history.
+
+Not yet run on Linux: the Rust suites, the kill test, folder fsync, and the first backfill of the VM's
+real history and archive.
 
 ## Notes for the lead
 
@@ -609,7 +679,6 @@ from the old file with a gap for the store's days.
   `catalog/`, and the agent-reports format in the 2026-11-06 status-tabs share folder.
 - **L5. Memory.** Today every changed sample parses and rewrites the whole history file (up to 32 MB).
   Phase 1 removes that; the memory-growth investigation may want to know.
-- **L6. Device scope.** Device tokens today reach only the tray routes (`api-request-guard.ts`). For the
-  local CLI to read the store while the dashboard runs, the read-only `GET /api/store/status`,
-  `/api/usage/*` and `/api/cost/*` routes would join the device scope. If that is not wanted, the CLI
-  works only with the dashboard stopped and agents use the share export.
+- **L6. Device scope (approved).** Paired device tokens may also `GET /api/store/status`,
+  `/api/usage/*` and `/api/cost/*` (`api-request-guard.ts`); every write and every other route stays
+  refused.
