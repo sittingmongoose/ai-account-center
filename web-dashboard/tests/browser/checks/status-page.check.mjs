@@ -231,6 +231,7 @@ export const tests = {
 		await t.text('.sent .ok', /Sent 3 at/);
 		const entries = sent[0]?.answers || [];
 		await t.equal('one send', sent.length, 1);
+		await t.check('the send carries its id (a content hash, so a retry is recorded once)', /^[0-9a-f]{32}$/.test(sent[0]?.sendId || ''));
 		await t.equal('kinds sent', entries.map((a) => a.kind).sort().join(','), 'answer,done,object');
 		await t.check('every entry names the exact card version', entries.every((a) => a.cardId && a.cardSha256 && Number.isInteger(a.cardSeq)));
 		await t.check('the objection carries its words', entries.some((a) => a.kind === 'object' && /audit folder/.test(a.note)));

@@ -192,6 +192,39 @@ test('an iframe is made on the first visit, shown once ready, kept while hidden 
   assert.equal(status.removed, true);
 });
 
+test('a ready page that reloads hides until ready again, and one sent outside /app fails', () => {
+  const t = setup();
+  t.frames.setSignedIn(true);
+  t.frames.setRect('0,62,1440,838');
+  t.frames.setPage('status');
+  const [frame] = t.iframes();
+  frame.fire('load');
+  t.message({ type: 'aac-ready' }, frame.contentWindow);
+  assert.equal(frame.style.visibility, 'visible');
+  // a reload inside /app: hidden and loading until it says ready, then told it is the current tab again
+  frame.fire('load');
+  assert.equal(frame.style.visibility, 'hidden');
+  assert.equal(t.frames.snapshot().frames[0].state, 'loading');
+  assert.equal(t.frames.snapshot().note, 'Loading Status…');
+  t.message({ type: 'aac-ready' }, frame.contentWindow);
+  assert.equal(frame.style.visibility, 'visible');
+  assert.deepEqual(t.posted.at(-1).msg, { type: 'aac-visible', visible: true });
+  // the same page later lands on the shell (a sign-in redirect): unavailable, not left on screen
+  frame.contentWindow.location.pathname = '/';
+  frame.fire('load');
+  assert.equal(t.frames.snapshot().frames[0].state, 'failed');
+  assert.equal(frame.style.visibility, 'hidden');
+  assert.equal(t.frames.snapshot().note, 'Status page unavailable');
+  // a reload that never says ready times out
+  t.frames.retry();
+  const [again] = t.iframes();
+  again.fire('load');
+  t.message({ type: 'aac-ready' }, again.contentWindow);
+  again.fire('load');
+  t.fakeTimers.fireAll();
+  assert.equal(t.frames.snapshot().frames[0].state, 'failed');
+});
+
 test('the rect follows the shell and covers hide or cut the frame', () => {
   const t = setup();
   t.frames.setSignedIn(true);

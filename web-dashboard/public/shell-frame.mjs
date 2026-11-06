@@ -156,6 +156,14 @@ export function createShellFrames({ doc, win, origin, onNavigate, timers = null,
     entry.timer = setT(() => fail(name), readyTimeoutMs);
     iframe.addEventListener('load', () => {
       if (frames.get(name) !== entry) return;
+      // Every load starts over: a page that reloads, or is sent elsewhere, must say aac-ready again before it shows.
+      if (entry.state === 'ready') {
+        entry.state = 'loading';
+        entry.active = undefined;
+        clearT(entry.timer);
+        entry.timer = setT(() => fail(name), readyTimeoutMs);
+        update();
+      }
       let path = null;
       try { path = iframe.contentWindow?.location?.pathname ?? null; } catch { path = null; }
       if (!isAppPath(path)) { fail(name); return; }

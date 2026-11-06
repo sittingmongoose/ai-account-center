@@ -10,7 +10,7 @@ use crate::api::{AnswerEntry, Card};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-const STORAGE_KEY: &str = "aac.status.drafts.v1";
+pub const STORAGE_KEY: &str = "aac.status.drafts.v1";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -43,6 +43,16 @@ pub enum Standing {
     Changed,
     /// An objection with no words yet: an objection must say why.
     NeedsWords,
+}
+
+/// Which parts of a draft were made on an older version of the card: (choice, note).
+pub fn stale_parts(drafts: &Drafts, card: &Card) -> (bool, bool) {
+    drafts.get(&card.id).map_or((false, false), |d| {
+        (
+            !d.choice.is_empty() && d.version != card.version_key(),
+            !d.note.trim().is_empty() && d.note_version != card.version_key(),
+        )
+    })
 }
 
 pub fn standing(drafts: &Drafts, card: &Card) -> Standing {
@@ -109,7 +119,8 @@ pub fn set_note(drafts: &mut Drafts, card: &Card, note: String) {
 /// Fill every card that has no choice yet with its recommendation (notes are kept).
 pub fn use_recommendations(drafts: &mut Drafts, cards: &[Card]) -> usize {
     let mut filled = 0;
-    for card in cards.iter().filter(|c| c.can_answer() && !c.is_judgement()) {
+    // Only plain questions: never a judgement (the owner's own call), an objection (the owner's own words) or an action.
+    for card in cards.iter().filter(|c| c.can_answer() && c.is_question()) {
         let Some(rec) = card.recommendation.as_ref() else {
             continue;
         };
@@ -166,8 +177,19 @@ fn storage() -> Option<web_sys::Storage> {
 pub fn load() -> Drafts {
     storage()
         .and_then(|s| s.get_item(STORAGE_KEY).ok().flatten())
-        .and_then(|text| serde_json::from_str(&text).ok())
+        .map(|text| parse(&text))
         .unwrap_or_default()
+}
+
+/// Read stored drafts. A note saved before notes kept their own version was written on the draft's version.
+fn parse(text: &str) -> Drafts {
+    let mut drafts: Drafts = serde_json::from_str(text).unwrap_or_default();
+    for d in drafts.values_mut() {
+        if d.note_version.is_empty() && !d.note.is_empty() {
+            d.note_version = d.version.clone();
+        }
+    }
+    drafts
 }
 
 pub fn save(drafts: &Drafts) {
@@ -207,8 +229,14 @@ mod tests {
         sample.kind = "sample".into();
         let mut judged = card("j", 1, Some("A"));
         judged.kind = "judgement".into();
-        let cards = vec![sample.clone(), judged.clone()];
+        let mut objection = card("o", 1, Some("A"));
+        objection.kind = "objection".into();
+        let mut action = card("a", 1, Some("A"));
+        action.kind = "action".into();
         let mut d = Drafts::new();
+        assert_eq!(use_recommendations(&mut d, &[objection, action]), 0);
+        assert!(d.is_empty());
+        let cards = vec![sample.clone(), judged.clone()];
         assert_eq!(use_recommendations(&mut d, &cards), 0);
         toggle(&mut d, &sample, "A");
         toggle(&mut d, &judged, "B");
@@ -216,6 +244,25 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].card_id, "j");
         assert_eq!(sent[0].kind, "answer");
+    }
+
+    #[test]
+    fn stale_parts_name_what_changed_and_old_saved_notes_keep_their_version() {
+        let old = card("x", 1, None);
+        let new = card("x", 2, None);
+        let mut d = Drafts::new();
+        toggle(&mut d, &old, "A");
+        assert_eq!(stale_parts(&d, &new), (true, false));
+        set_note(&mut d, &old, "why".into());
+        assert_eq!(stale_parts(&d, &new), (true, true));
+        set_note(&mut d, &new, "why, still".into());
+        assert_eq!(stale_parts(&d, &new), (true, false));
+        assert_eq!(standing(&d, &new), Standing::Changed);
+        // a draft saved before notes had their own version: the note was written on the draft's version
+        let saved = r##"{"x":{"choice":["A"],"note":"why","via":"deck","version":"x#1#h1"}}"##;
+        let loaded = parse(saved);
+        assert_eq!(loaded["x"].note_version, loaded["x"].version);
+        assert_eq!(standing(&loaded, &old), Standing::Ready);
     }
 
     #[test]

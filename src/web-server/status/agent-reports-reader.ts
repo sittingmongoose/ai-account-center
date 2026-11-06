@@ -418,7 +418,12 @@ export class AgentReportsReader {
     for (const [key, value] of folderProblems) this.folderProblems.set(key, value);
     if (await this.statBoards()) changed = true;
     this.scannedAt = this.now();
-    this.complete = !this.scanPartial;
+    // A card file refused for its content with no earlier good copy is absent from the list though it may be open:
+    // the list then proves nothing about closed cards (the page would drop that card's unsent draft).
+    const unseenCard = [...this.entries.values()].some(
+      (entry) => entry.kind === 'card' && entry.problem !== null && entry.good === null
+    );
+    this.complete = !this.scanPartial && !unseenCard;
     return changed;
   }
 

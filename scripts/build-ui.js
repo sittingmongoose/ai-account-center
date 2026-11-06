@@ -112,73 +112,93 @@ function assertLockedSlint(lock) {
   }
 }
 
-/** Fingerprint build inputs, including the same-origin login/control bridge. */
-function sourceFingerprint(crate) {
+/** lstat that returns null only when nothing is there (a dangling symlink is still there). */
+function lstatOrNull(absolute) {
+  try {
+    return fs.lstatSync(absolute);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/**
+ * Hash a crate's build inputs: each input path relative to `root`, walked without following links. The root, every
+ * folder on the way to an input and every input must be a real folder or file; any symlink (dangling or not) fails.
+ */
+function fingerprintInputs(root, inputs, label) {
+  const rootStat = lstatOrNull(root);
+  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory())
+    throw new Error(`${label} build root must be a real folder.`);
   const files = [];
   function collect(relative) {
-    const absolute = path.join(crate, relative);
-    if (!fs.existsSync(absolute)) return;
-    const stat = fs.lstatSync(absolute);
-    if (stat.isSymbolicLink()) throw new Error('Dashboard build inputs must not be symlinks.');
+    const absolute = path.join(root, relative);
+    const stat = lstatOrNull(absolute);
+    if (!stat) return;
+    if (stat.isSymbolicLink()) throw new Error(`${label} build inputs must not be symlinks.`);
     if (stat.isDirectory()) {
       for (const entry of fs.readdirSync(absolute).sort()) collect(path.join(relative, entry));
     } else if (stat.isFile()) files.push(relative);
   }
-  for (const input of [
-    '.cargo/config.toml',
-    'rust-toolchain.toml',
-    'Cargo.toml',
-    'Cargo.lock',
-    'build.rs',
-    'build-tools',
-    'src',
-    'ui',
-    'public',
-  ])
-    collect(input);
+  for (const input of inputs) {
+    // a linked parent folder (such as .cargo) would be followed silently by path.join
+    const parts = input.split('/');
+    let missing = false;
+    for (let i = 1; i < parts.length && !missing; i++) {
+      const stat = lstatOrNull(path.join(root, ...parts.slice(0, i)));
+      if (!stat) missing = true;
+      else if (stat.isSymbolicLink() || !stat.isDirectory())
+        throw new Error(`${label} build inputs must not be symlinks.`);
+    }
+    if (!missing) collect(input);
+  }
   const hash = crypto.createHash('sha256');
   for (const file of files.sort()) {
     hash.update(file.split(path.sep).join('/'));
     hash.update('\0');
-    hash.update(fs.readFileSync(path.join(crate, file)));
+    hash.update(fs.readFileSync(path.join(root, file)));
     hash.update('\0');
   }
   return { sha256: hash.digest('hex'), files: files.length };
 }
 
+/** Fingerprint build inputs, including the same-origin login/control bridge. */
+function sourceFingerprint(crate) {
+  return fingerprintInputs(
+    crate,
+    [
+      '.cargo/config.toml',
+      'rust-toolchain.toml',
+      'Cargo.toml',
+      'Cargo.lock',
+      'build.rs',
+      'build-tools',
+      'src',
+      'ui',
+      'public',
+    ],
+    'Dashboard'
+  );
+}
+
 const LEPTOS_NAME = 'aac_web';
 const LEPTOS_VERSION = '0.9.0-rc1';
 
+/** The Leptos pages' manifest version must be what Cargo.lock resolves (the crate pins `=LEPTOS_VERSION`). */
+function assertLockedLeptos(lock) {
+  const entries = (lock.package ?? []).filter((entry) => entry.name === 'leptos');
+  if (entries.length !== 1 || entries[0].version !== LEPTOS_VERSION) {
+    throw new Error(`web-dashboard/leptos/Cargo.lock must resolve leptos to ${LEPTOS_VERSION}.`);
+  }
+}
+
 /** Fingerprint the Leptos pages' inputs (web-dashboard/leptos), the same way as the Slint crate's. */
 function leptosFingerprint(leptosCrate) {
-  const files = [];
-  function collect(relative) {
-    const absolute = path.join(leptosCrate, relative);
-    if (!fs.existsSync(absolute)) return;
-    const stat = fs.lstatSync(absolute);
-    if (stat.isSymbolicLink()) throw new Error('Leptos build inputs must not be symlinks.');
-    if (stat.isDirectory()) {
-      for (const entry of fs.readdirSync(absolute).sort()) collect(path.join(relative, entry));
-    } else if (stat.isFile()) files.push(relative);
-  }
-  for (const input of [
-    '.cargo/config.toml',
-    'Cargo.toml',
-    'Cargo.lock',
-    'index.html',
-    'build',
-    'src',
-    'style',
-  ])
-    collect(input);
-  const hash = crypto.createHash('sha256');
-  for (const file of files.sort()) {
-    hash.update(file.split(path.sep).join('/'));
-    hash.update('\0');
-    hash.update(fs.readFileSync(path.join(leptosCrate, file)));
-    hash.update('\0');
-  }
-  return { sha256: hash.digest('hex'), files: files.length };
+  return fingerprintInputs(
+    leptosCrate,
+    ['.cargo/config.toml', 'Cargo.toml', 'Cargo.lock', 'index.html', 'build', 'src', 'style'],
+    'Leptos'
+  );
 }
 
 /**
@@ -187,7 +207,11 @@ function leptosFingerprint(leptosCrate) {
  */
 function buildLeptosPages({ crate, repoRoot, run, env, cargoBin, lock }) {
   const leptosCrate = path.join(crate, 'leptos');
+  if (!lstatOrNull(leptosCrate)) return null;
+  // refuse a linked or incomplete crate, and a lock that drifted from the pinned version, before building anything
+  leptosFingerprint(leptosCrate);
   if (!fs.existsSync(path.join(leptosCrate, 'Cargo.toml'))) return null;
+  assertLockedLeptos(parse(fs.readFileSync(path.join(leptosCrate, 'Cargo.lock'), 'utf8')));
   const pkg = path.join(leptosCrate, 'pkg');
   runWithUiBuildLock(
     toolPath('wasm-pack', cargoBin),
@@ -544,6 +568,7 @@ module.exports = {
   readBuildCommit,
   assertSlintPin,
   assertLockedSlint,
+  assertLockedLeptos,
   assertBridgeImport,
   versionedBridgeSource,
   stampedSwSource,

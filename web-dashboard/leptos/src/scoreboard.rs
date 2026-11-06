@@ -147,9 +147,10 @@ pub struct Column {
     #[serde(deserialize_with = "nullable")]
     pub source: String,
     pub benchmark_label: Option<String>,
-    pub n: u32,
-    pub imported: u32,
-    pub reviews: u32,
+    /// Counts the server didn't send stay unknown, never 0.
+    pub n: Option<u32>,
+    pub imported: Option<u32>,
+    pub reviews: Option<u32>,
     pub ranked: bool,
     pub preliminary: bool,
     #[serde(deserialize_with = "nullable")]
@@ -166,7 +167,7 @@ pub struct MeasureValue {
     pub value: Option<f64>,
     #[serde(deserialize_with = "nullable")]
     pub unit: String,
-    pub n: u32,
+    pub n: Option<u32>,
     pub low: Option<f64>,
     pub high: Option<f64>,
     /// "wilson90" (a share's 90% interval) or "range" (a median's low and high).
@@ -188,7 +189,13 @@ pub struct Rate {
     pub value: Option<f64>,
     #[serde(deserialize_with = "nullable")]
     pub unit: String,
-    pub n: u32,
+    pub n: Option<u32>,
+}
+
+/// "n = 4", or "n unknown" when the server sent no count.
+fn n_words(n: Option<u32>) -> String {
+    n.map(|n| format!("n = {n}"))
+        .unwrap_or_else(|| "n unknown".into())
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -301,18 +308,18 @@ fn credits(v: f64) -> String {
 
 /// The main words for a value and the line under it (interval and n). Missing stays missing, never zero.
 pub fn measure_words(m: &MeasureValue) -> (String, String) {
-    let n = format!("n = {}", m.n);
+    let n = n_words(m.n);
     let Some(v) = m.value else {
         if let Some(e) = m.estimate.as_ref().and_then(|e| e.credits.as_ref()) {
             if let Some(ev) = e.value {
                 return (
                     format!("≈ {} credits per {}", credits(ev), per_unit(&e.unit)),
-                    format!("estimate · n = {}", e.n),
+                    format!("estimate · {}", n_words(e.n)),
                 );
             }
         }
         return (
-            if m.n == 0 {
+            if m.n == Some(0) {
                 "No data".into()
             } else {
                 "Not measured".into()
@@ -684,17 +691,17 @@ fn ColumnView(
     } else {
         "Observed in real work".to_string()
     };
-    let mut facts = vec![format!("n = {}", column.n)];
-    if column.reviews > 0 {
-        facts.push(format!("{} reviewed", column.reviews));
+    let mut facts = vec![n_words(column.n)];
+    if let Some(r) = column.reviews.filter(|r| *r > 0) {
+        facts.push(format!("{r} reviewed"));
     }
-    if column.imported > 0 {
-        facts.push(format!("{} imported", column.imported));
+    if let Some(i) = column.imported.filter(|i| *i > 0) {
+        facts.push(format!("{i} imported"));
     }
     let runs = column.runs.clone();
     let run_count = runs.len();
-    let runs_label = if (run_count as u32) < column.n {
-        format!("Latest {run_count} of {} runs", column.n)
+    let runs_label = if let Some(total) = column.n.filter(|n| (run_count as u32) < *n) {
+        format!("Latest {run_count} of {total} runs")
     } else {
         format!("Runs ({run_count})")
     };
@@ -840,7 +847,7 @@ mod tests {
         let share_m = MeasureValue {
             value: Some(0.9291),
             unit: "share".into(),
-            n: 5,
+            n: Some(5),
             low: Some(0.9105),
             high: Some(0.9441),
             interval: Some("wilson90".into()),
@@ -853,7 +860,7 @@ mod tests {
         let speed = MeasureValue {
             value: Some(4.866),
             unit: "s/item".into(),
-            n: 5,
+            n: Some(5),
             low: Some(4.85),
             high: Some(4.882),
             interval: Some("range".into()),
@@ -862,17 +869,32 @@ mod tests {
         assert_eq!(measure_words(&speed).0, "4.9 s per item");
         let none = MeasureValue {
             unit: "credits/item".into(),
+            n: Some(0),
             ..Default::default()
         };
         assert_eq!(measure_words(&none), ("No data".into(), "n = 0".into()));
+        // a count the server didn't send is unknown, not zero
+        let unknown = MeasureValue {
+            unit: "credits/item".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            measure_words(&unknown),
+            ("Not measured".into(), "n unknown".into())
+        );
+        let column: Column = serde_json::from_str(r#"{"source":"observed"}"#).unwrap();
+        assert_eq!(
+            (column.n, column.reviews, column.imported),
+            (None, None, None)
+        );
         let estimated = MeasureValue {
             unit: "credits/item".into(),
-            n: 3,
+            n: Some(3),
             estimate: Some(Estimate {
                 credits: Some(Rate {
                     value: Some(1.25),
                     unit: "credits/item".into(),
-                    n: 3,
+                    n: Some(3),
                 }),
             }),
             ..Default::default()

@@ -1052,14 +1052,23 @@ describe('cards.complete', () => {
       expect(complete(reader)).toBe(false);
     });
 
-  it('stays true for a file refused for its content, which is a named problem', async () => {
+  it('is false while a card refused for its content has no good copy, and true when it keeps one', async () => {
     const root = dirs.make();
     writeCard(root, cardDoc('vm.lead', 'Q1'));
-    writeReport(root, 'vm.lead', `cards/vm.lead--Q2.json`, Buffer.from('not json'));
+    writeCard(root, cardDoc('vm.lead', 'Q2'));
     const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    expect(complete(reader)).toBe(true);
+    // a damaged rewrite of a card already read: the last good copy is still listed, so the list is whole
+    writeReport(root, 'vm.lead', `cards/vm.lead--Q2.json`, Buffer.from('not json'));
     await reader.scan();
     expect(reader.snapshot().problems).toHaveLength(1);
     expect(complete(reader)).toBe(true);
+    // after a restart the same file has no good copy: Q2 may be open but isn't listed, so nothing is proved
+    const restarted = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await restarted.scan();
+    expect(restarted.snapshot().problems).toHaveLength(1);
+    expect(complete(restarted)).toBe(false);
   });
 
   it('is false when the last scan is stale, however whole it was', async () => {

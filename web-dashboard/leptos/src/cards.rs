@@ -112,22 +112,28 @@ pub fn CardsPanel() -> impl IntoView {
     let deck_view = RwSignal::new(DeckView::Cards);
     let show_answered = RwSignal::new(false);
 
-    // Keep drafts on this device; drop drafts of cards that closed. Only a current reading of the cards may prune: a
-    // view whose card source is missing or unreadable (a restarted server, a share that is down) lists no cards and
-    // must not wipe the owner's unsent work.
+    // Keep drafts on this device; drop drafts of cards that closed (see the prune below).
     Effect::new(move |_| drafts.with(drafts::save));
+    // Another tab (or the installed app beside a browser tab) changed the drafts: take its copy, so this tab's next
+    // save starts from it instead of overwriting it. Storage events reach only the other tabs, and an unchanged value
+    // fires none, so this can't echo.
+    let other_tab = window_event_listener(leptos::ev::storage, move |e| {
+        if e.key().as_deref() == Some(drafts::STORAGE_KEY) {
+            let stored = drafts::load();
+            if drafts.with_untracked(|d| *d != stored) {
+                drafts.set(stored);
+            }
+        }
+    });
+    on_cleanup(move || other_tab.remove());
     Effect::new(move |_| {
         let cards = open.get();
-        let current = live.view.with_untracked(|v| {
-            v.as_ref().is_some_and(|v| {
-                // A reading exists (it may be stale or have a damaged file, but its list is the reader's last good
-                // one); "missing" before the first scan has none.
-                v.sources
-                    .iter()
-                    .any(|s| s.id == v.cards.source && s.as_of.is_some() && s.state != "missing")
-            })
-        });
-        if current {
+        // Only a card list the server calls complete proves a card closed: after a restart while the share fails,
+        // or with one writer folder unreadable, the list is short and pruning would lose unsent work.
+        let complete = live
+            .view
+            .with_untracked(|v| v.as_ref().is_some_and(|v| v.cards.proves_closed()));
+        if complete {
             drafts.update(|d| drafts::prune(d, &cards));
         }
     });
@@ -186,6 +192,16 @@ fn Deck(
         v.sort();
         v.dedup();
         v
+    });
+    // a filter whose last card closed shows every card again, never an empty "1 of 0" deck
+    Effect::new(move |_| {
+        let gone = verdict.with(|v| {
+            v.as_ref()
+                .is_some_and(|v| !verdicts.with(|all| all.contains(v)))
+        });
+        if gone {
+            verdict.set(None);
+        }
     });
     let shown = Memo::new(move |_| {
         let pick = verdict.get();
@@ -368,7 +384,7 @@ fn Deck(
                     </div>
                 }.into_any(),
                 DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open sending=sending/> }.into_any(),
-                DeckView::Sent(summary) => view! { <Sent summary=summary deck_view=deck_view at=at/> }.into_any(),
+                DeckView::Sent(summary) => view! { <Sent summary=summary back=move || go_card(0)/> }.into_any(),
             }}
         </div>
     }
@@ -549,7 +565,11 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
             </dl>
             {(!fold_sections).then(|| view! { <Blocks blocks=c.sections.clone()/> })}
             <Show when=move || standing() == Standing::Changed>
-                <p class="item-note" data-tone="warn">"This question changed after you answered. Nothing is sent until you tap an option again or edit your note."</p>
+                <p class="item-note" data-tone="warn">{move || match drafts.with(|d| drafts::stale_parts(d, &card.get_value())) {
+                    (true, true) => "This question changed after you answered. Nothing is sent until you tap an option again and edit your note.",
+                    (true, false) => "This question changed after you chose. Nothing is sent until you tap an option again.",
+                    _ => "This question changed after you wrote your note. Nothing is sent until you edit the note.",
+                }}</p>
             </Show>
 
             {match c.kind.as_str() {
@@ -786,7 +806,7 @@ fn Review(
 }
 
 #[component]
-fn Sent(summary: SentSummary, deck_view: RwSignal<DeckView>, at: RwSignal<usize>) -> impl IntoView {
+fn Sent(summary: SentSummary, back: impl Fn() + Copy + Send + Sync + 'static) -> impl IntoView {
     let told = match summary.askers.len() {
         0 => String::new(),
         1 => format!(" {} will be told.", summary.askers[0]),
@@ -805,7 +825,7 @@ fn Sent(summary: SentSummary, deck_view: RwSignal<DeckView>, at: RwSignal<usize>
             {(!summary.refused.is_empty()).then(|| view! {
                 <ul class="item-note" data-tone="crit">{summary.refused.iter().map(|r| view! { <li>{r.clone()}</li> }).collect_view()}</ul>
             })}
-            <button class="secondary" on:click=move |_| { at.set(0); deck_view.set(DeckView::Cards); }>"Back to the questions"</button>
+            <button class="secondary" on:click=move |_| back()>"Back to the questions"</button>
         </div>
     }
 }

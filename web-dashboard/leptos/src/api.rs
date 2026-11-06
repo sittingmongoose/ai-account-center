@@ -206,6 +206,16 @@ pub struct Cards {
     pub answered: Vec<AnsweredCard>,
     #[serde(deserialize_with = "nullable")]
     pub batches: Vec<Batch>,
+    /// True only when the server's latest scan read every writer folder: then a card missing from `open` has closed.
+    /// Anything else (no field, a share error, a capped scan, the first scan after a restart) proves nothing.
+    pub complete: Option<bool>,
+}
+
+impl Cards {
+    /// Whether drafts of cards missing from this list may be dropped.
+    pub fn proves_closed(&self) -> bool {
+        self.complete == Some(true)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -575,8 +585,9 @@ pub struct Board {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Completion {
-    pub done: u32,
-    pub of: u32,
+    /// Missing stays unknown (never read as 0).
+    pub done: Option<u32>,
+    pub of: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -671,8 +682,9 @@ pub struct Thread {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Progress {
-    pub done: u32,
-    pub total: u32,
+    /// Missing stays unknown (never read as 0).
+    pub done: Option<u32>,
+    pub total: Option<u32>,
     #[serde(deserialize_with = "nullable")]
     pub unit: String,
 }
@@ -842,24 +854,47 @@ impl FetchError {
     }
 }
 
-const REQUEST_DEADLINE_MS: i32 = 15_000;
+/// Reads give up after 15 s. A send may take the server longer (it reads each card fresh and writes to the share) and
+/// carries its id, so it gets 120 s, and a retry after that is still recorded once.
+const READ_DEADLINE_MS: i32 = 15_000;
+const SEND_DEADLINE_MS: i32 = 120_000;
 
-/// Abort the request after `REQUEST_DEADLINE_MS`; returns the timer to clear once the answer is in.
-fn request_deadline(window: &web_sys::Window, init: &RequestInit) -> Option<i32> {
-    let controller = web_sys::AbortController::new().ok()?;
-    init.set_signal(Some(&controller.signal()));
-    let abort = wasm_bindgen::closure::Closure::once_into_js(move || controller.abort());
-    window
-        .set_timeout_with_callback_and_timeout_and_arguments_0(
-            abort.unchecked_ref(),
-            REQUEST_DEADLINE_MS,
-        )
-        .ok()
+/// Aborts a request when its time is up. Dropping it clears the timer and frees the callback, so a request that
+/// answered in time leaves nothing behind.
+struct Deadline {
+    window: web_sys::Window,
+    timer: Option<i32>,
+    _abort: Option<wasm_bindgen::closure::Closure<dyn FnMut()>>,
 }
 
-fn clear_deadline(window: &web_sys::Window, timer: Option<i32>) {
-    if let Some(t) = timer {
-        window.clear_timeout_with_handle(t);
+impl Deadline {
+    fn start(window: &web_sys::Window, init: &RequestInit, ms: i32) -> Self {
+        let mut deadline = Deadline {
+            window: window.clone(),
+            timer: None,
+            _abort: None,
+        };
+        let Ok(controller) = web_sys::AbortController::new() else {
+            return deadline;
+        };
+        init.set_signal(Some(&controller.signal()));
+        let abort = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || controller.abort());
+        deadline.timer = window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                abort.as_ref().unchecked_ref(),
+                ms,
+            )
+            .ok();
+        deadline._abort = Some(abort);
+        deadline
+    }
+}
+
+impl Drop for Deadline {
+    fn drop(&mut self) {
+        if let Some(timer) = self.timer {
+            self.window.clear_timeout_with_handle(timer);
+        }
     }
 }
 
@@ -876,8 +911,16 @@ pub(crate) async fn send(
     if let Some(body) = body {
         init.set_body(&JsValue::from_str(&body));
     }
-    // A request that never answers must not stall every later read: give up after 15 s and count it as offline.
-    let timer = request_deadline(&window, &init);
+    // A request that never answers must not stall every later read: give up and count it as offline.
+    let deadline = Deadline::start(
+        &window,
+        &init,
+        if method == "GET" {
+            READ_DEADLINE_MS
+        } else {
+            SEND_DEADLINE_MS
+        },
+    );
     let request = Request::new_with_str_and_init(url, &init).map_err(|_| FetchError::Malformed)?;
     if method != "GET" {
         request
@@ -900,7 +943,7 @@ pub(crate) async fn send(
         Ok((status, text))
     }
     .await;
-    clear_deadline(&window, timer);
+    drop(deadline);
     result
 }
 
@@ -935,7 +978,26 @@ pub struct AnswerEntry {
 
 #[derive(Serialize)]
 struct SubmitRequest<'a> {
+    #[serde(rename = "sendId")]
+    send_id: String,
     answers: &'a [AnswerEntry],
+}
+
+/// A send's identity, taken from what is sent: the same entries sent again (a retry after the connection dropped,
+/// even after a reload) carry the same id and the server records them once; any change to them makes a new id. Two
+/// 64-bit FNV-1a hashes with different starting points give 32 hex characters.
+pub fn send_id(answers: &[AnswerEntry]) -> String {
+    let text = serde_json::to_string(answers).unwrap_or_default();
+    let fnv = |basis: u64| {
+        text.bytes().fold(basis, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    };
+    format!(
+        "{:016x}{:016x}",
+        fnv(0xcbf2_9ce4_8422_2325),
+        fnv(0x6c62_272e_07bb_0142)
+    )
 }
 
 /// One entry's result as the server reports it.
@@ -964,7 +1026,7 @@ struct SubmitResponse {
 pub enum SendOutcome {
     /// Each entry's own result (some may be refused while others are recorded).
     Results(Vec<EntryOutcome>),
-    /// The whole request failed; nothing was recorded.
+    /// The whole request failed: refused (nothing recorded) or unknown (the words say which).
     Failed(String),
 }
 
@@ -988,31 +1050,41 @@ fn send_outcome(status: u16, text: &str) -> SendOutcome {
             "Signed out. Sign in again; your choices are kept on this device.".into(),
         );
     }
+    // A server error (or a proxy's 502/504) can come after some answers were recorded: never say nothing was.
+    if status >= 500 {
+        return SendOutcome::Failed(format!("The server answered {status}. {MAYBE_RECORDED}"));
+    }
     let body: ErrorBody = serde_json::from_str(text).unwrap_or_default();
     if body.error.is_empty() {
         SendOutcome::Failed(format!(
-            "The server answered {status}. Nothing was sent; your choices are kept."
+            "The server answered {status}. Nothing was recorded; your choices are kept."
         ))
     } else {
         SendOutcome::Failed(format!(
-            "{} Nothing was sent; your choices are kept.",
+            "{} Nothing was recorded; your choices are kept.",
             body.error
         ))
     }
 }
 
+/// When a send may have landed. A retry of the same answers carries the same send id, so it is recorded once.
+const MAYBE_RECORDED: &str = "Your answers may have been recorded. Sending the same answers again won't record them \
+                              twice; reload to see what was recorded. Your choices are kept.";
+
 pub async fn post_answers(answers: &[AnswerEntry]) -> SendOutcome {
-    let body = serde_json::to_string(&SubmitRequest { answers }).unwrap_or_default();
+    let body = serde_json::to_string(&SubmitRequest {
+        send_id: send_id(answers),
+        answers,
+    })
+    .unwrap_or_default();
     match send("POST", "/api/status/answers", Some(body)).await {
         Ok((status, text)) => send_outcome(status, &text),
         // The answers may have reached the server before the connection dropped: say so, never "nothing was sent".
-        Err(FetchError::Offline) => SendOutcome::Failed(
-            "The connection dropped while sending. Your answers may have been recorded: reload to see what was \
-             recorded before sending again. Your choices are kept."
-                .into(),
-        ),
+        Err(FetchError::Offline) => SendOutcome::Failed(format!(
+            "The connection dropped or timed out while sending. {MAYBE_RECORDED}"
+        )),
         Err(error) => SendOutcome::Failed(format!(
-            "{} Nothing was sent; your choices are kept.",
+            "{} Nothing was recorded; your choices are kept.",
             error.sentence()
         )),
     }
@@ -1057,11 +1129,65 @@ mod tests {
     /// A view the server branch built from scripts/status-fixture.mjs (--with-kinds --with-problems): the page must read
     /// what the server actually sends, nulls included.
     #[test]
+    fn a_resend_of_the_same_entries_keeps_its_id() {
+        let entry = |note: &str| AnswerEntry {
+            kind: "note".into(),
+            card_id: "vm.a--c1".into(),
+            card_seq: 3,
+            card_sha256: "ab".repeat(32),
+            choice: vec![],
+            note: note.into(),
+            via: "deck".into(),
+        };
+        let first = send_id(&[entry("go")]);
+        assert_eq!(first.len(), 32);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(first, send_id(&[entry("go")]), "a retry is the same send");
+        assert_ne!(first, send_id(&[entry("go now")]), "an edit is a new send");
+        let body = serde_json::to_string(&SubmitRequest {
+            send_id: first.clone(),
+            answers: &[entry("go")],
+        })
+        .unwrap();
+        assert!(body.starts_with(&format!(r#"{{"sendId":"{first}","answers":["#)));
+    }
+
+    #[test]
+    fn only_a_complete_card_list_proves_cards_closed() {
+        let read = |text: &str| serde_json::from_str::<Cards>(text).unwrap().proves_closed();
+        assert!(read(
+            r#"{"source":"agent-reports","open":[],"complete":true}"#
+        ));
+        assert!(!read(
+            r#"{"source":"agent-reports","open":[],"complete":false}"#
+        ));
+        assert!(
+            !read(r#"{"source":"agent-reports","open":[]}"#),
+            "an older server proves nothing"
+        );
+        assert!(!read(
+            r#"{"source":"agent-reports","open":[],"complete":null}"#
+        ));
+    }
+
+    #[test]
+    fn missing_progress_counts_stay_unknown() {
+        let c: Completion = serde_json::from_str(r#"{"done":3}"#).unwrap();
+        assert_eq!((c.done, c.of), (Some(3), None));
+        let p: Progress = serde_json::from_str(r#"{"unit":"files"}"#).unwrap();
+        assert_eq!((p.done, p.total), (None, None));
+    }
+
+    #[test]
     fn the_server_view_reads() {
         let text = include_str!("../fixtures/server-view.json");
         let view: StatusView = serde_json::from_str(text).expect("server view parses");
         assert_eq!(view.version, STATUS_VIEW_VERSION);
         assert_eq!(view.cards.open.len(), 9);
+        assert!(
+            view.cards.proves_closed(),
+            "the server's whole scan says so"
+        );
         let kinds: Vec<&str> = view.cards.open.iter().map(|c| c.kind.as_str()).collect();
         for kind in ["objection", "action", "judgement", "sample"] {
             assert!(kinds.contains(&kind), "{kind}");
@@ -1152,7 +1278,7 @@ mod tests {
     }
 
     #[test]
-    fn send_outcomes_keep_each_entry_and_say_when_nothing_was_sent() {
+    fn send_outcomes_keep_each_entry_and_say_when_nothing_was_recorded() {
         let ok = send_outcome(
             200,
             r#"{"results":[{"cardId":"a","outcome":"recorded"},{"cardId":"b","outcome":"card_changed","code":"card_changed"}]}"#,
@@ -1177,8 +1303,18 @@ mod tests {
         assert_eq!(
             send_outcome(400, r#"{"error":"Too many answers."}"#),
             SendOutcome::Failed(
-                "Too many answers. Nothing was sent; your choices are kept.".into()
+                "Too many answers. Nothing was recorded; your choices are kept.".into()
             )
         );
+        // a 5xx may follow recorded answers: never "nothing was recorded"
+        for status in [500, 502, 504] {
+            match send_outcome(status, r#"{"error":"Boom."}"#) {
+                SendOutcome::Failed(words) => {
+                    assert!(words.contains("may have been recorded"), "{words}");
+                    assert!(!words.contains("Nothing was"), "{words}");
+                }
+                other => panic!("{other:?}"),
+            }
+        }
     }
 }

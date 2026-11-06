@@ -43,6 +43,7 @@ pub fn Panel(
                     {move || match (state().as_str(), age()) {
                         ("ok", Some(a)) => format!("Updated {a}"),
                         ("stale", Some(a)) => format!("Stale · {a}"),
+                        ("stale", None) => "Stale".to_string(),
                         ("unconfigured", _) => "Not set up".to_string(),
                         ("missing", _) => "Missing".to_string(),
                         ("unreadable", _) => "Unreadable".to_string(),
@@ -258,11 +259,11 @@ fn ProjectView(project: Project) -> impl IntoView {
 fn StreamView(stream: Stream) -> impl IntoView {
     let open = RwSignal::new(false);
     let has_items = !stream.items.is_empty();
-    let completion = match (&stream.completion, &stream.counts) {
-        (Some(c), Some(counts)) => view! {
+    let completion = match (stream.completion.as_ref().and_then(|c| Some((c.done?, c.of?))), &stream.counts) {
+        (Some((done, of)), Some(counts)) => view! {
             <div class="stream-line">
-                {bar(c.done, c.of)}
-                <span class="num">{format!("{} of {}", c.done, c.of)}</span>
+                {bar(done, of)}
+                <span class="num">{format!("{done} of {of}")}</span>
                 {count_chips(counts)}
             </div>
         }
@@ -335,7 +336,7 @@ fn ThreadsPanel() -> impl IntoView {
                         let model = [t.model.clone(), t.effort.clone()].into_iter().flatten().collect::<Vec<_>>().join(" ");
                         let place = [t.machine.clone(), t.stream.clone().map(|s| format!("stream {s}"))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
                         let blocked = t.blocked_on.as_ref().map(blocked_words);
-                        let progress = t.progress.as_ref().map(|p| format!("{} of {} {}", p.done, p.total, p.unit));
+                        let progress = t.progress.as_ref().and_then(|p| Some(format!("{} of {} {}", p.done?, p.total?, p.unit)));
                         view! {
                             <li class="thread" data-state=t.state.clone() data-stale=t.stale.then_some("1")>
                                 <div class="thread-top">
@@ -512,12 +513,18 @@ fn UsagePanel() -> impl IntoView {
                                 let tone = if a.at_limit { "crit" } else if a.runs_out_before_reset == Some(true) { "warn" } else { "" };
                                 let used = a.used_pct.map(fmt::pct).unwrap_or_else(|| "-".into());
                                 let reset = a.resets_at.as_deref().map(fmt::clock).unwrap_or_default();
-                                let note = if a.at_limit {
+                                let state = if a.at_limit {
                                     "at its limit".to_string()
                                 } else if a.runs_out_before_reset == Some(true) {
                                     a.projected_full_at.as_deref().map(|t| format!("full {}", fmt::clock(t))).unwrap_or_else(|| "full before reset".into())
                                 } else {
                                     String::new()
+                                };
+                                // a stale reading says so in words, not only by fading
+                                let note = match (a.stale, state.is_empty()) {
+                                    (true, true) => "stale reading".to_string(),
+                                    (true, false) => format!("stale reading · {state}"),
+                                    (false, _) => state,
                                 };
                                 view! {
                                     <tr data-tone=tone data-stale=a.stale.then_some("1")>

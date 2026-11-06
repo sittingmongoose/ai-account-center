@@ -117,16 +117,22 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
   the canvas and closes it), otherwise the toast stack and the hover card as `"x,y,w,h"` rects joined by `;`,
   which are cut out of the iframe with `clip-path` (they stay visible and clickable), or `""`.
 - **Messages** (`window.postMessage`, target origin = the dashboard origin; the shell checks `event.origin` and
-  that `event.source` is one of its own iframes, and ignores anything else):
+  that `event.source` is one of its own iframes, the page checks `event.origin` and that `event.source` is its
+  parent, and each ignores anything else):
   - shell -> page `{ "type": "aac-theme", "mode": "light" | "dark" }`: the effective theme (Auto resolved), sent
     on the iframe's `load`, on `aac-ready` and whenever it changes. The page draws in it and ignores its own
     `prefers-color-scheme` while embedded.
+  - shell -> page `{ "type": "aac-visible", "visible": true | false }`: whether the page is the current tab, sent
+    after each `aac-ready` and whenever that changes. A hidden iframe's document still reports itself visible, so
+    the page relies on this: while hidden it stops polling and ignores `/ws` hints (so the server's collectors can
+    idle), and on becoming visible it reads at once.
   - page -> shell `{ "type": "aac-ready" }`: the page is mounted and drawing (send it once per document load).
-    The shell shows the iframe and sends the theme again.
+    The shell shows the iframe and sends the theme and `aac-visible` again.
   - page -> shell `{ "type": "aac-navigate", "page": "home" | "analytics" | "accounts" | "status" | "scoreboard" }`:
     switch the shell's tab (a link from one page to another tab).
-- **Unavailable**: a frame that fires `error`, finishes loading anywhere but `/app/status` or `/app/scoreboard`
-  (a redirect, the shell itself), or sends no `aac-ready` within 20 seconds is replaced by the shell's own note
+- **Unavailable**: every `load` of a frame starts it over (hidden until it says `aac-ready` again). A frame that
+  fires `error`, finishes loading anywhere but `/app/status` or `/app/scoreboard` (a redirect, the shell itself),
+  or sends no `aac-ready` within 20 seconds is replaced by the shell's own note
   ("Status page unavailable", Try again) in the content area; until ready the note reads "Loading Status...". A
   failed page gets a new iframe on Try again, when its tab is opened again and when the browser comes back online.
   Stale data inside a page that did load is the page's own business (Sources above).
@@ -175,7 +181,9 @@ detail when there is no data. Nothing is ever shown as live when its source is s
 **`cards.complete`**: whether a card missing from this view is known to be gone. The page prunes the owner's local
 drafts of closed cards only while it is true. True only when the latest scan listed `v1/writers` and every writer and
 `cards/` folder, read every file it tried and reached no scan limit. A file refused for its content (bad JSON, NUL
-bytes, a secret, a schema miss) was read: it is a named problem and leaves this true. False before the first full scan
+bytes, a secret, a schema miss) was read: it is a named problem, and leaves this true while the card's last good copy
+is still listed; a refused card file with no good copy (after a restart, say) makes it false, since that card may be
+open but isn't listed. False before the first full scan
 after start; while the Source is `missing`, `error` or `stale`; when any listing failed (EIO, EACCES, ETIMEDOUT, ESTALE
 and the like, including on one writer's folder); when a file could not be read (a Source of `unreadable` for that
 reason); and when a scan limit was reached.

@@ -11,6 +11,8 @@ const {
   readBuildCommit,
   assertSlintPin,
   assertLockedSlint,
+  assertLockedLeptos,
+  leptosFingerprint,
   BRIDGE_IMPORT_ERROR,
   SW_BUILD_ID_ERROR,
 } = require('../../../scripts/build-ui.js');
@@ -142,7 +144,10 @@ function addLeptosCrate(root: string): Buffer {
   for (const dir of ['src', 'style', 'build', 'pkg'])
     fs.mkdirSync(path.join(leptos, dir), { recursive: true });
   fs.writeFileSync(path.join(leptos, 'Cargo.toml'), '[package]\nname = "aac-web"\n');
-  fs.writeFileSync(path.join(leptos, 'Cargo.lock'), '# fixture\n');
+  fs.writeFileSync(
+    path.join(leptos, 'Cargo.lock'),
+    'version = 4\n\n[[package]]\nname = "leptos"\nversion = "0.9.0-rc1"\n'
+  );
   fs.writeFileSync(path.join(leptos, 'src', 'lib.rs'), '// fixture\n');
   fs.writeFileSync(path.join(leptos, 'style', 'app.css'), 'body{margin:0}\n'.repeat(80));
   fs.writeFileSync(
@@ -245,6 +250,37 @@ describe('Leptos pages in the UI build', () => {
     expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow(
       'Leptos page source changed after the build'
     );
+  });
+
+  it('requires Cargo.lock to resolve the pinned Leptos version', () => {
+    expect(() =>
+      assertLockedLeptos({ package: [{ name: 'leptos', version: '0.9.0-rc1' }] })
+    ).not.toThrow();
+    expect(() => assertLockedLeptos({ package: [{ name: 'leptos', version: '0.9.0' }] })).toThrow(
+      'must resolve leptos to 0.9.0-rc1'
+    );
+    expect(() => assertLockedLeptos({ package: [] })).toThrow('must resolve leptos');
+  });
+
+  it('refuses a linked crate root, a linked parent folder and a dangling link among the inputs', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-leptos-links-'));
+    roots.push(root);
+    const real = path.join(root, 'real');
+    for (const dir of ['src', 'elsewhere']) fs.mkdirSync(path.join(real, dir), { recursive: true });
+    fs.writeFileSync(path.join(real, 'Cargo.toml'), '[package]\n');
+    fs.writeFileSync(path.join(real, 'src', 'lib.rs'), '// page\n');
+    fs.writeFileSync(path.join(real, 'elsewhere', 'config.toml'), '[build]\n');
+    expect(leptosFingerprint(real).files).toBe(2);
+    // the crate folder itself is a link
+    fs.symlinkSync(real, path.join(root, 'linked'));
+    expect(() => leptosFingerprint(path.join(root, 'linked'))).toThrow('must be a real folder');
+    // .cargo is a link to another folder: path.join would follow it to .cargo/config.toml
+    fs.symlinkSync(path.join(real, 'elsewhere'), path.join(real, '.cargo'));
+    expect(() => leptosFingerprint(real)).toThrow('must not be symlinks');
+    fs.unlinkSync(path.join(real, '.cargo'));
+    // a dangling link is refused, not skipped
+    fs.symlinkSync(path.join(root, 'nowhere.rs'), path.join(real, 'src', 'gone.rs'));
+    expect(() => leptosFingerprint(real)).toThrow('must not be symlinks');
   });
 
   it('builds no pages and adds nothing to the manifest when the crate is absent', () => {

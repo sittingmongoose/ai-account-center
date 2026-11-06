@@ -144,14 +144,19 @@ fn connect_hints(live: Live, delay_ms: u32) {
             let Some(text) = event.data().as_string() else {
                 return;
             };
-            if text.contains("\"status-changed\"") {
+            // a hidden page ignores hints (its reads would keep the server's collectors busy); returning to it reads
+            if text.contains("\"status-changed\"") && visible() {
                 live.reload();
             }
         });
     socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
     on_message.forget();
 
-    let on_open = Closure::<dyn Fn()>::new(move || live.reload());
+    let on_open = Closure::<dyn Fn()>::new(move || {
+        if visible() {
+            live.reload();
+        }
+    });
     socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
     on_open.forget();
 
