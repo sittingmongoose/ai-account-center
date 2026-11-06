@@ -5,6 +5,7 @@ import {
   canonicalModel,
   computeMeasures,
   unitsOf,
+  unknownOutcomes,
 } from '../../../../src/web-server/scoreboard/scoreboard-measures';
 import { median, wilson90 } from '../../../../src/web-server/scoreboard/scoreboard-stats';
 import { run as projectRun, type RunDoc } from '../../../../src/web-server/status/run-schema';
@@ -350,5 +351,127 @@ describe('measures', () => {
     expect(measure('silent-misses', [doc('A', { metrics: final }), doc('B')]).preliminary).toBe(
       false
     );
+  });
+});
+
+describe('outcomes', () => {
+  const measureDefs = new Map<string, CatalogMeasure>(
+    ['reliability', 'overclaim', 'speed', 'cost'].map((id) => [
+      id,
+      {
+        id,
+        label: id,
+        better: 'higher',
+        unit: 'share',
+        description: null,
+        metric: null,
+        preliminaryUnless: null,
+      },
+    ])
+  );
+  const measured = (runs: RunDoc[]) =>
+    computeMeasures(runs, 'task', [...measureDefs.keys()], measureDefs, buildReviewIndex(runs));
+
+  it('only done is a success; a new failure word counts against; anything else is neither', () => {
+    const runs = [
+      doc('a', { outcome: 'done', cost: { credits: 1 } }),
+      doc('b', { outcome: 'DONE', cost: { credits: 1 } }),
+      ...['timeout', 'aborted', 'killed', 'failure', 'interrupted', 'abandoned', 'timed_out'].map(
+        (outcome, i) => doc(`f${i}`, { outcome, wallSeconds: 1 })
+      ),
+      doc('p', { outcome: 'partial', wallSeconds: 9999, cost: { credits: 500 } }),
+      doc('q', { outcome: 'blocked', wallSeconds: 9999, cost: { credits: 500 } }),
+      doc('r', { outcome: 'who-knows', wallSeconds: 9999, cost: { credits: 500 } }),
+    ];
+    const out = measured(runs);
+    expect(out.reliability.of).toBe(2);
+    expect(out.reliability.per).toBe(9);
+    expect(out.reliability.n).toBe(9);
+    expect(out.speed.value).toBe(100);
+    expect(out.speed.n).toBe(2);
+    expect(out.cost.n).toBe(2);
+    expect(out.cost.value).toBe(1);
+  });
+
+  it('counts only done as a claim for overclaim', () => {
+    const runs = [
+      doc('a', { outcome: 'done' }),
+      doc('p', { outcome: 'partial' }),
+      reviewOf('ra', 'a'),
+      reviewOf('rp', 'p', { overturned: true, verdict: 'fail' }),
+    ];
+    const out = measured(runs);
+    expect(out.overclaim.per).toBe(1);
+    expect(out.overclaim.of).toBe(0);
+  });
+
+  it('names unknown outcomes for the runs Source', () => {
+    expect([
+      ...unknownOutcomes([
+        doc('a', { outcome: 'done' }),
+        doc('f', { outcome: 'failed' }),
+        doc('p', { outcome: 'Partial' }),
+        doc('q', { outcome: 'partial' }),
+      ]),
+    ]).toEqual([['partial', 2]]);
+  });
+});
+
+describe('a review without overturned', () => {
+  it('refuses the run instead of reading it as a pass', () => {
+    const review = {
+      of: `${W}--a`,
+      verdict: 'fail',
+      findings: { high: 1, medium: 0, low: 0 },
+      by: null,
+    };
+    expect(() => doc('r', { task: { id: 'r', type: 'review', title: 'R' }, review })).toThrow(
+      'review.overturned'
+    );
+    expect(() =>
+      doc('r', {
+        task: { id: 'r', type: 'review', title: 'R' },
+        review: { ...review, overturned: 'no' },
+      })
+    ).toThrow('review.overturned');
+  });
+
+  it('keeps the documented scoring: fail with overturned false is not an overturn', () => {
+    const runs = [doc('a'), reviewOf('r', 'a', { verdict: 'fail', overturned: false })];
+    const defs = new Map<string, CatalogMeasure>([
+      [
+        'quality',
+        {
+          id: 'quality',
+          label: 'q',
+          better: 'higher',
+          unit: 'share',
+          description: null,
+          metric: null,
+          preliminaryUnless: null,
+        },
+      ],
+    ]);
+    const quality = computeMeasures(
+      runs.slice(0, 1),
+      'task',
+      ['quality'],
+      defs,
+      buildReviewIndex(runs)
+    );
+    expect(quality.quality.value).toBe(1);
+  });
+});
+
+describe('amounts', () => {
+  it('refuses negatives', () => {
+    for (const fields of [
+      { wallSeconds: -1 },
+      { cost: { credits: -1 } },
+      { cost: { usd: -0.5 } },
+      { cost: { estimate: { source: 's', method: 'm', credits: -1 } } },
+      { task: { id: 'x', type: 'build', title: 'X', size: { tasks: -1 } } },
+    ])
+      expect(() => doc('n', fields)).toThrow('not valid');
   });
 });

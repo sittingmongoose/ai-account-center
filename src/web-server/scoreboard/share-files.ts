@@ -59,44 +59,51 @@ export class ShareFiles<T> {
     entry.statKey = statKey;
   }
 
-  /** Stat and, when changed, read one listed file. `absolute` is on disk, `file` is its report path. */
-  async visit(absolute: string, file: string, seen: Set<string>): Promise<void> {
+  /**
+   * Stat and, when changed, read one listed file. `absolute` is on disk, `file` is its report path.
+   * Resolves the file's size, for a caller that caps the bytes held per scan.
+   */
+  async visit(absolute: string, file: string, seen: Set<string>): Promise<number> {
     const { fs, capBytes, parse, seq, now } = this.options;
     let statKey: string;
     let size: number;
     try {
       const stat = await fs().stat(absolute);
-      if (!stat.isFile()) return;
+      seen.add(file);
+      if (!stat.isFile()) {
+        this.setProblem(file, 'is not a regular file');
+        return 0;
+      }
       statKey = `${stat.size}:${stat.mtimeMs}:${stat.ino}:${stat.ctimeMs}`;
       size = stat.size;
     } catch (error) {
       seen.add(file);
       if (!isTransientShareError(error)) this.setProblem(file, 'could not be read');
-      return;
+      return 0;
     }
-    seen.add(file);
-    if (this.entries.get(file)?.statKey === statKey) return;
+    if (this.entries.get(file)?.statKey === statKey) return size;
     if (size > capBytes) {
       this.setProblem(file, `larger than the ${capBytes / 1024} KB cap`, statKey);
-      return;
+      return 0;
     }
     let bytes: Buffer;
     try {
-      bytes = await fs().readFile(absolute);
+      bytes = await fs().readFile(absolute, capBytes);
     } catch (error) {
       if (!isTransientShareError(error)) this.setProblem(file, 'could not be read');
-      return;
+      return size;
     }
     const parsed = parse(bytes, file);
     if (!parsed.ok) {
       this.setProblem(file, parsed.reason, statKey);
-      return;
+      return size;
     }
     const entry = this.entry(file);
     entry.statKey = statKey;
     entry.problem = null;
-    if (entry.good && seq && seq(parsed.value) < seq(entry.good.doc)) return;
+    if (entry.good && seq && seq(parsed.value) < seq(entry.good.doc)) return size;
     entry.good = { file, doc: parsed.value, firstSeenAt: now() };
+    return size;
   }
 
   /** Marks every file under a folder that could not be listed: not listed is not withdrawn. */

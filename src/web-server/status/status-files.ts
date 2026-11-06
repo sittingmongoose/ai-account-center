@@ -7,16 +7,19 @@
  */
 import fs from 'fs';
 import path from 'path';
+import type { Writable } from 'stream';
 import { isWriterFilePath, isWriterName } from './report-schema';
+import { openRegularFile } from './share-read';
 
 export const MAX_CARD_IMAGE_BYTES = 2 * 1024 * 1024;
 export const MAX_CARD_VIDEO_BYTES = 50 * 1024 * 1024;
 const SNIFF_BYTES = 64;
+const SEND_CHUNK_BYTES = 64 * 1024;
 
 export type CardFileType = 'image/png' | 'image/jpeg' | 'image/webp' | 'video/mp4' | 'video/webm';
 
 export type CardFile =
-  | { ok: true; contentType: CardFileType; file: string; size: number }
+  | { ok: true; contentType: CardFileType; handle: fs.promises.FileHandle; size: number }
   | { ok: false; reason: 'not_found' | 'too_large' | 'not_media' };
 
 /** ISO base media brands that are still images, not video. */
@@ -50,29 +53,81 @@ export function sniffMedia(bytes: Buffer): CardFileType | null {
   return null;
 }
 
-/** Finds, confines and types one writer file; the bytes are streamed by the route. */
+/**
+ * Finds, confines and types one writer file. On success the caller owns the open handle and closes
+ * it: the bytes served come from the same file that was sniffed, even if the path is swapped later.
+ */
 export async function openCardFile(root: string, writer: string, file: string): Promise<CardFile> {
   if (!isWriterName(writer) || !isWriterFilePath(file)) return { ok: false, reason: 'not_found' };
   try {
-    const base = await fs.promises.realpath(path.join(root, 'v1', 'writers', writer));
+    const writersDir = await fs.promises.realpath(path.join(root, 'v1', 'writers'));
+    const base = await fs.promises.realpath(path.join(writersDir, writer));
+    // A writer folder that is itself a link would make its target the folder files are confined to.
+    if (base !== path.join(writersDir, writer)) return { ok: false, reason: 'not_found' };
     const target = await fs.promises.realpath(path.join(base, ...file.split('/')));
     if (!target.startsWith(base + path.sep)) return { ok: false, reason: 'not_found' };
-    const handle = await fs.promises.open(target, 'r');
+    const { handle, stat } = await openRegularFile(target);
+    let keep = false;
     try {
-      const stat = await handle.stat();
-      if (!stat.isFile()) return { ok: false, reason: 'not_found' };
       const head = Buffer.alloc(SNIFF_BYTES);
       const { bytesRead } = await handle.read(head, 0, SNIFF_BYTES, 0);
       const contentType = sniffMedia(head.subarray(0, bytesRead));
       if (!contentType) return { ok: false, reason: 'not_media' };
       const max = contentType.startsWith('video/') ? MAX_CARD_VIDEO_BYTES : MAX_CARD_IMAGE_BYTES;
       if (stat.size > max) return { ok: false, reason: 'too_large' };
-      return { ok: true, contentType, file: target, size: stat.size };
+      keep = true;
+      return { ok: true, contentType, handle, size: stat.size };
     } finally {
-      await handle.close();
+      if (!keep) await handle.close();
     }
   } catch {
     return { ok: false, reason: 'not_found' };
+  }
+}
+
+/**
+ * Writes bytes `start..end` of an open file to the response and ends it. A file that shrank since
+ * its size was read cannot fill the `Content-Length` already promised, so the response is destroyed:
+ * the client sees a failed transfer, never a short file presented as whole.
+ */
+export async function sendFileBytes(
+  handle: fs.promises.FileHandle,
+  res: Writable,
+  start: number,
+  end: number
+): Promise<void> {
+  let closed = false;
+  const onClose = () => {
+    closed = true;
+  };
+  res.once('close', onClose);
+  try {
+    let position = start;
+    while (position <= end && !closed) {
+      // A fresh buffer each time: a queued write keeps a reference to the one it was given.
+      const chunk = Buffer.allocUnsafe(Math.min(SEND_CHUNK_BYTES, end - position + 1));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) {
+        res.destroy();
+        return;
+      }
+      position += bytesRead;
+      if (!res.write(chunk.subarray(0, bytesRead)) && !closed)
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            res.off('drain', done);
+            res.off('close', done);
+            resolve();
+          };
+          res.once('drain', done);
+          res.once('close', done);
+        });
+    }
+    if (!closed) res.end();
+  } catch {
+    res.destroy();
+  } finally {
+    res.off('close', onClose);
   }
 }
 

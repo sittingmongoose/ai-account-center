@@ -26,7 +26,7 @@ Accounts are not part of the identity (they change cost, not the model); they st
    not start empty. Imports are reviewed like any other data change.
 4. **Catalog** (`<reports>/v1/catalog/`, owned by AAC, edited as data). The seeds are in
    `docs/agent-reports/catalog/` (packaged with the server); at server start AAC writes a seed only where the share
-   lists no such file (temporary dot file, then rename), never over one, so edits on the share stay. A catalog file
+   lists no such file (temporary dot file, then a hard link, which fails on a file that appeared meanwhile), never over one, so edits on the share stay. A catalog file
    keeps its last good copy when it later fails; with no good copy it shows as a Source problem and its kind stays
    empty (`minRuns` falls back to 5). Refusals are fixed words naming the field, never the file's text.
    Each file is `{ "schema": "catalog-<kind>@1", "<kind>": [...] }`:
@@ -50,22 +50,30 @@ Same share rules as the Status reader (`docs/status-tab.md`, Reading rules): eve
 ENOENT and ESTALE keep the last good copy and retry, a file absent from its listing stays for 2 minutes, temporary (dot)
 files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, only changed files are read. The highest
 `seq` per run id wins, across date folders. A file that does not read is counted and named in the runs Source, never
-dropped silently. A run with no `model.id` or no `task.type` is not scored and is counted there too; a task type the
+dropped silently. One scan reads at most 1,000 writer folders, 5,000 run files and 64 MB (over a limit the newest date
+folders are kept); the rest is named in the runs Source (`limits/run-writers`, `limits/runs`). More writers than the
+Status reader: an old writer's runs are still history. A review with no boolean `review.overturned`, or a negative
+`wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too; a task type the
 catalog does not list is not scored and is named in the catalog Source (a model it does not list is scored, labelled by
 its id, `inCatalog: false`, and named there).
 
 ## Measures (v1)
-Computed per column (see the view) within one task type, from that column's runs only. "Failed" means an outcome of
-`failed`, `cancelled`, `canceled`, `did-not-start`, `not-started`, `error`, `crashed` or `timed-out`; the format has no
-reason field, so a failure cannot be told apart from an owner's cancel.
+Computed per column (see the view) within one task type, from that column's runs only. `done` is the only success.
+"Failed" means an outcome of `failed`, `failure`, `cancelled`, `canceled`, `did-not-start`, `not-started`, `error`,
+`crashed`, `timed-out`, `timeout`, `aborted`, `killed`, `interrupted` or `abandoned` (any case, `_` reads as `-`); the
+format has no reason field, so a failure cannot be told apart from an owner's cancel. Any other outcome (`partial`,
+`blocked`, a word this server does not know) is **unknown**: it says neither, so the run is left out of speed, cost,
+reliability and overclaim, and the runs Source names each such outcome with its count.
 - **speed**: median wall seconds per unit (`wallSeconds / task.size.<unit>s`) with its range, and `perTask`, the median
-  wall seconds per run. Failed runs and runs with no known size do not count. A run with no `task.size.tasks` is one
+  wall seconds per run. Only `done` runs with a known size count. A run with no `task.size.tasks` is one
   task in a task type counted in `task`; other units stay unknown.
 - **quality**: share of items whose latest decisive blind review did not overturn them
   (`review.overturned == false`), 90% Wilson interval. An item is one `project` + `task.id`, so fix rounds on it count
   once. `rounds` is the median reviews until the first pass. A latest review that is a disputed overturn leaves the item
   out of the share and adds to `disputed`; `cannot-verify` decides nothing and adds to `cannotVerify`. `overturns` lists
   every overturn: run, review, reviewer model (`review.by`, else the review run's model), disputed, first evidence link.
+  `overturned` (the reviewer found the work wrong) decides, not `verdict`: a `fail` with `overturned: false` is not an
+  overturn. `overturned` is required: a review without it is refused rather than read as a pass.
 - **Review rule:** a review is a run with `task.type: "review"` whose `review.of` names a known run and which did not
   end before that run. The format has no "blind" field: every such review counts as blind, so a reporter must not
   report a non-blind check as a review. Others are ignored and counted in the runs Source.
@@ -76,12 +84,12 @@ reason field, so a failure cannot be told apart from an owner's cancel.
   neither fact is not evidence and is left out, so a batch that reports no scope shows unknown, not 0.
 - **cheating**: share of all runs flagged `shortcut`, `cheating`, `fabricated`, `test-weakened` or `false-claim`; every
   flag of every kind is listed in the column's `flags` with its run and evidence, never only counted.
-- **cost**: measured credits over all runs with a known cost and size, per accepted unit (accepted: not failed and not
-  overturned, disputes aside; an unreviewed run counts as accepted). Quota moves per `window` and `usd` are shown apart,
+- **cost**: measured credits over the runs with a known cost, size and outcome (`done` or failed), per accepted unit
+  (accepted: `done` and not overturned, disputes aside; an unreviewed run counts as accepted). Quota moves per `window` and `usd` are shown apart,
   never mixed in. Estimates (`cost.estimate`) sit in `estimate`, `label: "estimate"`, with their methods and sources.
-- **reliability**: share of runs that did not fail.
-- **overclaim**: of the runs reported done with a standing decisive review, the share overturned; disputed overturns are
-  left out. The format has no field for claimed checks, so outcome `done` is the claim.
+- **reliability**: of the runs that are `done` or failed, the share that are `done`.
+- **overclaim**: of the runs with outcome `done` and a standing decisive review, the share overturned; disputed overturns are
+  left out. The format has no field for claimed checks, so outcome `done` is the claim, and no other outcome counts.
 - **Metric measures** (catalog `metric: { of, per }`, such as Scout's **facts kept** and **verdict drift**): Σof / Σper
   over the runs where both are known and `of >= 0`, `per > 0`, with a Wilson interval over the per-sum; `n` is runs.
   Items in a run are not independent, so read the interval as a lower bound on the uncertainty.

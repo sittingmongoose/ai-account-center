@@ -17,7 +17,7 @@ import { randomBytes, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
-import { withDeadline } from '../../utils/settle-deadline';
+import { DeadlineExceededError, withDeadline } from '../../utils/settle-deadline';
 import { agentReportsRoot } from './agent-reports-reader';
 import {
   DOORBELL_OFF_DETAIL,
@@ -57,6 +57,7 @@ import {
   type CardDoc,
   type ParsedReport,
 } from './report-schema';
+import { readRegularFile } from './share-read';
 
 export * from './answer-entries';
 export {
@@ -69,7 +70,47 @@ export {
 
 /** Retries of a failed share write, summary or ring before the history says it gave up. */
 export const MAX_DELIVERY_ATTEMPTS = 20;
-const SHARE_DEADLINE_MS = 10_000;
+
+/** How long each step may take before the share or the doorbell counts as hung. */
+const DEFAULT_TIMING = {
+  /** One signed file (with the public keys) reaching the share. */
+  shareMs: 10_000,
+  /** One fresh read of a card. */
+  readMs: 5_000,
+  /** One whole send, inside the serial queue: 50 entries on a hung share still end. */
+  sendBudgetMs: 30_000,
+  /** One retry pass, including its share writes and rings. */
+  retryBudgetMs: 45_000,
+  /** One ring: pm-mail's own 30 s timeout and its kill grace, so this only fires on a lost one. */
+  ringMs: 40_000,
+};
+export type AnswerTiming = typeof DEFAULT_TIMING;
+
+/** The client ids a duplicate send is recognised by: the last 200, for at most a day. */
+const MAX_REMEMBERED_SENDS = 200;
+const REMEMBER_SEND_MS = 24 * 60 * 60 * 1000;
+
+const SUPERSEDED_DETAIL =
+  'Not delivered: a newer answer to this card replaced this one before it reached the share.';
+const SHARE_UNAVAILABLE_DETAIL = 'The reports share is not available.';
+
+/** The share's `v1` folder is not there: not mounted, most likely. Nothing was created. */
+class ShareUnavailableError extends Error {}
+/** The write was abandoned just before its rename: it is too late or no longer wanted. */
+class ShareWriteDroppedError extends Error {}
+
+/** Time left, on the wall clock: a test's frozen `now` must not make a budget endless. */
+function startBudget(ms: number) {
+  const ends = Date.now() + ms;
+  let spent = false;
+  return {
+    left: () => (spent ? 0 : Math.max(0, ends - Date.now())),
+    spend: () => {
+      spent = true;
+    },
+  };
+}
+type Budget = ReturnType<typeof startBudget>;
 
 export function statusStoreDir(): string {
   return path.join(getCcsDir(), 'status');
@@ -111,9 +152,32 @@ export interface AnswerDelivery {
   doorbell: StepState;
 }
 
-/** Temporary dot file in the same folder, flushed, then renamed over the target (async: a share can hang). */
-async function writeAtomic(file: string, body: string): Promise<void> {
-  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+/**
+ * Creates the folders from `v1` down to `dir`, one level at a time and never `v1` or its parents, so
+ * a share that goes away mid-write cannot grow a local folder where its mount point was.
+ */
+async function mkdirBelow(v1: string, dir: string): Promise<void> {
+  let current = v1;
+  for (const segment of path.relative(v1, dir).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    await fs.promises.mkdir(current).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error;
+    });
+  }
+}
+
+/**
+ * Temporary dot file in the same folder, flushed, then renamed over the target (async: a share can
+ * hang). `proceed` is asked again just before the rename: a share that hung for a while may wake up
+ * after the caller has given up or a newer record has been written.
+ */
+async function writeAtomic(
+  v1: string,
+  file: string,
+  body: string,
+  proceed: () => boolean
+): Promise<void> {
+  await mkdirBelow(v1, path.dirname(file));
   const temp = path.join(
     path.dirname(file),
     `.${path.basename(file)}.tmp-${randomBytes(6).toString('hex')}`
@@ -126,6 +190,7 @@ async function writeAtomic(file: string, body: string): Promise<void> {
     } finally {
       await handle.close();
     }
+    if (!proceed()) throw new ShareWriteDroppedError();
     await fs.promises.rename(temp, file);
   } catch (error) {
     await fs.promises.rm(temp, { force: true }).catch(() => undefined);
@@ -159,6 +224,8 @@ function stepFrom(record: Record<string, unknown>, before: StepState): StepState
 export function deliveryView(entry: AnswerHistoryEntry): AnswerDelivery {
   const { share, doorbell } = entry;
   const base = { share, doorbell };
+  if (share.state === 'skipped')
+    return { ...base, state: 'failed', at: share.at, detail: share.detail };
   if (share.state === 'failed')
     return {
       ...base,
@@ -167,7 +234,9 @@ export function deliveryView(entry: AnswerHistoryEntry): AnswerDelivery {
       detail:
         share.attempts >= MAX_DELIVERY_ATTEMPTS
           ? `The signed copy could not be written to the share after ${share.attempts} attempts.`
-          : 'The signed copy could not be written to the share yet; retrying.',
+          : share.detail === SHARE_UNAVAILABLE_DETAIL
+            ? 'The reports share is not available, so the signed copy is not written yet; retrying.'
+            : 'The signed copy could not be written to the share yet; retrying.',
     };
   if (doorbell.state === 'failed')
     return {
@@ -198,6 +267,7 @@ export interface StatusAnswersDeps {
   now?: () => number;
   /** Called after any change the page shows (a new answer, a delivery step). */
   onChange?: () => void;
+  timing?: Partial<AnswerTiming>;
 }
 
 const RECORD_KINDS: readonly string[] = ['answer', 'note', 'object', 'done'];
@@ -210,8 +280,22 @@ export class StatusAnswers {
   private retrying = false;
   /** Records whose ring is running now, so a retry never rings twice at once. */
   private readonly ringing = new Set<string>();
+  /** Client send id -> what that send answered, oldest first. Never the server's own batch id. */
+  private readonly replays = new Map<string, { at: number; results: EntryResult[] }>();
+  private readonly timing: AnswerTiming;
 
-  constructor(private readonly deps: StatusAnswersDeps) {}
+  constructor(private readonly deps: StatusAnswersDeps) {
+    this.timing = { ...DEFAULT_TIMING, ...deps.timing };
+  }
+
+  /** A hint to the page; a listener that throws must not cost a record its result. */
+  private notifyChange(): void {
+    try {
+      this.deps.onChange?.();
+    } catch {
+      /* Only a hint. */
+    }
+  }
 
   private now(): number {
     return (this.deps.now ?? Date.now)();
@@ -282,6 +366,12 @@ export class StatusAnswers {
             : [],
           summary: { ...PENDING },
         });
+        if (typeof record.clientSendId === 'string' && Array.isArray(record.results))
+          this.remember(
+            record.clientSendId,
+            typeof record.at === 'string' ? Date.parse(record.at) : 0,
+            record.results as EntryResult[]
+          );
       } else if (record.type === 'delivery' && typeof record.id === 'string') {
         if (record.step === 'summary') {
           const send = this.sends.get(record.id);
@@ -342,53 +432,118 @@ export class StatusAnswers {
     const at = new Date(this.now()).toISOString();
     this.record({ type: 'delivery', id: entry.id, step, state, at, detail });
     entry[step] = { state, at, detail, attempts: entry[step].attempts + 1 };
-    this.deps.onChange?.();
+    this.notifyChange();
   }
 
-  /** One signed file under `<reports>/v1/answers/`, after making sure both public key files are current. */
-  private async writeShareFile(name: string, body: string): Promise<void> {
+  private remember(clientSendId: string, at: number, results: EntryResult[]): void {
+    this.replays.delete(clientSendId);
+    this.replays.set(clientSendId, { at, results });
+    for (const oldest of this.replays.keys()) {
+      if (this.replays.size <= MAX_REMEMBERED_SENDS) break;
+      this.replays.delete(oldest);
+    }
+  }
+
+  /** What an earlier send with this client id answered, while it is still remembered. */
+  private replayOf(clientSendId: string): EntryResult[] | null {
+    this.list();
+    const held = this.replays.get(clientSendId);
+    return held && this.now() - held.at < REMEMBER_SEND_MS ? held.results : null;
+  }
+
+  /**
+   * One signed file under `<reports>/v1/answers/`, after making sure both public key files are
+   * current. The share's `v1` folder must already exist. A write that outlives its deadline is
+   * dropped before its rename, so it can never land over what was written since.
+   */
+  private async writeShareFile(
+    name: string,
+    body: string,
+    limitMs: number,
+    wanted: () => boolean = () => true
+  ): Promise<void> {
     const v1 = path.join(this.reportsRoot(), 'v1');
+    let expired = false;
+    const proceed = () => !expired && wanted();
     await withDeadline(
       (async () => {
+        const stat = await fs.promises.stat(v1).catch(() => null);
+        if (!stat?.isDirectory()) throw new ShareUnavailableError();
         const key = this.answerKey();
         // Verifiers try keys/<keyId>.pub first, so a rotation keeps old answers checkable.
         for (const file of [
           path.join(v1, 'keys', 'aac-answers.pub'),
           path.join(v1, 'keys', `${key.keyId}.pub`),
         ]) {
-          const current = await fs.promises.readFile(file, 'utf8').catch(() => '');
-          if (current !== key.publicKeyPem) await writeAtomic(file, key.publicKeyPem);
+          const current = await readRegularFile(file, 64 * 1024)
+            .then((bytes) => bytes.toString('utf8'))
+            .catch(() => '');
+          if (current !== key.publicKeyPem) await writeAtomic(v1, file, key.publicKeyPem, proceed);
         }
-        await writeAtomic(path.join(v1, 'answers', name), body);
+        await writeAtomic(v1, path.join(v1, 'answers', name), body, proceed);
       })(),
-      SHARE_DEADLINE_MS,
-      undefined,
+      limitMs,
+      () => {
+        expired = true;
+      },
       'Status answer share write'
     );
   }
 
+  /**
+   * Whether a later record closes the same card. Answers and dones share one file, `<card>.json`, so
+   * writing this record now would put the older answer back over the newer one.
+   */
+  private superseded(entry: AnswerHistoryEntry): boolean {
+    if (!CLOSING_KINDS.has(entry.answer.kind)) return false;
+    const all = this.list();
+    return all
+      .slice(all.indexOf(entry) + 1)
+      .some(
+        (later) =>
+          CLOSING_KINDS.has(later.answer.kind) && later.answer.cardId === entry.answer.cardId
+      );
+  }
+
+  private markSuperseded(entry: AnswerHistoryEntry): void {
+    this.recordStep(entry, 'share', 'skipped', SUPERSEDED_DETAIL);
+    if (entry.doorbell.state !== 'done')
+      this.recordStep(entry, 'doorbell', 'skipped', SUPERSEDED_DETAIL);
+  }
+
   /** Writes one record's signed copy to the share. */
-  private async writeShare(entry: AnswerHistoryEntry): Promise<boolean> {
+  private async writeShare(entry: AnswerHistoryEntry, limitMs: number): Promise<boolean> {
+    if (this.superseded(entry)) {
+      this.markSuperseded(entry);
+      return false;
+    }
     try {
       await this.writeShareFile(
         shareFileName(entry.answer, entry.id),
-        `${JSON.stringify(entry.answer, null, 2)}\n`
+        `${JSON.stringify(entry.answer, null, 2)}\n`,
+        limitMs,
+        () => !this.superseded(entry)
       );
       this.recordStep(entry, 'share', 'done', 'Signed copy written to the share.');
       return true;
-    } catch {
-      this.recordStep(
-        entry,
-        'share',
-        'failed',
-        'The signed copy could not be written to the share.'
-      );
+    } catch (error) {
+      if (error instanceof ShareWriteDroppedError && this.superseded(entry))
+        this.markSuperseded(entry);
+      else
+        this.recordStep(
+          entry,
+          'share',
+          'failed',
+          error instanceof ShareUnavailableError
+            ? SHARE_UNAVAILABLE_DETAIL
+            : 'The signed copy could not be written to the share.'
+        );
       return false;
     }
   }
 
   /** Writes a send's signed summary to `answers/batches/<sendId>.json`. */
-  private async writeSummary(send: SendRecord): Promise<boolean> {
+  private async writeSummary(send: SendRecord, limitMs: number): Promise<boolean> {
     const byId = new Map(this.list().map((entry) => [entry.id, entry]));
     const answers = send.entryIds.flatMap((id) => {
       const entry = byId.get(id);
@@ -404,7 +559,8 @@ export class StatusAnswers {
       );
       await this.writeShareFile(
         `batches/${send.sendId}.json`,
-        `${JSON.stringify(signed, null, 2)}\n`
+        `${JSON.stringify(signed, null, 2)}\n`,
+        limitMs
       );
     } catch {
       state = 'failed';
@@ -420,7 +576,7 @@ export class StatusAnswers {
    * before sends) and by the card's pm-mail name. A record whose signed copy is not on the share
    * yet waits for its retry.
    */
-  private async ringGroups(entries: AnswerHistoryEntry[]): Promise<void> {
+  private async ringGroups(entries: AnswerHistoryEntry[], budget?: Budget): Promise<void> {
     const groups = new Map<
       string,
       { to: string; sendId: string | null; entries: AnswerHistoryEntry[] }
@@ -441,9 +597,13 @@ export class StatusAnswers {
       group.entries.push(entry);
       groups.set(key, group);
     }
-    for (const group of groups.values()) {
-      for (const entry of group.entries) this.ringing.add(entry.id);
-      try {
+    // Every group is claimed before the first await, so a retry starting during the first ring
+    // cannot ring a later group as well.
+    const claimed = [...groups.values()].flatMap((group) => group.entries);
+    for (const entry of claimed) this.ringing.add(entry.id);
+    try {
+      for (const group of groups.values()) {
+        if (budget && budget.left() <= 0) break;
         const records: SentRecord[] = group.entries.map((entry) => ({
           answer: entry.answer,
           card: entry.card,
@@ -451,19 +611,24 @@ export class StatusAnswers {
         }));
         let result: RingResult;
         try {
-          result = await (this.deps.doorbell ?? pmMailDoorbell())(
-            group.to,
-            ringSubject(records),
-            ringBody(group.sendId, records, this.answerKey().keyId)
+          result = await withDeadline(
+            (this.deps.doorbell ?? pmMailDoorbell())(
+              group.to,
+              ringSubject(records),
+              ringBody(group.sendId, records, this.answerKey().keyId)
+            ),
+            this.timing.ringMs,
+            undefined,
+            'Status answer ring'
           );
         } catch {
           result = { ok: false, detail: 'pm-mail failed.' };
         }
         for (const entry of group.entries)
           this.recordStep(entry, 'doorbell', result.ok ? 'done' : 'failed', result.detail);
-      } finally {
-        for (const entry of group.entries) this.ringing.delete(entry.id);
       }
+    } finally {
+      for (const entry of claimed) this.ringing.delete(entry.id);
     }
   }
 
@@ -475,7 +640,8 @@ export class StatusAnswers {
     device: string,
     via: UnsignedAnswer['via'],
     kind: AnswerKind,
-    sendId: string
+    sendId: string,
+    budget: Budget
   ): Promise<AnswerHistoryEntry | null> {
     const unsigned: UnsignedAnswer = {
       schema: ANSWER_SCHEMA,
@@ -513,15 +679,34 @@ export class StatusAnswers {
       return null;
     }
     this.list().push(entry);
-    this.deps.onChange?.();
-    await this.writeShare(entry);
+    this.notifyChange();
+    // Out of time, the record stays pending and the retry writes it: it is already stored.
+    const left = budget.left();
+    if (left > 0) await this.writeShare(entry, Math.min(this.timing.shareMs, left));
     return entry;
   }
 
-  /** The card if it is open on disk at exactly this version and not yet answered. */
-  private async openCard(id: string, seq: number, sha256: string) {
+  /**
+   * The card if it is open on disk at exactly this version and not yet answered, null if it is not,
+   * `no_answer` if the share cannot say in time. A hung share uses up the send's budget at once: the
+   * entries after this one would only wait for the same share.
+   */
+  private async openCard(id: string, seq: number, sha256: string, budget: Budget) {
     if (!isCardId(id)) return null;
-    const parsed = await this.deps.readCard(id);
+    const left = budget.left();
+    if (left <= 0) return 'no_answer' as const;
+    let parsed: ParsedReport<CardDoc> | null;
+    try {
+      parsed = await withDeadline(
+        this.deps.readCard(id),
+        Math.min(this.timing.readMs, left),
+        undefined,
+        'Status card read'
+      );
+    } catch (error) {
+      if (error instanceof DeadlineExceededError) budget.spend();
+      return 'no_answer' as const;
+    }
     if (!parsed || parsed.doc.state !== 'open') return null;
     if (parsed.doc.seq !== seq || parsed.sha256 !== sha256) return null;
     if (this.isAnswered(id, seq, sha256)) return null;
@@ -533,14 +718,16 @@ export class StatusAnswers {
     raw: unknown,
     device: string,
     sendId: string,
-    recorded: AnswerHistoryEntry[]
+    recorded: AnswerHistoryEntry[],
+    budget: Budget
   ): Promise<EntryResult> {
     const entry = parseAnswerEntry(raw);
     const named = (raw as { cardId?: unknown } | null)?.cardId;
     if (!entry) return refused(isCardId(named) ? named : null, 'invalid_entry');
     const note = normalizeNote(entry.note);
     if (note === null) return refused(entry.cardId, 'invalid_note');
-    const parsed = await this.openCard(entry.cardId, entry.cardSeq, entry.cardSha256);
+    const parsed = await this.openCard(entry.cardId, entry.cardSeq, entry.cardSha256, budget);
+    if (parsed === 'no_answer') return refused(entry.cardId, 'share_unavailable');
     if (!parsed) return refused(entry.cardId, 'card_changed');
     if (!validChoice(parsed.doc, entry.choice)) return refused(entry.cardId, 'invalid_choice');
     const kind = entryKind(parsed.doc, entry, note);
@@ -560,7 +747,8 @@ export class StatusAnswers {
       device,
       entry.via,
       kind as AnswerKind,
-      sendId
+      sendId,
+      budget
     );
     if (!done) return refused(entry.cardId, 'answer_not_saved');
     recorded.push(done);
@@ -570,13 +758,40 @@ export class StatusAnswers {
   /**
    * An answer set from the deck: each entry validated and recorded on its own, one result per
    * entry in order. Then the signed send summary, then one ring per asker.
+   *
+   * `clientSendId` is the client's retry key, kept apart from `sendId`, the server's own id that
+   * names and signs the batch. The look-up runs inside the queue, so a duplicate that arrives while
+   * the first send is still running waits for it and answers from its results: nothing is recorded,
+   * written or rung again. A send that recorded nothing is not remembered; a retry may yet succeed.
    */
-  async submitSet(entries: unknown[], device: string): Promise<EntryResult[]> {
+  async submitSet(
+    entries: unknown[],
+    device: string,
+    clientSendId: string | null = null
+  ): Promise<EntryResult[]> {
     const sendId = randomUUID();
     const recorded: AnswerHistoryEntry[] = [];
     const results = await this.serial(async () => {
+      const replay = clientSendId ? this.replayOf(clientSendId) : null;
+      if (replay) return replay;
+      const budget = startBudget(this.timing.sendBudgetMs);
       const out: EntryResult[] = [];
-      for (const raw of entries) out.push(await this.recordEntry(raw, device, sendId, recorded));
+      for (const raw of entries) {
+        const before = recorded.length;
+        try {
+          out.push(await this.recordEntry(raw, device, sendId, recorded, budget));
+        } catch {
+          // Whatever went wrong, the other entries still get their answers. A record that exists
+          // says so: its delivery is retried like any other.
+          const named = (raw as { cardId?: unknown } | null)?.cardId;
+          const cardId = isCardId(named) ? named : null;
+          out.push(
+            recorded.length > before
+              ? { cardId, outcome: 'recorded', code: null, error: null }
+              : refused(cardId, 'answer_not_saved')
+          );
+        }
+      }
       if (recorded.length > 0) {
         const send: SendRecord = {
           sendId,
@@ -585,9 +800,19 @@ export class StatusAnswers {
           entryIds: recorded.map((entry) => entry.id),
           summary: { ...PENDING },
         };
-        this.record({ type: 'send', sendId, at: send.at, device, entryIds: send.entryIds });
+        this.record({
+          type: 'send',
+          sendId,
+          at: send.at,
+          device,
+          entryIds: send.entryIds,
+          ...(clientSendId ? { clientSendId, results: out } : {}),
+        });
         this.sends.set(sendId, send);
-        await this.writeSummary(send);
+        if (clientSendId) this.remember(clientSendId, this.now(), out);
+        // Out of time, the summary stays pending and the retry writes it.
+        const left = budget.left();
+        if (left > 0) await this.writeSummary(send, Math.min(this.timing.shareMs, left));
       }
       return out;
     });
@@ -600,20 +825,29 @@ export class StatusAnswers {
     if (this.retrying) return;
     this.retrying = true;
     try {
+      // A hung share spends this pass's budget; what is left waits for the next pass, uncounted.
+      const budget = startBudget(this.timing.retryBudgetMs);
+      const shareLimit = () => Math.min(this.timing.shareMs, budget.left());
       for (const entry of this.list()) {
-        if (entry.share.state !== 'done' && entry.share.attempts < MAX_DELIVERY_ATTEMPTS)
-          await this.serial(() => this.writeShare(entry));
+        if (entry.share.state !== 'pending' && entry.share.state !== 'failed') continue;
+        if (entry.share.attempts >= MAX_DELIVERY_ATTEMPTS) continue;
+        await this.serial(async () => {
+          if (shareLimit() > 0) await this.writeShare(entry, shareLimit());
+        });
       }
       for (const send of this.sendList()) {
         if (send.summary.state !== 'done' && send.summary.attempts < MAX_DELIVERY_ATTEMPTS)
-          await this.serial(() => this.writeSummary(send));
+          await this.serial(async () => {
+            if (shareLimit() > 0) await this.writeSummary(send, shareLimit());
+          });
       }
       await this.ringGroups(
         this.list().filter(
           (entry) =>
             (entry.doorbell.state === 'pending' || entry.doorbell.state === 'failed') &&
             entry.doorbell.attempts < MAX_DELIVERY_ATTEMPTS
-        )
+        ),
+        budget
       );
     } finally {
       this.retrying = false;

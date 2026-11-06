@@ -21,6 +21,8 @@ const REFUSALS = {
   judgement_anchored:
     'This judgement card carries a recommendation, so it cannot be answered until the agent removes it.',
   answer_not_saved: 'The answer could not be saved. Nothing was sent.',
+  share_unavailable:
+    'The reports share did not answer in time, so this card could not be checked. Nothing was recorded for it; try again.',
 } as const;
 
 export type RefusalCode = keyof typeof REFUSALS;
@@ -40,6 +42,16 @@ export function refused(cardId: string | null, code: RefusalCode): EntryResult {
     code,
     error: REFUSALS[code],
   };
+}
+
+const CLIENT_SEND_ID = /^[A-Za-z0-9_-]{16,64}$/;
+
+/**
+ * The client's retry key for a send (the request's `sendId`): a content hash of the entries. It is
+ * only ever a dedupe key, never the server's own batch id that names and signs the send summary.
+ */
+export function isClientSendId(value: unknown): value is string {
+  return typeof value === 'string' && CLIENT_SEND_ID.test(value);
 }
 
 /** The device word for an answer, from the browser's User-Agent. */

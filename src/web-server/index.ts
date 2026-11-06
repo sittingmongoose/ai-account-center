@@ -151,14 +151,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
         if (sendAuthPathError(req, res, 400, 'invalid_json', 'Invalid JSON in request body'))
           return;
-        res.status(400).json({ error: 'Invalid JSON in request body' });
+        res.status(400).json({ error: 'Invalid JSON in request body', code: 'invalid_json' });
         return;
       }
       // body-parser's own 413 would otherwise reach Express's HTML error page.
       if (err.type === 'entity.too.large') {
         if (sendAuthPathError(req, res, 413, 'body_too_large', 'Request body is too large.'))
           return;
-        res.status(413).json({ error: 'Request body is too large.' });
+        res.status(413).json({ error: 'Request body is too large.', code: 'body_too_large' });
         return;
       }
       next(err);

@@ -23,6 +23,7 @@ import {
   DEFAULT_DASHBOARD_TIME_ZONE,
   readDashboardPreferences,
 } from '../services/dashboard-preferences';
+import { ValidationError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { AgentReportsReader, ensureReportsLayout, publishSchemas } from './agent-reports-reader';
 import { DOORBELL_SENDER, StatusAnswers } from './answers';
@@ -32,6 +33,7 @@ import {
   busyBetween,
   commandFailure,
   findExecutable,
+  localMachineId,
   parseBrowserSlots,
   parseSimlockStatus,
   PmMailRegistryReader,
@@ -86,6 +88,8 @@ export interface StatusServiceDeps {
   registryReader?: PmMailRegistryReader;
   answers?: StatusAnswers;
   run?: CommandRunner;
+  /** Which machine row this computer is; by default from its host name. */
+  localMachine?: () => MachineId;
   readLocalMachine?: () => Promise<MachineSample>;
   readRemoteMachine?: (machine: Exclude<MachineId, 'vm'>) => Promise<MachineSample>;
   timeZone?: () => string;
@@ -248,12 +252,17 @@ export class StatusService {
   }
 
   async collectMachines(): Promise<void> {
+    const local = (this.deps.localMachine ?? localMachineId)();
     const read = async (id: MachineId) => {
       try {
+        if (id !== local && id === 'vm')
+          throw new ValidationError('No ssh host is configured for this machine.');
         const sample =
-          id === 'vm'
+          id === local
             ? await (this.deps.readLocalMachine ?? readLocalMachine)()
-            : await (this.deps.readRemoteMachine ?? ((m) => readRemoteMachine(m, this.run())))(id);
+            : await (this.deps.readRemoteMachine ?? ((m) => readRemoteMachine(m, this.run())))(
+                id as Exclude<MachineId, 'vm'>
+              );
         const before = this.machines[id].data;
         const busy = busyBetween(before?.cpuTimes ?? null, sample.cpuTimes);
         this.machines[id] = succeeded({ ...sample, busyPct: busy ?? sample.busyPct }, this.now());

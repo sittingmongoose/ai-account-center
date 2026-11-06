@@ -22,6 +22,7 @@ import {
   type TasksDoc,
   type ThreadDoc,
 } from './report-schema';
+import { readRegularFile } from './share-read';
 
 export const DEFAULT_AGENT_REPORTS_DIR = '/mnt/Cursor/agent-reports';
 
@@ -87,7 +88,7 @@ export async function publishSchemas(
     );
     for (const name of names.sort()) {
       const body = await fs.promises.readFile(path.join(sourceDir, name));
-      const current = await fs.promises.readFile(path.join(target, name)).catch(() => null);
+      const current = await readRegularFile(path.join(target, name), body.length).catch(() => null);
       if (current && current.equals(body)) continue;
       const temp = path.join(target, `.${name}.tmp-${process.pid}-${Date.now()}`);
       try {
@@ -130,6 +131,12 @@ export interface AgentReportsState {
   state: 'ok' | 'missing' | 'error';
   /** The last scan that finished (epoch ms), null before the first. */
   scannedAt: number | null;
+  /**
+   * The latest scan listed `v1/writers` and every writer and `cards/` folder, read every file it
+   * tried (a file it refused for its content is named in `problems` and does not count) and hit no
+   * limit. Only then is a card missing from `cards` known to be gone.
+   */
+  complete: boolean;
   threads: SeenReport<ThreadDoc>[];
   tasks: SeenReport<TasksDoc>[];
   cards: SeenReport<CardDoc>[];
@@ -149,6 +156,8 @@ interface Entry {
   missingSince?: number | null;
 }
 
+const SEQ_WENT_BACK = 'its seq is lower than one already read, so this copy is ignored';
+
 /**
  * A file absent from its folder's listing is kept (last good copy) this long before it counts as
  * removed: a Mac rename-over through SMB is a delete then a rename, and NFS caches the gap.
@@ -158,13 +167,21 @@ export const MISSING_GRACE_MS = 120_000;
 export interface ReaderFs {
   readdir(dir: string): Promise<fs.Dirent[]>;
   stat(file: string): Promise<fs.Stats>;
-  readFile(file: string): Promise<Buffer>;
+  /** Reads a regular file; `capBytes` limits what is held (a larger file comes back over the cap). */
+  readFile(file: string, capBytes: number): Promise<Buffer>;
 }
+
+/**
+ * What one scan reads (docs/status-tab.md, Reading rules), so the share cannot grow the server
+ * without bound. Past a limit the rest is named as a problem; the most recently changed writers are
+ * the ones kept.
+ */
+export const REPORT_LIMITS = { writers: 200, cards: 500, bytes: 64 * 1024 * 1024 };
 
 export const nodeReaderFs: ReaderFs = {
   readdir: (dir) => fs.promises.readdir(dir, { withFileTypes: true }),
   stat: (file) => fs.promises.stat(file),
-  readFile: (file) => fs.promises.readFile(file),
+  readFile: (file, capBytes) => readRegularFile(file, capBytes),
 };
 
 function isMissing(error: unknown): boolean {
@@ -219,6 +236,11 @@ export class AgentReportsReader {
   private boards = new Map<string, number | null>();
   private state: AgentReportsState['state'] = 'missing';
   private scannedAt: number | null = null;
+  private complete = false;
+  /** This scan: a folder or file that could not be read, or a limit reached. */
+  private scanPartial = false;
+  private scanBytes = 0;
+  private overBytes = 0;
   private scanning: Promise<boolean> | null = null;
 
   constructor(
@@ -226,6 +248,7 @@ export class AgentReportsReader {
       root?: () => string;
       now?: () => number;
       fs?: ReaderFs;
+      limits?: Partial<typeof REPORT_LIMITS>;
     } = {}
   ) {}
 
@@ -244,9 +267,14 @@ export class AgentReportsReader {
   /** One rescan; resolves whether anything the view shows changed. Overlapping calls share one scan. */
   scan(): Promise<boolean> {
     if (!this.scanning)
-      this.scanning = this.runScan().finally(() => {
-        this.scanning = null;
-      });
+      this.scanning = this.runScan()
+        .catch((error: unknown) => {
+          this.complete = false;
+          throw error;
+        })
+        .finally(() => {
+          this.scanning = null;
+        });
     return this.scanning;
   }
 
@@ -255,9 +283,14 @@ export class AgentReportsReader {
     const writersDir = path.join(v1, 'writers');
     let changed = false;
     let writers: fs.Dirent[];
+    const limits = { ...REPORT_LIMITS, ...this.options.limits };
+    this.scanPartial = false;
+    this.scanBytes = 0;
+    this.overBytes = 0;
     try {
       writers = await this.fs.readdir(writersDir);
     } catch (error) {
+      this.complete = false;
       // A stale handle on the share: keep everything and try again next scan (the source turns
       // stale if it persists).
       if (
@@ -287,6 +320,7 @@ export class AgentReportsReader {
       const prefix = `writers/${name}/${folder}`;
       for (const key of this.entries.keys()) if (key.startsWith(prefix)) seen.add(key);
     };
+    const names: string[] = [];
     for (const dirent of writers) {
       const name = dirent.name;
       if (name.startsWith('.')) continue;
@@ -295,12 +329,26 @@ export class AgentReportsReader {
         if (showable(name)) folderProblem(`writers/${name}`, 'folder name is not a writer name');
         continue;
       }
+      names.push(name);
+    }
+    const kept = await this.newestWriters(names, writersDir, limits.writers);
+    if (kept.length < names.length) {
+      this.scanPartial = true;
+      folderProblem(
+        'limits/writers',
+        `${names.length - kept.length} writer folders past the limit of ${limits.writers} were not read (the most recently changed are kept)`
+      );
+    }
+    let cardsVisited = 0;
+    let cardsOver = 0;
+    for (const name of kept) {
       const base = path.join(writersDir, name);
       // List the folder first, then read: a listing refreshes the NFS view of a rename-over.
       let listed: Set<string>;
       try {
         listed = new Set((await this.fs.readdir(base)).map((entry) => entry.name));
       } catch (error) {
+        this.scanPartial = true;
         if (!isTransientShareError(error))
           folderProblem(`writers/${name}`, 'folder could not be listed');
         keepWriter(name);
@@ -319,19 +367,39 @@ export class AgentReportsReader {
       try {
         cards = await this.fs.readdir(path.join(base, 'cards'));
       } catch (error) {
+        this.scanPartial = true;
         if (!isTransientShareError(error))
           folderProblem(`writers/${name}/cards`, 'folder could not be listed');
         // A listing failure is not a withdrawal: keep the cards already known.
         keepWriter(name, 'cards/');
       }
-      for (const card of cards) {
+      for (const card of [...cards].sort((a, b) => a.name.localeCompare(b.name))) {
         if (card.name.startsWith('.') || !card.name.endsWith('.json') || !card.isFile()) continue;
         const id = card.name.slice(0, -'.json'.length);
         const rel = `writers/${name}/cards/${card.name}`;
         if (!showable(card.name)) continue;
+        if (cardsVisited >= limits.cards) {
+          cardsOver += 1;
+          continue;
+        }
+        cardsVisited += 1;
         if (await this.visit(path.join(base, 'cards', card.name), rel, 'card', name, id, seen))
           changed = true;
       }
+    }
+    if (cardsOver > 0) {
+      this.scanPartial = true;
+      folderProblem(
+        'limits/cards',
+        `${cardsOver} card files past the limit of ${limits.cards} were not read`
+      );
+    }
+    if (this.overBytes > 0) {
+      this.scanPartial = true;
+      folderProblem(
+        'limits/bytes',
+        `${this.overBytes} files past the limit of ${limits.bytes / (1024 * 1024)} MB were not read`
+      );
     }
     const now = this.now();
     for (const [key, entry] of [...this.entries]) {
@@ -350,7 +418,24 @@ export class AgentReportsReader {
     for (const [key, value] of folderProblems) this.folderProblems.set(key, value);
     if (await this.statBoards()) changed = true;
     this.scannedAt = this.now();
+    this.complete = !this.scanPartial;
     return changed;
+  }
+
+  /** At most `limit` writers: all of them when they fit, else the folders changed most recently. */
+  private async newestWriters(names: string[], dir: string, limit: number): Promise<string[]> {
+    if (names.length <= limit) return names;
+    const dated = await Promise.all(
+      names.map(async (name) => {
+        try {
+          return { name, mtime: (await this.fs.stat(path.join(dir, name))).mtimeMs };
+        } catch {
+          return { name, mtime: 0 };
+        }
+      })
+    );
+    dated.sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name));
+    return dated.slice(0, limit).map((row) => row.name);
   }
 
   /** Stat and, when changed, read one file. Resolves whether it changed what the view shows. */
@@ -367,11 +452,20 @@ export class AgentReportsReader {
       stat = await this.fs.stat(file);
     } catch (error) {
       seen.add(rel);
+      this.scanPartial = true;
       // Listed but gone or stale: keep the last good copy and read again next scan.
       if (isTransientShareError(error)) return false;
       return this.setProblem(rel, kind, writer, 'could not be read');
     }
-    if (!stat.isFile()) return false;
+    if (!stat.isFile()) {
+      seen.add(rel);
+      return this.setProblem(rel, kind, writer, 'is not a regular file');
+    }
+    if (this.scanBytes + stat.size > (this.options.limits?.bytes ?? REPORT_LIMITS.bytes)) {
+      this.overBytes += 1;
+      return false;
+    }
+    this.scanBytes += stat.size;
     seen.add(rel);
     const statKey = `${stat.size}:${stat.mtimeMs}:${stat.ino}:${stat.ctimeMs}`;
     const entry = this.entries.get(rel);
@@ -386,8 +480,9 @@ export class AgentReportsReader {
       );
     let bytes: Buffer;
     try {
-      bytes = await this.fs.readFile(file);
+      bytes = await this.fs.readFile(file, REPORT_SIZE_CAPS[kind]);
     } catch (error) {
+      this.scanPartial = true;
       if (isTransientShareError(error)) return false;
       return this.setProblem(rel, kind, writer, 'could not be read');
     }
@@ -426,15 +521,15 @@ export class AgentReportsReader {
     statKey: string
   ): boolean {
     const entry = this.entries.get(rel) ?? { kind, writer, statKey, good: null, problem: null };
+    // An older write landing late, or a writer that restarted its count: the older copy is ignored
+    // and said out loud. A card stays unanswerable until then: the page shows the higher seq, an
+    // answer to it could only ever come back "card changed", and the owner would loop.
+    if (entry.good && parsed.doc.seq < entry.good.doc.seq)
+      return this.setProblem(rel, kind, writer, SEQ_WENT_BACK, statKey);
     const hadProblem = entry.problem !== null;
     entry.statKey = statKey;
     entry.problem = null;
     this.entries.set(rel, entry);
-    if (entry.good && parsed.doc.seq < entry.good.doc.seq) {
-      // An older write landing late (or a writer that restarted its count): ignored.
-      entry.good = { ...entry.good, problem: null };
-      return hadProblem;
-    }
     if (entry.good && entry.good.sha256 === parsed.sha256) {
       entry.good = { ...entry.good, problem: null };
       return hadProblem;
@@ -496,6 +591,7 @@ export class AgentReportsReader {
       root: this.root,
       state: this.state,
       scannedAt: this.scannedAt,
+      complete: this.complete,
       ...this.collect(),
       problems,
       boards: new Map(this.boards),
@@ -517,7 +613,8 @@ export class AgentReportsReader {
       if (!listed.some((entry) => entry.name === `${cardId}.json`)) return null;
       const stat = await this.fs.stat(file);
       if (!stat.isFile() || stat.size > REPORT_SIZE_CAPS.card) return null;
-      const parsed = parseReportFile('card', await this.fs.readFile(file), writer, cardId);
+      const bytes = await this.fs.readFile(file, REPORT_SIZE_CAPS.card);
+      const parsed = parseReportFile('card', bytes, writer, cardId);
       return parsed.ok ? parsed.value : null;
     } catch {
       return null;

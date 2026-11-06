@@ -74,6 +74,7 @@
       "description": "Measured cost. Unknown numbers stay null, never 0.",
       "properties": {
         "credits": {
+          "minimum": 0,
           "type": [
             "number",
             "null"
@@ -84,6 +85,7 @@
           "description": "Cost estimate, kept apart from measured values; the scoreboard labels estimates.",
           "properties": {
             "credits": {
+              "minimum": 0,
               "type": [
                 "number",
                 "null"
@@ -120,6 +122,7 @@
           "$ref": "#/$defs/tokens"
         },
         "usd": {
+          "minimum": 0,
           "type": [
             "number",
             "null"
@@ -432,7 +435,7 @@
     },
     "writer": {
       "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-closure-lead.",
-      "pattern": "^(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
       "type": "string"
     },
     "writtenAt": {

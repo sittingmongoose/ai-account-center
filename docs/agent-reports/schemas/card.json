@@ -838,7 +838,8 @@
       "description": "How to reach the asker.",
       "properties": {
         "pmMail": {
-          "description": "Asker's pm-mail name.",
+          "description": "Asker's pm-mail name: lowercase letters, digits, - or _, and never all (the broadcast).",
+          "pattern": "^(?!all$)[a-z0-9][a-z0-9_-]{0,63}$",
           "type": [
             "string",
             "null"
@@ -928,7 +929,7 @@
     },
     "writer": {
       "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-fo-lead.",
-      "pattern": "^(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
       "type": "string"
     },
     "writtenAt": {

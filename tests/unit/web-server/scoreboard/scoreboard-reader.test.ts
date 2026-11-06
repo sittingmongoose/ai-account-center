@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -210,7 +210,62 @@ describe('runs reader', () => {
   });
 });
 
+describe('scan limits', () => {
+  it('names run files past the limit and keeps the newest days', async () => {
+    const root = dirs.make();
+    writeRun(root, runDoc('vm.old', 'A'), '2026-01-01');
+    writeRun(root, runDoc('vm.old', 'B'), '2026-11-05');
+    writeRun(root, runDoc('vm.new', 'C'), '2026-11-06');
+    const r = new RunsReader({ root: () => root, now: () => NOW, limits: { runs: 2 } });
+    await r.scan();
+    const seen = r.snapshot();
+    expect(seen.runs.map((run) => run.doc.id).sort()).toEqual(['vm.new--C', 'vm.old--B']);
+    expect(seen.problems.map((p) => p.file)).toEqual(['limits/runs']);
+    expect(seen.problems[0].reason).toContain('1 run files past the limit');
+  });
+
+  it('names writers and bytes past their limits', async () => {
+    const root = dirs.make();
+    const file = writeRun(root, runDoc('vm.a', 'A'));
+    writeRun(root, runDoc('vm.b', 'B'));
+    const byWriters = new RunsReader({ root: () => root, now: () => NOW, limits: { writers: 1 } });
+    await byWriters.scan();
+    expect(byWriters.snapshot().runs).toHaveLength(1);
+    expect(byWriters.snapshot().problems.map((p) => p.file)).toEqual(['limits/run-writers']);
+    const byBytes = new RunsReader({
+      root: () => root,
+      now: () => NOW,
+      limits: { bytes: fs.statSync(file).size },
+    });
+    await byBytes.scan();
+    expect(byBytes.snapshot().runs).toHaveLength(1);
+    expect(byBytes.snapshot().problems.map((p) => p.file)).toEqual(['limits/runs']);
+  });
+});
+
 describe('catalog', () => {
+  it('never overwrites a file written while the seed was on its way', async () => {
+    const root = dirs.make();
+    const target = path.join(root, 'v1', 'catalog');
+    fs.mkdirSync(target, { recursive: true });
+    const real = fs.promises.copyFile;
+    const copy = spyOn(fs.promises, 'copyFile').mockImplementation(async (from, to) => {
+      // Another machine seeds or edits this file after the look and before the write.
+      if (path.basename(String(from)) === 'models.json')
+        fs.writeFileSync(path.join(target, 'models.json'), 'edited on the share');
+      return real(from, to);
+    });
+    try {
+      const written = await seedCatalog(root);
+      expect(written).not.toContain('models.json');
+      expect(written).toContain('uses.json');
+    } finally {
+      copy.mockRestore();
+    }
+    expect(fs.readFileSync(path.join(target, 'models.json'), 'utf8')).toBe('edited on the share');
+    expect(fs.readdirSync(target).filter((name) => name.startsWith('.'))).toEqual([]);
+  });
+
   it('accepts every packaged seed', () => {
     for (const name of CATALOG_FILES) {
       const parsed = parseCatalogFile(name, fs.readFileSync(path.join(packagedCatalogDir(), name)));
