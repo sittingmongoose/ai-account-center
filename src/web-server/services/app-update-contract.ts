@@ -133,6 +133,10 @@ export const MESSAGES = {
     'Update held: the newest Antigravity version could not be checked against the switching review, so nothing was installed.',
   updated_unreviewed:
     'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
+  runtime_unavailable:
+    'The Antigravity switching runtime is not running or did not answer, so the managed update could not check for running sessions; nothing was installed.',
+  runtime_paused:
+    'Antigravity switching is paused on an unreviewed build, so the update ran without its runtime and did not finish; nothing running was stopped.',
   t3_updated: 'Updated T3 Code and its installed server runtime.',
   t3_restart_scheduled:
     'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect. A release that upgrades a large T3 database can keep T3 offline for several minutes before it reconnects.',
@@ -426,6 +430,10 @@ export function normalizeAppUpdateRow(
     held !== (code === 'held_for_review' || code === 'held_unchecked') ||
     (held && appId !== 'antigravity-cli') ||
     (code === 'updated_unreviewed' && (appId !== 'antigravity-cli' || row.status !== 'updated')) ||
+    // Only the Ubuntu managed bridge reports these; runtime_unavailable runs nothing.
+    ((code === 'runtime_unavailable' || code === 'runtime_paused') &&
+      (appId !== 'antigravity-cli' || platform !== 'ubuntu' || row.status !== 'failed')) ||
+    (code === 'runtime_unavailable' && row.updateAttempted === true) ||
     ((code === 't3_sessions_kept' || code === 'background_sessions_kept') &&
       (!CLI_APPS.includes(appId) || row.status !== 'updated')) ||
     ((code === 'codex_sessions_stopped' || code === 'codex_force_failed') &&

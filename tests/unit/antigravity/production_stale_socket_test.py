@@ -171,7 +171,7 @@ class ClearStaleSocketFixtures(unittest.TestCase):
 class StartupMessageFixtures(unittest.TestCase):
     """Runs the real resident_main entrypoint from a copied bundle, as a subprocess."""
 
-    def run_entrypoint(self, socket_path_for, native_released=False):
+    def run_entrypoint(self, socket_path_for, native_released=False, native_replaced=False):
         temp = tempfile.TemporaryDirectory(prefix='aac-startup-message-')
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
@@ -192,6 +192,9 @@ class StartupMessageFixtures(unittest.TestCase):
             assert text.count(NATIVE_SHA256) == 1
             module.write_text(text.replace(NATIVE_SHA256, digest), encoding='utf-8')
             release['nativeSha256'] = digest
+            if native_replaced:
+                # An unreviewed build replaced the pinned native (as `agy update` does).
+                binary.write_bytes(b'fixture unreviewed native binary, never executed')
         (library / 'release.json').write_text(json.dumps(release), encoding='utf-8')
         parser = root / 'bundle' / 'parser'
         for name, version in (('pyte', '0.8.2'), ('wcwidth', '0.9.1')):
@@ -241,14 +244,27 @@ class StartupMessageFixtures(unittest.TestCase):
         self.assertEqual((after.st_dev, after.st_ino), run['before'])
         self.assertTrue(accepts(run['dir'] / 'status.sock'))
 
-    def test_os_error_keeps_the_generic_message_without_paths(self):
+    def test_os_error_names_only_its_errno_without_paths(self):
         def blocked_parent(root):
             blocker = root / 'run-file'
             blocker.write_bytes(b'fixture')
             return blocker / 'control.sock'
         last, stderr = self.run_entrypoint(blocked_parent)
-        self.assertEqual(last, 'Managed Antigravity runtime is unavailable.', stderr)
+        self.assertRegex(last, r'^Managed Antigravity runtime is unavailable \(runtime-os-error E[A-Z]+\)\.$', stderr)
         self.assertNotIn('run-file', stderr)
+
+    def test_replaced_native_names_the_publisher_change(self):
+        last, stderr = self.run_entrypoint(lambda root: root / 'control.sock', native_released=True, native_replaced=True)
+        self.assertEqual(last, 'Managed Antigravity runtime is unavailable (native-publisher-changed).', stderr)
+
+    def test_exit_cause_never_echoes_free_text(self):
+        sys.path.insert(0, str(PUBLIC_RUNTIME))
+        self.addCleanup(sys.path.remove, str(PUBLIC_RUNTIME))
+        import resident_main
+        self.assertEqual(resident_main.exit_cause(ValueError('native-publisher-changed')), 'native-publisher-changed')
+        self.assertEqual(resident_main.exit_cause(ValueError('/home/user/secret path')), 'runtime-value-error')
+        self.assertEqual(resident_main.exit_cause(FileNotFoundError(2, 'gone', '/home/user/x')), 'runtime-os-error ENOENT')
+        self.assertEqual(resident_main.exit_cause(OSError('no errno')), 'runtime-os-error')
 
 
 if __name__ == '__main__':

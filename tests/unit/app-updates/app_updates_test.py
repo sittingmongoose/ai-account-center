@@ -2048,6 +2048,22 @@ class AntigravityReviewHoldTests(unittest.TestCase):
                 row, _ = self.bridge_run(odd, False)
                 self.assertEqual((row['status'], row['messageCode']), ('failed', 'update_failed'))
 
+    def test_managed_bridge_paused_and_unavailable_runtime_reasons_are_kept(self):
+        # Paused-runtime case (2026-11-06): the bridge itself censuses and updates
+        # without the stopped runtime; this helper still never scans or falls through,
+        # and keeps the bridge's reason instead of a generic update_failed.
+        paused_update = {**self.BRIDGE_UPDATED, 'previousVersion': '1.4.12', 'version': '1.5.2'}
+        row, argv = self.bridge_run(paused_update, False)
+        self.assertEqual(argv[2:], ['--idle-only'])
+        self.assertEqual((row['status'], row['version']), ('updated', '1.5.2'))
+        self.assertEqual(updater.mark_unreviewed(row, self.REVIEWED)['messageCode'], 'updated_unreviewed')
+        for code, attempted in (('runtime_paused', True), ('runtime_paused', False), ('runtime_unavailable', False)):
+            with self.subTest(code=code, attempted=attempted):
+                failed = {'appId': 'antigravity-cli', 'platform': 'ubuntu', 'manager': 'native', 'status': 'failed',
+                          'messageCode': code, 'updateAttempted': attempted, 'restartedProcesses': 0}
+                row, _ = self.bridge_run(failed, False)
+                self.assertEqual((row['status'], row['messageCode'], row['updateAttempted']), ('failed', code, attempted))
+
     def test_managed_marker_never_falls_through_to_ordinary_update(self):
         for platform in ('ubuntu', 'mac', 'windows'):
             with mock.patch.object(updater, 'perform_cli_update') as native, \

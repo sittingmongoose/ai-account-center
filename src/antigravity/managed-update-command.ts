@@ -5,8 +5,18 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { AntigravityProfileRegistry } from './registry';
-import { createInstalledAntigravityComponents } from './production-runtime';
-import { updateManagedAntigravity, type ManagedNativeUpdate } from './managed-updater';
+import {
+  createInstalledAntigravityComponents,
+  verifyOwnedAntigravityNativePin,
+} from './production-runtime';
+import {
+  routeManagedAntigravityUpdate,
+  type ManagedNativeUpdate,
+  type ManagedUpdateResult,
+} from './managed-updater';
+import { defaultNativeReleaseFile, readNativeRelease } from './native-version';
+import { censusAntigravityProcesses } from './native-process-census';
+import { probeRuntimeSocket } from './runtime-socket-probe';
 import { AntigravityError } from './errors';
 
 const MAX_COMMAND_BYTES = 65_536;
@@ -24,7 +34,15 @@ export interface ManagedNativeUpdateOptions {
   runCommand?: ManagedNativeCommand;
 }
 
-type ManagedCoordinatorResult = Awaited<ReturnType<typeof updateManagedAntigravity>>;
+type ManagedCoordinatorResult = ManagedUpdateResult;
+
+/**
+ * Why a managed update failed before it could finish, beyond update_failed:
+ * runtime_unavailable - the resident runtime did not answer (nothing ran);
+ * runtime_paused - switching is paused on an unreviewed build, the runtime is
+ * stopped, and the update without it could not finish.
+ */
+export type ManagedFailureCode = 'update_failed' | 'runtime_unavailable' | 'runtime_paused';
 
 export interface ManagedUpdateCommandOptions extends ManagedNativeUpdateOptions {
   /** Explicit coordinator injection; importing or constructing options performs no work. */
@@ -36,7 +54,7 @@ export interface ManagedUpdateCommandResult {
   platform: 'ubuntu';
   manager: 'native';
   status: Exclude<ManagedCoordinatorResult['status'], 'in_use'> | 'action_required';
-  messageCode: ManagedCoordinatorResult['status'] | 'update_failed';
+  messageCode: ManagedCoordinatorResult['status'] | ManagedFailureCode;
   updateAttempted: boolean;
   restartedProcesses: number;
   previousVersion?: string;
@@ -220,13 +238,16 @@ export function createManagedNativeUpdate(
   };
 }
 
-function failedCommandResult(updateAttempted: boolean): ManagedUpdateCommandResult {
+function failedCommandResult(
+  updateAttempted: boolean,
+  messageCode: ManagedFailureCode = 'update_failed'
+): ManagedUpdateCommandResult {
   return {
     appId: 'antigravity-cli',
     platform: 'ubuntu',
     manager: 'native',
     status: 'failed',
-    messageCode: 'update_failed',
+    messageCode,
     updateAttempted,
     restartedProcesses: 0,
   };
@@ -272,15 +293,35 @@ export async function runManagedAntigravityUpdateCommand(
       manager: 'native',
       // A running Antigravity kept an idle-only update from starting: nothing changed.
       status: value.status === 'in_use' ? 'action_required' : value.status,
-      messageCode: value.status,
+      messageCode:
+        value.status === 'failed' && value.runtimePaused === true ? 'runtime_paused' : value.status,
       previousVersion: value.previousVersion,
       version: value.version,
       updateAttempted: attempted,
       restartedProcesses: value.restartedProcesses,
     };
-  } catch {
-    return failedCommandResult(attempted);
+  } catch (error) {
+    const message = error instanceof AntigravityError ? error.message : '';
+    return failedCommandResult(
+      attempted,
+      // runtime_unavailable promises nothing ran; after a counted update it stays generic.
+      message === 'antigravity-runtime-unavailable' && !attempted
+        ? 'runtime_unavailable'
+        : message === 'update-runtime-paused'
+          ? 'runtime_paused'
+          : 'update_failed'
+    );
   }
+}
+
+/** True when the installed native matches a reviewed build; false when unusable or unknown. */
+export function nativeMatchesReviewedBuild(nativeBinary: string, releaseFile?: string): boolean {
+  const release = readNativeRelease(releaseFile ?? defaultNativeReleaseFile());
+  // An unreadable review list never counts as paused: the coordinator keeps it.
+  if (!release.reviewed.length) return true;
+  return release.reviewed.some((entry) =>
+    verifyOwnedAntigravityNativePin(nativeBinary, entry.sha256)
+  );
 }
 
 export async function runInstalledManagedAntigravityUpdate(
@@ -290,16 +331,21 @@ export async function runInstalledManagedAntigravityUpdate(
   try {
     const ccs = path.join(home, '.ccs');
     const components = createInstalledAntigravityComponents(ccs, home);
-    if (!components) throw new AntigravityError('update-runtime-unavailable');
+    // The descriptor is present (the helper checked) but unusable: no runtime can run.
+    if (!components) return failedCommandResult(false, 'runtime_unavailable');
+    const { nativeBinary, socketPath } = components.installed;
     return await runManagedAntigravityUpdateCommand({
-      nativeBinary: components.installed.nativeBinary,
+      nativeBinary,
       ccsDirectory: ccs,
       execute: (native) =>
-        updateManagedAntigravity({
+        routeManagedAntigravityUpdate({
           registry: new AntigravityProfileRegistry(ccs),
           driver: components.driver,
           native,
           idleOnly,
+          nativeReviewed: () => nativeMatchesReviewedBuild(nativeBinary),
+          runtimeSocket: () => probeRuntimeSocket(socketPath),
+          census: () => censusAntigravityProcesses({ home, nativeBinary }),
         }),
     });
   } catch {

@@ -2,6 +2,8 @@ import { AntigravityError } from './errors';
 import type { AntigravitySwitchDriver, StopReceipt } from './types';
 import { checkedPlan, planFingerprint } from './confirmation';
 import { AntigravityProfileRegistry, credentialFingerprint, identityKey } from './registry';
+import type { NativeProcessCensus } from './native-process-census';
+import type { RuntimeSocketState } from './runtime-socket-probe';
 
 export interface ManagedNativeUpdate {
   version(): Promise<string>;
@@ -9,6 +11,16 @@ export interface ManagedNativeUpdate {
   update(): Promise<void>;
   /** Refuses every native executable replacement not owned by this update. */
   rollback(): Promise<boolean>;
+}
+
+export interface ManagedUpdateResult {
+  status: 'current' | 'updated' | 'failed' | 'restart_failed' | 'in_use';
+  previousVersion: string;
+  version: string;
+  restartedProcesses: number;
+  updateAttempted: boolean;
+  /** Set only by the paused-runtime path (updatePausedAntigravity). */
+  runtimePaused?: true;
 }
 
 /**
@@ -24,13 +36,7 @@ export async function updateManagedAntigravity(deps: {
   native: ManagedNativeUpdate;
   idleOnly?: boolean;
   now?: () => number;
-}): Promise<{
-  status: 'current' | 'updated' | 'failed' | 'restart_failed' | 'in_use';
-  previousVersion: string;
-  version: string;
-  restartedProcesses: number;
-  updateAttempted: boolean;
-}> {
+}): Promise<ManagedUpdateResult> {
   const { driver, registry, native } = deps;
   const before = await native.version();
   return registry.withLock(async () => {
@@ -193,5 +199,100 @@ export async function updateManagedAntigravity(deps: {
         return { ...failed, status: 'restart_failed', updateAttempted: updated };
       }
     }
+  });
+}
+
+/**
+ * The managed update while switching is paused: the installed native build
+ * has no switching review, so the resident runtime refuses to start and holds
+ * no managed session. Its census is unavailable, so a runtime-free same-user
+ * census decides instead. Always idle-only: any Antigravity process answers
+ * in_use and nothing changes. Otherwise the native is backed up exactly as the
+ * managed path does and `agy update` runs under the same account lock.
+ * Failures carry runtimePaused, so the row can say why.
+ */
+export async function updatePausedAntigravity(deps: {
+  registry: AntigravityProfileRegistry;
+  native: ManagedNativeUpdate;
+  census: () => NativeProcessCensus;
+  /** True only while the runtime certainly is not running and the build is still unreviewed. */
+  stillPaused: () => Promise<boolean>;
+}): Promise<ManagedUpdateResult> {
+  const { registry, native } = deps;
+  let before: string;
+  try {
+    before = await native.version();
+  } catch {
+    throw new AntigravityError('update-runtime-paused');
+  }
+  const unchanged = {
+    previousVersion: before,
+    version: before,
+    restartedProcesses: 0,
+    updateAttempted: false,
+  };
+  const failed = { ...unchanged, status: 'failed' as const, runtimePaused: true as const };
+  const inUse = { ...unchanged, status: 'in_use' as const };
+  try {
+    return await registry.withLock(async () => {
+      // A pending managed recovery record needs the runtime; never replace its native.
+      if (registry.hasRecovery()) return failed;
+      const first = deps.census();
+      if (!first.complete) return failed;
+      if (first.running) return inUse;
+      let attempted = false;
+      try {
+        await native.backup();
+        const latest = deps.census();
+        if (!latest.complete || !(await deps.stillPaused())) return failed;
+        if (latest.running) return inUse;
+        attempted = true;
+        await native.update();
+        const after = await native.version();
+        return {
+          status: after === before ? ('current' as const) : ('updated' as const),
+          previousVersion: before,
+          version: after,
+          restartedProcesses: 0,
+          updateAttempted: true,
+        };
+      } catch {
+        return { ...failed, updateAttempted: attempted };
+      }
+    });
+  } catch {
+    return failed;
+  }
+}
+
+/**
+ * Chooses the managed coordinator or the paused-runtime path. The paused path
+ * runs only when the installed build matches no reviewed native AND nothing
+ * listens on the runtime socket. A live (or unclear) runtime always keeps the
+ * coordinator, and a reviewed build with a stopped runtime still fails there
+ * (runtime unavailable) instead of updating without it.
+ */
+export async function routeManagedAntigravityUpdate(deps: {
+  registry: AntigravityProfileRegistry;
+  driver: AntigravitySwitchDriver;
+  native: ManagedNativeUpdate;
+  idleOnly?: boolean;
+  nativeReviewed: () => boolean;
+  runtimeSocket: () => Promise<RuntimeSocketState>;
+  census: () => NativeProcessCensus;
+}): Promise<ManagedUpdateResult> {
+  const paused = async () => !deps.nativeReviewed() && (await deps.runtimeSocket()) === 'stopped';
+  if (await paused())
+    return updatePausedAntigravity({
+      registry: deps.registry,
+      native: deps.native,
+      census: deps.census,
+      stillPaused: paused,
+    });
+  return updateManagedAntigravity({
+    registry: deps.registry,
+    driver: deps.driver,
+    native: deps.native,
+    idleOnly: deps.idleOnly,
   });
 }
