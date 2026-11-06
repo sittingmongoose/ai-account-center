@@ -44,6 +44,16 @@ export function outcomeOf(run: RunDoc): 'done' | 'failed' | 'unknown' {
   return FAILED_OUTCOMES.has(word) ? 'failed' : 'unknown';
 }
 
+/** The runs left out of a quota rate for a negative move, for the runs Source. */
+export function negativeQuotaRuns(runs: readonly RunDoc[]): string[] {
+  return runs
+    .filter(
+      (run) =>
+        (run.cost?.quota?.deltaPct ?? 0) < 0 || (run.cost?.estimate?.quota?.deltaPct ?? 0) < 0
+    )
+    .map((run) => run.id);
+}
+
 /** The runs with an unknown outcome, by outcome word, for the runs Source. */
 export function unknownOutcomes(runs: readonly RunDoc[]): Map<string, number> {
   const counts = new Map<string, number>();
@@ -322,12 +332,12 @@ function rate(
   for (const run of runs) {
     const cost = costOf(run);
     const units = unitsOf(run, unit);
-    const outcome = outcomeOf(run);
-    // A failed run's cost is known waste; an unknown outcome is not known to be either.
-    if (cost === null || units === null || outcome === 'unknown') continue;
+    if (cost === null || units === null) continue;
     n += 1;
+    // Spent is spent, whatever became of the run; only `done` work that stood is what it bought.
     total += cost;
-    if (outcome === 'done' && !index.of(run.id).some(overturnedUndisputed)) accepted += units;
+    if (outcomeOf(run) === 'done' && !index.of(run.id).some(overturnedUndisputed))
+      accepted += units;
   }
   return {
     value: n > 0 && accepted > 0 ? significant(total / accepted) : null,
@@ -351,7 +361,8 @@ function quotaRates(
       index,
       (run) => {
         const quota = quotaOf(run);
-        return quota?.window === window ? quota.deltaPct : null;
+        // A negative move is a window that reset during the run, not a cost.
+        return quota?.window === window && quota.deltaPct >= 0 ? quota.deltaPct : null;
       },
       '%'
     ),

@@ -8,6 +8,7 @@ import {
   answerDevice,
   deliveryView,
   isClientSendId,
+  validEntryIds,
   type AnswerHistoryEntry,
   type EntryResult,
 } from '../status/answers';
@@ -160,7 +161,8 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       !Array.isArray(entries) ||
       entries.length === 0 ||
       entries.length > MAX_ANSWER_ENTRIES ||
-      (body.sendId !== undefined && !isClientSendId(body.sendId))
+      (body.sendId !== undefined && !isClientSendId(body.sendId)) ||
+      !validEntryIds(entries)
     ) {
       invalid(res);
       return;

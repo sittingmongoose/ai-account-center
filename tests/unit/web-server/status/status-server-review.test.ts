@@ -12,6 +12,7 @@ import {
   agentReportsRoot,
   AgentReportsReader,
   DEFAULT_AGENT_REPORTS_DIR,
+  newestFolders,
   publishSchemas,
   type ReaderFs,
 } from '../../../../src/web-server/status/agent-reports-reader';
@@ -1259,5 +1260,535 @@ describe('the machine rows', () => {
     expect(row('mac')?.cpu.cores).toBe(4);
     expect(row('vm')?.cpu?.cores ?? null).toBeNull();
     expect([...new Set(remote)].sort()).toEqual(['nas1', 'windows']);
+  });
+});
+
+describe('round two', () => {
+  function gated() {
+    let release = () => undefined as void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { gate, release: () => release() };
+  }
+
+  describe('a retry during a send', () => {
+    it('does not ring records of a send that is still running', async () => {
+      const { root, reader, make, rings } = setup();
+      const a = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const b = writeCard(root, cardDoc('vm.lead', 'Q2'));
+      const { gate, release } = gated();
+      let reads = 0;
+      const answers = make({
+        readCard: async (id) => {
+          reads += 1;
+          if (reads === 2) await gate;
+          return reader.readCardNow(id);
+        },
+      });
+      const send = answers.submitSet([entry(CARD, a), entry('vm.lead--Q2', b)], 'Mac');
+      while (reads < 2) await settle();
+      await soon(answers.retryPending());
+      expect(rings).toEqual([]);
+      release();
+      await send;
+      await settle();
+      expect(rings.map((ring) => ring.subject)).toEqual(['2 answers from the owner']);
+      await answers.retryPending();
+      expect(rings).toHaveLength(1);
+    });
+
+    it('never rings a record whose doorbell is done or skipped', async () => {
+      const { root, answers, rings } = setup();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      await answers.submitSet([entry(CARD, sha)], 'Mac');
+      await settle();
+      expect(rings).toHaveLength(1);
+      const ring = (answers as unknown as { ringGroups: (e: unknown[]) => Promise<void> })
+        .ringGroups;
+      await ring.call(answers, answers.list());
+      const [record] = answers.list();
+      record.doorbell = { state: 'skipped', at: null, detail: 'x', attempts: 1 };
+      await ring.call(answers, answers.list());
+      expect(rings).toHaveLength(1);
+    });
+
+    it('asks again in the queue: a summary the send wrote meanwhile is not written twice', async () => {
+      const { root, answers } = setup();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const { gate, release } = gated();
+      const realOpen = fs.promises.open;
+      let held = false;
+      const open = spyOn(fs.promises, 'open').mockImplementation((async (
+        ...args: Parameters<typeof fs.promises.open>
+      ) => {
+        if (String(args[0]).includes(`${path.sep}batches${path.sep}`)) {
+          held = true;
+          await gate;
+        }
+        return realOpen(...args);
+      }) as typeof fs.promises.open);
+      try {
+        const send = answers.submitSet([entry(CARD, sha)], 'Mac');
+        while (!held) await settle();
+        const retry = answers.retryPending();
+        await settle();
+        release();
+        await soon(Promise.all([send, retry]));
+        expect(answers.sendList()[0].summary.attempts).toBe(1);
+      } finally {
+        open.mockRestore();
+      }
+    });
+  });
+
+  describe('a client that left', () => {
+    it('sendFileBytes returns at once for a response already gone, writing nothing', async () => {
+      const file = path.join(dirs.make(), 'a.png');
+      fs.writeFileSync(file, Buffer.alloc(300_000, 1));
+      const handle = await fs.promises.open(file, 'r');
+      let writes = 0;
+      const out = new Writable({
+        write(_chunk, _encoding, done) {
+          writes += 1;
+          done();
+        },
+      });
+      out.on('error', () => undefined);
+      out.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await soon(sendFileBytes(handle, out, 0, 299_999), 1000);
+      await handle.close();
+      expect(writes).toBe(0);
+    });
+
+    it('stops waiting when the response goes away during a wait', async () => {
+      const file = path.join(dirs.make(), 'a.png');
+      fs.writeFileSync(file, Buffer.alloc(300_000, 1));
+      const handle = await fs.promises.open(file, 'r');
+      const out = new Writable({ highWaterMark: 1, write() {} });
+      out.on('error', () => undefined);
+      setTimeout(() => out.destroy(), 20);
+      await soon(sendFileBytes(handle, out, 0, 299_999), 1000);
+      await handle.close();
+    });
+
+    it('a client that stops taking bytes gives up the wait', async () => {
+      const file = path.join(dirs.make(), 'a.png');
+      fs.writeFileSync(file, Buffer.alloc(300_000, 1));
+      const handle = await fs.promises.open(file, 'r');
+      const out = new Writable({ highWaterMark: 1, write() {} });
+      out.on('error', () => undefined);
+      await soon(sendFileBytes(handle, out, 0, 299_999, 20), 1000);
+      await handle.close();
+      expect(out.destroyed).toBe(true);
+    });
+
+    // Node, as production runs it: Bun's http reports an aborted response differently.
+    it('under Node, open files return to their baseline after many aborted requests', async () => {
+      const root = dirs.make();
+      const bundle = dirs.make();
+      const dir = path.join(root, 'v1', 'writers', 'vm.lead', 'c');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'v.mp4'),
+        Buffer.concat([
+          Buffer.from([0, 0, 0, 0x18]),
+          Buffer.from('ftypisom'),
+          Buffer.alloc(3 * 1024 * 1024, 1),
+        ])
+      );
+      const built = await Bun.build({
+        entrypoints: [
+          path.resolve(import.meta.dir, '../../../../src/web-server/status/status-files.ts'),
+        ],
+        target: 'node',
+        format: 'esm',
+        outdir: bundle,
+        naming: 'status-files.mjs',
+      });
+      expect(built.success).toBe(true);
+      const harness = path.join(bundle, 'harness.mjs');
+      fs.writeFileSync(
+        harness,
+        `import fs from 'fs';
+import http from 'http';
+import { openCardFile, sendFileBytes } from './status-files.mjs';
+const count = () => fs.readdirSync('/proc/self/fd').length;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const server = http.createServer(async (req, res) => {
+  // As the route does, with the client gone by the time the file is open.
+  const media = await openCardFile(process.argv[2], 'vm.lead', 'c/v.mp4');
+  await sleep(20);
+  try {
+    res.setHeader('Content-Length', String(media.size));
+    await sendFileBytes(media.handle, res, 0, media.size - 1);
+  } finally {
+    await media.handle.close().catch(() => undefined);
+  }
+});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+const { port } = server.address();
+const baseline = count();
+await Promise.all(
+  Array.from({ length: 60 }, () =>
+    new Promise((resolve) => {
+      const request = http.get({ host: '127.0.0.1', port, agent: false });
+      request.on('error', resolve);
+      request.on('close', resolve);
+      // After the request is out, so the server has it, and before the file is open plus 20 ms.
+      request.once('finish', () => setTimeout(() => request.destroy(), 5));
+    })
+  )
+);
+await sleep(400);
+console.log(JSON.stringify({ baseline, after: count() }));
+process.exit(0);
+`
+      );
+      const output = execFileSync('node', [harness, root], { encoding: 'utf8', timeout: 15_000 });
+      const { baseline, after } = JSON.parse(output);
+      expect(after).toBeLessThanOrEqual(baseline + 5);
+    }, 25_000);
+  });
+
+  describe('a share error is not a changed card', () => {
+    const errno = (code: string) => Object.assign(new Error(code), { code });
+    const realFs = {
+      readdir: (dir: string) => fs.promises.readdir(dir, { withFileTypes: true }),
+      stat: (file: string) => fs.promises.stat(file),
+      readFile: (file: string) => fs.promises.readFile(file),
+    };
+
+    async function outcome(root: string, overrides: Partial<ReaderFs>, sha = 'a'.repeat(64)) {
+      const reader = new AgentReportsReader({
+        root: () => root,
+        now: () => NOW,
+        fs: { ...realFs, ...overrides },
+      });
+      const answers = new StatusAnswers({
+        readCard: (id) => reader.readCardNow(id),
+        storeDir: () => path.join(dirs.make(), 'status'),
+        reportsRoot: () => root,
+        doorbell: async () => ({ ok: true, detail: 'Rang.' }),
+        now: () => NOW,
+      });
+      return (await answers.submitSet([entry(CARD, sha)], 'Mac'))[0].code;
+    }
+
+    it('EIO on the listing is share_unavailable', async () => {
+      const root = dirs.make();
+      writeCard(root, cardDoc('vm.lead', 'Q1'));
+      expect(
+        await outcome(root, {
+          readdir: async () => {
+            throw errno('EIO');
+          },
+        })
+      ).toBe('share_unavailable');
+    });
+
+    it('an unmounted root is share_unavailable', async () => {
+      expect(await outcome(path.join(dirs.make(), 'gone'), {})).toBe('share_unavailable');
+    });
+
+    it('a stat or read failure on a listed card is share_unavailable', async () => {
+      const root = dirs.make();
+      writeCard(root, cardDoc('vm.lead', 'Q1'));
+      for (const overrides of [
+        {
+          stat: async () => {
+            throw errno('EIO');
+          },
+        },
+        {
+          readFile: async () => {
+            throw errno('ESTALE');
+          },
+        },
+      ])
+        expect(await outcome(root, overrides)).toBe('share_unavailable');
+    });
+
+    it('a share that answers "not there" is still card_changed', async () => {
+      const root = dirs.make();
+      fs.mkdirSync(path.join(root, 'v1'), { recursive: true });
+      expect(await outcome(root, {})).toBe('card_changed');
+      writeCard(root, cardDoc('vm.lead', 'Q2'));
+      expect(await outcome(root, {})).toBe('card_changed');
+      writeReport(root, 'vm.lead', `cards/${CARD}.json`, Buffer.from('not json'));
+      expect(await outcome(root, {})).toBe('card_changed');
+    });
+  });
+
+  describe('one oversized file', () => {
+    it('takes nothing from the byte budget of the other writers', async () => {
+      const root = dirs.make();
+      writeReport(root, 'vm.big', 'thread.json', Buffer.from('{}'));
+      fs.truncateSync(path.join(root, 'v1', 'writers', 'vm.big', 'thread.json'), 63 * 1024 * 1024);
+      writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const reader = new AgentReportsReader({
+        root: () => root,
+        now: () => NOW,
+        limits: { bytes: 1024 * 1024 },
+      });
+      await reader.scan();
+      const seen = reader.snapshot();
+      expect(seen.cards).toHaveLength(1);
+      expect(seen.problems.map((p) => p.file)).toEqual(['writers/vm.big/thread.json']);
+      expect(seen.problems[0].reason).toContain('cap');
+    });
+  });
+
+  describe('special files in cards/', () => {
+    for (const [what, make] of [
+      ['a FIFO', (file: string) => execFileSync('mkfifo', [file])],
+      ['a link', (file: string) => fs.symlinkSync('/etc/hostname', file)],
+    ] as const)
+      it(`names ${what} and makes the list not complete`, async () => {
+        const root = dirs.make();
+        writeCard(root, cardDoc('vm.lead', 'Q1'));
+        make(path.join(root, 'v1', 'writers', 'vm.lead', 'cards', 'vm.lead--Q2.json'));
+        const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+        await reader.scan();
+        const seen = reader.snapshot();
+        expect(seen.problems.map((p) => [p.file, p.reason])).toEqual([
+          ['writers/vm.lead/cards/vm.lead--Q2.json', 'is not a regular file'],
+        ]);
+        expect(seen.complete).toBe(false);
+      });
+  });
+
+  it('newestFolders keeps the newest and bounds the stats running at once', async () => {
+    let running = 0;
+    let most = 0;
+    const names = Array.from({ length: 60 }, (_, i) => `w${i}`);
+    const kept = await newestFolders(names, 2, async (name) => {
+      running += 1;
+      most = Math.max(most, running);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      running -= 1;
+      if (name === 'w7') throw new Error('gone');
+      return { mtimeMs: Number(name.slice(1)) } as fs.Stats;
+    });
+    expect(kept).toEqual(['w59', 'w58']);
+    expect(most).toBeLessThanOrEqual(16);
+  });
+
+  describe('sendId is bound to its entries', () => {
+    const ID = '0123456789abcdef0123456789abcdef';
+
+    it('the same id with different entries is a new send', async () => {
+      const { root, answers } = setup();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const first = await answers.submitSet(
+        [entry(CARD, sha, { choice: [], note: 'one' })],
+        'Mac',
+        ID
+      );
+      const second = await answers.submitSet(
+        [entry(CARD, sha, { choice: [], note: 'two' })],
+        'Mac',
+        ID
+      );
+      expect([first[0].outcome, second[0].outcome]).toEqual(['recorded', 'recorded']);
+      expect(answers.list().map((e) => e.answer.note)).toEqual(['one', 'two']);
+    });
+
+    it('binding survives a restart, and key order does not matter', async () => {
+      const { root, answers, make } = setup();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const { via, ...rest } = entry(CARD, sha, { choice: [], note: 'one' });
+      await answers.submitSet([{ ...rest, via }], 'Mac', ID);
+      const again = make();
+      await again.submitSet([{ via, ...rest }], 'Mac', ID);
+      expect(again.list()).toHaveLength(1);
+      await again.submitSet([entry(CARD, sha, { choice: [], note: 'two' })], 'Mac', ID);
+      expect(again.list()).toHaveLength(2);
+    });
+  });
+
+  describe('the entry id', () => {
+    const NOTE_ID = 'a'.repeat(32);
+    const ANSWER_ID = 'b'.repeat(32);
+
+    /** The answer card closes and the note card stays: the sequence the client recheck found. */
+    async function lostResponse() {
+      const made = setup();
+      const answerSha = writeCard(made.root, cardDoc('vm.lead', 'Q1'));
+      const noteSha = writeCard(made.root, cardDoc('vm.lead', 'Q2'));
+      const answer = entry(CARD, answerSha, { entryId: ANSWER_ID });
+      const note = entry('vm.lead--Q2', noteSha, {
+        choice: [],
+        note: 'the words',
+        entryId: NOTE_ID,
+      });
+      const first = await made.answers.submitSet([answer, note], 'Mac', 'x'.repeat(32));
+      await settle();
+      return { ...made, answer, note, first };
+    }
+    const noteFiles = (root: string) =>
+      fs.readdirSync(path.join(root, 'v1', 'answers')).filter((f) => f.includes('.note-'));
+
+    it('a note resent alone after its send lost the response is one record, one file, one ring', async () => {
+      const { root, answers, rings, note, first } = await lostResponse();
+      expect(first.map((r) => r.outcome)).toEqual(['recorded', 'recorded']);
+      const again = await answers.submitSet([note], 'Mac', 'y'.repeat(32));
+      await settle();
+      expect(again).toEqual([
+        { cardId: 'vm.lead--Q2', outcome: 'recorded', code: null, error: null },
+      ]);
+      expect(answers.list()).toHaveLength(2);
+      expect(noteFiles(root)).toHaveLength(1);
+      expect(rings).toHaveLength(1);
+      expect(answers.sendList()).toHaveLength(1);
+      expect(fs.readdirSync(path.join(root, 'v1', 'answers', 'batches'))).toHaveLength(1);
+    });
+
+    it('an answer whose card has closed answers recorded, not card_changed', async () => {
+      const { answers, rings, answer } = await lostResponse();
+      const again = await answers.submitSet([answer], 'Mac');
+      await settle();
+      expect(again[0]).toMatchObject({ outcome: 'recorded', code: null });
+      expect(answers.list()).toHaveLength(2);
+      expect(rings).toHaveLength(1);
+    });
+
+    it('a repeat mixed with a new entry rings and records only the new one', async () => {
+      const { root, answers, rings, note } = await lostResponse();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q3'));
+      const results = await answers.submitSet(
+        [note, entry('vm.lead--Q3', sha, { entryId: 'c'.repeat(32) })],
+        'Mac'
+      );
+      await settle();
+      expect(results.map((r) => r.outcome)).toEqual(['recorded', 'recorded']);
+      expect(answers.list()).toHaveLength(3);
+      expect(rings).toHaveLength(2);
+      expect(rings[1].body).toContain('vm.lead--Q3');
+      expect(rings[1].body).not.toContain('the words');
+    });
+
+    it('the same id with different content is refused, and nothing is recorded', async () => {
+      const { answers, rings, note } = await lostResponse();
+      const results = await answers.submitSet([{ ...note, note: 'other words' }], 'Mac');
+      await settle();
+      expect(results[0]).toMatchObject({ outcome: 'refused', code: 'invalid_entry' });
+      expect(answers.list()).toHaveLength(2);
+      expect(rings).toHaveLength(1);
+    });
+
+    it('the same draft after an agent replied on the card is still one record', async () => {
+      const { root, answers, note } = await lostResponse();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q2', { seq: 2 }));
+      const results = await answers.submitSet([{ ...note, cardSeq: 2, cardSha256: sha }], 'Mac');
+      expect(results[0].outcome).toBe('recorded');
+      expect(answers.list()).toHaveLength(2);
+    });
+
+    it('two fresh drafts with the same words and different ids are both recorded', async () => {
+      const { root, answers } = setup();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const draft = (entryId: string) => [entry(CARD, sha, { choice: [], note: 'same', entryId })];
+      const sameSend = 'z'.repeat(32);
+      await answers.submitSet(draft('1'.repeat(32)), 'Mac', sameSend);
+      await answers.submitSet(draft('2'.repeat(32)), 'Mac', sameSend);
+      expect(answers.list()).toHaveLength(2);
+    });
+
+    it('an entry that was refused is not remembered: its retry can be recorded', async () => {
+      const { root, make } = setup({ timing: { readMs: 20 } });
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      let hung = true;
+      const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+      const answers = make({
+        readCard: (id) => (hung ? new Promise(() => undefined) : reader.readCardNow(id)),
+      });
+      const draft = [entry(CARD, sha, { choice: [], note: 'x', entryId: NOTE_ID })];
+      expect((await answers.submitSet(draft, 'Mac'))[0].code).toBe('share_unavailable');
+      hung = false;
+      expect((await answers.submitSet(draft, 'Mac'))[0].outcome).toBe('recorded');
+    });
+
+    it('remembers across a restart, and never lets the id reach the share or the mail', async () => {
+      const { root, make, rings, note } = await lostResponse();
+      const restarted = make();
+      expect((await restarted.submitSet([note], 'Mac'))[0].outcome).toBe('recorded');
+      await settle();
+      expect(restarted.list()).toHaveLength(2);
+      expect(rings).toHaveLength(1);
+      expect(rings[0].body).not.toContain(NOTE_ID);
+      const signed = noteFiles(root).map((f) =>
+        fs.readFileSync(path.join(root, 'v1', 'answers', f), 'utf8')
+      );
+      expect(signed.join('')).not.toContain(NOTE_ID);
+    });
+
+    it('a batch replay agrees with the entry records', async () => {
+      const { answers, answer, note, first, rings } = await lostResponse();
+      expect(await answers.submitSet([answer, note], 'Mac', 'x'.repeat(32))).toEqual(first);
+      expect(await answers.submitSet([answer, note], 'Mac', 'w'.repeat(32))).toEqual(first);
+      await settle();
+      expect(answers.list()).toHaveLength(2);
+      expect(rings).toHaveLength(1);
+    });
+
+    it('keeps every id from the last day and the newest 1,000 past that', () => {
+      const { answers } = setup();
+      const remember = (id: string, at: number) =>
+        (
+          answers as unknown as { rememberDraft: (a: string, b: number, c: string) => void }
+        ).rememberDraft(id, at, 'h');
+      const drafts = (answers as unknown as { drafts: Map<string, unknown> }).drafts;
+      const old = NOW - 2 * 24 * 60 * 60 * 1000;
+      for (let i = 0; i < 1005; i += 1) remember(`old${i}`, old);
+      expect(drafts.size).toBe(1000);
+      for (let i = 0; i < 1500; i += 1) remember(`new${i}`, NOW);
+      expect(drafts.has('new0')).toBe(true);
+      expect(drafts.size).toBe(1500);
+    });
+
+    it('the route refuses a bad or repeated entryId with invalid_body', async () => {
+      const root = dirs.make();
+      const service = new StatusService({
+        reader: new AgentReportsReader({ root: () => root, now: () => NOW }),
+        registryReader: new PmMailRegistryReader(() => path.join(root, 'none')),
+        run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+        timeZone: () => 'UTC',
+        notify: () => undefined,
+      });
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        Object.assign(req, { session: { authenticated: true } });
+        next();
+      });
+      app.use(
+        '/api/status',
+        createStatusRouter(() => service)
+      );
+      server = await new Promise<Server>((resolve) => {
+        const s = app.listen(0, '127.0.0.1', () => resolve(s));
+      });
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const one = (entryId: unknown) => entry(CARD, 'a'.repeat(64), { entryId });
+      for (const answers of [
+        [one('short')],
+        [one('A'.repeat(32))],
+        [one('g'.repeat(32))],
+        [one('a'.repeat(33))],
+        [one(null)],
+        [one(7)],
+        [one('a'.repeat(32)), one('a'.repeat(32))],
+      ]) {
+        const res = await fetch(`${base}/api/status/answers`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: base },
+          body: JSON.stringify({ answers }),
+        });
+        expect(res.status).toBe(400);
+        expect((await res.json()).code).toBe('invalid_body');
+      }
+    });
   });
 });

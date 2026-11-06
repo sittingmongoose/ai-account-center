@@ -13,7 +13,7 @@ import {
   DEFAULT_DASHBOARD_TIME_ZONE,
   readDashboardPreferences,
 } from '../services/dashboard-preferences';
-import { CatalogReader, seedCatalog } from './catalog';
+import { CatalogReader, seedCatalog, type SeedFailure } from './catalog';
 import { RunsReader } from './runs-reader';
 import { buildScoreboardView, type ScoreboardView } from './scoreboard-view';
 
@@ -35,6 +35,7 @@ export class ScoreboardService {
   private readonly runs: RunsReader;
   private cached: { at: number; view: ScoreboardView } | null = null;
   private building: Promise<ScoreboardView> | null = null;
+  private seedFailures: SeedFailure[] = [];
 
   constructor(private readonly deps: ScoreboardServiceDeps = {}) {
     const options = { root: () => this.root, now: () => this.now(), fs: deps.fs };
@@ -79,6 +80,7 @@ export class ScoreboardService {
       root: this.root,
       catalog: this.catalog.snapshot(),
       runs: this.runs.snapshot(),
+      seedFailures: this.seedFailures,
     });
     this.cached = { at: now, view };
     return view;
@@ -98,7 +100,10 @@ export class ScoreboardService {
   async seed(): Promise<void> {
     try {
       await ensureReportsLayout(this.root);
-      await seedCatalog(this.root);
+      const failures: SeedFailure[] = [];
+      await seedCatalog(this.root, undefined, (failure) => failures.push(failure));
+      this.seedFailures = failures;
+      this.cached = null;
     } catch {
       /* The catalog Source shows what is missing. */
     }

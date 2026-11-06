@@ -240,7 +240,7 @@
       "type": "object"
     },
     "outcome": {
-      "description": "Run outcome; the spec shows done.",
+      "description": "Free text, so no writer is refused for a word. Any case, _ reads as -. Success: done. Failure: failed, failure, cancelled, canceled, did-not-start, not-started, error, crashed, timed-out, timeout, aborted, killed, interrupted, abandoned. The scoreboard counts any other word as unknown and names it in its Source.",
       "type": "string"
     },
     "project": {

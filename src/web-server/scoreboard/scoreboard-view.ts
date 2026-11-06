@@ -8,6 +8,7 @@ import type { RunDoc } from '../status/report-schema';
 import type { CatalogMeasure, CatalogTaskType, CatalogUse } from './catalog';
 import {
   buildReviewIndex,
+  negativeQuotaRuns,
   unknownOutcomes,
   canonicalModel,
   computeMeasures,
@@ -313,7 +314,7 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
     generatedAt: new Date(now).toISOString(),
     refresh: { pollSeconds: SCOREBOARD_POLL_SECONDS },
     sources: [
-      runsSource(inputs, unscored, index.ignored, unknownOutcomes(docs)),
+      runsSource(inputs, unscored, index.ignored, unknownOutcomes(docs), negativeQuotaRuns(docs)),
       catalogSource(inputs, missingTypes, missingModels),
     ],
     catalog: {

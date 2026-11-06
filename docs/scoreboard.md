@@ -26,7 +26,8 @@ Accounts are not part of the identity (they change cost, not the model); they st
    not start empty. Imports are reviewed like any other data change.
 4. **Catalog** (`<reports>/v1/catalog/`, owned by AAC, edited as data). The seeds are in
    `docs/agent-reports/catalog/` (packaged with the server); at server start AAC writes a seed only where the share
-   lists no such file (temporary dot file, then a hard link, which fails on a file that appeared meanwhile), never over one, so edits on the share stay. A catalog file
+   lists no such file (temporary dot file, then a hard link, which fails on a file that appeared meanwhile), never over one, so edits on the share stay. A seed that cannot be
+   written reads "Could not seed `<file>`: `<code>`" in the catalog Source. A catalog file
    keeps its last good copy when it later fails; with no good copy it shows as a Source problem and its kind stays
    empty (`minRuns` falls back to 5). Refusals are fixed words naming the field, never the file's text.
    Each file is `{ "schema": "catalog-<kind>@1", "<kind>": [...] }`:
@@ -50,20 +51,22 @@ Same share rules as the Status reader (`docs/status-tab.md`, Reading rules): eve
 ENOENT and ESTALE keep the last good copy and retry, a file absent from its listing stays for 2 minutes, temporary (dot)
 files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, only changed files are read. The highest
 `seq` per run id wins, across date folders. A file that does not read is counted and named in the runs Source, never
-dropped silently. One scan reads at most 1,000 writer folders, 5,000 run files and 64 MB (over a limit the newest date
-folders are kept); the rest is named in the runs Source (`limits/run-writers`, `limits/runs`). More writers than the
+dropped silently; a FIFO or a link in a run folder is named too. One scan reads at most 1,000 writer folders, 5,000 run files and 64 MB (over a limit the most recently changed
+`runs/` folders and the newest date folders are kept); the rest is named in the runs Source (`limits/run-writers`, `limits/runs`). More writers than the
 Status reader: an old writer's runs are still history. A review with no boolean `review.overturned`, or a negative
 `wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too; a task type the
 catalog does not list is not scored and is named in the catalog Source (a model it does not list is scored, labelled by
 its id, `inCatalog: false`, and named there).
 
 ## Measures (v1)
-Computed per column (see the view) within one task type, from that column's runs only. `done` is the only success.
+Computed per column (see the view) within one task type, from that column's runs only. `outcome` stays free text in the
+schema, so no writer is refused for a word; these words decide how a run counts. `done` is the only success.
 "Failed" means an outcome of `failed`, `failure`, `cancelled`, `canceled`, `did-not-start`, `not-started`, `error`,
 `crashed`, `timed-out`, `timeout`, `aborted`, `killed`, `interrupted` or `abandoned` (any case, `_` reads as `-`); the
 format has no reason field, so a failure cannot be told apart from an owner's cancel. Any other outcome (`partial`,
-`blocked`, a word this server does not know) is **unknown**: it says neither, so the run is left out of speed, cost,
-reliability and overclaim, and the runs Source names each such outcome with its count.
+`blocked`, a word this server does not know) is **unknown**: it says neither, so the run is left out of speed,
+reliability and overclaim and adds no accepted units (its known cost still counts, below), and the runs Source names each
+such outcome with its count.
 - **speed**: median wall seconds per unit (`wallSeconds / task.size.<unit>s`) with its range, and `perTask`, the median
   wall seconds per run. Only `done` runs with a known size count. A run with no `task.size.tasks` is one
   task in a task type counted in `task`; other units stay unknown.
@@ -84,8 +87,9 @@ reliability and overclaim, and the runs Source names each such outcome with its 
   neither fact is not evidence and is left out, so a batch that reports no scope shows unknown, not 0.
 - **cheating**: share of all runs flagged `shortcut`, `cheating`, `fabricated`, `test-weakened` or `false-claim`; every
   flag of every kind is listed in the column's `flags` with its run and evidence, never only counted.
-- **cost**: measured credits over the runs with a known cost, size and outcome (`done` or failed), per accepted unit
-  (accepted: `done` and not overturned, disputes aside; an unreviewed run counts as accepted). Quota moves per `window` and `usd` are shown apart,
+- **cost**: measured credits over all runs with a known cost and size, whatever their outcome, per accepted unit
+  (accepted: `done` and not overturned, disputes aside; an unreviewed run counts as accepted). A negative quota move (a
+  window that reset during the run) is left out of its quota rate and named in the runs Source, not refused. Quota moves per `window` and `usd` are shown apart,
   never mixed in. Estimates (`cost.estimate`) sit in `estimate`, `label: "estimate"`, with their methods and sources.
 - **reliability**: of the runs that are `done` or failed, the share that are `done`.
 - **overclaim**: of the runs with outcome `done` and a standing decisive review, the share overturned; disputed overturns are
