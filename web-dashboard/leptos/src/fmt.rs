@@ -20,6 +20,16 @@ pub fn age(seconds: i64) -> String {
     }
 }
 
+/// A length of time: "40s", "4m", "2h 5m", "3d".
+pub fn span(seconds: i64) -> String {
+    let s = seconds.max(0);
+    if s < 60 {
+        format!("{s}s")
+    } else {
+        age(s.max(45)).trim_end_matches(" ago").to_string()
+    }
+}
+
 /// An age that has kept running since the view was generated.
 pub fn live_age(age_at_fetch: Option<i64>, elapsed_seconds: i64) -> Option<i64> {
     age_at_fetch.map(|a| a + elapsed_seconds.max(0))
@@ -67,6 +77,14 @@ pub fn pct(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spans_read_plainly() {
+        assert_eq!(span(40), "40s");
+        assert_eq!(span(240), "4m");
+        assert_eq!(span(7_500), "2h 5m");
+        assert_eq!(span(-5), "0s");
+    }
 
     #[test]
     fn ages_read_plainly() {

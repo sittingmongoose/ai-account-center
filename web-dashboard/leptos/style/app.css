@@ -265,18 +265,23 @@ code, .num { font-family: var(--mono); font-size: 0.86em; font-variant-numeric: 
 .option { border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--paper-2); overflow: hidden;
   transition: border-color var(--fast), background var(--fast); }
 .option[data-checked='1'] { border-color: var(--accent); background: var(--row-sel); box-shadow: inset 0 0 0 1px var(--accent); }
-.opt-pick { display: grid; gap: 4px; width: 100%; text-align: left; padding: 12px; background: none; border: 0; color: inherit;
+.opt-pick { display: grid; gap: 3px; width: 100%; text-align: left; padding: 10px 12px; background: none; border: 0; color: inherit;
   -webkit-tap-highlight-color: transparent; }
 .opt-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .opt-key { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
-  font: 700 var(--t-small) / 1 var(--mono); background: var(--paper-3); color: var(--ink-2); }
+  font: 700 var(--t-small) / 1 var(--mono); background: var(--paper); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--rule-strong); }
 .option[data-checked='1'] .opt-key { background: var(--accent); color: var(--accent-ink); }
 .rec-tag { font-size: var(--t-caption); font-weight: 700; color: var(--good-text); background: color-mix(in srgb, var(--good-text) 12%, transparent);
   padding: 2px 8px; border-radius: 999px; }
 .opt-label { font-weight: 600; font-size: calc(var(--t-body) + 0.5px); line-height: 1.3; margin-top: 2px; }
 .gc { color: var(--ink-2); font-size: var(--t-small); line-height: 1.4; }
 .gc strong { color: var(--ink-3); font-weight: 600; margin-right: 4px; font-size: var(--t-caption); text-transform: uppercase; letter-spacing: .03em; }
-.option > .media-list, .option > .block { margin: 0 12px 12px; }
+.option > .block { margin: 0 12px 10px; }
+/* Media inside an option runs edge to edge of the option. */
+.option > .media-list { margin: 2px 0 0; gap: 0; }
+.option .media-open { border: 0; border-radius: 0; }
+.option .media video { border-radius: 0; }
+.option .media figcaption { padding: 4px 12px 8px; }
 .why { margin: 12px 0 0; font-size: var(--t-small); color: var(--ink-2); line-height: 1.45; }
 .why p { margin: 0; }
 .why p + p { margin-top: 4px; }
@@ -320,15 +325,23 @@ details.block > summary { cursor: pointer; font-weight: 600; color: var(--accent
 .media video { display: block; width: 100%; max-height: 360px; border-radius: var(--radius-sm); background: #000; }
 .media figcaption { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: var(--t-caption); color: var(--ink-3); }
 .media figcaption .link { min-height: 32px; padding: 0; }
-.viewer { position: fixed; inset: 0; z-index: 50; background: #05080c; display: grid; grid-template-rows: auto 1fr auto auto;
-  padding: calc(env(safe-area-inset-top) + 8px) 8px calc(env(safe-area-inset-bottom) + 8px); }
-.viewer-close { justify-self: end; min-height: 44px; padding: 0 16px; border-radius: 999px; border: 0; background: rgba(255, 255, 255, 0.16);
-  color: #fff; font-weight: 600; }
-.viewer-scroll { overflow: hidden; display: grid; place-items: center; min-height: 0; }
-.viewer-scroll img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
-.viewer-scroll[data-zoomed='1'] { overflow: auto; place-items: start; -webkit-overflow-scrolling: touch; }
-.viewer-scroll[data-zoomed='1'] img { max-width: none; max-height: none; cursor: zoom-out; }
-.viewer-caption, .viewer-hint { margin: 6px 0 0; text-align: center; color: rgba(255, 255, 255, 0.82); font-size: var(--t-small); }
+/* The full-screen viewer: buttons on top, the picture as large as the screen allows. Sideways mode turns the frame a
+   quarter and swaps the stage's width and height (container units), so a wide picture fills an upright phone. */
+.viewer { position: fixed; inset: 0; z-index: 50; background: #000; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); color: #fff; }
+.viewer-bar { display: flex; gap: 8px; justify-content: flex-end; padding: 8px; }
+.viewer-btn { min-height: 40px; padding: 0 14px; border-radius: 999px; border: 0; background: rgba(255, 255, 255, 0.16); color: #fff; font-weight: 600; }
+.viewer-btn.close { background: rgba(255, 255, 255, 0.26); }
+.viewer-stage { position: relative; min-height: 0; overflow: hidden; container-type: size; }
+.viewer-frame { position: absolute; inset: 0; display: grid; place-items: center; }
+.viewer-frame img, .viewer-frame video { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.viewer-frame img { cursor: zoom-in; }
+.viewer[data-rotated='1'] .viewer-frame { inset: auto; top: 50%; left: 50%; width: 100cqh; height: 100cqw;
+  transform: translate(-50%, -50%) rotate(90deg); }
+.viewer[data-actual='1'] .viewer-stage { overflow: auto; -webkit-overflow-scrolling: touch; }
+.viewer[data-actual='1'] .viewer-frame { position: static; display: block; inset: auto; width: auto; height: auto; transform: none; }
+.viewer[data-actual='1'] .viewer-frame img { max-width: none; max-height: none; cursor: zoom-out; }
+.viewer-caption { margin: 0; padding: 6px 12px 8px; display: grid; gap: 2px; text-align: center; color: rgba(255, 255, 255, 0.85); font-size: var(--t-small); }
 .viewer-hint { color: rgba(255, 255, 255, 0.55); font-size: var(--t-caption); }
 
 .evidence { margin: 12px 0 0; font-size: var(--t-caption); color: var(--ink-3); }
@@ -337,6 +350,37 @@ details.block > summary { cursor: pointer; font-weight: 600; color: var(--accent
 .talk { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; font-size: var(--t-small); }
 .talk li { padding: 8px 10px; border-radius: var(--radius-sm); background: var(--paper-2); line-height: 1.45; }
 .talk li.mine { background: var(--row-sel); }
+.talk li.mine[data-kind='object'] { background: var(--warn-soft); }
+
+/* Verdict badges (Scout: adopt / adapt / keep ours / reject) and the deck's verdict filter. */
+.chip[data-verdict='adopt'] { background: color-mix(in srgb, var(--good-text) 14%, transparent); color: var(--good-text); }
+.chip[data-verdict='adapt'] { background: var(--accent-soft); color: var(--accent-text); }
+.chip[data-verdict='keep'], .chip[data-verdict='keep-ours'] { background: var(--paper-3); color: var(--ink-2); }
+.chip[data-verdict='reject'] { background: var(--crit-soft); color: var(--crit-text); }
+.verdicts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.chip-btn { min-height: 32px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--rule); background: var(--paper);
+  color: var(--ink-2); font: inherit; font-size: var(--t-small); cursor: pointer; }
+.chip-btn[aria-pressed='true'] { border-color: var(--accent); color: var(--ink); box-shadow: inset 0 0 0 1px var(--accent); }
+.opt-top .stance-tag { margin-left: auto; font-size: var(--t-caption); font-weight: 600; color: var(--ink-2);
+  background: var(--paper-3); padding: 2px 8px; border-radius: 999px; }
+.sample-banner { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--paper-3);
+  color: var(--ink-2); font-weight: 600; }
+
+/* Verbatim quotes and proposed plan changes. */
+.quotes { display: grid; gap: 10px; }
+.quote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--rule-strong); background: var(--paper-2);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.quote blockquote { margin: 0; }
+.quote blockquote p { margin: 0 0 6px; white-space: pre-wrap; }
+.quote-context { margin: 0 0 4px; font-size: var(--t-caption); color: var(--warn-text); }
+.quote figcaption { font-size: var(--t-caption); color: var(--ink-3); overflow-wrap: anywhere; }
+.plan-change { display: grid; gap: 8px; }
+.plan-change > p { margin: 0; overflow-wrap: anywhere; }
+.pc-now, .pc-new { padding: 8px 12px; border-radius: var(--radius-sm); }
+.pc-now { background: var(--crit-soft); }
+.pc-new { background: color-mix(in srgb, var(--good-text) 12%, transparent); }
+.pc-now p, .pc-new p { margin: 4px 0 0; white-space: pre-wrap; }
+.pc-label { font-size: var(--t-caption); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); }
 .talk .who { display: block; font-size: var(--t-caption); color: var(--ink-3); margin-bottom: 2px; }
 .note textarea {
   display: block; width: 100%; min-height: 56px; margin: 12px 0 0; resize: vertical; padding: 10px 12px;

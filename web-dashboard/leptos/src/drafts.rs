@@ -98,7 +98,7 @@ pub fn set_note(drafts: &mut Drafts, card: &Card, note: String) {
 /// Fill every card that has no choice yet with its recommendation (notes are kept).
 pub fn use_recommendations(drafts: &mut Drafts, cards: &[Card]) -> usize {
     let mut filled = 0;
-    for card in cards {
+    for card in cards.iter().filter(|c| c.can_answer() && !c.is_judgement()) {
         let Some(rec) = card.recommendation.as_ref() else {
             continue;
         };
@@ -122,7 +122,7 @@ pub fn prune(drafts: &mut Drafts, cards: &[Card]) {
 pub fn entries(drafts: &Drafts, cards: &[Card]) -> Vec<AnswerEntry> {
     cards
         .iter()
-        .filter(|c| standing(drafts, c) == Standing::Ready)
+        .filter(|c| c.can_answer() && standing(drafts, c) == Standing::Ready)
         .map(|c| {
             let d = &drafts[&c.id];
             let kind = entry_kind(c, d);
@@ -188,6 +188,23 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn samples_and_judgements_take_no_recommendation_and_samples_send_nothing() {
+        let mut sample = card("s", 1, Some("A"));
+        sample.kind = "sample".into();
+        let mut judged = card("j", 1, Some("A"));
+        judged.kind = "judgement".into();
+        let cards = vec![sample.clone(), judged.clone()];
+        let mut d = Drafts::new();
+        assert_eq!(use_recommendations(&mut d, &cards), 0);
+        toggle(&mut d, &sample, "A");
+        toggle(&mut d, &judged, "B");
+        let sent = entries(&d, &cards);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].card_id, "j");
+        assert_eq!(sent[0].kind, "answer");
     }
 
     #[test]

@@ -146,6 +146,125 @@ function sourceFingerprint(crate) {
   return { sha256: hash.digest('hex'), files: files.length };
 }
 
+const LEPTOS_NAME = 'aac_web';
+const LEPTOS_VERSION = '0.9.0-rc1';
+
+/** Fingerprint the Leptos pages' inputs (web-dashboard/leptos), the same way as the Slint crate's. */
+function leptosFingerprint(leptosCrate) {
+  const files = [];
+  function collect(relative) {
+    const absolute = path.join(leptosCrate, relative);
+    if (!fs.existsSync(absolute)) return;
+    const stat = fs.lstatSync(absolute);
+    if (stat.isSymbolicLink()) throw new Error('Leptos build inputs must not be symlinks.');
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(absolute).sort()) collect(path.join(relative, entry));
+    } else if (stat.isFile()) files.push(relative);
+  }
+  for (const input of [
+    '.cargo/config.toml',
+    'Cargo.toml',
+    'Cargo.lock',
+    'index.html',
+    'build',
+    'src',
+    'style',
+  ])
+    collect(input);
+  const hash = crypto.createHash('sha256');
+  for (const file of files.sort()) {
+    hash.update(file.split(path.sep).join('/'));
+    hash.update('\0');
+    hash.update(fs.readFileSync(path.join(leptosCrate, file)));
+    hash.update('\0');
+  }
+  return { sha256: hash.digest('hex'), files: files.length };
+}
+
+/**
+ * Build the Leptos pages (Status, Scoreboard) when the crate is present: release wasm, the debug name section
+ * stripped, content-addressed like the Slint runtime. Nothing in dist/ui is touched here.
+ */
+function buildLeptosPages({ crate, repoRoot, run, env, cargoBin, lock }) {
+  const leptosCrate = path.join(crate, 'leptos');
+  if (!fs.existsSync(path.join(leptosCrate, 'Cargo.toml'))) return null;
+  const pkg = path.join(leptosCrate, 'pkg');
+  runWithUiBuildLock(
+    toolPath('wasm-pack', cargoBin),
+    [
+      'build',
+      leptosCrate,
+      '--release',
+      '--target',
+      'web',
+      '--out-dir',
+      'pkg',
+      '--out-name',
+      LEPTOS_NAME,
+      '--',
+      '--locked',
+    ],
+    { cwd: repoRoot, env: { ...env, CARGO_TARGET_DIR: `${env.CARGO_TARGET_DIR}-leptos` } },
+    { env, run, ...lock }
+  );
+  const wasmPath = path.join(pkg, `${LEPTOS_NAME}_bg.wasm`);
+  for (const file of [
+    path.join(pkg, `${LEPTOS_NAME}.js`),
+    wasmPath,
+    path.join(leptosCrate, 'index.html'),
+  ]) {
+    if (!fs.existsSync(file))
+      throw new Error(`Missing Leptos page artifact: ${path.relative(repoRoot, file)}.`);
+  }
+  const { stripNameSection } = require(path.join(leptosCrate, 'build', 'strip-names.cjs'));
+  const wasm = stripNameSection(fs.readFileSync(wasmPath));
+  fs.writeFileSync(wasmPath, wasm);
+  const wasmSha256 = sha256(wasm);
+  return {
+    leptosCrate,
+    pkg,
+    wasm,
+    wasmSha256,
+    buildId: wasmSha256.slice(0, 12),
+    source: leptosFingerprint(leptosCrate),
+  };
+}
+
+/** Put the built Leptos pages into dist/ui: pkg/<buildId>/, app/index.html, app/app.css and the mono font. */
+function stageLeptosPages(packagedUi, crate, leptos) {
+  const pkgOut = path.join(packagedUi, 'pkg', leptos.buildId);
+  fs.cpSync(leptos.pkg, pkgOut, {
+    recursive: true,
+    filter: (source) =>
+      !['.gitignore', '.npmignore', 'package.json', 'README.md'].includes(path.basename(source)),
+  });
+  const appDir = path.join(packagedUi, 'app');
+  fs.mkdirSync(appDir, { recursive: true });
+  const template = fs.readFileSync(path.join(leptos.leptosCrate, 'index.html'), 'utf8');
+  if (!template.includes('{{PKG}}'))
+    throw new Error('The Leptos page template must reference {{PKG}}.');
+  fs.writeFileSync(
+    path.join(appDir, 'index.html'),
+    template.replaceAll('{{PKG}}', `/pkg/${leptos.buildId}`)
+  );
+  fs.copyFileSync(path.join(leptos.leptosCrate, 'style', 'app.css'), path.join(appDir, 'app.css'));
+  for (const font of ['MartianMono.ttf', 'OFL-MartianMono.txt']) {
+    fs.copyFileSync(path.join(crate, 'ui', 'fonts', font), path.join(appDir, font));
+  }
+  return {
+    framework: 'leptos',
+    version: LEPTOS_VERSION,
+    entry: 'app/index.html',
+    source: leptos.source,
+    buildId: leptos.buildId,
+    wasm: {
+      path: `pkg/${leptos.buildId}/${LEPTOS_NAME}_bg.wasm`,
+      bytes: leptos.wasm.length,
+      sha256: leptos.wasmSha256,
+    },
+  };
+}
+
 function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
@@ -347,6 +466,8 @@ function buildUi(options = {}) {
   }
   wasm = fs.readFileSync(wasmPath);
   const wasmSha256 = sha256(wasm);
+  // The Leptos pages build before the old output is removed, so a failed build never leaves dist/ui empty.
+  const leptos = buildLeptosPages({ crate, repoRoot, run, env, cargoBin, lock: options.lock });
   // The pkg folder is named after the wasm content, so pkg/<buildId>/** can be cached forever.
   const buildId = wasmSha256.slice(0, 12);
   // Checked before the old output is removed, so a bad bridge never leaves dist/ui empty.
@@ -369,6 +490,7 @@ function buildUi(options = {}) {
     recursive: true,
     filter: (source) => !['.gitignore', '.npmignore'].includes(path.basename(source)),
   });
+  const leptosManifest = leptos ? stageLeptosPages(packagedUi, crate, leptos) : null;
   const precompressed = precompressUi(packagedUi);
   const commit = (options.readCommit ?? readBuildCommit)(repoRoot);
   const manifest = {
@@ -386,6 +508,7 @@ function buildUi(options = {}) {
       sha256: wasmSha256,
       compatibility,
     },
+    ...(leptosManifest ? { leptos: leptosManifest } : {}),
     precompressed,
   };
   // Written last, then every mode is set explicitly.
@@ -420,6 +543,7 @@ module.exports = {
   versionedBridgeSource,
   stampedSwSource,
   sourceFingerprint,
+  leptosFingerprint,
   commandRunner,
   toolPath,
   BRIDGE_IMPORT_ERROR,

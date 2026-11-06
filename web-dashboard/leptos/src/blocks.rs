@@ -28,6 +28,8 @@ fn default_title(kind: &str) -> Option<&'static str> {
         "unknowns" => Some("Unknowns"),
         "terms" => Some("Terms"),
         "links" => Some("Links"),
+        "quote" => Some("In their words"),
+        "planChange" => Some("Plan change"),
         _ => None,
     }
 }
@@ -107,6 +109,37 @@ fn body_of(block: &Block) -> AnyView {
             <ul class="links">{block.items.iter().map(|i| view! { <li>{link_view(text_of(i, "label"), text_of(i, "url"))}</li> }).collect_view()}</ul>
         }
         .into_any(),
+        // Verbatim words copied by code: shown exactly as written, with where they came from.
+        "quote" => view! {
+            <div class="quotes">
+                {block.items.iter().map(|q| {
+                    let where_ = text_of(q, "where");
+                    let source = text_of(q, "source");
+                    let version = text_of(q, "version");
+                    let context = q.get("context").and_then(Value::as_array).map(|a| strings(a)).unwrap_or_default();
+                    let link = q.get("link").filter(|l| !l.is_null()).map(|l| (text_of(l, "label"), text_of(l, "url")));
+                    let origin = [source, where_, version].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+                    view! {
+                        <figure class="quote">
+                            <blockquote>{paragraphs(&text_of(q, "text"))}</blockquote>
+                            {(!context.is_empty()).then(|| view! { <p class="quote-context">{context.join(" · ")}</p> })}
+                            {(!origin.is_empty() || link.is_some()).then(|| view! {
+                                <figcaption>{origin.clone()}{link.clone().map(|(label, url)| view! { " " {link_view(if label.is_empty() { url.clone() } else { label }, url)} })}</figcaption>
+                            })}
+                        </figure>
+                    }
+                }).collect_view()}
+            </div>
+        }
+        .into_any(),
+        "planChange" => view! {
+            <div class="plan-change">
+                <p class="muted">{[block.doc.clone().unwrap_or_default(), block.unit.clone().unwrap_or_default()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" › ")}</p>
+                <div class="pc-now"><span class="pc-label">"Now"</span>{paragraphs(block.now.as_deref().unwrap_or_default())}</div>
+                <div class="pc-new"><span class="pc-label">"Proposed"</span>{paragraphs(block.proposed.as_deref().unwrap_or_default())}</div>
+            </div>
+        }
+        .into_any(),
         "media" => {
             let items: Vec<Media> = block.items.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
             view! { <MediaList items=items/> }.into_any()
@@ -128,8 +161,9 @@ fn link_view(label: String, url: String) -> AnyView {
     }
 }
 
+/// `fold_all`: every section starts folded under its title (phones, where the decision comes first).
 #[component]
-pub fn Blocks(blocks: Vec<Block>) -> impl IntoView {
+pub fn Blocks(blocks: Vec<Block>, #[prop(optional)] fold_all: bool) -> impl IntoView {
     blocks
         .into_iter()
         .map(|block| {
@@ -139,7 +173,7 @@ pub fn Blocks(blocks: Vec<Block>) -> impl IntoView {
                 .clone()
                 .or_else(|| default_title(&kind).map(str::to_string));
             let body = body_of(&block);
-            if block.fold {
+            if block.fold || fold_all {
                 view! {
                     <details class="block" data-type=kind>
                         <summary>{title.unwrap_or_else(|| "More".into())}</summary>

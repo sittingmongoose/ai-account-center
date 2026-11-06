@@ -1,11 +1,13 @@
-// Remove the WebAssembly "name" custom section (function names for debugging, about 90% of the file) from a module.
+'use strict';
+// Remove the WebAssembly "name" custom section (function names for debugging, about 90% of a release build).
 // Pure: bytes in, bytes out. Every other section, including target_features, is kept byte for byte.
-import fs from 'node:fs';
+const fs = require('fs');
 
 function leb(bytes, at) {
   let value = 0;
   let shift = 0;
   for (;;) {
+    if (at >= bytes.length) throw new Error('truncated LEB128');
     const b = bytes[at++];
     value += (b & 0x7f) * 2 ** shift;
     shift += 7;
@@ -13,7 +15,7 @@ function leb(bytes, at) {
   }
 }
 
-export function stripNameSection(bytes) {
+function stripNameSection(bytes) {
   if (bytes.length < 8 || bytes.readUInt32LE(0) !== 0x6d736100) throw new Error('not a WebAssembly module');
   const parts = [bytes.subarray(0, 8)];
   let at = 8;
@@ -34,7 +36,9 @@ export function stripNameSection(bytes) {
   return Buffer.concat(parts);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+module.exports = { stripNameSection };
+
+if (require.main === module) {
   const file = process.argv[2];
   const out = stripNameSection(fs.readFileSync(file));
   fs.writeFileSync(file, out);

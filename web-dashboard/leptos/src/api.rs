@@ -10,15 +10,28 @@ use web_sys::{Request, RequestCredentials, RequestInit, Response};
 
 pub const STATUS_VIEW_VERSION: u32 = 1;
 
+/// Text and lists the server sends as `null` when unknown read as empty, which the page draws as missing. Numbers are
+/// left strict: a null count must not turn into a zero.
+fn nullable<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct StatusView {
     pub version: u32,
+    #[serde(deserialize_with = "nullable")]
     pub generated_at: String,
     pub refresh: Refresh,
     pub headline: Headline,
+    #[serde(deserialize_with = "nullable")]
     pub sources: Vec<Source>,
     pub cards: Cards,
+    #[serde(deserialize_with = "nullable")]
     pub projects: Vec<Project>,
     pub threads: Rows<Thread>,
     pub machines: Rows<Machine>,
@@ -41,7 +54,9 @@ impl Default for Refresh {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Headline {
+    #[serde(deserialize_with = "nullable")]
     pub tone: String,
+    #[serde(deserialize_with = "nullable")]
     pub runs: Vec<Run>,
     pub counts: HeadlineCounts,
 }
@@ -59,6 +74,7 @@ pub struct HeadlineCounts {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Run {
+    #[serde(deserialize_with = "nullable")]
     pub text: String,
     pub strong: bool,
     pub tone: Option<String>,
@@ -67,12 +83,16 @@ pub struct Run {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Source {
+    #[serde(deserialize_with = "nullable")]
     pub id: String,
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
+    #[serde(deserialize_with = "nullable")]
     pub state: String,
     pub as_of: Option<String>,
     pub age_seconds: Option<i64>,
     pub stale_after_seconds: Option<i64>,
+    #[serde(deserialize_with = "nullable")]
     pub detail: String,
 }
 
@@ -85,47 +105,88 @@ impl Source {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Cards {
+    #[serde(deserialize_with = "nullable")]
     pub source: String,
+    #[serde(deserialize_with = "nullable")]
     pub open: Vec<Card>,
+    #[serde(deserialize_with = "nullable")]
     pub answered: Vec<AnsweredCard>,
+    #[serde(deserialize_with = "nullable")]
     pub batches: Vec<Batch>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Card {
+    #[serde(deserialize_with = "nullable")]
     pub id: String,
     /// "question" (default), "objection" (a call already made; the owner may object) or "action" (owner-only task).
+    #[serde(deserialize_with = "nullable")]
     pub kind: String,
     /// The short id the owner can quote anywhere ("F-Q3").
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
     pub seq: u64,
+    #[serde(deserialize_with = "nullable")]
     pub card_sha256: String,
+    #[serde(deserialize_with = "nullable")]
     pub project: String,
     pub stream: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub asked_by: String,
     pub asker_state: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub title: String,
+    #[serde(deserialize_with = "nullable")]
     pub now: String,
     pub now_as_of: Option<String>,
     pub old_answer: Option<OldAnswer>,
     pub what_changed: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub options: Vec<CardOption>,
     pub recommendation: Option<Recommendation>,
     pub multiple: bool,
+    #[serde(deserialize_with = "nullable")]
     pub urgency: String,
     pub blocks: Option<String>,
     pub batch: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub evidence: Vec<Link>,
     /// Optional sections, only what this question needs (comparisons, tables, media...).
+    #[serde(deserialize_with = "nullable")]
     pub sections: Vec<Block>,
     pub needed_by: Option<NeededBy>,
     pub exception: Option<Exception>,
     pub reversible: Option<Reversible>,
+    /// A badge such as Scout's adopt / adapt / keep ours / reject; the deck can filter on it.
+    pub verdict: Option<String>,
+    /// A group within the batch, with its own "use the recommendations for this group".
+    pub group: Option<String>,
+    /// Whether the judges agreed; split cards are where the owner's time goes.
+    pub agreement: Option<Agreement>,
+    /// What the asker is unsure of.
+    pub doubt: Option<String>,
+    /// A rule card that settles a whole class of cases.
+    pub applies_to: Option<AppliesTo>,
+    #[serde(deserialize_with = "nullable")]
+    pub changes_canon: Vec<CanonChange>,
+    /// Other card ids this one depends on or affects.
+    #[serde(deserialize_with = "nullable")]
+    pub related: Vec<String>,
+    #[serde(deserialize_with = "nullable")]
     pub replies: Vec<Reply>,
+    #[serde(deserialize_with = "nullable")]
     pub notes: Vec<SentNote>,
+    #[serde(deserialize_with = "nullable")]
     pub asked_at: String,
     pub age_seconds: Option<i64>,
+    /// The report folder that asked (`<machine>.<name>`).
+    #[serde(deserialize_with = "nullable")]
+    pub writer: String,
+    /// Why the card can't be trusted right now (for example its file was damaged after it was read).
+    pub problem: Option<String>,
+    /// False while there is a problem: the server would refuse an answer, so the page offers none. Absent means true.
+    pub answerable: Option<bool>,
 }
 
 impl Card {
@@ -136,6 +197,15 @@ impl Card {
 
     pub fn is_question(&self) -> bool {
         self.kind.is_empty() || self.kind == "question"
+    }
+
+    pub fn can_answer(&self) -> bool {
+        self.answerable.unwrap_or(true) && self.kind != "sample"
+    }
+
+    /// A measurement card: the owner's own judgement, never anchored by a recommendation.
+    pub fn is_judgement(&self) -> bool {
+        self.kind == "judgement"
     }
 
     pub fn short(&self) -> String {
@@ -150,6 +220,7 @@ impl Card {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OldAnswer {
+    #[serde(deserialize_with = "nullable")]
     pub text: String,
     pub at: Option<String>,
 }
@@ -157,19 +228,54 @@ pub struct OldAnswer {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CardOption {
+    #[serde(deserialize_with = "nullable")]
     pub key: String,
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
+    #[serde(deserialize_with = "nullable")]
     pub gets: String,
+    #[serde(deserialize_with = "nullable")]
     pub costs: String,
+    #[serde(deserialize_with = "nullable")]
     pub media: Vec<Media>,
+    #[serde(deserialize_with = "nullable")]
     pub sections: Vec<Block>,
+    /// "keep" (ours), "borrow" (from others) or "own" (new), when the asker says.
+    pub stance: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Agreement {
+    pub same: Option<bool>,
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppliesTo {
+    pub count: Option<u32>,
+    #[serde(deserialize_with = "nullable")]
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CanonChange {
+    #[serde(rename = "ref")]
+    #[serde(deserialize_with = "nullable")]
+    pub reference: String,
+    #[serde(deserialize_with = "nullable")]
+    pub what: String,
 }
 
 /// A screenshot or a video; `url`/`posterUrl` are served by AAC from the asking writer's own folder.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Media {
+    #[serde(deserialize_with = "nullable")]
     pub kind: String,
+    #[serde(deserialize_with = "nullable")]
     pub url: String,
     pub poster_url: Option<String>,
     pub caption: Option<String>,
@@ -183,6 +289,7 @@ pub struct Media {
 #[serde(rename_all = "camelCase", default)]
 pub struct Block {
     #[serde(rename = "type")]
+    #[serde(deserialize_with = "nullable")]
     pub kind: String,
     pub title: Option<String>,
     pub fold: bool,
@@ -190,9 +297,17 @@ pub struct Block {
     pub body: Option<String>,
     pub tone: Option<String>,
     pub ordered: bool,
+    #[serde(deserialize_with = "nullable")]
     pub columns: Vec<String>,
+    #[serde(deserialize_with = "nullable")]
     pub items: Vec<serde_json::Value>,
+    #[serde(deserialize_with = "nullable")]
     pub rows: Vec<serde_json::Value>,
+    /// planChange: the document, the unit in it, its words now and the proposed words.
+    pub doc: Option<String>,
+    pub unit: Option<String>,
+    pub now: Option<String>,
+    pub proposed: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -205,7 +320,9 @@ pub struct NeededBy {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Exception {
+    #[serde(deserialize_with = "nullable")]
     pub rule: String,
+    #[serde(deserialize_with = "nullable")]
     pub text: String,
 }
 
@@ -219,7 +336,9 @@ pub struct Reversible {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Recommendation {
+    #[serde(deserialize_with = "nullable")]
     pub key: String,
+    #[serde(deserialize_with = "nullable")]
     pub why: String,
     /// "low", "medium" or "high".
     pub confidence: Option<String>,
@@ -230,7 +349,9 @@ pub struct Recommendation {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Link {
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
+    #[serde(deserialize_with = "nullable")]
     pub path: String,
 }
 
@@ -238,12 +359,17 @@ pub struct Link {
 #[serde(rename_all = "camelCase", default)]
 pub struct Reply {
     pub at: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub text: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SentNote {
+    /// "note", or "object" (an objection, in the owner's words; the card stays open).
+    #[serde(deserialize_with = "nullable")]
+    pub kind: String,
+    #[serde(deserialize_with = "nullable")]
     pub note: String,
     pub at: Option<String>,
     pub delivery: Delivery,
@@ -259,36 +385,50 @@ pub struct AnsweredCard {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Answer {
+    #[serde(deserialize_with = "nullable")]
     pub kind: String,
     pub choice: Option<Vec<String>>,
     pub note: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub via: String,
+    #[serde(deserialize_with = "nullable")]
     pub answered_at: String,
+    /// The kind of device the answer came from ("iPhone", "Mac"...).
+    #[serde(deserialize_with = "nullable")]
+    pub device: String,
     pub delivery: Delivery,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Delivery {
+    #[serde(deserialize_with = "nullable")]
     pub state: String,
     pub at: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub detail: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Batch {
+    #[serde(deserialize_with = "nullable")]
     pub id: String,
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
+    #[serde(deserialize_with = "nullable")]
     pub card_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Project {
+    #[serde(deserialize_with = "nullable")]
     pub id: String,
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
     pub counts: Option<Counts>,
+    #[serde(deserialize_with = "nullable")]
     pub streams: Vec<Stream>,
 }
 
@@ -310,22 +450,31 @@ pub struct Counts {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Stream {
+    #[serde(deserialize_with = "nullable")]
     pub id: String,
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
+    #[serde(deserialize_with = "nullable")]
     pub owner: String,
+    #[serde(deserialize_with = "nullable")]
     pub goal: String,
     pub board: Option<Board>,
+    #[serde(deserialize_with = "nullable")]
     pub source: String,
     pub as_of: Option<String>,
     pub stale: bool,
     pub counts: Option<Counts>,
     pub completion: Option<Completion>,
+    #[serde(deserialize_with = "nullable")]
     pub items: Vec<Item>,
+    /// Why this stream's task report could not be read (the last good reading is shown).
+    pub problem: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Board {
+    #[serde(deserialize_with = "nullable")]
     pub path: String,
     pub age_seconds: Option<i64>,
 }
@@ -340,19 +489,27 @@ pub struct Completion {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Item {
+    #[serde(deserialize_with = "nullable")]
     pub id: String,
+    #[serde(deserialize_with = "nullable")]
     pub title: String,
+    #[serde(deserialize_with = "nullable")]
     pub state: String,
     pub owner: Option<String>,
     pub landed: Option<Landed>,
+    #[serde(deserialize_with = "nullable")]
     pub reviews: Vec<Review>,
     pub blocked_on: Option<BlockedOn>,
     pub age_seconds: Option<i64>,
+    pub branch: Option<String>,
+    /// Why an item was dropped or changed.
+    pub why: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Landed {
+    #[serde(deserialize_with = "nullable")]
     pub sha: String,
     pub at: Option<String>,
 }
@@ -360,14 +517,18 @@ pub struct Landed {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Review {
+    #[serde(deserialize_with = "nullable")]
     pub by: String,
+    #[serde(deserialize_with = "nullable")]
     pub verdict: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BlockedOn {
+    #[serde(deserialize_with = "nullable")]
     pub kind: String,
+    #[serde(deserialize_with = "nullable")]
     pub what: String,
     pub since: Option<String>,
 }
@@ -391,10 +552,12 @@ impl<T> Default for Rows<T> {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Thread {
+    #[serde(deserialize_with = "nullable")]
     pub name: String,
     pub machine: Option<String>,
     pub project: Option<String>,
     pub stream: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub state: String,
     pub doing: Option<String>,
     pub blocked_on: Option<BlockedOn>,
@@ -402,10 +565,14 @@ pub struct Thread {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub account: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub source: String,
     pub last_seen: Option<String>,
     pub age_seconds: Option<i64>,
     pub stale: bool,
+    /// Seconds this thread's clock runs ahead of AAC's, when it is enough to matter.
+    pub clock_ahead_seconds: Option<i64>,
+    pub problem: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -413,23 +580,44 @@ pub struct Thread {
 pub struct Progress {
     pub done: u32,
     pub total: u32,
+    #[serde(deserialize_with = "nullable")]
     pub unit: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Machine {
+    #[serde(deserialize_with = "nullable")]
     pub id: String,
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
+    #[serde(deserialize_with = "nullable")]
     pub state: String,
     pub as_of: Option<String>,
     pub cpu: Option<Cpu>,
     pub memory: Option<Memory>,
+    #[serde(deserialize_with = "nullable")]
     pub disk: Vec<Disk>,
     pub browsers: Option<Slots>,
     pub recordings: Option<Slots>,
     pub gpu_pct: Option<f64>,
+    #[serde(deserialize_with = "nullable")]
     pub warnings: Vec<String>,
+    pub age_seconds: Option<i64>,
+    /// Why a machine is stale or unreachable, and which reading is shown instead.
+    pub detail: Option<String>,
+    /// Browsers running there now.
+    #[serde(deserialize_with = "nullable")]
+    pub sessions: Vec<Session>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Session {
+    pub url: Option<String>,
+    pub owner: Option<String>,
+    pub recording: bool,
+    pub age_seconds: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -450,6 +638,7 @@ pub struct Memory {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Disk {
+    #[serde(deserialize_with = "nullable")]
     pub mount: String,
     pub free_gb: Option<f64>,
     pub total_gb: Option<f64>,
@@ -465,14 +654,18 @@ pub struct Slots {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Simlock {
+    #[serde(deserialize_with = "nullable")]
     pub source: String,
+    #[serde(deserialize_with = "nullable")]
     pub capacity: Vec<Capacity>,
+    #[serde(deserialize_with = "nullable")]
     pub leases: Vec<Lease>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Capacity {
+    #[serde(deserialize_with = "nullable")]
     pub platform: String,
     pub running: Option<u32>,
     pub max: Option<u32>,
@@ -483,8 +676,11 @@ pub struct Capacity {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Lease {
+    #[serde(deserialize_with = "nullable")]
     pub device: String,
+    #[serde(deserialize_with = "nullable")]
     pub platform: String,
+    #[serde(deserialize_with = "nullable")]
     pub holder: String,
     pub since: Option<String>,
     pub expires_at: Option<String>,
@@ -493,28 +689,36 @@ pub struct Lease {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Usage {
+    #[serde(deserialize_with = "nullable")]
     pub source: String,
+    #[serde(deserialize_with = "nullable")]
     pub warnings: Vec<UsageWarning>,
+    #[serde(deserialize_with = "nullable")]
     pub accounts: Vec<UsageAccount>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UsageWarning {
+    #[serde(deserialize_with = "nullable")]
     pub tone: String,
+    #[serde(deserialize_with = "nullable")]
     pub text: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UsageAccount {
+    #[serde(deserialize_with = "nullable")]
     pub provider: String,
+    #[serde(deserialize_with = "nullable")]
     pub label: String,
+    #[serde(deserialize_with = "nullable")]
     pub window: String,
     pub used_pct: Option<f64>,
     pub resets_at: Option<String>,
     pub projected_full_at: Option<String>,
-    pub runs_out_before_reset: bool,
+    pub runs_out_before_reset: Option<bool>,
     pub at_limit: bool,
     pub stale: bool,
 }
@@ -613,10 +817,14 @@ struct SubmitRequest<'a> {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct EntryOutcome {
+    #[serde(deserialize_with = "nullable")]
     pub card_id: String,
     /// "recorded", "card_changed" or "refused".
+    #[serde(deserialize_with = "nullable")]
     pub outcome: String,
+    #[serde(deserialize_with = "nullable")]
     pub code: String,
+    #[serde(deserialize_with = "nullable")]
     pub error: String,
 }
 
@@ -713,6 +921,89 @@ mod tests {
             .find(|s| s.id == "C")
             .unwrap();
         assert!(c.completion.is_none());
+    }
+
+    /// A view the server branch built from scripts/status-fixture.mjs (--with-kinds --with-problems): the page must read
+    /// what the server actually sends, nulls included.
+    #[test]
+    fn the_server_view_reads() {
+        let text = include_str!("../fixtures/server-view.json");
+        let view: StatusView = serde_json::from_str(text).expect("server view parses");
+        assert_eq!(view.version, STATUS_VIEW_VERSION);
+        assert_eq!(view.cards.open.len(), 9);
+        let kinds: Vec<&str> = view.cards.open.iter().map(|c| c.kind.as_str()).collect();
+        for kind in ["objection", "action", "judgement", "sample"] {
+            assert!(kinds.contains(&kind), "{kind}");
+        }
+        assert!(view.cards.open.iter().all(|c| !c.writer.is_empty()));
+        // A sample card is shown but never answered; every other card in this view can be.
+        for c in &view.cards.open {
+            assert_eq!(c.can_answer(), c.kind != "sample", "{}", c.label);
+        }
+        // The threads' additions are read, not dropped.
+        let card = |label: &str| view.cards.open.iter().find(|c| c.label == label).unwrap();
+        let split = card("F-Q4");
+        assert_eq!(split.verdict.as_deref(), Some("adapt"));
+        assert_eq!(split.group.as_deref(), Some("toasts"));
+        assert_eq!(split.agreement.as_ref().and_then(|a| a.same), Some(false));
+        assert_eq!(split.related.len(), 1);
+        let rule = card("F-Q5");
+        assert_eq!(rule.applies_to.as_ref().and_then(|a| a.count), Some(4));
+        assert_eq!(rule.changes_canon[0].reference, "PM7 plan > Flags");
+        assert!(rule.doubt.is_some());
+        let words = card("ST-Q2");
+        let types: Vec<&str> = words.sections.iter().map(|s| s.kind.as_str()).collect();
+        assert_eq!(types, ["quote", "planChange"]);
+        assert!(words.sections[1].proposed.is_some());
+        assert_eq!(words.notes[0].kind, "note");
+        // An option the agent left without gets/costs reads as empty, not as a failed page.
+        assert!(
+            view.cards
+                .open
+                .iter()
+                .flat_map(|c| &c.options)
+                .any(|o| o.gets.is_empty())
+        );
+        // Image and video links are the server's file URLs.
+        let media: Vec<&Media> = view
+            .cards
+            .open
+            .iter()
+            .flat_map(|c| &c.options)
+            .flat_map(|o| &o.media)
+            .collect();
+        assert!(
+            !media.is_empty()
+                && media
+                    .iter()
+                    .all(|m| m.url.starts_with("/api/status/files/"))
+        );
+        let answered = &view.cards.answered[0].answer;
+        assert!(!answered.device.is_empty() && !answered.delivery.state.is_empty());
+        // An unreachable machine says why, and a machine with no reading stays missing.
+        let nas1 = view.machines.rows.iter().find(|m| m.id == "nas1").unwrap();
+        assert!(
+            nas1.detail
+                .as_deref()
+                .is_some_and(|d| d.contains("refused"))
+        );
+        assert!(nas1.memory.is_none() && nas1.disk.is_empty());
+        let vm = view.machines.rows.iter().find(|m| m.id == "vm").unwrap();
+        assert_eq!(vm.sessions.len(), 1);
+        // A usage window with no projection is unknown, not "won't run out".
+        assert!(
+            view.usage
+                .accounts
+                .iter()
+                .any(|a| a.runs_out_before_reset.is_none())
+        );
+        // Damaged report files are reported by the source, not dropped silently.
+        let reports = view
+            .sources
+            .iter()
+            .find(|s| s.id == "agent-reports")
+            .unwrap();
+        assert_eq!(reports.state, "unreadable");
     }
 
     #[test]

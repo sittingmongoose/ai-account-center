@@ -1,5 +1,8 @@
-//! Screenshots and videos on cards. Every image opens full screen when tapped (tap again to see it at full size);
-//! every video plays inline and has a Full screen button (on an iPhone that is the system video player).
+//! Screenshots and videos on cards. Tapping a screenshot, or Full screen on a video, opens the page's own full-screen
+//! viewer: wide media on an upright phone opens turned sideways so it fills the screen (Rotate switches), a tap on a
+//! screenshot shows it at full size to pan around, and a video plays there with the system player one tap away.
+//! The viewer works the same inside the T3 app, the installed AAC app and a browser, whatever the host's own
+//! rotation lock.
 
 use crate::api::Media;
 use leptos::prelude::*;
@@ -42,13 +45,14 @@ pub fn MediaList(items: Vec<Media>) -> impl IntoView {
     })
 }
 
-/// Video full screen: the iPhone only offers its own player (`webkitEnterFullscreen`); elsewhere the standard API.
-fn video_full_screen(video: &web_sys::HtmlVideoElement) {
+/// The iPhone only offers its own player for a video (`webkitEnterFullscreen`); elsewhere the standard API.
+fn system_full_screen(video: &web_sys::HtmlVideoElement) {
     let target: &wasm_bindgen::JsValue = video.as_ref();
     if let Ok(f) = js_sys::Reflect::get(target, &"webkitEnterFullscreen".into()) {
         if let Some(f) = f.dyn_ref::<js_sys::Function>() {
-            let _ = f.call0(target);
-            return;
+            if f.call0(target).is_ok() {
+                return;
+            }
         }
     }
     let _ = video.request_fullscreen();
@@ -58,19 +62,15 @@ fn video_full_screen(video: &web_sys::HtmlVideoElement) {
 fn MediaItem(media: Media) -> impl IntoView {
     let viewer = expect_context::<Viewer>();
     let caption = caption_line(&media);
+    let open = media.clone();
     if media.kind == "video" {
-        let video_ref = NodeRef::<leptos::html::Video>::new();
         view! {
             <figure class="media" data-kind="video">
-                <video node_ref=video_ref src=media.url.clone() poster=media.poster_url.clone().unwrap_or_default()
+                <video src=media.url.clone() poster=media.poster_url.clone().unwrap_or_default()
                     controls=true playsinline=true preload="metadata"></video>
                 <figcaption>
                     <span>{caption}</span>
-                    <button class="link" on:click=move |_| {
-                        if let Some(v) = video_ref.get_untracked() {
-                            video_full_screen(&v);
-                        }
-                    }>"Full screen"</button>
+                    <button class="link" on:click=move |_| viewer.open.set(Some(open.clone()))>"Full screen"</button>
                 </figcaption>
             </figure>
         }
@@ -82,7 +82,6 @@ fn MediaItem(media: Media) -> impl IntoView {
             caption.clone()
         };
         let label = format!("Enlarge: {alt}");
-        let open = media.clone();
         view! {
             <figure class="media" data-kind="image">
                 <button class="media-open" aria-label=label on:click=move |_| viewer.open.set(Some(open.clone()))>
@@ -96,22 +95,46 @@ fn MediaItem(media: Media) -> impl IntoView {
     }
 }
 
-/// The full-screen image viewer, once per page. Tap the image to switch between fit-to-screen and full size;
-/// the close button, Escape or a tap outside the image closes it.
+fn upright_screen() -> bool {
+    let w = window()
+        .inner_width()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let h = window()
+        .inner_height()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    h > w
+}
+
+/// The full-screen viewer, once per page.
 #[component]
 pub fn ViewerOverlay() -> impl IntoView {
     let viewer = expect_context::<Viewer>();
-    let zoomed = RwSignal::new(false);
+    // Turned sideways (fills an upright screen with wide media); showing a screenshot at full size.
+    let rotated = RwSignal::new(false);
+    let actual = RwSignal::new(false);
+    let decided = RwSignal::new(false);
     let close = move || {
         viewer.open.set(None);
-        zoomed.set(false);
+        rotated.set(false);
+        actual.set(false);
+        decided.set(false);
+    };
+    // Wide media opens sideways on an upright screen, once its size is known.
+    let fit_to_screen = move |w: f64, h: f64| {
+        if !decided.get_untracked() && w > 0.0 && h > 0.0 {
+            decided.set(true);
+            rotated.set(w > h * 1.15 && upright_screen());
+        }
     };
     let _ = window_event_listener(leptos::ev::keydown, move |e| {
         if e.key() == "Escape" && viewer.open.with_untracked(|m| m.is_some()) {
             close();
         }
     });
-    // Keep the page behind still while the viewer is open.
     Effect::new(move |_| {
         let open = viewer.open.with(|m| m.is_some());
         if let Some(body) = document().body() {
@@ -120,18 +143,53 @@ pub fn ViewerOverlay() -> impl IntoView {
                 .set_property("overflow", if open { "hidden" } else { "" });
         }
     });
+    let video_ref = NodeRef::<leptos::html::Video>::new();
     view! {
         <Show when=move || viewer.open.with(|m| m.is_some())>
             {move || viewer.open.get().map(|m| {
                 let caption = caption_line(&m);
+                let is_video = m.kind == "video";
                 view! {
-                    <div class="viewer" role="dialog" aria-modal="true" aria-label="Screenshot" on:click=move |_| close()>
-                        <button class="viewer-close" aria-label="Close" on:click=move |e| { e.stop_propagation(); close(); }>"Close"</button>
-                        <div class="viewer-scroll" data-zoomed=move || zoomed.get().then_some("1")>
-                            <img src=m.url.clone() alt=caption.clone() on:click=move |e| { e.stop_propagation(); zoomed.update(|z| *z = !*z); }/>
+                    <div class="viewer" role="dialog" aria-modal="true" aria-label=if is_video { "Video" } else { "Screenshot" }
+                        data-rotated=move || rotated.get().then_some("1") data-actual=move || actual.get().then_some("1")>
+                        <div class="viewer-bar">
+                            <button class="viewer-btn" on:click=move |_| { actual.set(false); rotated.update(|r| *r = !*r); }>"Rotate"</button>
+                            {is_video.then(|| view! {
+                                <button class="viewer-btn" on:click=move |_| { if let Some(v) = video_ref.get_untracked() { system_full_screen(&v); } }>"System player"</button>
+                            })}
+                            <button class="viewer-btn close" on:click=move |_| close()>"Close"</button>
                         </div>
-                        {(!caption.is_empty()).then(|| view! { <p class="viewer-caption">{caption.clone()}</p> })}
-                        <p class="viewer-hint">{move || if zoomed.get() { "Tap the image to fit it to the screen" } else { "Tap the image to see it at full size" }}</p>
+                        <div class="viewer-stage" on:click=move |_| { if !is_video && actual.get_untracked() { actual.set(false); } }>
+                            <div class="viewer-frame">
+                                {if is_video {
+                                    view! {
+                                        <video node_ref=video_ref src=m.url.clone() poster=m.poster_url.clone().unwrap_or_default()
+                                            controls=true playsinline=true autoplay=true muted=true preload="auto"
+                                            on:loadedmetadata=move |ev| {
+                                                let v: web_sys::HtmlVideoElement = event_target(&ev);
+                                                fit_to_screen(v.video_width() as f64, v.video_height() as f64);
+                                            }></video>
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <img src=m.url.clone() alt=caption.clone()
+                                            on:load=move |ev| {
+                                                let i: web_sys::HtmlImageElement = event_target(&ev);
+                                                fit_to_screen(i.natural_width() as f64, i.natural_height() as f64);
+                                            }
+                                            on:click=move |e| { e.stop_propagation(); actual.update(|a| *a = !*a); }/>
+                                    }.into_any()
+                                }}
+                            </div>
+                        </div>
+                        <p class="viewer-caption">
+                            {(!caption.is_empty()).then(|| view! { <span>{caption.clone()}</span> })}
+                            <span class="viewer-hint">{move || match (is_video, actual.get()) {
+                                (true, _) => "Sound is off until you turn it on in the player.",
+                                (false, true) => "Drag to look around. Tap to fit it to the screen again.",
+                                (false, false) => "Tap the picture to see it at full size.",
+                            }}</span>
+                        </p>
                     </div>
                 }
             })}

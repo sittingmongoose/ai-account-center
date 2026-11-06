@@ -12,6 +12,39 @@ use crate::status::Panel;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+fn verdict_label(v: &str) -> String {
+    match v {
+        "adopt" => "Adopt".into(),
+        "adapt" => "Adapt".into(),
+        "keep" | "keep-ours" | "keep ours" => "Keep ours".into(),
+        "reject" => "Reject".into(),
+        other => {
+            let mut c = other.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
+fn stance_label(s: &str) -> Option<&'static str> {
+    match s {
+        "keep" => Some("Keep ours"),
+        "borrow" => Some("Borrow"),
+        "own" => Some("Our own"),
+        _ => None,
+    }
+}
+
+/// Phones read the decision first: sections fold under the options.
+fn narrow() -> bool {
+    window()
+        .inner_width()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .is_some_and(|w| w < 600.0)
+}
+
 fn urgency_label(u: &str) -> &'static str {
     match u {
         "now" => "Now",
@@ -137,10 +170,34 @@ fn Deck(
             30,
         );
     };
+    // A verdict filter (Scout's adopt / adapt / keep ours / reject) narrows the deck; the review always lists every card.
+    let verdict = RwSignal::new(None::<String>);
+    let verdicts = Memo::new(move |_| {
+        let mut v: Vec<String> =
+            open.with(|cards| cards.iter().filter_map(|c| c.verdict.clone()).collect());
+        v.sort();
+        v.dedup();
+        v
+    });
+    let shown = Memo::new(move |_| {
+        let pick = verdict.get();
+        open.with(|cards| {
+            cards
+                .iter()
+                .filter(|c| pick.is_none() || c.verdict == pick)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+    });
     let go_card = move |i: usize| {
         at.set(i);
         deck_view.set(DeckView::Cards);
         to_top();
+    };
+    // From the review, a row is a card in the whole deck: drop the filter first.
+    let go_open = move |i: usize| {
+        verdict.set(None);
+        go_card(i);
     };
     let go_review = move || {
         deck_view.set(DeckView::Review);
@@ -151,26 +208,95 @@ fn Deck(
             drafts.with(|d| {
                 cards
                     .iter()
-                    .filter(|c| drafts::standing(d, c) == Standing::Ready)
+                    .filter(|c| c.can_answer() && drafts::standing(d, c) == Standing::Ready)
                     .count()
             })
         })
     };
-    let current = Memo::new(move |_| open.with(|cards| cards.get(at.get()).cloned()));
-
+    let current = Memo::new(move |_| shown.with(|cards| cards.get(at.get()).cloned()));
+    let next = move || {
+        let last = at.get_untracked() + 1 >= shown.with_untracked(|o| o.len());
+        if last {
+            go_review()
+        } else {
+            go_card(at.get_untracked() + 1)
+        }
+    };
+    let back = move || {
+        if at.get_untracked() > 0 {
+            go_card(at.get_untracked() - 1)
+        }
+    };
+    // Keyboard on a desktop: left and right move through the deck, 1-9 pick an option on the card shown. Typing in
+    // the note field is left alone.
+    let _keys = window_event_listener(leptos::ev::keydown, move |e| {
+        if e.ctrl_key()
+            || e.meta_key()
+            || e.alt_key()
+            || deck_view.get_untracked() != DeckView::Cards
+        {
+            return;
+        }
+        let typing = document().active_element().is_some_and(|el| {
+            matches!(el.tag_name().as_str(), "TEXTAREA" | "INPUT" | "SELECT")
+                || el.closest(".viewer").ok().flatten().is_some()
+        });
+        if typing
+            || document()
+                .query_selector(".viewer")
+                .ok()
+                .flatten()
+                .is_some()
+        {
+            return;
+        }
+        match e.key().as_str() {
+            "ArrowRight" => next(),
+            "ArrowLeft" => back(),
+            k if k.len() == 1 && k.as_bytes()[0].is_ascii_digit() && k != "0" => {
+                let index = (k.as_bytes()[0] - b'1') as usize;
+                if let Some(card) = current.get_untracked() {
+                    if card.can_answer()
+                        && matches!(card.kind.as_str(), "" | "question" | "judgement")
+                    {
+                        if let Some(option) = card.options.get(index) {
+                            let key = option.key.clone();
+                            drafts.update(|d| drafts::toggle(d, &card, &key));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
     view! {
         <div class="deck">
             <div class="deck-sub">
                 <span>{move || format!("{} open · {} answered", open.with(|o| o.len()), ready())}</span>
-                <Show when=move || deck_view.get() == DeckView::Cards>
+                <Show when=move || deck_view.get() == DeckView::Cards && open.with(|cards| cards.iter().any(|c| c.recommendation.is_some() && c.can_answer() && !c.is_judgement()))>
                     <button class="link" on:click=move |_| { open.with_untracked(|cards| drafts.update(|d| { drafts::use_recommendations(d, cards); })); }>
                         "Use recommendations"
                     </button>
                 </Show>
             </div>
+            <Show when=move || deck_view.get() == DeckView::Cards && !verdicts.with(|v| v.is_empty())>
+                <div class="verdicts" role="group" aria-label="Show cards by verdict">
+                    <button class="chip-btn" aria-pressed=move || verdict.with(|v| v.is_none()).to_string()
+                        on:click=move |_| { verdict.set(None); at.set(0); }>"All"</button>
+                    {move || verdicts.get().into_iter().map(|v| {
+                        let label = verdict_label(&v);
+                        let pick = v.clone();
+                        let count = open.with_untracked(|cards| cards.iter().filter(|c| c.verdict.as_deref() == Some(v.as_str())).count());
+                        view! {
+                            <button class="chip-btn" data-verdict=v.clone() aria-pressed=move || verdict.with(|x| x.as_deref() == Some(pick.as_str())).to_string()
+                                on:click=move |_| { verdict.set(Some(v.clone())); at.set(0); }>{format!("{label} ({count})")}</button>
+                        }
+                    }).collect_view()}
+                </div>
+            </Show>
             <Show when=move || !matches!(deck_view.get(), DeckView::Sent(_))>
                 <div class="jump" role="tablist" aria-label="Questions">
-                    {move || open.get().into_iter().enumerate().map(|(i, card)| {
+                    {move || shown.get().into_iter().enumerate().map(|(i, card)| {
                         let label = card.short();
                         let state = move || drafts.with(|d| match drafts::standing(d, &card) {
                             Standing::Ready => "done",
@@ -191,23 +317,20 @@ fn Deck(
             </Show>
             {move || match deck_view.get() {
                 DeckView::Cards => view! {
-                    {move || current.get().map(|card| view! { <CardBody card=card drafts=drafts/> })}
-                    <Show when=move || { ready() > 0 && at.get() + 1 < open.with(|o| o.len()) }>
+                    {move || current.get().map(|card| view! { <CardBody card=card drafts=drafts open=open/> })}
+                    <Show when=move || { ready() > 0 && at.get() + 1 < shown.with(|o| o.len()) }>
                         <button class="link early" on:click=move |_| go_review()>{move || format!("Send current selections ({})", ready())}</button>
                     </Show>
                     <p class="fine">"Nothing is sent until you review and send."</p>
                     <div class="deck-nav">
-                        <button class="secondary" disabled=move || at.get() == 0 on:click=move |_| go_card(at.get_untracked().saturating_sub(1))>"‹ Back"</button>
-                        <span class="count">{move || format!("{} of {}", at.get() + 1, open.with(|o| o.len()))}</span>
-                        <button class="primary" on:click=move |_| {
-                            let last = at.get_untracked() + 1 >= open.with_untracked(|o| o.len());
-                            if last { go_review() } else { go_card(at.get_untracked() + 1) }
-                        }>
-                            {move || if at.get() + 1 >= open.with(|o| o.len()) { "Review" } else { "Next ›" }}
+                        <button class="secondary" disabled=move || at.get() == 0 on:click=move |_| back()>"‹ Back"</button>
+                        <span class="count">{move || format!("{} of {}", at.get() + 1, shown.with(|o| o.len()))}</span>
+                        <button class="primary" on:click=move |_| next()>
+                            {move || if at.get() + 1 >= shown.with(|o| o.len()) { "Review" } else { "Next ›" }}
                         </button>
                     </div>
                 }.into_any(),
-                DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_card/> }.into_any(),
+                DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open/> }.into_any(),
                 DeckView::Sent(summary) => view! { <Sent summary=summary deck_view=deck_view at=at/> }.into_any(),
             }}
         </div>
@@ -215,24 +338,61 @@ fn Deck(
 }
 
 #[component]
-fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
+fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl IntoView {
     let card = StoredValue::new(card);
     let c = card.get_value();
-    let recommended = c
-        .recommendation
+    // A judgement card is the owner's own call: no recommendation is shown, so nothing anchors it.
+    let recommendation = c.recommendation.clone().filter(|_| !c.is_judgement());
+    let recommended = recommendation
         .as_ref()
         .map(|r| r.key.clone())
         .unwrap_or_default();
+    let group = c.group.clone();
+    let group_size = group.as_ref().map_or(0, |g| {
+        open.with_untracked(|cards| cards.iter().filter(|x| x.group.as_ref() == Some(g)).count())
+    });
+    let use_group = {
+        let group = group.clone();
+        move |_| {
+            open.with_untracked(|cards| {
+                let mine: Vec<Card> = cards.iter().filter(|x| x.group == group).cloned().collect();
+                drafts.update(|d| {
+                    drafts::use_recommendations(d, &mine);
+                });
+            })
+        }
+    };
+    let related: Vec<String> = c
+        .related
+        .iter()
+        .map(|id| {
+            open.with_untracked(|cards| {
+                cards
+                    .iter()
+                    .find(|x| &x.id == id)
+                    .map(Card::short)
+                    .unwrap_or_else(|| id.rsplit("--").next().unwrap_or(id).to_string())
+            })
+        })
+        .collect();
+    let fold_sections = narrow();
     let initial_note =
         drafts.with_untracked(|d| d.get(&c.id).map(|x| x.note.clone()).unwrap_or_default());
     let place = [
-        Some(c.project.clone()),
+        Some(c.project.clone()).filter(|p| !p.is_empty()),
         c.stream.clone().map(|s| format!("stream {s}")),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>()
     .join(" · ");
+    let asker = if c.asked_by.is_empty() {
+        c.writer.clone()
+    } else {
+        c.asked_by.clone()
+    };
+    // A card the server can't vouch for right now is shown but can't be answered.
+    let locked = !c.can_answer();
     let standing = move || drafts.with(|d| drafts::standing(d, &card.get_value()));
     let chosen = move |key: &str| {
         drafts.with(|d| {
@@ -243,6 +403,9 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
     let kind_word = match c.kind.as_str() {
         "action" => Some("Only you can do this"),
         "objection" => Some("Already decided · object if you disagree"),
+        "judgement" => Some(
+            "Your judgement · no recommendation is shown, and \u{201c}Can't tell\u{201d} is a fine answer",
+        ),
         _ => None,
     };
     let mut facts: Vec<(&'static str, String)> = Vec::new();
@@ -273,6 +436,26 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
         };
         facts.push(("Reversible", words));
     }
+    if let Some(a) = c.applies_to.clone() {
+        let words = match a.count {
+            Some(n) => format!("{n} cases · {}", a.description),
+            None => a.description,
+        };
+        facts.push(("Applies to", words));
+    }
+    if !c.changes_canon.is_empty() {
+        facts.push((
+            "Changes the plan",
+            c.changes_canon
+                .iter()
+                .map(|x| format!("{}: {}", x.reference, x.what))
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
+    }
+    if !related.is_empty() {
+        facts.push(("Related", related.join(", ")));
+    }
     let note_hint = match c.kind.as_str() {
         "objection" => "Say why you object, or leave a note. It goes to the agent word for word.",
         "action" => "Note for the agent (optional). It goes word for word.",
@@ -281,21 +464,35 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
 
     view! {
         <article class="card" data-urgency=c.urgency.clone() data-kind=c.kind.clone()>
+            {(c.kind == "sample").then(|| view! {
+                <p class="sample-banner">"Format sample · no answer wanted. Nothing on this card is sent."</p>
+            })}
+            {(c.kind != "sample" && (locked || c.problem.is_some())).then(|| view! {
+                <p class="item-note" data-tone="warn">
+                    {if locked { "Can't be answered right now. " } else { "" }}
+                    {c.problem.clone().unwrap_or_else(|| "The card could not be checked.".into())}
+                    {locked.then_some(" The last good version is shown; it can be answered once the agent rewrites it.")}
+                </p>
+            })}
             {c.exception.clone().map(|e| view! {
                 <p class="exception"><strong>{format!("Exception to your rule: {}", e.rule)}</strong>{(!e.text.is_empty()).then(|| format!(". {}", e.text))}</p>
             })}
             <div class="card-meta">
                 <span class="card-label">{c.short()}</span>
                 <span class="chip" data-urgency=c.urgency.clone()>{urgency_label(&c.urgency)}</span>
+                {c.verdict.clone().map(|v| view! { <span class="chip" data-verdict=v.clone()>{verdict_label(&v)}</span> })}
+                {group.clone().map(|g| view! { <span class="muted">{format!("group {g}")}</span> })}
                 <span>{place}</span>
-                <span class="asked">{format!("{} · {}", c.asked_by, fmt::clock(&c.asked_at))}</span>
+                <span class="asked">{[asker.clone(), fmt::clock(&c.asked_at)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")}</span>
             </div>
             {kind_word.map(|w| view! { <p class="kind-word">{w}</p> })}
             <h3 class="card-title">{c.title.clone()}</h3>
-            <p class="now">
-                {c.now.clone()}
-                {c.now_as_of.as_deref().map(|t| view! { <span class="asof">{format!(" As of {}.", fmt::clock(t))}</span> })}
-            </p>
+            {(!c.now.is_empty()).then(|| view! {
+                <p class="now">
+                    {c.now.clone()}
+                    {c.now_as_of.as_deref().map(|t| view! { <span class="asof">{format!(" As of {}.", fmt::clock(t))}</span> })}
+                </p>
+            })}
             {(c.old_answer.is_some() || c.what_changed.is_some()).then(|| view! {
                 <div class="old">
                     {c.old_answer.clone().map(|o| view! {
@@ -304,23 +501,29 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
                     {c.what_changed.clone().map(|w| view! { <p><strong>"What changed: "</strong>{w}</p> })}
                 </div>
             })}
+            {c.agreement.clone().and_then(|a| match a.same {
+                Some(false) => Some(view! { <p class="item-note" data-tone="warn"><strong>"The judges split. "</strong>{a.note.unwrap_or_default()}</p> }.into_any()),
+                Some(true) => Some(view! { <p class="item-note muted">{format!("The judges agreed.{}", a.note.map(|n| format!(" {n}")).unwrap_or_default())}</p> }.into_any()),
+                None => a.note.map(|n| view! { <p class="item-note muted">{n}</p> }.into_any()),
+            })}
+            {c.doubt.clone().filter(|d| !d.is_empty()).map(|d| view! { <p class="item-note muted"><strong>"Unsure: "</strong>{d}</p> })}
             <dl class="card-facts">
                 {facts.into_iter().map(|(k, v)| view! { <div><dt>{k}</dt><dd>{v}</dd></div> }).collect_view()}
             </dl>
-            <Blocks blocks=c.sections.clone()/>
+            {(!fold_sections).then(|| view! { <Blocks blocks=c.sections.clone()/> })}
             <Show when=move || standing() == Standing::Changed>
                 <p class="item-note" data-tone="warn">"This question changed after you chose. Look again; your choice is kept but not sent until you touch it."</p>
             </Show>
 
             {match c.kind.as_str() {
                 "action" => view! {
-                    <button class="toggle" aria-pressed=move || chosen("done").to_string()
+                    <button class="toggle" disabled=locked aria-pressed=move || chosen("done").to_string()
                         on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), "done"))>
                         {move || if chosen("done") { "Marked done (sent when you review)" } else { "Mark done" }}
                     </button>
                 }.into_any(),
                 "objection" => view! {
-                    <button class="toggle" data-tone="warn" aria-pressed=move || chosen("object").to_string()
+                    <button class="toggle" data-tone="warn" disabled=locked aria-pressed=move || chosen("object").to_string()
                         on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), "object"))>
                         {move || if chosen("object") { "You object: say why below" } else { "Object" }}
                     </button>
@@ -339,12 +542,14 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
                                 <div class="option" data-checked=move || chosen(&key_state).then_some("1")>
                                     <button
                                         class="opt-pick"
+                                        disabled=locked
                                         role=if c.multiple { "checkbox" } else { "radio" }
                                         aria-checked={let k = key.clone(); move || chosen(&k).to_string()}
                                         on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), &key_click))
                                     >
                                         <span class="opt-top">
                                             <span class="opt-key">{key.clone()}</span>
+                                            {o.stance.as_deref().and_then(stance_label).map(|w| view! { <span class="stance-tag">{w}</span> })}
                                             {is_rec.then(|| view! { <span class="rec-tag">"Recommended"</span> })}
                                         </span>
                                         <span class="opt-label">{o.label.clone()}</span>
@@ -357,7 +562,10 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
                             }
                         }).collect_view()}
                     </div>
-                    {c.recommendation.clone().map(|r| view! {
+                    {(group_size > 1 && c.can_answer() && recommendation.is_some()).then(|| view! {
+                        <button class="link" on:click=use_group.clone()>{format!("Use the recommendations for this group ({group_size})")}</button>
+                    })}
+                    {recommendation.clone().map(|r| view! {
                         <div class="why">
                             <p><strong>{format!("Why {}: ", r.key)}</strong>{r.why}
                                 {r.confidence.filter(|x| !x.is_empty()).map(|x| view! { <span class="muted">{format!(" Confidence: {x}.")}</span> })}
@@ -368,6 +576,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
                 }.into_any(),
             }}
 
+            {fold_sections.then(|| view! { <Blocks blocks=c.sections.clone() fold_all=true/> })}
             {(!c.evidence.is_empty()).then(|| view! {
                 <details class="evidence">
                     <summary>"Evidence"</summary>
@@ -377,10 +586,10 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
             {(!c.notes.is_empty() || !c.replies.is_empty()).then(|| view! {
                 <ul class="talk">
                     {c.notes.iter().map(|n| view! {
-                        <li class="mine"><span class="who">{format!("You · {}", n.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{n.note.clone()}</li>
+                        <li class="mine" data-kind=n.kind.clone()><span class="who">{format!("{} · {}", if n.kind == "object" { "You objected" } else { "You" }, n.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{n.note.clone()}</li>
                     }).collect_view()}
                     {c.replies.iter().map(|r| view! {
-                        <li class="theirs"><span class="who">{format!("{} · {}", c.asked_by, r.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{r.text.clone()}</li>
+                        <li class="theirs"><span class="who">{format!("{} · {}", asker, r.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{r.text.clone()}</li>
                     }).collect_view()}
                 </ul>
             })}
@@ -389,6 +598,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>) -> impl IntoView {
                 <textarea
                     rows="2"
                     maxlength="4000"
+                    disabled=locked
                     placeholder=note_hint
                     prop:value=initial_note
                     on:input=move |ev| { let text = event_target_value(&ev); drafts.update(|d| drafts::set_note(d, &card.get_value(), text)); }
@@ -479,6 +689,8 @@ fn Review(
                     let (what, tone) = drafts.with(|d| {
                         let draft = d.get(&c.id).cloned().unwrap_or_default();
                         match drafts::standing(d, &c) {
+                            _ if c.kind == "sample" => ("Format sample · no answer wanted".to_string(), "muted"),
+                            _ if !c.can_answer() => ("Can't be answered right now · nothing is sent".to_string(), "warn"),
                             Standing::Changed => ("Changed since you chose · look again".to_string(), "warn"),
                             Standing::NeedsWords => ("Objection without a reason · add one to send it".to_string(), "warn"),
                             Standing::Empty if c.kind == "objection" => ("No objection · nothing is sent".to_string(), "muted"),

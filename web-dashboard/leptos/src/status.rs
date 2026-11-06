@@ -162,6 +162,7 @@ fn state_label(state: &str) -> &'static str {
         "waiting" => "Waiting",
         "paused" => "Paused",
         "idle" => "Idle",
+        "" => "No report",
         _ => "Unknown",
     }
 }
@@ -284,6 +285,7 @@ fn StreamView(stream: Stream) -> impl IntoView {
                 {stream.stale.then(|| view! { <span class="chip" data-state="stale">"stale"</span> })}
             </button>
             {completion}
+            {stream.problem.clone().map(|p| view! { <div class="item-note" data-tone="warn">{format!("Task report unreadable: {p}")}</div> })}
             {stream.board.clone().map(|b| {
                 let short = b.path.rsplit('/').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/");
                 view! { <div class="path" title=b.path.clone()>{format!("Board: {short}")}</div> }
@@ -301,6 +303,7 @@ fn StreamView(stream: Stream) -> impl IntoView {
                                 <span class="item-title">{i.title.clone()}</span>
                                 {blocked.map(|b| view! { <div class="item-note" data-tone="warn">{b}</div> })}
                                 {landed.map(|l| view! { <div class="item-note muted">{l}</div> })}
+                                {i.why.clone().filter(|w| !w.is_empty()).map(|w| view! { <div class="item-note muted">{w}</div> })}
                                 {(!reviews.is_empty()).then(|| view! { <div class="item-note muted">{reviews}</div> })}
                             </li>
                         }
@@ -343,6 +346,10 @@ fn ThreadsPanel() -> impl IntoView {
                                 </div>
                                 {t.doing.clone().map(|d| view! { <div class="thread-doing">{d}</div> })}
                                 {blocked.map(|b| view! { <div class="item-note" data-tone="warn">{b}</div> })}
+                                {t.problem.clone().map(|p| view! { <div class="item-note" data-tone="warn">{p}</div> })}
+                                {t.clock_ahead_seconds.filter(|s| *s > 0).map(|s| view! {
+                                    <div class="item-note muted">{format!("Its clock runs {} ahead of this server's; its times may look early.", fmt::span(s))}</div>
+                                })}
                                 <div class="thread-meta muted">
                                     {place}
                                     {(!model.is_empty()).then(|| format!(" · {model}"))}
@@ -429,6 +436,7 @@ fn MachinesPanel() -> impl IntoView {
                                 {format!("Browsers {} · Recordings {}", slots(&m.browsers), slots(&m.recordings))}
                                 {m.gpu_pct.map(|g| format!(" · GPU {}", fmt::pct(g)))}
                             </div>
+                            {m.detail.clone().filter(|d| !d.is_empty()).map(|d| view! { <div class="item-note" data-tone="warn">{d}</div> })}
                             {m.warnings.into_iter().map(|w| view! { <div class="item-note" data-tone="warn">{w}</div> }).collect_view()}
                         </div>
                     }
@@ -501,12 +509,12 @@ fn UsagePanel() -> impl IntoView {
                     <table class="usage">
                         <tbody>
                             {u.accounts.into_iter().map(|a| {
-                                let tone = if a.at_limit { "crit" } else if a.runs_out_before_reset { "warn" } else { "" };
+                                let tone = if a.at_limit { "crit" } else if a.runs_out_before_reset == Some(true) { "warn" } else { "" };
                                 let used = a.used_pct.map(fmt::pct).unwrap_or_else(|| "-".into());
                                 let reset = a.resets_at.as_deref().map(fmt::clock).unwrap_or_default();
                                 let note = if a.at_limit {
                                     "at its limit".to_string()
-                                } else if a.runs_out_before_reset {
+                                } else if a.runs_out_before_reset == Some(true) {
                                     a.projected_full_at.as_deref().map(|t| format!("full {}", fmt::clock(t))).unwrap_or_else(|| "full before reset".into())
                                 } else {
                                     String::new()

@@ -6,7 +6,7 @@ server). Each note says what happened, why, and what to do.
 ## Size and build
 - **Download:** the Status page is about 0.8 MB of WebAssembly, 0.18 MB brotli, against 36.7 MB (3.7 MB brotli) for
   the Slint canvas UI. About 90% of a release build is the `name` custom section (function names): strip it after
-  wasm-bindgen (`dev/strip-names.mjs`). Don't use `strip = true` in Cargo: it also drops `target_features`, and
+  wasm-bindgen (`build/strip-names.cjs`). Don't use `strip = true` in Cargo: it also drops `target_features`, and
   wasm-bindgen then can't tell which WebAssembly features are on.
 - **Build time:** about 1.5 min for a clean release build on the VM, 25-75 s incremental. CSS changes need no build.
 - **Cargo config is inherited:** a crate under `web-dashboard/` picks up the Slint crate's `.cargo/config.toml`

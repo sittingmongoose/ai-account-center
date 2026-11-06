@@ -9,6 +9,7 @@ const {
   assertSlintPin,
   assertLockedSlint,
   sourceFingerprint,
+  leptosFingerprint,
   commandRunner,
   toolPath,
 } = require('./build-ui');
@@ -48,6 +49,30 @@ function validateUi(options = {}) {
   const { manifest } = verifyBundle(path.join(repoRoot, 'dist', 'ui'));
   if (manifest.source?.sha256 !== source.sha256 || manifest.source?.files !== source.files) {
     throw new Error('Dashboard source changed after the build. Run bun run ui:build.');
+  }
+  // The Leptos pages (Status, Scoreboard) are checked the same way when the crate is present.
+  const leptosCrate = path.join(crate, 'leptos');
+  if (fs.existsSync(path.join(leptosCrate, 'Cargo.toml'))) {
+    run(
+      toolPath('cargo', cargoBin),
+      ['fmt', '--manifest-path', path.join(leptosCrate, 'Cargo.toml'), '--check'],
+      {
+        cwd: leptosCrate,
+        env,
+      }
+    );
+    const leptos = leptosFingerprint(leptosCrate);
+    if (
+      manifest.leptos?.source?.sha256 !== leptos.sha256 ||
+      manifest.leptos?.source?.files !== leptos.files
+    ) {
+      throw new Error('Leptos page source changed after the build. Run bun run ui:build.');
+    }
+    for (const file of [manifest.leptos.entry, manifest.leptos.wasm?.path]) {
+      if (typeof file !== 'string' || !fs.existsSync(path.join(repoRoot, 'dist', 'ui', file))) {
+        throw new Error('The packaged Leptos pages are incomplete. Run bun run ui:build.');
+      }
+    }
   }
   return source;
 }

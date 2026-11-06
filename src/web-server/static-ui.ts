@@ -7,7 +7,8 @@
  *   the fly; /api JSON is encoded per request (api-compression.ts).
  * - Cache-Control by path: pkg/<buildId>/** is immutable; everything else revalidates.
  * - Page routes: /, /login, /analytics, /accounts, /accounts/<provider>, /status and
- *   /scoreboard answer with index.html; a few aliases redirect; anything else goes back to /.
+ *   /scoreboard answer with index.html; /app/status and /app/scoreboard answer with the
+ *   Leptos pages' app/index.html (the page reads which one from its path); a few aliases redirect; anything else goes back to /.
  */
 
 import crypto from 'crypto';
@@ -74,6 +75,9 @@ const STATIC_ICON_ALIASES: ReadonlyMap<string, string> = new Map<string, string>
 ]);
 
 const PAGES = new Set(['/', '/login', '/analytics', '/accounts', '/status', '/scoreboard']);
+/** The Leptos pages (shown in the shell's iframe, or opened directly). */
+const APP_PAGES = new Set(['/app/status', '/app/scoreboard']);
+const APP_ENTRY = 'app/index.html';
 const PAGE_ALIASES = new Map([
   ['/settings', '/accounts'],
   ['/home', '/'],
@@ -403,6 +407,26 @@ export function resolvePageRoute(
 /** The app.get('*') fallback: page routes get index.html, the rest are redirected. */
 export function pageRouteHandler(ui: StaticUi, providerIds: ReadonlySet<string>): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
+    const appPath =
+      req.path.length > 5 && req.path.endsWith('/') ? req.path.slice(0, -1) : req.path;
+    if (APP_PAGES.has(appPath)) {
+      if (appPath !== req.path) {
+        res.redirect(301, appPath);
+        return;
+      }
+      if (!fs.existsSync(path.join(ui.root, APP_ENTRY))) {
+        res.status(404).type('text/plain').send('This build has no Status page.');
+        return;
+      }
+      serveUiFile(ui, req, res, APP_ENTRY, () => {
+        withoutVariantHeaders(res);
+        setSharedHeaders(ui, res, APP_ENTRY);
+        res.sendFile(path.join(ui.root, APP_ENTRY), (error?: Error) => {
+          if (error && !res.headersSent) next(error);
+        });
+      });
+      return;
+    }
     const route = resolvePageRoute(req.path, providerIds);
     if (route.kind === 'redirect') {
       res.redirect(route.status, route.location);

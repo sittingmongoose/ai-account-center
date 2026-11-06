@@ -1,0 +1,171 @@
+// The Status page (Leptos, /app/status) served by this checkout's dist/ui: panels, the question deck, the media viewer
+// and the review-and-send flow, on desktop and on a phone-sized touch screen.
+// Synthetic data only: GET /api/status answers with web-dashboard/leptos/fixtures/*.json (made-up threads), card files
+// come from fixtures/media, and POST /api/status/answers is stubbed in the page, so a test tap never reaches an answer
+// store, real or temporary. The stub keeps what the page sent so the check can assert on it.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const LEPTOS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../leptos');
+const fixture = (name) => JSON.parse(fs.readFileSync(path.join(LEPTOS, 'fixtures', name), 'utf8'));
+const TYPES = { '.jpg': 'image/jpeg', '.png': 'image/png', '.mp4': 'video/mp4', '.webp': 'image/webp' };
+// iPhone 17 Pro's CSS viewport. Touch and DPR 2; WebKit itself is only tested on the simulator.
+const PHONE = { viewport: { width: 402, height: 874 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
+
+// Every status call the page makes, answered here. Returns the answer sets the page sent.
+async function stubStatus(t, view) {
+	const sent = [];
+	await t.page.route((u) => new URL(u).pathname === '/api/status', (r) => r.fulfill({ json: view }));
+	await t.page.route((u) => new URL(u).pathname === '/api/status/answers', async (r) => {
+		const body = JSON.parse(r.request().postData() || '{}');
+		sent.push(body);
+		const results = (body.answers || []).map((a) => ({ cardId: a.cardId, outcome: 'recorded' }));
+		await r.fulfill({ json: { results } });
+	});
+	// Card files: the fixture's media by file name (option-a.jpg, option-b.mp4, ...), with byte ranges for video. A
+	// file the fixture folder doesn't have (the server view's writer images) gets a stand-in of the same kind.
+	await t.page.route((u) => new URL(u).pathname.startsWith('/api/status/files/'), async (r) => {
+		let name = path.basename(new URL(r.request().url()).pathname);
+		if (!fs.existsSync(path.join(LEPTOS, 'fixtures', 'media', name))) name = /\.(mp4|webm)$/i.test(name) ? 'option-b.mp4' : 'option-a.jpg';
+		const file = path.join(LEPTOS, 'fixtures', 'media', name);
+		const body = fs.readFileSync(file);
+		const type = TYPES[path.extname(name)] || 'application/octet-stream';
+		const range = /bytes=(\d+)-(\d*)/.exec(r.request().headers().range || '');
+		if (!range) return r.fulfill({ status: 200, body, headers: { 'content-type': type, 'accept-ranges': 'bytes' } });
+		const start = Number(range[1]);
+		const end = range[2] ? Math.min(Number(range[2]), body.length - 1) : body.length - 1;
+		await r.fulfill({
+			status: 206,
+			body: body.subarray(start, end + 1),
+			headers: { 'content-type': type, 'accept-ranges': 'bytes', 'content-range': `bytes ${start}-${end}/${body.length}` },
+		});
+	});
+	return sent;
+}
+
+async function openStatus(t, view) {
+	await t.app.signIn();
+	const sent = await stubStatus(t, view);
+	await t.goto('/app/status', { settleMs: 300 });
+	await t.page.waitForSelector('.panel#cards');
+	return sent;
+}
+
+const PANELS = ['cards', 'progress', 'threads', 'machines', 'simlock', 'usage'];
+
+export const tests = {
+	async 'status desktop'(t) {
+		await t.viewport(1440, 900);
+		await openStatus(t, fixture('status-view.json'));
+		for (const id of PANELS) await t.count(`.panel#${id}`, 1);
+		await t.page.waitForSelector('.deck .card');
+		await t.text('.deck-sub', /6 open/);
+		await t.audit('status 1440');
+		await t.shot('status-desktop', 'Status page at 1440 px: panel grid, question deck, no clipped text');
+		for (const width of [1024, 1920]) {
+			await t.viewport(width, 900);
+			await t.page.waitForTimeout(200);
+			await t.audit(`status ${width}`);
+			await t.snap(`status-${width}`);
+		}
+	},
+
+	// The view the server branch builds from scripts/status-fixture.mjs (--with-kinds --with-problems): nulls, damaged
+	// report files and unreachable machines must read plainly, not break the page.
+	async 'status from a server view'(t) {
+		await t.viewport(1440, 900);
+		await openStatus(t, fixture('server-view.json'));
+		await t.page.waitForSelector('.deck .card');
+		await t.text('.deck-sub', /9 open/);
+		await t.text('.panel#machines', /ssh refused/);
+		await t.text('.panel#machines', /under the 50 GB floor/);
+		await t.text('.panel#cards .src', /Unreadable/);
+		await t.check('nothing reads as zero for a machine with no reading', async () =>
+			t.page.evaluate(() => {
+				const nas = [...document.querySelectorAll('.machine')].find((m) => /Nas1/.test(m.textContent));
+				return !!nas && !/\b0(\.0)? ?GB free/.test(nas.textContent);
+			})
+		);
+		// The threads' card additions: a verdict filter, a judges' split, a sample that sends nothing, verbatim quotes.
+		await t.count('.verdicts .chip-btn', 2);
+		await t.page.click('.verdicts .chip-btn[data-verdict="adapt"]');
+		await t.text('.deck .card .card-label', 'F-Q4');
+		await t.visible('text=The judges split', 'split judges are flagged');
+		await t.page.click('.verdicts .chip-btn >> text=All');
+		await t.page.click('.jump button >> text=C-S1');
+		await t.visible('.sample-banner', 'a sample card says no answer is wanted');
+		await t.check('a sample card cannot be answered', async () => t.page.evaluate(() => [...document.querySelectorAll('.deck .card .opt-pick')].every((b) => b.disabled)));
+		await t.page.click('.jump button >> text=ST-Q2');
+		await t.count('.deck .card .quote', 1);
+		await t.count('.deck .card .plan-change', 1);
+		await t.audit('server view 1440');
+		await t.crop('status-machines', '.panel#machines', 'unreachable machines say why, and show no invented readings');
+	},
+
+	async 'status deck on a phone'(t) {
+		await t.newContext(PHONE);
+		const sent = await openStatus(t, fixture('status-view.json'));
+		await t.page.waitForSelector('.deck .card');
+		await t.audit('phone status');
+		await t.shot('phone-card', 'first card on a 402 px phone: card fills the width, option media, readable spacing');
+
+		// A wide screenshot opens full screen turned sideways on an upright phone; Rotate, full size and Close work.
+		await t.page.click('.media-open >> nth=0');
+		await t.page.waitForSelector('.viewer img');
+		await t.until('wide screenshot opens sideways', () => document.querySelector('.viewer')?.dataset.rotated === '1');
+		await t.shot('phone-viewer', 'screenshot full screen, sideways: fills the screen, bar reachable');
+		await t.page.click('.viewer-frame img');
+		await t.until('tap shows full size', () => document.querySelector('.viewer')?.dataset.actual === '1');
+		await t.page.click('.viewer-btn >> text=Rotate');
+		await t.until('Rotate turns it upright', () => !document.querySelector('.viewer')?.dataset.rotated);
+		await t.page.click('.viewer-btn.close');
+		await t.count('.viewer', 0);
+
+		// The video plays inline (byte ranges served) and opens in the viewer muted, with the system player one tap away.
+		await t.check('inline video ready', async () =>
+			t.page.evaluate(() => {
+				const v = document.querySelector('.media video');
+				return !!v && v.controls && v.playsInline && !!v.poster;
+			})
+		);
+		await t.page.click('.media[data-kind="video"] button >> text=Full screen');
+		await t.page.waitForSelector('.viewer video');
+		await t.check('viewer video is muted and inline', async () =>
+			t.page.evaluate(() => {
+				const v = document.querySelector('.viewer video');
+				return v.muted && v.playsInline && v.autoplay;
+			})
+		);
+		await t.visible('.viewer-btn >> text=System player', 'system player button');
+		await t.page.click('.viewer-btn.close');
+
+		// Walk the deck: answer, object with words, mark an action done; then review and send once.
+		await t.page.click('.opt-pick >> nth=0');
+		await t.page.click('.deck-nav .primary'); // S-Q1 (Scout comparison)
+		await t.page.waitForSelector('.block[data-type="compare"]');
+		await t.page.click('.deck-nav .primary'); // C-Q5a (exception)
+		await t.visible('.exception', 'an exception to a standing rule shows first');
+		await t.page.click('.deck-nav .primary'); // C-Q5b (objection)
+		await t.page.click('.toggle');
+		await t.visible('text=An objection needs a reason', 'an objection asks for words');
+		await t.page.fill('.note textarea', 'Keep whole-file hashes for the audit folder only.');
+		await t.page.click('.deck-nav .primary'); // C-Q5c
+		await t.page.click('.deck-nav .primary'); // T-A1 (action)
+		await t.page.click('.toggle');
+		await t.text('.toggle', /Marked done/);
+		await t.equal('nothing sent before the review', sent.length, 0);
+		await t.page.click('.deck-nav .primary'); // Review
+		await t.page.waitForSelector('.review');
+		await t.text('.review-actions .primary', /Send 3 answers/);
+		await t.shot('phone-review', 'review screen: each card says what will be sent');
+		await t.page.click('.review-actions .primary');
+		await t.page.waitForSelector('.sent');
+		await t.text('.sent .ok', /Sent 3 at/);
+		const entries = sent[0]?.answers || [];
+		await t.equal('one send', sent.length, 1);
+		await t.equal('kinds sent', entries.map((a) => a.kind).sort().join(','), 'answer,done,object');
+		await t.check('every entry names the exact card version', entries.every((a) => a.cardId && a.cardSha256 && Number.isInteger(a.cardSeq)));
+		await t.check('the objection carries its words', entries.some((a) => a.kind === 'object' && /audit folder/.test(a.note)));
+	},
+};
