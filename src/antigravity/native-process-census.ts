@@ -38,6 +38,11 @@ function within(child: string, root: string): boolean {
   );
 }
 
+/** The kernel marks a removed executable or working folder with this suffix. */
+function withoutDeleted(value: string): string {
+  return value.endsWith(' (deleted)') ? value.slice(0, -' (deleted)'.length) : value;
+}
+
 function code(error: unknown): string {
   return (error as NodeJS.ErrnoException)?.code ?? '';
 }
@@ -132,7 +137,11 @@ function readCmdline(file: string): string {
  * (it contains a slash, such as `./bin/helper.js`) is resolved against the
  * process's working folder. A bare relative word (`helper.js`) is not, so a
  * script started by bare name from inside a root folder matches only by its
- * process name or executable.
+ * process name or executable. Two further limits are known: `./bin/x` started
+ * from a root by a process that then changes folder (`chdir("/")`) resolves
+ * against its new folder, and an absolute argument that reaches a root only
+ * through a symlink elsewhere is not resolved. Both still match by name or
+ * executable when those are Antigravity's.
  */
 export function censusAntigravityProcesses(options: {
   home: string;
@@ -168,7 +177,7 @@ export function censusAntigravityProcesses(options: {
   }
   if (entries.length > MAX_PROC_ENTRIES || !entries.includes(String(self))) return incomplete;
   const isAntigravityPath = (value: string) => {
-    const file = value.endsWith(' (deleted)') ? value.slice(0, -' (deleted)'.length) : value;
+    const file = withoutDeleted(value);
     if (!path.isAbsolute(file)) return false;
     const resolved = path.resolve(file);
     return natives.includes(resolved) || rootPaths.some((root) => within(resolved, root));
@@ -199,8 +208,14 @@ export function censusAntigravityProcesses(options: {
         const resolveArgument = (argument: string): string | null => {
           if (path.isAbsolute(argument)) return argument;
           if (!argument.includes('/')) return null;
-          if (cwd === undefined)
-            cwd = readTolerant(() => fs.readlinkSync(path.join(directory, 'cwd')), deniedExe);
+          if (cwd === undefined) {
+            const link = readTolerant(
+              () => fs.readlinkSync(path.join(directory, 'cwd')),
+              deniedExe
+            );
+            // A working folder that was removed reads as "<folder> (deleted)".
+            cwd = link === null ? null : withoutDeleted(link);
+          }
           return cwd === null || !path.isAbsolute(cwd) ? null : path.resolve(cwd, argument);
         };
         if (

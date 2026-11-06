@@ -326,12 +326,17 @@ review list, is not proof of an unreviewed build: it keeps the coordinator.
   the runtime: the process names the runtime's own census uses, the native
   binary (also once replaced), `~/.gemini/antigravity-cli` helpers and anything
   run from the managed runtime folder such as the launcher shim (roots matched
-  as named and as resolved; the first 64 KB of a command line). Any match
+  as named and as resolved; the first 64 KB of a command line, whose first four
+  arguments are checked). A relative argument that names a path (it contains a
+  slash, such as `./bin/helper.js`) is resolved against the process's working
+  folder, also when that folder was removed; a bare word is not. Any match
   reports `action_required` / `in_use` and nothing changes. The census is
   complete only when every same-user process was read and the listing includes
   the census's own process; a read failure other than the process exiting makes
-  it incomplete. The kernel hides the exe link of non-dumpable processes
-  (systemd --user, ssh-agent, sshd-session), so there only the name and command
+  it incomplete, and so does a root folder or native path that cannot be
+  resolved (a dangling symlink, a folder that refuses access). The kernel hides
+  the exe and working-folder links of non-dumpable processes (systemd --user,
+  ssh-agent, sshd-session), so there only the name and the rest of the command
   line decide;
 - otherwise the native is backed up exactly as the managed path does
   (`antigravity-switching/native-backups/<sha256>`). The slow recheck (runtime

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import * as managedUpdater from '../../../src/antigravity/managed-updater';
 import fs from 'fs';
 import net from 'net';
 import os from 'os';
@@ -292,6 +293,39 @@ describe('runtime-free Antigravity process census', () => {
     // A relative word without a slash is not resolved (documented limit).
     value.add(891, 'node', '/opt/fixture-runtime/node', ['node', 'helper.js'], root);
     expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a relative argument from a removed working folder still resolves inside the root', () => {
+    const value = procFixture();
+    // ~/.gemini/antigravity-cli was rm -rf'd after `sh ./bin/h.sh` started in it.
+    const root = path.join(value.home, '.gemini/antigravity-cli');
+    value.add(900, 'sh', '/usr/bin/dash', ['sh', './bin/h.sh'], `${root} (deleted)`);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('each process resolves against its own working folder', () => {
+    const value = procFixture();
+    const root = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(root, { recursive: true });
+    value.add(910, 'sh', '/usr/bin/dash', ['sh', './elsewhere.sh'], value.root);
+    value.add(911, 'sh', '/usr/bin/dash', ['sh', './bin/h.sh'], root);
+    // A working folder shared across processes would count 0 or 2, never exactly 1.
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a working-folder link that fails other than denied or gone is incomplete', () => {
+    const value = procFixture();
+    value.add(920, 'sh', '/usr/bin/dash', ['sh', './bin/h.sh']);
+    // A regular file where the cwd link should be: readlink gives EINVAL.
+    fs.writeFileSync(path.join(value.proc, '920', 'cwd'), 'not a link');
+    expect(value.census()).toEqual({ complete: false, running: 0 });
+  });
+
+  test('~/.gemini as a regular file walks on through ENOTDIR and stays complete', () => {
+    const value = procFixture();
+    fs.writeFileSync(path.join(value.home, '.gemini'), 'not a folder');
+    value.add(930, 'bash', '/usr/bin/bash', ['bash']);
+    expect(value.census()).toEqual({ complete: true, running: 0 });
   });
 
   test('a symlinked ~/.gemini matches a helper run from its real path', () => {
@@ -1057,6 +1091,32 @@ describe('installed managed update wiring (temporary home)', () => {
     });
     expect(fs.existsSync(value.log)).toBe(false);
     expect(fs.existsSync(value.backups)).toBe(false);
+  });
+
+  test('the installed entry passes idleOnly through: true, false, and true by default', async () => {
+    const value = installedHome();
+    const seen: Array<boolean | undefined> = [];
+    const spy = spyOn(managedUpdater, 'routeManagedAntigravityUpdate').mockImplementation(
+      async (deps) => {
+        seen.push(deps.idleOnly);
+        return {
+          status: 'current',
+          previousVersion: '1.4.12',
+          version: '1.4.12',
+          restartedProcesses: 0,
+          updateAttempted: false,
+        };
+      }
+    );
+    try {
+      await runInstalledManagedAntigravityUpdate(value.home, { idleOnly: true });
+      await runInstalledManagedAntigravityUpdate(value.home, { idleOnly: false });
+      await runInstalledManagedAntigravityUpdate(value.home);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(seen).toEqual([true, false, true]);
+    expect(fs.existsSync(value.log)).toBe(false);
   });
 
   test('a listening runtime socket keeps the coordinator, which reports runtime_unavailable', async () => {

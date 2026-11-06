@@ -10,7 +10,10 @@ import {
   runManagedAntigravityUpdateCommand,
   type ManagedNativeCommand,
 } from '../../../src/antigravity/managed-update-command';
-import { updateManagedAntigravity } from '../../../src/antigravity/managed-updater';
+import {
+  routeManagedAntigravityUpdate,
+  updateManagedAntigravity,
+} from '../../../src/antigravity/managed-updater';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import type { AntigravitySwitchDriver, ProcessPlan } from '../../../src/antigravity/types';
 
@@ -614,6 +617,29 @@ describe('managed Antigravity native updater: public files and injected commands
       throw new Error(RAW_FAILURE);
     }) as unknown as Parameters<typeof managedUpdateMain>[1];
     expect(await managedUpdateMain([], throwing)).toEqual(failedCommandResult(false));
+  });
+
+  test('routing keeps idle-only past main: a running process is in_use only when idleOnly is set', async () => {
+    for (const idleOnly of [true, false]) {
+      const value = fixture();
+      const { driver, actions } = driverFixture([residentPlan()]);
+      const result = await routeManagedAntigravityUpdate({
+        registry: new AntigravityProfileRegistry(value.ccsDirectory),
+        driver,
+        native: value.native,
+        idleOnly,
+        nativeReview: () => 'unreviewed',
+        runtimeSocket: async () => 'listening',
+        census: () => {
+          throw new Error('the runtime-free census ran beside a live runtime');
+        },
+      });
+      // idle-only stops at the census; otherwise it goes on to the release gate.
+      expect(result.status).toBe(idleOnly ? 'in_use' : 'failed');
+      expect(actions).toEqual(idleOnly ? ['inspect'] : ['inspect', 'release-gate-false']);
+      expect(fs.existsSync(backupPath(value))).toBe(false);
+      expect(value.calls.map((call) => call.args)).toEqual([['--version']]);
+    }
   });
 
   test('the command accepts only no argument or exactly --idle-only', () => {
