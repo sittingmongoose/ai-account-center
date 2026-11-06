@@ -31,7 +31,11 @@ class ProcessGone extends Error {}
 
 function within(child: string, root: string): boolean {
   const relative = path.relative(root, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  // A child name may itself start with '..' (`..cache`); only a '..' segment leaves.
+  return (
+    relative === '' ||
+    (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))
+  );
 }
 
 function code(error: unknown): string {
@@ -54,12 +58,25 @@ function readTolerant<T>(read: () => T, tolerated: ReadonlySet<string>): T | nul
   }
 }
 
+/** A missing path component, as opposed to one that could not be resolved. */
+function missing(file: string): boolean {
+  try {
+    // A dangling symlink is not missing: where it pointed is unknown.
+    fs.lstatSync(file);
+    return false;
+  } catch (error) {
+    return code(error) === 'ENOENT' || code(error) === 'ENOTDIR';
+  }
+}
+
 /**
  * A path as named and as resolved, so either spelling matches. A missing tail
  * (a root folder that was removed) is rejoined onto its deepest existing
- * ancestor's real path, so a symlink above it still resolves.
+ * ancestor's real path, so a symlink above it still resolves. Null when the
+ * path cannot be resolved for any other reason (a dangling symlink, a folder
+ * that refuses access): its real spelling is unknown, so the census is incomplete.
  */
-function spellings(file: string): string[] {
+function spellings(file: string): string[] | null {
   const resolved = path.resolve(file);
   let existing = resolved;
   const tail: string[] = [];
@@ -67,7 +84,9 @@ function spellings(file: string): string[] {
     try {
       const real = path.join(fs.realpathSync(existing), ...tail);
       return real === resolved ? [resolved] : [resolved, real];
-    } catch {
+    } catch (error) {
+      if ((code(error) !== 'ENOENT' && code(error) !== 'ENOTDIR') || !missing(existing))
+        return null;
       const parent = path.dirname(existing);
       if (parent === existing) return [resolved];
       tail.unshift(path.basename(existing));
@@ -104,9 +123,16 @@ function readCmdline(file: string): string {
  *
  * Complete only when every same-user process was read: a read failure other
  * than the process exiting makes it incomplete, and so does a listing that
- * lacks this process itself. One exception: the kernel denies the exe link of
- * a non-dumpable process (systemd --user, ssh-agent, gpg-agent, sshd-session),
- * so EACCES/EPERM there leaves its name and command line to decide.
+ * lacks this process itself, or a root or native path that cannot be resolved.
+ * One exception: the kernel denies the exe and cwd links of a non-dumpable
+ * process (systemd --user, ssh-agent, gpg-agent, sshd-session), so EACCES/EPERM
+ * there leaves its name and the rest of its command line to decide.
+ *
+ * Command-line arguments are the first four; a relative one that names a path
+ * (it contains a slash, such as `./bin/helper.js`) is resolved against the
+ * process's working folder. A bare relative word (`helper.js`) is not, so a
+ * script started by bare name from inside a root folder matches only by its
+ * process name or executable.
  */
 export function censusAntigravityProcesses(options: {
   home: string;
@@ -123,13 +149,17 @@ export function censusAntigravityProcesses(options: {
   if (typeof uid !== 'number' || !Number.isSafeInteger(uid)) return incomplete;
   const home = path.resolve(options.home);
   const natives = spellings(options.nativeBinary);
-  // Resolve the home first, then join each root onto every spelling of it, so a
-  // missing root folder under a symlinked home still matches its real path.
-  const roots = spellings(home).flatMap((base) =>
-    ['.gemini/antigravity-cli', '.local/share/ai-account-center/antigravity-runtime'].flatMap(
+  // Each root is joined onto every spelling of the home and then resolved itself,
+  // so a symlinked home, a symlinked ~/.gemini or ~/.local, and a removed root
+  // folder under either all still match the real path a helper runs from.
+  const homes = spellings(home);
+  const roots = homes?.flatMap((base) =>
+    ['.gemini/antigravity-cli', '.local/share/ai-account-center/antigravity-runtime'].map(
       (relative) => spellings(path.join(base, relative))
     )
   );
+  if (!natives || !roots || roots.some((root) => root === null)) return incomplete;
+  const rootPaths = roots.flat() as string[];
   let entries: string[];
   try {
     entries = fs.readdirSync(procRoot);
@@ -141,7 +171,7 @@ export function censusAntigravityProcesses(options: {
     const file = value.endsWith(' (deleted)') ? value.slice(0, -' (deleted)'.length) : value;
     if (!path.isAbsolute(file)) return false;
     const resolved = path.resolve(file);
-    return natives.includes(resolved) || roots.some((root) => within(resolved, root));
+    return natives.includes(resolved) || rootPaths.some((root) => within(resolved, root));
   };
   const deniedExe = new Set(['EACCES', 'EPERM']);
   let running = 0;
@@ -164,12 +194,20 @@ export function censusAntigravityProcesses(options: {
           continue;
         }
         const cmdline = readField(() => readCmdline(path.join(directory, 'cmdline')));
+        const args = cmdline.split('\0').filter(Boolean).slice(0, 4);
+        let cwd: string | null | undefined;
+        const resolveArgument = (argument: string): string | null => {
+          if (path.isAbsolute(argument)) return argument;
+          if (!argument.includes('/')) return null;
+          if (cwd === undefined)
+            cwd = readTolerant(() => fs.readlinkSync(path.join(directory, 'cwd')), deniedExe);
+          return cwd === null || !path.isAbsolute(cwd) ? null : path.resolve(cwd, argument);
+        };
         if (
-          cmdline
-            .split('\0')
-            .filter(Boolean)
-            .slice(0, 4)
-            .some((argument) => isAntigravityPath(argument))
+          args.some((argument) => {
+            const file = resolveArgument(argument);
+            return file !== null && isAntigravityPath(file);
+          })
         )
           running += 1;
       } catch (error) {

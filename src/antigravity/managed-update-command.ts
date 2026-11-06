@@ -386,16 +386,25 @@ export function managedUpdateArguments(args: string[]): { idleOnly: boolean } | 
   return args.length === 1 && args[0] === '--idle-only' ? { idleOnly: true } : null;
 }
 
+/**
+ * The command-line entry point. Only idleOnly crosses the command line; the
+ * releaseFile fixture seam never does, and refused arguments run nothing.
+ */
+export async function main(
+  argv: string[],
+  run: typeof runInstalledManagedAntigravityUpdate = runInstalledManagedAntigravityUpdate
+): Promise<ManagedUpdateCommandResult> {
+  const parsed = managedUpdateArguments(argv);
+  if (!parsed) return failedCommandResult(false);
+  try {
+    return await run(os.homedir(), { idleOnly: parsed.idleOnly });
+  } catch {
+    return failedCommandResult(false);
+  }
+}
+
 if (require.main === module) {
-  const parsed = managedUpdateArguments(process.argv.slice(2));
-  void (
-    parsed
-      ? // Only idleOnly crosses the command line; the releaseFile seam never does.
-        runInstalledManagedAntigravityUpdate(os.homedir(), { idleOnly: parsed.idleOnly })
-      : Promise.resolve(failedCommandResult(false))
-  )
-    .then((result) => process.stdout.write(JSON.stringify(result) + '\n'))
-    .catch(() => {
-      process.stdout.write(JSON.stringify(failedCommandResult(false)) + '\n');
-    });
+  void main(process.argv.slice(2)).then((result) =>
+    process.stdout.write(JSON.stringify(result) + '\n')
+  );
 }

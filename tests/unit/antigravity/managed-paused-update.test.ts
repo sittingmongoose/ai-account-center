@@ -129,19 +129,20 @@ describe('runtime-free Antigravity process census', () => {
     fs.writeFileSync(native, ORIGINAL, { mode: 0o700 });
     const proc = path.join(root, 'proc');
     fs.mkdirSync(proc);
-    const add = (pid: number, comm: string, exe: string, args: string[]) => {
+    const add = (pid: number, comm: string, exe: string, args: string[], cwd?: string) => {
       const directory = path.join(proc, String(pid));
       fs.mkdirSync(directory);
       fs.writeFileSync(path.join(directory, 'comm'), `${comm}\n`);
       fs.symlinkSync(exe, path.join(directory, 'exe'));
       fs.writeFileSync(path.join(directory, 'cmdline'), args.map((arg) => `${arg}\0`).join(''));
+      if (cwd) fs.symlinkSync(cwd, path.join(directory, 'cwd'));
     };
     // The census requires its own pid in the listing.
     add(7, 'node', '/opt/fixture-runtime/node', ['node', 'managed-update-command.js']);
-    const census = (overrides: { home?: string } = {}) =>
+    const census = (overrides: { home?: string; nativeBinary?: string } = {}) =>
       censusAntigravityProcesses({
         home: overrides.home ?? home,
-        nativeBinary: native,
+        nativeBinary: overrides.nativeBinary ?? native,
         procRoot: proc,
         selfPid: 7,
       });
@@ -218,6 +219,79 @@ describe('runtime-free Antigravity process census', () => {
     fs.symlinkSync(value.home, linked);
     value.add(800, 'helper', path.join(value.home, '.gemini/antigravity-cli/bin/agentapi'), ['x']);
     expect(value.census({ home: linked })).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a dangling ~/.gemini symlink or an unreadable target parent makes the census incomplete', () => {
+    const dangling = procFixture();
+    fs.symlinkSync(path.join(dangling.root, 'gone-gemini'), path.join(dangling.home, '.gemini'));
+    dangling.add(840, 'helper', path.join(dangling.root, 'gone-gemini/antigravity-cli/bin/x'), [
+      'x',
+    ]);
+    expect(dangling.census()).toEqual({ complete: false, running: 0 });
+    if (process.getuid?.() === 0) return; // root reads mode-000 folders
+    const locked = procFixture();
+    const parent = path.join(locked.root, 'locked-parent');
+    fs.mkdirSync(path.join(parent, 'real-gemini/antigravity-cli'), { recursive: true });
+    fs.symlinkSync(path.join(parent, 'real-gemini'), path.join(locked.home, '.gemini'));
+    fs.chmodSync(parent, 0o000);
+    try {
+      expect(locked.census()).toEqual({ complete: false, running: 0 });
+    } finally {
+      fs.chmodSync(parent, 0o700);
+    }
+  });
+
+  test('a removed root is rejoined, not widened: a sibling under the real parent is not counted', () => {
+    const value = procFixture();
+    const real = path.join(value.root, 'real-gemini-sibling');
+    fs.mkdirSync(path.join(real, 'other-tool/bin'), { recursive: true });
+    fs.symlinkSync(real, path.join(value.home, '.gemini'));
+    value.add(850, 'other', path.join(real, 'other-tool/bin/other'), ['other']);
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+  });
+
+  test('a symlinked ~/.local with the whole runtime tail removed still matches by real path', () => {
+    const value = procFixture();
+    const realLocal = path.join(value.root, 'real-local');
+    // Move ~/.local (with its bin/agy) out and link it back: share/... never existed.
+    fs.renameSync(path.join(value.home, '.local'), realLocal);
+    fs.symlinkSync(realLocal, path.join(value.home, '.local'));
+    value.add(860, 'python3', '/usr/bin/python3.12', [
+      path.join(
+        realLocal,
+        'share/ai-account-center/antigravity-runtime/bundles/x/venv/bin/python3'
+      ),
+    ]);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('the native matches by its real spelling when named through a linked home', () => {
+    const value = procFixture();
+    const linked = path.join(value.root, 'linked-home-native');
+    fs.symlinkSync(value.home, linked);
+    value.add(870, 'sh', '/usr/bin/dash', ['sh', value.native, '--hold']);
+    expect(
+      value.census({ home: linked, nativeBinary: path.join(linked, '.local/bin/agy') })
+    ).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a root child named ..cache is inside the root', () => {
+    const value = procFixture();
+    fs.mkdirSync(path.join(value.home, '.gemini/antigravity-cli/..cache'), { recursive: true });
+    value.add(880, 'helper', path.join(value.home, '.gemini/antigravity-cli/..cache/helper'), [
+      'x',
+    ]);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a relative path argument resolves against the process working folder', () => {
+    const value = procFixture();
+    const root = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+    value.add(890, 'node', '/opt/fixture-runtime/node', ['node', './bin/helper.js'], root);
+    // A relative word without a slash is not resolved (documented limit).
+    value.add(891, 'node', '/opt/fixture-runtime/node', ['node', 'helper.js'], root);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
   });
 
   test('a symlinked ~/.gemini matches a helper run from its real path', () => {

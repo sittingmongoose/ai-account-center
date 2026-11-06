@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
 import {
+  main as managedUpdateMain,
   createManagedNativeUpdate,
   managedUpdateArguments,
   runManagedAntigravityUpdateCommand,
@@ -590,6 +591,29 @@ describe('managed Antigravity native updater: public files and injected commands
     });
     expect(actions).toEqual(['inspect', 'inspect']);
     expect(fs.readFileSync(backupPath(value))).toEqual(ORIGINAL);
+  });
+
+  test('the entry point hands the runner exactly the parsed idleOnly, and nothing for refused arguments', async () => {
+    const seen: unknown[][] = [];
+    const run = (async (...args: unknown[]) => {
+      seen.push(args);
+      return failedCommandResult(false);
+    }) as unknown as Parameters<typeof managedUpdateMain>[1];
+    await managedUpdateMain(['--idle-only'], run);
+    await managedUpdateMain([], run);
+    expect(seen).toStrictEqual([
+      [os.homedir(), { idleOnly: true }],
+      [os.homedir(), { idleOnly: false }],
+    ]);
+    for (const refused of [['--release-file', 'x'], ['--idle-only', '--release-file=x'], ['x']]) {
+      seen.length = 0;
+      expect(await managedUpdateMain(refused, run)).toEqual(failedCommandResult(false));
+      expect(seen).toEqual([]);
+    }
+    const throwing = (async () => {
+      throw new Error(RAW_FAILURE);
+    }) as unknown as Parameters<typeof managedUpdateMain>[1];
+    expect(await managedUpdateMain([], throwing)).toEqual(failedCommandResult(false));
   });
 
   test('the command accepts only no argument or exactly --idle-only', () => {
