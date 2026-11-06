@@ -28,8 +28,11 @@ export interface UnsignedAnswer {
   cardId: string;
   cardSeq: number;
   cardSha256: string;
-  /** answer: a choice that closes the card; note: a note alone, the card stays open. */
-  kind: 'answer' | 'note';
+  /**
+   * answer: a choice (question card); note: a note alone, the card stays open; object: the owner
+   * objects to an objection card, in their own words; done: an action card is done.
+   */
+  kind: 'answer' | 'note' | 'object' | 'done';
   choice: string[];
   note: string;
   /** recommended: filled by "Use the recommendations" and not changed by the owner. */
@@ -44,8 +47,9 @@ export interface SignedAnswer extends UnsignedAnswer {
 }
 
 /**
- * Canonical JSON: object keys sorted by UTF-16 code unit order at every depth, no whitespace,
- * strings and numbers as JSON.stringify writes them. Arrays keep their order.
+ * Canonical JSON in the RFC 8785 style: object keys sorted by UTF-16 code unit at every depth, no
+ * whitespace, strings and numbers as JSON.stringify writes them (the serialization RFC 8785 uses),
+ * arrays in order. Sign and verify its UTF-8 bytes.
  */
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== 'object') {
@@ -156,14 +160,12 @@ export function verifySignedAnswer(fileText: string | Buffer, publicKeyPem: stri
   if (signature.keyId !== answerKeyId(publicKey))
     return { ok: false, reason: 'signed by another key' };
   const { signature: _omit, ...unsigned } = record;
+  const raw = Buffer.from(signature.value, 'base64');
+  if (raw.length !== 64 || raw.toString('base64') !== signature.value)
+    return { ok: false, reason: 'bad signature' };
   let good = false;
   try {
-    good = verify(
-      null,
-      Buffer.from(canonicalJson(unsigned), 'utf8'),
-      publicKey,
-      Buffer.from(signature.value, 'base64')
-    );
+    good = verify(null, Buffer.from(canonicalJson(unsigned), 'utf8'), publicKey, raw);
   } catch {
     good = false;
   }

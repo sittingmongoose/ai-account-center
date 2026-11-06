@@ -3,6 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import {
   AgentReportsReader,
+  ensureReportsLayout,
+  isTransientShareError,
+  MISSING_GRACE_MS,
   shareLocalPath,
 } from '../../../../src/web-server/status/agent-reports-reader';
 import {
@@ -126,13 +129,100 @@ describe('agent reports reader', () => {
     );
     writeCard(root, cardDoc('vm.lead', 'Q1'));
     writeReport(root, 'Laptop.x', 'thread.json', {});
-    const r = reader(root);
+    let now = NOW;
+    const r = reader(root, () => now);
     await r.scan();
     expect(r.snapshot().boards.get(boardFile)).toBeGreaterThan(0);
     expect(r.snapshot().problems.map((p) => p.file)).toEqual(['writers/Laptop.x']);
     fs.rmSync(path.join(root, 'v1', 'writers', 'vm.lead', 'cards', 'vm.lead--Q1.json'));
+    fs.rmSync(path.join(root, 'v1', 'writers', 'vm.lead', 'thread.json'));
+    // A rename-over is a delete then a rename: the last good copies stay through the grace.
+    expect(await r.scan()).toBe(false);
+    now += MISSING_GRACE_MS - 1000;
+    expect(await r.scan()).toBe(false);
+    expect(r.snapshot().cards).toHaveLength(1);
+    expect(r.snapshot().threads).toHaveLength(1);
+    now += 2000;
     expect(await r.scan()).toBe(true);
     expect(r.snapshot().cards).toEqual([]);
+    expect(r.snapshot().threads).toEqual([]);
+  });
+
+  it('keeps the last good copy through ENOENT and ESTALE reads and retries next scan', async () => {
+    const root = dirs.make();
+    writeReport(root, 'vm.lead', 'thread.json', threadDoc('vm.lead', { doing: 'First' }));
+    let fail: 'ENOENT' | 'ESTALE' | null = null;
+    const r = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      fs: {
+        readdir: (dir) => fs.promises.readdir(dir, { withFileTypes: true }),
+        stat: (file) => fs.promises.stat(file),
+        readFile: async (file) => {
+          if (fail === 'ESTALE')
+            throw Object.assign(new Error('Unknown system error -116'), {
+              errno: -116,
+              code: 'Unknown system error -116',
+            });
+          if (fail === 'ENOENT') throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+          return fs.promises.readFile(file);
+        },
+      },
+    });
+    await r.scan();
+    for (const kind of ['ESTALE', 'ENOENT'] as const) {
+      writeReport(
+        root,
+        'vm.lead',
+        'thread.json',
+        threadDoc('vm.lead', { seq: 2, doing: `During ${kind}` })
+      );
+      fail = kind;
+      await r.scan();
+      expect(r.snapshot().threads[0].doc.doing).not.toBe(`During ${kind}`);
+      expect(r.snapshot().problems).toEqual([]);
+      fail = null;
+      await r.scan();
+      expect(r.snapshot().threads[0].doc.doing).toBe(`During ${kind}`);
+    }
+    expect(isTransientShareError({ code: 'ESTALE' })).toBe(true);
+    expect(isTransientShareError({ code: 'EACCES' })).toBe(false);
+  });
+
+  it('accepts T3 writers without a pm-mail name, and quiet threads without a heartbeat', async () => {
+    const root = dirs.make();
+    writeReport(
+      root,
+      'mac.t3-1a2b3c4d',
+      'thread.json',
+      threadDoc('mac.t3-1a2b3c4d', { ttlSeconds: null, state: 'idle' })
+    );
+    writeReport(
+      root,
+      'vm.busy',
+      'thread.json',
+      threadDoc('vm.busy', { ttlSeconds: null, state: 'working' })
+    );
+    const r = reader(root);
+    await r.scan();
+    expect(r.snapshot().threads.map((t) => t.writer)).toEqual(['mac.t3-1a2b3c4d']);
+    expect(r.snapshot().threads[0].doc.ttlSeconds).toBeNull();
+    expect(r.snapshot().problems.map((p) => p.reason)).toEqual([
+      'ttlSeconds is missing or not valid',
+    ]);
+  });
+
+  it('creates v1 and its folders under an existing root only', async () => {
+    const root = dirs.make();
+    const created = await ensureReportsLayout(root);
+    expect(created.sort()).toEqual(
+      ['v1', 'v1/answers', 'v1/catalog', 'v1/keys', 'v1/schemas', 'v1/writers'].sort()
+    );
+    expect(fs.statSync(path.join(root, 'v1', 'writers')).mode & 0o777).toBe(0o777);
+    expect(await ensureReportsLayout(root)).toEqual([]);
+    const unmounted = path.join(dirs.make(), 'agent-reports');
+    expect(await ensureReportsLayout(unmounted)).toEqual([]);
+    expect(fs.existsSync(unmounted)).toBe(false);
   });
 
   it('reads a card fresh for an answer', async () => {

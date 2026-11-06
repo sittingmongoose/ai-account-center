@@ -118,6 +118,14 @@ function slug(value: unknown, field: string): string {
   return value;
 }
 
+function optObj<T>(
+  value: unknown,
+  field: string,
+  read: (value: Record<string, unknown>) => T
+): T | null {
+  return value === null || value === undefined ? null : read(obj(value, field));
+}
+
 function optSlug(value: unknown, field: string): string | null {
   return value === null || value === undefined ? null : slug(value, field);
 }
@@ -174,6 +182,13 @@ function link(value: unknown, field: string): ReportLink {
 
 export const THREAD_STATES = ['working', 'waiting', 'blocked', 'paused', 'idle', 'done'] as const;
 export type ThreadState = (typeof THREAD_STATES)[number];
+/** States that may carry `ttlSeconds: null` (shown by age, never stale). */
+export const QUIET_STATES: ReadonlySet<ThreadState> = new Set([
+  'waiting',
+  'idle',
+  'done',
+  'paused',
+]);
 /**
  * Documented kinds: owner, agent, review, lock, resource, quota. Any short slug is accepted and
  * shown as written, so a new kind needs no rebuild.
@@ -209,7 +224,8 @@ function head(doc: Record<string, unknown>, schema: string, writer: string): Doc
 }
 
 export interface ThreadDoc extends DocHead {
-  ttlSeconds: number;
+  /** Null only for waiting, idle, done or paused: a thread that ended its turn cannot heartbeat. */
+  ttlSeconds: number | null;
   agent: {
     name: string | null;
     harness: string | null;
@@ -231,8 +247,15 @@ export interface ThreadDoc extends DocHead {
 
 function thread(doc: Record<string, unknown>, writer: string): ThreadDoc {
   const agent = doc.agent === undefined || doc.agent === null ? {} : obj(doc.agent, 'agent');
-  const ttl = doc.ttlSeconds === undefined ? 1800 : count(doc.ttlSeconds, 'ttlSeconds');
-  if (ttl < 60 || ttl > 7 * 86_400) fail('ttlSeconds');
+  const state = oneOf(doc.state, 'state', THREAD_STATES);
+  let ttl: number | null = 1800;
+  if (doc.ttlSeconds === null) {
+    if (!QUIET_STATES.has(state)) fail('ttlSeconds');
+    ttl = null;
+  } else if (doc.ttlSeconds !== undefined) {
+    ttl = count(doc.ttlSeconds, 'ttlSeconds');
+    if (ttl < 60 || ttl > 7 * 86_400) fail('ttlSeconds');
+  }
   let progress: ThreadDoc['progress'] = null;
   if (doc.progress !== null && doc.progress !== undefined) {
     const item = obj(doc.progress, 'progress');
@@ -257,7 +280,7 @@ function thread(doc: Record<string, unknown>, writer: string): ThreadDoc {
     },
     project: optSlug(doc.project, 'project'),
     stream: optSlug(doc.stream, 'stream'),
-    state: oneOf(doc.state, 'state', THREAD_STATES),
+    state,
     doing: optText(doc.doing, 'doing', 500),
     blockedOn: blockedOn(doc.blockedOn, 'blockedOn'),
     progress,
@@ -353,6 +376,12 @@ function tasks(doc: Record<string, unknown>, writer: string): TasksDoc {
 }
 
 export const CARD_STATES = ['open', 'withdrawn', 'superseded'] as const;
+/**
+ * question: options, answered in the deck. objection: a call the agent already made; the owner may
+ * object, silence is not an answer. action: something only the owner can do; a Done button.
+ */
+export const CARD_KINDS = ['question', 'objection', 'action'] as const;
+export type CardKind = (typeof CARD_KINDS)[number];
 export const URGENCIES = ['now', 'today', 'this-week', 'whenever'] as const;
 export type Urgency = (typeof URGENCIES)[number];
 
@@ -400,6 +429,12 @@ export interface CardDoc extends DocHead {
   /** The agent's replies to the owner's notes. */
   replies: Array<{ at: string; text: string }>;
   askedAt: string;
+  kind: CardKind;
+  /** When an answer is needed and what happens or starts costing without one. */
+  neededBy: { at: string | null; ifNoAnswer: string | null } | null;
+  /** The owner's rule this card loosens, and how. Shown before anything else. */
+  exception: { rule: string; text: string } | null;
+  reversible: { yes: boolean; how: string | null } | null;
 }
 
 /** A relative path inside a writer's folder: plain segments, no `..`, no absolute or Windows paths. */
@@ -443,7 +478,11 @@ function card(doc: Record<string, unknown>, writer: string, fileId: string): Car
       image: optionImage(option.image, `${at}.image`),
     };
   });
-  if (options.length < 2) throw new Invalid('a card needs 2 to 4 options');
+  const kind = oneOf(doc.kind ?? 'question', 'kind', CARD_KINDS);
+  if (kind === 'question' && options.length < 2) throw new Invalid('a card needs 2 to 4 options');
+  if (kind === 'objection' && options.length === 1)
+    throw new Invalid('an objection has no options or 2 to 4');
+  if (kind === 'action' && options.length > 0) throw new Invalid('an action card has no options');
   if (new Set(options.map((option) => option.key)).size !== options.length)
     throw new Invalid('options repeat a key');
   let recommendation: CardDoc['recommendation'] = null;
@@ -488,6 +527,19 @@ function card(doc: Record<string, unknown>, writer: string, fileId: string): Car
     blocks: optText(doc.blocks, 'blocks', 300),
     batch: optSlug(doc.batch, 'batch'),
     evidence: list(doc.evidence, 'evidence', 20, link),
+    kind,
+    neededBy: optObj(doc.neededBy, 'neededBy', (value) => ({
+      at: optIso(value.at, 'neededBy.at'),
+      ifNoAnswer: optText(value.ifNoAnswer, 'neededBy.ifNoAnswer', 500),
+    })),
+    exception: optObj(doc.exception, 'exception', (value) => ({
+      rule: text(value.rule, 'exception.rule', 300),
+      text: text(value.text, 'exception.text', 1000),
+    })),
+    reversible: optObj(doc.reversible, 'reversible', (value) => {
+      if (typeof value.yes !== 'boolean') fail('reversible.yes');
+      return { yes: value.yes, how: optText(value.how, 'reversible.how', 500) };
+    }),
     replies: list(doc.replies, 'replies', 50, (value, at) => {
       const reply = obj(value, at);
       return { at: iso(reply.at, `${at}.at`), text: text(reply.text, `${at}.text`, 2000) };

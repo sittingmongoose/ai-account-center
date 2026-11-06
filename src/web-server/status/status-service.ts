@@ -24,7 +24,7 @@ import {
   readDashboardPreferences,
 } from '../services/dashboard-preferences';
 import { createLogger } from '../../services/logging';
-import { AgentReportsReader } from './agent-reports-reader';
+import { AgentReportsReader, ensureReportsLayout } from './agent-reports-reader';
 import { DOORBELL_SENDER, StatusAnswers } from './answers';
 import { MACHINES, type MachineId } from './report-schema';
 import {
@@ -339,6 +339,8 @@ export class StatusService {
       timers.push(timer);
       tick();
     };
+    // AAC owns v1/ and its folders; the reporter never creates them.
+    void ensureReportsLayout(this.reader.root).catch(() => undefined);
     every(REPORTS_EVERY_MS, () => this.scanReports());
     every(REGISTRY_EVERY_MS, () => this.scanRegistry());
     every(COLLECT_EVERY_MS, async () => {

@@ -123,6 +123,10 @@ export interface CardView {
   batch: string | null;
   evidence: ReportLink[];
   replies: Array<{ at: string; text: string }>;
+  kind: CardDoc['kind'];
+  neededBy: CardDoc['neededBy'];
+  exception: CardDoc['exception'];
+  reversible: CardDoc['reversible'];
   askedAt: string;
   ageSeconds: number;
   askerState: ThreadDoc['state'] | 'gone' | 'unknown';
@@ -137,7 +141,8 @@ export interface CardView {
 export interface AnsweredCardView {
   card: CardView;
   answer: {
-    kind: 'answer';
+    /** answer (a choice), object (an objection card, with the owner's words) or done (an action card). */
+    kind: 'answer' | 'object' | 'done';
     choice: string[];
     note: string;
     via: 'deck' | 'recommended';

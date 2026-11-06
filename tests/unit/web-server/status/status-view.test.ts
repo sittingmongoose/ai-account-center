@@ -266,6 +266,32 @@ describe('status view', () => {
     expect(view.headline.runs[0]).toEqual({ text: '3 questions', strong: true, tone: 'warn' });
   });
 
+  it('keeps objection cards without a response open, and shows quiet threads by age', async () => {
+    const root = dirs.make();
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'O1', {
+        kind: 'objection',
+        options: [],
+        recommendation: null,
+        reversible: { yes: true, how: 'Revert the commit.' },
+      })
+    );
+    writeReport(
+      root,
+      'vm.lead',
+      'thread.json',
+      threadDoc('vm.lead', { ttlSeconds: null, state: 'done', writtenAt: ago(5 * 3600_000) })
+    );
+    const view = buildStatusView(await inputs(root));
+    expect(view.cards.open.map((c) => [c.id, c.kind])).toEqual([['vm.lead--O1', 'objection']]);
+    expect(view.cards.open[0].reversible).toEqual({ yes: true, how: 'Revert the commit.' });
+    expect(view.cards.open[0].askerState).toBe('done');
+    const thread = view.threads.rows.find((t) => t.name === 'lead');
+    expect(thread?.stale).toBe(false);
+    expect(thread?.ageSeconds).toBe(5 * 3600);
+  });
+
   it('names unreadable report files in the source and never calls them live', async () => {
     const root = dirs.make();
     writeReport(root, 'vm.lead', 'tasks.json', Buffer.from('{oops'));

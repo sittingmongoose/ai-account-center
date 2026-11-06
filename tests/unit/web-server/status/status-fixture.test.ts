@@ -18,7 +18,7 @@ const { writeStatusFixture } = (await import(
 )) as {
   writeStatusFixture: (
     root: string,
-    options: { ccsDir?: string | null; withProblems?: boolean; now?: number }
+    options: { ccsDir?: string | null; withProblems?: boolean; withKinds?: boolean; now?: number }
   ) => { root: string; storeDir: string | null; cards: string[]; answered: string[] };
 };
 
@@ -89,6 +89,19 @@ describe('status fixture', () => {
         verifySignedAnswer(fs.readFileSync(path.join(root, 'v1', 'answers', file)), pub).ok
       ).toBe(true);
     expect(() => writeStatusFixture(root, { ccsDir })).toThrow('already holds');
+  });
+
+  it('adds an objection card and an action card on request', async () => {
+    const root = dirs.make();
+    writeStatusFixture(root, { withKinds: true });
+    const reader = new AgentReportsReader({ root: () => root });
+    await reader.scan();
+    expect(reader.snapshot().problems).toEqual([]);
+    const kinds = reader
+      .snapshot()
+      .cards.map((c) => c.doc.kind)
+      .sort();
+    expect(kinds.filter((k) => k !== 'question')).toEqual(['action', 'objection']);
   });
 
   it('adds named problems on request', async () => {

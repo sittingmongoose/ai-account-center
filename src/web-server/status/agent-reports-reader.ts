@@ -31,6 +31,39 @@ export function agentReportsRoot(): string {
   return configured ? path.resolve(configured) : DEFAULT_AGENT_REPORTS_DIR;
 }
 
+/** The folders AAC owns under `<reports>/v1`. `writers/` is writable by every agent. */
+export const REPORT_FOLDERS = ['writers', 'answers', 'keys', 'schemas', 'catalog'] as const;
+
+/**
+ * Creates `<reports>/v1/` and its folders when missing (`writers/` mode 0777). The reports root
+ * itself is never created: an unmounted share must not grow a local folder. Resolves which
+ * folders it created; never throws.
+ */
+export async function ensureReportsLayout(root: string): Promise<string[]> {
+  const created: string[] = [];
+  try {
+    if (!(await fs.promises.stat(root)).isDirectory()) return created;
+  } catch {
+    return created;
+  }
+  const make = async (dir: string, mode?: number): Promise<boolean> => {
+    try {
+      await fs.promises.mkdir(dir);
+    } catch {
+      // Already there (or not creatable): leave it as it is.
+      return false;
+    }
+    if (mode !== undefined) await fs.promises.chmod(dir, mode).catch(() => undefined);
+    created.push(path.relative(root, dir));
+    return true;
+  };
+  const v1 = path.join(root, 'v1');
+  await make(v1);
+  for (const folder of REPORT_FOLDERS)
+    await make(path.join(v1, folder), folder === 'writers' ? 0o777 : undefined);
+  return created;
+}
+
 export interface ReportProblem {
   /** Relative to `<reports>/v1`, such as `writers/vm.foo/tasks.json`. */
   file: string;
@@ -72,7 +105,15 @@ interface Entry {
   statKey: string;
   good: SeenReport<ReportDoc> | null;
   problem: ReportProblem | null;
+  /** When the file stopped appearing in its folder's listing (epoch ms), null while listed. */
+  missingSince?: number | null;
 }
+
+/**
+ * A file absent from its folder's listing is kept (last good copy) this long before it counts as
+ * removed: a Mac rename-over through SMB is a delete then a rename, and NFS caches the gap.
+ */
+export const MISSING_GRACE_MS = 120_000;
 
 export interface ReaderFs {
   readdir(dir: string): Promise<fs.Dirent[]>;
@@ -89,6 +130,20 @@ const nodeFs: ReaderFs = {
 function isMissing(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null)?.code;
   return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
+ * ENOENT or ESTALE (Node reports ESTALE as "Unknown system error -116"): the share is between a
+ * delete and a rename, or holds a stale handle. Keep the last good copy and try again next scan.
+ */
+export function isTransientShareError(error: unknown): boolean {
+  const err = error as NodeJS.ErrnoException | null;
+  return (
+    err?.code === 'ENOENT' ||
+    err?.code === 'ESTALE' ||
+    err?.errno === -116 ||
+    /system error -116/.test(String(err?.message ?? ''))
+  );
 }
 
 /** A name safe to show: printable ASCII without separators. */
@@ -163,6 +218,13 @@ export class AgentReportsReader {
     try {
       writers = await this.fs.readdir(writersDir);
     } catch (error) {
+      // A stale handle on the share: keep everything and try again next scan (the source turns
+      // stale if it persists).
+      if (
+        (error as NodeJS.ErrnoException | null)?.code !== 'ENOENT' &&
+        isTransientShareError(error)
+      )
+        return false;
       const next = isMissing(error) ? 'missing' : 'error';
       changed = this.state !== next;
       this.state = next;
@@ -181,6 +243,10 @@ export class AgentReportsReader {
         since: before?.reason === reason ? before.since : this.now(),
       });
     };
+    const keepWriter = (name: string, folder = '') => {
+      const prefix = `writers/${name}/${folder}`;
+      for (const key of this.entries.keys()) if (key.startsWith(prefix)) seen.add(key);
+    };
     for (const dirent of writers) {
       const name = dirent.name;
       if (name.startsWith('.')) continue;
@@ -190,23 +256,33 @@ export class AgentReportsReader {
         continue;
       }
       const base = path.join(writersDir, name);
+      // List the folder first, then read: a listing refreshes the NFS view of a rename-over.
+      let listed: Set<string>;
+      try {
+        listed = new Set((await this.fs.readdir(base)).map((entry) => entry.name));
+      } catch (error) {
+        if (!isTransientShareError(error))
+          folderProblem(`writers/${name}`, 'folder could not be listed');
+        keepWriter(name);
+        continue;
+      }
       for (const [file, kind] of [
         ['thread.json', 'thread'],
         ['tasks.json', 'tasks'],
       ] as const) {
+        if (!listed.has(file)) continue;
         const rel = `writers/${name}/${file}`;
         if (await this.visit(path.join(base, file), rel, kind, name, '', seen)) changed = true;
       }
+      if (!listed.has('cards')) continue;
       let cards: fs.Dirent[] = [];
       try {
         cards = await this.fs.readdir(path.join(base, 'cards'));
       } catch (error) {
-        if (!isMissing(error)) {
+        if (!isTransientShareError(error))
           folderProblem(`writers/${name}/cards`, 'folder could not be listed');
-          // Keep the cards already known: a listing failure is not a withdrawal.
-          for (const key of this.entries.keys())
-            if (key.startsWith(`writers/${name}/cards/`)) seen.add(key);
-        }
+        // A listing failure is not a withdrawal: keep the cards already known.
+        keepWriter(name, 'cards/');
       }
       for (const card of cards) {
         if (card.name.startsWith('.') || !card.name.endsWith('.json') || !card.isFile()) continue;
@@ -217,11 +293,18 @@ export class AgentReportsReader {
           changed = true;
       }
     }
-    for (const key of [...this.entries.keys()])
-      if (!seen.has(key)) {
+    const now = this.now();
+    for (const [key, entry] of [...this.entries]) {
+      if (seen.has(key)) {
+        entry.missingSince = null;
+        continue;
+      }
+      entry.missingSince ??= now;
+      if (now - entry.missingSince >= MISSING_GRACE_MS) {
         this.entries.delete(key);
         changed = true;
       }
+    }
     if (!sameProblems(this.folderProblems, folderProblems)) changed = true;
     this.folderProblems.clear();
     for (const [key, value] of folderProblems) this.folderProblems.set(key, value);
@@ -243,8 +326,9 @@ export class AgentReportsReader {
     try {
       stat = await this.fs.stat(file);
     } catch (error) {
-      if (isMissing(error)) return false;
       seen.add(rel);
+      // Listed but gone or stale: keep the last good copy and read again next scan.
+      if (isTransientShareError(error)) return false;
       return this.setProblem(rel, kind, writer, 'could not be read');
     }
     if (!stat.isFile()) return false;
@@ -263,7 +347,8 @@ export class AgentReportsReader {
     let bytes: Buffer;
     try {
       bytes = await this.fs.readFile(file);
-    } catch {
+    } catch (error) {
+      if (isTransientShareError(error)) return false;
       return this.setProblem(rel, kind, writer, 'could not be read');
     }
     const parsed =
@@ -384,8 +469,12 @@ export class AgentReportsReader {
   async readCardNow(cardId: string): Promise<ParsedReport<CardDoc> | null> {
     const writer = cardId.slice(0, cardId.indexOf('--'));
     if (!isWriterName(writer)) return null;
-    const file = path.join(this.root, 'v1', 'writers', writer, 'cards', `${cardId}.json`);
+    const folder = path.join(this.root, 'v1', 'writers', writer, 'cards');
+    const file = path.join(folder, `${cardId}.json`);
     try {
+      // List, then read (see the reading rules above).
+      const listed = await this.fs.readdir(folder);
+      if (!listed.some((entry) => entry.name === `${cardId}.json`)) return null;
       const stat = await this.fs.stat(file);
       if (!stat.isFile() || stat.size > REPORT_SIZE_CAPS.card) return null;
       const parsed = parseReportFile('card', await this.fs.readFile(file), writer, cardId);

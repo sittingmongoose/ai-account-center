@@ -2,7 +2,7 @@
 /**
  * Writes a realistic agent reports folder for the Status tab's page and phone tests.
  *
- *   node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems]
+ *   node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems] [--with-kinds]
  *
  * <reports-dir> gets v1/writers/** (2 projects, 4 streams with tasks.json and 1 board-only stream,
  * 8 threads in mixed states, 5 open cards including a batch of 3 with recommendations, and 2 cards
@@ -21,6 +21,7 @@
  *   AAC_STATUS_DOORBELL=off CCS_DIR=<dir>
  * so it reads only the fixture and never sends pm-mail.
  *
+ * `--with-kinds` adds an objection card and an action card (7 open cards then).
  * `--with-problems` adds a malformed tasks.json and a card with NUL bytes (the unreadable state).
  * Times are relative to now, so run it just before the test. It refuses a folder that already
  * holds v1/writers.
@@ -93,7 +94,7 @@ const TINY_PNG = Buffer.from(
 /** Writes the fixture; returns what it wrote (for tests). */
 export function writeStatusFixture(
   root,
-  { ccsDir = null, withProblems = false, now = Date.now() } = {}
+  { ccsDir = null, withProblems = false, withKinds = false, now = Date.now() } = {}
 ) {
   const v1 = path.join(root, 'v1');
   if (fs.existsSync(path.join(v1, 'writers')))
@@ -121,7 +122,8 @@ export function writeStatusFixture(
     const name = writer.slice(writer.indexOf('.') + 1);
     writeJson(path.join(writers, writer, 'thread.json'), {
       ...head('agent-reports/thread@1', writer, ago),
-      ttlSeconds: 1800,
+      // A thread that ended its turn cannot heartbeat: done, idle, waiting and paused may say null.
+      ttlSeconds: fields.ttlSeconds === undefined ? 1800 : fields.ttlSeconds,
       agent: {
         name,
         harness: fields.harness ?? 'claude-code',
@@ -167,6 +169,7 @@ export function writeStatusFixture(
     project: 'ai-account-center',
     stream: 'SIGNIN',
     state: 'done',
+    ttlSeconds: null,
     doing: 'Sign-in renewal landed; runner reinstalled',
   });
   thread('vm.pm-closure-lead', 12 * MIN, {
@@ -348,6 +351,10 @@ export function writeStatusFixture(
       batch: fields.batch ?? null,
       evidence: fields.evidence ?? [],
       replies: fields.replies ?? [],
+      kind: fields.kind ?? 'question',
+      neededBy: fields.neededBy ?? null,
+      exception: fields.exception ?? null,
+      reversible: fields.reversible ?? null,
       askedAt: at(ago),
     };
     const bytes = writeJson(path.join(writers, writer, 'cards', `${id}.json`), doc);
@@ -453,6 +460,30 @@ export function writeStatusFixture(
       { at: at(10 * MIN), text: 'Both are in the screenshot set now; greyed is on the left.' },
     ],
   });
+  if (withKinds) {
+    card('vm.pm-fo-lead', 'O1', 70 * MIN, {
+      kind: 'objection',
+      label: 'F-O1',
+      project: 'puppet-master',
+      stream: 'F',
+      title: 'I am moving the export button into the toolbar',
+      now: 'Two people missed it at the bottom of the panel during QA.',
+      options: [],
+      reversible: { yes: true, how: 'One commit to revert.' },
+      neededBy: { at: at(-4 * HOUR), ifNoAnswer: 'It lands with group 4 tonight.' },
+    });
+    card('vm.aac-status-lead', 'D1', 15 * MIN, {
+      kind: 'action',
+      label: 'ST-D1',
+      project: 'ai-account-center',
+      stream: 'STATUS',
+      title: 'Sign in to the second Claude account on the Mac',
+      now: 'Its sign-in ended this morning; only you can complete the CAPTCHA.',
+      options: [],
+      urgency: 'now',
+      exception: { rule: 'Agents never sign in for you', text: 'This one needs your hands.' },
+    });
+  }
   const answeredIds = [
     card('vm.pm-closure-lead', 'Q1', 5 * HOUR, {
       label: 'C-Q1',
@@ -513,6 +544,7 @@ export function writeStatusFixture(
     const key = answerKey(storeDir);
     fs.mkdirSync(path.join(v1, 'keys'), { recursive: true });
     fs.writeFileSync(path.join(v1, 'keys', 'aac-answers.pub'), key.publicKeyPem);
+    fs.writeFileSync(path.join(v1, 'keys', `${key.keyId}.pub`), key.publicKeyPem);
     const lines = [];
     const answers = [
       {
@@ -602,6 +634,8 @@ function main(argv) {
   };
   const withProblems = args.includes('--with-problems');
   if (withProblems) args.splice(args.indexOf('--with-problems'), 1);
+  const withKinds = args.includes('--with-kinds');
+  if (withKinds) args.splice(args.indexOf('--with-kinds'), 1);
   const ccsDir =
     take('--ccs-dir') ??
     process.env.CCS_DIR ??
@@ -609,13 +643,14 @@ function main(argv) {
   const root = args[0];
   if (!root || args.length !== 1) {
     process.stderr.write(
-      'Usage: node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems]\n'
+      'Usage: node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems] [--with-kinds]\n'
     );
     return 2;
   }
   const result = writeStatusFixture(path.resolve(root), {
     ccsDir: ccsDir ? path.resolve(ccsDir) : null,
     withProblems,
+    withKinds,
   });
   process.stdout.write(
     [

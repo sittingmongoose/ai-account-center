@@ -26,6 +26,21 @@ Test servers also set `AAC_PM_MAIL_REGISTRY_DIR` (default `/mnt/Cursor/Inbox/reg
 `AAC_STATUS_DOORBELL=off` (answers are stored and signed, nobody is rung). `node scripts/status-fixture.mjs <dir>
 --ccs-dir <dir>` writes a realistic fixture and prints that environment.
 
+**Reports folder.** At startup AAC creates `<reports>/v1/`, `v1/writers/` (mode 0777) and `v1/answers/`,
+`v1/keys/`, `v1/schemas/`, `v1/catalog/` when missing, but never the reports root itself (an unmounted share must not
+grow a local folder). Writers are `<machine>.<pm-mail name>`, or `<machine>.t3-<first 8 hex of sha256(T3 thread
+id)>` for a T3 thread with no pm-mail name. Runs carry `seq` like every other document; their `cost.estimate` (`{
+source, method, credits, quota, tokens: { in, out, cached } }`) is kept apart from measured cost. The Status server
+does not read runs yet (they feed the Scoreboard).
+
+**Reading rules.** For each writer the reader lists the folder (and `cards/`) first and then reads what the listing
+names: a Mac rename-over through SMB is a delete then a rename, and NFS caches a missed lookup for about 20 s unless
+the folder is listed. ENOENT and ESTALE (Node: "Unknown system error -116") on a listed file, or on listing a writer
+folder, keep the last good copy and retry on the next scan; they never count as the thread going away. A file absent
+from its folder's listing keeps its last good copy for 2 minutes before it counts as removed. A file containing a NUL
+byte is refused (Mac SMB appends wrote NULs into shared files). The fresh card read behind every answer also lists
+`cards/` first.
+
 **Collectors.** Agent reports: rescanned every 10 s (stat every file, read only changed ones; the share has no change
 notification). pm-mail registry: every 30 s. Machines (one short read-only command per host over the app-update ssh
 aliases; the VM from `/proc` and `statfs`), `browser-check slots --json` and `simlock status --json`: once a minute
@@ -94,8 +109,8 @@ A panel whose source is not `ok` draws its last good data greyed with the source
 detail when there is no data. Nothing is ever shown as live when its source is stale.
 
 **Card** (open): the card file's fields after validation (`id`, `label`, `writer`, `seq`, `project`, `stream`,
-`askedBy`, `title`, `now`, `nowAsOf`, `oldAnswer`, `whatChanged`, `options[]`, `recommendation`, `multiple`, `urgency`,
-`blocks`, `batch`, `evidence[]`, `replies[]`, `askedAt`) plus `ageSeconds`, `askerState` (the asking thread's state,
+`askedBy`, `kind`, `title`, `now`, `nowAsOf`, `oldAnswer`, `whatChanged`, `options[]`, `recommendation`, `multiple`,
+`urgency`, `blocks`, `batch`, `evidence[]`, `replies[]`, `neededBy`, `exception`, `reversible`, `askedAt`) plus `ageSeconds`, `askerState` (the asking thread's state,
 `"gone"` when its thread is stale, `"unknown"` when the writer has no `thread.json`), `cardSha256` (SHA-256 of the card
 file's bytes), `notes[]` (the owner's notes already sent on this card, oldest first, each `{ note, at, delivery }`),
 `problem` (the file's current problem, or null) and `answerable` (false while the shown copy is the last good one of a
@@ -116,9 +131,19 @@ share):
 - `recommendation` `{ key, why }`: marked on its option and again with the one-line reason.
 - `blocks`: what waits on the answer, or null for "nothing waits on this".
 - `replies[]` `{ at, text }`: the agent's replies to the owner's notes, in the card file (a new `seq`).
+- `kind`: `question` (the default; two to four options, answered in the deck), `objection` (a call the agent already
+  made, "tell me if you object": shown in a quiet list with the decision, the reason and an Object button; no options
+  or two to four; silence is not an answer, nothing is signed unless the owner objects, and the card stays listed) or
+  `action` (something only the owner can do, such as signing in or changing a NAS setting: a Done button, no
+  options).
+- `neededBy` `{ at: ISO | null, ifNoAnswer }` | null: when an answer is needed and what happens or starts costing
+  without one. `exception` `{ rule, text }` | null: the owner's rule this card loosens and how; shown before anything
+  else. `reversible` `{ yes: true | false, how }` | null.
 - A withdrawn card may carry `reason` ("Settled by your note"). There is no `allowNote`: the note box is always there.
+- A count or premise that changes after a card was shown: the agent supersedes the card; the new card's `whatChanged`
+  gives old and new values and `oldAnswer` quotes any earlier answer.
 
-**AnsweredCard**: `{ card: Card, answer: { kind: "answer", choice, note, via, answeredAt, device, delivery: { state:
+**AnsweredCard**: `{ card: Card, answer: { kind: "answer" | "object" | "done", choice, note, via, answeredAt, device, delivery: { state:
 "rang" | "failed" | "pending", at, detail, share: Step, doorbell: Step } } }`, newest first, at most 50 (the full
 history, notes included, is `GET /api/status/answers`). **Step**: `{ state: "pending" | "done" | "failed" |
 "skipped", at, detail, attempts }`. `failed` covers a share write or doorbell still being retried, one that gave up
@@ -141,7 +166,9 @@ of the share are mapped); elsewhere `ageSeconds` is null.
 source: "report" | "pm-mail", lastSeen, ageSeconds, stale, clockAheadSeconds, problem }`. Threads quiet for more than
 a day are left out unless they report `blocked`. `lastSeen` is the older of the writer's `writtenAt` and when AAC first
 saw that version, so a writer whose clock runs ahead cannot look fresh; `clockAheadSeconds` says by how much when over
-2 minutes. A report is `stale` after its `ttlSeconds` or while its file is unreadable. pm-mail rows (registry threads
+2 minutes. A report is `stale` after its `ttlSeconds` or while its file is unreadable. `ttlSeconds` may be null only
+when `state` is `waiting`, `idle`, `done` or `paused` (a thread that ended its turn cannot heartbeat): such a thread
+shows its age and is never stale for lack of a heartbeat (null with `working` or `blocked` makes the file unreadable). pm-mail rows (registry threads
 with no report, seen in the last day) have `state: null`, `doing` = their about line, and are stale after 30 minutes.
 `blockedOn.kind` is any short slug (documented: `owner`, `agent`, `review`, `lock`, `resource`, `quota`).
 
@@ -175,13 +202,18 @@ any of them before sending. Unsent choices and notes are kept on this device (br
 loses nothing; they are drafts, never answers.
 
 `POST /api/status/answers` body: `{ "answers": [ { "cardId", "cardSeq", "cardSha256", "choice": ["A"] | [], "note": "...",
-"via": "deck" | "recommended" } ] }`, 1 to 50 entries, at most 64 KB. Each entry is validated and recorded on its
+"via": "deck" | "recommended", "kind"?: "answer" | "note" | "object" | "done" } ] }`, 1 to 50 entries, at most 64 KB. Each entry is validated and recorded on its
 own, in order, one set at a time; the response is `{ "results": [ { cardId, outcome: "recorded" | "card_changed" |
 "refused", code, error } ] }`, one per entry in request order (HTTP 200 when the request itself is valid, even if some
 entries are refused; `code` and `error` are null for `recorded`; `cardId` is null when the entry did not name a valid
 card id). Entry codes: `card_changed`, `invalid_entry` (not the strict entry shape), `invalid_choice`, `empty_entry`
-(no choice and no note), `invalid_note`, `invalid_via`, `answer_not_saved` (the private store could not be written;
-nothing else happened for that entry).
+(no choice and no note), `invalid_note`, `invalid_via`, `invalid_kind` (the entry's kind does not fit the card's
+kind), `words_required` (an objection without the owner's words), `answer_not_saved` (the private store could not be
+written; nothing else happened for that entry).
+- Record kinds: `answer` (a choice, `question` cards only), `note` (a note alone, any card; the card stays open),
+  `object` (`objection` cards: no choice, the owner's words required) and `done` (`action` cards: no choice, words
+  optional). Without `kind`, an entry with a choice is an `answer` and one with only a note is a `note`; `object` and
+  `done` must be sent as `kind`. `answer`, `object` and `done` close the card version; `note` does not.
 - The card must be open on disk at that `seq` and hash (read fresh, not from the last scan) and that version not yet
   answered. Otherwise that entry is `card_changed` and the page reloads the card.
 - `choice` keys must be the card's option keys, without repeats (one unless `multiple`).
@@ -196,19 +228,25 @@ nothing else happened for that entry).
 - Stored in `<ccsDir>/status/answers.jsonl` (append, local disk, this server only), then written signed to the share
   (temporary file and rename), then the asker is rung through pm-mail. An answer goes to
   `<reports>/v1/answers/<card>.json` (a later answer to a newer version of the card replaces it); each note gets its
-  own file, `<reports>/v1/answers/<card>.note-<12 hex>.json`, so no note overwrites another or an answer. Each step's
+  own file, `<reports>/v1/answers/<card>.note-<12 hex>.json`, so no note overwrites another or an answer; `object` and
+  `done` go to `<card>.json` like an answer. Each step's
   result is kept in the history; a failed share write or doorbell is retried and shown, never hidden.
-- The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind, choice, note, via,
+- The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind: "answer" | "note" |
+  "object" | "done", choice, note, via,
   answeredAt, answeredBy: "owner", device, signature }`. `device` is a word from the browser (`iPhone`, `iPad`,
   `Android`, `Mac`, `Windows`, `Linux`, `browser`).
-- Signature: Ed25519 over the canonical JSON of the answer without `signature` (object keys sorted at every depth, no
-  whitespace, values as `JSON.stringify` writes them). The key pair lives in `<ccsDir>/status/answer-key.pem` (PKCS#8,
-  0600), created on first use; the public key (SPKI PEM) is published at `<reports>/v1/keys/aac-answers.pub` with
-  `keyId` = first 16 hex characters of the SHA-256 of the public key's DER (SPKI) bytes.
-  `verifySignedAnswer(fileText, publicKeyPem)` in `src/web-server/status/answer-signing.ts` is the check a reporter
+- Signature: Ed25519 over the UTF-8 bytes of the canonical JSON (RFC 8785 style: object keys sorted by UTF-16 code
+  unit at every level, no whitespace, strings and numbers as `JSON.stringify` writes them) of the answer with the
+  top-level `signature` removed; `signature.value` is standard base64 of the 64-byte signature. The key pair lives in
+  `<ccsDir>/status/answer-key.pem` (PKCS#8, 0600), created on first use; the public key (SPKI PEM) is published at
+  both `<reports>/v1/keys/aac-answers.pub` and `<reports>/v1/keys/<keyId>.pub` (verifiers try `<keyId>.pub` first), with
+  `keyId` = first 16 hex characters of the SHA-256 of the public key's DER (SPKI) bytes. `canonicalJson(value)` and
+  `verifySignedAnswer(fileText, publicKeyPem)` in `src/web-server/status/answer-signing.ts` are what a reporter
   mirrors.
-- The doorbell runs `pm-mail --as aac-answers send <replyTo.pmMail> "Answer for <card>" | "Note on <card>" -m
-  "<body>"` only after the signed copy is on the share; the body names the card and the signed file, never the note.
+- The doorbell rings only the asker (`replyTo.pmMail`): `pm-mail --as aac-answers send <asker> "Answer for <card>" |
+  "Note on <card>" | "Objection to <card>" | "Done: <card>" -m "<body>"`, only after the signed copy is on the share.
+  The body carries the card id and seq, the record kind, the owner's exact choice (keys and labels) and words, the
+  UTC time and the card's SHA-256, and says the signed file is the authority (naming it and the key file).
 - No agent path exists: the routes take a browser session only (not a device token, not localhost without auth).
 
 `cards.batches` is only a grouping (id, label, cardIds) that orders the deck; there is no approve-all endpoint.

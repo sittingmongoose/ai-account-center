@@ -183,8 +183,10 @@ function seenAt(row: { writtenAtMs: number; firstSeenAt: number }): number {
     : row.firstSeenAt;
 }
 
+/** Past its heartbeat, or unreadable. A quiet thread without a heartbeat (`ttlSeconds: null`) shows its age only. */
 function threadStale(row: SeenReport<ThreadDoc>, now: number): boolean {
-  return row.problem !== null || now - seenAt(row) > row.doc.ttlSeconds * 1000;
+  const ttl = row.doc.ttlSeconds;
+  return row.problem !== null || (ttl !== null && now - seenAt(row) > ttl * 1000);
 }
 
 function reportThreadView(row: SeenReport<ThreadDoc>, now: number): ThreadView {
@@ -320,6 +322,10 @@ function cardView(
     batch: doc.batch ?? null,
     evidence: doc.evidence ?? [],
     replies: doc.replies ?? [],
+    kind: doc.kind ?? 'question',
+    neededBy: doc.neededBy ?? null,
+    exception: doc.exception ?? null,
+    reversible: doc.reversible ?? null,
     askedAt: doc.askedAt,
     ageSeconds: ageSeconds(inputs.now, asked) ?? 0,
     askerState: askerState(inputs, doc.writer),
@@ -372,7 +378,7 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
     answered: history.map((entry) => ({
       card: cardView(inputs, entry.card, entry.answer.cardSha256, null),
       answer: {
-        kind: 'answer' as const,
+        kind: entry.answer.kind as 'answer' | 'object' | 'done',
         choice: entry.answer.choice,
         note: entry.answer.note,
         via: entry.answer.via,

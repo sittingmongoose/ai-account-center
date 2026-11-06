@@ -138,6 +138,38 @@ describe('agent report documents', () => {
       ).toEqual({ ok: false, reason: 'options[0].image.path is missing or not valid' });
   });
 
+  it('reads card kinds and the needed-by, exception and reversible fields', () => {
+    const parse = (fields: Record<string, unknown>) =>
+      parseReportFile('card', json(cardDoc('vm.lead', 'Q1', fields)), 'vm.lead', 'vm.lead--Q1');
+    const question = parse({
+      neededBy: { at: '2026-11-07T12:00:00Z', ifNoAnswer: 'The landing waits.' },
+      exception: { rule: 'No branch installs', text: 'Install this branch once on the VM.' },
+      reversible: { yes: true, how: 'Reinstall main.' },
+    });
+    expect(question.ok && question.value.doc.kind).toBe('question');
+    expect(question.ok && question.value.doc.neededBy?.ifNoAnswer).toBe('The landing waits.');
+    expect(question.ok && question.value.doc.exception?.rule).toBe('No branch installs');
+    expect(question.ok && question.value.doc.reversible).toEqual({
+      yes: true,
+      how: 'Reinstall main.',
+    });
+    expect(parse({ kind: 'objection', options: [], recommendation: null }).ok).toBe(true);
+    expect(parse({ kind: 'action', options: [], recommendation: null }).ok).toBe(true);
+    expect(parse({ kind: 'action' })).toEqual({
+      ok: false,
+      reason: 'an action card has no options',
+    });
+    expect(parse({ kind: 'question', options: [], recommendation: null })).toEqual({
+      ok: false,
+      reason: 'a card needs 2 to 4 options',
+    });
+    expect(parse({ kind: 'poll' })).toEqual({ ok: false, reason: 'kind is missing or not valid' });
+    expect(parse({ reversible: { yes: 'maybe' } })).toEqual({
+      ok: false,
+      reason: 'reversible.yes is missing or not valid',
+    });
+  });
+
   it('refuses files with secrets and says what kind, never the text', () => {
     const cases: Array<[unknown, string]> = [
       [{ doing: 'key sk-ant-abcdefghijklmnopqrstuvwxyz0123' }, 'an API key'],

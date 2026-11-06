@@ -83,6 +83,8 @@ const REFUSALS = {
   empty_entry: 'Choose an option or write a note.',
   invalid_note: `The note must be at most ${ANSWER_NOTE_MAX} characters of plain text.`,
   invalid_via: 'Only an unchanged recommendation can be sent as recommended.',
+  invalid_kind: 'This kind of answer does not fit this card.',
+  words_required: 'An objection needs your words in the note.',
   answer_not_saved: 'The answer could not be saved. Nothing was sent.',
 } as const;
 
@@ -143,6 +145,9 @@ export function validChoice(card: CardDoc, choice: string[]): boolean {
   return card.multiple || choice.length <= 1;
 }
 
+export type AnswerKind = UnsignedAnswer['kind'];
+const ANSWER_KINDS: readonly AnswerKind[] = ['answer', 'note', 'object', 'done'];
+
 export interface AnswerEntry {
   cardId: string;
   cardSeq: number;
@@ -150,9 +155,28 @@ export interface AnswerEntry {
   choice: string[];
   note?: string;
   via: 'deck' | 'recommended';
+  /** Needed for `object` and `done`; `answer`/`note` follow from the choice when absent. */
+  kind?: AnswerKind;
 }
 
-const ENTRY_KEYS = new Set(['cardId', 'cardSeq', 'cardSha256', 'choice', 'note', 'via']);
+const ENTRY_KEYS = new Set(['cardId', 'cardSeq', 'cardSha256', 'choice', 'note', 'via', 'kind']);
+
+/** The record kind an entry makes on this card, or the refusal. */
+export function entryKind(
+  card: CardDoc,
+  entry: AnswerEntry,
+  note: string
+): AnswerKind | 'invalid_kind' | 'words_required' | 'empty_entry' {
+  const cardKind = card.kind ?? 'question';
+  const kind = entry.kind ?? (entry.choice.length > 0 ? 'answer' : 'note');
+  if (kind === 'answer')
+    return cardKind === 'question' && entry.choice.length > 0 ? kind : 'invalid_kind';
+  if (entry.choice.length > 0) return 'invalid_kind';
+  if (kind === 'note') return note ? kind : 'empty_entry';
+  if (kind === 'object')
+    return cardKind !== 'objection' ? 'invalid_kind' : note ? kind : 'words_required';
+  return cardKind === 'action' ? kind : 'invalid_kind';
+}
 const SHA256 = /^[0-9a-f]{64}$/;
 
 /** The strict shape of one entry of an answer set, or null. */
@@ -160,7 +184,8 @@ export function parseAnswerEntry(raw: unknown): AnswerEntry | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const rec = raw as Record<string, unknown>;
   if (!Object.keys(rec).every((key) => ENTRY_KEYS.has(key))) return null;
-  const { cardId, cardSeq, cardSha256, choice, note, via } = rec;
+  const { cardId, cardSeq, cardSha256, choice, note, via, kind } = rec;
+  if (kind !== undefined && !ANSWER_KINDS.includes(kind as AnswerKind)) return null;
   if (!isCardId(cardId)) return null;
   if (typeof cardSeq !== 'number' || !Number.isSafeInteger(cardSeq) || cardSeq < 0) return null;
   if (typeof cardSha256 !== 'string' || !SHA256.test(cardSha256)) return null;
@@ -179,7 +204,47 @@ export function parseAnswerEntry(raw: unknown): AnswerEntry | null {
     choice: choice as string[],
     ...(note !== undefined ? { note } : {}),
     via,
+    ...(kind !== undefined ? { kind: kind as AnswerKind } : {}),
   };
+}
+
+const SUBJECTS: Record<AnswerKind, string> = {
+  answer: 'Answer for',
+  note: 'Note on',
+  object: 'Objection to',
+  done: 'Done:',
+};
+
+export function doorbellSubject(answer: SignedAnswer): string {
+  return `${SUBJECTS[answer.kind] ?? 'Answer for'} ${answer.cardId}`;
+}
+
+/**
+ * The doorbell: the card id, the owner's exact choice and words, the UTC time and the card hash.
+ * The signed file stays the authority.
+ */
+export function doorbellBody(answer: SignedAnswer, card: CardDoc, file: string): string {
+  const labels = new Map((card.options ?? []).map((option) => [option.key, option.label]));
+  const choice =
+    answer.choice.length > 0
+      ? answer.choice.map((key) => `${key} (${labels.get(key) ?? 'unknown option'})`).join(', ')
+      : 'none';
+  const kindWords: Record<AnswerKind, string> = {
+    answer: 'answered',
+    note: 'sent a note on (the card stays open; reply on the card or withdraw it)',
+    object: 'objected to',
+    done: 'marked done',
+  };
+  return [
+    `Card ${answer.cardId} (seq ${answer.cardSeq}): the owner ${kindWords[answer.kind] ?? 'answered'} it.`,
+    `Kind: ${answer.kind}`,
+    `Choice: ${choice}`,
+    `Words: ${answer.note ? answer.note : '(none)'}`,
+    `Time (UTC): ${answer.answeredAt}`,
+    `Card sha256: ${answer.cardSha256}`,
+    `The signed file is the authority: agent-reports/v1/answers/${file}`,
+    `(key agent-reports/v1/keys/${answer.signature.keyId}.pub). This mail is only a doorbell.`,
+  ].join('\n');
 }
 
 /** Where a record's signed copy goes: an answer replaces `<card>.json`; each note gets its own file. */
@@ -378,11 +443,11 @@ export class StatusAnswers {
     return this.list().slice().reverse().slice(0, Math.max(0, limit));
   }
 
-  /** Whether this exact card version already has an answer (a note does not close a card). */
+  /** Whether this exact card version already has an answer, objection or done (a note does not close a card). */
   isAnswered(cardId: string, seq: number, sha256: string): boolean {
     return this.list().some(
       (entry) =>
-        entry.answer.kind === 'answer' &&
+        entry.answer.kind !== 'note' &&
         entry.answer.cardId === cardId &&
         entry.answer.cardSeq === seq &&
         entry.answer.cardSha256 === sha256
@@ -418,8 +483,11 @@ export class StatusAnswers {
         (async () => {
           const pub = path.join(v1, 'keys', 'aac-answers.pub');
           const key = this.answerKey();
-          const current = await fs.promises.readFile(pub, 'utf8').catch(() => '');
-          if (current !== key.publicKeyPem) await writeAtomic(pub, key.publicKeyPem);
+          // Verifiers try keys/<keyId>.pub first, so a rotation keeps old answers checkable.
+          for (const file of [pub, path.join(v1, 'keys', `${key.keyId}.pub`)]) {
+            const current = await fs.promises.readFile(file, 'utf8').catch(() => '');
+            if (current !== key.publicKeyPem) await writeAtomic(file, key.publicKeyPem);
+          }
           await writeAtomic(
             path.join(v1, 'answers', shareFileName(entry.answer, entry.id)),
             `${JSON.stringify(entry.answer, null, 2)}\n`
@@ -472,16 +540,8 @@ export class StatusAnswers {
       );
       return;
     }
-    const { cardId, cardSeq, kind } = entry.answer;
-    const note = kind === 'note';
-    const subject = note ? `Note on ${cardId}` : `Answer for ${cardId}`;
-    const body = [
-      note
-        ? `The owner sent a note on card ${cardId} (seq ${cardSeq}); the card stays open. Reply on the card or withdraw it.`
-        : `The owner answered card ${cardId} (seq ${cardSeq}) on the AI Account Center Status tab.`,
-      `The signed file is the authority: agent-reports/v1/answers/${shareFileName(entry.answer, entry.id)}`,
-      '(public key agent-reports/v1/keys/aac-answers.pub). This mail is only a doorbell.',
-    ].join('\n');
+    const subject = doorbellSubject(entry.answer);
+    const body = doorbellBody(entry.answer, entry.card, shareFileName(entry.answer, entry.id));
     let result: RingResult;
     try {
       result = await (this.deps.doorbell ?? pmMailDoorbell())(to, subject, body);
@@ -497,14 +557,15 @@ export class StatusAnswers {
     choice: string[],
     note: string,
     device: string,
-    via: UnsignedAnswer['via']
+    via: UnsignedAnswer['via'],
+    kind: AnswerKind
   ): Promise<CardAnswer> {
     const unsigned: UnsignedAnswer = {
       schema: ANSWER_SCHEMA,
       cardId: parsed.doc.id,
       cardSeq: parsed.doc.seq,
       cardSha256: parsed.sha256,
-      kind: choice.length > 0 ? 'answer' : 'note',
+      kind,
       choice,
       note,
       via,
@@ -562,15 +623,18 @@ export class StatusAnswers {
     const parsed = await this.openCard(entry.cardId, entry.cardSeq, entry.cardSha256);
     if (!parsed) return refused(entry.cardId, 'card_changed');
     if (!validChoice(parsed.doc, entry.choice)) return refused(entry.cardId, 'invalid_choice');
-    if (entry.choice.length === 0 && !note) return refused(entry.cardId, 'empty_entry');
+    const kind = entryKind(parsed.doc, entry, note);
+    if (kind === 'invalid_kind' || kind === 'words_required' || kind === 'empty_entry')
+      return refused(entry.cardId, kind);
     if (
       entry.via === 'recommended' &&
-      (!parsed.doc.recommendation ||
+      (kind !== 'answer' ||
+        !parsed.doc.recommendation ||
         entry.choice.length !== 1 ||
         entry.choice[0] !== parsed.doc.recommendation.key)
     )
       return refused(entry.cardId, 'invalid_via');
-    const done = await this.answerCard(parsed, entry.choice, note, device, entry.via);
+    const done = await this.answerCard(parsed, entry.choice, note, device, entry.via, kind);
     if (!done.ok) return refused(entry.cardId, 'answer_not_saved');
     if (done.ring) rings.push(done.ring);
     return { cardId: entry.cardId, outcome: 'recorded', code: null, error: null };
