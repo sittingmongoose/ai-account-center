@@ -1,7 +1,7 @@
 # Status tab: contract (v1)
 
 The Status tab answers "how are we looking?" without asking an agent: task progress for every project and stream,
-open questions for Jared as decision cards, threads, machines, browsers and recordings, Simlock devices and account
+open questions for the owner as decision cards, threads, machines, browsers and recordings, Simlock devices and account
 usage. It is the first page of the Leptos web UI (see "Web UI move" below).
 
 Agents report through the files described in
@@ -15,7 +15,7 @@ Agents report through the files described in
 | Agent reports reader | `src/web-server/status/` | reading `<reports>/v1/**`, last good copy, staleness |
 | Collectors | `src/web-server/status/` | pm-mail registry, machines (ssh), `browser-check slots --json`, `simlock status`, usage |
 | Status view | `src/web-server/status/status-view.ts` | every number, word, state and warning the page shows (pure, tested) |
-| Answers | `src/web-server/status/answers.ts` | Jared's answers: validation, signing, private store, share copy, pm-mail doorbell |
+| Answers | `src/web-server/status/answers.ts` | the owner's answers: validation, signing, private store, share copy, pm-mail doorbell |
 | Routes | `src/web-server/routes/status-routes.ts` | `/api/status`, `/api/status/answers*` |
 | Page | `web-dashboard/leptos/` (Leptos 0.9.0-rc1, client-side rendered) | drawing only: never computes a reading |
 | Shell tab | `web-dashboard/ui/shell/`, `web-dashboard/public/bridge.js` | the Status and Scoreboard tabs in the Slint shell, the iframe over the canvas |
@@ -126,6 +126,6 @@ individually (`card_changed`) and the rest proceed; the result lists each card's
 
 ## Web UI move
 
-Jared approved moving the web UI from Slint to Leptos on 2026-11-06 (Leptos 0.9.0-rc1, client-side rendered, served by
+The owner approved moving the web UI from Slint to Leptos on 2026-11-06 (Leptos 0.9.0-rc1, client-side rendered, served by
 this TypeScript server). The Status and Scoreboard pages are the first Leptos pages, shown inside the Slint shell by an
 iframe until the shell itself moves. The JavaScript view-model layer (`web-dashboard/public/*.mjs`) stays.
