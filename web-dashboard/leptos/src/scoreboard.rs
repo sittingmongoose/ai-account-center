@@ -478,7 +478,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
             let t = ticks.get_untracked() + 15;
             if t >= every {
                 ticks.set(0);
-                if document().visibility_state() == web_sys::VisibilityState::Visible {
+                if crate::on_screen() {
                     board.reload();
                 }
             } else {
@@ -488,6 +488,19 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         Duration::from_secs(15),
     );
 
+    // Shown again by the shell, or back online: read at once.
+    for event in [crate::SHOWN_EVENT, "online"] {
+        let again = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
+            if crate::on_screen() {
+                board.reload();
+            }
+        });
+        let _ = window().add_event_listener_with_callback(
+            event,
+            wasm_bindgen::JsCast::unchecked_ref(again.as_ref()),
+        );
+        again.forget();
+    }
     let chosen = RwSignal::new(stored_use());
     let current_use = Memo::new(move |_| {
         board.view.with(|v| {

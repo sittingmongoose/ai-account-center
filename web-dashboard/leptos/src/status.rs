@@ -294,7 +294,7 @@ fn StreamView(stream: Stream) -> impl IntoView {
                 <ul class="items">
                     {items.clone().into_iter().map(|i| {
                         let blocked = i.blocked_on.as_ref().map(blocked_words);
-                        let landed = i.landed.as_ref().map(|l| format!("landed {}", &l.sha[..l.sha.len().min(10)]));
+                        let landed = i.landed.as_ref().map(|l| format!("landed {}", l.sha.chars().take(10).collect::<String>()));
                         let reviews = i.reviews.iter().map(|r| format!("{} {}", r.by, r.verdict)).collect::<Vec<_>>().join(" · ");
                         view! {
                             <li class="item" data-state=i.state.clone()>

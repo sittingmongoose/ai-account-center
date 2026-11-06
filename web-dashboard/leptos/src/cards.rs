@@ -112,15 +112,23 @@ pub fn CardsPanel() -> impl IntoView {
     let deck_view = RwSignal::new(DeckView::Cards);
     let show_answered = RwSignal::new(false);
 
-    // Keep drafts on this device; drop drafts of cards that closed (only once a real view is in).
+    // Keep drafts on this device; drop drafts of cards that closed. Only a current reading of the cards may prune: a
+    // view whose card source is missing or unreadable (a restarted server, a share that is down) lists no cards and
+    // must not wipe the owner's unsent work.
     Effect::new(move |_| drafts.with(drafts::save));
     Effect::new(move |_| {
         let cards = open.get();
-        if live.view.with_untracked(|v| v.is_some()) {
+        let current = live.view.with_untracked(|v| {
+            v.as_ref().is_some_and(|v| {
+                // A reading exists (it may be stale or have a damaged file, but its list is the reader's last good
+                // one); "missing" before the first scan has none.
+                v.sources
+                    .iter()
+                    .any(|s| s.id == v.cards.source && s.as_of.is_some() && s.state != "missing")
+            })
+        });
+        if current {
             drafts.update(|d| drafts::prune(d, &cards));
-        }
-        if at.get_untracked() >= cards.len() {
-            at.set(cards.len().saturating_sub(1));
         }
     });
 
@@ -189,15 +197,42 @@ fn Deck(
                 .collect::<Vec<_>>()
         })
     });
+    // While answers are on their way the deck stays on its review screen: no second send, no moving away.
+    let sending = RwSignal::new(false);
+    // The deck follows a card, not a position: when cards close or a filter changes, the owner stays on the same
+    // card if it is still shown, else the nearest one.
+    let current_id = RwSignal::new(None::<String>);
+    Effect::new(move |_| {
+        let ids: Vec<String> = shown.with(|cards| cards.iter().map(|c| c.id.clone()).collect());
+        let keep = current_id
+            .get_untracked()
+            .and_then(|id| ids.iter().position(|x| *x == id));
+        let i = keep.unwrap_or_else(|| at.get_untracked().min(ids.len().saturating_sub(1)));
+        if at.get_untracked() != i {
+            at.set(i);
+        }
+        current_id.set(ids.get(i).cloned());
+    });
     let go_card = move |i: usize| {
+        if sending.get_untracked() {
+            return;
+        }
         at.set(i);
+        current_id.set(shown.with_untracked(|cards| cards.get(i).map(|c| c.id.clone())));
         deck_view.set(DeckView::Cards);
         to_top();
     };
     // From the review, a row is a card in the whole deck: drop the filter first.
     let go_open = move |i: usize| {
+        if sending.get_untracked() {
+            return;
+        }
         verdict.set(None);
-        go_card(i);
+        let id = open.with_untracked(|cards| cards.get(i).map(|c| c.id.clone()));
+        current_id.set(id.clone());
+        let at_shown =
+            id.and_then(|id| shown.with_untracked(|cards| cards.iter().position(|c| c.id == id)));
+        go_card(at_shown.unwrap_or(i));
     };
     let go_review = move || {
         deck_view.set(DeckView::Review);
@@ -229,7 +264,7 @@ fn Deck(
     };
     // Keyboard on a desktop: left and right move through the deck, 1-9 pick an option on the card shown. Typing in
     // the note field is left alone.
-    let _keys = window_event_listener(leptos::ev::keydown, move |e| {
+    let keys = window_event_listener(leptos::ev::keydown, move |e| {
         if e.ctrl_key()
             || e.meta_key()
             || e.alt_key()
@@ -269,6 +304,8 @@ fn Deck(
             _ => {}
         }
     });
+    // The deck can be unmounted (no questions left); its key listener goes with it.
+    on_cleanup(move || keys.remove());
     view! {
         <div class="deck">
             <div class="deck-sub">
@@ -282,14 +319,14 @@ fn Deck(
             <Show when=move || deck_view.get() == DeckView::Cards && !verdicts.with(|v| v.is_empty())>
                 <div class="verdicts" role="group" aria-label="Show cards by verdict">
                     <button class="chip-btn" aria-pressed=move || verdict.with(|v| v.is_none()).to_string()
-                        on:click=move |_| { verdict.set(None); at.set(0); }>"All"</button>
+                        on:click=move |_| { current_id.set(None); at.set(0); verdict.set(None); }>"All"</button>
                     {move || verdicts.get().into_iter().map(|v| {
                         let label = verdict_label(&v);
                         let pick = v.clone();
                         let count = open.with_untracked(|cards| cards.iter().filter(|c| c.verdict.as_deref() == Some(v.as_str())).count());
                         view! {
                             <button class="chip-btn" data-verdict=v.clone() aria-pressed=move || verdict.with(|x| x.as_deref() == Some(pick.as_str())).to_string()
-                                on:click=move |_| { verdict.set(Some(v.clone())); at.set(0); }>{format!("{label} ({count})")}</button>
+                                on:click=move |_| { current_id.set(None); at.set(0); verdict.set(Some(v.clone())); }>{format!("{label} ({count})")}</button>
                         }
                     }).collect_view()}
                 </div>
@@ -330,7 +367,7 @@ fn Deck(
                         </button>
                     </div>
                 }.into_any(),
-                DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open/> }.into_any(),
+                DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open sending=sending/> }.into_any(),
                 DeckView::Sent(summary) => view! { <Sent summary=summary deck_view=deck_view at=at/> }.into_any(),
             }}
         </div>
@@ -512,7 +549,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
             </dl>
             {(!fold_sections).then(|| view! { <Blocks blocks=c.sections.clone()/> })}
             <Show when=move || standing() == Standing::Changed>
-                <p class="item-note" data-tone="warn">"This question changed after you chose. Look again; your choice is kept but not sent until you touch it."</p>
+                <p class="item-note" data-tone="warn">"This question changed after you answered. Nothing is sent until you tap an option again or edit your note."</p>
             </Show>
 
             {match c.kind.as_str() {
@@ -614,16 +651,16 @@ fn Review(
     drafts: RwSignal<Drafts>,
     deck_view: RwSignal<DeckView>,
     go_card: impl Fn(usize) + Copy + Send + Sync + 'static,
+    sending: RwSignal<bool>,
 ) -> impl IntoView {
     let live = expect_context::<Live>();
-    let sending = RwSignal::new(false);
     let problem = RwSignal::new(None::<String>);
     let count = move || open.with(|cards| drafts.with(|d| drafts::entries(d, cards).len()));
 
     let send = move || {
         let cards = open.get_untracked();
         let entries = drafts.with_untracked(|d| drafts::entries(d, &cards));
-        if entries.is_empty() {
+        if entries.is_empty() || sending.get_untracked() {
             return;
         }
         sending.set(true);
@@ -730,12 +767,16 @@ fn Review(
                         (false, n) => format!("Send {n} answers"),
                     }}
                 </button>
-                <button class="secondary" on:click=move |_| deck_view.set(DeckView::Cards)>"Back to the cards"</button>
+                <button class="secondary" disabled=move || sending.get() on:click=move |_| deck_view.set(DeckView::Cards)>"Back to the cards"</button>
             </div>
             {move || problem.get().map(|p| view! { <p class="item-note" data-tone="crit" role="alert">{p}</p> })}
             <p class="fine">
                 {move || {
-                    let left = open.with(|o| o.len()).saturating_sub(count());
+                    // Answers and "done" close their cards; notes, objections and samples stay open.
+                    let closing = open.with(|cards| drafts.with(|d| {
+                        drafts::entries(d, cards).iter().filter(|e| e.kind == "answer" || e.kind == "done").count()
+                    }));
+                    let left = open.with(|o| o.len()).saturating_sub(closing);
                     let stays = match left { 0 => String::new(), 1 => "1 question stays open for later. ".into(), n => format!("{n} questions stay open for later. ") };
                     format!("{stays}Tap a row to change it. When you send, AAC records your exact choices, your notes word for word and the time, signs them, and tells each agent that asked.")
                 }}

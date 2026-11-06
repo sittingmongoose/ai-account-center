@@ -268,9 +268,13 @@ function setSharedHeaders(ui: StaticUi, res: http.ServerResponse, relative: stri
   res.setHeader('Cache-Control', uiCacheControl(relative));
   const type = CONTENT_TYPES.get(path.extname(relative).toLowerCase());
   if (type) res.setHeader('Content-Type', type);
-  if (relative === 'index.html') {
+  if (relative === 'index.html' || relative === APP_ENTRY) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
+    // Only AAC's own shell may frame its pages: a service on another port or a sibling name is same-site, so the
+    // session cookie alone would let it overlay the answer buttons.
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   }
   if (ui.variants.has(relative)) res.setHeader('Vary', 'Accept-Encoding');
 }

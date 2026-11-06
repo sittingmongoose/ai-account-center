@@ -68,10 +68,24 @@ function validateUi(options = {}) {
     ) {
       throw new Error('Leptos page source changed after the build. Run bun run ui:build.');
     }
-    for (const file of [manifest.leptos.entry, manifest.leptos.wasm?.path]) {
-      if (typeof file !== 'string' || !fs.existsSync(path.join(repoRoot, 'dist', 'ui', file))) {
+    // Every file the pages load is there, and the wasm is the one the build recorded.
+    const ui = path.join(repoRoot, 'dist', 'ui');
+    const pkg = `pkg/${manifest.leptos.buildId}`;
+    for (const file of [
+      manifest.leptos.entry,
+      manifest.leptos.wasm?.path,
+      `${pkg}/aac_web.js`,
+      'app/app.css',
+      'app/MartianMono.ttf',
+    ]) {
+      if (typeof file !== 'string' || !fs.existsSync(path.join(ui, file))) {
         throw new Error('The packaged Leptos pages are incomplete. Run bun run ui:build.');
       }
+    }
+    const wasm = fs.readFileSync(path.join(ui, manifest.leptos.wasm.path));
+    const wasmSha = require('crypto').createHash('sha256').update(wasm).digest('hex');
+    if (wasmSha !== manifest.leptos.wasm.sha256 || wasm.length !== manifest.leptos.wasm.bytes) {
+      throw new Error('The packaged Leptos wasm is not the one the build recorded. Run bun run ui:build.');
     }
   }
   return source;

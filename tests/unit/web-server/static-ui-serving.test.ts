@@ -303,6 +303,9 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     const index = await raw('GET', '/index.html');
     expect(index.headers['x-content-type-options']).toBe('nosniff');
     expect(index.headers['referrer-policy']).toBe('same-origin');
+    // Only AAC's own shell may frame it.
+    expect(index.headers['content-security-policy']).toBe("frame-ancestors 'self'");
+    expect(index.headers['x-frame-options']).toBe('SAMEORIGIN');
   });
 
   it('never serves the build manifest (commit and source hash) to anyone', async () => {
@@ -380,6 +383,9 @@ describe('the Leptos pages', () => {
         expect(response.body.toString()).toBe(page);
         expect(response.headers['content-type']).toBe('text/html; charset=utf-8');
         expect(response.headers['cache-control']).toBe('no-cache');
+        expect(response.headers['x-content-type-options']).toBe('nosniff');
+        expect(response.headers['content-security-policy']).toBe("frame-ancestors 'self'");
+        expect(response.headers['x-frame-options']).toBe('SAMEORIGIN');
       }
       const slash = await raw('GET', '/app/status/');
       expect(slash.status).toBe(301);

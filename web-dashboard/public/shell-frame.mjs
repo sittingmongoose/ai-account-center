@@ -9,7 +9,8 @@
 //   canvas draws over it as `content-cover` ("all", "" or "x,y,w,h" rects joined by ";"). Rects are cut out of
 //   the iframe with clip-path, so toasts and hover cards stay visible and clickable.
 // - Messages (same origin, from our own iframes only): the page sends { type: "aac-ready" } and
-//   { type: "aac-navigate", page }; the shell sends { type: "aac-theme", mode: "light" | "dark" } on load, on
+//   { type: "aac-navigate", page }; the shell sends { type: "aac-visible", visible } when the page becomes or stops
+//   being the current tab, and { type: "aac-theme", mode: "light" | "dark" } on load, on
 //   ready and whenever the effective theme changes. Anything else is ignored.
 // - A page that does not load, lands anywhere but /app/, or never says aac-ready within READY_TIMEOUT_MS is
 //   replaced by the shell's own "Status page unavailable" note with Try again; the area is never blank.
@@ -127,6 +128,14 @@ export function createShellFrames({ doc, win, origin, onNavigate, timers = null,
   function postTheme(entry) {
     try { entry.iframe.contentWindow?.postMessage({ type: 'aac-theme', mode: theme }, origin); } catch {}
   }
+  // Whether the page is the current tab. A hidden iframe's document still reports itself visible, so the shell says
+  // so: a page that isn't on screen pauses its reads (and the server's collectors idle). A menu covering the frame
+  // for a moment doesn't count as hiding it.
+  function postActive(entry, active) {
+    if (entry.active === active) return;
+    entry.active = active;
+    try { entry.iframe.contentWindow?.postMessage({ type: 'aac-visible', visible: active }, origin); } catch {}
+  }
   function fail(name) {
     const entry = frames.get(name);
     if (!entry || entry.state === 'ready') return;
@@ -214,6 +223,7 @@ export function createShellFrames({ doc, win, origin, onNavigate, timers = null,
       }
       style.clipPath = shown ? frameClip(rect, cover.holes) || 'none' : 'none';
       style.visibility = shown ? 'visible' : 'hidden';
+      if (entry.state === 'ready') postActive(entry, signedIn && name === page);
     }
     const current = frames.get(page);
     placeNote(!!area && !!current && current.state !== 'ready', current);
@@ -240,6 +250,7 @@ export function createShellFrames({ doc, win, origin, onNavigate, timers = null,
       if (entry.state === 'failed') return;
       clearT(entry.timer);
       entry.state = 'ready';
+      entry.active = undefined; // a reloaded page starts unaware; tell it again
       postTheme(entry);
       update();
       return;

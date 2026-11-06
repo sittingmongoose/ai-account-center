@@ -161,18 +161,31 @@ test('an iframe is made on the first visit, shown once ready, kept while hidden 
   status.fire('load');
   assert.deepEqual(t.posted.at(-1).msg, { type: 'aac-theme', mode: 'light' });
   assert.equal(t.posted.at(-1).origin, t.ORIGIN);
+  const sent = () => t.posted.filter((p) => p.el === status).map((p) => p.msg);
+  const before = sent().length;
   t.message({ type: 'aac-ready' }, status.contentWindow);
   assert.equal(status.style.visibility, 'visible');
   assert.equal(t.frames.snapshot().note, null);
-  assert.deepEqual(t.posted.at(-1).msg, { type: 'aac-theme', mode: 'light' });
-  // away and back: the same iframe, hidden then shown again
+  // ready: the theme again, then whether it is the current tab
+  assert.deepEqual(sent().slice(before), [{ type: 'aac-theme', mode: 'light' }, { type: 'aac-visible', visible: true }]);
+  assert.ok(t.posted.every((p) => p.origin === t.ORIGIN));
+  // away and back: the same iframe, hidden then shown again, told each time and only on a change
   t.frames.setPage('home');
   assert.equal(status.style.visibility, 'hidden');
+  assert.deepEqual(sent().at(-1), { type: 'aac-visible', visible: false });
+  const away = sent().length;
+  t.frames.setRect('0,62,1440,800');
+  assert.equal(sent().length, away, 'a resize while away says nothing new');
   t.frames.setPage('scoreboard');
   assert.equal(t.iframes().length, 2);
+  assert.equal(sent().length, away, 'another tab opening says nothing new to this one');
   t.frames.setPage('status');
   assert.equal(t.iframes()[0], status);
   assert.equal(status.style.visibility, 'visible');
+  assert.deepEqual(sent().slice(away), [{ type: 'aac-visible', visible: true }]);
+  // a reload of the page (a second ready) is told again
+  t.message({ type: 'aac-ready' }, status.contentWindow);
+  assert.deepEqual(sent().slice(-2), [{ type: 'aac-theme', mode: 'light' }, { type: 'aac-visible', visible: true }]);
   // sign-out removes both
   t.frames.setSignedIn(false);
   assert.equal(t.iframes().length, 0);

@@ -842,11 +842,33 @@ impl FetchError {
     }
 }
 
+const REQUEST_DEADLINE_MS: i32 = 15_000;
+
+/// Abort the request after `REQUEST_DEADLINE_MS`; returns the timer to clear once the answer is in.
+fn request_deadline(window: &web_sys::Window, init: &RequestInit) -> Option<i32> {
+    let controller = web_sys::AbortController::new().ok()?;
+    init.set_signal(Some(&controller.signal()));
+    let abort = wasm_bindgen::closure::Closure::once_into_js(move || controller.abort());
+    window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(
+            abort.unchecked_ref(),
+            REQUEST_DEADLINE_MS,
+        )
+        .ok()
+}
+
+fn clear_deadline(window: &web_sys::Window, timer: Option<i32>) {
+    if let Some(t) = timer {
+        window.clear_timeout_with_handle(t);
+    }
+}
+
 pub(crate) async fn send(
     method: &str,
     url: &str,
     body: Option<String>,
 ) -> Result<(u16, String), FetchError> {
+    let window = web_sys::window().ok_or(FetchError::Offline)?;
     let init = RequestInit::new();
     init.set_method(method);
     init.set_credentials(RequestCredentials::SameOrigin);
@@ -854,6 +876,8 @@ pub(crate) async fn send(
     if let Some(body) = body {
         init.set_body(&JsValue::from_str(&body));
     }
+    // A request that never answers must not stall every later read: give up after 15 s and count it as offline.
+    let timer = request_deadline(&window, &init);
     let request = Request::new_with_str_and_init(url, &init).map_err(|_| FetchError::Malformed)?;
     if method != "GET" {
         request
@@ -861,19 +885,23 @@ pub(crate) async fn send(
             .set("Content-Type", "application/json")
             .map_err(|_| FetchError::Malformed)?;
     }
-    let window = web_sys::window().ok_or(FetchError::Offline)?;
-    let response: Response = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|_| FetchError::Offline)?
-        .dyn_into()
-        .map_err(|_| FetchError::Malformed)?;
-    let status = response.status();
-    let text = JsFuture::from(response.text().map_err(|_| FetchError::Malformed)?)
-        .await
-        .map_err(|_| FetchError::Malformed)?
-        .as_string()
-        .unwrap_or_default();
-    Ok((status, text))
+    let result = async {
+        let response: Response = JsFuture::from(window.fetch_with_request(&request))
+            .await
+            .map_err(|_| FetchError::Offline)?
+            .dyn_into()
+            .map_err(|_| FetchError::Malformed)?;
+        let status = response.status();
+        let text = JsFuture::from(response.text().map_err(|_| FetchError::Malformed)?)
+            .await
+            .map_err(|_| FetchError::Offline)?
+            .as_string()
+            .unwrap_or_default();
+        Ok((status, text))
+    }
+    .await;
+    clear_deadline(&window, timer);
+    result
 }
 
 pub async fn fetch_status() -> Result<StatusView, FetchError> {
@@ -977,6 +1005,12 @@ pub async fn post_answers(answers: &[AnswerEntry]) -> SendOutcome {
     let body = serde_json::to_string(&SubmitRequest { answers }).unwrap_or_default();
     match send("POST", "/api/status/answers", Some(body)).await {
         Ok((status, text)) => send_outcome(status, &text),
+        // The answers may have reached the server before the connection dropped: say so, never "nothing was sent".
+        Err(FetchError::Offline) => SendOutcome::Failed(
+            "The connection dropped while sending. Your answers may have been recorded: reload to see what was \
+             recorded before sending again. Your choices are kept."
+                .into(),
+        ),
         Err(error) => SendOutcome::Failed(format!(
             "{} Nothing was sent; your choices are kept.",
             error.sentence()

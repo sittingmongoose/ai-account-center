@@ -58,7 +58,7 @@ impl Live {
 }
 
 fn visible() -> bool {
-    document().visibility_state() == web_sys::VisibilityState::Visible
+    crate::on_screen()
 }
 
 pub fn start() -> Live {
@@ -110,6 +110,17 @@ pub fn start() -> Live {
     let _ = document()
         .add_event_listener_with_callback("visibilitychange", on_visible.as_ref().unchecked_ref());
     on_visible.forget();
+
+    // Shown again by the shell, or back online: read at once.
+    for event in [crate::SHOWN_EVENT, "online"] {
+        let again = Closure::<dyn Fn()>::new(move || {
+            if visible() {
+                live.reload();
+            }
+        });
+        let _ = window().add_event_listener_with_callback(event, again.as_ref().unchecked_ref());
+        again.forget();
+    }
 
     connect_hints(live, 1_000);
     live

@@ -1,8 +1,10 @@
 //! The owner's unsent choices and notes. Drafts are never answers: they live on this device (browser storage) so
 //! leaving the page loses nothing, and they go to the server only from the review screen.
 //!
-//! A draft remembers the exact card version it was made on. If the agent changes the question afterwards the draft
-//! is kept but marked, and it is not sent until the owner looks at the new version (touching it re-dates it).
+//! A choice remembers the exact card version it was made on, and a note the version it was written on. If the agent
+//! changes the question afterwards the draft is kept but marked, and nothing is sent until the owner acts on the new
+//! version: the first tap on a changed card starts its choice afresh, and editing the note re-dates only the note. A
+//! note never re-dates a choice, so an old choice can't ride along on a changed question.
 
 use crate::api::{AnswerEntry, Card};
 use serde::{Deserialize, Serialize};
@@ -17,8 +19,10 @@ pub struct Draft {
     pub note: String,
     /// "deck", or "recommended" when "Use the recommendations" filled it.
     pub via: String,
-    /// The card version (`Card::version_key`) the draft was made on.
+    /// The card version (`Card::version_key`) the choice was made on.
     pub version: String,
+    /// The card version the note was last written on.
+    pub note_version: String,
 }
 
 impl Draft {
@@ -43,7 +47,10 @@ pub enum Standing {
 
 pub fn standing(drafts: &Drafts, card: &Card) -> Standing {
     match drafts.get(&card.id) {
-        Some(d) if d.has_answer() && d.version != card.version_key() => Standing::Changed,
+        Some(d) if !d.choice.is_empty() && d.version != card.version_key() => Standing::Changed,
+        Some(d) if !d.note.trim().is_empty() && d.note_version != card.version_key() => {
+            Standing::Changed
+        }
         Some(d)
             if card.kind == "objection"
                 && d.choice.iter().any(|k| k == "object")
@@ -71,6 +78,10 @@ pub fn entry_kind(card: &Card, draft: &Draft) -> &'static str {
 /// Tap an option: one choice unless the card takes several; tapping the chosen one clears it.
 pub fn toggle(drafts: &mut Drafts, card: &Card, key: &str) {
     let d = drafts.entry(card.id.clone()).or_default();
+    // A choice made on an older version of the question is not carried over: the first tap starts afresh.
+    if d.version != card.version_key() {
+        d.choice.clear();
+    }
     if card.multiple {
         if let Some(i) = d.choice.iter().position(|k| k == key) {
             d.choice.remove(i);
@@ -89,7 +100,7 @@ pub fn toggle(drafts: &mut Drafts, card: &Card, key: &str) {
 pub fn set_note(drafts: &mut Drafts, card: &Card, note: String) {
     let d = drafts.entry(card.id.clone()).or_default();
     d.note = note;
-    d.version = card.version_key();
+    d.note_version = card.version_key();
     if d.via.is_empty() {
         d.via = "deck".into();
     }
@@ -251,11 +262,33 @@ mod tests {
         toggle(&mut d, &old, "A");
         assert_eq!(standing(&d, &new), Standing::Changed);
         assert!(entries(&d, &[new.clone()]).is_empty());
-        set_note(&mut d, &new, String::new());
+        // Typing a note on the new version must not re-date the old choice.
+        set_note(&mut d, &new, "why?".into());
+        assert_eq!(standing(&d, &new), Standing::Changed);
+        assert!(entries(&d, &[new.clone()]).is_empty());
+        // The first tap on the changed card starts the choice afresh, on the new version.
+        toggle(&mut d, &new, "B");
+        assert_eq!(d["a"].choice, vec!["B"]);
         assert_eq!(standing(&d, &new), Standing::Ready);
         let sent = entries(&d, &[new]);
         assert_eq!(sent.len(), 1);
         assert_eq!((sent[0].card_seq, sent[0].card_sha256.as_str()), (2, "h2"));
+        assert_eq!(sent[0].choice, vec!["B"]);
+    }
+
+    #[test]
+    fn a_note_written_on_an_older_version_waits_until_edited() {
+        let old = card("a", 1, None);
+        let new = card("a", 2, None);
+        let mut d = Drafts::new();
+        set_note(&mut d, &old, "keep it small".into());
+        assert_eq!(standing(&d, &new), Standing::Changed);
+        assert!(entries(&d, &[new.clone()]).is_empty());
+        // "Use recommendations" on the new version neither sends nor re-dates the old note.
+        use_recommendations(&mut d, &[new.clone()]);
+        assert_eq!(standing(&d, &new), Standing::Changed);
+        set_note(&mut d, &new, "keep it small".into());
+        assert_eq!(standing(&d, &new), Standing::Ready);
     }
 
     #[test]
