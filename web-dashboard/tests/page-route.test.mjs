@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { PAGES, pageFromUrl, pagePath } from '../public/page-route.mjs';
 
 test('the server page routes open their pages, and ?view= stays an alias', () => {
-  assert.deepEqual(PAGES, ['home', 'analytics', 'accounts']);
+  assert.deepEqual(PAGES, ['home', 'analytics', 'accounts', 'status', 'scoreboard']);
   assert.equal(pageFromUrl('/', ''), 'home');
   assert.equal(pageFromUrl('/login', ''), 'home');
   assert.equal(pageFromUrl('/analytics', ''), 'analytics');
@@ -16,12 +16,25 @@ test('the server page routes open their pages, and ?view= stays an alias', () =>
   assert.equal(pageFromUrl('/analytics', '?view=nope'), 'analytics');
   assert.equal(pageFromUrl('/nope', '?view=nope'), 'home');
   assert.equal(pageFromUrl(undefined, undefined), 'home');
+  // Status and Scoreboard: the shell pages the server serves at /status and /scoreboard
+  assert.equal(pageFromUrl('/status', ''), 'status');
+  assert.equal(pageFromUrl('/scoreboard', ''), 'scoreboard');
+  assert.equal(pageFromUrl('/', '?view=status'), 'status');
+  assert.equal(pageFromUrl('/', '?view=scoreboard'), 'scoreboard');
+  // the Leptos pages themselves are never shell routes
+  assert.equal(pageFromUrl('/app/status', ''), 'home');
+  assert.equal(pageFromUrl('/status/x', ''), 'home');
+  assert.equal(pageFromUrl('/Status', ''), 'home');
 });
 
 test('navigation pushes the path form', () => {
   assert.equal(pagePath('home'), '/');
   assert.equal(pagePath('analytics'), '/analytics');
   assert.equal(pagePath('accounts'), '/accounts');
+  assert.equal(pagePath('status'), '/status');
+  assert.equal(pagePath('scoreboard'), '/scoreboard');
   assert.equal(pagePath('other'), '/');
+  assert.equal(pagePath('toString'), '/');
+  assert.equal(pagePath(undefined), '/');
   for (const page of PAGES) assert.equal(pageFromUrl(pagePath(page), ''), page);
 });

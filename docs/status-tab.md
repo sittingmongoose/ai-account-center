@@ -36,6 +36,41 @@ server always set it to a temporary fixture folder). The private store is `<ccsD
 All routes: a browser session (`authKind(req) === 'session'`), no query string on POSTs, the dashboard Origin,
 `application/json`, a strict body of at most 16 KB, errors `{ error, code }` with fixed sentences that never echo input.
 
+## Shell iframe
+
+The Slint shell (`web-dashboard/ui/`, `web-dashboard/public/bridge.js`, `web-dashboard/public/shell-frame.mjs`) shows
+Status and Scoreboard as tabs after Accounts (desktop header, the F/T and short NavBar, the phone tab bar) and lays
+one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
+
+- **Lifetime**: the iframe (`/app/status?embed=1`, `/app/scoreboard?embed=1`) is created on the first visit and kept
+  while hidden, so returning is instant. It is visible only while its tab is current, the user is signed in, no
+  shell overlay covers the content area and the page has sent `aac-ready`. Sign-out (or an ended session) removes
+  both. Same origin, no `sandbox`, no `allow`. The Slint page under it draws only the paper background.
+- **Geometry**: the shell sends the `content-rect` action, `"x,y,w,h"` in CSS px of the window: below the header,
+  above the phone tab bar, the on-screen keyboard and the bottom safe area, inside the side safe areas. It is sent
+  once at start and whenever it changes (resize, rotation, fold, safe areas, keyboard, header height). The bridge
+  rounds the edges to whole pixels. `content-cover` says what the canvas draws over that area: `"all"` while a
+  header menu, sheet, popover, dialog or Details is open (the iframe hides, so a click outside the overlay reaches
+  the canvas and closes it), otherwise the toast stack and the hover card as `"x,y,w,h"` rects joined by `;`,
+  which are cut out of the iframe with `clip-path` (they stay visible and clickable), or `""`.
+- **Messages** (`window.postMessage`, target origin = the dashboard origin; the shell checks `event.origin` and
+  that `event.source` is one of its own iframes, and ignores anything else):
+  - shell -> page `{ "type": "aac-theme", "mode": "light" | "dark" }`: the effective theme (Auto resolved), sent
+    on the iframe's `load`, on `aac-ready` and whenever it changes. The page draws in it and ignores its own
+    `prefers-color-scheme` while embedded.
+  - page -> shell `{ "type": "aac-ready" }`: the page is mounted and drawing (send it once per document load).
+    The shell shows the iframe and sends the theme again.
+  - page -> shell `{ "type": "aac-navigate", "page": "home" | "analytics" | "accounts" | "status" | "scoreboard" }`:
+    switch the shell's tab (a link from one page to another tab).
+- **Unavailable**: a frame that fires `error`, finishes loading anywhere but `/app/status` or `/app/scoreboard`
+  (a redirect, the shell itself), or sends no `aac-ready` within 20 seconds is replaced by the shell's own note
+  ("Status page unavailable", Try again) in the content area; until ready the note reads "Loading Status...". A
+  failed page gets a new iframe on Try again, when its tab is opened again and when the browser comes back online.
+  Stale data inside a page that did load is the page's own business (Sources above).
+- **Service worker**: `/app/*` is cached network-first like the shell, but offline it falls back only to its own
+  cached copy, is never mirrored to the start URL and never answers another navigation as "any shell"
+  (`public/sw-route.js` `isAppPage`). A shell that finds itself inside its own iframe does not start.
+
 ## GET /api/status (view v1)
 
 ```jsonc
