@@ -1,0 +1,34 @@
+{
+  "schema": "aac-store-registry@1",
+  "description": "Every stored family of the AAC store (docs/store.md 2.7): its key, value encoding, producer, retention and authority. Every redb table is derived_rebuildable from the logs.",
+  "storeSchemaVersion": 1,
+  "events": [
+    { "type": "usage.sampled", "log": "readings", "durability": "group", "schemaVersion": "1.0.0", "payload": "native/aac-store/src/usage.rs SampledBatch {observations: [Sampled]}: every changed account of one sampling tick", "producer": "usage::record (the analytics sampler and the backfill)", "dedupe": "the projector's per-account rule: sampled time never goes back, an unchanged sample is skipped", "retention": "90 days, whole sealed segments" },
+    { "type": "usage.seen", "log": "readings", "durability": "group", "schemaVersion": "1.0.0", "payload": "native/aac-store/src/usage.rs SeenBatch {accounts: [Seen]}: every unchanged account of one sampling tick", "producer": "usage::record", "dedupe": "as usage.sampled", "retention": "90 days, whole sealed segments" },
+    { "type": "usage.day_closed", "log": "ledger", "durability": "group", "schemaVersion": "1.0.0", "payload": "{day, part, parts, series[{account, window, hours[{hour, rollup}], day_rollup, periods[{start_ms, period}]}]}; a rollup is a 12-element array (usage.rs rollup_to_json)", "producer": "usage::close_days (maintenance, 2 h after a UTC day ends)", "dedupe": "idempotency key day:part", "retention": "kept for good" },
+    { "type": "store.opened", "log": "ledger", "durability": "group", "schemaVersion": "1.0.0", "payload": "{build, store_schema_version}", "producer": "Engine::open", "retention": "kept for good" },
+    { "type": "store.integrity_detected", "log": "ledger", "durability": "group", "schemaVersion": "1.0.0", "payload": "log::Finding {kind, detail, start_seq, end_seq}", "producer": "Engine::open, Engine::verify", "retention": "kept for good" },
+    { "type": "store.backup_verified", "log": "ledger", "durability": "group", "schemaVersion": "1.0.0", "payload": "{backup_id, with_redb, files, mirrors}", "producer": "Engine::backup", "retention": "kept for good" },
+    { "type": "store.segment_retired", "log": "ledger", "durability": "group", "schemaVersion": "1.0.0", "payload": "{log, segments[{start_seq, end_seq}]}", "producer": "usage::retire_segments", "retention": "kept for good" }
+  ],
+  "tables": [
+    { "name": "meta", "key": "&str", "value": "UTF-8 text", "owner": "core", "authority": "derived_rebuildable", "notes": "store_schema_version, instance_id, created_ms, clean_shutdown, closed_through_day, last_*_ms; ts:* keys are the TypeScript side's (backfill markers)" },
+    { "name": "dict", "key": "kind u8 | id u32", "value": "UTF-8 text", "owner": "core", "authority": "derived_rebuildable" },
+    { "name": "dict_rev", "key": "kind u8 | text bytes", "value": "id u32", "owner": "core", "authority": "derived_rebuildable" },
+    { "name": "checkpoint", "key": "<projector>/<log>", "value": "msgpack Checkpoint", "owner": "core", "authority": "derived_rebuildable" },
+    { "name": "idem", "key": "log u8 | event_type u32 | sha256(key)[0..16]", "value": "seq u64", "owner": "core", "authority": "derived_rebuildable", "notes": "reserved for ledger events with idempotency keys (phase 2 onward)" },
+    { "name": "account", "key": "a u32", "value": "msgpack AccountMeta", "owner": "usage", "authority": "derived_rebuildable" },
+    { "name": "window", "key": "w u32", "value": "msgpack WindowMeta", "owner": "usage", "authority": "derived_rebuildable" },
+    { "name": "series", "key": "a u32 | w u32", "value": "msgpack SeriesMeta", "owner": "usage", "authority": "derived_rebuildable", "query": "series list; all accounts at time T" },
+    { "name": "series_by_provider", "key": "p u32 | a u32 | w u32", "value": "()", "owner": "usage", "authority": "derived_rebuildable", "query": "by provider" },
+    { "name": "reading", "key": "a u32 | w u32 | t_first u64", "value": "binary Row v1: version, flags, presence mask, last_seen u64, then the present f64/i64 fields; the open span is fresher in latest", "owner": "usage", "authority": "derived_rebuildable", "query": "an account and window over a time range", "retention": "90 days (the latest row of each series stays)" },
+    { "name": "reading_by_time", "key": "t_first u64 | a u32 | w u32", "value": "()", "owner": "usage", "authority": "derived_rebuildable", "query": "every change between two times; pruning by age" },
+    { "name": "latest", "key": "a u32 | w u32", "value": "t_first u64 | period_start u64 | Row v1", "owner": "usage", "authority": "derived_rebuildable", "query": "the latest reading per account" },
+    { "name": "account_latest", "key": "a u32", "value": "msgpack AccountLatest", "owner": "usage", "authority": "derived_rebuildable", "query": "account status now; the change decision" },
+    { "name": "account_state", "key": "a u32 | t u64", "value": "msgpack AccountState", "owner": "usage", "authority": "derived_rebuildable", "query": "account status spans", "retention": "90 days (the current span stays)" },
+    { "name": "period", "key": "a u32 | w u32 | t_start u64", "value": "msgpack Period", "owner": "usage", "authority": "derived_rebuildable", "query": "reset periods", "retention": "kept for good (final periods through usage.day_closed)" },
+    { "name": "rollup_hour", "key": "a u32 | w u32 | hour u32", "value": "binary Rollup v1: version, presence mask, then the present fields (percentages f32, credits f64)", "owner": "usage", "authority": "derived_rebuildable", "query": "burn over any span, hourly charts", "retention": "kept for good" },
+    { "name": "rollup_day", "key": "a u32 | w u32 | day u32", "value": "binary Rollup v1", "owner": "usage", "authority": "derived_rebuildable", "query": "long-range charts", "retention": "kept for good" },
+    { "name": "day_closed", "key": "day u32", "value": "()", "owner": "usage", "authority": "derived_rebuildable", "notes": "days whose rollups are final" }
+  ]
+}

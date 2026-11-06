@@ -61,3 +61,7 @@ _serve*.log
 # Python usage readers and updater test caches
 __pycache__/
 *.pyc
+
+# History store crate (docs/store.md): build output and machine-specific prebuilt modules
+native/aac-store/target/
+native/aac-store/prebuilt/

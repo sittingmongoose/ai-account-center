@@ -109,6 +109,12 @@ jobs:
       - name: Validate Slint dashboard
         run: bun run ui:validate
 
+      - name: History store crate (format, lints, crash-cut and corruption suites)
+        run: bun run store:check
+
+      - name: Build the history store module
+        run: bun run store:build
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
