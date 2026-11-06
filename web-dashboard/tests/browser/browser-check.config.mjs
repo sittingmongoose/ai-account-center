@@ -42,6 +42,9 @@ export default (ctx) => {
 			if (!fs.existsSync(path.join(reports, 'v1', 'writers'))) {
 				const { writeStatusFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'status-fixture.mjs')).href);
 				writeStatusFixture(reports, { ccsDir: path.join(home, '.ccs'), withKinds: true });
+				// The Model Scoreboard reads runs and the catalog from the same folder.
+				const { writeScoreboardFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'scoreboard-fixture.mjs')).href);
+				writeScoreboardFixture(reports);
 			}
 			return { home, reports, port: +ctx.args.port || (await ctx.freePort()) };
 		},
