@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { AgentReportsReader } from '../../../../src/web-server/status/agent-reports-reader';
 import { verifySignedAnswer } from '../../../../src/web-server/status/answer-signing';
-import { readCardImage } from '../../../../src/web-server/status/status-files';
+import { openCardFile } from '../../../../src/web-server/status/status-files';
 import { StatusAnswers } from '../../../../src/web-server/status/answers';
 import { PmMailRegistryReader } from '../../../../src/web-server/status/status-collectors';
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
@@ -66,11 +66,18 @@ describe('status fixture', () => {
     expect(noted?.notes.map((n) => n.note)).toEqual(['Could you show both side by side first?']);
     expect(noted?.replies).toHaveLength(1);
     const q3 = view.cards.open.find((c) => c.id === 'vm.pm-fo-lead--Q3');
-    expect(q3?.options.map((o) => o.image?.url)).toEqual([
+    expect(q3?.options.map((o) => o.media[0]?.url)).toEqual([
       '/api/status/files/vm.pm-fo-lead/images/fo33-inside.png',
       '/api/status/files/vm.pm-fo-lead/images/fo33-under-axis.png',
     ]);
-    const image = await readCardImage(root, 'vm.pm-fo-lead', 'images/fo33-inside.png');
+    expect(q3?.recommendation?.confidence).toBe('medium');
+    expect(q3?.sections.at(-1)).toEqual({
+      type: 'timeline',
+      title: 'A section type this page does not know',
+      fold: true,
+      unknown: true,
+    });
+    const image = await openCardFile(root, 'vm.pm-fo-lead', 'images/fo33-inside.png');
     expect(image.ok && image.contentType).toBe('image/png');
     expect(view.cards.answered.map((a) => a.answer.via).sort()).toEqual(['deck', 'recommended']);
     expect(view.threads.rows.filter((t) => t.source === 'report')).toHaveLength(8);

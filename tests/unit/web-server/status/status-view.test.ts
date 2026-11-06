@@ -175,7 +175,18 @@ describe('status view', () => {
         urgency: 'whenever',
         batch: 'b1',
         options: [
-          { key: 'A', label: 'First', image: { path: 'images/a-b.png', kind: 'mockup' } },
+          {
+            key: 'A',
+            label: 'First',
+            media: [
+              {
+                kind: 'video',
+                path: 'images/a-b.mp4',
+                label: 'built',
+                poster: 'images/a b.png'.replace(' ', '-'),
+              },
+            ],
+          },
           { key: 'B', label: 'Second' },
         ],
       })
@@ -251,16 +262,24 @@ describe('status view', () => {
       { note: 'A third way?', at: ago(2000), delivery: expect.objectContaining({ state: 'rang' }) },
     ]);
     expect(open1?.label).toBe('S-Q1');
-    expect(open1?.options[0].image).toEqual({
-      url: '/api/status/files/vm.lead/images/a-b.png',
-      kind: 'mockup',
-    });
+    expect(open1?.options[0].media).toEqual([
+      {
+        kind: 'video',
+        path: 'images/a-b.mp4',
+        caption: null,
+        label: 'built',
+        poster: 'images/a-b.png',
+        url: '/api/status/files/vm.lead/images/a-b.mp4',
+        posterUrl: '/api/status/files/vm.lead/images/a-b.png',
+      },
+    ]);
     expect(open1?.options[1]).toEqual({
       key: 'B',
       label: 'Second',
       gets: null,
       costs: null,
-      image: null,
+      media: [],
+      sections: [],
     });
     expect(view.headline.tone).toBe('bad');
     expect(view.headline.runs[0]).toEqual({ text: '3 questions', strong: true, tone: 'warn' });

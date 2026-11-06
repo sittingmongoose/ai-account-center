@@ -11,14 +11,18 @@ import {
   MACHINES,
   URGENCIES,
   writerMachine,
+  type CardSection,
   type CardDoc,
+  type CardMedia,
   type TasksDoc,
   type ThreadDoc,
 } from './report-schema';
 import { buildUsage, machinesSource, machineView } from './status-view-panels';
 import type {
   BatchView,
+  SectionView,
   CardNoteView,
+  MediaView,
   CardView,
   Collected,
   HeadlineRun,
@@ -284,6 +288,20 @@ export function cardFileUrl(writer: string, file: string): string {
     .join('/')}`;
 }
 
+function mediaView(writer: string, item: CardMedia): MediaView {
+  return {
+    ...item,
+    url: cardFileUrl(writer, item.path),
+    posterUrl: item.poster ? cardFileUrl(writer, item.poster) : null,
+  };
+}
+
+function sectionView(writer: string, item: CardSection): SectionView {
+  if (item.type === 'media' && !('unknown' in item))
+    return { ...item, items: (item.items as CardMedia[]).map((m) => mediaView(writer, m)) };
+  return item as SectionView;
+}
+
 function cardView(
   inputs: StatusInputs,
   doc: CardDoc,
@@ -311,14 +329,14 @@ function cardView(
       label: option.label,
       gets: option.gets ?? null,
       costs: option.costs ?? null,
-      image: option.image
-        ? { url: cardFileUrl(doc.writer, option.image.path), kind: option.image.kind }
-        : null,
+      media: (option.media ?? []).map((item) => mediaView(doc.writer, item)),
+      sections: (option.sections ?? []).map((item) => sectionView(doc.writer, item)),
     })),
     recommendation: doc.recommendation ?? null,
     multiple: doc.multiple === true,
     urgency: doc.urgency,
     blocks: doc.blocks ?? null,
+    sections: (doc.sections ?? []).map((item) => sectionView(doc.writer, item)),
     batch: doc.batch ?? null,
     evidence: doc.evidence ?? [],
     replies: doc.replies ?? [],

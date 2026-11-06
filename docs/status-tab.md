@@ -57,9 +57,14 @@ provider refresh. quota-watch: `unconfigured` until its report format is agreed.
 - `GET /api/status/answers?limit=N`: the read-only answer history (answers and notes), newest first: `{ answers: [ {
   id, card: { id, label, seq, title, project, stream, askedBy, options: [ { key, label } ], recommendation, cardSha256
   }, answer: { kind, choice, note, via, answeredAt, device, delivery } } ] }`.
-- `GET /api/status/files/<writer>/<path>`: an image a card names, from that writer's own folder only (no `..`, no
-  links out of the folder, PNG/JPEG/WebP by content, at most 2 MB, `Cache-Control: private, max-age=300`). Refusals:
-  `404 not_found` (missing, outside the folder, not a writer, bad path), `413 too_large`, `415 not_an_image`.
+- `GET /api/status/files/<writer>/<path>`: an image or video a card names, from that writer's own folder only (no
+  `..`, no links out of the folder). The type comes from the content, never the name: images PNG, JPEG or WebP up to
+  2 MB; videos MP4 (an `ftyp` box; still-image brands such as HEIC/AVIF refused) or WebM (an EBML header naming
+  `webm`) up to 50 MB. Every file answers byte ranges (`Accept-Ranges: bytes`, one `Range: bytes=` range gives
+  `206 Partial Content` with `Content-Range`, a range past the end gives `416`): iOS Safari plays no video without
+  them. `HEAD` gives the headers only. `Cache-Control: private, max-age=300`, `X-Content-Type-Options: nosniff`.
+  Refusals: `404 not_found` (missing, outside the folder, not a writer, bad path), `413 too_large`, `415 not_media`,
+  `416 range_not_satisfiable`.
 - `/ws` sends `{ "type": "status-changed" }` to browser-session sockets when a source changes (at most one every 5 s);
   the page re-reads `/api/status`. The page also
   re-reads every `refresh.pollSeconds` while visible, so a missed hint only delays.
@@ -69,7 +74,7 @@ All routes: a browser session (`authKind(req) === 'session'`; no session `401 au
 `GET /api/status` takes no query (`400 unexpected_query`); the history takes only `limit` (1 to 500, default 50,
 else `400 invalid_limit`). POSTs: no query string (`400 unexpected_query`), the dashboard Origin
 (`403 origin_required`), `application/json` (`415 json_required`), at most 64 KB (`413 body_too_large`) and exactly
-the documented keys (`400 invalid_body`). The image route sets `Cache-Control: private, max-age=300` instead of
+the documented keys (`400 invalid_body`). The files route sets `Cache-Control: private, max-age=300` instead of
 `no-store`.
 
 ## GET /api/status (view v1)
@@ -110,7 +115,8 @@ detail when there is no data. Nothing is ever shown as live when its source is s
 
 **Card** (open): the card file's fields after validation (`id`, `label`, `writer`, `seq`, `project`, `stream`,
 `askedBy`, `kind`, `title`, `now`, `nowAsOf`, `oldAnswer`, `whatChanged`, `options[]`, `recommendation`, `multiple`,
-`urgency`, `blocks`, `batch`, `evidence[]`, `replies[]`, `neededBy`, `exception`, `reversible`, `askedAt`) plus `ageSeconds`, `askerState` (the asking thread's state,
+`urgency`, `blocks`, `sections[]`, `batch`, `evidence[]`, `replies[]`, `neededBy`, `exception`, `reversible`,
+`askedAt`) plus `ageSeconds`, `askerState` (the asking thread's state,
 `"gone"` when its thread is stale, `"unknown"` when the writer has no `thread.json`), `cardSha256` (SHA-256 of the card
 file's bytes), `notes[]` (the owner's notes already sent on this card, oldest first, each `{ note, at, delivery }`),
 `problem` (the file's current problem, or null) and `answerable` (false while the shown copy is the last good one of a
@@ -124,12 +130,25 @@ share):
   with `nowAsOf` (when the counts in it were taken). The reader accepts `context` as an alias of `now`.
 - `oldAnswer` `{ text, at }` and `whatChanged`: when a question comes back because its premise moved, the earlier
   answer quoted and what changed. Otherwise both null: an answer that still holds is never asked again.
-- `options[]`: `{ key: "A", label, gets, costs, image: { url, kind: "built" | "mockup" } | null }`, two to four
-  options. `gets`: what the owner sees or gets; `costs`: what it costs or changes elsewhere. In the card file `image`
-  is `{ path, kind }` with `path` relative to the writer's own folder (plain segments, no `..`); the view turns it
-  into `url` = `/api/status/files/<writer>/<path>` (PNG, JPEG or WebP, at most 2 MB), shown under the option.
-- `recommendation` `{ key, why }`: marked on its option and again with the one-line reason.
-- `blocks`: what waits on the answer, or null for "nothing waits on this".
+- `options[]`: `{ key: "A", label, gets, costs, media[], sections[] }`, two to four options (at most 6 media and 10
+  sections each). `gets`: what the owner sees or gets; `costs`: what it costs or changes elsewhere.
+- **Media** (option `media[]` and `media` sections): `{ kind: "image" | "video", path, caption, label: "built" |
+  "mockup" | null, poster }`. `path` and `poster` are relative to the writer's own folder (plain segments, no `..`,
+  such as `cards/<card>.assets/a.webp`); the view adds `url` and `posterUrl` (`/api/status/files/<writer>/<path>`,
+  null without a poster). Every image opens full screen when tapped; every video has a full-screen button.
+- `recommendation` `{ key, why, confidence: "low" | "medium" | "high" | null, flip }`: marked on its option and again
+  with the one-line reason; `flip` says what would change it (or null).
+- `blocks`: what waits on the answer, or null for "nothing waits on this" (a string).
+- `sections[]`: the card's content sections, in order, at most 30; only what the question needs. Each is `{ type,
+  title | null, fold }` (`fold: true` starts collapsed) plus its type's fields: `text { body }` (a blank line starts a
+  paragraph; no markup), `list { items, ordered }`, `facts { rows: [ { label, value } ] }`, `table { columns, rows }`
+  (every row as wide as `columns`; cells may be empty), `compare { items: [ { name, does, problem, link: { label, url }
+  | null, version } ] }`, `notCopying { items: [ { what, why } ] }`, `unknowns { items }`, `terms { items: [ { term,
+  meaning } ] }`, `callout { tone: "info" | "warn" | "crit", body }`, `links { items: [ { label, url } ] }` (an http(s)
+  URL opens in a new tab; a share path is shown to copy; anything else is refused) and `media { items: [ Media ] }`.
+  Known types are validated strictly (a bad one makes the card file unreadable, by name); a type this server does not
+  know arrives as `{ type, title, fold, unknown: true }` and the page says it has a section it cannot show yet. The
+  card's 64 KB cap includes its sections.
 - `replies[]` `{ at, text }`: the agent's replies to the owner's notes, in the card file (a new `seq`).
 - `kind`: `question` (the default; two to four options, answered in the deck), `objection` (a call the agent already
   made, "tell me if you object": shown in a quiet list with the decision, the reason and an Object button; no options

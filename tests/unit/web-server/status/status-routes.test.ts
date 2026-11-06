@@ -8,7 +8,7 @@ import { AgentReportsReader } from '../../../../src/web-server/status/agent-repo
 import { StatusAnswers } from '../../../../src/web-server/status/answers';
 import { StatusService } from '../../../../src/web-server/status/status-service';
 import { PmMailRegistryReader } from '../../../../src/web-server/status/status-collectors';
-import { readCardImage } from '../../../../src/web-server/status/status-files';
+import { openCardFile, parseByteRange } from '../../../../src/web-server/status/status-files';
 import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
 import { cardDoc, NOW, tempDirs, writeCard } from './status-test-helpers';
 
@@ -274,15 +274,77 @@ describe('status routes', () => {
       '/etc/passwd',
       'images\\a.png',
     ])
-      expect(await readCardImage(root, 'vm.lead', file)).toEqual({
+      expect(await openCardFile(root, 'vm.lead', file)).toEqual({
         ok: false,
         reason: 'not_found',
       });
-    expect(await readCardImage(root, '..', 'secret.png')).toEqual({
+    expect(await openCardFile(root, '..', 'secret.png')).toEqual({
       ok: false,
       reason: 'not_found',
     });
     expect(await raw('/api/status/files/vm.other/b.png')).toBe(200);
     expect((await get('/api/status/files/vm.lead/images/a.png?x=1')).status).toBe(400);
+  });
+
+  it('serves MP4 and WebM by content, up to 50 MB, with byte ranges', async () => {
+    const { root, base } = await start();
+    const writer = path.join(root, 'v1', 'writers', 'vm.lead', 'cards', 'vm.lead--Q1.assets');
+    fs.mkdirSync(writer, { recursive: true });
+    const mp4 = Buffer.concat([
+      Buffer.from([0, 0, 0, 0x18]),
+      Buffer.from('ftypisom', 'latin1'),
+      Buffer.alloc(1000, 7),
+    ]);
+    for (let i = 0; i < mp4.length; i += 1) if (i >= 12) mp4[i] = i % 251;
+    fs.writeFileSync(path.join(writer, 'clip.bin'), mp4);
+    const webm = Buffer.concat([
+      Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x82, 0x84]),
+      Buffer.from('webm', 'latin1'),
+      Buffer.alloc(64),
+    ]);
+    fs.writeFileSync(path.join(writer, 'clip.webm'), webm);
+    const heic = Buffer.concat([
+      Buffer.from([0, 0, 0, 0x18]),
+      Buffer.from('ftypheic', 'latin1'),
+      Buffer.alloc(16),
+    ]);
+    fs.writeFileSync(path.join(writer, 'photo.mp4'), heic);
+    const big = path.join(writer, 'big.mp4');
+    fs.writeFileSync(big, mp4.subarray(0, 16));
+    fs.truncateSync(big, 50 * 1024 * 1024 + 1);
+    const url = `${base}/api/status/files/vm.lead/cards/vm.lead--Q1.assets`;
+    const whole = await fetch(`${url}/clip.bin`, { headers: session });
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get('content-type')).toBe('video/mp4');
+    expect(whole.headers.get('accept-ranges')).toBe('bytes');
+    expect(whole.headers.get('content-length')).toBe(String(mp4.length));
+    expect(Buffer.from(await whole.arrayBuffer()).equals(mp4)).toBe(true);
+    const part = await fetch(`${url}/clip.bin`, {
+      headers: { ...session, range: 'bytes=100-199' },
+    });
+    expect(part.status).toBe(206);
+    expect(part.headers.get('content-range')).toBe(`bytes 100-199/${mp4.length}`);
+    expect(part.headers.get('content-length')).toBe('100');
+    expect(Buffer.from(await part.arrayBuffer()).equals(mp4.subarray(100, 200))).toBe(true);
+    // iOS opens with bytes=0-1.
+    const probe = await fetch(`${url}/clip.bin`, { headers: { ...session, range: 'bytes=0-1' } });
+    expect(probe.status).toBe(206);
+    expect(Buffer.from(await probe.arrayBuffer()).equals(mp4.subarray(0, 2))).toBe(true);
+    const tail = await fetch(`${url}/clip.bin`, { headers: { ...session, range: 'bytes=-10' } });
+    expect(Buffer.from(await tail.arrayBuffer()).equals(mp4.subarray(mp4.length - 10))).toBe(true);
+    const past = await fetch(`${url}/clip.bin`, { headers: { ...session, range: 'bytes=5000-' } });
+    expect(past.status).toBe(416);
+    expect(past.headers.get('content-range')).toBe(`bytes */${mp4.length}`);
+    const w = await fetch(`${url}/clip.webm`, { headers: session });
+    expect(w.headers.get('content-type')).toBe('video/webm');
+    expect((await fetch(`${url}/photo.mp4`, { headers: session })).status).toBe(415);
+    expect((await fetch(`${url}/big.mp4`, { headers: session })).status).toBe(413);
+    const head = await fetch(`${url}/clip.bin`, { method: 'HEAD', headers: session });
+    expect(head.status).toBe(200);
+    expect(head.headers.get('content-length')).toBe(String(mp4.length));
+    expect(parseByteRange('bytes=0-1,4-5', 10)).toBeNull();
+    expect(parseByteRange('bytes=3-100', 10)).toEqual({ start: 3, end: 9 });
+    expect(parseByteRange('bytes=-0', 10)).toBe('unsatisfiable');
+    expect(parseByteRange(undefined, 10)).toBeNull();
   });
 });

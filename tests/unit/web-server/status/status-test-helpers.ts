@@ -92,8 +92,8 @@ export function cardDoc(writer: string, local: string, fields: Record<string, un
     oldAnswer: null,
     whatChanged: null,
     options: [
-      { key: 'A', label: 'First', gets: 'Simple', costs: null, image: null },
-      { key: 'B', label: 'Second', gets: null, costs: 'More work', image: null },
+      { key: 'A', label: 'First', gets: 'Simple', costs: null, media: [], sections: [] },
+      { key: 'B', label: 'Second', gets: null, costs: 'More work', media: [], sections: [] },
     ],
     recommendation: { key: 'A', why: 'Simpler.' },
     multiple: false,

@@ -84,7 +84,7 @@ describe('agent report documents', () => {
     expect(dup).toEqual({ ok: false, reason: 'items repeat an id' });
   });
 
-  it('reads the deck card fields: label, now (context alias), old answer, gets/costs, images, replies', () => {
+  it('reads the deck card fields: label, now (context alias), old answer, gets/costs, media, replies', () => {
     const parse = (fields: Record<string, unknown>) =>
       parseReportFile('card', json(cardDoc('vm.lead', 'Q1', fields)), 'vm.lead', 'vm.lead--Q1');
     const full = parse({
@@ -96,9 +96,11 @@ describe('agent report documents', () => {
           label: 'First',
           gets: 'g',
           costs: 'c',
-          image: { path: 'images/a.png', kind: 'mockup' },
+          media: [
+            { kind: 'image', path: 'images/a.png', caption: 'A', label: 'mockup', poster: null },
+          ],
         },
-        { key: 'B', label: 'Second', gets: null, costs: null, image: null },
+        { key: 'B', label: 'Second', gets: null, costs: null },
       ],
       replies: [{ at: '2026-11-06T16:00:00Z', text: 'Done' }],
       allowNote: false,
@@ -107,7 +109,10 @@ describe('agent report documents', () => {
     if (full.ok) {
       expect(full.value.doc.label).toBe('S-Q1');
       expect(full.value.doc.oldAnswer?.text).toBe('Keep it');
-      expect(full.value.doc.options[0].image).toEqual({ path: 'images/a.png', kind: 'mockup' });
+      expect(full.value.doc.options[0].media).toEqual([
+        { kind: 'image', path: 'images/a.png', caption: 'A', label: 'mockup', poster: null },
+      ]);
+      expect(full.value.doc.options[1].media).toEqual([]);
       expect(full.value.doc.replies).toHaveLength(1);
       expect('allowNote' in full.value.doc).toBe(false);
     }
@@ -132,10 +137,111 @@ describe('agent report documents', () => {
     ])
       expect(
         parse({
-          options: [{ ...option('A'), image: { path: bad, kind: 'built' } }, option('B')],
+          options: [{ ...option('A'), media: [{ kind: 'image', path: bad }] }, option('B')],
           recommendation: null,
         })
-      ).toEqual({ ok: false, reason: 'options[0].image.path is missing or not valid' });
+      ).toEqual({ ok: false, reason: 'options[0].media[0].path is missing or not valid' });
+  });
+
+  it('reads card sections strictly, passes unknown section types through, and keeps blocks as a string', () => {
+    const parse = (fields: Record<string, unknown>) =>
+      parseReportFile('card', json(cardDoc('vm.lead', 'Q1', fields)), 'vm.lead', 'vm.lead--Q1');
+    const sections = [
+      { type: 'text', title: null, body: 'One.\n\nTwo.' },
+      { type: 'list', title: 'Steps', fold: true, ordered: true, items: ['a', 'b'] },
+      { type: 'facts', rows: [{ label: 'Size', value: '2 MB' }] },
+      { type: 'table', columns: ['A', 'B'], rows: [['1', '']] },
+      {
+        type: 'compare',
+        items: [
+          {
+            name: 'X',
+            does: 'd',
+            problem: null,
+            link: { label: 'X', url: 'https://x.test/a' },
+            version: '2',
+          },
+        ],
+      },
+      { type: 'notCopying', items: [{ what: 'w', why: 'y' }] },
+      { type: 'unknowns', items: ['u'] },
+      { type: 'terms', items: [{ term: 't', meaning: 'm' }] },
+      { type: 'callout', tone: 'crit', body: 'Careful' },
+      { type: 'links', items: [{ label: 'Board', url: '/mnt/Cursor/share/x.md' }] },
+      {
+        type: 'media',
+        items: [
+          {
+            kind: 'video',
+            path: 'cards/vm.lead--Q1.assets/a.mp4',
+            caption: null,
+            label: null,
+            poster: 'cards/vm.lead--Q1.assets/a.png',
+          },
+        ],
+      },
+      { type: 'timeline', title: 'Later', fold: true, entries: [1, 2, 3] },
+    ];
+    const ok = parse({
+      blocks: 'FO-33 landing',
+      sections,
+      options: [
+        { key: 'A', label: 'A', sections: [{ type: 'text', body: 'Option detail' }] },
+        { key: 'B', label: 'B' },
+      ],
+      recommendation: { key: 'A', why: 'w', confidence: 'high', flip: 'If B gets cheaper' },
+    });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    const doc = ok.value.doc;
+    expect(doc.blocks).toBe('FO-33 landing');
+    expect(doc.sections.map((s) => s.type)).toEqual(sections.map((s) => s.type));
+    expect(doc.sections[0]).toEqual({
+      type: 'text',
+      title: null,
+      fold: false,
+      body: 'One.\n\nTwo.',
+    });
+    expect(doc.sections[11]).toEqual({
+      type: 'timeline',
+      title: 'Later',
+      fold: true,
+      unknown: true,
+    });
+    expect(doc.options[0].sections).toEqual([
+      { type: 'text', title: null, fold: false, body: 'Option detail' },
+    ]);
+    expect(doc.recommendation).toEqual({
+      key: 'A',
+      why: 'w',
+      confidence: 'high',
+      flip: 'If B gets cheaper',
+    });
+    const refused = (section: unknown) => parse({ sections: [section] });
+    expect(refused({ type: 'callout', tone: 'loud', body: 'x' })).toEqual({
+      ok: false,
+      reason: 'sections[0].tone is missing or not valid',
+    });
+    expect(refused({ type: 'links', items: [{ label: 'x', url: 'javascript:alert(1)' }] })).toEqual(
+      {
+        ok: false,
+        reason: 'sections[0].items[0].url is missing or not valid',
+      }
+    );
+    expect(refused({ type: 'table', columns: ['A', 'B'], rows: [['only one']] })).toEqual({
+      ok: false,
+      reason: 'sections[0].rows[0] is missing or not valid',
+    });
+    expect(refused({ type: 'media', items: [{ kind: 'audio', path: 'a.mp3' }] })).toEqual({
+      ok: false,
+      reason: 'sections[0].items[0].kind is missing or not valid',
+    });
+    expect(refused({ type: '<b>', title: null }).ok).toBe(false);
+    expect(parse({ recommendation: { key: 'A', confidence: 'sure' } })).toEqual({
+      ok: false,
+      reason: 'recommendation.confidence is missing or not valid',
+    });
+    expect(parse({ sections: Array(31).fill({ type: 'text', body: 'x' }) }).ok).toBe(false);
   });
 
   it('reads card kinds and the needed-by, exception and reversible fields', () => {

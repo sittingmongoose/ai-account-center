@@ -3,6 +3,7 @@
  * Writes a realistic agent reports folder for the Status tab's page and phone tests.
  *
  *   node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems] [--with-kinds]
+ *     [--no-video]
  *
  * <reports-dir> gets v1/writers/** (2 projects, 4 streams with tasks.json and 1 board-only stream,
  * 8 threads in mixed states, 5 open cards including a batch of 3 with recommendations, and 2 cards
@@ -21,7 +22,8 @@
  *   AAC_STATUS_DOORBELL=off CCS_DIR=<dir>
  * so it reads only the fixture and never sends pm-mail.
  *
- * `--with-kinds` adds an objection card and an action card (7 open cards then).
+ * F-Q3 also gets a short H.264 MP4 with a poster when ffmpeg is installed (`--no-video` skips it),
+ * for the Range-request playback check on phones. `--with-kinds` adds an objection card and an action card (7 open cards then).
  * `--with-problems` adds a malformed tasks.json and a card with NUL bytes (the unreadable state).
  * Times are relative to now, so run it just before the test. It refuses a folder that already
  * holds v1/writers.
@@ -36,6 +38,7 @@ import {
 } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const MIN = 60_000;
@@ -77,13 +80,43 @@ function answerKey(storeDir) {
   };
 }
 
-const option = (key, label, gets = null, costs = null, image = null) => ({
+const option = (key, label, gets = null, costs = null, media = [], sections = []) => ({
   key,
   label,
   gets,
   costs,
-  image,
+  media,
+  sections,
 });
+
+/**
+ * A 3-second H.264 MP4 (and its poster) from ffmpeg, when ffmpeg is installed: the phone test
+ * needs a real video to check Range playback. Without ffmpeg the card shows only images.
+ */
+function writeVideo(dir) {
+  const video = path.join(dir, 'pip-resize.mp4');
+  const poster = path.join(dir, 'pip-resize.png');
+  const run = (args) =>
+    spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args], {
+      stdio: 'ignore',
+      timeout: 60_000,
+    }).status === 0;
+  const made =
+    run([
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=duration=3:size=320x240:rate=15',
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      '-movflags',
+      '+faststart',
+      video,
+    ]) && run(['-i', video, '-frames:v', '1', poster]);
+  return made;
+}
 
 /** A 2x2 PNG, so the page has a real option image to show. */
 const TINY_PNG = Buffer.from(
@@ -94,7 +127,13 @@ const TINY_PNG = Buffer.from(
 /** Writes the fixture; returns what it wrote (for tests). */
 export function writeStatusFixture(
   root,
-  { ccsDir = null, withProblems = false, withKinds = false, now = Date.now() } = {}
+  {
+    ccsDir = null,
+    withProblems = false,
+    withKinds = false,
+    withVideo = false,
+    now = Date.now(),
+  } = {}
 ) {
   const v1 = path.join(root, 'v1');
   if (fs.existsSync(path.join(v1, 'writers')))
@@ -348,6 +387,7 @@ export function writeStatusFixture(
       multiple: fields.multiple ?? false,
       urgency: fields.urgency ?? 'today',
       blocks: fields.blocks ?? null,
+      sections: fields.sections ?? [],
       batch: fields.batch ?? null,
       evidence: fields.evidence ?? [],
       replies: fields.replies ?? [],
@@ -365,6 +405,7 @@ export function writeStatusFixture(
   fs.mkdirSync(images, { recursive: true });
   fs.writeFileSync(path.join(images, 'fo33-inside.png'), TINY_PNG);
   fs.writeFileSync(path.join(images, 'fo33-under-axis.png'), TINY_PNG);
+  const hasVideo = withVideo && writeVideo(images);
   const batch = 'F-questions-2026-11-05';
   card('vm.pm-fo-lead', 'Q3', 2 * HOUR, {
     label: 'F-Q3',
@@ -379,19 +420,85 @@ export function writeStatusFixture(
         'Keep the label inside the plot',
         'The label moves left when it would cover a point.',
         'Can still feel crowded on a phone.',
-        { path: 'images/fo33-inside.png', kind: 'mockup' }
+        [
+          {
+            kind: 'image',
+            path: 'images/fo33-inside.png',
+            caption: 'The label inside the plot at 320 px',
+            label: 'mockup',
+            poster: null,
+          },
+        ],
+        [
+          {
+            type: 'text',
+            title: 'How it moves',
+            fold: true,
+            body: 'It slides left of the newest point.',
+          },
+        ]
       ),
       option(
         'B',
         'Move it under the axis',
         'The label never covers data.',
         'It sits further from the line it names.',
-        { path: 'images/fo33-under-axis.png', kind: 'mockup' }
+        [
+          {
+            kind: 'image',
+            path: 'images/fo33-under-axis.png',
+            caption: 'The label under the axis',
+            label: 'mockup',
+            poster: null,
+          },
+        ]
       ),
     ],
-    recommendation: { key: 'A', why: 'Matches the other charts.' },
+    recommendation: {
+      key: 'A',
+      why: 'Matches the other charts.',
+      confidence: 'medium',
+      flip: 'If the chart gets narrower than 280 px, B reads better.',
+    },
     blocks: 'FO-33 landing (group 4)',
     batch,
+    sections: [
+      {
+        type: 'facts',
+        title: 'Where it shows',
+        fold: false,
+        rows: [
+          { label: 'Windows narrower than', value: '420 px' },
+          { label: 'Charts affected', value: '3 of 11' },
+        ],
+      },
+      {
+        type: 'callout',
+        title: null,
+        fold: false,
+        tone: 'warn',
+        body: 'The newest value is the one people read first.',
+      },
+      ...(hasVideo
+        ? [
+            {
+              type: 'media',
+              title: 'The glitch today',
+              fold: false,
+              items: [
+                {
+                  kind: 'video',
+                  path: 'images/pip-resize.mp4',
+                  caption: 'Resizing the window (test pattern)',
+                  label: 'built',
+                  poster: 'images/pip-resize.png',
+                },
+              ],
+            },
+          ]
+        : []),
+      { type: 'timeline', title: 'A section type this page does not know', fold: true },
+    ],
   });
   card('vm.pm-fo-lead', 'Q4', 100 * MIN, {
     label: 'F-Q4',
@@ -443,6 +550,65 @@ export function writeStatusFixture(
     urgency: 'now',
     blocks: 'T-19',
     evidence: [{ label: 'Frame drop log', path: path.join(root, 'boards', 'TOOLS.md') }],
+    sections: [
+      {
+        type: 'compare',
+        title: 'What other setups do',
+        fold: false,
+        items: [
+          {
+            name: 'OBS on the gaming PC',
+            does: 'Records with the GPU encoder while streaming.',
+            problem: 'Competes with the game for the encoder.',
+            link: { label: 'OBS', url: 'https://obsproject.com/' },
+            version: '31',
+          },
+        ],
+      },
+      {
+        type: 'notCopying',
+        title: null,
+        fold: true,
+        items: [{ what: 'Recording at 60 fps', why: 'Doubles the encoder load.' }],
+      },
+      {
+        type: 'terms',
+        title: null,
+        fold: true,
+        items: [
+          { term: 'Moonlight', meaning: 'The app that streams the VM desktop to the owner.' },
+        ],
+      },
+      {
+        type: 'unknowns',
+        title: null,
+        fold: false,
+        items: ['Whether the Mac encoder holds up at 1080p.'],
+      },
+      {
+        type: 'list',
+        title: 'Steps if VM is chosen',
+        fold: true,
+        ordered: true,
+        items: ['Pause Moonlight', 'Record', 'Resume'],
+      },
+      {
+        type: 'table',
+        title: 'Encoders',
+        fold: true,
+        columns: ['Machine', 'Encoder'],
+        rows: [
+          ['VM', 'NVENC'],
+          ['Nas1', ''],
+        ],
+      },
+      {
+        type: 'links',
+        title: null,
+        fold: true,
+        items: [{ label: 'Board', url: '/mnt/Cursor/share/puppet-master/TOOLS.md' }],
+      },
+    ],
   });
   card('vm.aac-status-lead', 'Q2', 40 * MIN, {
     label: 'ST-Q2',
@@ -635,6 +801,8 @@ function main(argv) {
   const withProblems = args.includes('--with-problems');
   if (withProblems) args.splice(args.indexOf('--with-problems'), 1);
   const withKinds = args.includes('--with-kinds');
+  const withVideo = !args.includes('--no-video');
+  if (!withVideo) args.splice(args.indexOf('--no-video'), 1);
   if (withKinds) args.splice(args.indexOf('--with-kinds'), 1);
   const ccsDir =
     take('--ccs-dir') ??
@@ -643,7 +811,7 @@ function main(argv) {
   const root = args[0];
   if (!root || args.length !== 1) {
     process.stderr.write(
-      'Usage: node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems] [--with-kinds]\n'
+      'Usage: node scripts/status-fixture.mjs <reports-dir> [--ccs-dir <dir>] [--with-problems] [--with-kinds] [--no-video]\n'
     );
     return 2;
   }
@@ -651,6 +819,7 @@ function main(argv) {
     ccsDir: ccsDir ? path.resolve(ccsDir) : null,
     withProblems,
     withKinds,
+    withVideo,
   });
   process.stdout.write(
     [

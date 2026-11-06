@@ -4,7 +4,10 @@ import type { AgentReportsState } from './agent-reports-reader';
 import type { AnswerDelivery, AnswerHistoryEntry } from './answers';
 import type {
   BlockedOn,
+  CardSection,
   CardDoc,
+  CardMedia,
+  CardRecommendation,
   ItemState,
   MachineId,
   ReportLink,
@@ -86,13 +89,21 @@ export interface HeadlineRun {
   tone?: Tone;
 }
 
+/** A media item with where the page loads it: `/api/status/files/<writer>/<path>` (session only). */
+export type MediaView = CardMedia & { url: string; posterUrl: string | null };
+
+/** A section as the page gets it: media items carry their URLs. */
+export type SectionView =
+  | Exclude<CardSection, { type: 'media' }>
+  | { type: 'media'; title: string | null; fold: boolean; items: MediaView[] };
+
 export interface CardOptionView {
   key: string;
   label: string;
   gets: string | null;
   costs: string | null;
-  /** `url` is `/api/status/files/<writer>/<path>` (session only). */
-  image: { url: string; kind: 'built' | 'mockup' } | null;
+  media: MediaView[];
+  sections: SectionView[];
 }
 
 /** A note the owner already sent on an open card. */
@@ -116,10 +127,13 @@ export interface CardView {
   oldAnswer: { text: string; at: string | null } | null;
   whatChanged: string | null;
   options: CardOptionView[];
-  recommendation: { key: string; why: string | null } | null;
+  recommendation: CardRecommendation | null;
   multiple: boolean;
   urgency: CardDoc['urgency'];
+  /** What waits on the answer, or null for "nothing waits on this". */
   blocks: string | null;
+  /** The card's content sections, in order; unknown types arrive as `{ type, title, fold, unknown: true }`. */
+  sections: SectionView[];
   batch: string | null;
   evidence: ReportLink[];
   replies: Array<{ at: string; text: string }>;

@@ -5,14 +5,15 @@ import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware
 import { authKind } from '../middleware/request-auth';
 import { getStatusService, type StatusService } from '../status/status-service';
 import { answerDevice, deliveryView, type AnswerHistoryEntry } from '../status/answers';
-import { readCardImage } from '../status/status-files';
+import fs from 'fs';
+import { openCardFile, parseByteRange } from '../status/status-files';
 
 /**
  * The Status tab API (docs/status-tab.md):
  * - `GET /api/status`: the whole view;
  * - `GET /api/status/answers?limit=N`: the owner's answers and notes, newest first;
  * - `POST /api/status/answers`: an answer set from the deck, one result per entry;
- * - `GET /api/status/files/<writer>/<path>`: an option image from that writer's own folder.
+ * - `GET /api/status/files/<writer>/<path>`: card media (images, videos with byte ranges).
  * Every route: a browser session only (never a device token, never localhost without sign-in).
  * The POST: no query string, the dashboard Origin, application/json and a strict body of at most
  * 64 KB. Errors are `{ error, code }` with fixed sentences.
@@ -94,10 +95,10 @@ function entryView(entry: AnswerHistoryEntry) {
   };
 }
 
-const IMAGE_REFUSALS = {
+const FILE_REFUSALS = {
   not_found: [404, 'This file is not available.'],
-  too_large: [413, 'This image is larger than 2 MB.'],
-  not_an_image: [415, 'This file is not a PNG, JPEG or WebP image.'],
+  too_large: [413, 'This file is larger than its limit (images 2 MB, videos 50 MB).'],
+  not_media: [415, 'This file is not a PNG, JPEG or WebP image or an MP4 or WebM video.'],
 } as const;
 
 export function createStatusRouter(service: () => StatusService = getStatusService): Router {
@@ -169,17 +170,46 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       return;
     }
     const params = req.params as unknown as Record<string, string>;
-    const image = await readCardImage(service().reader.root, params[0], params[1]);
-    if (!image.ok) {
-      const [status, error] = IMAGE_REFUSALS[image.reason];
-      sendError(res, status, image.reason, error);
+    const media = await openCardFile(service().reader.root, params[0], params[1]);
+    if (!media.ok) {
+      const [status, error] = FILE_REFUSALS[media.reason];
+      sendError(res, status, media.reason, error);
       return;
     }
     res.setHeader('Cache-Control', 'private, max-age=300');
-    res.setHeader('Content-Type', image.contentType);
+    res.setHeader('Content-Type', media.contentType);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-    res.send(image.bytes);
+    res.setHeader('Accept-Ranges', 'bytes');
+    const range = parseByteRange(req.headers.range, media.size);
+    if (range === 'unsatisfiable') {
+      res.setHeader('Content-Range', `bytes */${media.size}`);
+      sendError(res, 416, 'range_not_satisfiable', 'The requested range is outside this file.');
+      return;
+    }
+    const start = range ? range.start : 0;
+    const end = range ? range.end : media.size - 1;
+    res.status(range ? 206 : 200);
+    if (range) res.setHeader('Content-Range', `bytes ${start}-${end}/${media.size}`);
+    res.setHeader('Content-Length', String(Math.max(0, end - start + 1)));
+    if (req.method === 'HEAD' || media.size === 0) {
+      res.end();
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const stream = fs.createReadStream(media.file, { start, end });
+      stream.on('error', () => {
+        if (!res.headersSent) sendError(res, 404, 'not_found', FILE_REFUSALS.not_found[1]);
+        else res.destroy();
+        resolve();
+      });
+      stream.on('end', () => resolve());
+      res.on('close', () => {
+        stream.destroy();
+        resolve();
+      });
+      stream.pipe(res);
+    });
   });
 
   return router;
