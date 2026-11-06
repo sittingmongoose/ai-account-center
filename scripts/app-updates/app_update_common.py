@@ -67,6 +67,53 @@ def environment(extra=None):
     return strip_dashboard_secrets(result)
 
 
+def sanitize_unit_fragment(value):
+    cleaned = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
+    return cleaned or "app"
+
+
+def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple"):
+    """Wrap argv so it starts in a transient user service OUTSIDE our cgroup.
+
+    Why: the dashboard runs as a systemd user unit with KillMode=control-group.
+    A plain spawn keeps the child (here: the restarted tmux server, and with it
+    the user's CLI session) in the unit's cgroup, so the next dashboard
+    restart or deploy would kill it. A transient user service re-parents the
+    process to app.slice instead. Transient *scopes* are deliberately NOT used:
+    this host's systemd aborts `--scope` units, so scope launches silently do
+    nothing. When systemd-run is missing there is no safe launch: fail closed
+    rather than cage the session in the service cgroup.
+    """
+    runner = shutil.which("systemd-run")
+    if runner is None:
+        raise UpdateFailure("restart_context")
+    wrapped = [runner, "--user", "--unit=" + unit, "--collect"]
+    if service_type != "simple":
+        wrapped.append("--service-type=" + service_type)
+    if cwd:
+        wrapped.append("--working-directory=" + str(cwd))
+    for key, value in strip_dashboard_secrets(env or {}).items():
+        if value is None:
+            continue
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise UpdateFailure("restart_context")
+        wrapped.append("--setenv=" + key)
+    wrapped.append("--")
+    wrapped.extend(argv)
+    return wrapped
+
+
+def in_service_cgroup():
+    """Whether this process runs in a systemd user service's cgroup (the dashboard), where everything
+    it starts is charged to that service: its MemoryMax, and with KillMode=process its cgroup and
+    memory.peak stay alive across restarts. An ssh session or a plain shell needs no transient unit."""
+    try:
+        with open("/proc/self/cgroup", encoding="utf-8") as lines:
+            return any(re.search(r"/user@\d+\.service/.*\.service$", line.strip()) for line in lines)
+    except OSError:
+        return False
+
+
 def _stop_group(process):
     """Stop a timed-out child. On POSIX the child leads its own session, so the
     whole group goes (an installer's helpers included); a detached app relaunch

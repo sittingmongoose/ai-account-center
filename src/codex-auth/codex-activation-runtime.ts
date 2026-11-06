@@ -46,7 +46,15 @@ export interface CodexActivationRuntimeDependencies {
   releaseNativeStartupLock(): Promise<void>;
   assertIdle(processes: CodexProcessSnapshot[]): Promise<void>;
   signal(process: CodexProcessSnapshot, signal: NodeJS.Signals): Promise<void>;
-  launch(process: CodexProcessSnapshot, desktop: boolean): Promise<void>;
+  /**
+   * `outside` is the default launcher (launchApp, outside the dashboard cgroup), for an override
+   * that only changes what it starts: the update bridge starts the updated executable.
+   */
+  launch(
+    process: CodexProcessSnapshot,
+    desktop: boolean,
+    outside?: (process: CodexProcessSnapshot, desktop: boolean) => Promise<void>
+  ): Promise<void>;
   prepareCli(process: CodexProcessSnapshot): Promise<void>;
   launchCli(process: CodexProcessSnapshot): Promise<void>;
   verifyDaemon(process: CodexProcessSnapshot): Promise<void>;
@@ -211,7 +219,8 @@ export function createCodexActivationRuntime(
   codexHome: string,
   overrides: Partial<CodexActivationRuntimeDependencies> = {}
 ): CodexActivationRuntime {
-  const dependencies = { ...createDependencies(codexHome), ...overrides };
+  const defaults = createDependencies(codexHome);
+  const dependencies = { ...defaults, ...overrides };
   let releaseLock: (() => Promise<void>) | undefined;
   let launchers: CodexProcessSnapshot[] = [];
   let cliLaunchers: CodexProcessSnapshot[] = [];
@@ -291,7 +300,7 @@ export function createCodexActivationRuntime(
       await release();
       for (const launcher of launchers.filter(isDaemon)) {
         if (!(await scan()).some((entry) => isDaemon(entry) && usesHome(entry, codexHome))) {
-          await dependencies.launch(launcher, false);
+          await dependencies.launch(launcher, false, defaults.launch);
         }
         await dependencies.verifyDaemon(launcher);
       }
@@ -304,7 +313,7 @@ export function createCodexActivationRuntime(
           desktopUserData(main, processes) === desktopUserData(launcher, [launcher]);
         const existing = await scan();
         if (!existing.some((entry) => matchesDesktop(entry, existing))) {
-          await dependencies.launch(launcher, true);
+          await dependencies.launch(launcher, true, defaults.launch);
         }
         const deadline = dependencies.now() + START_TIMEOUT;
         let ready = false;
@@ -791,6 +800,7 @@ function createDependencies(codexHome: string): CodexActivationRuntimeDependenci
         ? undefined
         : path.join(codexHome, 'app-server-control', 'app-server.log');
       if (logFile !== undefined) {
+        fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
         const stream = fs.openSync(logFile, 'a', 0o600);
         fs.closeSync(stream);
       }

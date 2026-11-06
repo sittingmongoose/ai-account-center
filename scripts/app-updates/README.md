@@ -696,6 +696,17 @@ clearly, nothing runs and the row is `failed` / `update_failed`, as T3 and Claud
 Desktop report an unreadable release feed: nothing can be called current without
 it.
 
+## Relaunching from the dashboard's service
+
+Anything the dashboard starts from its own service stays in that service's cgroup: its memory
+counts against the dashboard's `MemoryMax`, and with `KillMode=process` one leftover process keeps
+the cgroup, and so `memory.peak` and `memory.swap.peak`, alive across dashboard restarts. A Linux
+relaunch therefore goes through a transient `systemd-run --user` unit (`aac-launch-*`) whenever the
+helper runs inside a user service: Codex and Codex Desktop (`app_update_codex.cjs`), desktop apps
+(`restart_desktops`) and CLI terminals (`systemd_user_service_argv`). A failed `systemd-run` fails
+the relaunch instead of starting the app inside the cgroup. Over ssh (Nas1) the helper is in a session
+scope, which no dashboard limit covers, so it starts the app directly as before.
+
 ## Deployment and setup
 
 The server syncs every `app_update_*.py`, `app_updates.py`, and

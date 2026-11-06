@@ -15,6 +15,7 @@
 
 ### Fixed
 
+* **app-updates:** Codex, Codex Desktop and desktop apps that Update all relaunches on Linux now start outside the dashboard's cgroup. They stayed in it before, so their memory counted against the dashboard's limit, and one leftover process kept `memory.peak` alive across dashboard restarts.
 * **antigravity:** A revoked or expired Antigravity refresh grant (HTTP 400 `invalid_grant` from Google's token endpoint) now shows Sign in again instead of temporarily unavailable.
 
 ## [8.10.0](https://github.com/kaitranntt/ccs/compare/v8.9.0...v8.10.0) (2026-09-11)

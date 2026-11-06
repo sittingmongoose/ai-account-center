@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 
-from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, strip_dashboard_secrets
+from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, sanitize_unit_fragment, strip_dashboard_secrets, systemd_user_service_argv
 from app_update_processes import scan, user_family
 
 
@@ -38,42 +38,6 @@ def restart_environment(context):
     values.pop("MUSE_LAUNCHER_INSTALL", None)
     values.pop("MUSE_UPGRADE_MODE", None)
     return strip_dashboard_secrets(values)
-
-
-def sanitize_unit_fragment(value):
-    cleaned = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
-    return cleaned or "app"
-
-
-def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple"):
-    """Wrap argv so it starts in a transient user service OUTSIDE our cgroup.
-
-    Why: the dashboard runs as a systemd user unit with KillMode=control-group.
-    A plain spawn keeps the child (here: the restarted tmux server, and with it
-    the user's CLI session) in the unit's cgroup, so the next dashboard
-    restart or deploy would kill it. A transient user service re-parents the
-    process to app.slice instead. Transient *scopes* are deliberately NOT used:
-    this host's systemd aborts `--scope` units, so scope launches silently do
-    nothing. When systemd-run is missing there is no safe launch: fail closed
-    rather than cage the session in the service cgroup.
-    """
-    runner = shutil.which("systemd-run")
-    if runner is None:
-        raise UpdateFailure("restart_context")
-    wrapped = [runner, "--user", "--unit=" + unit, "--collect"]
-    if service_type != "simple":
-        wrapped.append("--service-type=" + service_type)
-    if cwd:
-        wrapped.append("--working-directory=" + str(cwd))
-    for key, value in strip_dashboard_secrets(env or {}).items():
-        if value is None:
-            continue
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-            raise UpdateFailure("restart_context")
-        wrapped.append("--setenv=" + key)
-    wrapped.append("--")
-    wrapped.extend(argv)
-    return wrapped
 
 
 def check_terminal(platform, contexts):

@@ -29,6 +29,27 @@ const output = { appId: operation === 'desktop' ? 'codex-desktop' : 'codex-cli',
   messageCode: 'update_failed', updateAttempted: false, restartedProcesses: 0, forcedStops: 0 };
 const cleanEnvironment = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !/^CCS_SESSION_SECRET$|^CCS_DASHBOARD_|_PASSWORD_HASH$/i.test(key)));
 const version = (text) => typeof text === 'string' ? text.match(/\d+\.\d+(?:\.\d+){0,3}/)?.[0] ?? null : null;
+// A process in a systemd user service's cgroup (the dashboard) charges whatever it starts to that
+// service: a relaunched Codex and everything it runs would count against the dashboard's MemoryMax,
+// and with KillMode=process would keep its cgroup, and so its memory.peak, alive across restarts.
+// An ssh session or a plain shell has no such cgroup and needs no transient unit.
+function insideServiceCgroup(read = () => fs.readFileSync('/proc/self/cgroup', 'utf8')) {
+  try { return read().split('\n').some((line) => /\/user@\d+\.service\/.*\.service$/.test(line.trim())); } catch { return false; }
+}
+/** Restart one captured process from the updated install, outside the dashboard's cgroup. */
+async function relaunch(target, desktop, outside, deps = {}) {
+  const actual = desktop ? target.exe : (deps.executable ?? executable);
+  const env = cleanEnvironment(target.env);
+  if (outside && (deps.inside ?? insideServiceCgroup)()) {
+    await outside({ ...target, exe: actual, env }, desktop);
+  } else {
+    const child = (deps.spawn ?? spawn)(actual, target.args.slice(1), { cwd: target.cwd, env, detached: true,
+      argv0: desktop ? target.args[0] : (deps.executable ?? executable), stdio: ['ignore', 'ignore', 'ignore'] });
+    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new Error('Launch failed.'))); });
+    child.unref();
+  }
+  output.restartedProcesses++;
+}
 function run(binary, args, timeout = 10000) {
   return new Promise((resolve, reject) => execFile(binary, args, { timeout, maxBuffer: 65536, encoding: 'utf8',
     env: { ...cleanEnvironment(process.env), CODEX_NON_INTERACTIVE: '1', NO_UPDATE_NOTIFIER: '1', DEBIAN_FRONTEND: 'noninteractive' } },
@@ -195,16 +216,10 @@ async function main() {
       return true;
     },
     runtime: () => createCodexActivationRuntime(path.join(home, '.codex'), { scan: async () => privateScan(),
-      launch: async (target, desktop) => {
-        const actual = desktop ? target.exe : executable;
-        const child = spawn(actual, target.args.slice(1), { cwd: target.cwd, env: cleanEnvironment(target.env), detached: true,
-          argv0: desktop ? target.args[0] : executable, stdio: ['ignore', 'ignore', 'ignore'] });
-        await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new Error('Launch failed.'))); });
-        child.unref(); output.restartedProcesses++;
-      },
+      launch: (target, desktop, outside) => relaunch(target, desktop, outside),
     }),
   });
   } finally { await release(); }
 }
-module.exports = { execute, loadRuntime, modules, output, version };
+module.exports = { execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

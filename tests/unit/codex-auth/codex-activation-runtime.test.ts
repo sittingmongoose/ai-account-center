@@ -176,6 +176,22 @@ describe('Codex activation process lifecycle', () => {
     expect(app.env.BROWSER_USE_ACCESS_VERIFYING_IDENTITY).toBeUndefined();
   });
 
+  it('offers its default launcher to a launch override, so an updater can stay outside the cgroup', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    const offered: unknown[] = [];
+    const runtime = createCodexActivationRuntime(home, {
+      ...fake.deps,
+      launch: async (target, isDesktop, outside) => {
+        offered.push(outside);
+        await fake.deps.launch(target, isDesktop);
+      },
+    });
+    await runtime.stop();
+    await runtime.start();
+    expect(offered.length).toBe(2);
+    expect(offered.every((value) => typeof value === 'function')).toBe(true);
+  });
+
   it('retires a daemon an SSH proxy respawned during the swap before starting the new one', async () => {
     const fake = harness([daemon, desktop, bundled, renderer]);
     const runtime = createCodexActivationRuntime(home, fake.deps);

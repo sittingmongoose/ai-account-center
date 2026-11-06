@@ -270,3 +270,102 @@ describe('Codex desktop version verification', () => {
     expect(result.status).not.toBe('updated');
   });
 });
+
+describe('Codex relaunch after an update', () => {
+  const dashboard =
+    '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service\n';
+  const target = {
+    exe: '/old/codex',
+    args: ['codex', 'app-server', 'daemon'],
+    cwd: '/work',
+    env: { KEEP: 'yes', CCS_SESSION_SECRET: 'hidden', CCS_DASHBOARD_USERNAME: 'hidden' },
+  };
+  function spawned() {
+    const calls: unknown[][] = [];
+    return {
+      calls,
+      spawn: (...args: unknown[]) => {
+        calls.push(args);
+        return {
+          once: (name: string, done: () => void) => {
+            if (name === 'spawn') done();
+          },
+          unref: () => {},
+        };
+      },
+    };
+  }
+  beforeEach(() => {
+    bridge.output.restartedProcesses = 0;
+  });
+
+  it('never spawns inside the dashboard cgroup, so the app is not charged to the dashboard', async () => {
+    const { calls, spawn } = spawned();
+    const outside: unknown[][] = [];
+    await bridge.relaunch(
+      target,
+      false,
+      async (...args: unknown[]) => {
+        outside.push(args);
+      },
+      { spawn, inside: () => bridge.insideServiceCgroup(() => dashboard), executable: '/new/codex' }
+    );
+    expect(calls).toEqual([]);
+    expect(outside).toEqual([
+      [
+        {
+          exe: '/new/codex',
+          args: target.args,
+          cwd: '/work',
+          env: { KEEP: 'yes' },
+        },
+        false,
+      ],
+    ]);
+    expect(bridge.output.restartedProcesses).toBe(1);
+  });
+
+  it('reports a failed outside launch instead of falling back into the cgroup', async () => {
+    const { calls, spawn } = spawned();
+    await expect(
+      bridge.relaunch(
+        target,
+        true,
+        async () => {
+          throw new Error('no systemd-run');
+        },
+        { spawn, inside: () => true }
+      )
+    ).rejects.toThrow('no systemd-run');
+    expect(calls).toEqual([]);
+    expect(bridge.output.restartedProcesses).toBe(0);
+  });
+
+  it('starts directly from an ssh session, where there is no dashboard cgroup to leave', async () => {
+    const { calls, spawn } = spawned();
+    await bridge.relaunch(target, false, async () => {}, {
+      spawn,
+      inside: () => false,
+      executable: '/new/codex',
+    });
+    expect(calls.length).toBe(1);
+    expect(calls[0][0]).toBe('/new/codex');
+    expect((calls[0][2] as { env: object }).env).toEqual({ KEEP: 'yes' });
+    expect(bridge.output.restartedProcesses).toBe(1);
+  });
+
+  it('tells a user service from a session, a slice and an unreadable file', () => {
+    expect(bridge.insideServiceCgroup(() => dashboard)).toBe(true);
+    for (const cgroup of [
+      '0::/user.slice/user-1000.slice/session-3.scope\n',
+      '0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-agents.slice\n',
+      '0::/system.slice/ssh.service\n',
+    ])
+      expect(bridge.insideServiceCgroup(() => cgroup)).toBe(false);
+    expect(
+      bridge.insideServiceCgroup(() => {
+        throw new Error('no proc');
+      })
+    ).toBe(false);
+  });
+});

@@ -431,6 +431,44 @@ class UpdaterTests(unittest.TestCase):
             with self.assertRaises(common.UpdateFailure):
                 terminal.check_terminal('ubuntu', [mock.Mock()])
 
+    def _restart_ubuntu_desktop(self, in_service):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+        item = mock.Mock(args=['/fixture/claude-desktop', '--user-data-dir=/fixture/data'], cwd='/fixture', env={'KEEP': 'yes', 'CCS_SESSION_SECRET': 'hidden'}, pid=1, ppid=0)
+        with mock.patch.object(processes, 'in_service_cgroup', return_value=in_service), \
+                mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'command') as run, mock.patch.object(processes.subprocess, 'Popen') as popen, \
+                mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            self.assertEqual(processes.restart_desktops(install, [item]), 1)
+        return run, popen
+
+    def test_desktop_relaunch_leaves_the_dashboard_cgroup(self):
+        run, popen = self._restart_ubuntu_desktop(True)
+        popen.assert_not_called()
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:2], ['/usr/bin/systemd-run', '--user'])
+        self.assertEqual(argv[argv.index('--') + 1:], ['/fixture/claude-desktop', '--user-data-dir=/fixture/data'])
+        self.assertIn('--setenv=KEEP', argv)
+        self.assertFalse(any('CCS_SESSION_SECRET' in value for value in argv))
+        self.assertNotIn('CCS_SESSION_SECRET', run.call_args.kwargs['env'])
+
+    def test_desktop_relaunch_from_a_session_starts_directly(self):
+        run, popen = self._restart_ubuntu_desktop(False)
+        run.assert_not_called()
+        popen.assert_called_once()
+
+    def test_service_cgroup_detection(self):
+        cases = {
+            '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service\n': True,
+            '0::/user.slice/user-1000.slice/session-3.scope\n': False,
+            '0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-agents.slice\n': False,
+            '0::/system.slice/ssh.service\n': False,
+        }
+        for text, expected in cases.items():
+            with mock.patch('builtins.open', mock.mock_open(read_data=text)):
+                self.assertEqual(common.in_service_cgroup(), expected, text)
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertFalse(common.in_service_cgroup())
+
     def test_real_standin_cli_restarts_in_new_pty_without_original_prompt(self):
         source = r'''#include <stdio.h>
 #include <stdlib.h>

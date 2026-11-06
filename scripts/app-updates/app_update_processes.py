@@ -16,8 +16,11 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
-from app_update_common import UpdateFailure, command, environment, powershell
+from app_update_common import (
+    UpdateFailure, command, environment, in_service_cgroup, powershell, sanitize_unit_fragment, systemd_user_service_argv,
+)
 
 # T3's own server and desktop, by exact location. A CLI process started below
 # one of them belongs to a T3 session: normally Update all never stops,
@@ -846,6 +849,13 @@ def restart_desktops(install, contexts):
         elif install.platform == "windows":
             subprocess.Popen([str(install.path), *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        elif in_service_cgroup():
+            # A plain start would stay in the dashboard's cgroup: the app and all it runs would
+            # count against the dashboard's memory limit and outlive its restarts there.
+            unit = "aac-launch-%s-%s" % (sanitize_unit_fragment(install.app_id), uuid.uuid4().hex[:12])
+            values = environment(item.env)
+            command(systemd_user_service_argv(unit, item.cwd, values, [str(install.path), *args]),
+                    timeout=15, env=values, preserve_env=True)
         else:
             subprocess.Popen([str(install.path), *args], cwd=item.cwd, env=environment(item.env), stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
