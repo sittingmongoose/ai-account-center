@@ -38,9 +38,15 @@ function within(child: string, root: string): boolean {
   );
 }
 
-/** The kernel marks a removed executable or working folder with this suffix. */
-function withoutDeleted(value: string): string {
-  return value.endsWith(' (deleted)') ? value.slice(0, -' (deleted)'.length) : value;
+const DELETED = ' (deleted)';
+
+/**
+ * The kernel marks a removed executable or working folder with " (deleted)",
+ * but a live folder may really be named that way. Both readings are tried; a
+ * false match only reports in_use.
+ */
+function pathSpellings(value: string): string[] {
+  return value.endsWith(DELETED) ? [value, value.slice(0, -DELETED.length)] : [value];
 }
 
 function code(error: unknown): string {
@@ -176,12 +182,12 @@ export function censusAntigravityProcesses(options: {
     return incomplete;
   }
   if (entries.length > MAX_PROC_ENTRIES || !entries.includes(String(self))) return incomplete;
-  const isAntigravityPath = (value: string) => {
-    const file = withoutDeleted(value);
-    if (!path.isAbsolute(file)) return false;
-    const resolved = path.resolve(file);
-    return natives.includes(resolved) || rootPaths.some((root) => within(resolved, root));
-  };
+  const isAntigravityPath = (value: string) =>
+    pathSpellings(value).some((file) => {
+      if (!path.isAbsolute(file)) return false;
+      const resolved = path.resolve(file);
+      return natives.includes(resolved) || rootPaths.some((root) => within(resolved, root));
+    });
   const deniedExe = new Set(['EACCES', 'EPERM']);
   let running = 0;
   try {
@@ -204,26 +210,22 @@ export function censusAntigravityProcesses(options: {
         }
         const cmdline = readField(() => readCmdline(path.join(directory, 'cmdline')));
         const args = cmdline.split('\0').filter(Boolean).slice(0, 4);
-        let cwd: string | null | undefined;
-        const resolveArgument = (argument: string): string | null => {
-          if (path.isAbsolute(argument)) return argument;
-          if (!argument.includes('/')) return null;
-          if (cwd === undefined) {
+        let cwds: string[] | undefined;
+        const resolveArgument = (argument: string): string[] => {
+          if (path.isAbsolute(argument)) return [argument];
+          if (!argument.includes('/')) return [];
+          if (cwds === undefined) {
             const link = readTolerant(
               () => fs.readlinkSync(path.join(directory, 'cwd')),
               deniedExe
             );
-            // A working folder that was removed reads as "<folder> (deleted)".
-            cwd = link === null ? null : withoutDeleted(link);
+            // A removed working folder reads as "<folder> (deleted)"; a live one
+            // may really carry that name, so both readings are kept.
+            cwds = link === null ? [] : pathSpellings(link).filter((cwd) => path.isAbsolute(cwd));
           }
-          return cwd === null || !path.isAbsolute(cwd) ? null : path.resolve(cwd, argument);
+          return cwds.map((cwd) => path.resolve(cwd, argument));
         };
-        if (
-          args.some((argument) => {
-            const file = resolveArgument(argument);
-            return file !== null && isAntigravityPath(file);
-          })
-        )
+        if (args.some((argument) => resolveArgument(argument).some(isAntigravityPath)))
           running += 1;
       } catch (error) {
         if (error instanceof ProcessGone) continue;

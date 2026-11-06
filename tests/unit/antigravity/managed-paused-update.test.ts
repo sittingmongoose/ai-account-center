@@ -303,6 +303,48 @@ describe('runtime-free Antigravity process census', () => {
     expect(value.census()).toEqual({ complete: true, running: 1 });
   });
 
+  test('a live working folder really named "... (deleted)" still resolves inside the root', () => {
+    const value = procFixture();
+    const real = path.join(value.root, 'data/agy (deleted)');
+    fs.mkdirSync(path.join(real, 'bin'), { recursive: true });
+    fs.mkdirSync(path.join(value.home, '.gemini'));
+    fs.symlinkSync(real, path.join(value.home, '.gemini/antigravity-cli'));
+    // The kernel reports the real folder name, which happens to end in " (deleted)".
+    value.add(940, 'sh', '/usr/bin/dash', ['sh', './bin/h.sh'], real);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a home really named "home (deleted)" still resolves a relative argument inside it', () => {
+    const value = procFixture();
+    const home = path.join(value.root, 'home (deleted)');
+    fs.mkdirSync(path.join(home, '.gemini/antigravity-cli'), { recursive: true });
+    value.add(950, 'sh', '/usr/bin/dash', ['sh', './.gemini/antigravity-cli/h.sh'], home);
+    expect(value.census({ home, nativeBinary: path.join(home, '.local/bin/agy') })).toEqual({
+      complete: true,
+      running: 1,
+    });
+  });
+
+  test('an executable in a root whose real name ends in " (deleted)" is counted', () => {
+    const value = procFixture();
+    const real = path.join(value.root, 'data-exe/agy (deleted)');
+    fs.mkdirSync(path.join(real, 'bin'), { recursive: true });
+    fs.mkdirSync(path.join(value.home, '.gemini'));
+    fs.symlinkSync(real, path.join(value.home, '.gemini/antigravity-cli'));
+    value.add(960, 'helper', path.join(real, 'bin/unlisted-helper'), ['x']);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('a live executable really named "agy (deleted)" is counted by its exact path', () => {
+    const value = procFixture();
+    const native = path.join(value.root, 'native-bin/agy (deleted)');
+    fs.mkdirSync(path.dirname(native), { recursive: true });
+    fs.writeFileSync(native, ORIGINAL, { mode: 0o700 });
+    // Stripping the suffix alone would look for ".../agy", which is not the native.
+    value.add(970, 'renamed', native, ['renamed']);
+    expect(value.census({ nativeBinary: native })).toEqual({ complete: true, running: 1 });
+  });
+
   test('each process resolves against its own working folder', () => {
     const value = procFixture();
     const root = path.join(value.home, '.gemini/antigravity-cli');
