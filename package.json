@@ -67,7 +67,8 @@
     "assets/screenshots/README.md",
     "LICENSE",
     "docs/antigravity-runtime.md",
-    "docs/agent-reports/schemas/"
+    "docs/agent-reports/schemas/",
+    "docs/agent-reports/catalog/"
   ],
   "engines": {
     "node": ">=18.0.0",

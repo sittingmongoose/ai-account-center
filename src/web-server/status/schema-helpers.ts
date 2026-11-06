@@ -74,6 +74,30 @@ export function findSecret(text: string): string | null {
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
+/**
+ * Bytes of one share file -> its JSON value, under the rules every reader applies: the size cap, no
+ * NUL bytes (a damaged write), UTF-8, no secrets. Every refusal is a fixed reason.
+ */
+export function jsonFromBytes(bytes: Buffer, capBytes: number): Parsed<unknown> {
+  if (bytes.length > capBytes)
+    return { ok: false, reason: `larger than the ${capBytes / 1024} KB cap` };
+  if (bytes.length === 0) return { ok: false, reason: 'empty' };
+  if (bytes.includes(0)) return { ok: false, reason: 'contains NUL bytes from a damaged write' };
+  let source: string;
+  try {
+    source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return { ok: false, reason: 'not UTF-8 text' };
+  }
+  const secret = findSecret(source);
+  if (secret) return { ok: false, reason: `refused: it contains what looks like ${secret}` };
+  try {
+    return { ok: true, value: JSON.parse(source) };
+  } catch {
+    return { ok: false, reason: 'not valid JSON' };
+  }
+}
+
 /** Thrown inside the projection; becomes `{ ok: false, reason }`. */
 export class Invalid extends Error {}
 

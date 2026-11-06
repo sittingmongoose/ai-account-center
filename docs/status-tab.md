@@ -41,7 +41,7 @@ them, and the view shows null as unknown.
 validator (`src/web-server/status/run-schema.ts`) accepts `model.account`, `process { id, version, sha256 }`,
 `metrics { name: number | null }`, `imported { from, at }`, `review.by`, `review.disputed` and `cost.estimate` (`{
 source, method, credits, quota, tokens: { in, out, cached } }`, kept apart from measured cost). The Status server does
-not read runs yet (they feed the Scoreboard).
+not read runs; they feed the Model Scoreboard (`docs/scoreboard.md`).
 
 **Reading rules.** For each writer the reader lists the folder (and `cards/`) first and then reads what the listing
 names: a Mac rename-over through SMB is a delete then a rename, and NFS caches a missed lookup for about 20 s unless

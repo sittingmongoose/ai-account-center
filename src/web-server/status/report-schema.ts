@@ -25,8 +25,8 @@ import {
   TASKS_SCHEMA,
   THREAD_SCHEMA,
   type DocHead,
-  findSecret,
   Invalid,
+  jsonFromBytes,
   link,
   list,
   obj,
@@ -264,26 +264,10 @@ export function parseReportFile(
   writer: string,
   cardId = ''
 ): Parsed<ParsedReport> {
-  if (bytes.length > REPORT_SIZE_CAPS[kind])
-    return { ok: false, reason: `larger than the ${REPORT_SIZE_CAPS[kind] / 1024} KB cap` };
-  if (bytes.length === 0) return { ok: false, reason: 'empty' };
-  if (bytes.includes(0)) return { ok: false, reason: 'contains NUL bytes from a damaged write' };
-  let source: string;
+  const raw = jsonFromBytes(bytes, REPORT_SIZE_CAPS[kind]);
+  if (!raw.ok) return raw;
   try {
-    source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    return { ok: false, reason: 'not UTF-8 text' };
-  }
-  const secret = findSecret(source);
-  if (secret) return { ok: false, reason: `refused: it contains what looks like ${secret}` };
-  let raw: unknown;
-  try {
-    raw = JSON.parse(source);
-  } catch {
-    return { ok: false, reason: 'not valid JSON' };
-  }
-  try {
-    const doc = obj(raw, 'document');
+    const doc = obj(raw.value, 'document');
     const value =
       kind === 'thread'
         ? thread(doc, writer)

@@ -1,0 +1,72 @@
+{
+ "schema": "agent-reports/run@1",
+ "id": "windows.opus-typed-decisions--plan-pilot2-t-inf-brainrot",
+ "writer": "windows.opus-typed-decisions",
+ "seq": 60,
+ "writtenAt": "2026-11-06T18:13:32Z",
+ "source": "benchmark",
+ "benchmark": "plan-pilot2",
+ "project": "puppet-master",
+ "stream": null,
+ "task": {
+  "id": "inf-brainrot",
+  "type": "plan",
+  "title": "targeted per-piece pass over code-selected pieces: inf-brainrot (informal)",
+  "size": {
+   "words": 1393
+  }
+ },
+ "model": {
+  "id": "openai/gpt-6.1-sol",
+  "provider": "openai",
+  "harness": "codex",
+  "effort": "medium",
+  "account": "account-a"
+ },
+ "startedAt": null,
+ "endedAt": "2026-10-31T02:05:34Z",
+ "outcome": "done",
+ "cost": {
+  "usd": null,
+  "credits": null,
+  "quota": null,
+  "tokens": {
+   "in": null,
+   "out": null,
+   "cached": null
+  }
+ },
+ "scope": {
+  "recordsAssigned": 18,
+  "recordsJudged": 18
+ },
+ "process": {
+  "id": "t",
+  "version": "consult5-pilot2/run_target.py",
+  "sha256": "453d3bad85f8ddf5f4322bcbf3c6d1adc6250b792e6cba33b643cefa0ef11713"
+ },
+ "metrics": {
+  "modelSeconds": 23.9,
+  "calls": 1,
+  "modelSecondsPer1kWords": 19.2,
+  "singleRun": 1,
+  "answerKeyFinal": 0,
+  "piecesSelected": 18,
+  "piecesAnswered": 18
+ },
+ "imported": {
+  "from": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\runs\\t\\inf-brainrot.json",
+  "at": "2026-11-06T18:13:32Z"
+ },
+ "evidence": [
+  {
+   "label": "pilot-2 results (preliminary, before the owner's cards)",
+   "path": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\RESULTS.md"
+  },
+  {
+   "label": "preregistration and amendments",
+   "path": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\PREREG.md"
+  }
+ ],
+ "wallSeconds": 25
+}

@@ -161,7 +161,7 @@ export interface ReaderFs {
   readFile(file: string): Promise<Buffer>;
 }
 
-const nodeFs: ReaderFs = {
+export const nodeReaderFs: ReaderFs = {
   readdir: (dir) => fs.promises.readdir(dir, { withFileTypes: true }),
   stat: (file) => fs.promises.stat(file),
   readFile: (file) => fs.promises.readFile(file),
@@ -187,7 +187,7 @@ export function isTransientShareError(error: unknown): boolean {
 }
 
 /** A name safe to show: printable ASCII without separators. */
-function showable(name: string): boolean {
+export function showable(name: string): boolean {
   return /^[\x21-\x7e]{1,100}$/.test(name) && !name.includes('/') && !name.includes('\\');
 }
 
@@ -238,7 +238,7 @@ export class AgentReportsReader {
   }
 
   private get fs(): ReaderFs {
-    return this.options.fs ?? nodeFs;
+    return this.options.fs ?? nodeReaderFs;
   }
 
   /** One rescan; resolves whether anything the view shows changed. Overlapping calls share one scan. */

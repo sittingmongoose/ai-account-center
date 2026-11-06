@@ -1,8 +1,8 @@
 /**
  * Finished runs and reviews (agent-reports/run@1, `writers/<writer>/runs/<YYYY-MM-DD>/<run>.json`).
- * The Status server does not read runs yet (they feed the Scoreboard); this is the one validator
- * the Scoreboard reader will use. Unknown values stay null, never 0; `cost.estimate` is kept apart
- * from measured cost.
+ * The Status server does not read runs (they feed the Scoreboard); this is the one validator the
+ * Scoreboard reader uses. Unknown values stay null, never 0; `cost.estimate` is kept apart from
+ * measured cost.
  */
 import {
   bool,
@@ -48,13 +48,16 @@ export interface RunQuota {
   deltaPct: number;
 }
 
+/** A run's size in each unit a task type may count (catalog `unit` + `s`). */
+export type RunSize = Record<'records' | 'files' | 'items' | 'words' | 'tasks', number | null>;
+
 export interface RunDoc extends DocHead {
   id: string;
   source: 'observed' | 'benchmark';
   benchmark: string | null;
   project: string | null;
   stream: string | null;
-  task: { id: string; type: string | null; title: string; size: { records: number | null } | null };
+  task: { id: string; type: string | null; title: string; size: RunSize | null };
   model: {
     id: string | null;
     provider: string | null;
@@ -166,6 +169,10 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
       title: text(task.title, 'task.title', 300),
       size: optObj(task.size, 'task.size', (s) => ({
         records: optCount(s.records, 'task.size.records'),
+        files: optCount(s.files, 'task.size.files'),
+        items: optCount(s.items, 'task.size.items'),
+        words: optCount(s.words, 'task.size.words'),
+        tasks: optCount(s.tasks, 'task.size.tasks'),
       })),
     },
     model: {
