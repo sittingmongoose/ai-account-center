@@ -31,7 +31,7 @@
         "cost",
         "reliability"
       ],
-      "byProcess": false
+      "byProcess": true
     },
     {
       "id": "worknode-create",
@@ -153,6 +153,38 @@
       "id": "mechanical",
       "label": "Mechanical edits",
       "description": "Spec-driven edits with a known right answer.",
+      "unit": "file",
+      "measures": [
+        "speed",
+        "quality",
+        "thoroughness",
+        "laziness",
+        "cheating",
+        "cost",
+        "reliability"
+      ],
+      "byProcess": false
+    },
+    {
+      "id": "audit-read",
+      "label": "Audit read",
+      "description": "Reading records or files against a rule set and judging each one (closure re-audits).",
+      "unit": "record",
+      "measures": [
+        "speed",
+        "quality",
+        "thoroughness",
+        "laziness",
+        "cheating",
+        "cost",
+        "reliability"
+      ],
+      "byProcess": false
+    },
+    {
+      "id": "docs",
+      "label": "Docs",
+      "description": "Writing or updating documentation and guides.",
       "unit": "file",
       "measures": [
         "speed",

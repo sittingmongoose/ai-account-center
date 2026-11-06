@@ -32,3 +32,22 @@ server). Each note says what happened, why, and what to do.
   plain string), never reactively while the owner types.
 - **Drafts in browser storage** (`localStorage`, wrapped so a refusal only loses persistence) let the owner leave the
   page mid-deck.
+- **`default` is not enough for `null`:** serde's `default` fills a missing field, but a `null` sent for a `String` or
+  `Vec` fails the whole view. The server sends unknowns as `null`, so text and list fields read through a small
+  `nullable` deserializer (null becomes empty). Numbers stay strict: a null count must not turn into a zero.
+
+## iOS WebKit (iPhone 17 Pro and iPhone Duo simulators, iOS 27.3)
+Chrome's checks passed while these were wrong on the phone; test WebKit before calling a page done.
+- **Variable fonts ignore `font-weight`:** Instrument Sans and Martian Mono are variable (`wght` axis). WebKit drew
+  every weight as the default 400; only `font-variation-settings: 'wght' N` picks the weight. `app.css` gives every
+  weight both ways, and sets the default-bold elements (`strong`, `b`, headings, `th`) explicitly.
+- **Boolean media attributes set after creation don't act:** the page sets attributes on an element it has already
+  created, and `muted` only mutes an element created with it. Use `prop:muted=true` as well, or the video starts with
+  sound and phones refuse to autoplay it.
+- **Fixed asset URLs stay cached:** `/app/app.css` revalidates (`no-cache`), but Safari kept showing the old file. The
+  page links it as `app.css?v=<content hash>` (`{{CSS}}` in `index.html`), so a new build is always read.
+- **Media fills its frame:** `width/height: 100%` with `object-fit: contain`, not `max-width/max-height: 100%`, so a
+  small screenshot is shown as large as the screen allows in every engine.
+- **Testing:** text entry into the Slint canvas sign-in can't be driven through the simulator's automation; a test
+  server's sign-in can be done with a fetch from a page on that origin. The Simlock-leased Duo can't change its pose
+  (`fold` reports no panel table), so the open panel is covered by Chromium viewports only.

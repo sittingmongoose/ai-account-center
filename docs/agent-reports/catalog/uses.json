@@ -16,7 +16,8 @@
         "thoroughness": 2,
         "facts-kept": 3,
         "speed": 1,
-        "cost": 1
+        "cost": 1,
+        "silent-misses": 3
       }
     },
     {
@@ -28,7 +29,8 @@
         "build",
         "fix",
         "test",
-        "review"
+        "review",
+        "audit-read"
       ],
       "weights": {
         "quality": 3,
@@ -52,7 +54,8 @@
         "cheating": 3,
         "reliability": 2,
         "speed": 1,
-        "cost": 2
+        "cost": 2,
+        "silent-misses": 3
       }
     }
   ]

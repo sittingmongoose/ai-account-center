@@ -241,13 +241,18 @@ function stageLeptosPages(packagedUi, crate, leptos) {
   const appDir = path.join(packagedUi, 'app');
   fs.mkdirSync(appDir, { recursive: true });
   const template = fs.readFileSync(path.join(leptos.leptosCrate, 'index.html'), 'utf8');
-  if (!template.includes('{{PKG}}'))
-    throw new Error('The Leptos page template must reference {{PKG}}.');
+  if (!template.includes('{{PKG}}') || !template.includes('{{CSS}}'))
+    throw new Error('The Leptos page template must reference {{PKG}} and {{CSS}}.');
+  // The stylesheet keeps one path but its link names the content, so a phone that kept the old file reads the new one.
+  const css = fs.readFileSync(path.join(leptos.leptosCrate, 'style', 'app.css'));
+  const cssVersion = crypto.createHash('sha256').update(css).digest('hex').slice(0, 12);
   fs.writeFileSync(
     path.join(appDir, 'index.html'),
-    template.replaceAll('{{PKG}}', `/pkg/${leptos.buildId}`)
+    template
+      .replaceAll('{{PKG}}', `/pkg/${leptos.buildId}`)
+      .replaceAll('{{CSS}}', `/app/app.css?v=${cssVersion}`)
   );
-  fs.copyFileSync(path.join(leptos.leptosCrate, 'style', 'app.css'), path.join(appDir, 'app.css'));
+  fs.writeFileSync(path.join(appDir, 'app.css'), css);
   for (const font of ['MartianMono.ttf', 'OFL-MartianMono.txt']) {
     fs.copyFileSync(path.join(crate, 'ui', 'fonts', font), path.join(appDir, font));
   }

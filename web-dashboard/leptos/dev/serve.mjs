@@ -51,13 +51,14 @@ http.createServer((req, res) => {
   const p = url.pathname;
   if (p === '/__reset') { view = JSON.parse(fs.readFileSync(fixture, 'utf8')); json(res, 200, { ok: true }); return; }
   if (p === '/app/status' || p === '/app/scoreboard') {
-    const html = fs.readFileSync(path.join(crate, 'index.html'), 'utf8').replaceAll('{{PKG}}', '/app/pkg');
+    const html = fs.readFileSync(path.join(crate, 'index.html'), 'utf8').replaceAll('{{PKG}}', '/app/pkg').replaceAll('{{CSS}}', '/app/app.css');
     res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
   } else if (p.startsWith('/app/pkg/')) file(res, path.join(crate, 'pkg', path.basename(p)));
   else if (p === '/app/app.css') file(res, path.join(crate, 'style/app.css'));
   else if (p === '/app/MartianMono.ttf') file(res, path.join(dashboard, 'ui/fonts/MartianMono.ttf'));
   else if (p.startsWith('/assets/')) file(res, path.join(dashboard, 'public/assets', path.basename(p)));
   else if (p.startsWith('/api/status/files/')) ranged(req, res, path.join(crate, 'fixtures/media', path.basename(p)));
+  else if (p === '/api/scoreboard' && req.method === 'GET') json(res, 200, JSON.parse(fs.readFileSync(path.join(crate, 'fixtures/scoreboard-view.json'), 'utf8')));
   else if (p === '/api/status' && req.method === 'GET') json(res, 200, { ...view, generatedAt: new Date().toISOString() });
   else if (p === '/api/status/answers' && req.method === 'POST') {
     let body = '';

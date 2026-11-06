@@ -11,6 +11,7 @@ mod drafts;
 pub mod fmt;
 mod live;
 mod media;
+mod scoreboard;
 mod status;
 
 use leptos::prelude::*;
@@ -76,16 +77,6 @@ fn listen_to_shell() {
     }
 }
 
-#[component]
-fn ScoreboardPage(embedded: bool) -> impl IntoView {
-    view! {
-        <main class="page scoreboard" data-embedded=embedded.then_some("1")>
-            <Show when=move || !embedded><header class="page-head"><h1>"Model Scoreboard"</h1></header></Show>
-            <p class="empty">"The Model Scoreboard comes after the Status page."</p>
-        </main>
-    }
-}
-
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
@@ -96,14 +87,17 @@ pub fn start() {
         listen_to_shell();
     }
     mount_to_body(move || {
-        let live = live::start();
-        provide_context(live);
         media::provide_viewer();
+        let page_view = match page {
+            Page::Status => {
+                // Only the Status page reads /api/status.
+                provide_context(live::start());
+                view! { <status::StatusPage embedded=embed/> }.into_any()
+            }
+            Page::Scoreboard => view! { <scoreboard::ScoreboardPage embedded=embed/> }.into_any(),
+        };
         view! {
-            {match page {
-                Page::Status => view! { <status::StatusPage embedded=embed/> }.into_any(),
-                Page::Scoreboard => view! { <ScoreboardPage embedded=embed/> }.into_any(),
-            }}
+            {page_view}
             <media::ViewerOverlay/>
         }
     });

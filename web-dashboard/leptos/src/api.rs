@@ -12,7 +12,7 @@ pub const STATUS_VIEW_VERSION: u32 = 1;
 
 /// Text and lists the server sends as `null` when unknown read as empty, which the page draws as missing. Numbers are
 /// left strict: a null count must not turn into a zero.
-fn nullable<'de, D, T>(d: D) -> Result<T, D::Error>
+pub(crate) fn nullable<'de, D, T>(d: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Default + Deserialize<'de>,
@@ -749,7 +749,11 @@ impl FetchError {
     }
 }
 
-async fn send(method: &str, url: &str, body: Option<String>) -> Result<(u16, String), FetchError> {
+pub(crate) async fn send(
+    method: &str,
+    url: &str,
+    body: Option<String>,
+) -> Result<(u16, String), FetchError> {
     let init = RequestInit::new();
     init.set_method(method);
     init.set_credentials(RequestCredentials::SameOrigin);

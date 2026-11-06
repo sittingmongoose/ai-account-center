@@ -147,7 +147,7 @@ function addLeptosCrate(root: string): Buffer {
   fs.writeFileSync(path.join(leptos, 'style', 'app.css'), 'body{margin:0}\n'.repeat(80));
   fs.writeFileSync(
     path.join(leptos, 'index.html'),
-    `<!doctype html><link rel="stylesheet" href="/app/app.css"><script type="module">import init from '{{PKG}}/aac_web.js'; init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' });</script>${'<!-- page -->'.repeat(80)}`
+    `<!doctype html><link rel="stylesheet" href="{{CSS}}"><script type="module">import init from '{{PKG}}/aac_web.js'; init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' });</script>${'<!-- page -->'.repeat(80)}`
   );
   fs.copyFileSync(
     path.join(__dirname, '../../../web-dashboard/leptos/build/strip-names.cjs'),
@@ -213,6 +213,8 @@ describe('Leptos pages in the UI build', () => {
     const page = fs.readFileSync(path.join(ui, 'app', 'index.html'), 'utf8');
     expect(page).toContain(`'/pkg/${id}/aac_web.js'`);
     expect(page).not.toContain('{{PKG}}');
+    expect(page).not.toContain('{{CSS}}');
+    expect(page).toMatch(/href="\/app\/app\.css\?v=[0-9a-f]{12}"/);
     for (const file of [
       'app/app.css',
       'app/MartianMono.ttf',

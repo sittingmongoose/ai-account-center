@@ -54,7 +54,52 @@ async function openStatus(t, view) {
 
 const PANELS = ['cards', 'progress', 'threads', 'machines', 'simlock', 'usage'];
 
+// Signed answers the server wrote to the kit's temporary reports folder (never the share).
+function signedAnswers(t) {
+	const dir = path.join(t.state.reports, 'v1', 'answers');
+	return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')) : [];
+}
+
 export const tests = {
+	// No stubs: the real server reads the kit's fixture reports folder, serves card media with byte ranges, records the
+	// answer in the temporary home's store, signs it into the temporary reports folder, and rings nobody (doorbell off).
+	async 'status end to end on the server'(t) {
+		await t.viewport(1440, 900);
+		await t.app.signIn();
+		await t.goto('/app/status', { settleMs: 300 });
+		await t.page.waitForSelector('.deck .card');
+		await t.text('.deck-sub', /9 open/);
+		await t.check('card video plays from the server (byte ranges)', async () =>
+			t.page.evaluate(async () => {
+				const v = [...document.querySelectorAll('.media video')][0];
+				if (!v) return 'the first card has no video';
+				v.muted = true;
+				try { await v.play(); v.pause(); return true; } catch (e) { return String(e); }
+			})
+		);
+		// Answer the first question card in the deck, then send from the review.
+		let found = false;
+		for (let i = 0; i < 9 && !found; i++) {
+			found = await t.page.evaluate(() => {
+				const card = document.querySelector('.deck .card');
+				return !!card && ['question', ''].includes(card.dataset.kind || '') && !!card.querySelector('.opt-pick:not([disabled])');
+			});
+			if (!found) await t.page.click('.deck-nav .primary');
+		}
+		await t.check('a question card to answer', found);
+		const before = signedAnswers(t).length;
+		await t.page.click('.deck .card .opt-pick >> nth=0');
+		await t.page.click('.jump button >> text=Review');
+		await t.page.waitForSelector('.review');
+		await t.text('.review-actions .primary', /Send 1 answer/);
+		await t.page.click('.review-actions .primary');
+		await t.page.waitForSelector('.sent');
+		await t.text('.sent .ok', /Sent 1 at/);
+		await t.equal('one signed answer written to the test reports folder', signedAnswers(t).length, before + 1);
+		await t.until('the answered card leaves the deck', () => /8 open/.test(document.querySelector('.deck-sub')?.textContent || ''), null, { timeout: 15000 });
+		await t.audit('end to end 1440');
+	},
+
 	async 'status desktop'(t) {
 		await t.viewport(1440, 900);
 		await openStatus(t, fixture('status-view.json'));
@@ -101,6 +146,24 @@ export const tests = {
 		await t.count('.deck .card .plan-change', 1);
 		await t.audit('server view 1440');
 		await t.crop('status-machines', '.panel#machines', 'unreachable machines say why, and show no invented readings');
+	},
+
+	// The iPhone Duo's panels: closed (outer, 466x678), open (inner, 669x951) and open sideways. Layout only, in
+	// Chromium: Simlock's Duo can't change its pose yet, so the open panel isn't tried on the simulator.
+	async 'status at iPhone Duo sizes'(t) {
+		for (const [w, h, name] of [[466, 678, 'closed'], [669, 951, 'open'], [951, 669, 'open sideways']]) {
+			await t.newContext({ viewport: { width: w, height: h }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+			await openStatus(t, fixture('server-view.json'));
+			await t.page.waitForSelector('.deck .card');
+			await t.audit(`Duo ${name} ${w}x${h}`);
+			await t.check(`Duo ${name}: Back and Next on screen`, async () =>
+				t.page.evaluate(() => {
+					const r = document.querySelector('.deck-nav')?.getBoundingClientRect();
+					return !!r && r.bottom <= innerHeight + 1 && r.top >= 0 && r.right <= innerWidth + 1;
+				})
+			);
+			await t.snap(`duo-${name.replace(' ', '-')}`);
+		}
 	},
 
 	async 'status deck on a phone'(t) {

@@ -272,7 +272,7 @@ fn Deck(
     view! {
         <div class="deck">
             <div class="deck-sub">
-                <span>{move || format!("{} open · {} answered", open.with(|o| o.len()), ready())}</span>
+                <span>{move || format!("{} open · {} ready to send", open.with(|o| o.len()), ready())}</span>
                 <Show when=move || deck_view.get() == DeckView::Cards && open.with(|cards| cards.iter().any(|c| c.recommendation.is_some() && c.can_answer() && !c.is_judgement()))>
                     <button class="link" on:click=move |_| { open.with_untracked(|cards| drafts.update(|d| { drafts::use_recommendations(d, cards); })); }>
                         "Use recommendations"

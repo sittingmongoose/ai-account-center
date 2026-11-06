@@ -109,7 +109,9 @@ fn upright_screen() -> bool {
     h > w
 }
 
-/// The full-screen viewer, once per page.
+/// The full-screen viewer, once per page. Its video is muted through the property as well as the attribute: the
+/// attribute only mutes an element that is created with it, and the page sets attributes after creating the element,
+/// so without the property the video starts with sound and phones refuse to autoplay it.
 #[component]
 pub fn ViewerOverlay() -> impl IntoView {
     let viewer = expect_context::<Viewer>();
@@ -164,7 +166,7 @@ pub fn ViewerOverlay() -> impl IntoView {
                                 {if is_video {
                                     view! {
                                         <video node_ref=video_ref src=m.url.clone() poster=m.poster_url.clone().unwrap_or_default()
-                                            controls=true playsinline=true autoplay=true muted=true preload="auto"
+                                            controls=true playsinline=true autoplay=true muted=true prop:muted=true preload="auto"
                                             on:loadedmetadata=move |ev| {
                                                 let v: web_sys::HtmlVideoElement = event_target(&ev);
                                                 fit_to_screen(v.video_width() as f64, v.video_height() as f64);
