@@ -26,6 +26,7 @@ import {
 import { createLogger } from '../../services/logging';
 import { AgentReportsReader, ensureReportsLayout, publishSchemas } from './agent-reports-reader';
 import { DOORBELL_SENDER, StatusAnswers } from './answers';
+import { QuotaReportReader } from './quota-report';
 import { MACHINES, type MachineId } from './report-schema';
 import {
   busyBetween,
@@ -81,6 +82,7 @@ function errorReason(error: unknown, fallback: string): string {
 
 export interface StatusServiceDeps {
   reader?: AgentReportsReader;
+  quotaReader?: QuotaReportReader;
   registryReader?: PmMailRegistryReader;
   answers?: StatusAnswers;
   run?: CommandRunner;
@@ -96,6 +98,7 @@ export interface StatusServiceDeps {
 
 export class StatusService {
   readonly reader: AgentReportsReader;
+  readonly quotaReader: QuotaReportReader;
   readonly answers: StatusAnswers;
   private readonly registryReader: PmMailRegistryReader;
   private registry: Collected<RegistryThread[]> = empty();
@@ -117,6 +120,7 @@ export class StatusService {
 
   constructor(private readonly deps: StatusServiceDeps = {}) {
     this.reader = deps.reader ?? new AgentReportsReader();
+    this.quotaReader = deps.quotaReader ?? new QuotaReportReader({ root: () => this.reader.root });
     this.registryReader = deps.registryReader ?? new PmMailRegistryReader();
     this.answers =
       deps.answers ??
@@ -164,6 +168,11 @@ export class StatusService {
   async scanReports(): Promise<void> {
     try {
       if (await this.reader.scan()) this.changed();
+    } catch {
+      /* The reader keeps its own state; the source shows stale. */
+    }
+    try {
+      if (await this.quotaReader.scan()) this.changed();
     } catch {
       /* The reader keeps its own state; the source shows stale. */
     }
@@ -317,6 +326,7 @@ export class StatusService {
       usage: this.usage,
       answers: this.answers.list(),
       hiddenThreadNames: [DOORBELL_SENDER],
+      quota: this.quotaReader.snapshot(),
     });
   }
 
