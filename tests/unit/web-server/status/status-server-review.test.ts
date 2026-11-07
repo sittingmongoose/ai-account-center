@@ -148,6 +148,10 @@ describe('timestamps are real calendar moments', () => {
       '2028-02-29T00:00:00Z',
       '2026-12-31T23:59:59-05:00',
       '2026-01-01T00:00:00+14:00',
+      // years 0000-0099 count as written (0000 and 2000 are leap years, 1900 is not)
+      '0000-02-29T00:00:00Z',
+      '0050-03-01T00:00:00Z',
+      '2000-02-29T00:00:00Z',
     ])
       expect([ok, realTimestamp(ok)]).toEqual([ok, true]);
     for (const bad of [
@@ -163,6 +167,8 @@ describe('timestamps are real calendar moments', () => {
       '2026-11-06T23:59:60Z',
       '2026-11-06T10:00:00+14:30',
       '2026-11-06T10:00:00+05:61',
+      '1900-02-29T00:00:00Z',
+      '0001-02-29T00:00:00Z',
     ])
       expect([bad, realTimestamp(bad)]).toEqual([bad, false]);
   });

@@ -232,7 +232,9 @@ export function realTimestamp(value: string): boolean {
   const [year, month, day, hour, minute] = [m[1], m[2], m[3], m[4], m[5]].map(Number);
   const second = m[6] === undefined ? 0 : Number(m[6]);
   if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
-  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  // Proleptic Gregorian by arithmetic, not Date.UTC (which reads years 0-99 as 19xx), so every year counts as written.
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const lastDay = month === 2 ? (leap ? 29 : 28) : [4, 6, 9, 11].includes(month) ? 30 : 31;
   if (day < 1 || day > lastDay) return false;
   if (m[7] !== undefined) {
     const offsetHours = Number(m[8]);
