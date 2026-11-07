@@ -384,6 +384,11 @@ export interface SeedFailure {
   code: string;
 }
 
+function seedErrorCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code && /^[A-Z0-9_]+$/.test(code) ? code : 'failed';
+}
+
 /** The catalog seeds this package ships (docs/agent-reports/catalog). */
 export function packagedCatalogDir(): string {
   return path.resolve(__dirname, '../../../docs/agent-reports/catalog');
@@ -410,7 +415,11 @@ export async function seedCatalog(
       const absent = await fs.promises
         .lstat(destination)
         .then(() => false)
-        .catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT');
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return true;
+          onFailure({ file: name, code: seedErrorCode(error) });
+          return false;
+        });
       if (!absent) continue;
       const temp = path.join(target, `.${name}.tmp-${process.pid}-${Date.now()}`);
       try {
@@ -421,9 +430,8 @@ export async function seedCatalog(
         written.push(name);
       } catch (error) {
         // Already there: the file on the share stands. Anything else leaves the file missing.
-        const code = (error as NodeJS.ErrnoException | null)?.code;
-        if (code !== 'EEXIST')
-          onFailure({ file: name, code: code && /^[A-Z0-9_]+$/.test(code) ? code : 'failed' });
+        if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST')
+          onFailure({ file: name, code: seedErrorCode(error) });
       } finally {
         await fs.promises.rm(temp, { force: true }).catch(() => undefined);
       }

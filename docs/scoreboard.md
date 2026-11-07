@@ -51,7 +51,7 @@ Same share rules as the Status reader (`docs/status-tab.md`, Reading rules): eve
 ENOENT and ESTALE keep the last good copy and retry, a file absent from its listing stays for 2 minutes, temporary (dot)
 files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, only changed files are read. The highest
 `seq` per run id wins, across date folders. A file that does not read is counted and named in the runs Source, never
-dropped silently; a FIFO or a link in a run folder is named too. One scan reads at most 1,000 writer folders, 5,000 run files and 64 MB (over a limit the most recently changed
+dropped silently; a FIFO or a link in a run folder, or anything but a folder directly in `runs/`, is named too. A file over its cap takes nothing from the 64 MB. One scan reads at most 1,000 writer folders, 5,000 run files and 64 MB (over a limit the most recently changed
 `runs/` folders and the newest date folders are kept); the rest is named in the runs Source (`limits/run-writers`, `limits/runs`). More writers than the
 Status reader: an old writer's runs are still history. A review with no boolean `review.overturned`, or a negative
 `wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too; a task type the

@@ -81,11 +81,13 @@ export class ShareFiles<T> {
       if (!isTransientShareError(error)) this.setProblem(file, 'could not be read');
       return 0;
     }
-    if (this.entries.get(file)?.statKey === statKey) return size;
+    // Before the unchanged check: a file over its cap is never read, on this scan or any later one,
+    // so it never takes from the scan's byte budget.
     if (size > capBytes) {
       this.setProblem(file, `larger than the ${capBytes / 1024} KB cap`, statKey);
       return 0;
     }
+    if (this.entries.get(file)?.statKey === statKey) return size;
     let bytes: Buffer;
     try {
       bytes = await fs().readFile(absolute, capBytes);

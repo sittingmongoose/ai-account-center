@@ -1792,3 +1792,127 @@ process.exit(0);
     });
   });
 });
+
+describe('round three', () => {
+  const ID = 'd'.repeat(32);
+
+  describe('the card version in the entry binding', () => {
+    it('refuses an answer id replayed on another version of the card', async () => {
+      const { root, answers, rings } = setup();
+      const first = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const body = entry(CARD, first, { entryId: ID });
+      expect((await answers.submitSet([body], 'Mac'))[0].outcome).toBe('recorded');
+      await settle();
+      // The same version is still a retry, though the card has closed.
+      expect((await answers.submitSet([body], 'Mac'))[0].outcome).toBe('recorded');
+      const second = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+      const replayed = await answers.submitSet(
+        [{ ...body, cardSeq: 2, cardSha256: second }],
+        'Mac'
+      );
+      expect(replayed[0]).toMatchObject({ outcome: 'refused', code: 'invalid_entry' });
+      expect(answers.list()).toHaveLength(1);
+      await settle();
+      expect(rings).toHaveLength(1);
+    });
+
+    it('binds the version when the kind is named too, and for a done', async () => {
+      const { root, answers } = setup();
+      const action = { options: [], recommendation: null, kind: 'action' };
+      const first = writeCard(root, cardDoc('vm.lead', 'Q1', action));
+      const body = entry(CARD, first, { choice: [], kind: 'done', entryId: ID });
+      expect((await answers.submitSet([body], 'Mac'))[0].outcome).toBe('recorded');
+      const second = writeCard(root, cardDoc('vm.lead', 'Q1', { ...action, seq: 2 }));
+      const replayed = await answers.submitSet(
+        [{ ...body, cardSeq: 2, cardSha256: second }],
+        'Mac'
+      );
+      expect(replayed[0].code).toBe('invalid_entry');
+      expect(answers.list()).toHaveLength(1);
+    });
+
+    it('binds no version for a note or an objection: the words stand', async () => {
+      const { root, answers } = setup();
+      const objection = { options: [], recommendation: null, kind: 'objection' };
+      for (const [local, fields, extra] of [
+        ['Q1', {}, { note: 'words' }],
+        ['Q2', objection, { note: 'words', kind: 'object' }],
+      ] as const) {
+        const entryId = local === 'Q1' ? ID : 'e'.repeat(32);
+        const cardId = `vm.lead--${local}`;
+        const first = writeCard(root, cardDoc('vm.lead', local, fields));
+        const body = entry(cardId, first, { choice: [], ...extra, entryId });
+        expect((await answers.submitSet([body], 'Mac'))[0].outcome).toBe('recorded');
+        const second = writeCard(root, cardDoc('vm.lead', local, { ...fields, seq: 2 }));
+        const again = await answers.submitSet([{ ...body, cardSeq: 2, cardSha256: second }], 'Mac');
+        expect(again[0]).toMatchObject({ outcome: 'recorded', code: null });
+      }
+      expect(answers.list()).toHaveLength(2);
+    });
+  });
+
+  describe('a crash before the send line', () => {
+    /** The store as a crash leaves it: the record is there, its send and later steps are not. */
+    function crash(store: string): void {
+      const file = path.join(store, 'answers.jsonl');
+      const kept = fs
+        .readFileSync(file, 'utf8')
+        .split('\n')
+        .filter((line) => line && JSON.parse(line).type === 'answer');
+      fs.writeFileSync(file, `${kept.join('\n')}\n`);
+    }
+
+    it('rebuilds the summary, so the file the ring names exists when it rings', async () => {
+      const { root, store, answers, make, rings } = setup();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const body = entry(CARD, sha, { choice: [], note: 'words', entryId: ID });
+      await answers.submitSet([body], 'Mac');
+      await settle();
+      const batches = path.join(root, 'v1', 'answers', 'batches');
+      fs.rmSync(batches, { recursive: true });
+      crash(store);
+      rings.length = 0;
+
+      const restarted = make();
+      // A retry of the draft is recognised and starts no send of its own.
+      expect((await restarted.submitSet([body], 'Mac'))[0].outcome).toBe('recorded');
+      expect(restarted.list()).toHaveLength(1);
+      await restarted.retryPending();
+
+      const [{ sendId }] = restarted.list();
+      expect(fs.readdirSync(batches)).toEqual([`${sendId}.json`]);
+      const summary = JSON.parse(fs.readFileSync(path.join(batches, `${sendId}.json`), 'utf8'));
+      expect(summary.entries.map((row: { note: string }) => row.note)).toEqual(['words']);
+      expect(rings).toHaveLength(1);
+      expect(rings[0].body).toContain(`batches/${sendId}.json`);
+    });
+
+    it('a rebuilt summary is written once, across later passes and restarts', async () => {
+      const { root, store, answers, make } = setup();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      await answers.submitSet([entry(CARD, sha)], 'Mac');
+      await settle();
+      crash(store);
+      const restarted = make();
+      await restarted.retryPending();
+      await restarted.retryPending();
+      expect(restarted.sendList()[0].summary.attempts).toBe(1);
+      const again = make();
+      await again.retryPending();
+      expect(again.sendList()).toHaveLength(1);
+      expect(again.sendList()[0].summary).toMatchObject({ state: 'done', attempts: 1 });
+    });
+
+    it('a finished send still reads back as one send with its own entries', async () => {
+      const { root, answers, make } = setup();
+      const a = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const b = writeCard(root, cardDoc('vm.lead', 'Q2'));
+      await answers.submitSet([entry(CARD, a), entry('vm.lead--Q2', b)], 'Mac');
+      await settle();
+      const [send] = make().sendList();
+      expect(send.entryIds).toEqual(answers.list().map((e) => e.id));
+      expect(make().sendList()).toHaveLength(1);
+      expect(send.summary.state).toBe('done');
+    });
+  });
+});

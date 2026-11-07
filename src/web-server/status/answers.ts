@@ -100,17 +100,20 @@ function contentHash(value: unknown): string {
 }
 
 /**
- * What a draft says, for telling a retry of it from another use of its id. The card's version is
- * left out on purpose: an agent may reply on the card between a lost response and the retry, and
- * the words the owner already sent must not be recorded a second time for that.
+ * What a draft says, for telling a retry of it from another use of its id. A note or an objection
+ * leaves the card's version out: an agent may reply on the card between a lost response and the
+ * retry, and words already sent must not be recorded again for that. An answer or a done closes one
+ * version, so it binds that version: replayed on a reopened card it would silently drop the answer.
  */
 function draftHash(entry: AnswerEntry, note: string): string {
+  const kind = entry.kind ?? (entry.choice.length > 0 ? 'answer' : 'note');
   return contentHash({
     cardId: entry.cardId,
     choice: entry.choice,
     note,
     via: entry.via,
     kind: entry.kind ?? null,
+    ...(CLOSING_KINDS.has(kind) ? { cardSeq: entry.cardSeq, cardSha256: entry.cardSha256 } : {}),
   });
 }
 
@@ -388,6 +391,20 @@ export class StatusAnswers {
         };
         entries.push(entry);
         byId.set(entry.id, entry);
+        // A crash between a record and its send line left a send with no summary, which the ring
+        // names. Rebuilt from its records, the retry writes it; a send line further on replaces this.
+        if (entry.sendId) {
+          const send = this.sends.get(entry.sendId);
+          if (send) send.entryIds.push(entry.id);
+          else
+            this.sends.set(entry.sendId, {
+              sendId: entry.sendId,
+              at: typeof record.at === 'string' ? record.at : entry.answer.answeredAt,
+              device: entry.answer.device,
+              entryIds: [entry.id],
+              summary: { ...PENDING },
+            });
+        }
         if (typeof record.entryId === 'string' && typeof record.entryHash === 'string')
           this.rememberDraft(
             record.entryId,
