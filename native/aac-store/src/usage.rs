@@ -209,80 +209,172 @@ fn refused_key(day: u32, fingerprint: &str) -> Option<Vec<u8>> {
     (bytes.len() == 16).then(|| Key::new().u32(day).bytes(&bytes).0)
 }
 
-/// Records that a refused observation touched these series on `day`, and withdraws any closed-day
-/// summary for them that was applied without excluding refused observations.
+/// Records that a refused observation touched these series on `day`, and withdraws what older
+/// closed-day summaries wrote for them that depends on that day.
 fn note_refused(txn: &WriteTransaction, day: u32, fingerprints: &[String]) -> Result<Vec<String>> {
     let mut withdrawn = Vec::new();
     for fp in fingerprints {
         let Some(key) = refused_key(day, fp) else { continue };
         put_index(txn, db::REFUSED, &key)?;
-        let Some(value) = get(txn, db::SUMMARY_UNMARKED, &key)? else {
-            continue;
-        };
-        if value.len() >= 9 {
-            let (rollups, a, w) = (value[0] & 1 != 0, db::be_u32(&value, 1), db::be_u32(&value, 5));
-            if rollups {
-                let rollup = Key::new().u32(a).u32(w).u32(day);
-                txn.open_table(db::ROLLUP_HOURS)?.remove(rollup.as_slice())?;
-                txn.open_table(db::ROLLUP_DAY)?.remove(rollup.as_slice())?;
-            }
-            for at in (9..value.len()).step_by(8) {
-                if at + 8 <= value.len() {
-                    let start = db::be_u64(&value, at);
-                    txn.open_table(db::PERIOD)?
-                        .remove(Key::new().u32(a).u32(w).u64(start).as_slice())?;
-                }
-            }
+        let mut rows: Vec<(Bytes, Vec<u8>, Vec<u8>)> = Vec::new();
+        if let Some(value) = get(txn, db::SUMMARY_UNMARKED, &key)? {
+            rows.push((db::SUMMARY_UNMARKED, key.clone(), value));
         }
-        txn.open_table(db::SUMMARY_UNMARKED)?.remove(key.as_slice())?;
+        // Unbounded rows of this series whose last day is on or after the refusal.
+        let fp_bytes = &key[4..];
+        let lo = Key::new().bytes(fp_bytes).u32(day);
+        let hi = Key::new().bytes(fp_bytes).u32(u32::MAX);
+        for item in txn
+            .open_table(db::SUMMARY_UNBOUNDED)?
+            .range(lo.as_slice()..=hi.as_slice())?
+        {
+            let (k, v) = item?;
+            rows.push((db::SUMMARY_UNBOUNDED, k.value().to_vec(), v.value().to_vec()));
+        }
+        if rows.is_empty() {
+            continue;
+        }
+        for (table, row_key, value) in rows {
+            withdraw(txn, &value)?;
+            txn.open_table(table)?.remove(row_key.as_slice())?;
+        }
         withdrawn.push(fp.clone());
     }
     Ok(withdrawn)
 }
 
-/// Notes what an unmarked summary wrote for a series on `day` (its rollups, a period starting at
-/// `period`), merged with what other summaries wrote there.
-fn remember_unmarked(
-    txn: &WriteTransaction,
-    key: &[u8],
-    (a, w): (u32, u32),
-    rollups: bool,
-    period: Option<u64>,
-) -> Result<()> {
-    let mut value = get(txn, db::SUMMARY_UNMARKED, key)?
-        .filter(|v| v.len() >= 9)
-        .unwrap_or_else(|| {
-            let mut v = vec![0u8];
-            v.extend_from_slice(&a.to_be_bytes());
-            v.extend_from_slice(&w.to_be_bytes());
-            v
-        });
-    if rollups {
-        value[0] |= 1;
+/// Removes what a provenance row lists: a day's rollups or a reset period.
+fn withdraw(txn: &WriteTransaction, value: &[u8]) -> Result<()> {
+    if value.len() < 8 {
+        return Ok(());
     }
-    if let Some(start) = period {
-        let known = (9..value.len())
-            .step_by(8)
-            .any(|at| at + 8 <= value.len() && db::be_u64(&value, at) == start);
-        if !known {
-            value.extend_from_slice(&start.to_be_bytes());
+    let (a, w) = (db::be_u32(value, 0), db::be_u32(value, 4));
+    let mut at = 8;
+    while at + 9 <= value.len() {
+        let n = db::be_u64(value, at + 1);
+        match value[at] {
+            1 => {
+                let rollup = Key::new().u32(a).u32(w).u32(n.min(u32::MAX as u64) as u32);
+                txn.open_table(db::ROLLUP_HOURS)?.remove(rollup.as_slice())?;
+                txn.open_table(db::ROLLUP_DAY)?.remove(rollup.as_slice())?;
+            }
+            2 => {
+                txn.open_table(db::PERIOD)?
+                    .remove(Key::new().u32(a).u32(w).u64(n).as_slice())?;
+            }
+            _ => {}
         }
+        at += 9;
     }
-    put(txn, db::SUMMARY_UNMARKED, key, &value)
+    Ok(())
 }
 
-/// The UTC days a reset period depends on: the days it covers, and before its start the
-/// reading that ended the previous period, which can lie up to one window length earlier (a
-/// longer silence resets the window whatever that reading was). An unknown length counts as 31
-/// days. At most a year of days.
-fn period_days(start_ms: u64, end_ms: i64, window_minutes: Option<f64>) -> std::ops::RangeInclusive<u32> {
-    let lookback_days = match window_minutes {
-        Some(m) if m.is_finite() && m > 0.0 => ((m * 60_000.0) / DAY_MS as f64).ceil().clamp(1.0, 366.0) as u32,
-        _ => 31,
-    };
-    let first = day_of(start_ms).saturating_sub(lookback_days);
-    let last = day_of(end_ms.max(start_ms as i64) as u64).min(first.saturating_add(366 + lookback_days));
-    first..=last
+/// Adds an entry (`1`: a day's rollups, `2`: a period start) to a provenance row.
+fn remember(txn: &WriteTransaction, table: Bytes, key: &[u8], (a, w): (u32, u32), entry: (u8, u64)) -> Result<()> {
+    let mut value = get(txn, table, key)?.filter(|v| v.len() >= 8).unwrap_or_else(|| {
+        let mut v = a.to_be_bytes().to_vec();
+        v.extend_from_slice(&w.to_be_bytes());
+        v
+    });
+    let known = (8..value.len())
+        .step_by(9)
+        .any(|at| at + 9 <= value.len() && value[at] == entry.0 && db::be_u64(&value, at + 1) == entry.1);
+    if !known {
+        value.push(entry.0);
+        value.extend_from_slice(&entry.1.to_be_bytes());
+    }
+    put(txn, table, key, &value)
+}
+
+/// The UTC days an older summary's numbers for a series can depend on.
+enum Reach {
+    /// From the first day through the last.
+    Days(u32, u32),
+    /// Every day up to the last: a window of unknown length with no earlier surviving reading.
+    Back(u32),
+}
+
+/// What numbers covering `[first_ms, last_ms]` depend on: the days they cover and, before them,
+/// the reading that came last before `first_ms`, since it decides the first consumption and
+/// whether a reset happened. That reading is found as the series' previous surviving reading
+/// when the readings still replay, whatever the window. Without one: for a window of known length,
+/// one length back (a longer silence passes the provider's reset time, which resets the window
+/// whatever that reading was); for an unknown length, every earlier day.
+fn reach(
+    txn: &WriteTransaction,
+    ids: Option<(u32, u32)>,
+    first_ms: u64,
+    last_ms: i64,
+    window_minutes: Option<f64>,
+) -> Result<Reach> {
+    let last = day_of(last_ms.max(first_ms as i64) as u64);
+    if let (Some((a, w)), Some(before)) = (ids, first_ms.checked_sub(1)) {
+        let readings = txn.open_table(db::READING_DAY)?;
+        let latest = txn.open_table(db::LATEST)?;
+        let open = open_spans_for(&latest, [(a, w)])?;
+        if let Some((_, row)) = span_at(&readings, &open, (a, w), before)? {
+            return Ok(Reach::Days(day_of(row.last_seen.min(before)), last));
+        }
+    }
+    if let Some(m) = window_minutes.filter(|m| m.is_finite() && *m > 0.0) {
+        let lookback = ((m * 60_000.0) / DAY_MS as f64).ceil().clamp(1.0, 366.0) as u32;
+        return Ok(Reach::Days(day_of(first_ms).saturating_sub(lookback), last));
+    }
+    Ok(Reach::Back(last))
+}
+
+/// Whether a refused observation of this series falls on a day the numbers depend on.
+fn reach_refused(txn: &WriteTransaction, fingerprint: &str, reach: &Reach) -> Result<bool> {
+    match *reach {
+        Reach::Days(first, last) => {
+            for d in first..=last.min(first.saturating_add(3660)) {
+                if let Some(key) = refused_key(d, fingerprint)
+                    && has_index(txn, db::REFUSED, &key)?
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(last > first.saturating_add(3660))
+        }
+        Reach::Back(last) => {
+            let Some(probe) = refused_key(0, fingerprint) else {
+                return Ok(false);
+            };
+            for item in txn.open_table(db::REFUSED)?.iter()? {
+                let (k, _) = item?;
+                if k.value()[4..] == probe[4..] && db::be_u32(k.value(), 0) <= last {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+    }
+}
+
+/// Records an applied entry under every day of its reach, so a refusal there withdraws it.
+fn remember_reach(
+    txn: &WriteTransaction,
+    fingerprint: &str,
+    reach: &Reach,
+    ids: (u32, u32),
+    entry: (u8, u64),
+) -> Result<()> {
+    match *reach {
+        Reach::Days(first, last) => {
+            for d in first..=last.min(first.saturating_add(3660)) {
+                if let Some(key) = refused_key(d, fingerprint) {
+                    remember(txn, db::SUMMARY_UNMARKED, &key, ids, entry)?;
+                }
+            }
+        }
+        Reach::Back(last) => {
+            if let Some(key) = refused_key(0, fingerprint) {
+                let row = Key::new().bytes(&key[4..]).u32(last);
+                remember(txn, db::SUMMARY_UNBOUNDED, row.as_slice(), ids, entry)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn summary_finding(event: &Event, why: &str) -> Finding {
@@ -801,8 +893,10 @@ pub struct UsageProjector;
 /// Bump when projection rules change: the usage tables are then rebuilt from the logs.
 /// Version 3: observations refused by today's checks are set aside, and closed-day summaries
 /// built from them are not trusted; earlier projections are rebuilt from the logs. Version 4: an
-/// older summary's reset periods are checked against every day they cover.
-pub const USAGE_PROJECTOR_VERSION: u32 = 4;
+/// older summary's reset periods are checked against every day they cover. Version 5: its day and
+/// hour rollups and its periods are checked against every day they depend on, back to the series'
+/// previous surviving reading when the window length is unknown.
+pub const USAGE_PROJECTOR_VERSION: u32 = 5;
 
 impl Projector for UsageProjector {
     fn name(&self) -> &'static str {
@@ -883,6 +977,7 @@ impl Projector for UsageProjector {
             db::ROLLUP_HOURS,
             db::ROLLUP_DAY,
             db::SUMMARY_UNMARKED,
+            db::SUMMARY_UNBOUNDED,
             db::LEGACY_READING,
             db::LEGACY_ROLLUP_HOUR,
         ] {
@@ -1400,54 +1495,58 @@ fn project_day_closed(txn: &WriteTransaction, event: &Event, payload: &Json) -> 
     for series in payload["series"].as_array().into_iter().flatten() {
         let account: AccountObs = serde_json::from_value(series["account"].clone())?;
         let window: WindowObs = serde_json::from_value(series["window"].clone())?;
+        // The series as this projection knows it from clean readings, without interning anything.
+        let known = {
+            let rev = txn.open_table(db::DICT_REV)?;
+            match (
+                db::lookup_id(&rev, db::KIND_ACCOUNT, &account.identity)?,
+                db::lookup_id(&rev, db::KIND_WINDOW, &window.identity)?,
+            ) {
+                (Some(a), Some(w)) => Some((a, w)),
+                _ => None,
+            }
+        };
+        // An older close checked against clean readings that still give its day is re-stated by
+        // a close from this build (trusted or not), so a rebuild after the readings retire
+        // serves what the check found; without those readings nothing is re-stated.
+        if !marked
+            && let Some((a, w)) = known
+            && get(txn, db::ROLLUP_DAY, Key::new().u32(a).u32(w).u32(day).as_slice())?.is_some()
+        {
+            put_index(txn, db::RECLOSE, Key::new().u32(day).u32(a).u32(w).as_slice())?;
+        }
         if !summary_text_ok(&account, &window) {
             set_aside.push(summary_finding(event, "holds text that today's checks refuse"));
             continue;
         }
         let fingerprint = series_fingerprint(&account.identity, &window.identity);
-        let refused_on = |d: u32| -> Result<bool> {
-            Ok(match refused_key(d, &fingerprint) {
-                Some(key) => has_index(txn, db::REFUSED, &key)?,
-                None => false,
-            })
-        };
-        // The day's rollups are trusted unless an older build computed them over a refused
-        // observation of this series that day.
-        let rollups_ok = marked || !refused_on(day)?;
-        // Each reset period separately, against every day it covers.
-        let mut periods: Vec<(u64, Period)> = Vec::new();
+        // The day's rollups depend on the day and on the reading before its first one.
+        let day_start = day as u64 * DAY_MS;
+        let rollup_reach = reach(
+            txn,
+            known,
+            day_start,
+            (day_start + DAY_MS - 1) as i64,
+            window.window_minutes,
+        )?;
+        let rollups_ok = marked || !reach_refused(txn, &fingerprint, &rollup_reach)?;
+        // Each reset period separately, against every day it depends on.
+        let mut periods: Vec<(u64, Period, Reach)> = Vec::new();
         let mut periods_refused = false;
         for period in series["periods"].as_array().into_iter().flatten() {
             let start = period["start_ms"].as_u64().unwrap_or(0);
             let mut value: Period = serde_json::from_value(period["period"].clone())?;
-            if !marked {
-                let mut touched = false;
-                for d in period_days(start, value.end_ms, window.window_minutes) {
-                    touched |= refused_on(d)?;
-                }
-                if touched {
-                    periods_refused = true;
-                    continue;
-                }
+            let period_reach = reach(txn, known, start, value.end_ms, window.window_minutes)?;
+            if !marked && reach_refused(txn, &fingerprint, &period_reach)? {
+                periods_refused = true;
+                continue;
             }
             value.is_final = true;
             value.emitted = true;
-            periods.push((start, value));
+            periods.push((start, value, period_reach));
         }
         if !rollups_ok {
             set_aside.push(summary_finding(event, "was built from an observation refused since"));
-            // When the clean readings still give that day, a close from this build will say so.
-            let rev = txn.open_table(db::DICT_REV)?;
-            let ids = (
-                db::lookup_id(&rev, db::KIND_ACCOUNT, &account.identity)?,
-                db::lookup_id(&rev, db::KIND_WINDOW, &window.identity)?,
-            );
-            drop(rev);
-            if let (Some(a), Some(w)) = ids
-                && get(txn, db::ROLLUP_DAY, Key::new().u32(a).u32(w).u32(day).as_slice())?.is_some()
-            {
-                put_index(txn, db::RECLOSE, Key::new().u32(day).u32(a).u32(w).as_slice())?;
-            }
         } else if periods_refused {
             set_aside.push(summary_finding(
                 event,
@@ -1494,19 +1593,15 @@ fn project_day_closed(txn: &WriteTransaction, event: &Event, payload: &Json) -> 
                 key.as_slice(),
                 &rollup_from_json(&series["day_rollup"])?.encode(),
             )?;
-            if !marked && let Some(key) = refused_key(day, &fingerprint) {
-                remember_unmarked(txn, &key, (a, w), true, None)?;
+            // An unmarked summary may still meet a refusal later in the ledger.
+            if !marked {
+                remember_reach(txn, &fingerprint, &rollup_reach, (a, w), (1, day as u64))?;
             }
         }
-        for (start, value) in &periods {
+        for (start, value, period_reach) in &periods {
             write_period(txn, a, w, *start, value)?;
-            // An unmarked period may still meet a refusal later in the ledger, on any day it covers.
             if !marked {
-                for d in period_days(*start, value.end_ms, window.window_minutes) {
-                    if let Some(key) = refused_key(d, &fingerprint) {
-                        remember_unmarked(txn, &key, (a, w), false, Some(*start))?;
-                    }
-                }
+                remember_reach(txn, &fingerprint, period_reach, (a, w), (2, *start))?;
             }
         }
     }

@@ -19,5 +19,10 @@ projection and checkpoints are that build's own. Synthetic values only: the labe
   reading is refused (100), so that build saw 100 then 40 as a reset and closed the invented
   period on day 6.
 
+- `forward`, `forward-wm`, `long-unknown-lookback`, `long-unknown-inside`, `edges`, `two-windows`:
+  the round-5 recheck's plans (`../plans/<name>.json`, records and maintenance times), written by
+  that build with its plan runner. The tests replay each plan without its refused readings to get
+  the clean reference.
+
 `aac.redb.zst` is the redb file compressed with zstd (`store.lock` is left out);
 `tests/store_upgrade.rs` unpacks each store into a temporary folder.

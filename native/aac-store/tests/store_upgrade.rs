@@ -338,6 +338,14 @@ fn old_periods_over_a_refused_reading_on_another_day_are_not_served() {
         )],
     );
     let expected_a = periods_of(&reference, 'a', "five");
+    let mut expected_rollups = serde_json::Map::new();
+    for resolution in ["day", "hour"] {
+        let args = json!({ "fromMs": T0 - DAY, "toMs": T0 + 7 * DAY, "resolution": resolution });
+        expected_rollups.insert(
+            resolution.into(),
+            sorted_series(&call(&reference, "seriesPoints", args)),
+        );
+    }
     let expected_b = periods_of(&reference, 'b', "five");
     assert!(expected_a.as_array().unwrap().iter().all(|p| p["hitLimitAt"].is_null()));
     reference.close().unwrap();
@@ -349,6 +357,17 @@ fn old_periods_over_a_refused_reading_on_another_day_are_not_served() {
         }
         let engine = open(&dir);
         assert_eq!(periods_of(&engine, 'a', "five"), expected_a, "{pass}: a/five periods");
+        for resolution in ["day", "hour"] {
+            let args = json!({ "fromMs": T0 - DAY, "toMs": T0 + 7 * DAY, "resolution": resolution });
+            let got = sorted_series(&call(&engine, "seriesPoints", args));
+            let clean: Vec<&Json> = got
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|s| s["accountId"] != "codex:c")
+                .collect();
+            assert_eq!(json!(clean), expected_rollups[resolution], "{pass} {resolution}");
+        }
         assert_eq!(periods_of(&engine, 'b', "five"), expected_b, "{pass}: b/five periods");
         assert!(!answers(&engine).to_string().contains(SECRET), "{pass}");
         assert_no_refused_text(&engine);
@@ -382,6 +401,14 @@ fn an_old_weekly_period_with_an_invented_reset_is_not_served() {
     }
     let (reference_dir, reference) = clean_store("upgrade-weekly-clean", steps);
     let expected = periods_of(&reference, 'a', "seven");
+    let mut expected_rollups = serde_json::Map::new();
+    for resolution in ["day", "hour"] {
+        let args = json!({ "fromMs": T0 - DAY, "toMs": T0 + 12 * DAY, "resolution": resolution });
+        expected_rollups.insert(
+            resolution.into(),
+            sorted_series(&call(&reference, "seriesPoints", args)),
+        );
+    }
     reference.close().unwrap();
     drop(reference);
     fs::remove_dir_all(&reference_dir).unwrap();
@@ -392,6 +419,14 @@ fn an_old_weekly_period_with_an_invented_reset_is_not_served() {
         let engine = open(&dir);
         let got = periods_of(&engine, 'a', "seven");
         assert_eq!(got, expected, "{pass}");
+        for resolution in ["day", "hour"] {
+            let args = json!({ "fromMs": T0 - DAY, "toMs": T0 + 12 * DAY, "resolution": resolution });
+            assert_eq!(
+                sorted_series(&call(&engine, "seriesPoints", args.clone())),
+                expected_rollups[resolution],
+                "{pass} {resolution}"
+            );
+        }
         // No two periods overlap, and none starts at the invented reset (40%).
         let list = got.as_array().unwrap();
         assert!(
@@ -472,4 +507,227 @@ fn reopen_and_log_only_rebuild_agree_after_retirement() {
     drop(engine);
     fs::remove_dir_all(&dir).unwrap();
     fs::remove_dir_all(&backups).unwrap();
+}
+
+// ----------------------------------------------------------------------------- plan fixtures
+//
+// `tests/fixtures/plans/<name>.json` is the round-5 recheck's plan: records and maintenance
+// times. `store-v2-000a0ac7/<name>` is that plan written by the 000a0ac7 build. A clean
+// reference replays the same plan with this build, leaving out the refused readings.
+
+const PLANS: [&str; 6] = [
+    "forward",
+    "forward-wm",
+    "long-unknown-lookback",
+    "long-unknown-inside",
+    "edges",
+    "two-windows",
+];
+
+fn plan(name: &str) -> Vec<Json> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/plans")
+        .join(format!("{name}.json"));
+    serde_json::from_str::<Json>(&fs::read_to_string(path).unwrap())
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// A plan record as an observation (the plan runner's shape).
+fn plan_obs(o: &Json) -> Json {
+    let acct = o["acct"].as_str().unwrap();
+    let mut w = json!({ "identity": o["win"], "key": o.get("key").cloned().unwrap_or(o["win"].clone()),
+                        "label": o["label"], "used_pct": o["used"] });
+    if let Some(r) = o.get("reset") {
+        w["reset_at_ms"] = r.clone();
+    }
+    if let Some(m) = o.get("wm") {
+        w["window_minutes"] = m.clone();
+    }
+    json!({ "account": { "identity": acct.repeat(64), "provider": "codex", "account_id": format!("codex:{acct}"),
+            "platform": "ubuntu", "source": "probe", "status": "ok", "is_active": true },
+            "sampled_at_ms": o["t"], "observed_at_ms": o["t"], "windows": [w] })
+}
+
+fn refused(o: &Json) -> bool {
+    o["label"].as_str().unwrap_or_default().contains(SECRET)
+}
+
+/// This build's store from the plan's clean readings alone, with the same maintenance.
+fn clean_from_plan(name: &str) -> (PathBuf, Engine) {
+    let dir = temp_dir(&format!("plan-clean-{name}"));
+    let engine = open(&dir);
+    for step in plan(name) {
+        if let Some(o) = step.get("record") {
+            if !refused(o) {
+                call(&engine, "record", json!({ "observations": [plan_obs(o)] }));
+            }
+        } else if let Some(n) = step.get("maintain") {
+            call(&engine, "maintain", json!({ "nowMs": n }));
+        }
+    }
+    (dir, engine)
+}
+
+/// Series sorted by account and window, so stores with other dictionary ids compare equal.
+fn sorted_series(answer: &Json) -> Json {
+    let mut series = answer["series"].as_array().cloned().unwrap_or_default();
+    series.sort_by_key(|s| (s["accountId"].to_string(), s["window"]["identity"].to_string()));
+    json!(series)
+}
+
+/// What the routes serve for a plan's series: day and hour rollups, burn over 1, 3 and 7 days at
+/// each of the plan's days, and reset periods.
+fn plan_view(engine: &Engine, name: &str, closed_only: bool) -> Json {
+    let steps = plan(name);
+    let times: Vec<i64> = steps
+        .iter()
+        .filter_map(|s| s.get("record"))
+        .map(|o| o["t"].as_i64().unwrap())
+        .collect();
+    let (first, last) = (*times.iter().min().unwrap(), *times.iter().max().unwrap());
+    let mut series: Vec<(String, String)> = steps
+        .iter()
+        .filter_map(|s| s.get("record"))
+        .map(|o| {
+            (
+                o["acct"].as_str().unwrap().repeat(64),
+                o["win"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    series.sort();
+    series.dedup();
+    let mut out = serde_json::Map::new();
+    for resolution in ["hour", "day"] {
+        let answer = call(
+            engine,
+            "seriesPoints",
+            json!({ "fromMs": first - DAY, "toMs": last + 3 * DAY, "resolution": resolution }),
+        );
+        out.insert(resolution.into(), sorted_series(&answer));
+    }
+    let refs: Vec<Json> = series
+        .iter()
+        .map(|(i, w)| json!({ "identity": i, "window": w }))
+        .collect();
+    if !closed_only {
+        let mut burns = Vec::new();
+        for day in 0..=((last - first) / DAY + 1) {
+            let now = first - first.rem_euclid(DAY) + (day + 1) * DAY;
+            burns.push(call(
+                engine,
+                "burnLong",
+                json!({ "series": refs, "spansMs": [DAY, 3 * DAY, 7 * DAY], "nowMs": now }),
+            ));
+        }
+        out.insert("burn".into(), json!(burns));
+    }
+    let periods = call(
+        engine,
+        "periods",
+        json!({ "series": refs, "fromMs": 0, "toMs": last + 30 * DAY }),
+    );
+    let periods: Vec<Json> = periods
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            let list: Vec<Json> = s["periods"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| !closed_only || p["final"] == true)
+                .cloned()
+                .collect();
+            json!({ "window": s["window"], "periods": list })
+        })
+        .collect();
+    out.insert("periods".into(), json!(periods));
+    Json::Object(out)
+}
+
+/// An older build's closes are trusted only for what clean readings could have given: day and
+/// hour rollups, burn and periods all equal a store written from the clean readings alone.
+#[test]
+fn old_closes_serve_only_what_the_clean_readings_give() {
+    let mut failures = Vec::new();
+    for name in PLANS {
+        let (clean_dir, clean) = clean_from_plan(name);
+        let expected = plan_view(&clean, name, false);
+        clean.close().unwrap();
+        drop(clean);
+        fs::remove_dir_all(&clean_dir).unwrap();
+        let dir = unpack(name);
+        for pass in ["upgrade", "reopen", "rebuild"] {
+            if pass == "rebuild" {
+                fs::remove_file(dir.join("aac.redb")).unwrap();
+            }
+            let engine = open(&dir);
+            let got = plan_view(&engine, name, false);
+            assert!(!got.to_string().contains(SECRET), "{name} {pass}: refused text served");
+            for part in ["day", "hour", "burn", "periods"] {
+                if got[part] != expected[part] {
+                    failures.push(format!(
+                        "{name} {pass} {part}:\n  got      {}\n  expected {}",
+                        got[part], expected[part]
+                    ));
+                }
+            }
+            engine.close().unwrap();
+            drop(engine);
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// After this build retires the readings, a reopen and a log-only rebuild serve the same closed
+/// days, including days whose older close was set aside for its text.
+#[test]
+fn plan_stores_agree_on_reopen_and_rebuild_after_retirement() {
+    let mut failures = Vec::new();
+    for name in PLANS {
+        let dir = unpack(name);
+        let backups = temp_dir(&format!("plan-retire-{name}"));
+        let engine = open(&dir);
+        let far = aac_store::engine::now_ms() + 400 * DAY as u64;
+        for _ in 0..3 {
+            call(
+                &engine,
+                "backup",
+                json!({ "roots": [backups.to_str().unwrap()], "withRedb": false }),
+            );
+            call(&engine, "maintain", json!({ "nowMs": far }));
+        }
+        engine.close().unwrap();
+        drop(engine);
+        let readings = dir.join("log").join("readings");
+        assert!(
+            common::find(&readings, ".zst").is_empty() && common::find(&readings, ".seglog").is_empty(),
+            "{name}: the readings retired"
+        );
+        let engine = open(&dir);
+        let reopened = plan_view(&engine, name, true);
+        engine.close().unwrap();
+        drop(engine);
+        fs::remove_file(dir.join("aac.redb")).unwrap();
+        let engine = open(&dir);
+        let rebuilt = plan_view(&engine, name, true);
+        engine.close().unwrap();
+        drop(engine);
+        for part in ["day", "hour", "periods"] {
+            if rebuilt[part] != reopened[part] {
+                failures.push(format!(
+                    "{name} {part}:\n  rebuilt  {}\n  reopened {}",
+                    rebuilt[part], reopened[part]
+                ));
+            }
+        }
+        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(&backups).unwrap();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

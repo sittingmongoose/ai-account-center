@@ -32,10 +32,14 @@ pub const DAY_CLOSED: Index = TableDefinition::new("day_closed");
 /// Series and days a refused observation touched: `day u32 | fingerprint (16 bytes)`.
 pub const REFUSED: Index = TableDefinition::new("refused");
 /// What closed-day summaries applied without this build's exclusion of refused observations wrote
-/// for a series on a day: `day u32 | fingerprint` to `flags u8 (1: the day's rollups) | a u32 |
-/// w u32 | period starts u64...`, under every day a period covers, so a refusal that arrives later
-/// withdraws them.
+/// for a series, under every day those numbers depend on: `day u32 | fingerprint` to `a u32 |
+/// w u32 | entries`, each entry `1 | rollup day u64` or `2 | period start u64`. A refusal on that
+/// day later withdraws them.
 pub const SUMMARY_UNMARKED: Bytes = TableDefinition::new("summary_unmarked");
+/// The same for numbers whose dependence reaches back without a bound (a window of unknown
+/// length with no earlier surviving reading): `fingerprint | last day u32`, withdrawn by a refusal
+/// on any day up to that last day.
+pub const SUMMARY_UNBOUNDED: Bytes = TableDefinition::new("summary_unbounded");
 /// Series and days whose older summary was set aside while the clean readings still gave the
 /// day: `day u32 | a u32 | w u32`. A replacement close from this build is appended for each.
 pub const RECLOSE: Index = TableDefinition::new("reclose");
@@ -77,6 +81,7 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
         ROLLUP_HOURS,
         ROLLUP_DAY,
         SUMMARY_UNMARKED,
+        SUMMARY_UNBOUNDED,
     ] {
         txn.open_table(def)?;
     }
