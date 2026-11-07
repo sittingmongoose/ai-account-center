@@ -638,10 +638,47 @@ describe('runtime-free Antigravity process census', () => {
       expect([argv, census()]).toEqual([argv, { complete: true, running: 1 }]);
       fs.rmSync(path.join(value.proc, '982'), { recursive: true });
     }
-    // past the lookup cap an interpreter's script is unplaced, not idle
-    const many = Array.from({ length: 400 }, (_, i) => path.join(value.root, `x${i}`, 'y.py'));
+    // a long inline script's bare fragments cost no lookups: the census stays complete
+    const script = Array.from({ length: 2000 }, (_, i) => `echo step${i}:done,ok`).join('; ');
+    value.add(984, 'bash', '/usr/bin/bash', ['bash', '-c', script], value.root);
+    expect(census()).toEqual({ complete: true, running: 0 });
+    fs.rmSync(path.join(value.proc, '984'), { recursive: true });
+    // past the lookup cap (thousands of distinct paths) an interpreter's script is unplaced, not idle
+    const many = Array.from({ length: 5000 }, (_, i) => `/q/${i}`);
     value.add(983, 'python3', '/usr/bin/python3', ['python3', ...many], value.root);
     expect(census()).toEqual({ complete: false, running: 0 });
+    fs.rmSync(path.join(value.proc, '983'), { recursive: true });
+    // `..` applies after a link, as the kernel does: /tmp/l/../h.py with /tmp/l -> root/sub is root/h.py
+    fs.mkdirSync(path.join(helperDir, 'sub'), { recursive: true });
+    const intoSub = path.join(value.root, 'into-sub');
+    fs.symlinkSync(path.join(helperDir, 'sub'), intoSub);
+    value.add(985, 'python3', '/usr/bin/python3', ['python3', `${intoSub}/../h.py`], value.root);
+    expect(census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '985'), { recursive: true });
+  });
+
+  test('a link into a root that sits on a network mount still counts, by its spelling', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(helperDir, { recursive: true });
+    const mountInfo = path.join(value.root, 'mountinfo');
+    fs.writeFileSync(
+      mountInfo,
+      `40 25 0:40 / ${path.join(value.home, '.gemini')} rw - nfs4 nas:/gemini rw\n` +
+        `1 0 0:1 / / rw - virtiofs root rw\n`
+    );
+    const link = path.join(value.root, 'to-helpers');
+    fs.symlinkSync(helperDir, link);
+    value.add(990, 'python3', '/usr/bin/python3', ['python3', path.join(link, 'h.py')], value.root);
+    expect(
+      censusAntigravityProcesses({
+        home: value.home,
+        nativeBinary: value.native,
+        procRoot: value.proc,
+        selfPid: 7,
+        mountInfo,
+      })
+    ).toEqual({ complete: true, running: 1 });
   });
 
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {

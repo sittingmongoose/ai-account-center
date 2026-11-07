@@ -112,9 +112,9 @@ function spellings(file: string): string[] | null {
  * mount point mounts its share on first touch (a systemd automount like /mnt/Cursor reads as autofs until then).
  */
 const NETWORK_FS =
-  /^(?:nfs4?|cifs|smb3?|smbfs|ceph|glusterfs|lustre|gpfs|afs|9p|virtiofs|davfs|autofs|fuse(?:\..*)?)$/;
+  /^(?:nfs4?|cifs|smb3?|smbfs|ceph|glusterfs|lustre|gpfs|afs|9p|virtiofs|davfs|autofs|beegfs|ocfs2|gfs2|orangefs|pvfs2|vboxsf|fuse.*)$/;
 /** How many path lookups one process's arguments may cost the census. */
-const LOOKUPS_PER_PROCESS = 256;
+const LOOKUPS_PER_PROCESS = 4096;
 
 /** Mount points of such filesystems, from a mount table (`/proc/self/mountinfo`); none when it can't be read. */
 function networkMounts(file: string): string[] {
@@ -128,6 +128,8 @@ function networkMounts(file: string): string[] {
     const [left, right] = line.split(' - ');
     if (!right || !NETWORK_FS.test(right.split(' ')[0] ?? '')) return [];
     const mount = left.split(' ')[4];
+    // the root folder itself is never skipped (a virtiofs / would turn off every lookup)
+    if (mount === '/') return [];
     // the table writes a space and other bytes as octal escapes (\040)
     return mount
       ? [
@@ -139,28 +141,51 @@ function networkMounts(file: string): string[] {
   });
 }
 
+/** lstat results shared by one census's lookups, so repeated parent folders cost one call. */
+type StatCache = Map<string, fs.Stats | string>;
+
+function cachedLstat(file: string, cache: StatCache): fs.Stats | string {
+  let hit = cache.get(file);
+  if (hit === undefined) {
+    try {
+      hit = fs.lstatSync(file);
+    } catch (error) {
+      hit = code(error) || 'EUNKNOWN';
+    }
+    cache.set(file, hit);
+  }
+  return hit;
+}
+
 /**
- * Where a path really leads, resolved one component at a time like realpath, but never touching anything on or under
- * a mount in `network` (that path counts as unresolved: null). A missing tail is kept (`/tmp/link/gone.py` through
- * `/tmp/link -> root` is `root/gone.py`), and so is a dangling link's target. Any other failure is null.
+ * Where a path really leads, resolved one component at a time as the kernel does: `.` and `..` apply to the folder
+ * reached so far, after links (`/tmp/l/../h.py` with `/tmp/l -> root/sub` is `root/h.py`). Nothing on or under a mount
+ * in `network` is touched: the path from there on is kept as written. A missing tail is kept (`/tmp/link/gone.py`
+ * through `/tmp/link -> root` is `root/gone.py`), and so is a dangling link's target. A loop or any other failure is
+ * null.
  */
-function resolveLocally(file: string, network: readonly string[]): string | null {
-  let pending = path.resolve(file).split(path.sep).filter(Boolean);
+function resolveLocally(file: string, network: readonly string[], cache: StatCache): string | null {
+  let pending = file.split(path.sep).filter(Boolean);
   let current: string = path.sep;
   for (let hops = 0; pending.length > 0; ) {
-    const next = path.join(current, pending[0]);
-    if (network.some((mount) => within(next, mount))) return null;
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(next);
-    } catch (error) {
-      return code(error) === 'ENOENT' || code(error) === 'ENOTDIR'
-        ? path.join(current, ...pending)
-        : null;
+    const [part, ...rest] = pending;
+    if (part === '.') {
+      pending = rest;
+      continue;
     }
-    pending = pending.slice(1);
+    if (part === '..') {
+      current = path.dirname(current);
+      pending = rest;
+      continue;
+    }
+    const next = path.join(current, part);
+    if (network.some((mount) => within(next, mount))) return path.join(next, ...rest);
+    const stat = cachedLstat(next, cache);
+    if (typeof stat === 'string')
+      return stat === 'ENOENT' || stat === 'ENOTDIR' ? path.join(current, ...pending) : null;
     if (!stat.isSymbolicLink()) {
       current = next;
+      pending = rest;
       continue;
     }
     hops += 1;
@@ -171,8 +196,9 @@ function resolveLocally(file: string, network: readonly string[]): string | null
     } catch {
       return null;
     }
-    pending = [...path.resolve(current, target).split(path.sep).filter(Boolean), ...pending];
-    current = path.sep;
+    // a relative target is read from the link's own folder
+    if (path.isAbsolute(target)) current = path.sep;
+    pending = [...target.split(path.sep).filter(Boolean), ...rest];
   }
   return current;
 }
@@ -351,14 +377,23 @@ export function censusAntigravityProcesses(options: {
   // past that an interpreter's script is unplaced.
   let lookups = 0;
   let overLookups = false;
-  const reachesRoot = (value: string): boolean => {
+  const stats: StatCache = new Map();
+  const resolved = new Map<string, string | null>();
+  // `lookup: false` for a bare word: it can only lead into the working folder, which is judged on its own (an
+  // interpreter working in a root counts), so it needs no lookup at all and a long inline script costs none.
+  const reachesRoot = (value: string, lookup = true): boolean => {
     if (isAntigravityPath(value)) return true;
-    if (lookups >= LOOKUPS_PER_PROCESS) {
-      overLookups = true;
-      return false;
+    if (!lookup) return false;
+    let real = resolved.get(value);
+    if (real === undefined) {
+      if (lookups >= LOOKUPS_PER_PROCESS) {
+        overLookups = true;
+        return false;
+      }
+      lookups += 1;
+      real = resolveLocally(value, network, stats);
+      resolved.set(value, real);
     }
-    lookups += 1;
-    const real = resolveLocally(value, network);
     return real !== null && isAntigravityPath(real);
   };
   const deniedExe = new Set(['EACCES', 'EPERM']);
@@ -423,18 +458,23 @@ export function censusAntigravityProcesses(options: {
             cwds = link === null ? [] : pathSpellings(link).filter((cwd) => path.isAbsolute(cwd));
             if (link === null) cwdDenied = true;
           }
-          return cwds.map((cwd) => path.resolve(cwd, argument));
+          // joined as written, so `..` is applied after links (path.resolve would apply it first)
+          return cwds.map((cwd) => `${cwd}${path.sep}${argument}`);
         };
         // An interpreter working inside a root runs Antigravity's code whatever its arguments say (`python3 -m mod`,
         // `python3 -c ...`, a script on stdin): it counts too. Only one with arguments: a bare interpreter name (an
         // empty or reaped command line) is no evidence either way.
         const inRoot = (): boolean => {
           resolveArgument('./x', true);
-          return (cwds ?? []).some(reachesRoot);
+          return (cwds ?? []).some((cwd) => reachesRoot(cwd));
         };
         if (
-          args.some((argument) => resolveArgument(argument).some(reachesRoot)) ||
-          operands.some((argument) => resolveArgument(argument, true).some(reachesRoot)) ||
+          args.some((argument) => resolveArgument(argument).some((file) => reachesRoot(file))) ||
+          operands.some((argument) =>
+            resolveArgument(argument, true).some((file) =>
+              reachesRoot(file, path.isAbsolute(argument) || argument.includes(path.sep))
+            )
+          ) ||
           // a shell needs arguments (an interactive one parked in a root folder is no helper); another interpreter
           // with none reads its script from stdin
           (interpreter && (all.length > 1 || (all.length === 1 && !shell)) && inRoot())
