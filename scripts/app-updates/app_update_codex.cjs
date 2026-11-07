@@ -253,10 +253,14 @@ async function execute(deps) {
     await deps.restartProxies?.();
     await runtime.start(); stopped = false;
     if (await deps.hasOldProxies()) throw new Error('An old proxy has no verified restart supervisor.');
-    // Leaving closed what an earlier run closed is not a restart: say so once. The marker goes too,
-    // since nothing here could ever finish it. start() has just retired any daemon a proxy respawned
-    // too early, so while a live proxy could bring the daemon back it gets a short while to do so.
-    if (retried) {
+    // What this run and any earlier one closed must be back on a scan taken now: an app can exit after
+    // start() verified it, during the proxy check. start() has just retired any daemon a proxy
+    // respawned too early, so while a live proxy could bring the daemon back it gets a short while. A
+    // first update keeps its marker, so the next click retries. A retry leaving closed what an earlier
+    // run closed says so once and clears it, since nothing here could ever finish it. A first update
+    // on an older runtime that can't be scanned rests on start()'s own checks.
+    const nothing = { daemon: false, desktops: [] };
+    if ((retried || typeof runtime.restartState === 'function') && stillOwed(closed, nothing)) {
       const settleBy = deps.now() + (deps.settleMs ?? RESTART_SETTLE_MS);
       let live = await runtimeState(runtime, deps);
       while (closed.daemon && !live.daemon && live.proxy && deps.now() < settleBy) {
@@ -264,7 +268,8 @@ async function execute(deps) {
         live = await runtimeState(runtime, deps);
       }
       if (stillOwed(closed, await verifiedState(runtime, deps, closed))) {
-        deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running';
+        if (retried) { deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running'; }
+        else { output.status = 'restart_failed'; output.messageCode = 'restart_failed'; }
         return output;
       }
     }

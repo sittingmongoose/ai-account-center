@@ -738,7 +738,9 @@ is not a retry. A marker that names something is owed whatever version is instal
 and `update_linux` route it to the bridge even with no daemon running. A CLI update that replaces the app
 and then fails also names a daemon still running the old binary. A retry that leaves any of them closed is `restart_failed` with
 `restart_not_running`: each desktop must have a live app server on this Codex home under it, as
-`start()` requires, and an owed daemon must pass `start()`'s own bounded readiness check. While a live
+`start()` requires, and an owed daemon must pass `start()`'s own bounded readiness check. A first
+update is checked the same way once `start()` returns: if something it restarted is gone, the row is
+`restart_failed` and the marker stays, so the next click retries. While a live
 proxy could bring the daemon back, the retry waits up to 10 seconds for it. The marker is then cleared, so the next click reports the row as it stands.
 
 ## Deployment and setup

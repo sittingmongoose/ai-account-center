@@ -922,6 +922,55 @@ describe('Pending-marker retry', () => {
     }
   });
 
+  it('checks a first update on a fresh scan after the proxy check, and keeps the marker', async () => {
+    for (const [after, status] of [
+      [{ daemon: true, desktops: [] }, 'restart_failed'],
+      [{ daemon: false, desktops: [A] }, 'restart_failed'],
+      [{ daemon: true, desktops: [A] }, 'updated'],
+    ] as Array<[Live, string]>) {
+      const value = fixture();
+      let proxiesChecked = false;
+      const result = await bridge.execute({
+        ...value.deps,
+        operation: 'cli',
+        hasOldProxies: async () => {
+          proxiesChecked = true;
+          return false;
+        },
+        runtime: () => ({
+          ...runtime({ daemon: true, desktops: [A] }),
+          restartState: async () => state(proxiesChecked ? after : { daemon: true, desktops: [A] }),
+        }),
+      });
+      expect(result.status).toBe(status);
+      expect(value.pending()).toBe(status !== 'updated');
+    }
+  });
+
+  it('holds a first update to the readiness check of the daemon it restarted', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: () => ({
+        ...runtime({ daemon: true }, { daemon: true }),
+        verifyRunningDaemon: async () => false,
+      }),
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(value.pending()).toBe(true);
+  });
+
+  it('leaves a first update on an older runtime that cannot be scanned as updated', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: () => ({ stop: async () => {}, start: async () => {} }),
+    });
+    expect(result.status).toBe('updated');
+  });
+
   it('does not run the readiness check when no daemon is owed', async () => {
     const { deps } = retry({ desktop: true, desktops: [A] }, { desktops: [A], daemon: true });
     let checks = 0;

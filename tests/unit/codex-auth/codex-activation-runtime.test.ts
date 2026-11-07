@@ -619,6 +619,44 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(marker()).toBeNull();
   });
 
+  it('does not call a first update a restart when the app exits during the proxy check', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    const { deps, marker } = click(fake);
+    let installed = '1.0.0';
+    const result = {
+      ...(await bridge.execute({
+        ...deps,
+        operation: 'cli',
+        readVersion: async () => installed,
+        update: async () => {
+          installed = '2.0.0';
+        },
+        // start() has finished; the restarted desktop exits while the old proxies are checked.
+        hasOldProxies: async () => {
+          for (const entry of fake.current().filter((item) => !item.args.includes('--listen')))
+            await fake.deps.signal(entry, 'SIGKILL');
+          return false;
+        },
+        runtime: (hooks = {}) =>
+          createCodexActivationRuntime(home, {
+            ...fake.deps,
+            ...hooks,
+            launch: (target, isDesktop) =>
+              bridge.relaunch(target, isDesktop, fake.deps.launch, { inside: () => true }),
+          }),
+      })),
+    };
+    expect(fake.current().some(isDesktop)).toBe(false);
+    expect(result.status).not.toBe('updated');
+    expect(result.status).toBe('restart_failed');
+    expect(marker()).toEqual({
+      version: '2.0.0',
+      desktop: true,
+      daemon: true,
+      desktops: [codexDesktopInstance('/fixture/.config/Codex')],
+    });
+  });
+
   it('accepts a respawned daemon once the readiness check passes', async () => {
     let checks = 0;
     const { run } = respawnedDaemon(async () => {
