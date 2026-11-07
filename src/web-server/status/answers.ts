@@ -51,6 +51,7 @@ import {
   type SignedAnswer,
   type UnsignedAnswer,
   canonicalJson,
+  verifySignedAnswer,
 } from './answer-signing';
 import {
   ANSWER_SCHEMA,
@@ -125,6 +126,8 @@ const SHARE_UNAVAILABLE_DETAIL = 'The reports share is not available.';
 class ShareUnavailableError extends Error {}
 /** The write was abandoned just before its rename: it is too late or no longer wanted. */
 class ShareWriteDroppedError extends Error {}
+/** The share already holds this card's signed answer to a higher version. */
+class ShareHasNewerError extends Error {}
 
 /** Time left, on the wall clock: a test's frozen `now` must not make a budget endless. */
 function startBudget(ms: number) {
@@ -202,7 +205,8 @@ async function writeAtomic(
   v1: string,
   file: string,
   body: string,
-  proceed: () => boolean
+  proceed: () => boolean,
+  beforeRename?: () => Promise<void>
 ): Promise<void> {
   await mkdirBelow(v1, path.dirname(file));
   const temp = path.join(
@@ -217,6 +221,7 @@ async function writeAtomic(
     } finally {
       await handle.close();
     }
+    await beforeRename?.();
     if (!proceed()) throw new ShareWriteDroppedError();
     await fs.promises.rename(temp, file);
   } catch (error) {
@@ -545,7 +550,8 @@ export class StatusAnswers {
     name: string,
     body: string,
     limitMs: number,
-    wanted: () => boolean = () => true
+    wanted: () => boolean = () => true,
+    beforeRename?: (file: string) => Promise<void>
   ): Promise<void> {
     const v1 = path.join(this.reportsRoot(), 'v1');
     let expired = false;
@@ -565,7 +571,10 @@ export class StatusAnswers {
             .catch(() => '');
           if (current !== key.publicKeyPem) await writeAtomic(v1, file, key.publicKeyPem, proceed);
         }
-        await writeAtomic(v1, path.join(v1, 'answers', name), body, proceed);
+        const target = path.join(v1, 'answers', name);
+        await writeAtomic(v1, target, body, proceed, () =>
+          beforeRename ? beforeRename(target) : Promise.resolve()
+        );
       })(),
       limitMs,
       () => {
@@ -590,6 +599,24 @@ export class StatusAnswers {
       );
   }
 
+  /**
+   * The last guard on `<card>.json`, whatever the store remembers: it never goes back to a lower
+   * `cardSeq`. Only a file with our own signature counts, so a file anyone dropped on the share
+   * cannot block a real answer. A file that cannot be read fails the write, to be retried.
+   */
+  private async refuseOverNewer(entry: AnswerHistoryEntry, file: string): Promise<void> {
+    let bytes: Buffer;
+    try {
+      bytes = await readRegularFile(file, 64 * 1024);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code === 'ENOENT' || code === 'ENOTREG' || code === 'ELOOP') return;
+      throw error;
+    }
+    const held = verifySignedAnswer(bytes, this.answerKey().publicKeyPem);
+    if (held.ok && held.answer.cardSeq > entry.answer.cardSeq) throw new ShareHasNewerError();
+  }
+
   private markSuperseded(entry: AnswerHistoryEntry): void {
     this.recordStep(entry, 'share', 'skipped', SUPERSEDED_DETAIL);
     if (entry.doorbell.state !== 'done')
@@ -607,12 +634,18 @@ export class StatusAnswers {
         shareFileName(entry.answer, entry.id),
         `${JSON.stringify(entry.answer, null, 2)}\n`,
         limitMs,
-        () => !this.superseded(entry)
+        () => !this.superseded(entry),
+        CLOSING_KINDS.has(entry.answer.kind)
+          ? (file) => this.refuseOverNewer(entry, file)
+          : undefined
       );
       this.recordStep(entry, 'share', 'done', 'Signed copy written to the share.');
       return true;
     } catch (error) {
-      if (error instanceof ShareWriteDroppedError && this.superseded(entry))
+      if (
+        error instanceof ShareHasNewerError ||
+        (error instanceof ShareWriteDroppedError && this.superseded(entry))
+      )
         this.markSuperseded(entry);
       else
         this.recordStep(
@@ -802,8 +835,18 @@ export class StatusAnswers {
     }
     if (!parsed || parsed.doc.state !== 'open') return null;
     if (parsed.doc.seq !== seq || parsed.sha256 !== sha256) return null;
+    // An older copy of the card can land on the share and read fresh here. The owner has already
+    // spoken on a later version, and a closing answer to this one would replace that signed file.
+    if (seq < this.highestRecordedSeq(id)) return null;
     if (this.isAnswered(id, seq, sha256)) return null;
     return parsed;
+  }
+
+  private highestRecordedSeq(cardId: string): number {
+    let highest = 0;
+    for (const { answer } of this.list())
+      if (answer.cardId === cardId && answer.cardSeq > highest) highest = answer.cardSeq;
+    return highest;
   }
 
   /** One entry of a set; must run inside `serial`. */

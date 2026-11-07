@@ -6,6 +6,7 @@
  * checked to be a regular file before a byte is read.
  */
 import fs from 'fs';
+import path from 'path';
 
 const OPEN_FLAGS =
   fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0);
@@ -32,6 +33,46 @@ export async function openRegularFile(
   } catch (error) {
     await handle.close().catch(() => undefined);
     throw error;
+  }
+}
+
+/**
+ * Whether an opened file really lies under `folder`, asked of the handle. `O_NOFOLLOW` guards only
+ * the last path segment, so a parent folder swapped for a link after a `realpath` check would still
+ * open a file elsewhere. Linux names what the descriptor actually holds. Without `/proc` (macOS,
+ * Windows) every segment of `file` (the checked real path) is looked at again: no links, and the
+ * last must be the opened file. That leaves one race there: a folder swapped out for the open and
+ * back again before this look.
+ */
+export async function openedFileIsUnder(
+  handle: fs.promises.FileHandle,
+  stat: fs.Stats,
+  folder: string,
+  file: string,
+  fdDir = '/proc/self/fd'
+): Promise<boolean> {
+  let opened: string;
+  try {
+    opened = await fs.promises.readlink(path.join(fdDir, String(handle.fd)));
+  } catch {
+    return walkFindsFile(stat, folder, file);
+  }
+  return opened.startsWith(folder + path.sep);
+}
+
+async function walkFindsFile(stat: fs.Stats, folder: string, file: string): Promise<boolean> {
+  try {
+    let current = folder;
+    let seen = await fs.promises.lstat(current);
+    if (seen.isSymbolicLink()) return false;
+    for (const segment of path.relative(folder, file).split(path.sep)) {
+      current = path.join(current, segment);
+      seen = await fs.promises.lstat(current);
+      if (seen.isSymbolicLink()) return false;
+    }
+    return seen.dev === stat.dev && seen.ino === stat.ino;
+  } catch {
+    return false;
   }
 }
 

@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import type { Writable } from 'stream';
 import { isWriterFilePath, isWriterName } from './report-schema';
-import { openRegularFile } from './share-read';
+import { openedFileIsUnder, openRegularFile } from './share-read';
 
 export const MAX_CARD_IMAGE_BYTES = 2 * 1024 * 1024;
 export const MAX_CARD_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -71,6 +71,9 @@ export async function openCardFile(root: string, writer: string, file: string): 
     const { handle, stat } = await openRegularFile(target);
     let keep = false;
     try {
+      // Before a byte is read: the checks above were about paths, and a folder can be swapped since.
+      if (!(await openedFileIsUnder(handle, stat, base, target)))
+        return { ok: false, reason: 'not_found' };
       const head = Buffer.alloc(SNIFF_BYTES);
       const { bytesRead } = await handle.read(head, 0, SNIFF_BYTES, 0);
       const contentType = sniffMedia(head.subarray(0, bytesRead));

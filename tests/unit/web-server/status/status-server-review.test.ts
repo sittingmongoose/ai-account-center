@@ -40,6 +40,12 @@ import {
   runCommand,
 } from '../../../../src/web-server/status/status-collectors';
 import { openCardFile, sendFileBytes } from '../../../../src/web-server/status/status-files';
+import { openedFileIsUnder } from '../../../../src/web-server/status/share-read';
+import {
+  loadOrCreateAnswerKey,
+  signAnswer,
+  type UnsignedAnswer,
+} from '../../../../src/web-server/status/answer-signing';
 import { StatusService } from '../../../../src/web-server/status/status-service';
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
 import { cardDoc, NOW, tempDirs, threadDoc, writeCard, writeReport } from './status-test-helpers';
@@ -1931,5 +1937,349 @@ describe('round three', () => {
       expect(make().sendList()).toHaveLength(1);
       expect(send.summary.state).toBe('done');
     });
+  });
+});
+
+describe('round four', () => {
+  const answerFile = (root: string) => path.join(root, 'v1', 'answers', `${CARD}.json`);
+  const signedSeq = (root: string) => JSON.parse(fs.readFileSync(answerFile(root), 'utf8')).cardSeq;
+
+  describe('an older card version', () => {
+    /** Seq 2 answered, then an older seq 1 file lands on the share. */
+    async function rolledBack() {
+      const made = setup();
+      const oldSha = writeCard(made.root, cardDoc('vm.lead', 'Q1'));
+      await made.reader.scan();
+      const newSha = writeCard(made.root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+      await made.reader.scan();
+      expect(
+        (await made.answers.submitSet([entry(CARD, newSha, { cardSeq: 2 })], 'Mac'))[0].outcome
+      ).toBe('recorded');
+      await settle();
+      writeCard(made.root, cardDoc('vm.lead', 'Q1'));
+      await made.reader.scan();
+      return { ...made, oldSha };
+    }
+
+    it('a stale answer to it is refused and the signed answer stays', async () => {
+      const { root, answers, oldSha, rings } = await rolledBack();
+      const results = await answers.submitSet([entry(CARD, oldSha, { choice: ['B'] })], 'Mac');
+      await settle();
+      expect(results[0]).toMatchObject({ outcome: 'card_changed', code: 'card_changed' });
+      expect(signedSeq(root)).toBe(2);
+      expect(answers.list()).toHaveLength(1);
+      expect(rings).toHaveLength(1);
+    });
+
+    it('is refused by the records alone, after a restart with a reader that remembers nothing', async () => {
+      const { root, make, oldSha } = await rolledBack();
+      const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+      const restarted = make({ readCard: (id) => reader.readCardNow(id) });
+      const results = await restarted.submitSet([entry(CARD, oldSha)], 'Mac');
+      expect(results[0].code).toBe('card_changed');
+      expect(signedSeq(root)).toBe(2);
+      expect(restarted.list()).toHaveLength(1);
+    });
+
+    it('is refused by the reader too, when nothing has been answered yet', async () => {
+      const { root, reader, answers } = setup();
+      const oldSha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      await reader.scan();
+      writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+      await reader.scan();
+      writeCard(root, cardDoc('vm.lead', 'Q1'));
+      expect(await reader.readCardNow(CARD)).toBeNull();
+      const results = await answers.submitSet([entry(CARD, oldSha)], 'Mac');
+      expect(results[0].code).toBe('card_changed');
+      expect(answers.list()).toEqual([]);
+    });
+
+    it('is refused after a note on a later version as well', async () => {
+      const { root, answers } = setup();
+      const oldSha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const newSha = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+      await answers.submitSet(
+        [entry(CARD, newSha, { cardSeq: 2, choice: [], note: 'words' })],
+        'Mac'
+      );
+      writeCard(root, cardDoc('vm.lead', 'Q1'));
+      expect((await answers.submitSet([entry(CARD, oldSha)], 'Mac'))[0].code).toBe('card_changed');
+    });
+
+    it('a higher version is still answered, and the same version is unchanged', async () => {
+      const { root, answers } = await rolledBack();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 3 }));
+      expect((await answers.submitSet([entry(CARD, sha, { cardSeq: 3 })], 'Mac'))[0].outcome).toBe(
+        'recorded'
+      );
+      expect(signedSeq(root)).toBe(3);
+    });
+
+    it('after a restart the page shows it unanswerable, so the owner is not looped', async () => {
+      const { root, answers } = await rolledBack();
+      const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+      await reader.scan();
+      const empty = { data: null, asOf: null, error: null };
+      const view = buildStatusView({
+        now: NOW,
+        timeZone: 'UTC',
+        reports: reader.snapshot(),
+        registry: { data: [], asOf: NOW, error: null },
+        machines: { vm: empty, mac: empty, windows: empty, nas1: empty },
+        browsers: empty,
+        simlock: empty,
+        usage: null,
+        answers: answers.list(),
+        hiddenThreadNames: [],
+        quota: { state: 'missing', scannedAt: null, good: null, problem: null },
+      });
+      const [card] = view.cards.open;
+      expect(card.seq).toBe(1);
+      expect(card.answerable).toBe(false);
+      expect(card.problem).toContain('seq');
+    });
+  });
+
+  describe('publishing', () => {
+    const unsigned = (cardSeq: number, sha: string): UnsignedAnswer => ({
+      schema: 'agent-reports/answer@1',
+      cardId: CARD,
+      cardSeq,
+      cardSha256: sha,
+      kind: 'answer',
+      choice: ['A'],
+      note: '',
+      via: 'deck',
+      answeredAt: new Date(NOW).toISOString(),
+      answeredBy: 'owner',
+      device: 'Mac',
+    });
+
+    /** A record whose share write failed, then a higher signed answer the store knows nothing of. */
+    async function behind(forged = false) {
+      const made = setup();
+      const sha = writeCard(made.root, cardDoc('vm.lead', 'Q1'));
+      const blocker = path.join(made.root, 'v1', 'answers');
+      fs.writeFileSync(blocker, 'blocker');
+      await made.answers.submitSet([entry(CARD, sha)], 'Mac');
+      await settle();
+      expect(made.answers.list()[0].share.state).toBe('failed');
+      fs.rmSync(blocker);
+      fs.mkdirSync(blocker);
+      const key = forged
+        ? loadOrCreateAnswerKey(path.join(dirs.make(), 'other'))
+        : loadOrCreateAnswerKey(made.store);
+      fs.writeFileSync(
+        answerFile(made.root),
+        JSON.stringify(signAnswer(unsigned(9, 'b'.repeat(64)), key))
+      );
+      return made;
+    }
+
+    it('never renames an answer over a signed one with a higher cardSeq', async () => {
+      const { root, answers, rings } = await behind();
+      await answers.retryPending();
+      expect(signedSeq(root)).toBe(9);
+      const [record] = answers.list();
+      expect(record.share.state).toBe('skipped');
+      expect(record.doorbell.state).toBe('skipped');
+      expect(deliveryView(record).detail).toContain('newer answer');
+      expect(rings).toEqual([]);
+      expect(
+        fs.readdirSync(path.join(root, 'v1', 'answers')).filter((f) => f.startsWith('.'))
+      ).toEqual([]);
+    });
+
+    it('holds after a restart: the retry from a fresh start does the same', async () => {
+      const { root, make } = await behind();
+      const restarted = make();
+      await restarted.retryPending();
+      expect(signedSeq(root)).toBe(9);
+      expect(restarted.list()[0].share.state).toBe('skipped');
+      const again = make();
+      expect(again.list()[0].share.state).toBe('skipped');
+    });
+
+    it('a higher seq not signed by this server blocks nothing', async () => {
+      const { root, answers } = await behind(true);
+      await answers.retryPending();
+      expect(signedSeq(root)).toBe(1);
+      expect(answers.list()[0].share.state).toBe('done');
+    });
+
+    it('a garbled file is replaced, and a read error fails the write to be retried', async () => {
+      const { root, answers } = await behind();
+      fs.writeFileSync(answerFile(root), 'not json');
+      const realOpen = fs.promises.open;
+      const open = spyOn(fs.promises, 'open').mockImplementation((async (
+        ...args: Parameters<typeof fs.promises.open>
+      ) => {
+        if (String(args[0]) === answerFile(root))
+          throw Object.assign(new Error('fault'), { code: 'EIO' });
+        return realOpen(...args);
+      }) as typeof fs.promises.open);
+      try {
+        await answers.retryPending();
+      } finally {
+        open.mockRestore();
+      }
+      expect(answers.list()[0].share.state).toBe('failed');
+      await answers.retryPending();
+      expect(signedSeq(root)).toBe(1);
+      expect(answers.list()[0].share.state).toBe('done');
+    });
+
+    it('notes keep their own files, whatever the answer file says', async () => {
+      const { root, answers } = await behind();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 10 }));
+      const results = await answers.submitSet(
+        [entry(CARD, sha, { cardSeq: 10, choice: [], note: 'words' })],
+        'Mac'
+      );
+      expect(results[0].outcome).toBe('recorded');
+      expect(answers.list()[1].share.state).toBe('done');
+    });
+  });
+
+  describe('a folder swapped during the open', () => {
+    const PNG_HEAD = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    function fixture() {
+      const root = dirs.make();
+      const writer = path.join(root, 'v1', 'writers', 'vm.lead');
+      const media = path.join(writer, 'media');
+      const outside = dirs.make();
+      fs.mkdirSync(media, { recursive: true });
+      fs.writeFileSync(path.join(media, 'image.png'), Buffer.concat([PNG_HEAD, Buffer.from('in')]));
+      fs.writeFileSync(
+        path.join(outside, 'image.png'),
+        Buffer.concat([PNG_HEAD, Buffer.from('out')])
+      );
+      return { root, writer, media, outside, target: path.join(media, 'image.png') };
+    }
+
+    /** Runs `swap` once, at the moment the checked path is opened: after every realpath. */
+    function swapAtOpen(target: string, swap: () => void) {
+      const realOpen = fs.promises.open;
+      let swapped = false;
+      return spyOn(fs.promises, 'open').mockImplementation((async (
+        ...args: Parameters<typeof fs.promises.open>
+      ) => {
+        if (!swapped && String(args[0]) === target) {
+          swapped = true;
+          swap();
+        }
+        return realOpen(...args);
+      }) as typeof fs.promises.open);
+    }
+
+    it('refuses a parent folder swapped for a link to somewhere else', async () => {
+      const { root, media, outside, target } = fixture();
+      const open = swapAtOpen(target, () => {
+        fs.renameSync(media, `${media}-original`);
+        fs.symlinkSync(outside, media);
+      });
+      try {
+        expect(await openCardFile(root, 'vm.lead', 'media/image.png')).toEqual({
+          ok: false,
+          reason: 'not_found',
+        });
+      } finally {
+        open.mockRestore();
+      }
+    });
+
+    it('refuses the writer folder itself swapped for a link', async () => {
+      const { root, writer, outside, target } = fixture();
+      fs.mkdirSync(path.join(outside, 'media'));
+      fs.writeFileSync(
+        path.join(outside, 'media', 'image.png'),
+        Buffer.concat([PNG_HEAD, Buffer.from('out')])
+      );
+      const open = swapAtOpen(target, () => {
+        fs.renameSync(writer, `${writer}-original`);
+        fs.symlinkSync(outside, writer);
+      });
+      try {
+        expect((await openCardFile(root, 'vm.lead', 'media/image.png')).ok).toBe(false);
+      } finally {
+        open.mockRestore();
+      }
+    });
+
+    it('still serves a plain file, and a link that stays inside the folder', async () => {
+      const { root, writer, target } = fixture();
+      fs.mkdirSync(path.join(writer, 'other'));
+      fs.symlinkSync(target, path.join(writer, 'other', 'link.png'));
+      for (const file of ['media/image.png', 'other/link.png']) {
+        const opened = await openCardFile(root, 'vm.lead', file);
+        expect([file, opened.ok]).toEqual([file, true]);
+        if (opened.ok) await opened.handle.close();
+      }
+    });
+
+    it('without /proc, the walk catches the swap and accepts the plain file', async () => {
+      const { writer, media, outside, target } = fixture();
+      const noProc = path.join(dirs.make(), 'no-such-dir');
+      const ask = async (file: string) => {
+        const handle = await fs.promises.open(file, 'r');
+        try {
+          return await openedFileIsUnder(handle, await handle.stat(), writer, target, noProc);
+        } finally {
+          await handle.close();
+        }
+      };
+      expect(await ask(target)).toBe(true);
+      expect(await ask(path.join(outside, 'image.png'))).toBe(false);
+      const handle = await fs.promises.open(path.join(outside, 'image.png'), 'r');
+      const stat = await handle.stat();
+      fs.renameSync(media, `${media}-original`);
+      fs.symlinkSync(outside, media);
+      expect(await openedFileIsUnder(handle, stat, writer, target, noProc)).toBe(false);
+      await handle.close();
+    });
+
+    // Node, as production runs it; the probe's swap, patched in the same way.
+    it('under Node, outside bytes are never served', async () => {
+      const { root, media, outside } = fixture();
+      const bundle = dirs.make();
+      const built = await Bun.build({
+        entrypoints: [
+          path.resolve(import.meta.dir, '../../../../src/web-server/status/status-files.ts'),
+        ],
+        target: 'node',
+        format: 'esm',
+        outdir: bundle,
+        naming: 'status-files.mjs',
+      });
+      expect(built.success).toBe(true);
+      const harness = path.join(bundle, 'harness.mjs');
+      fs.writeFileSync(
+        harness,
+        `import fs from 'fs';
+import path from 'path';
+import { openCardFile } from './status-files.mjs';
+const [root, media, outside] = process.argv.slice(2);
+const open = fs.promises.open;
+let swapped = false;
+fs.promises.open = async function (file, ...args) {
+  if (!swapped && file === path.join(media, 'image.png')) {
+    swapped = true;
+    fs.renameSync(media, media + '-original');
+    fs.symlinkSync(outside, media);
+  }
+  return open.call(this, file, ...args);
+};
+const result = await openCardFile(root, 'vm.lead', 'media/image.png');
+console.log(JSON.stringify({ swapped, ok: result.ok, reason: result.reason ?? null }));
+process.exit(0);
+`
+      );
+      const output = execFileSync('node', [harness, root, media, outside], {
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      expect(JSON.parse(output)).toEqual({ swapped: true, ok: false, reason: 'not_found' });
+    }, 25_000);
   });
 });
