@@ -890,6 +890,8 @@ pub struct Lease {
     pub holder: String,
     pub since: Option<String>,
     pub expires_at: Option<String>,
+    /// On a Simlock worker the gateway cannot reach: its last known lease, not a current one.
+    pub last_known: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -921,7 +923,14 @@ pub struct UsageAccount {
     pub label: String,
     #[serde(deserialize_with = "nullable")]
     pub window: String,
+    /// `rate_limit` (a used percent) or `balance` (an amount left, such as Codex credits).
+    #[serde(deserialize_with = "nullable")]
+    pub kind: String,
     pub used_pct: Option<f64>,
+    /// A balance's amount left and, when the provider gives one, its total; unknown stays None.
+    pub remaining: Option<f64>,
+    pub limit: Option<f64>,
+    pub unit: Option<String>,
     pub resets_at: Option<String>,
     pub projected_full_at: Option<String>,
     pub runs_out_before_reset: Option<bool>,
@@ -932,6 +941,29 @@ pub struct UsageAccount {
 }
 
 impl UsageAccount {
+    /// The row's number: a balance is its amount left with the server's unit ("12 credits left"); a rate limit is
+    /// its used percent. Unknown is "-": no percent is derived from a balance and no total is assumed.
+    pub fn amount(&self) -> String {
+        if self.kind == "balance" {
+            let Some(left) = self.remaining else {
+                return "-".into();
+            };
+            let unit = self
+                .unit
+                .as_deref()
+                .filter(|u| !u.is_empty())
+                .map(|u| format!(" {u}"))
+                .unwrap_or_default();
+            return match self.limit {
+                Some(limit) => format!("{} of {}{unit} left", number(left), number(limit)),
+                None => format!("{}{unit} left", number(left)),
+            };
+        }
+        self.used_pct
+            .map(crate::fmt::pct)
+            .unwrap_or_else(|| "-".into())
+    }
+
     /// The row's state words: a stale reading says so, and one from before a passed reset says it is history.
     pub fn note(&self, state: String) -> String {
         let stale = if self.reset_passed {
@@ -944,6 +976,15 @@ impl UsageAccount {
             (true, false) => format!("{stale} · {state}"),
             (false, _) => state,
         }
+    }
+}
+
+/// A whole amount as is, a fraction to two places (the server's own `amount` rule).
+fn number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.2}")
     }
 }
 
@@ -1752,6 +1793,62 @@ mod tests {
             serde_json::json!({"usedPct": 100, "atLimit": true, "stale": false, "resetPassed": false}),
         );
         assert_eq!(current.note("at its limit".into()), "at its limit");
+    }
+
+    #[test]
+    fn a_known_balance_shows_its_amount_and_unit_and_an_unknown_one_stays_unknown() {
+        let row = |v: serde_json::Value| -> UsageAccount { serde_json::from_value(v).unwrap() };
+        // The server's row for a Codex credit balance (the Sol max reproduction on 409b8163).
+        let twelve = row(serde_json::json!({
+            "provider": "codex", "label": "Review fixture", "window": "Credits", "kind": "balance",
+            "usedPct": null, "remaining": 12, "limit": null, "unit": "credits", "resetsAt": null,
+            "stale": false, "resetPassed": false
+        }));
+        assert_eq!(twelve.amount(), "12 credits left");
+        let zero = row(
+            serde_json::json!({"kind": "balance", "usedPct": null, "remaining": 0, "unit": "credits"}),
+        );
+        assert_eq!(
+            zero.amount(),
+            "0 credits left",
+            "a known zero is shown, not hidden"
+        );
+        let unknown = row(
+            serde_json::json!({"kind": "balance", "usedPct": null, "remaining": null, "unit": "credits"}),
+        );
+        assert_eq!(unknown.amount(), "-", "unknown stays unknown, never 0");
+        let fraction = row(
+            serde_json::json!({"kind": "balance", "remaining": 4.5, "limit": 50, "unit": "USD"}),
+        );
+        assert_eq!(fraction.amount(), "4.50 of 50 USD left");
+        let bare = row(serde_json::json!({"kind": "balance", "remaining": 7, "unit": null}));
+        assert_eq!(bare.amount(), "7 left");
+        // A balance never turns into a percent, even with a used percent beside it.
+        let odd = row(serde_json::json!({"kind": "balance", "usedPct": 40, "remaining": null}));
+        assert_eq!(odd.amount(), "-");
+        // Rate limits keep their percent; a missing one stays unknown.
+        let rate = row(
+            serde_json::json!({"kind": "rate_limit", "usedPct": 3, "remaining": 97, "unit": "%"}),
+        );
+        assert_eq!(rate.amount(), "3%");
+        let rate_unknown = row(serde_json::json!({"kind": "rate_limit", "usedPct": null}));
+        assert_eq!(rate_unknown.amount(), "-");
+        // A view from before `kind` was read draws as before.
+        let old = row(serde_json::json!({"usedPct": 12}));
+        assert_eq!(old.amount(), "12%");
+    }
+
+    #[test]
+    fn a_lease_on_an_unreachable_simlock_worker_reads_last_known() {
+        let lease: Lease = serde_json::from_value(serde_json::json!({
+            "device": "dev_1", "platform": "ios", "holder": "agent-1", "since": null, "expiresAt": null,
+            "lastKnown": true
+        }))
+        .unwrap();
+        assert!(lease.last_known);
+        let current: Lease =
+            serde_json::from_value(serde_json::json!({"device": "dev_2"})).unwrap();
+        assert!(!current.last_known);
     }
 
     #[test]

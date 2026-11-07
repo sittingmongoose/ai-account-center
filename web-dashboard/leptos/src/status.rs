@@ -519,6 +519,7 @@ fn SimlockPanel() -> impl IntoView {
                                     <li>
                                         <span class="lease-device">{l.device}</span>
                                         <span class="muted">{format!(" · {}", l.holder)}</span>
+                                        {l.last_known.then(|| view! { <span class="muted">" · last known (worker unreachable)"</span> })}
                                         <span class="muted right">
                                             {l.since.as_deref().map(|t| format!("since {}", fmt::clock(t)))}
                                             {l.expires_at.as_deref().map(|t| format!(" · until {}", fmt::clock(t)))}
@@ -554,7 +555,8 @@ fn UsagePanel() -> impl IntoView {
                         <tbody>
                             {u.accounts.into_iter().map(|a| {
                                 let tone = if a.at_limit { "crit" } else if a.runs_out_before_reset == Some(true) { "warn" } else { "" };
-                                let used = a.used_pct.map(fmt::pct).unwrap_or_else(|| "-".into());
+                                // a balance shows its amount left with its unit; a rate limit its used percent
+                                let used = a.amount();
                                 let reset = a.resets_at.as_deref().map(fmt::clock).unwrap_or_default();
                                 let state = if a.at_limit {
                                     "at its limit".to_string()
