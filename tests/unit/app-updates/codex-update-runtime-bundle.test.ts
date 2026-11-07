@@ -37,7 +37,13 @@ describe('Codex update runtime bundle', () => {
     expect(Object.keys(loaded).sort()).toEqual(['createCodexActivationRuntime', 'lockfile']);
     expect(typeof loaded.lockfile.lock).toBe('function');
     const runtime = loaded.createCodexActivationRuntime(path.join(folder, 'codex-home'));
-    expect(Object.keys(runtime).sort()).toEqual(['dispose', 'start', 'stop']);
+    expect(Object.keys(runtime).sort()).toEqual([
+      'dispose',
+      'restartState',
+      'start',
+      'stop',
+      'stopPlan',
+    ]);
   });
 
   it('is what the bridge loads from a flat helper folder, with its own lock library', async () => {

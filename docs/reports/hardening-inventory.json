@@ -778,12 +778,12 @@
           "loc": 1322
         },
         {
-          "file": "src/antigravity/registry.ts",
-          "loc": 1104
+          "file": "src/codex-auth/codex-activation-runtime.ts",
+          "loc": 1160
         },
         {
-          "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1101
+          "file": "src/antigravity/registry.ts",
+          "loc": 1104
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",

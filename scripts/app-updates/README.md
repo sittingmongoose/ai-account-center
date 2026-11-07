@@ -716,14 +716,14 @@ argv, and names systemd refuses are left out rather than failing the relaunch. A
 logs to `app-server-control/app-server.log`, which moves to `.1` at launch once past 5 MB.
 
 A pending-marker retry restarts only what it finds running, since the launch snapshot of the failed
-run is gone. Once `stop()` has succeeded, the marker records the Codex `desktop` and `daemon` that run
-closed, and a `stop()` that failed partway records what its recovery could not bring back. A marker
-naming neither is not a retry. `update_cli` routes a marker that names something, for
-the installed version, to the bridge even with no daemon running. A retry that leaves one of them
-closed is `restart_failed` with `restart_not_running`: the desktop must have a live app server on this
-Codex home under it, as `start()` requires. While a live proxy could bring the daemon back, the retry
-waits up to 10 seconds for it. The marker is then cleared, so the next click reports the row as it
-stands.
+run is gone. Once `stop()` has succeeded, the marker records what the runtime's own stop plan closed:
+the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder, never the path. A
+`stop()` that failed partway records what its recovery could not bring back. A marker naming nothing
+is not a retry. `update_cli` routes a marker that names something, for the installed version, to the
+bridge even with no daemon running. A retry that leaves any of them closed is `restart_failed` with
+`restart_not_running`: each desktop must have a live app server on this Codex home under it, as
+`start()` requires. While a live proxy could bring the daemon back, the retry waits up to 10 seconds
+for it. The marker is then cleared, so the next click reports the row as it stands.
 
 ## Deployment and setup
 

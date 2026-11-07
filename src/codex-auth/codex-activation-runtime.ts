@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -13,6 +14,33 @@ export interface CodexActivationRuntime {
   stop(approval?: CodexActivationStopPlan): Promise<void>;
   start(): Promise<void>;
   dispose?(): Promise<void>;
+  /** What stop() planned to close, captured under its lock. Holds no launch context. */
+  stopPlan(): CodexRestartPlan;
+  /** What runs now, by the same rules stop() and start() use. */
+  restartState(): Promise<CodexRestartState>;
+}
+
+export interface CodexRestartPlan {
+  daemon: boolean;
+  /** One codexDesktopInstance per Codex Desktop. */
+  desktops: string[];
+}
+
+export interface CodexRestartState extends CodexRestartPlan {
+  /** Desktops with no ready app server yet, as well as the ready ones in `desktops`. */
+  presentDesktops: string[];
+  proxy: boolean;
+}
+
+/**
+ * Names one Codex Desktop by its data folder, without keeping the path: this goes in a marker file.
+ * A desktop started with no folder uses the default one, which a relaunch names explicitly.
+ */
+export function codexDesktopInstance(userData: string): string {
+  return createHash('sha256')
+    .update(path.resolve(userData || path.join(os.homedir(), '.config', 'Codex')))
+    .digest('hex')
+    .slice(0, 32);
 }
 
 export class CodexActivationRuntimeError extends Error {
@@ -518,6 +546,37 @@ export function createCodexActivationRuntime(
     },
     start,
     dispose: release,
+    stopPlan: () => ({
+      daemon: launchers.some(isDaemon),
+      desktops: [
+        ...new Set(
+          launchers
+            .filter(isDesktop)
+            .map((launcher) => codexDesktopInstance(desktopUserData(launcher, [launcher])))
+        ),
+      ],
+    }),
+    restartState: async () => {
+      const processes = await scan();
+      const onHome = (entry: CodexProcessSnapshot): boolean =>
+        isCodex(entry) && usesHome(entry, codexHome);
+      const mains = processes.filter(isDesktop);
+      const instance = (main: CodexProcessSnapshot): string =>
+        codexDesktopInstance(desktopUserData(main, processes));
+      return {
+        daemon: processes.some((entry) => isDaemon(entry) && !isProxy(entry) && onHome(entry)),
+        // start()'s readiness test: a live app server on this home under the main process.
+        desktops: mains
+          .filter((main) =>
+            descendants(main, processes).some(
+              (entry) => onHome(entry) && entry.args.includes('app-server') && !isProxy(entry)
+            )
+          )
+          .map(instance),
+        presentDesktops: mains.map(instance),
+        proxy: processes.some((entry) => onHome(entry) && isProxy(entry)),
+      };
+    },
   };
 }
 

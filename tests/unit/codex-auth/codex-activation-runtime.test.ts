@@ -7,6 +7,7 @@ import {
   CodexActivationRuntimeError,
   CodexActivationRuntimeDependencies,
   CodexProcessSnapshot,
+  codexDesktopInstance,
   createCodexActivationRuntime,
   launchCodexProcess,
   prepareAppServerLog,
@@ -152,7 +153,7 @@ describe('Codex Desktop update retry on the real runtime', () => {
   ) {
     let clock = 0;
     let installed = '1.0.0';
-    let marker: { version: string; desktop?: boolean; daemon?: boolean } | null = null;
+    let marker: Record<string, unknown> | null = null;
     const deps = {
       now: () => clock,
       sleep: async (ms: number) => {
@@ -164,14 +165,13 @@ describe('Codex Desktop update retry on the real runtime', () => {
       },
       pending: (expected: string) => marker?.version === expected,
       marked: () => marker,
-      mark: (closed: { desktop?: boolean; daemon?: boolean } = {}) => {
+      mark: (closed: Record<string, unknown> = {}) => {
         marker = { version: installed, ...closed };
       },
       clear: () => {
         marker = null;
       },
       hasOldProxies: async () => false,
-      running: async () => bridge.runningState(fake.current(), home),
       runtime: () =>
         createCodexActivationRuntime(home, {
           ...fake.deps,
@@ -197,7 +197,12 @@ describe('Codex Desktop update retry on the real runtime', () => {
     const first = await run({});
     expect(first.status).toBe('restart_failed');
     expect(first.restartedProcesses).toBe(1);
-    expect(marker()).toEqual({ version: '2.0.0', desktop: true, daemon: true });
+    expect(marker()).toEqual({
+      version: '2.0.0',
+      desktop: true,
+      daemon: true,
+      desktops: [codexDesktopInstance('/fixture/.config/Codex')],
+    });
 
     const second = await run({ restartOnly: true });
     expect(second.restartedProcesses).toBe(1);
@@ -221,7 +226,12 @@ describe('Codex Desktop update retry on the real runtime', () => {
     });
     const first = await run({});
     expect(first.status).toBe('restart_failed');
-    expect(marker()).toEqual({ version: '2.0.0', desktop: true, daemon: false });
+    expect(marker()).toEqual({
+      version: '2.0.0',
+      desktop: true,
+      daemon: false,
+      desktops: [codexDesktopInstance('')],
+    });
 
     const second = await run({ restartOnly: true });
     expect(second.status).toBe('restart_failed');
@@ -253,7 +263,92 @@ describe('Codex Desktop update retry on the real runtime', () => {
       ...(await bridge.execute({ ...interrupted, operation: 'cli', expectedCandidate: '2.0.0' })),
     };
     expect(result.status).toBe('restart_failed');
-    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true });
+    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: [] });
+  });
+
+  const dataDesktop = (pid: number, data: string) =>
+    processFixture(pid, ['/usr/lib/chatgpt/ChatGPT', `--user-data-dir=${data}`], {
+      env: { HOME: '/fixture', DISPLAY: ':8' },
+    });
+  const childOf = (pid: number, ppid: number) => ({
+    ...bundled,
+    pid,
+    ppid,
+    startTime: String(pid),
+  });
+
+  it('names a daemon that appeared just before stop() took its lock', async () => {
+    const fake = harness([]);
+    const { deps, marker } = click(fake);
+    const result = {
+      ...(await bridge.execute({
+        ...deps,
+        operation: 'cli',
+        runtime: () =>
+          createCodexActivationRuntime(home, {
+            ...fake.deps,
+            acquireStartupLock: async () => {
+              fake.inject(daemon);
+              return fake.deps.acquireStartupLock();
+            },
+            launch: async () => {
+              throw new CodexActivationRuntimeError('fixture launch failed');
+            },
+          }),
+      })),
+    };
+    expect(result.status).toBe('restart_failed');
+    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: [] });
+  });
+
+  it('owes every desktop it closed: one coming back does not satisfy a retry', async () => {
+    const fake = harness([
+      dataDesktop(40, '/private/data-a'),
+      childOf(41, 40),
+      dataDesktop(50, '/private/data-b'),
+      childOf(51, 50),
+    ]);
+    const { run, marker } = click(fake, async (target, isDesktop) => {
+      if (target.args.join(' ').includes('/private/data-b')) {
+        throw new CodexActivationRuntimeError('fixture launch failed');
+      }
+      await fake.deps.launch(target, isDesktop);
+    });
+    const first = await run({});
+    expect(first.status).toBe('restart_failed');
+    const a = codexDesktopInstance('/private/data-a');
+    const b = codexDesktopInstance('/private/data-b');
+    expect(marker()).toEqual({ version: '2.0.0', desktop: true, daemon: false, desktops: [a, b] });
+    expect(JSON.stringify(marker())).not.toContain('/private');
+
+    const second = await run({ restartOnly: true });
+    expect(second.status).toBe('restart_failed');
+    expect(second.messageCode).toBe('restart_not_running');
+    expect(marker()).toBeNull();
+  });
+
+  it('is updated once every desktop it closed is back', async () => {
+    const fake = harness([
+      dataDesktop(40, '/private/data-a'),
+      childOf(41, 40),
+      dataDesktop(50, '/private/data-b'),
+      childOf(51, 50),
+    ]);
+    let failB = true;
+    const { run, marker } = click(fake, async (target, isDesktop) => {
+      if (failB && target.args.join(' ').includes('/private/data-b')) {
+        throw new CodexActivationRuntimeError('fixture launch failed');
+      }
+      await fake.deps.launch(target, isDesktop);
+    });
+    await run({});
+    // The user reopens the missing one by hand before the next click.
+    failB = false;
+    fake.inject(dataDesktop(60, '/private/data-b'));
+    fake.inject(childOf(61, 60));
+    const second = await run({ restartOnly: true });
+    expect(second.status).toBe('updated');
+    expect(marker()).toBeNull();
   });
 
   it('does not call a desktop whose app server never started a restart', async () => {
@@ -273,6 +368,97 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(second.status).toBe('restart_failed');
     expect(second.messageCode).toBe('restart_not_running');
     expect(marker()).toBeNull();
+  });
+});
+
+describe('What the runtime reports for a retry', () => {
+  const state = (entries: CodexProcessSnapshot[]) => {
+    const fake = harness(entries);
+    return createCodexActivationRuntime(home, fake.deps).restartState();
+  };
+  const server = (ppid: number, env: Record<string, string> = { CODEX_HOME: home }) =>
+    processFixture(11, ['/usr/lib/chatgpt/resources/codex', 'app-server'], { ppid, env });
+  const main = processFixture(10, ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/data/a']);
+  const a = codexDesktopInstance('/data/a');
+  const helper = processFixture(12, ['/usr/lib/chatgpt/ChatGPT', '--type=utility'], { ppid: 10 });
+
+  it('counts a desktop as ready only with a live app server on this home under it', async () => {
+    expect((await state([main, server(10)])).desktops).toEqual([a]);
+    expect((await state([main, helper, server(12)])).desktops).toEqual([a]);
+    expect((await state([main])).desktops).toEqual([]);
+    expect((await state([main, server(99)])).desktops).toEqual([]);
+    expect((await state([main, server(10, { CODEX_HOME: '/t3/.codex' })])).desktops).toEqual([]);
+    const proxy = processFixture(13, ['/usr/lib/chatgpt/resources/codex', 'app-server', 'proxy'], {
+      ppid: 10,
+    });
+    expect((await state([main, proxy])).desktops).toEqual([]);
+  });
+
+  it('reports a desktop with no app server as present, not ready', async () => {
+    const seen = await state([main]);
+    expect(seen.presentDesktops).toEqual([a]);
+    expect(seen.desktops).toEqual([]);
+  });
+
+  it('does not take a renderer for the main process', async () => {
+    const renderer = processFixture(10, ['/usr/lib/chatgpt/ChatGPT --type=zygote']);
+    const seen = await state([renderer, server(10)]);
+    expect(seen.presentDesktops).toEqual([]);
+  });
+
+  it('names the default data folder the same way with or without the flag', () => {
+    const explicit = path.join(os.homedir(), '.config', 'Codex');
+    expect(codexDesktopInstance('')).toBe(codexDesktopInstance(explicit));
+    expect(codexDesktopInstance('/data/a')).not.toBe(codexDesktopInstance('/data/b'));
+    expect(codexDesktopInstance('/data/a')).not.toContain('data');
+  });
+
+  it('counts only the shared daemon on this home as the daemon', async () => {
+    const run = async (args: string[], env: Record<string, string> = {}) =>
+      (
+        await state([
+          processFixture(20, ['/fixture/bin/codex', ...args], {
+            env: { CODEX_HOME: home, ...env },
+          }),
+        ])
+      ).daemon;
+    expect(await run(['app-server', '--listen', 'unix://'])).toBe(true);
+    expect(await run(['app-server', '--listen', 'unix://'], { CODEX_HOME: '/t3/.codex' })).toBe(
+      false
+    );
+    expect(await run(['app-server'])).toBe(false);
+    expect(await run(['app-server', 'proxy', '--listen', 'unix://'])).toBe(false);
+    expect((await state([main, server(10)])).daemon).toBe(false);
+  });
+
+  it('names a proxy on this home', async () => {
+    const proxy = (env: Record<string, string>) =>
+      processFixture(20, ['/fixture/bin/codex', 'app-server', 'proxy'], { env });
+    expect((await state([proxy({ CODEX_HOME: home })])).proxy).toBe(true);
+    expect((await state([proxy({ CODEX_HOME: '/t3/.codex' })])).proxy).toBe(false);
+  });
+
+  it('reports the plan stop() made under its lock, and none before it', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    expect(runtime.stopPlan()).toEqual({ daemon: false, desktops: [] });
+    await runtime.stop();
+    expect(runtime.stopPlan()).toEqual({
+      daemon: true,
+      desktops: [codexDesktopInstance('/fixture/.config/Codex')],
+    });
+  });
+
+  it('reports no plan when stop() refused before closing anything', async () => {
+    const fake = harness([daemon]);
+    const runtime = createCodexActivationRuntime(home, {
+      ...fake.deps,
+      assertIdle: async () => {
+        throw new CodexActivationRuntimeError('working', 'busy');
+      },
+    });
+    await expect(runtime.stop()).rejects.toThrow('working');
+    expect(runtime.stopPlan()).toEqual({ daemon: false, desktops: [] });
   });
 });
 
