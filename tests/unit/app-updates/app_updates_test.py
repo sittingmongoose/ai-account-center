@@ -438,6 +438,23 @@ class UpdaterTests(unittest.TestCase):
             with self.assertRaises(common.UpdateFailure):
                 terminal.check_terminal('ubuntu', [mock.Mock()])
 
+    def test_desktop_arguments_take_the_folder_chromium_takes(self):
+        from app_update_processes import desktop_arguments
+        cases = {
+            'the last switch wins': (['/app', '--user-data-dir=/x/a', '--user-data-dir=/x/b'], ['--user-data-dir=/x/b']),
+            'nothing after -- is a switch': (['/app', '--user-data-dir=/x/b', '--', '--user-data-dir=/x/a'], ['--user-data-dir=/x/b']),
+            'only a positional after --': (['/app', '--', '--user-data-dir=/x/a'], []),
+            'an empty last switch is the default folder': (['/app', '--user-data-dir=/x/a', '--user-data-dir='], []),
+            'a single-dash switch counts': (['/app', '-user-data-dir=/x/b'], ['--user-data-dir=/x/b']),
+            'a separate value': (['/app', '--user-data-dir', '/x/b'], ['--user-data-dir=/x/b']),
+        }
+        for name, (args, expected) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(desktop_arguments(mock.Mock(args=args, cwd='/fixture'), 'linux'), expected)
+        # Windows also takes a `/` prefix, and switch names in any case.
+        self.assertEqual(desktop_arguments(mock.Mock(args=['/fixture/app.exe', '/User-Data-Dir=/fixture/x/b'], cwd=None), 'windows'),
+                         ['--user-data-dir=/fixture/x/b'])
+
     def test_desktop_arguments_resolve_a_relative_data_folder_in_the_app_working_directory(self):
         from app_update_processes import desktop_arguments
         for args in (['/fixture/app', '--user-data-dir=profile'], ['/fixture/app', '--user-data-dir', 'profile']):

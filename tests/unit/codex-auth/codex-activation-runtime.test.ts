@@ -460,6 +460,90 @@ describe('Codex Desktop update retry on the real runtime', () => {
     }
   );
 
+  it.each([
+    {
+      form: 'the last switch wins',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', '--user-data-dir=/x/b'],
+      other: '/x/a',
+      owed: '/x/b',
+    },
+    {
+      form: 'the last switch wins in a rewritten cmdline',
+      closed: ['/usr/lib/chatgpt/ChatGPT --user-data-dir=/x/a --user-data-dir=/x/b'],
+      other: '/x/a',
+      owed: '/x/b',
+    },
+    {
+      form: 'an empty last switch is the default folder',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', '--user-data-dir='],
+      other: '/x/a',
+      owed: '',
+    },
+    {
+      form: 'nothing after -- is a switch',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '--', '--user-data-dir=/x/a'],
+      other: '/x/a',
+      owed: '',
+    },
+    {
+      form: 'a single-dash switch counts',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '-user-data-dir=/x/b'],
+      other: '',
+      owed: '/x/b',
+    },
+  ])(
+    'owes a closed desktop by the folder Chromium takes: $form',
+    async ({ closed, other, owed }) => {
+      const at = (pid: number, args: string[]) =>
+        processFixture(pid, args, {
+          env: { HOME: '/fixture', DISPLAY: ':8' },
+          exe: '/usr/lib/chatgpt/ChatGPT',
+        });
+      const fake = harness([at(40, closed), childOf(41, 40)]);
+      let fail = true;
+      const { run, marker } = click(fake, async (target, isDesktop) => {
+        if (fail && isDesktop) throw new CodexActivationRuntimeError('fixture launch failed');
+        await fake.deps.launch(target, isDesktop);
+      });
+      expect((await run({})).status).toBe('restart_failed');
+      expect((marker() as { desktops: string[] }).desktops).toEqual([codexDesktopInstance(owed)]);
+
+      // Before the retry only a desktop on the folder an earlier reading named is running.
+      fail = false;
+      const args = ['/usr/lib/chatgpt/ChatGPT', ...(other ? [`--user-data-dir=${other}`] : [])];
+      fake.inject(at(60, args));
+      fake.inject(childOf(61, 60));
+      const second = await run({ restartOnly: true, launchOnly: true });
+      expect([second.status, second.messageCode]).toEqual([
+        'restart_failed',
+        'restart_not_running',
+      ]);
+    }
+  );
+
+  it('is updated when the desktop on the folder Chromium took is back', async () => {
+    const at = (pid: number, args: string[]) =>
+      processFixture(pid, args, {
+        env: { HOME: '/fixture', DISPLAY: ':8' },
+        exe: '/usr/lib/chatgpt/ChatGPT',
+      });
+    const fake = harness([
+      at(40, ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', '--user-data-dir=/x/b']),
+      childOf(41, 40),
+    ]);
+    let fail = true;
+    const { run } = click(fake, async (target, isDesktop) => {
+      if (fail && isDesktop) throw new CodexActivationRuntimeError('fixture launch failed');
+      await fake.deps.launch(target, isDesktop);
+    });
+    expect((await run({})).status).toBe('restart_failed');
+    fail = false;
+    fake.inject(at(60, ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/b']));
+    fake.inject(childOf(61, 60));
+    const second = await run({ restartOnly: true, launchOnly: true });
+    expect([second.status, second.messageCode]).toEqual(['updated', 'updated']);
+  });
+
   it('owes and relaunches two rewritten desktops that read as the same folder', async () => {
     // Electron rewrote each main cmdline into one string, so `/x/a --b` and `/x/a --c` can't be told
     // from a folder `/x/a` and a flag. Both read as `/x/a`, and each is still its own desktop.
@@ -1986,6 +2070,69 @@ describe('desktop main process detection', () => {
       }
     );
     expect(isDesktop(zygote)).toBe(false);
+  });
+
+  it('reads switches as Chromium does: the last wins, and none after --', async () => {
+    const main = (args: string[]) =>
+      processFixture(20, args, { env: { DISPLAY: ':8' }, exe: '/usr/lib/chatgpt/ChatGPT' });
+    const state = async (args: string[]) =>
+      (
+        await createCodexActivationRuntime(
+          home,
+          harness([daemon, main(args), bundled]).deps
+        ).restartState()
+      ).desktops;
+    const exe = '/usr/lib/chatgpt/ChatGPT';
+    expect(await state([exe, '--user-data-dir=/x/a', '--user-data-dir=/x/b'])).toEqual([
+      codexDesktopInstance('/x/b'),
+    ]);
+    expect(await state([exe, '--user-data-dir', '/x/a', '--user-data-dir=/x/b'])).toEqual([
+      codexDesktopInstance('/x/b'),
+    ]);
+    expect(await state([exe, '--user-data-dir=/x/b', '--', '--user-data-dir=/x/a'])).toEqual([
+      codexDesktopInstance('/x/b'),
+    ]);
+    expect(await state([exe, '--user-data-dir=/x/a', '--user-data-dir='])).toEqual([
+      codexDesktopInstance(''),
+    ]);
+    expect(await state([`${exe} --user-data-dir=/x/b -- --user-data-dir=/x/a`])).toEqual([
+      codexDesktopInstance('/x/b'),
+    ]);
+    // A `--type=` after the terminator is a plain argument: this is still the main process.
+    expect(isDesktop(main([exe, '--', '--type=renderer']))).toBe(true);
+    expect(isDesktop(main([exe, '--type=renderer']))).toBe(false);
+  });
+
+  it('relaunches with the data folder before the switch terminator', async () => {
+    const plain = processFixture(20, ['/usr/lib/chatgpt/ChatGPT', '--', '/fixture/file'], {
+      env: {},
+      exe: '/usr/lib/chatgpt/ChatGPT',
+    });
+    const fake = harness([daemon, plain, bundled]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    await runtime.start();
+    expect(fake.launches.filter(isDesktop).map((entry) => entry.args)).toEqual([
+      [
+        '/usr/lib/chatgpt/ChatGPT',
+        `--user-data-dir=${path.join(os.homedir(), '.config', 'Codex')}`,
+        '--',
+        '/fixture/file',
+      ],
+    ]);
+    // A rewritten cmdline's terminator and the words after it relaunch as their own arguments.
+    const rewritten = processFixture(
+      20,
+      ['/usr/lib/chatgpt/ChatGPT --user-data-dir=/x/b -- /fixture/file'],
+      { env: {}, exe: '/usr/lib/chatgpt/ChatGPT' }
+    );
+    const again = harness([daemon, rewritten, bundled]);
+    const second = createCodexActivationRuntime(home, again.deps);
+    await second.stop();
+    await second.start();
+    expect(again.launches.filter(isDesktop).map((entry) => entry.args)).toEqual([
+      ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/b', '--', '/fixture/file'],
+    ]);
   });
 
   it('treats only the Electron main process as the desktop, including rewritten zygote cmdlines', () => {

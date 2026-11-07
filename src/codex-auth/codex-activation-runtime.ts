@@ -184,22 +184,57 @@ function argWords(process: CodexProcessSnapshot): string[] {
  */
 function relaunchArguments(process: CodexProcessSnapshot): string[] {
   if (!rewrittenCmdline(process)) return process.args.filter(Boolean);
+  let ended = false;
   return argWords(process).flatMap((word, index) => {
-    const joined = index > 0 ? /^(--[^\s=]+)\s+([\s\S]+)$/.exec(word) : null;
+    // Past the terminator every word is a plain argument, kept as it is.
+    if (index === 0 || ended) return [word];
+    if (isTerminator(word)) {
+      ended = true;
+      return word === '--' ? [word] : ['--', word.slice(2).trim()];
+    }
+    const joined = /^(--[^\s=]+)\s+([\s\S]+)$/.exec(word);
     if (!joined) return [word];
     const [, flag, value] = joined;
     return flag === '--user-data-dir' ? [`${flag}=${value.trim()}`] : [flag, value.trim()];
   });
 }
 
+/** Chromium's switch terminator: every word after it is a plain argument, never a switch. */
+function isTerminator(word: string): boolean {
+  return word === '--' || /^--\s/.test(word);
+}
+
+/** The words Chromium reads switches from: after the program, and up to the terminator. */
+function switchWords(words: string[]): string[] {
+  const end = words.findIndex((word, index) => index > 0 && isTerminator(word));
+  return words.slice(1, end < 0 ? undefined : end);
+}
+
 /**
- * Chromium zygotes rewrite their cmdline into one space-joined string, so a
- * `--type=` flag can sit inside a single argv element rather than start one.
+ * The value Chromium takes for a switch, as base::CommandLine reads it on Linux: `--name=value` or
+ * `-name=value`, a bare name being an empty value, and a later one replacing an earlier one. Null
+ * when the switch isn't given.
+ */
+function lastSwitch(words: string[], name: string): string | null {
+  let value: string | null = null;
+  for (const word of switchWords(words)) {
+    const prefix = word.startsWith('--') ? 2 : word.startsWith('-') ? 1 : 0;
+    if (!prefix || !word.startsWith(name, prefix)) continue;
+    const rest = word.slice(prefix + name.length);
+    if (rest === '') value = '';
+    else if (rest.startsWith('=')) value = rest.slice(1);
+  }
+  return value;
+}
+
+/**
+ * The Electron main process. Its children carry a `--type=`, which a rewritten zygote cmdline can
+ * hold inside one space-joined string; an empty one, or one past the terminator, is not a child's.
  */
 export function isDesktop(process: CodexProcessSnapshot): boolean {
   return (
     process.exe.replace(/ \(deleted\)$/, '') === '/usr/lib/chatgpt/ChatGPT' &&
-    !argWords(process).some((word) => word.startsWith('--type='))
+    !lastSwitch(argWords(process), 'type')
   );
 }
 
@@ -701,15 +736,31 @@ function restartPlan(launchers: CodexProcessSnapshot[]): CodexRestartPlan {
   };
 }
 
-function userDataArgument(args: string[]): string {
-  const inline = args.find((arg) => arg.startsWith('--user-data-dir='));
-  if (inline) return inline.slice('--user-data-dir='.length);
-  // A rewritten cmdline keeps a separate value with its flag: `--user-data-dir /home/me/Work One`.
-  const joined = args.find((arg) => arg.startsWith('--user-data-dir '));
-  if (joined) return joined.slice('--user-data-dir '.length).trim();
-  const index = args.indexOf('--user-data-dir');
-  const value = index >= 0 ? args[index + 1] : undefined;
-  return value && !value.startsWith('--') ? value : '';
+/**
+ * The `--user-data-dir` Chromium takes from a process's words: the last one before the terminator,
+ * from either switch prefix, an empty one meaning the default folder (''). Null when none is given.
+ * Beyond Chromium, a value is also read where it was typed apart from the switch: in the next plain
+ * word, or joined to it by a space in a rewritten cmdline (`--user-data-dir /home/me/Work One`).
+ */
+function userDataArgument(words: string[]): string | null {
+  const switches = switchWords(words);
+  let value: string | null = null;
+  for (let index = 0; index < switches.length; index++) {
+    const word = switches[index];
+    const named = /^--?user-data-dir(?=$|[=\s])/.exec(word);
+    if (!named) continue;
+    const rest = word.slice(named[0].length);
+    if (rest.startsWith('=')) value = rest.slice(1);
+    else if (rest) value = rest.trim();
+    else {
+      const next = switches[index + 1];
+      if (next !== undefined && !next.startsWith('-')) {
+        value = next;
+        index++;
+      } else value = '';
+    }
+  }
+  return value;
 }
 
 /**
@@ -723,7 +774,7 @@ function desktopFolderArgument(
 ): { value: string; owner: CodexProcessSnapshot } | null {
   for (const owner of [desktop, ...descendants(desktop, processes)]) {
     const value = userDataArgument(argWords(owner));
-    if (value) return { value, owner };
+    if (value !== null) return { value, owner };
   }
   return null;
 }
@@ -738,6 +789,7 @@ function desktopUserData(desktop: CodexProcessSnapshot, processes: CodexProcessS
   const found = desktopFolderArgument(desktop, processes);
   if (!found) return '';
   const { value, owner } = found;
+  if (value === '') return '';
   if (path.isAbsolute(value)) return realFolder(value);
   // Joined as text, so `link/..` still reaches the filesystem rather than cancelling out here.
   if (owner.cwd && path.isAbsolute(owner.cwd)) {
@@ -771,20 +823,19 @@ function desktopLauncher(
     );
   }
   const args = relaunchArguments(desktop);
-  if (
-    !args.some(
-      (arg) =>
-        arg === '--user-data-dir' ||
-        arg.startsWith('--user-data-dir=') ||
-        arg.startsWith('--user-data-dir ')
-    )
-  ) {
+  if (userDataArgument(args) === null) {
     // The folder a child names, absolute when its directory is known: the relaunch runs in the
     // main process's directory, which need not be the child's.
     const found = desktopFolderArgument(desktop, processes);
     const userData = desktopUserData(desktop, processes);
     const folder = path.isAbsolute(userData) ? userData : found?.value;
-    args.push(`--user-data-dir=${folder || path.join(os.homedir(), '.config', 'Codex')}`);
+    // Before the terminator, or Chromium would read it as a plain argument.
+    const end = args.findIndex((word, index) => index > 0 && isTerminator(word));
+    args.splice(
+      end < 0 ? args.length : end,
+      0,
+      `--user-data-dir=${folder || path.join(os.homedir(), '.config', 'Codex')}`
+    );
   }
   return { ...desktop, args, env };
 }

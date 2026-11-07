@@ -778,12 +778,12 @@
           "loc": 1734
         },
         {
-          "file": "src/web-server/model-pricing.ts",
-          "loc": 1322
+          "file": "src/codex-auth/codex-activation-runtime.ts",
+          "loc": 1368
         },
         {
-          "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1317
+          "file": "src/web-server/model-pricing.ts",
+          "loc": 1322
         },
         {
           "file": "src/antigravity/registry.ts",

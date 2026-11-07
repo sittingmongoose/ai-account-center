@@ -770,14 +770,17 @@ def sys_platform_linux():
 
 
 def desktop_arguments(context, platform):
-    """Only existing data-directory flags are reapplied; never replay work arguments.
+    """Only an existing data-directory flag is reapplied; never replay work arguments.
 
-    A relative folder is the app's own: it is resolved against the app's working directory, never
-    this helper's, and dropped when that directory is unknown.
+    The folder is the one Chromium takes: the last --user-data-dir before a "--" terminator, with any
+    switch prefix the platform accepts, an empty one meaning the default folder. A value typed apart
+    from the switch is read too. A relative folder is the app's own: it is resolved against the app's
+    working directory, never this helper's, and dropped when that directory is unknown.
     """
     args = context.args[1:]
     cwd = getattr(context, "cwd", None)
-    found = []
+    windows = platform == "windows"
+    prefixes = ("--", "-", "/") if windows else ("--", "-")
 
     def absolute(value):
         if not value:
@@ -788,17 +791,28 @@ def desktop_arguments(context, platform):
             return str(pathlib.Path(cwd) / value)
         return None
 
-    for index, arg in enumerate(args):
-        value = None
-        if arg.startswith("--user-data-dir="):
-            value = absolute(arg[len("--user-data-dir="):])
-        elif arg == "--user-data-dir" and index + 1 < len(args):
-            value = absolute(args[index + 1])
-        if value:
-            found = ["--user-data-dir=" + value]
+    value = None
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            break
+        prefix = next((item for item in prefixes if arg.startswith(item) and len(arg) > len(item)), None)
+        if prefix:
+            name, separator, rest = arg[len(prefix):].partition("=")
+            if (name.lower() if windows else name) == "user-data-dir":
+                if separator:
+                    value = rest
+                elif index + 1 < len(args) and not args[index + 1].startswith("-"):
+                    value = args[index + 1]
+                    index += 1
+                else:
+                    value = ""
+        index += 1
     # Chromium on Linux may rewrite argv0 to just its executable. Its existing
     # data directory is still supplied by the preserved process environment.
-    return found
+    folder = absolute(value)
+    return ["--user-data-dir=" + folder] if folder else []
 
 
 def terminate_desktops(install, contexts, grace=15, ready=None):
