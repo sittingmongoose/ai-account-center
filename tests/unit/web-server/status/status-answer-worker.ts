@@ -21,6 +21,8 @@ let failCompletionAppends = false;
 // write error on the `type: "send"` line only. Only the journal's append descriptors are touched.
 let closeFault: string | null = null;
 let sendFault: string | null = null;
+// While on, every journal write of a `type: "void"` line fails: a disk that refuses the cancel too.
+let voidFault = false;
 const journalFds = new Set<number>();
 const realOpen = fs.openSync;
 fs.openSync = ((file: any, ...args: any[]) => {
@@ -40,6 +42,8 @@ fs.closeSync = ((fd: number) => {
 }) as typeof fs.closeSync;
 const realWrite = fs.writeSync;
 fs.writeSync = ((fd: any, data: any, ...args: any[]) => {
+  if (voidFault && journalFds.has(fd) && Buffer.from(data).toString().includes('"type":"void"'))
+    throw Object.assign(Error('Injected void line write error'), { code: 'EIO' });
   if (sendFault && journalFds.has(fd) && String(data).includes('\"type\":\"send\"')) {
     const code = sendFault;
     sendFault = null;
@@ -56,6 +60,8 @@ fs.writeSync = ((fd: any, data: any, ...args: any[]) => {
 // A slow failing fsync on the next `type: "answer"` line: the line is on disk, unvoided, until `<root>/fsync-go`
 // appears; then the fsync throws and appendLine writes its void line. Only the journal's descriptors are touched.
 let fsyncFault = false;
+/** Whether the fsync fault waits for `<root>/fsync-go` first; otherwise it fails at once. */
+let fsyncWait = true;
 const lastJournalData = new Map<number, string>();
 const realWriteSync = fs.writeSync;
 fs.writeSync = ((fd: any, data: any, ...args: any[]) => {
@@ -66,6 +72,7 @@ const realFsync = fs.fsyncSync;
 fs.fsyncSync = ((fd: number) => {
   if (fsyncFault && journalFds.has(fd) && lastJournalData.get(fd)?.includes('"type":"answer"')) {
     fsyncFault = false;
+    if (!fsyncWait) throw Object.assign(Error('Injected journal fsync error'), { code: 'EIO' });
     emit({ event: 'fsync-paused' });
     const until = Date.now() + 15000;
     while (!fs.existsSync(path.join(root, 'fsync-go')) && Date.now() < until) {
@@ -194,6 +201,12 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     }
     if (cmd.cmd === 'fsync-fault') {
       fsyncFault = true;
+      fsyncWait = cmd.wait !== false;
+      emit({ event: 'armed' });
+      return;
+    }
+    if (cmd.cmd === 'void-fault') {
+      voidFault = !!cmd.on;
       emit({ event: 'armed' });
       return;
     }

@@ -4008,6 +4008,80 @@ describe('real-process journal and publication fences', () => {
       }
     );
   }
+  for (const reload of ['regain-in-process', 'restart']) {
+    it(
+      'a record whose fsync and void both failed is never shared or rung, and its void lands: ' +
+        reload,
+      async () => {
+        const { root, entry } = fixture('void-unclear-' + reload);
+        const note = { ...noteEntry(entry), entryId: 'f'.repeat(32) };
+        const a = new Worker(root);
+        let b: Worker | undefined;
+        const voids = () => records(root).filter((x) => x.type === 'void');
+        const shared = path.join(root, 'reports', 'v1', 'answers');
+        const sharedFiles = () =>
+          fs.existsSync(shared) ? fs.readdirSync(shared, { recursive: true }) : [];
+        try {
+          await a.next('ready');
+          a.send({ cmd: 'retry' });
+          await a.next('retried');
+          a.send({ cmd: 'fsync-fault', wait: false });
+          await a.next('armed');
+          a.send({ cmd: 'void-fault', on: true });
+          await a.next('armed');
+          a.send({ cmd: 'submit', entries: [note], clientSendId: 'void-unclear-1234' });
+          const told = (await a.next('submitted')).result[0];
+          // The disk took the line and refused its cancel: the owner is not told "Nothing was sent".
+          assert.equal(told.outcome, 'refused');
+          assert.equal(told.code, 'answer_save_unclear');
+          assert.doesNotMatch(told.error, /Nothing was sent/);
+          assert.equal(answerRecords(root).length, 1);
+          assert.equal(voids().length, 0);
+          if (reload === 'regain-in-process') {
+            // The store is gained again while the disk still refuses the void: still never listed.
+            fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
+            for (let i = 0; i < 2; i++) {
+              a.send({ cmd: 'retry' });
+              await a.next('retried');
+            }
+            a.send({ cmd: 'routes' });
+            assert.equal((await a.next('routes')).history.answers.length, 0);
+            assert.equal(voids().length, 0);
+            a.send({ cmd: 'void-fault', on: false });
+            await a.next('armed');
+            for (let i = 0; i < 2; i++) {
+              a.send({ cmd: 'retry' });
+              await a.next('retried');
+            }
+            a.send({ cmd: 'routes' });
+            assert.equal((await a.next('routes')).history.answers.length, 0);
+          } else {
+            a.send({ cmd: 'void-fault', on: false });
+            await a.next('armed');
+            await a.exit();
+            b = new Worker(root);
+            await b.next('ready');
+            for (let i = 0; i < 2; i++) {
+              b.send({ cmd: 'retry' });
+              await b.next('retried');
+            }
+            b.send({ cmd: 'routes' });
+            const view = await b.next('routes');
+            assert.equal(view.historyStatus, 200);
+            assert.equal(view.history.answers.length, 0);
+          }
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          const answerLine = answerRecords(root)[0].line;
+          assert.deepEqual(voids(), [{ type: 'void', line: answerLine }]);
+          assert.deepEqual(sharedFiles(), []);
+          assert.equal(ringCount(root), 0);
+        } finally {
+          await a.kill();
+          await b?.kill();
+        }
+      }
+    );
+  }
   it('a second dashboard refreshes read-only history when the journal changes', async () => {
     const { root, entry } = fixture('viewer-refresh');
     const a = new Worker(root),

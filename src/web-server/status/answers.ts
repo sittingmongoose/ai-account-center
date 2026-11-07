@@ -136,6 +136,43 @@ class ShareUnavailableError extends Error {}
 class ShareWriteDroppedError extends Error {}
 /** The share already holds this card's signed answer to a higher version. */
 class ShareHasNewerError extends Error {}
+/**
+ * A record was refused and the disk refused its `void` line too: the line may be in the journal, uncancelled.
+ * The store holds `line` as voided and keeps writing its void line (see StatusAnswers.unvoided).
+ */
+class AppendUnclearError extends ConfigError {
+  constructor(
+    readonly line: string,
+    file: string
+  ) {
+    super('The answer store refused a record and could not cancel it.', file);
+  }
+}
+
+/** Appends one `void` line cancelling `line` and syncs it. Throws if the disk refuses either. */
+function appendVoid(fd: number, line: string, file: string): void {
+  const cancel = Buffer.from(`\n${JSON.stringify({ type: 'void', line })}\n`);
+  for (let done = 0; done < cancel.length; ) {
+    const taken = fs.writeSync(fd, cancel, done, cancel.length - done);
+    if (taken <= 0) throw new ConfigError('The answer store took no part of a void line.', file);
+    done += taken;
+  }
+  fs.fsyncSync(fd);
+}
+
+/** Opens the store, appends one void line for `line` and closes it; throws if it did not land. */
+function appendVoidLine(file: string, line: string): void {
+  const fd = fs.openSync(file, 'a+', 0o600);
+  try {
+    appendVoid(fd, line, file);
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* the void is synced or the write already threw; a close error changes neither */
+    }
+  }
+}
 
 /** Time left, on the wall clock: a test's frozen `now` must not make a budget endless. */
 function startBudget(ms: number) {
@@ -256,6 +293,9 @@ async function writeAtomic(
  * The append is committed once its fsync succeeds: the line is then durable and uncancelled, and every reader
  * after a restart counts it. A close error after that changes nothing (it is logged), so a durable record is
  * never reported unsaved while it stays in the journal, where a retry of the same draft would record it again.
+ *
+ * A refused record whose void line the disk refuses too throws AppendUnclearError naming the line: the caller
+ * holds it as voided and writes the void again later (StatusAnswers.unvoided).
  */
 function appendLine(file: string, record: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -275,18 +315,12 @@ function appendLine(file: string, record: Record<string, unknown>): void {
       fs.fsyncSync(fd);
     } catch (error) {
       // A refused record must not count after a restart (it would ring): cancel it. The leading newline ends whatever
-      // part of it was written. If the disk refuses this too, the record may come back; the error still refuses it.
+      // part of it was written. If the disk refuses this too, the caller is told so and writes the void again.
       if (written > 0) {
         try {
-          const cancel = Buffer.from(`\n${JSON.stringify({ type: 'void', line })}\n`);
-          for (let done = 0; done < cancel.length; ) {
-            const taken = fs.writeSync(fd, cancel, done, cancel.length - done);
-            if (taken <= 0) break;
-            done += taken;
-          }
-          fs.fsyncSync(fd);
+          appendVoid(fd, line, file);
         } catch {
-          /* see above */
+          throw new AppendUnclearError(line, file);
         }
       }
       throw error;
@@ -424,6 +458,12 @@ export class StatusAnswers {
   private readonly summarizing = new Set<string>();
   /** Record ids the last journal fold found cancelled by a void line. */
   private voidedIds = new Set<string>();
+  /**
+   * Line ids this process refused whose void line has not landed yet (the disk refused it too). Every fold treats
+   * them as voided, and the void is written again on each gain, retry pass and send, and on close and exit, like
+   * a pending completion. Once it lands the journal itself cancels the line.
+   */
+  private readonly unvoided = new Set<string>();
   private historyUnavailable = false;
   /** The journal's size, mtime and inode when `entries` was read; a non-owner reads it again once it changes. */
   private loadedFrom: string | null = null;
@@ -602,6 +642,7 @@ export class StatusAnswers {
         /* a torn or partial line */
       }
     }
+    for (const line of this.unvoided) voided.add(line);
     const voidedIds = new Set<string>();
     for (const record of records) {
       // a record its writer cancelled (it failed to be stored whole) does not count
@@ -830,16 +871,25 @@ export class StatusAnswers {
    * file name plus signature.keyId + signature.value, stable across retries.
    */
   flushCompletions(): void {
-    if (!this.pendingCompletions.size) return;
+    if (!this.pendingCompletions.size && !this.unvoided.size) return;
     try {
       if (holdWriterLock(this.storeDir())) this.owner = false;
     } catch {
       this.owner = false;
       return; // Retain the facts for the next gain; never write under another live owner.
     }
+    // Cancels first: a refused record stays held as voided until its void line lands.
+    for (const line of this.unvoided) {
+      try {
+        appendVoidLine(this.storeFile(), line);
+      } catch {
+        continue;
+      }
+      this.unvoided.delete(line);
+    }
     for (const [key, pending] of this.pendingCompletions) {
       try {
-        appendLine(this.storeFile(), pending.line);
+        this.append(pending.line);
       } catch {
         continue;
       }
@@ -847,7 +897,7 @@ export class StatusAnswers {
       else (pending.target as AnswerHistoryEntry)[pending.step] = pending.value;
       this.pendingCompletions.delete(key);
     }
-    if (!this.pendingCompletions.size) {
+    if (!this.pendingCompletions.size && !this.unvoided.size) {
       this.unregisterCompletionCleanup?.();
       this.unregisterCompletionCleanup = null;
     }
@@ -855,7 +905,29 @@ export class StatusAnswers {
 
   private unregisterCompletionCleanup: (() => void) | null = null;
 
+  /**
+   * Appends one line to the store. A refused line whose void the disk refused too is held as voided from here on
+   * (see unvoided), and its void is written again later; the error still refuses the line.
+   */
+  private append(line: Record<string, unknown>): void {
+    try {
+      appendLine(this.storeFile(), line);
+    } catch (error) {
+      if (error instanceof AppendUnclearError) {
+        this.unvoided.add(error.line);
+        this.registerFlush();
+      }
+      throw error;
+    }
+  }
+
   private watchCompletions(): void {
+    this.registerFlush();
+    this.flushCompletions();
+  }
+
+  /** Flushes pending completions and void lines on close and exit, while either is waiting. */
+  private registerFlush(): void {
     if (!this.unregisterCompletionCleanup) {
       const flush = () => this.flushCompletions();
       // Prepend so done lines land before writer-lock's exit listener releases ownership.
@@ -866,7 +938,6 @@ export class StatusAnswers {
         unregister();
       };
     }
-    this.flushCompletions();
   }
 
   private answerKey(): AnswerKey {
@@ -880,13 +951,13 @@ export class StatusAnswers {
   private record(line: Record<string, unknown>): boolean {
     try {
       this.writer();
-      appendLine(this.storeFile(), line);
+      this.append(line);
       return true;
     } catch {
       if (line.type === 'delivery' && line.state === 'done') {
         try {
           holdWriterLock(this.storeDir());
-          appendLine(this.storeFile(), line);
+          this.append(line);
           return true;
         } catch {
           // Only failed persistence remains queued; this completion makes no cached decision.
@@ -1269,7 +1340,7 @@ export class StatusAnswers {
     recorded: AnswerHistoryEntry[],
     draft: { entryId: string; hash: string } | null,
     request: RequestKey | null
-  ): Promise<AnswerHistoryEntry | null> {
+  ): Promise<AnswerHistoryEntry | 'unclear' | null> {
     const id = randomUUID();
     const unsigned: UnsignedAnswer = {
       schema: ANSWER_SCHEMA,
@@ -1298,7 +1369,7 @@ export class StatusAnswers {
       this.writer();
       // the store changed hands since this send began: what it checked may be stale, so nothing is recorded
       if (this.sendEpoch !== null && this.epoch !== this.sendEpoch) return null;
-      appendLine(this.storeFile(), {
+      this.append({
         type: 'answer',
         id: entry.id,
         sendId,
@@ -1308,8 +1379,9 @@ export class StatusAnswers {
         ...(draft ? { entryId: draft.entryId, entryHash: draft.hash } : {}),
         ...(request ?? {}),
       });
-    } catch {
-      return null;
+    } catch (error) {
+      // Refused, and its void refused too: held as voided here, but a restart before the void lands may count it.
+      return error instanceof AppendUnclearError ? 'unclear' : null;
     }
     // No await since the line was written: a retry sees the record only with its claim on it.
     this.written.add(entry.id);
@@ -1423,6 +1495,7 @@ export class StatusAnswers {
       entry.entryId && hash ? { entryId: entry.entryId, hash } : null,
       request
     );
+    if (done === 'unclear') return refused(entry.cardId, 'answer_save_unclear');
     if (!done) return refused(entry.cardId, 'answer_not_saved');
     return { cardId: entry.cardId, outcome: 'recorded', code: null, error: null };
   }

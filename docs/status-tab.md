@@ -373,7 +373,9 @@ address, including one typed as prose such as `password: ...` with a digit in it
 so it is refused; the refusal names the kind, `It looks like an API key.`, and quotes none of it), `invalid_via`, `invalid_kind` (the entry's kind does not fit the card's
 kind), `words_required` (an objection without the owner's words), `sample_card` (a format sample takes no answer),
 `judgement_anchored` (a judgement card that carries a recommendation), `answer_not_saved` (the private store could
-not be written; nothing else happened for that entry), `store_busy` (another dashboard process on this computer holds
+not be written; nothing else happened for that entry), `answer_save_unclear` (the store refused the record and could not
+cancel it either: this process never delivers it, but a restart before the cancel lands may deliver it once; wait
+before sending it again), `store_busy` (another dashboard process on this computer holds
 the private store; nothing was written or sent), `share_unavailable` (the share failed or did not answer in time, so the
 card could not be checked; nothing was recorded for that entry, and it can be sent again). `card_changed` means the share
 answered: the card is not there, or is not that version. If the send cannot finish at
@@ -431,7 +433,11 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   each record starts on a line of its own and is written in one piece or refused; a record that fails to be written
   whole is cancelled by a `void` line naming it, never cut, so no writer can remove another's record. A record counts
   once its fsync succeeds: a later close error is logged and changes nothing, so a durable record is never answered
-  `answer_not_saved` and its draft id still guards a retry. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
+  `answer_not_saved` and its draft id still guards a retry. If the disk refuses that `void` line too, the entry is
+  answered `answer_save_unclear` instead: the process holds the record as cancelled, never lists, shares or rings it,
+  and writes the `void` line again on each gain, retry pass and send and on close and exit until it lands. Limit: if
+  the process ends before any of those `void` lines lands (killed, or the disk still refusing at exit), a restart
+  counts the record and may share and ring it once. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
   each minute. Only ENOENT means an empty journal; other journal read errors refuse store-dependent decisions
   (answers return `answer_not_saved`) and mark history unavailable even after a warm cache; a later good authoritative read recovers. A second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
   over when its holder on this computer has ended, or on Linux was written in an earlier boot or names a pid since

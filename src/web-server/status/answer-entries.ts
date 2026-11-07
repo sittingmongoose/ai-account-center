@@ -23,6 +23,8 @@ const REFUSALS = {
   judgement_anchored:
     'This judgement card carries a recommendation, so it cannot be answered until the agent removes it.',
   answer_not_saved: 'The answer could not be saved. Nothing was sent.',
+  answer_save_unclear:
+    'The answer may not have been saved. Don’t send it again yet; check again in a minute.',
   store_busy:
     'Another AI Account Center dashboard is recording answers from this folder. Nothing was sent. Close it, then send again.',
   share_unavailable:
