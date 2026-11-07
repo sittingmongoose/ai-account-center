@@ -7,11 +7,14 @@ use crate::live::Live;
 use leptos::prelude::*;
 
 /// A panel with its source's state and age in the header. A source that is not `ok` greys the body and says why.
+/// `also` are the panel's secondary sources: each one that is not `ok` is named under the header too, so a healthy
+/// main source never hides them.
 #[component]
 pub fn Panel(
     title: &'static str,
     #[prop(into)] source: Signal<Option<Source>>,
     #[prop(optional)] id: &'static str,
+    #[prop(optional)] also: Option<Signal<Vec<Source>>>,
     children: Children,
 ) -> impl IntoView {
     let live = expect_context::<Live>();
@@ -54,6 +57,14 @@ pub fn Panel(
                 </span>
             </header>
             {move || note().map(|n| view! { <p class="src-note">{n}</p> })}
+            {move || {
+                also.map(|a| a.get())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|s| s.problem().map(|p| (s.state, p)))
+                    .map(|(state, p)| view! { <p class="src-note" data-state=state>{p}</p> })
+                    .collect_view()
+            }}
             <div class="panel-body">{children()}</div>
         </section>
     }
@@ -80,6 +91,24 @@ fn source_of(
         let view = live.view.get()?;
         let id = id_of(&view);
         view.sources.iter().find(|s| s.id == id).cloned()
+    })
+}
+
+/// A panel's secondary sources (`also`), as the server lists them.
+fn also_of(
+    live: Live,
+    ids_of: impl Fn(&StatusView) -> Vec<String> + Send + Sync + 'static,
+) -> Signal<Vec<Source>> {
+    Signal::derive(move || {
+        let Some(view) = live.view.get() else {
+            return Vec::new();
+        };
+        let ids = ids_of(&view);
+        view.sources
+            .iter()
+            .filter(|s| ids.contains(&s.id))
+            .cloned()
+            .collect()
     })
 }
 
@@ -319,6 +348,7 @@ fn StreamView(stream: Stream) -> impl IntoView {
 fn ThreadsPanel() -> impl IntoView {
     let live = expect_context::<Live>();
     let source = source_of(live, |v| v.threads.source.clone());
+    let also = also_of(live, |v| v.threads.also.clone());
     let rows = move || {
         live.view.with(|v| {
             v.as_ref()
@@ -327,7 +357,7 @@ fn ThreadsPanel() -> impl IntoView {
         })
     };
     view! {
-        <Panel title="Threads" source=source id="threads">
+        <Panel title="Threads" source=source id="threads" also=also>
             <ul class="threads">
                 {move || {
                     let elapsed = live.elapsed_seconds();
@@ -337,13 +367,21 @@ fn ThreadsPanel() -> impl IntoView {
                         let place = [t.machine.clone(), t.stream.clone().map(|s| format!("stream {s}"))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
                         let blocked = t.blocked_on.as_ref().map(blocked_words);
                         let progress = t.progress.as_ref().and_then(|p| Some(format!("{} of {} {}", p.done?, p.total?, p.unit)));
+                        // A pm-mail row while the registry fails is its last good scan: say so beside its age.
+                        let cached = t.registry_source.as_ref().and_then(|s| s.reading_words(elapsed));
+                        let when = match (t.stale, cached) {
+                            (true, Some(c)) => format!("stale · {c} · {age}"),
+                            (false, Some(c)) => format!("{c} · {age}"),
+                            (true, None) => format!("stale · {age}"),
+                            (false, None) => age,
+                        };
                         view! {
                             <li class="thread" data-state=t.state.clone() data-stale=t.stale.then_some("1")>
                                 <div class="thread-top">
                                     <span class="state-dot" data-state=t.state.clone() aria-hidden="true"></span>
                                     <span class="thread-name">{t.name.clone()}</span>
                                     <span class="muted">{state_label(&t.state)}</span>
-                                    <span class="muted right">{if t.stale { format!("stale · {age}") } else { age }}</span>
+                                    <span class="muted right">{when}</span>
                                 </div>
                                 {t.doing.clone().map(|d| view! { <div class="thread-doing">{d}</div> })}
                                 {blocked.map(|b| view! { <div class="item-note" data-tone="warn">{b}</div> })}
@@ -393,6 +431,7 @@ fn meter(
 fn MachinesPanel() -> impl IntoView {
     let live = expect_context::<Live>();
     let source = source_of(live, |v| v.machines.source.clone());
+    let also = also_of(live, |v| v.machines.also.clone());
     let rows = move || {
         live.view.with(|v| {
             v.as_ref()
@@ -401,9 +440,12 @@ fn MachinesPanel() -> impl IntoView {
         })
     };
     view! {
-        <Panel title="Machines" source=source id="machines">
+        <Panel title="Machines" source=source id="machines" also=also>
             <div class="machines">
                 {move || rows().into_iter().map(|m| {
+                    // browser-check's readings carry its own age and problem, apart from the machine's.
+                    let slots_cached = m.slots_source.as_ref().and_then(|s| s.reading_words(live.elapsed_seconds()));
+                    let slots_state = m.slots_source.as_ref().map(|s| s.state.clone()).filter(|s| s != "ok");
                     let cpu = m.cpu.clone().unwrap_or_default();
                     let mem = m.memory.clone().unwrap_or_default();
                     let disk = m.disk.first().cloned().unwrap_or_default();
@@ -433,9 +475,10 @@ fn MachinesPanel() -> impl IntoView {
                             {meter("CPU", cpu.busy_pct, Some(100.0), cpu_words, false)}
                             {meter("Memory", mem_used, mem.total_gb, mem_words, low_mem)}
                             {meter("Disk", disk_used, disk.total_gb, disk_words, low_disk)}
-                            <div class="machine-slots muted">
+                            <div class="machine-slots muted" data-state=slots_state>
                                 {format!("Browsers {} · Recordings {}", slots(&m.browsers), slots(&m.recordings))}
                                 {m.gpu_pct.map(|g| format!(" · GPU {}", fmt::pct(g)))}
+                                {slots_cached.map(|c| format!(" · {c}"))}
                             </div>
                             {m.detail.clone().filter(|d| !d.is_empty()).map(|d| view! { <div class="item-note" data-tone="warn">{d}</div> })}
                             {m.warnings.into_iter().map(|w| view! { <div class="item-note" data-tone="warn">{w}</div> }).collect_view()}
@@ -520,12 +563,8 @@ fn UsagePanel() -> impl IntoView {
                                 } else {
                                     String::new()
                                 };
-                                // a stale reading says so in words, not only by fading
-                                let note = match (a.stale, state.is_empty()) {
-                                    (true, true) => "stale reading".to_string(),
-                                    (true, false) => format!("stale reading · {state}"),
-                                    (false, _) => state,
-                                };
+                                // a stale reading, or one from before a passed reset, says so in words, not only by fading
+                                let note = a.note(state);
                                 view! {
                                     <tr data-tone=tone data-stale=a.stale.then_some("1")>
                                         <th scope="row">{a.label}</th>

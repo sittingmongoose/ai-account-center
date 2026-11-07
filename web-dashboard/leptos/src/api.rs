@@ -102,6 +102,44 @@ impl Source {
     pub fn is_ok(&self) -> bool {
         self.state == "ok"
     }
+
+    /// How a reading this source supplied to another source's panel is labelled while this source is not `ok`:
+    /// "stale, read 6m ago" or "cached, read 1m ago" (the last good reading), never nothing. None while `ok`.
+    pub fn reading_words(&self, elapsed_seconds: i64) -> Option<String> {
+        if self.is_ok() {
+            return None;
+        }
+        let word = if self.state == "stale" {
+            "stale"
+        } else {
+            "cached"
+        };
+        Some(
+            match crate::fmt::live_age(self.age_seconds, elapsed_seconds) {
+                Some(age) if self.as_of.is_some() => {
+                    format!("{word}, read {}", crate::fmt::age(age))
+                }
+                _ => "not read yet".to_string(),
+            },
+        )
+    }
+
+    /// This source's problem, named, for a panel it is not the main source of. None while `ok`.
+    pub fn problem(&self) -> Option<String> {
+        if self.is_ok() {
+            return None;
+        }
+        let label = if self.label.is_empty() {
+            &self.id
+        } else {
+            &self.label
+        };
+        Some(if self.detail.is_empty() {
+            format!("{label}: {}", self.state)
+        } else {
+            format!("{label}: {}", self.detail)
+        })
+    }
 }
 
 /// quota-watch's estimates, as the server words them. Every value here is an estimate except rows marked otherwise.
@@ -503,6 +541,20 @@ pub struct Answer {
     pub delivery: Delivery,
 }
 
+impl Answer {
+    /// The answered row's first line: a completed action says Done; an answer names its choices (`labels`); a
+    /// legacy record with neither says it was a note.
+    pub fn label(&self, labels: &str) -> String {
+        if self.kind == "done" {
+            "Done".to_string()
+        } else if !labels.is_empty() {
+            labels.to_string()
+        } else {
+            "Note only".to_string()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Delivery {
@@ -682,6 +734,9 @@ pub struct BlockedOn {
 #[serde(rename_all = "camelCase", default)]
 pub struct Rows<T> {
     pub source: String,
+    /// The panel's secondary sources (pm-mail in Threads, browsers in Machines).
+    #[serde(deserialize_with = "nullable")]
+    pub also: Vec<String>,
     pub rows: Vec<T>,
 }
 
@@ -689,6 +744,7 @@ impl<T> Default for Rows<T> {
     fn default() -> Self {
         Self {
             source: String::new(),
+            also: Vec::new(),
             rows: Vec::new(),
         }
     }
@@ -718,6 +774,8 @@ pub struct Thread {
     /// Seconds this thread's clock runs ahead of AAC's, when it is enough to matter.
     pub clock_ahead_seconds: Option<i64>,
     pub problem: Option<String>,
+    /// A pm-mail row's registry state: while it fails, the row is the last good scan. None on report rows.
+    pub registry_source: Option<Source>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -755,6 +813,8 @@ pub struct Machine {
     /// Browsers running there now.
     #[serde(deserialize_with = "nullable")]
     pub sessions: Vec<Session>,
+    /// browser-check's state for browsers, recordings, GPU and sessions, apart from the machine's own `state`.
+    pub slots_source: Option<Source>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -867,6 +927,24 @@ pub struct UsageAccount {
     pub runs_out_before_reset: Option<bool>,
     pub at_limit: bool,
     pub stale: bool,
+    /// The reset passed after this reading: the number is history.
+    pub reset_passed: bool,
+}
+
+impl UsageAccount {
+    /// The row's state words: a stale reading says so, and one from before a passed reset says it is history.
+    pub fn note(&self, state: String) -> String {
+        let stale = if self.reset_passed {
+            "reading from before its reset"
+        } else {
+            "stale reading"
+        };
+        match (self.stale || self.reset_passed, state.is_empty()) {
+            (true, true) => stale.to_string(),
+            (true, false) => format!("{stale} · {state}"),
+            (false, _) => state,
+        }
+    }
 }
 
 /// Why a read failed, in words the page can show.
@@ -1568,5 +1646,127 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
+    }
+
+    /// The server's Machines and Threads rows after browser-check and the pm-mail registry failed at 10:01 while the
+    /// machine reads and agent reports stayed healthy (the Sol max reproduction on 2e7fa26d).
+    fn failed(id: &str, label: &str, detail: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "label": label, "state": "error", "asOf": "2026-11-07T15:00:00.000Z",
+            "ageSeconds": 60, "detail": detail
+        })
+    }
+
+    #[test]
+    fn a_failed_browser_check_labels_its_readings_cached_on_a_fresh_machine() {
+        let detail = "browser-check failed (since 10:01 AM). Showing the reading from 10:00 AM.";
+        let machines: Rows<Machine> = serde_json::from_value(serde_json::json!({
+            "source": "machines", "also": ["browsers"],
+            "rows": [{
+                "id": "vm", "label": "Ubuntu VM", "state": "ok", "ageSeconds": 0, "detail": null,
+                "browsers": {"running": 6, "max": 12}, "recordings": {"running": 1, "max": 5}, "gpuPct": 39,
+                "slotsSource": failed("browsers", "Browsers and recordings", detail)
+            }]
+        }))
+        .unwrap();
+        assert_eq!(machines.also, ["browsers"]);
+        let vm = &machines.rows[0];
+        assert_eq!(vm.state, "ok");
+        assert_eq!(vm.browsers.as_ref().and_then(|b| b.running), Some(6));
+        let slots = vm.slots_source.as_ref().unwrap();
+        assert_eq!(
+            slots.reading_words(0).as_deref(),
+            Some("cached, read 1m ago")
+        );
+        // The age keeps running between refreshes.
+        assert_eq!(
+            slots.reading_words(300).as_deref(),
+            Some("cached, read 6m ago")
+        );
+        assert_eq!(
+            slots.problem().as_deref(),
+            Some(format!("Browsers and recordings: {detail}").as_str())
+        );
+        // A healthy browser-check adds nothing; a stale one says stale.
+        let ok: Source = serde_json::from_value(
+            serde_json::json!({"id": "browsers", "state": "ok", "ageSeconds": 5, "asOf": "x"}),
+        )
+        .unwrap();
+        assert_eq!((ok.reading_words(0), ok.problem()), (None, None));
+        let stale: Source = serde_json::from_value(serde_json::json!({"id": "browsers", "label": "Browsers and recordings", "state": "stale", "ageSeconds": 400, "asOf": "x", "detail": "No new reading since 10:00 AM."})).unwrap();
+        assert_eq!(
+            stale.reading_words(0).as_deref(),
+            Some("stale, read 7m ago")
+        );
+        let never: Source = serde_json::from_value(serde_json::json!({"id": "browsers", "state": "missing", "asOf": null, "ageSeconds": null, "detail": ""})).unwrap();
+        assert_eq!(never.reading_words(0).as_deref(), Some("not read yet"));
+        assert_eq!(never.problem().as_deref(), Some("browsers: missing"));
+        // A view from before this field reads as unknown, not as healthy-looking data.
+        let old: Machine = serde_json::from_value(serde_json::json!({"id": "vm"})).unwrap();
+        assert!(old.slots_source.is_none());
+    }
+
+    #[test]
+    fn a_failed_pm_mail_registry_labels_its_rows_while_reports_stay_healthy() {
+        let detail = "The pm-mail registry could not be listed (since 10:01 AM). Showing the reading from 10:00 AM.";
+        let threads: Rows<Thread> = serde_json::from_value(serde_json::json!({
+            "source": "agent-reports", "also": ["pm-mail"],
+            "rows": [
+                {"name": "vm.report", "source": "report", "stale": false, "registrySource": null},
+                {"name": "registry-worker", "source": "pm-mail", "state": null, "stale": false, "problem": null,
+                 "ageSeconds": 60, "registrySource": failed("pm-mail", "pm-mail registry", detail)}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(threads.also, ["pm-mail"]);
+        assert!(threads.rows[0].registry_source.is_none());
+        let reg = threads.rows[1].registry_source.as_ref().unwrap();
+        assert_eq!(reg.reading_words(0).as_deref(), Some("cached, read 1m ago"));
+        assert_eq!(
+            reg.problem().as_deref(),
+            Some(format!("pm-mail registry: {detail}").as_str())
+        );
+    }
+
+    #[test]
+    fn a_usage_reading_from_before_its_reset_says_it_is_history() {
+        let row = |v: serde_json::Value| -> UsageAccount { serde_json::from_value(v).unwrap() };
+        let passed = row(serde_json::json!({
+            "label": "Review fixture", "window": "5-hour", "usedPct": 100, "resetsAt": "2026-11-07T15:00:30.000Z",
+            "projectedFullAt": null, "runsOutBeforeReset": null, "atLimit": false, "stale": true, "resetPassed": true
+        }));
+        assert_eq!(
+            passed.used_pct,
+            Some(100.0),
+            "the measured number stays, as history"
+        );
+        assert!(!passed.at_limit);
+        assert_eq!(passed.note(String::new()), "reading from before its reset");
+        let stale = row(serde_json::json!({"usedPct": 40, "stale": true}));
+        assert_eq!(stale.note(String::new()), "stale reading");
+        assert_eq!(
+            stale.note("full 4:00 PM".into()),
+            "stale reading · full 4:00 PM"
+        );
+        let current = row(
+            serde_json::json!({"usedPct": 100, "atLimit": true, "stale": false, "resetPassed": false}),
+        );
+        assert_eq!(current.note("at its limit".into()), "at its limit");
+    }
+
+    #[test]
+    fn a_completed_action_reads_done_with_or_without_a_note() {
+        let answer = |v: serde_json::Value| -> Answer { serde_json::from_value(v).unwrap() };
+        let bare = answer(serde_json::json!({"kind": "done", "choice": [], "note": ""}));
+        assert_eq!(bare.label(""), "Done");
+        let noted = answer(
+            serde_json::json!({"kind": "done", "choice": [], "note": "Moved the NAS share."}),
+        );
+        assert_eq!(noted.label(""), "Done");
+        let chosen = answer(serde_json::json!({"kind": "answer", "choice": ["b"], "note": ""}));
+        assert_eq!(chosen.label("b · Keep it"), "b · Keep it");
+        // A legacy record with no kind and no choice was a note.
+        let legacy = answer(serde_json::json!({"choice": null, "note": "Just a thought."}));
+        assert_eq!(legacy.label(""), "Note only");
     }
 }

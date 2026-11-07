@@ -923,7 +923,7 @@ fn AnsweredView(answered: AnsweredCard) -> impl IntoView {
     view! {
         <li class="answered-row" data-delivery=a.delivery.state.clone()>
             <div class="card-title-sm"><span class="card-label">{c.short()}</span>" "{c.title.clone()}</div>
-            <div>{if labels.is_empty() { "Note only".to_string() } else { labels }}{(a.via == "recommended").then_some(" (recommended)")}</div>
+            <div>{a.label(&labels)}{(a.via == "recommended").then_some(" (recommended)")}</div>
             {a.note.clone().filter(|n| !n.is_empty()).map(|n| view! { <blockquote>{n}</blockquote> })}
             <div class="muted">{format!("{} · {} · {delivery}", c.asked_by, fmt::clock(&a.answered_at))}</div>
             <DeliveryWarnings delivery=a.delivery.clone()/>
