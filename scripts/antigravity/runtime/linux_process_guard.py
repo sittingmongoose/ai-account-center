@@ -16,6 +16,14 @@ from pathlib import Path
 
 MAX_INPUT = 64 * 1024
 MAX_CMDLINE = 1024 * 1024
+# Missing /proc metadata is accepted only if this exact, already-open pidfd
+# confirms exit within this bound. The kernel drops a task's mm (and so
+# /proc/<pid>/exe) and closes its files before exit_notify makes the pidfd
+# readable; that gap is microseconds unless the exiting task is preempted.
+# 200 ms covers preemption on a loaded host, stays well under the 1 s worker
+# stop budget, and is spent only when metadata is missing. A live pidfd after
+# the bound remains a hard refusal.
+EXIT_CONFIRM_SECONDS = 0.2
 
 
 class GuardError(Exception):
@@ -85,6 +93,11 @@ def inspect(pid, executable_paths):
     return _inspect(pid, _allowed_executables(executable_paths))
 
 
+def _exit_confirmed(fd):
+    """True only when this exact pidfd reports exit within the bound."""
+    return bool(select.select([fd], [], [], EXIT_CONFIRM_SECONDS)[0])
+
+
 def stop_reviewed(identities, executable_paths, timeout_seconds=8.0):
     if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
         raise GuardError("pidfd-unavailable")
@@ -119,7 +132,7 @@ def stop_reviewed(identities, executable_paths, timeout_seconds=8.0):
                         if _inspect(pid, allowed) != identity:
                             raise GuardError("stale-process")
                     except (FileNotFoundError, ProcessLookupError):
-                        if not select.select([fd], [], [], 0)[0]:
+                        if not _exit_confirmed(fd):
                             raise
             except BaseException:
                 os.close(fd)
@@ -134,7 +147,7 @@ def stop_reviewed(identities, executable_paths, timeout_seconds=8.0):
                 if _inspect(identity["pid"], allowed) != identity:
                     raise GuardError("stale-process")
             except (FileNotFoundError, ProcessLookupError):
-                if not select.select([fd], [], [], 0)[0]:
+                if not _exit_confirmed(fd):
                     raise
         for fd, _identity in handles:
             try:
@@ -150,7 +163,7 @@ def stop_reviewed(identities, executable_paths, timeout_seconds=8.0):
                 # example when its reviewed parent receives SIGTERM first.
                 # Only this already-open exact pidfd may prove that it exited;
                 # missing metadata for a live pidfd remains a hard refusal.
-                if not select.select([fd], [], [], 0)[0]:
+                if not _exit_confirmed(fd):
                     raise
         deadline = time.monotonic() + timeout_seconds
         remaining = {fd for fd, _identity in handles}

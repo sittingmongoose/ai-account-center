@@ -15,7 +15,7 @@
     },
     {
       "path": "linux_process_guard.py",
-      "sha256": "935be212744f8c3e968dc2f7aa178ffa992f06fe44fda2989f8564a02a00e780"
+      "sha256": "594f6f33285804274fa41a616c502f14c56347903a143fdf9fef6c228b2ba27d"
     },
     {
       "path": "native_credential_worker.py",

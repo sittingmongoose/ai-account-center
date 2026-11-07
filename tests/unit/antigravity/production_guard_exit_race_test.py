@@ -154,6 +154,43 @@ while True:time.sleep(.1)
                     except ChildProcessError: pass
                     if not worker.closed: worker.close()
 
+    def test_real_worker_eof_before_pidfd_readable_is_reaped_and_result_retained(self):
+        # No mocks: real owned children, real pipes, real pidfds and /proc. After
+        # EOF the child has already dropped its mm (/proc/<pid>/exe is gone) but
+        # can still be finishing kernel exit, so its pidfd is not yet readable.
+        # Sharing one CPU lets the parent's EOF wakeup preempt that window. On
+        # a6e0aad3 it failed 15-23 of 300 iterations in 6 runs, first at iteration 1.
+        sys.path.insert(0, str(GUARD.parent))
+        from native_status_identity_worker import OwnedIdentityWorker
+        def callback():
+            return {'email':'fixture@example.com','subject':'123','source':'Google OAuth2 userinfo',
+                    'verifiedAt':'2026-11-07T00:00:00+00:00','credentialFingerprint':'a'*64,
+                    'credentialCurrent':True,'nativeSnapshotIdentity':(1,2,3,'a'*64)}
+        affinity = os.sched_getaffinity(0)
+        failures = []
+        os.sched_setaffinity(0, {min(affinity)})
+        try:
+            for iteration in range(300):
+                worker = OwnedIdentityWorker(callback)
+                try:
+                    profile = None
+                    deadline = time.monotonic() + 3
+                    while profile is None and time.monotonic() < deadline:
+                        profile = worker.poll()
+                    self.assertEqual(profile['subject'], '123')
+                    try:
+                        self.assertTrue(worker.close())
+                        with self.assertRaises(ChildProcessError): os.waitpid(worker.pid, os.WNOHANG)
+                    except (OSError, AssertionError) as error:
+                        failures.append((iteration + 1, type(error).__name__))
+                finally:
+                    try: os.waitpid(worker.pid, 0)
+                    except ChildProcessError: pass
+                    if not worker.closed: worker.close()
+        finally:
+            os.sched_setaffinity(0, affinity)
+        self.assertEqual(failures, [])
+
     def test_missing_metadata_with_live_pidfd_still_refuses(self):
         guard=load(GUARD,'candidate_guard_live')
         pid=12345;identity={'pid':pid,'startTime':'invented:1','ownerId':'1000','fingerprint':'a'*64}
@@ -164,9 +201,11 @@ while True:time.sleep(.1)
             return value
         with patch.object(guard,'_allowed_executables',return_value=set()),patch.object(guard,'_inspect',side_effect=inspected),\
                 patch.object(guard.os,'pidfd_open',return_value=99),patch.object(guard.os,'close'),\
-                patch.object(guard.select,'select',return_value=([],[],[])),patch.object(guard.signal,'pidfd_send_signal') as sent:
+                patch.object(guard.select,'select',return_value=([],[],[])) as polled,patch.object(guard.signal,'pidfd_send_signal') as sent:
             with self.assertRaises(FileNotFoundError):guard.stop_reviewed([identity],['/invented'],timeout_seconds=1)
             sent.assert_not_called()
+            # The refusal came after the bounded exact-pidfd exit wait, not a zero poll.
+            self.assertEqual(polled.call_args_list[-1].args,([99],[],[],guard.EXIT_CONFIRM_SECONDS))
 
     def test_changed_birth_still_refuses_entire_plan_before_signal(self):
         guard=load(GUARD,'candidate_guard_birth')
