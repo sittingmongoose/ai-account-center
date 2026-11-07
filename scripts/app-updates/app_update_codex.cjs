@@ -60,14 +60,14 @@ function createUpdateRuntime(createRuntime, deps = {}) {
     launch: (target, desktop, outside) => relaunch(target, desktop, outside, deps) });
 }
 /** What a marker's fields say an earlier run closed. Bad entries are dropped. */
-function markerObligations(marker, current, legacyDesktop) {
-  const desktops = current && Array.isArray(marker?.desktops)
+function markerObligations(marker, legacyDesktop) {
+  const desktops = Array.isArray(marker?.desktops)
     ? [...new Set(marker.desktops.filter((item) => typeof item === 'string' && /^[0-9a-f]{32}$/.test(item)))] : [];
   return {
-    daemon: Boolean(current && marker?.daemon === true),
+    daemon: marker?.daemon === true,
     desktops,
     // A marker that names a desktop but no instance: some desktop must come back.
-    anyDesktop: Boolean(current && desktops.length === 0 && (marker?.desktop === true || legacyDesktop)),
+    anyDesktop: desktops.length === 0 && (marker?.desktop === true || legacyDesktop),
   };
 }
 function addObligations(prior, plan) {
@@ -116,11 +116,10 @@ function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'u
 /**
  * `closed`: what a run's stop() has closed, which a retry must see running again: the `daemon`, and
  * each desktop in `desktops` by a salted hash of its data folder (`desktop` says whether any). A marker
- * without them, written before stop(), says only that a restart is owed. `version` is the install it
- * applies to; `target` is the version a desktop install was about to put in place, so a helper killed
- * partway, or an installer that replaced the app and then failed, still leaves the record findable.
+ * without them, written before stop(), says only that a restart is owed. `version` is what was installed
+ * when it was written, and `target` the version a desktop install was about to put in place.
  */
-const markerMatches = (marker, installed) => [marker?.version, marker?.target].some((item) => version(item) === installed);
+const markerMatches = (marker, installed) => Boolean(installed) && [marker?.version, marker?.target].some((item) => version(item) === installed);
 function markPending(closed = {}) {
   fs.mkdirSync(path.dirname(markerFile()), { recursive: true, mode: 0o700 });
   const temporary = markerFile() + '.' + process.pid + '.tmp';
@@ -180,14 +179,15 @@ async function execute(deps) {
     // A retry restarts only what its own stop() finds, because the launch snapshot of a failed
     // earlier run is gone. The marker says what that run closed, and only a marker that names
     // something is a retry: a run stopped by a busy Codex, or a marker the Python path wrote,
-    // closed nothing. A desktop marker from before these fields counts as a closed desktop: the old
-    // bridge wrote one after any stop(), even with no desktop running, so a host with only a
-    // daemon can see one false restart_not_running before the marker clears. Versions compare on
-    // their numeric part, since the Python path writes a prerelease in full.
+    // closed nothing. What it names is owed whatever version is installed now, since a helper can be
+    // killed after replacing the app. A desktop marker from before these fields counts as a closed
+    // desktop if it is for this install: the old bridge wrote one after any stop(), even with no
+    // desktop running, so a host with only a daemon can see one false restart_not_running before the
+    // marker clears. Versions compare on their numeric part, since the Python path writes a
+    // prerelease in full.
     const marker = deps.marked();
-    const current = restartOnly || markerMatches(marker, output.previousVersion);
     const unnamed = marker && marker.desktop === undefined && marker.daemon === undefined;
-    prior = markerObligations(marker, current, mode === 'desktop' && Boolean(unnamed));
+    prior = markerObligations(marker, Boolean(mode === 'desktop' && unnamed && (restartOnly || markerMatches(marker, output.previousVersion))));
     retried = stillOwed(prior, { daemon: false, desktops: [] });
     if (mode === 'cli') {
       output.updateAttempted = true;
@@ -197,7 +197,7 @@ async function execute(deps) {
       output.version = version(await deps.readVersion());
       if (!output.version) { output.messageCode = 'version_unknown'; return output; }
       if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
-      if (output.version === output.previousVersion && !deps.pending(output.version)) {
+      if (output.version === output.previousVersion && !retried && !deps.pending(output.version)) {
         output.status = 'current'; output.messageCode = 'current'; return output;
       }
       deps.mark(retried ? markerFields(prior) : undefined);
@@ -253,12 +253,22 @@ async function execute(deps) {
     // retried here. The marker stays, and the next click reports what it finds (restart_not_running):
     // the updaters send a matching marker here even with no daemon running.
     // An installer that failed may still have replaced the app: what is installed now decides which
-    // version the marker applies to.
+    // version the row and the marker name. A CLI update stops nothing first, so a daemon still running
+    // the old binary is owed a restart too, or the next click would call it current.
     if (updating) {
       try {
         const now = version(await deps.readVersion());
-        if (now && (mode === 'desktop' || retried)) output.version = now;
-        if (mode === 'cli' && retried && output.version !== output.previousVersion) deps.mark(markerFields(prior));
+        if (now && now !== output.version) {
+          output.version = now;
+          if (mode === 'cli') {
+            const probe = deps.runtime();
+            // An older runtime can't say, so it is taken to have one.
+            const running = probe.restartState ? (await probe.restartState()).daemon : true;
+            const owed = { ...prior, daemon: prior.daemon || running };
+            if (stillOwed(owed, { daemon: false, desktops: [] })) deps.mark(markerFields(owed));
+            else nothingOwed = true;
+          }
+        }
       } catch { /* The version stays as it was read before the install. */ }
     }
     if (stopped) {
@@ -268,7 +278,7 @@ async function execute(deps) {
       if (mode === 'desktop' && !installed && closed) {
         try {
           if (!stillOwed(closed, await verifiedState(runtime, deps, closed))) { deps.clear(); nothingOwed = true; }
-          else if (output.version !== output.previousVersion) deps.mark(markerFields(closed));
+          else if (output.version && output.version !== output.previousVersion) deps.mark(markerFields(closed));
         } catch { /* The marker stays: the next click checks again. */ }
       }
     }
@@ -292,7 +302,7 @@ async function execute(deps) {
       // the desktop package was not touched.
       output.status = 'action_required'; output.messageCode = 'codex_busy';
     } else {
-      output.status = !nothingOwed && (output.version !== output.previousVersion || deps.pending(output.version)) ? 'restart_failed' : 'failed';
+      output.status = !nothingOwed && (retried || output.version !== output.previousVersion || deps.pending(output.version)) ? 'restart_failed' : 'failed';
       output.messageCode = output.status === 'restart_failed' ? 'restart_failed' : 'update_failed';
     }
   } finally { await runtime?.dispose?.(); }

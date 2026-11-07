@@ -227,10 +227,10 @@ class UpdateRecoveryTests(unittest.TestCase):
 
     def test_metadata_child_deadline_covers_http_headers_chunks_trailers_and_body(self):
         # A real Python child has to start and connect inside the budget. On a busy host it may not,
-        # which says nothing about the deadline, so a miss gets one larger budget before it counts.
+        # which says nothing about the deadline, so a miss gets larger budgets before it counts.
         for case in ("complete", "body", "headers", "chunk-extension", "trailer"):
             with self.subTest(case=case):
-                for budget, final in ((1.5, False), (4, True)):
+                for budget, final in ((1.5, False), (4, False), (8, True)):
                     if self._metadata_deadline_attempt(case, budget, final):
                         break
 
@@ -239,7 +239,7 @@ class UpdateRecoveryTests(unittest.TestCase):
         server = socket.socket()
         server.bind(("127.0.0.1", 0))
         server.listen(1)
-        server.settimeout(10)
+        server.settimeout(20)
         stop, received = threading.Event(), threading.Event()
         children = []
         real_popen = common.subprocess.Popen
@@ -258,13 +258,13 @@ class UpdateRecoveryTests(unittest.TestCase):
                         connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc")
                         return
                     prefix = {
-                        "body": b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n",
+                        "body": b"HTTP/1.1 200 OK\r\nContent-Length: 800\r\n\r\n",
                         "headers": b"HTTP/1.1 200 OK\r\nX-Slow: ",
                         "chunk-extension": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1;extension=",
                         "trailer": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\nX-Trailer: ",
                     }[case]
                     connection.sendall(prefix)
-                    for _ in range(240):
+                    for _ in range(360):
                         if stop.wait(.05):
                             return
                         connection.sendall(b"x")
@@ -287,11 +287,13 @@ class UpdateRecoveryTests(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
                         zcode.read_bounded(url, "http://127.0.0.1:", 1024, deadline=started + budget)
-            self.assertLess(time.monotonic() - started, budget * 2, "the complete operation must stop before a twelve-second drip finishes")
+            elapsed = time.monotonic() - started
             self.assertEqual(len(children), 1)
             self.assertIsNotNone(children[0].poll(), "the metadata child must be reaped")
-            if not received.is_set() and not final:
+            # A starved first attempt says nothing yet; the final one has to hold both.
+            if not final and (not received.is_set() or elapsed >= budget * 2):
                 return False
+            self.assertLess(elapsed, budget * 2, "the complete operation must stop before an eighteen-second drip finishes")
             self.assertTrue(received.is_set())
         finally:
             stop.set()

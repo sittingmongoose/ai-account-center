@@ -557,15 +557,47 @@ describe('Pending-marker retry', () => {
     expect((await bridge.execute(desktopRetry(deps))).status).toBe('updated');
   });
 
-  it('keeps a real upgrade with a stale marker clean', async () => {
+  it('keeps a real upgrade with a stale marker that names nothing clean', async () => {
     const value = fixture();
     const result = await bridge.execute({
       ...value.deps,
-      marked: () => ({ version: '0.9.0', desktop: true, daemon: true, desktops: [A] }),
+      marked: () => ({ version: '0.9.0', desktop: false, daemon: false, desktops: [] }),
       operation: 'cli',
       runtime: () => runtime(),
     });
     expect(result.status).toBe('updated');
+  });
+
+  it('owes what a marker names whatever version is installed now', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      marked: () => ({ version: '0.9.0', daemon: true }),
+      operation: 'cli',
+      runtime: () => runtime(),
+    });
+    expect(result.messageCode).toBe('restart_not_running');
+  });
+
+  it('does not call a retry current when the update changed nothing', async () => {
+    const { deps } = retry({ version: '0.9.0', daemon: true });
+    deps.pending = () => false;
+    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
+    const back = retry({ version: '0.9.0', daemon: true }, { daemon: true });
+    back.deps.pending = () => false;
+    expect((await bridge.execute(back.deps)).status).toBe('updated');
+  });
+
+  it('reports a failed retry as a failed restart at any version', async () => {
+    const { deps } = retry({ version: '0.9.0', daemon: true });
+    deps.pending = () => false;
+    deps.runtime = () => ({
+      ...runtime(),
+      start: async () => {
+        throw new Error('private');
+      },
+    });
+    expect((await bridge.execute(deps)).status).toBe('restart_failed');
   });
 
   it('writes what was closed only after stop(), from the runtime plan', async () => {
@@ -729,13 +761,6 @@ describe('Pending-marker retry', () => {
     expect(value.pending()).toBe(false);
   });
 
-  it('reads a marker by the target it was interrupted on the way to', async () => {
-    const { deps } = retry({ version: '0.5.0', target: '1.0.0', daemon: true });
-    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
-    const other = retry({ version: '0.5.0', target: '0.9.0', daemon: true });
-    expect((await bridge.execute(other.deps)).status).toBe('updated');
-  });
-
   it('carries a CLI retry to the version an updater that failed left installed', async () => {
     const value = fixture();
     let installed = '1.0.0';
@@ -759,7 +784,7 @@ describe('Pending-marker retry', () => {
     });
   });
 
-  it('leaves a first CLI update that failed as a failed update', async () => {
+  it('leaves a first CLI update that failed and changed nothing as a failed update', async () => {
     const value = fixture();
     const result = await bridge.execute({
       ...value.deps,
@@ -770,6 +795,62 @@ describe('Pending-marker retry', () => {
     });
     expect(result.status).toBe('failed');
     expect(value.marks).toEqual([]);
+  });
+
+  /** A first CLI update that puts 2.0.0 in place and then exits unsuccessfully, with no marker. */
+  function partialCli(value: ReturnType<typeof fixture>, daemon: boolean) {
+    let installed = '1.0.0';
+    return {
+      ...value.deps,
+      readVersion: async () => installed,
+      update: async () => {
+        installed = '2.0.0';
+        throw new Error('private');
+      },
+      operation: 'cli',
+      runtime: () => runtime({}, { daemon }),
+    };
+  }
+
+  it('owes a restart to a daemon a partial first CLI update left on the old binary', async () => {
+    const value = fixture();
+    const result = await bridge.execute(partialCli(value, true));
+    expect(result.status).toBe('restart_failed');
+    expect(result.version).toBe('2.0.0');
+    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [] }]);
+  });
+
+  it('owes nothing after a partial first CLI update with no daemon running', async () => {
+    const value = fixture();
+    const result = await bridge.execute(partialCli(value, false));
+    expect(result.status).toBe('failed');
+    expect(result.version).toBe('2.0.0');
+    expect(value.marks).toEqual([]);
+  });
+
+  it('takes an older runtime to have a daemon after a partial first CLI update', async () => {
+    const value = fixture();
+    await bridge.execute({
+      ...partialCli(value, false),
+      runtime: () => ({ stop: async () => {}, start: async () => {} }),
+    });
+    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [] }]);
+  });
+
+  it('never writes an empty version over the record', async () => {
+    const value = fixture();
+    let reads = 0;
+    const result = await bridge.execute({
+      ...value.deps,
+      readVersion: async () => (reads++ === 0 ? '1.0.0' : ''),
+      update: async () => {},
+      expectedCandidate: '2.0.0',
+      operation: 'desktop',
+      runtime: () => runtime({ daemon: true }),
+    });
+    expect(result.status).toBe('restart_failed');
+    // Only the record from when stop() returned: the version read came back empty.
+    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [], target: '2.0.0' }]);
   });
 
   it('holds an owed daemon to the readiness check, not its arguments', async () => {
@@ -1239,6 +1320,13 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     const { result, marker } = run('idle', {
       marker: { version: '1.0.0', target: '2.0.0', daemon: true },
     });
+    expect(result.messageCode).toBe('restart_not_running');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('still owes what a marker names after a helper was killed mid-update', () => {
+    const { result, marker } = run('idle', { marker: { version: '1.0.0', daemon: true } });
+    expect(result.status).toBe('restart_failed');
     expect(result.messageCode).toBe('restart_not_running');
     expect(fs.existsSync(marker)).toBe(false);
   });

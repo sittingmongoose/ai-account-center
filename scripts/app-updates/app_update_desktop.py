@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 
 from app_update_common import (
     Install, RangeReader, UpdateFailure, command, download, powershell, private_temporary,
-    marker_applies_to, ps_quote, remote_fingerprint, result, version_text, version_tuple, write_private_json,
+    marker_applies_to, marker_owes_restart, pending_marker, ps_quote, remote_fingerprint, result, version_text, version_tuple, write_private_json,
 )
 from app_update_processes import (
     desktop_arguments, family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops,
@@ -765,12 +765,11 @@ def update_linux(install, deadline=None):
         # knows the installed copy, so "current" would be a false answer.
         if not apt_package_sources(policy):
             return result(install.app_id, "ubuntu", "action_required", before, before, "apt", "source_disabled", False)
-        pending = pathlib.Path.home() / ".ccs/app-updates/codex-desktop-pending-restart.json"
+        # Codex Desktop's own record: another app that reaches here has no such marker.
         retry_restart = False
-        try:
-            retry_restart = marker_applies_to(json.loads(pending.read_text(encoding="utf-8")), before)
-        except (AttributeError, OSError, ValueError):
-            pass
+        if install.app_id == "codex-desktop":
+            marker = pending_marker(pathlib.Path.home() / ".ccs/app-updates/codex-desktop-pending-restart.json")
+            retry_restart = marker_owes_restart(marker) or marker_applies_to(marker, before)
         if version_tuple(candidate) <= version_tuple(before) and not retry_restart:
             return result(install.app_id, "ubuntu", "current", before, before, "apt")
         if install.app_id == "codex-desktop":

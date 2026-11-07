@@ -557,6 +557,12 @@ class UpdaterTests(unittest.TestCase):
             _, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker={'version': '1.0.0', 'target': '2.0.0', 'daemon': True})
         self.assertTrue(bridged)
 
+    def test_a_cli_retry_killed_after_replacing_codex_still_reaches_the_bridge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker={'version': '1.0.0', 'daemon': True})
+        self.assertTrue(bridged)
+        self.assertEqual(value['messageCode'], 'restart_not_running')
+
     def test_a_cli_retry_reaches_the_bridge_for_a_prerelease(self):
         # The bridge writes the numeric part; version_text keeps the prerelease.
         self.assertEqual(common.version_text('codex-cli 0.50.0-alpha.1'), '0.50.0-alpha.1')
@@ -573,7 +579,7 @@ class UpdaterTests(unittest.TestCase):
 
     def test_a_cli_click_with_no_daemon_and_no_matching_marker_stays_on_the_ordinary_path(self):
         closed = {'version': '2.0.0', 'daemon': True}
-        cases = ({'marker': None}, {'marker': {'version': '1.0.0', 'daemon': True}}, {'marker': {'version': '2.0.0'}},
+        cases = ({'marker': None}, {'marker': {'version': '1.0.0'}}, {'marker': {'version': '2.0.0'}},
                  {'marker': {'version': '2.0.0', 'desktop': False, 'daemon': False}}, {'marker': closed, 'manager': 'npm'}, {'marker': closed, 'binary': False})
         for case in cases:
             with tempfile.TemporaryDirectory() as directory:

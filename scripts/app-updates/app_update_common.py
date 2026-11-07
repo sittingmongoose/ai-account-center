@@ -263,6 +263,21 @@ def marker_names_version(marker_version, installed):
     return numeric(marker_version) is not None and numeric(marker_version) == numeric(installed)
 
 
+def pending_marker(pending):
+    """A pending-restart marker's fields, or none without a readable one."""
+    try:
+        value = json.loads(pending.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def marker_owes_restart(marker):
+    """Whether a marker names something an earlier run closed. That is owed whatever version is
+    installed now, since a helper can be killed after replacing the app; the bridge checks what runs."""
+    return marker.get("desktop") is True or marker.get("daemon") is True
+
+
 def marker_applies_to(marker, installed):
     """Whether a pending-restart marker is for this install: the version it records, or the version a
     desktop install was about to put in place when it was interrupted."""
