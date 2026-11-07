@@ -187,16 +187,15 @@ export function createUsageRouter(deps: StoreRouterDeps = {}): Router {
     try {
       const at = now();
       const longest = Math.max(...spanNames.map((name) => SPANS[name]));
-      // Which series exist: one hourly pass over the longest span.
-      const points = await current.seriesPoints({
+      // Which series were seen in the longest span, from series metadata: no point cap can
+      // leave one out.
+      const series = await current.seriesList({
         fromMs: at - longest,
         toMs: at,
-        resolution: 'hour',
         ...(filter.accountIds ? { accountIds: filter.accountIds } : {}),
         ...(filter.provider ? { provider: filter.provider } : {}),
         ...(filter.window ? { windowKey: filter.window } : {}),
       });
-      const series = points.series;
       const refs: SeriesRef[] = series.map((s) => ({
         identity: s.identity,
         window: s.window.identity,

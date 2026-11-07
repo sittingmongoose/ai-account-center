@@ -75,6 +75,24 @@ function fakeStore(): AacStore {
           },
         ],
       };
+    if (name === 'seriesList')
+      return [
+        {
+          identity: 'i'.repeat(64),
+          accountId: 'codex:first',
+          provider: 'codex',
+          plan: null,
+          window: {
+            identity: '["five_hour",null,null]',
+            key: 'five_hour',
+            label: '5 hour',
+            kind: null,
+            unit: null,
+            poolId: null,
+            poolLabel: null,
+          },
+        },
+      ];
     if (name === 'burnLong')
       return [
         {
@@ -89,6 +107,7 @@ function fakeStore(): AacStore {
   return {
     status: record('status'),
     seriesPoints: record('seriesPoints'),
+    seriesList: record('seriesList'),
     usageAt: record('usageAt'),
     burnLong: (series: unknown, spans: unknown) => record('burnLong')({ series, spans }),
     periods: (series: unknown) => record('periods')({ series }),
@@ -187,6 +206,10 @@ describe('history store routes', () => {
     ).json();
     // Coverage 0.3 is under half the span: the rate is withheld, the coverage shown.
     expect(burn.series[0].spans[0]).toEqual({ span: '7d', consumed: 2, rate: null, coverage: 0.3 });
+    // Series come from metadata, never from a capped point query.
+    const burnCalls = calls.slice(1).map(([name]) => name);
+    expect(burnCalls).toContain('seriesList');
+    expect(burnCalls).not.toContain('seriesPoints');
   });
 
   it('says plainly when the store is not available', async () => {

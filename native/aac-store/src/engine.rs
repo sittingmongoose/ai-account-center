@@ -284,15 +284,116 @@ impl Engine {
         format!("{}/{}", projector.name(), log.name())
     }
 
-    /// Brings every projector up to the end of both logs, rebuilding any whose version changed.
-    fn replay(&self) -> Result<Vec<Finding>> {
+    /// A projector's first checkpoint in a log: its chain starts where the log's retired events end.
+    fn fresh_checkpoint(projector: &dyn Projector, log_id: LogId, log: &Log) -> Checkpoint {
+        Checkpoint {
+            log: log_id.name().into(),
+            segment_generation: crate::log::GENERATION,
+            projector_schema_version: projector.version(),
+            survivor_prefix_sha256: log.base_digest().unwrap_or_default(),
+            ..Default::default()
+        }
+    }
+
+    /// Checks every checkpoint against the events each log still holds (docs/store.md 2.6): a
+    /// projection built from events the log has lost, or whose chain cannot be checked, is stale.
+    /// Returns the stale projectors and the findings, the logs' own included.
+    fn check_checkpoints(&self, logs: &mut Logs, db: &Database) -> Result<(Vec<usize>, Vec<Finding>)> {
+        let mut stale = Vec::new();
         let mut findings = Vec::new();
-        let logs = self.lock_logs();
+        for log_id in LogId::ALL {
+            let mut checkpoints: Vec<(usize, Checkpoint)> = Vec::new();
+            {
+                let read = db.begin_read()?;
+                let table = read.open_table(db::CHECKPOINT)?;
+                for (i, projector) in self.projectors.iter().enumerate() {
+                    if projector.reads(log_id)
+                        && let Some(cp) =
+                            db::read_checkpoint(&table, &Self::checkpoint_name(projector.as_ref(), log_id))?
+                    {
+                        checkpoints.push((i, cp));
+                    }
+                }
+            }
+            let log = logs.peek(log_id);
+            let base = log.base_digest();
+            let mut chain = base.clone();
+            // For each checkpoint: the last surviving event at or below it, and the chain there.
+            let mut reached: Vec<Option<(u64, Option<String>)>> = vec![None; checkpoints.len()];
+            let mut log_findings = log.read_ids(|sequence, event_id| {
+                chain = chain.as_deref().map(|c| db::chain_digest(c, sequence, event_id));
+                for (k, (_, cp)) in checkpoints.iter().enumerate() {
+                    if sequence <= cp.last_sequence_id {
+                        reached[k] = Some((sequence, chain.clone()));
+                    }
+                }
+            })?;
+            findings.append(&mut log_findings);
+            let retired_below = log.manifest().retired_below;
+            let mut reanchor = false;
+            for (k, (i, cp)) in checkpoints.iter().enumerate() {
+                if cp.last_sequence_id == 0 {
+                    continue;
+                }
+                let matches = match &reached[k] {
+                    Some((seq, Some(digest))) => *seq == cp.last_sequence_id && *digest == cp.survivor_prefix_sha256,
+                    Some((_, None)) => false,
+                    // Everything it was built from has retired: the retirement chain must end there.
+                    None => {
+                        base.as_deref() == Some(cp.survivor_prefix_sha256.as_str())
+                            && retired_below == cp.last_sequence_id + 1
+                    }
+                };
+                if matches {
+                    continue;
+                }
+                let projector = self.projectors[*i].name();
+                let (kind, detail) = if base.is_none() {
+                    reanchor = true;
+                    (
+                        "projection_unverifiable_missing",
+                        format!(
+                            "the {} log's retired events are not recorded, so the {projector} tables could not be checked against it; they were rebuilt from the surviving events",
+                            log_id.name()
+                        ),
+                    )
+                } else {
+                    (
+                        "projection_missing_events",
+                        format!(
+                            "the {} log no longer holds every event the {projector} tables were built from; they were rebuilt from the surviving events",
+                            log_id.name()
+                        ),
+                    )
+                };
+                let from = reached[k].as_ref().map(|(seq, _)| seq + 1).unwrap_or(retired_below);
+                findings.push(Finding {
+                    kind: kind.into(),
+                    detail,
+                    start_seq: Some(from),
+                    end_seq: Some(cp.last_sequence_id),
+                });
+                if !stale.contains(i) {
+                    stale.push(*i);
+                }
+            }
+            if reanchor {
+                // Rebuilt projections start their chain at the first surviving event.
+                logs.get(log_id).set_base_digest("")?;
+            }
+        }
+        Ok((stale, findings))
+    }
+
+    /// Brings every projector up to the end of both logs, rebuilding any whose version changed or
+    /// whose checkpoint does not match the surviving events.
+    fn replay(&self) -> Result<Vec<Finding>> {
+        let mut logs = self.lock_logs();
         self.with_db(|db| {
-            // Version changes drop and rebuild.
+            let (lost, mut findings) = self.check_checkpoints(&mut logs, db)?;
             let txn = begin(db)?;
-            for projector in &self.projectors {
-                let mut stale = false;
+            for (index, projector) in self.projectors.iter().enumerate() {
+                let mut stale = lost.contains(&index);
                 {
                     let table = txn.open_table(db::CHECKPOINT)?;
                     for log in LogId::ALL {
@@ -327,12 +428,7 @@ impl Engine {
                     for (i, projector) in self.projectors.iter().enumerate() {
                         if projector.reads(log_id) {
                             let cp = db::read_checkpoint(&table, &Self::checkpoint_name(projector.as_ref(), log_id))?
-                                .unwrap_or_else(|| Checkpoint {
-                                    log: log_id.name().into(),
-                                    segment_generation: crate::log::GENERATION,
-                                    projector_schema_version: projector.version(),
-                                    ..Default::default()
-                                });
+                                .unwrap_or_else(|| Self::fresh_checkpoint(projector.as_ref(), log_id, log));
                             checkpoints.push((i, cp));
                         }
                     }
@@ -362,7 +458,8 @@ impl Engine {
                     pending.clear();
                     Ok(())
                 };
-                let mut read_findings = log.read_after(if floor == 0 { None } else { Some(floor) }, |event| {
+                // The check above already reported what the logs hold; this pass only projects.
+                log.read_after(if floor == 0 { None } else { Some(floor) }, |event| {
                     pending.push(event);
                     if pending.len() >= PROJECTOR_BATCH {
                         flush(&mut pending, &mut checkpoints)?;
@@ -370,11 +467,9 @@ impl Engine {
                     Ok(())
                 })?;
                 flush(&mut pending, &mut checkpoints)?;
-                findings.append(&mut read_findings);
             }
-            Ok(())
-        })?;
-        Ok(findings)
+            Ok(findings)
+        })
     }
 
     /// Runs `build` inside one redb write transaction: each pushed event gets its sequence,
@@ -387,15 +482,11 @@ impl Engine {
             let mut checkpoints = Vec::new();
             {
                 let table = txn.open_table(db::CHECKPOINT)?;
+                let log = logs.peek(log_id);
                 for (i, projector) in self.projectors.iter().enumerate() {
                     if projector.reads(log_id) {
                         let cp = db::read_checkpoint(&table, &Self::checkpoint_name(projector.as_ref(), log_id))?
-                            .unwrap_or_else(|| Checkpoint {
-                                log: log_id.name().into(),
-                                segment_generation: crate::log::GENERATION,
-                                projector_schema_version: projector.version(),
-                                ..Default::default()
-                            });
+                            .unwrap_or_else(|| Self::fresh_checkpoint(projector.as_ref(), log_id, log));
                         checkpoints.push((i, cp));
                     }
                 }
@@ -873,6 +964,9 @@ fn mirror_backup(primary: &Path, root: &Path, id: &str, manifest: &Json) -> Resu
     for file in manifest["files"].as_array().unwrap() {
         let rel = file["path"].as_str().unwrap();
         let sha = file["sha256"].as_str().unwrap();
+        if !backup_rel_ok(rel, id) {
+            fail!("invalid", "a backup file path is outside the backup");
+        }
         let (source, dest) = if let Some(rest) = rel.strip_prefix(&format!("sets/{id}/")) {
             (primary.join("sets").join(id).join(rest), staging.join(rest))
         } else {
@@ -954,71 +1048,202 @@ pub fn prune_backups(root: &Path, keep_daily: usize, keep_with_redb: usize) -> R
     Ok(())
 }
 
-/// Restores a verified backup with the dashboard stopped (docs/store.md 4.7). Current files go
-/// to `quarantine/`; an interrupted restore is finished by the next open from its intent.
-pub fn restore(dir: &Path, backup_dir: &Path) -> Result<Json> {
-    fsx::private_dir(dir)?;
-    let _lock = fsx::lock_store(dir)?;
-    finish_restore(dir)?;
+/// A name a backup may use for a file or folder: one path component of safe characters.
+fn backup_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
+}
+
+/// A backup file path: `pool/<log>/<name>` or `sets/<id>/<name>`, nothing else.
+fn backup_rel_ok(rel: &str, id: &str) -> bool {
+    let parts: Vec<&str> = rel.split('/').collect();
+    match parts.as_slice() {
+        ["pool", log, name] => ["readings", "ledger"].contains(log) && backup_name_ok(name),
+        ["sets", set, name] => *set == id && backup_name_ok(name),
+        _ => false,
+    }
+}
+
+/// `path` is a regular file (not a link) whose folders up to `root` are not links either.
+fn plain_file_under(root: &Path, path: &Path) -> bool {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.file_type().is_file() {
+        return false;
+    }
+    let mut at = path.parent();
+    while let Some(dir) = at {
+        if dir == root {
+            break;
+        }
+        match fs::symlink_metadata(dir) {
+            Ok(m) if m.file_type().is_dir() => at = dir.parent(),
+            _ => return false,
+        }
+    }
+    match (fs::canonicalize(root), fs::canonicalize(path)) {
+        (Ok(r), Ok(f)) => f.starts_with(r),
+        _ => false,
+    }
+}
+
+/// What a validated backup restores: each file's source, its place in the staged store, its hash.
+struct RestorePlan {
+    id: String,
+    instance: Option<String>,
+    copies: Vec<(PathBuf, PathBuf, String)>,
+}
+
+/// Validates a whole backup manifest before anything is changed: names, paths, hashes, and that
+/// every file it restores is listed with its hash, inside the backup root and not a link.
+fn plan_restore(backup_dir: &Path) -> Result<RestorePlan> {
+    let refuse = |why: &str| -> Result<RestorePlan> { fail!("invalid", "the backup manifest {why}") };
     let text = fs::read_to_string(backup_dir.join("backup.json"))?;
     let manifest: Json = serde_json::from_str(&text)?;
     if manifest["schema"] != "aac-store-backup@1" {
         fail!("invalid", "not an AAC store backup");
     }
-    let id = manifest["id"].as_str().unwrap_or_default().to_string();
     if manifest["storeSchemaVersion"].as_u64().unwrap_or(u64::MAX) > db::STORE_SCHEMA_VERSION {
         fail!("newer_store", "the backup is from a newer store");
     }
-    let root = backup_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .ok_or_else(|| Error::new("invalid", "backup folder layout"))?;
-    let resolve = |rel: &str| -> PathBuf {
-        match rel.strip_prefix(&format!("sets/{id}/")) {
-            Some(rest) => backup_dir.join(rest),
-            None => root.join(rel),
-        }
+    let Some(id) = manifest["id"].as_str().filter(|id| backup_name_ok(id)) else {
+        return refuse("has an invalid id");
     };
+    // The backup folder is `<root>/sets/<id>`; the pool sits beside `sets`.
+    let sets = backup_dir.parent();
+    if backup_dir.file_name().and_then(|n| n.to_str()) != Some(id)
+        || sets.and_then(|p| p.file_name()).and_then(|n| n.to_str()) != Some("sets")
+    {
+        return refuse("does not match its folder");
+    }
+    let root = sets.and_then(|p| p.parent()).unwrap().to_path_buf();
+    let instance = match &manifest["instanceId"] {
+        Json::Null => None,
+        Json::String(v) if v.len() == 32 && v.bytes().all(|b| b.is_ascii_hexdigit()) => Some(v.clone()),
+        _ => return refuse("has an invalid instance id"),
+    };
+    let mut hashes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for file in manifest["files"].as_array().into_iter().flatten() {
-        let rel = file["path"].as_str().unwrap_or_default();
-        let (sha, _) = fsx::sha256_file(&resolve(rel))?;
-        if Some(sha.as_str()) != file["sha256"].as_str() {
-            fail!("backup_unverified", "{rel} does not match its hash");
+        let (Some(rel), Some(sha)) = (file["path"].as_str(), file["sha256"].as_str()) else {
+            return refuse("lists a file without a path or a hash");
+        };
+        if !backup_rel_ok(rel, id) || sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return refuse("lists a file outside the backup");
+        }
+        hashes.insert(rel.to_string(), sha.to_ascii_lowercase());
+    }
+    let mut copies = Vec::new();
+    let mut want = |rel: String, dest: PathBuf| -> Result<()> {
+        let Some(sha) = hashes.get(&rel) else {
+            fail!(
+                "invalid",
+                "the backup manifest restores a file it does not list with a hash"
+            );
+        };
+        copies.push((
+            root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR)),
+            dest,
+            sha.clone(),
+        ));
+        Ok(())
+    };
+    for log in ["readings", "ledger"] {
+        let info = &manifest["logs"][log];
+        let log_dir = PathBuf::from("log").join(log);
+        for seg in info["segments"].as_array().into_iter().flatten() {
+            let Some(name) = seg.as_str().filter(|n| backup_name_ok(n) && n.starts_with("seg-")) else {
+                return refuse("names an invalid segment");
+            };
+            want(format!("pool/{log}/{name}"), log_dir.join(name))?;
+        }
+        let Some(name) = info["manifest"].as_str().filter(|n| backup_name_ok(n)) else {
+            return refuse("names an invalid log manifest");
+        };
+        want(format!("sets/{id}/{name}"), log_dir.join("manifest.v1.msgpack"))?;
+        match &info["active"] {
+            Json::Null => {}
+            Json::Object(active) => {
+                let file = active
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .filter(|n| backup_name_ok(n));
+                let name = active
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .filter(|n| backup_name_ok(n) && n.starts_with("seg-") && n.ends_with(".active"));
+                let (Some(file), Some(name)) = (file, name) else {
+                    return refuse("names an invalid active segment");
+                };
+                want(format!("sets/{id}/{file}"), log_dir.join(name))?;
+            }
+            _ => return refuse("names an invalid active segment"),
         }
     }
-    let staging = dir.join("tmp").join(format!("restore-{id}"));
-    if staging.exists() {
-        fs::remove_dir_all(&staging)?;
+    match &manifest["withRedb"] {
+        Json::Bool(true) => want(format!("sets/{id}/{REDB_FILE}"), PathBuf::from(REDB_FILE))?,
+        Json::Bool(false) => {}
+        _ => return refuse("has an invalid redb flag"),
+    }
+    for (source, _, _) in &copies {
+        if !plain_file_under(&root, source) {
+            return refuse("restores a file that is missing, a link, or outside the backup");
+        }
+    }
+    Ok(RestorePlan {
+        id: id.to_string(),
+        instance,
+        copies,
+    })
+}
+
+/// Restores a verified backup with the dashboard stopped (docs/store.md 4.7). The whole manifest
+/// is validated and every file hashed before anything changes; current files go to
+/// `quarantine/`; an interrupted restore is finished by the next open from its intent.
+pub fn restore(dir: &Path, backup_dir: &Path) -> Result<Json> {
+    let plan = plan_restore(backup_dir)?;
+    for (source, _, sha) in &plan.copies {
+        let (actual, _) = fsx::sha256_file(source)?;
+        if actual != *sha {
+            fail!("backup_unverified", "a backup file does not match its hash");
+        }
+    }
+    fsx::private_dir(dir)?;
+    let _lock = fsx::lock_store(dir)?;
+    finish_restore(dir)?;
+    // A fresh staging folder, named here and never from the manifest.
+    fsx::private_dir(&dir.join("tmp"))?;
+    let staging = dir.join("tmp").join(format!("restore-{}", fsx::random_hex(8)));
+    fs::create_dir(&staging)?;
+    for (source, dest, sha) in &plan.copies {
+        let target = staging.join(dest);
+        if let Some(parent) = target.parent() {
+            fsx::private_dir(parent)?;
+        }
+        fsx::copy_atomic(source, &target)?;
+        // The copy is what gets promoted, so it is the copy that must match.
+        if fsx::sha256_file(&target)?.0 != *sha {
+            fs::remove_dir_all(&staging)?;
+            fail!("backup_unverified", "a backup file changed while it was copied");
+        }
     }
     for log in ["readings", "ledger"] {
-        let log_dir = staging.join("log").join(log);
-        fsx::private_dir(&log_dir)?;
-        let info = &manifest["logs"][log];
-        for seg in info["segments"].as_array().into_iter().flatten() {
-            let name = seg.as_str().unwrap_or_default();
-            fsx::copy_atomic(&root.join("pool").join(log).join(name), &log_dir.join(name))?;
-        }
-        let manifest_name = info["manifest"].as_str().unwrap_or_default();
-        fsx::copy_atomic(&backup_dir.join(manifest_name), &log_dir.join("manifest.v1.msgpack"))?;
-        if let Some(active) = info["active"].as_object() {
-            let file = active["file"].as_str().unwrap_or_default();
-            let name = active["name"].as_str().unwrap_or_default();
-            fsx::copy_atomic(&backup_dir.join(file), &log_dir.join(name))?;
-        }
+        fsx::private_dir(&staging.join("log").join(log))?;
     }
-    if let Some(instance) = manifest["instanceId"].as_str() {
+    if let Some(instance) = &plan.instance {
         fsx::write_atomic(&staging.join("log").join("instance-id"), instance.as_bytes())?;
     }
-    if manifest["withRedb"] == true {
-        fsx::copy_atomic(&backup_dir.join(REDB_FILE), &staging.join(REDB_FILE))?;
-    }
-    let quarantine_dir = dir
-        .join("quarantine")
-        .join(format!("{}-pre-restore", iso_compact(now_ms())));
-    let intent = json!({ "staging": staging.display().to_string(), "quarantine": quarantine_dir.display().to_string(), "backup": id });
+    let quarantine_dir =
+        dir.join("quarantine")
+            .join(format!("{}-pre-restore-{}", iso_compact(now_ms()), fsx::random_hex(2)));
+    let intent = json!({ "staging": staging.display().to_string(), "quarantine": quarantine_dir.display().to_string(), "backup": plan.id });
     fsx::write_atomic(&dir.join(RESTORE_INTENT), intent.to_string().as_bytes())?;
     finish_restore(dir)?;
-    Ok(json!({ "restored": id, "quarantine": quarantine_dir.display().to_string() }))
+    Ok(json!({ "restored": plan.id, "quarantine": quarantine_dir.display().to_string() }))
 }
 
 /// Completes a restore from its intent: move current files aside, promote the staged ones.
@@ -1030,6 +1255,17 @@ fn finish_restore(dir: &Path) -> Result<()> {
     let intent: Json = serde_json::from_str(&text)?;
     let staging = PathBuf::from(intent["staging"].as_str().unwrap_or_default());
     let quarantine_dir = PathBuf::from(intent["quarantine"].as_str().unwrap_or_default());
+    // The intent names folders this store created: anything else is refused, never moved.
+    let inside = |path: &Path, parent: &str, prefix: &str| {
+        path.parent() == Some(dir.join(parent).as_path())
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(prefix) && backup_name_ok(n))
+    };
+    if !inside(&staging, "tmp", "restore-") || !inside(&quarantine_dir, "quarantine", "") {
+        fail!("invalid", "the restore intent names folders outside the store");
+    }
     fsx::private_dir(&quarantine_dir)?;
     if staging.join("log").exists() {
         if dir.join("log").exists() {

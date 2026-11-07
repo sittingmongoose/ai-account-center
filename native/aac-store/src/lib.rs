@@ -15,6 +15,7 @@ pub mod log;
 pub mod msgpack;
 pub mod ops;
 pub mod pack;
+pub mod secret;
 pub mod usage;
 
 #[cfg(feature = "node")]

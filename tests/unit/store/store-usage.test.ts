@@ -8,6 +8,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as zlib from 'zlib';
+import express from 'express';
+import type { Server } from 'http';
 import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
 import { backfillUsageHistory } from '../../../src/store/usage-backfill';
@@ -26,6 +28,7 @@ import {
 import { usageHistory } from '../../../src/web-server/agent-usage/agent-usage-history';
 import { projectAgentUsage } from '../../../src/web-server/agent-usage/agent-usage-projection';
 import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import { createUsageRouter } from '../../../src/web-server/routes/store-routes';
 import type {
   AccountDashboard,
   DashboardAccount,
@@ -161,6 +164,60 @@ function memory(): AccountAnalyticsHistoryStore & { data: AccountAnalyticsHistor
       this.data = structuredClone(data);
     },
   };
+}
+
+/**
+ * A day and more of three accounts across every case the analytics route draws: five-hour resets,
+ * an error hour without windows, a cached window, a stretch with no samples at all, and a credit
+ * balance. Long enough to cross the JSON history's thinning steps (every record in the last hour,
+ * five-minute buckets to a day, hourly beyond) and the 24-hour range's start.
+ */
+const RICH_MINUTES = 28 * 60;
+const richSkipped = (minute: number) => minute >= 15 * 60 && minute < 15 * 60 + 40;
+function richAccountsAt(now: number): DashboardAccount[] {
+  const minute = Math.round((now - START) / MIN);
+  const period = Math.floor(minute / 300);
+  const used = Math.min(100, 3 + Math.floor((minute % 300) / 6));
+  const [first, second] = accountsAt(START);
+  const at = new Date(now).toISOString();
+  const five = {
+    ...first.windows[0],
+    usedPercent: used,
+    remainingPercent: 100 - used,
+    resetAt: new Date(START + (period + 1) * 300 * MIN).toISOString(),
+  };
+  const cachedHour = minute >= 10 * 60 && minute < 11 * 60;
+  const week = {
+    ...first.windows[1],
+    usedPercent: 40 + Math.floor(minute / 240),
+    remainingPercent: 60 - Math.floor(minute / 240),
+    ...(cachedHour
+      ? { status: 'cached', sampledAt: new Date(START + 10 * 60 * MIN - 5 * MIN).toISOString() }
+      : {}),
+  };
+  const failing = minute >= 5 * 60 && minute < 6 * 60;
+  const credits = { ...second.windows[0], remaining: 500 - Math.floor(minute / 30) * 2 };
+  const third = {
+    ...first,
+    id: 'codex:third',
+    label: 'third',
+    isActive: false,
+    windows: [{ ...five, usedPercent: 10 + (period % 3), remainingPercent: 90 - (period % 3) }],
+  };
+  return [
+    { ...first, fetchedAt: at, sampledAt: at, windows: [five, week] },
+    failing
+      ? {
+          ...second,
+          status: 'error',
+          message: 'refresh failed',
+          fetchedAt: at,
+          sampledAt: at,
+          windows: [],
+        }
+      : { ...second, fetchedAt: at, sampledAt: at, windows: [credits] },
+    { ...third, fetchedAt: at, sampledAt: at },
+  ] as unknown as DashboardAccount[];
 }
 
 describe.skipIf(!haveModule)('history store with the native module', () => {
@@ -309,6 +366,140 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       await store.close();
     }
   });
+
+  it('draws every analytics point the JSON history draws, across thinning, gaps and failures', async () => {
+    const dir = fs.mkdtempSync(path.join(sandbox, 'parity-'));
+    const store = await openStore(path.join(dir, 'store'));
+    try {
+      let clock = START;
+      const dashboard = async () =>
+        ({
+          schemaVersion: 1,
+          updatedAt: new Date(clock).toISOString(),
+          accounts: richAccountsAt(clock),
+          settings: { refreshIntervalSeconds: 60 },
+        }) as unknown as AccountDashboard;
+      const activity = async () => ({ ...noActivity, coverage: null }) as never;
+      const jsonService = new AccountAnalyticsService({
+        getDashboard: dashboard,
+        getActivity: activity,
+        createHistoryStore: () => memory(),
+        now: () => clock,
+        scope: () => path.join(dir, 'json'),
+      });
+      const storeService = new AccountAnalyticsService({
+        getDashboard: dashboard,
+        getActivity: activity,
+        usageStore: async () => store,
+        now: () => clock,
+        scope: () => path.join(dir, 'store-scope'),
+      });
+      for (let minute = 0; minute <= RICH_MINUTES; minute += 2) {
+        if (richSkipped(minute)) continue;
+        clock = START + minute * MIN;
+        await jsonService.sample();
+        await storeService.sample();
+      }
+      // The store rebuilds records on the JSON history's grid inside each observed span, not at
+      // each sample's own minute, so points are compared by analytics bucket: the same buckets in
+      // the same order (gaps included), with every field equal and both times inside the bucket.
+      const shape = (result: Awaited<ReturnType<typeof jsonService.get>>) => {
+        const bucket = result.range.bucketMinutes * MIN;
+        const slot = (iso: string) => Math.floor(Date.parse(iso) / bucket);
+        return result.accounts.map((account) => ({
+          id: account.id,
+          windows: account.windows.map((window) => ({
+            key: window.key,
+            points: window.points.map(({ sampledAt, observedAt, ...fields }) => ({
+              bucket: slot(sampledAt),
+              observedBucket: slot(observedAt),
+              ...fields,
+            })),
+          })),
+        }));
+      };
+      for (const range of ['24h', '7d'] as const) {
+        const query = {
+          platform: 'mac',
+          range,
+          provider: 'all',
+          account: 'all',
+          tz: 'UTC',
+        } as const;
+        const fromJson = await jsonService.get(query);
+        const fromStore = await storeService.get(query);
+        // The store keeps every reading, so its history may start before the thinned file's.
+        const { availableFrom, ...jsonRange } = fromJson.range;
+        const { availableFrom: storeFrom, ...storeRange } = fromStore.range;
+        expect(storeRange).toEqual(jsonRange);
+        expect(Date.parse(storeFrom as string)).toBeLessThanOrEqual(
+          Date.parse(availableFrom as string)
+        );
+        const expected = shape(fromJson);
+        // The fixture really has what it claims: many points, and the cached window among them.
+        const points = expected.flatMap((a) => a.windows.flatMap((w) => w.points));
+        expect(points.length).toBeGreaterThan(range === '24h' ? 300 : 100);
+        if (range === '7d') expect(points.some((p) => p.status === 'cached')).toBe(true);
+        // Every account, window and point: membership, order, values and gaps.
+        expect(shape(fromStore)).toEqual(expected);
+      }
+    } finally {
+      await store.close();
+    }
+  }, 60_000);
+
+  it('the burn route finds every series, however many hourly points they hold', async () => {
+    const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
+    const store = await openStore(path.join(dir, 'store'));
+    const end = START + 90 * 24 * HOUR;
+    let server: Server | null = null;
+    try {
+      // 11 series with a reading every hour for 90 days: 23,760 hourly points, over 20,000.
+      const [first] = accountsAt(START);
+      for (let account = 0; account < 11; account++) {
+        const observations = [];
+        for (let t = START; t < end; t += HOUR) {
+          const used = Math.floor((t - START) / HOUR) % 90;
+          const observation = storeObservationFromAccount(
+            {
+              ...first,
+              id: `codex:burn${account}`,
+              label: `burn${account}`,
+              fetchedAt: new Date(t).toISOString(),
+              sampledAt: new Date(t).toISOString(),
+              windows: [{ ...first.windows[0], usedPercent: used, remainingPercent: 100 - used }],
+            } as DashboardAccount,
+            t,
+            90 * 24 * HOUR
+          );
+          if (observation) observations.push(observation);
+        }
+        await store.record(observations as never);
+      }
+      const app = express();
+      app.use((req, _res, next) => {
+        Object.assign(req, { auth: { kind: 'device' } });
+        next();
+      });
+      app.use('/api/usage', createUsageRouter({ store: () => store, now: () => end }));
+      const listening = await new Promise<Server>((resolve) => {
+        const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+      });
+      server = listening;
+      const address = listening.address();
+      if (!address || typeof address === 'string') throw new Error('No test listener');
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/usage/burn?span=90d`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { series: Array<{ accountId: string }> };
+      expect(body.series.map((s) => s.accountId).sort()).toEqual(
+        Array.from({ length: 11 }, (_, i) => `codex:burn${i}`).sort()
+      );
+    } finally {
+      const open = server as Server | null;
+      if (open) await new Promise<void>((resolve) => open.close(() => resolve()));
+      await store.close();
+    }
+  }, 60_000);
 
   it('imports the JSON history and every readable archive file, counting the rest', async () => {
     const home = fs.mkdtempSync(path.join(sandbox, 'backfill-'));

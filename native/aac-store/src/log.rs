@@ -53,6 +53,10 @@ pub struct Manifest {
     pub active: Option<ActiveEntry>,
     pub lease_high: u64,
     pub retired_below: u64,
+    /// The survivor-prefix chain over every retired event (`""` when none retired). Absent in a
+    /// manifest written before it was kept, or rebuilt after loss: the chain is then unknown.
+    #[serde(default)]
+    pub retired_digest: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -105,6 +109,27 @@ pub struct Scan {
     pub frames: Vec<Scanned>,
     pub valid_end: usize,
     pub stop: Option<(usize, Problem)>,
+}
+
+/// The frames of a sealed segment whose SHA-256 matches its manifest: every byte is what was
+/// validated when it sealed, so only the frame prefixes and CRCs are checked, not each event.
+/// `None` at the first frame that does not decode.
+fn walk(buf: &[u8]) -> Option<Vec<Scanned>> {
+    let mut frames = Vec::new();
+    let mut offset = 0usize;
+    let mut previous = None;
+    while offset < buf.len() {
+        let f = frame::decode(&buf[offset..], GENERATION, previous).ok()?;
+        frames.push(Scanned {
+            offset,
+            len: f.len,
+            seq: f.sequence,
+            observed_ms: 0,
+        });
+        previous = Some(f.sequence);
+        offset += f.len;
+    }
+    Some(frames)
 }
 
 pub fn scan(buf: &[u8]) -> Scan {
@@ -328,6 +353,7 @@ impl Log {
                 active: None,
                 lease_high: 1,
                 retired_below: 0,
+                retired_digest: Some(String::new()),
             },
             Err(e) if e.code == "newer_store" => return Err(e),
             Err(e) => {
@@ -344,6 +370,7 @@ impl Log {
                     active: None,
                     lease_high: 1,
                     retired_below: 0,
+                    retired_digest: None,
                 }
             }
         };
@@ -846,6 +873,19 @@ impl Log {
         if gone.is_empty() {
             return Ok(gone);
         }
+        // The chain moves past the retired events, so projections built from them still match.
+        let mut digest = self.base_digest();
+        for entry in &gone {
+            let (bytes, frames, _) = self.segment_frames(entry);
+            for f in frames {
+                let event = Event::decode(
+                    &frame::decode(&bytes[f.offset..], GENERATION, None)
+                        .map_err(|p| Error::new("corrupt", format!("{p:?}")))?,
+                )?;
+                digest = digest.map(|d| crate::db::chain_digest(&d, event.sequence_id, &event.event_id));
+            }
+        }
+        self.manifest.retired_digest = digest;
         self.manifest.retired_below = gone
             .iter()
             .map(|s| s.end_seq + 1)
@@ -893,52 +933,72 @@ impl Log {
 
     /// Calls `visit` for every event with a sequence above `after`, in order: sealed segments
     /// (decompressed, hash-checked, degraded ones salvaged), then the active segment.
-    pub fn read_after(&self, after: Option<u64>, mut visit: impl FnMut(Event) -> Result<()>) -> Result<Vec<Finding>> {
+    /// The survivor-prefix chain over the retired events, or `None` when it is not known.
+    pub fn base_digest(&self) -> Option<String> {
+        if self.manifest.retired_below == 0 {
+            return Some(String::new());
+        }
+        self.manifest.retired_digest.clone()
+    }
+
+    /// Records that projections rebuilt from the surviving events start their chain at `digest`.
+    pub fn set_base_digest(&mut self, digest: &str) -> Result<()> {
+        if self.base_digest().as_deref() == Some(digest) {
+            return Ok(());
+        }
+        self.manifest.retired_digest = Some(digest.to_string());
+        self.write_manifest()
+    }
+
+    /// A sealed segment's bytes and its valid frames, with what was wrong with it.
+    fn segment_frames(&self, entry: &SegmentEntry) -> (Vec<u8>, Vec<Scanned>, Option<Finding>) {
+        let range = Some((entry.start_seq, entry.end_seq));
+        if entry.state == "missing" {
+            return (
+                Vec::new(),
+                Vec::new(),
+                Some(Finding::new("segment_missing", "skipped", range)),
+            );
+        }
+        let bytes = match read_segment_bytes(&self.dir, entry) {
+            Ok(b) => b,
+            Err(e) => {
+                return (
+                    Vec::new(),
+                    Vec::new(),
+                    Some(Finding::new("segment_unreadable", e.message, range)),
+                );
+            }
+        };
+        if entry.state == "sealed" && fsx::sha256_hex(&bytes) == entry.raw_sha256 {
+            let frames = walk(&bytes).unwrap_or_else(|| salvage(&bytes).0);
+            return (bytes, frames, None);
+        }
+        let finding =
+            (entry.state == "sealed").then(|| Finding::new("segment_degraded", "hash mismatch on read", range));
+        let frames = salvage(&bytes).0;
+        (bytes, frames, finding)
+    }
+
+    /// Visits every surviving frame after `after` (all of them with `None`), oldest first.
+    fn each_frame(
+        &self,
+        after: Option<u64>,
+        mut visit: impl FnMut(&frame::FrameRef<'_>) -> Result<()>,
+    ) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         let floor = after.unwrap_or(0);
+        fn decode<'b>(bytes: &'b [u8], f: &Scanned) -> Result<frame::FrameRef<'b>> {
+            frame::decode(&bytes[f.offset..], GENERATION, None).map_err(|p| Error::new("corrupt", format!("{p:?}")))
+        }
         for entry in &self.manifest.segments {
             if after.is_some() && entry.end_seq <= floor {
                 continue;
             }
-            if entry.state == "missing" {
-                findings.push(Finding::new(
-                    "segment_missing",
-                    "skipped",
-                    Some((entry.start_seq, entry.end_seq)),
-                ));
-                continue;
-            }
-            let bytes = match read_segment_bytes(&self.dir, entry) {
-                Ok(b) => b,
-                Err(e) => {
-                    findings.push(Finding::new(
-                        "segment_unreadable",
-                        e.message,
-                        Some((entry.start_seq, entry.end_seq)),
-                    ));
-                    continue;
-                }
-            };
-            let frames = if entry.state == "sealed" && fsx::sha256_hex(&bytes) == entry.raw_sha256 {
-                let s = scan(&bytes);
-                if s.stop.is_some() { salvage(&bytes).0 } else { s.frames }
-            } else {
-                if entry.state == "sealed" {
-                    findings.push(Finding::new(
-                        "segment_degraded",
-                        "hash mismatch on read",
-                        Some((entry.start_seq, entry.end_seq)),
-                    ));
-                }
-                salvage(&bytes).0
-            };
-            for f in frames {
-                if after.is_some() && f.seq <= floor {
-                    continue;
-                }
-                let decoded = frame::decode(&bytes[f.offset..], GENERATION, None)
-                    .map_err(|p| Error::new("corrupt", format!("{p:?}")))?;
-                visit(Event::decode(&decoded)?)?;
+            let (bytes, frames, finding) = self.segment_frames(entry);
+            findings.extend(finding);
+            for f in frames.iter().filter(|f| after.is_none() || f.seq > floor) {
+                visit(&decode(&bytes, f)?)?;
             }
         }
         if let Some(active) = &self.active {
@@ -946,13 +1006,48 @@ impl Log {
             File::open(self.dir.join(active_name(active.start_seq)))?
                 .take(active.len)
                 .read_to_end(&mut bytes)?;
-            for f in scan(&bytes).frames {
-                if after.is_some() && f.seq <= floor {
-                    continue;
-                }
-                let decoded = frame::decode(&bytes[f.offset..], GENERATION, None)
-                    .map_err(|p| Error::new("corrupt", format!("{p:?}")))?;
-                visit(Event::decode(&decoded)?)?;
+            for f in scan(&bytes).frames.iter().filter(|f| after.is_none() || f.seq > floor) {
+                visit(&decode(&bytes, f)?)?;
+            }
+        }
+        Ok(findings)
+    }
+
+    /// Visits every surviving event after `after` (all of them with `None`), oldest first.
+    pub fn read_after(&self, after: Option<u64>, mut visit: impl FnMut(Event) -> Result<()>) -> Result<Vec<Finding>> {
+        self.each_frame(after, |f| visit(Event::decode(f)?))
+    }
+
+    /// Visits every surviving event's sequence and id, reading only the header of each frame the
+    /// scan has already checked (its CRCs included).
+    pub fn read_ids(&self, mut visit: impl FnMut(u64, &str)) -> Result<Vec<Finding>> {
+        fn event_id(bytes: &[u8], f: &Scanned) -> Result<String> {
+            let at = f.offset;
+            let header_len = u16::from_le_bytes([bytes[at + 9], bytes[at + 10]]) as usize;
+            let header = &bytes[at + frame::PREFIX_LEN..at + frame::PREFIX_LEN + header_len];
+            match crate::msgpack::decode(header)? {
+                crate::msgpack::Value::Array(mut items) if items.len() == 8 => match items.swap_remove(1) {
+                    crate::msgpack::Value::Str(id) => Ok(id),
+                    _ => fail!("corrupt", "header event id"),
+                },
+                _ => fail!("corrupt", "header is not an eight-element tuple"),
+            }
+        }
+        let mut findings = Vec::new();
+        for entry in &self.manifest.segments {
+            let (bytes, frames, finding) = self.segment_frames(entry);
+            findings.extend(finding);
+            for f in &frames {
+                visit(f.seq, &event_id(&bytes, f)?);
+            }
+        }
+        if let Some(active) = &self.active {
+            let mut bytes = Vec::with_capacity(active.len as usize);
+            File::open(self.dir.join(active_name(active.start_seq)))?
+                .take(active.len)
+                .read_to_end(&mut bytes)?;
+            for f in &scan(&bytes).frames {
+                visit(f.seq, &event_id(&bytes, f)?);
             }
         }
         Ok(findings)

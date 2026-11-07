@@ -101,8 +101,9 @@ pub struct SeenBatch {
 /// At most this many accounts share one event.
 const ACCOUNTS_PER_EVENT: usize = 64;
 
+/// A persisted string: bounded, no control characters, nothing shaped like a credential.
 fn text_ok(s: &str, max: usize) -> bool {
-    !s.is_empty() && s.len() <= max && !s.chars().any(|c| c.is_control())
+    !s.is_empty() && s.len() <= max && !s.chars().any(|c| c.is_control()) && !crate::secret::looks_secret(s)
 }
 
 fn opt_text_ok(s: &Option<String>, max: usize) -> bool {
@@ -117,6 +118,7 @@ impl Sampled {
                 .bytes()
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
         if !hex
+            || !text_ok(&a.identity, 64)
             || !text_ok(&a.provider, 64)
             || !text_ok(&a.account_id, 128)
             || !opt_text_ok(&a.plan, 80)
@@ -1967,10 +1969,19 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
                 else {
                     continue;
                 };
+                // Inside a span only its first and last observation times are kept: a rebuilt
+                // reading takes the span's first offset from its sample time, within the two.
                 let observed = if *state_t == tau {
                     state.observed_ms
-                } else {
+                } else if tau == state.last_seen as u64 {
                     state.last_observed
+                } else {
+                    let offset = state.observed_ms - *state_t as i64;
+                    let (low, high) = (
+                        state.observed_ms.min(state.last_observed),
+                        state.observed_ms.max(state.last_observed),
+                    );
+                    (tau as i64 + offset).clamp(low, high)
                 };
                 let mut wins = Vec::new();
                 for (_, wmeta, smeta, rows) in &window_rows {
@@ -2191,6 +2202,52 @@ pub fn series_points(engine: &Engine, query: &SeriesQuery) -> Result<Json> {
             json!(["start", "consumed", "lastUsed", "maxUsed", "coveredMinutes", "readings", "resets", "creditsSpent", "creditsAdded"])
         };
         Ok(json!({ "resolution": query.resolution, "columns": columns, "series": out, "truncated": truncated }))
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesListQuery {
+    pub identities: Option<Vec<String>>,
+    pub account_ids: Option<Vec<String>>,
+    pub provider: Option<String>,
+    pub window_key: Option<String>,
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
+/// The series seen between two times, from series metadata alone: no point limit applies.
+pub fn series_list(engine: &Engine, query: &SeriesListQuery) -> Result<Json> {
+    engine.with_db(|db| {
+        let read = db.begin_read()?;
+        let accounts = read.open_table(db::ACCOUNT)?;
+        let windows = read.open_table(db::WINDOW)?;
+        let series_table = read.open_table(db::SERIES)?;
+        let mut out = Vec::new();
+        for item in series_table.iter()? {
+            let (k, v) = item?;
+            let (a, w) = (db::be_u32(k.value(), 0), db::be_u32(k.value(), 4));
+            let smeta: SeriesMeta = db::unpack(v.value())?;
+            if (smeta.last_ms as u64) < query.from_ms || (smeta.first_ms.max(0) as u64) > query.to_ms {
+                continue;
+            }
+            let Some(av) = accounts.get(Key::new().u32(a).as_slice())? else { continue };
+            let ameta: AccountMeta = db::unpack(av.value())?;
+            let Some(wv) = windows.get(Key::new().u32(w).as_slice())? else { continue };
+            let wmeta: WindowMeta = db::unpack(wv.value())?;
+            if query.identities.as_ref().map(|ids| !ids.contains(&ameta.identity)).unwrap_or(false)
+                || query.account_ids.as_ref().map(|ids| !ids.contains(&ameta.account_id)).unwrap_or(false)
+                || query.provider.as_ref().map(|p| *p != ameta.provider).unwrap_or(false)
+                || query.window_key.as_ref().map(|k| *k != wmeta.key).unwrap_or(false)
+            {
+                continue;
+            }
+            out.push(json!({
+                "identity": ameta.identity, "accountId": ameta.account_id, "provider": ameta.provider, "plan": ameta.plan,
+                "window": { "identity": wmeta.identity, "key": wmeta.key, "label": smeta.label, "kind": wmeta.kind, "unit": wmeta.unit, "poolId": wmeta.pool_id, "poolLabel": smeta.pool_label },
+            }));
+        }
+        Ok(Json::Array(out))
     })
 }
 

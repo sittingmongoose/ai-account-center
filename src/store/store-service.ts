@@ -139,6 +139,12 @@ export class AacStore {
   seriesPoints(query: SeriesPointsQuery): Promise<StoreSeriesPoints> {
     return this.call('seriesPoints', query);
   }
+  /** The series seen in a time range, from series metadata: no point limit applies. */
+  seriesList(
+    query: Omit<SeriesPointsQuery, 'resolution' | 'limit'>
+  ): Promise<Array<Omit<StoreSeriesPoints['series'][number], 'points'>>> {
+    return this.call('seriesList', query);
+  }
   usageAt(t: number): Promise<Record<string, unknown>> {
     return this.call('usageAt', { t });
   }

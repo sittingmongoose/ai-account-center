@@ -180,16 +180,21 @@ pub struct Checkpoint {
 impl Checkpoint {
     /// Folds one more event into the survivor-prefix digest chain.
     pub fn advance(&mut self, sequence: u64, event_id: &str) {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(self.survivor_prefix_sha256.as_bytes());
-        hasher.update(sequence.to_be_bytes());
-        hasher.update(event_id.as_bytes());
-        let digest = hasher.finalize();
-        self.survivor_prefix_sha256 = digest.iter().map(|b| format!("{b:02x}")).collect();
+        self.survivor_prefix_sha256 = chain_digest(&self.survivor_prefix_sha256, sequence, event_id);
         self.last_sequence_id = sequence;
         self.last_event_id = event_id.to_string();
     }
+}
+
+/// One link of the survivor-prefix chain: the digest of the events a projection was built from,
+/// so a log that no longer holds them is detected at open (docs/store.md 2.6).
+pub fn chain_digest(previous: &str, sequence: u64, event_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(previous.as_bytes());
+    hasher.update(sequence.to_be_bytes());
+    hasher.update(event_id.as_bytes());
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub fn read_checkpoint<T: ReadableTable<&'static str, &'static [u8]>>(

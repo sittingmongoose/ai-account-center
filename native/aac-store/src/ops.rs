@@ -145,6 +145,7 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             usage::periods(engine, &a.series, a.from_ms, a.to_ms)?
         }
         "seriesPoints" => usage::series_points(engine, &parse(args)?)?,
+        "seriesList" => usage::series_list(engine, &parse(args)?)?,
         "usageAt" => {
             #[derive(Deserialize)]
             struct AtArgs {
