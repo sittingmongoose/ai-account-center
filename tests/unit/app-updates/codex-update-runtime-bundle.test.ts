@@ -40,6 +40,7 @@ describe('Codex update runtime bundle', () => {
     expect(Object.keys(runtime).sort()).toEqual([
       'dispose',
       'restartState',
+      'retiredPlan',
       'start',
       'stop',
       'stopPlan',

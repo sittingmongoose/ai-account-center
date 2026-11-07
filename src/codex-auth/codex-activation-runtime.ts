@@ -16,6 +16,8 @@ export interface CodexActivationRuntime {
   dispose?(): Promise<void>;
   /** What stop() planned to close, captured under its lock. Holds no launch context. */
   stopPlan(): CodexRestartPlan;
+  /** The planned processes stop() really retired, by pid and start time, after a partial failure. */
+  retiredPlan(): Promise<CodexRestartPlan>;
   /** What runs now, by the same rules stop() and start() use. */
   restartState(): Promise<CodexRestartState>;
 }
@@ -27,8 +29,6 @@ export interface CodexRestartPlan {
 }
 
 export interface CodexRestartState extends CodexRestartPlan {
-  /** Desktops with no ready app server yet, as well as the ready ones in `desktops`. */
-  presentDesktops: string[];
   proxy: boolean;
 }
 
@@ -547,16 +547,13 @@ export function createCodexActivationRuntime(
     },
     start,
     dispose: release,
-    stopPlan: () => ({
-      daemon: launchers.some(isDaemon),
-      desktops: [
-        ...new Set(
-          launchers
-            .filter(isDesktop)
-            .map((launcher) => codexDesktopInstance(desktopUserData(launcher, [launcher])))
-        ),
-      ],
-    }),
+    stopPlan: () => restartPlan(launchers),
+    retiredPlan: async () => {
+      const processes = await dependencies.scan();
+      return restartPlan(
+        launchers.filter((launcher) => !processes.some((process) => sameProcess(launcher, process)))
+      );
+    },
     restartState: async () => {
       const processes = await scan();
       const onHome = (entry: CodexProcessSnapshot): boolean =>
@@ -574,10 +571,22 @@ export function createCodexActivationRuntime(
             )
           )
           .map(instance),
-        presentDesktops: mains.map(instance),
         proxy: processes.some((entry) => onHome(entry) && isProxy(entry)),
       };
     },
+  };
+}
+
+function restartPlan(launchers: CodexProcessSnapshot[]): CodexRestartPlan {
+  return {
+    daemon: launchers.some(isDaemon),
+    desktops: [
+      ...new Set(
+        launchers
+          .filter(isDesktop)
+          .map((launcher) => codexDesktopInstance(desktopUserData(launcher, [launcher])))
+      ),
+    ],
   };
 }
 

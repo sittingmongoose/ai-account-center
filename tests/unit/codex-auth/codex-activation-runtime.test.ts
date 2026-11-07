@@ -351,6 +351,96 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(marker()).toBeNull();
   });
 
+  const withoutServer = (fake: ReturnType<typeof harness>) =>
+    (async (target, isDesktop) => {
+      await fake.deps.launch(target, isDesktop);
+      if (!isDesktop) return;
+      for (const server of fake.current().filter((entry) => entry.exe.endsWith('/resources/codex')))
+        await fake.deps.signal(server, 'SIGKILL');
+    }) as CodexActivationRuntimeDependencies['launch'];
+
+  /** A click whose stop() retires what it was given, then meets a new writer and must recover. */
+  function interruptedClick(
+    fake: ReturnType<typeof harness>,
+    launch: CodexActivationRuntimeDependencies['launch'],
+    signal: CodexActivationRuntimeDependencies['signal']
+  ) {
+    const { deps, marker } = click(fake);
+    return {
+      marker,
+      run: async () => {
+        bridge.output.restartedProcesses = 0;
+        return {
+          ...(await bridge.execute({
+            ...deps,
+            operation: 'cli',
+            expectedCandidate: '2.0.0',
+            runtime: () =>
+              createCodexActivationRuntime(home, {
+                ...fake.deps,
+                signal,
+                launch: (target, isDesktop) =>
+                  bridge.relaunch(target, isDesktop, launch, { inside: () => true }),
+              }),
+          })),
+        };
+      },
+    };
+  }
+
+  it('owes a desktop a failed stop() retired when its relaunch never got an app server', async () => {
+    const fake = harness([desktop, bundled, renderer]);
+    const { run, marker } = interruptedClick(fake, withoutServer(fake), async (target, signal) => {
+      await fake.deps.signal(target, signal);
+      fake.inject(processFixture(30, ['/fixture/bin/codex', 'exec'], {}));
+    });
+    expect((await run()).status).toBe('restart_failed');
+    expect(fake.current().some(isDesktop)).toBe(true);
+    expect(marker()).toEqual({
+      version: '2.0.0',
+      desktop: true,
+      daemon: false,
+      desktops: [codexDesktopInstance('/fixture/.config/Codex')],
+    });
+  });
+
+  it('does not owe a proxy-only desktop a failed stop() never retired', async () => {
+    const fake = harness([desktop, proxyChild]);
+    const refuse = async () => {
+      throw new CodexActivationRuntimeError('fixture failed');
+    };
+    const { run, marker } = interruptedClick(fake, refuse, refuse);
+    await run();
+    // Still running, and not ready: only the fact it was never retired keeps it out of the marker.
+    expect(fake.current().some(isDesktop)).toBe(true);
+    expect((await createCodexActivationRuntime(home, fake.deps).restartState()).desktops).toEqual(
+      []
+    );
+    expect(marker()).toEqual({ version: '2.0.0' });
+  });
+
+  it('keeps what stop() closed when the install fails and recovery fails too', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    const { run, marker } = click(fake, async () => {
+      throw new CodexActivationRuntimeError('fixture launch failed');
+    });
+    const failed = {
+      update: async () => {
+        throw new Error('fixture apt failed');
+      },
+    };
+    const first = await run(failed);
+    expect(first.status).toBe('restart_failed');
+    expect(marker()).toEqual({
+      version: '1.0.0',
+      desktop: true,
+      daemon: true,
+      desktops: [codexDesktopInstance('/fixture/.config/Codex')],
+    });
+    const second = await run({ ...failed, expectedCandidate: '1.0.0', restartOnly: true });
+    expect(second.messageCode).toBe('restart_not_running');
+  });
+
   it('does not call a desktop whose app server never started a restart', async () => {
     const fake = harness([daemon, desktop, bundled, renderer]);
     const { run, marker } = click(fake, async (target, isDesktop) => {
@@ -394,16 +484,10 @@ describe('What the runtime reports for a retry', () => {
     expect((await state([main, proxy])).desktops).toEqual([]);
   });
 
-  it('reports a desktop with no app server as present, not ready', async () => {
-    const seen = await state([main]);
-    expect(seen.presentDesktops).toEqual([a]);
-    expect(seen.desktops).toEqual([]);
-  });
-
   it('does not take a renderer for the main process', async () => {
     const renderer = processFixture(10, ['/usr/lib/chatgpt/ChatGPT --type=zygote']);
     const seen = await state([renderer, server(10)]);
-    expect(seen.presentDesktops).toEqual([]);
+    expect(seen.desktops).toEqual([]);
   });
 
   it('names the default data folder the same way with or without the flag', () => {
@@ -447,6 +531,25 @@ describe('What the runtime reports for a retry', () => {
       daemon: true,
       desktops: [codexDesktopInstance('/fixture/.config/Codex')],
     });
+  });
+
+  it('reports as retired only planned processes no longer running', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    const runtime = createCodexActivationRuntime(home, {
+      ...fake.deps,
+      signal: async (target, signal) => {
+        // The desktop goes, the daemon refuses: stop() fails partway.
+        if (target.pid === daemon.pid)
+          throw new CodexActivationRuntimeError('fixture signal failed');
+        await fake.deps.signal(target, signal);
+      },
+    });
+    expect(await runtime.retiredPlan()).toEqual({ daemon: false, desktops: [] });
+    await expect(runtime.stop()).rejects.toThrow();
+    const retired = await runtime.retiredPlan();
+    expect(retired.daemon).toBe(false);
+    // Recovery relaunched the desktop under a new pid; the planned one is still gone.
+    expect(retired.desktops).toEqual([codexDesktopInstance('/fixture/.config/Codex')]);
   });
 
   it('reports no plan when stop() refused before closing anything', async () => {

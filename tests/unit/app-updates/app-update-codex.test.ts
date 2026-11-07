@@ -62,6 +62,9 @@ function fixture() {
       hasOldProxies: async () => false,
       marked: (): Record<string, unknown> | null => null,
       runtime: () => ({
+        stopPlan: () => ({ daemon: false, desktops: [] }),
+        retiredPlan: async () => ({ daemon: false, desktops: [] }),
+        restartState: async () => ({ daemon: false, desktops: [], proxy: false }),
         stop: async () => {
           events.push('stop');
           if (busy-- > 0) throw Object.assign(new Error('private'), { code: 'busy' });
@@ -256,7 +259,9 @@ describe('Codex desktop version verification', () => {
       expectedCandidate: '2.0.0',
     });
     expect(result.status).toBe('failed');
-    expect(value.events).not.toContain('mark');
+    // Written when stop() returned, then cleared: the failed install owes nothing with all back.
+    expect(value.events).toContain('clear');
+    expect(value.pending()).toBe(false);
   });
   it('can recover a pending restart without requiring another version change', async () => {
     const value = fixture();
@@ -266,12 +271,7 @@ describe('Codex desktop version verification', () => {
       marked: () => ({ version: '1.0.0', desktop: true }),
       runtime: () => ({
         ...value.deps.runtime(),
-        restartState: async () => ({
-          daemon: false,
-          desktops: ['a'.repeat(32)],
-          presentDesktops: ['a'.repeat(32)],
-          proxy: false,
-        }),
+        restartState: async () => ({ daemon: false, desktops: ['a'.repeat(32)], proxy: false }),
       }),
       operation: 'desktop',
       expectedCandidate: '1.0.0',
@@ -439,14 +439,8 @@ describe('Pending-marker retry', () => {
   const A = 'a'.repeat(32);
   const B = 'b'.repeat(32);
   type Plan = { daemon?: boolean; desktops?: string[] };
-  type Live = Plan & { presentDesktops?: string[]; proxy?: boolean };
-  const state = (live: Live = {}) => ({
-    daemon: false,
-    desktops: [],
-    presentDesktops: live.desktops ?? [],
-    proxy: false,
-    ...live,
-  });
+  type Live = Plan & { proxy?: boolean };
+  const state = (live: Live = {}) => ({ daemon: false, desktops: [], proxy: false, ...live });
   const plan = (value: Plan = {}) => ({ daemon: false, desktops: [], ...value });
   /** The runtime a click meets: what its stop() plans to close, and what runs after start(). */
   const runtime = (planned: Plan = {}, after: Live = {}) => ({
@@ -454,6 +448,7 @@ describe('Pending-marker retry', () => {
     start: async () => {},
     dispose: async () => {},
     stopPlan: () => plan(planned),
+    retiredPlan: async () => plan(planned),
     restartState: async () => state(after),
   });
   function retry(marker: Record<string, unknown> | null, after: Live = {}, planned: Plan = {}) {
@@ -618,6 +613,126 @@ describe('Pending-marker retry', () => {
     expect(value.marks).toEqual([undefined]);
   });
 
+  it('writes the marker as soon as stop() returns, before a desktop install', async () => {
+    const value = fixture();
+    let atUpdate: unknown[] = [];
+    await bridge.execute({
+      ...value.deps,
+      update: async () => {
+        atUpdate = [...value.marks];
+        await value.deps.update();
+      },
+      operation: 'desktop',
+      runtime: () => runtime({ daemon: true, desktops: [A] }, { daemon: true, desktops: [A] }),
+    });
+    expect(atUpdate).toEqual([{ desktop: true, daemon: true, desktops: [A] }]);
+  });
+
+  const failedInstall = (value: ReturnType<typeof fixture>, planned: Plan, after: Live) => ({
+    ...value.deps,
+    update: async () => {
+      throw new Error('private');
+    },
+    operation: 'desktop',
+    runtime: () => runtime(planned, after),
+  });
+
+  it('keeps what a failed install left closed in the marker', async () => {
+    const value = fixture();
+    const result = await bridge.execute(failedInstall(value, { desktops: [A] }, {}));
+    expect(result.status).toBe('restart_failed');
+    expect(value.marks).toEqual([{ desktop: true, daemon: false, desktops: [A] }]);
+    expect(value.pending()).toBe(true);
+  });
+
+  it('owes nothing after a failed install once everything is back', async () => {
+    const value = fixture();
+    const result = await bridge.execute(failedInstall(value, { desktops: [A] }, { desktops: [A] }));
+    expect(result.status).toBe('failed');
+    expect(result.messageCode).toBe('update_failed');
+    expect(value.pending()).toBe(false);
+  });
+
+  it('keeps what an earlier run owed after a failed install', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...failedInstall(value, { desktops: [A] }, { desktops: [A] }),
+      marked: () => ({ version: '1.0.0', desktop: true, desktops: [B] }),
+    });
+    expect(result.status).not.toBe('updated');
+    expect(value.pending()).toBe(true);
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: true,
+      daemon: false,
+      desktops: [B, A],
+    });
+  });
+
+  const olderRuntime = () => ({
+    stop: async () => {},
+    start: async () => {
+      throw new Error('private');
+    },
+    dispose: async () => {},
+  });
+
+  it('fails closed on an older runtime that reports no plan', async () => {
+    const value = fixture();
+    const result = await bridge.execute({ ...value.deps, operation: 'cli', runtime: olderRuntime });
+    expect(result.status).toBe('restart_failed');
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: true,
+      daemon: true,
+      desktops: [],
+    });
+  });
+
+  it('reads the next click on an older runtime as restart_not_running', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      update: async () => {},
+      pending: () => true,
+      marked: () => ({ version: '1.0.0', desktop: true, daemon: true, desktops: [] }),
+      operation: 'cli',
+      runtime: () => ({ ...olderRuntime(), start: async () => {} }),
+    });
+    expect(result.messageCode).toBe('restart_not_running');
+  });
+
+  it('fails closed when a stop() on an older runtime fails', async () => {
+    const value = fixture();
+    await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: () => ({
+        ...olderRuntime(),
+        stop: async () => {
+          throw new Error('private');
+        },
+      }),
+    });
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: true,
+      daemon: true,
+      desktops: [],
+    });
+  });
+
+  it('meets a salt problem before stopping anything', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      prepareSeal: () => {
+        throw new Error('private');
+      },
+      operation: 'desktop',
+    });
+    expect(value.events).not.toContain('stop');
+    expect(value.events).not.toContain('update');
+    expect(result.status).toBe('failed');
+  });
+
   it('gives a live proxy a bounded while to bring the daemon back', async () => {
     const { value, deps } = retry({ daemon: true });
     let checks = 0;
@@ -645,22 +760,33 @@ describe('Pending-marker retry', () => {
     expect(value.events).not.toContain('wait');
   });
 
-  const failingStop = (planned: Plan, after: Live) => ({
+  const failingStop = (planned: Plan, after: Live, retired: Plan = planned) => ({
     ...runtime(planned, after),
+    retiredPlan: async () => plan(retired),
     stop: async () => {
       throw new Error('private');
     },
   });
 
-  it('records what a failed stop() left closed, from its plan', async () => {
+  it('records what a failed stop() retired and did not bring back to ready', async () => {
     const value = fixture();
     const result = await bridge.execute({
       ...value.deps,
       operation: 'cli',
-      runtime: () => failingStop({ daemon: true, desktops: [A, B] }, { presentDesktops: [B] }),
+      runtime: () => failingStop({ daemon: true, desktops: [A, B] }, { desktops: [B] }),
     });
     expect(result.status).toBe('restart_failed');
     expect(value.marks).toEqual([undefined, { desktop: true, daemon: true, desktops: [A] }]);
+  });
+
+  it('does not owe a planned desktop a failed stop() never reached', async () => {
+    const value = fixture();
+    await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: () => failingStop({ desktops: [A] }, {}, {}),
+    });
+    expect(value.marks).toEqual([undefined]);
   });
 
   it('adds nothing when a failed stop() recovered what it closed', async () => {
@@ -736,12 +862,11 @@ exports.createCodexActivationRuntime = (home, overrides) => {
   let plan = { daemon: false, desktops: [] };
   return {
     stopPlan: () => plan,
-    restartState: async () => {
-      const live = await read();
-      return { ...live, presentDesktops: live.desktops, proxy: false };
-    },
+    retiredPlan: async () => (procs.length ? { daemon: false, desktops: [] } : plan),
+    restartState: async () => ({ ...(await read()), proxy: false }),
     stop: async () => {
       if (process.env.FIXTURE_AT_STOP) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_STOP);
+      fs.writeFileSync(process.env.FIXTURE_RECORD + '.salt', String(fs.lstatSync(require('path').join(require('path').dirname(process.env.FIXTURE_MARKER), 'codex-desktop-instance.salt')).isFile()));
       plan = await read();
       if (process.env.FIXTURE_STOP !== 'fail-recovered' && !process.env.FIXTURE_KEEP) procs = [];
       if (process.env.FIXTURE_STOP) throw new Error('private');
@@ -763,6 +888,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       installed?: string;
       stop?: string;
       salt?: string;
+      plantSalt?: (file: string) => void;
       keep?: boolean;
       procs?: (root: string) => object[];
     } = {}
@@ -787,6 +913,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     fs.mkdirSync(path.dirname(marker), { recursive: true });
     const salt = path.join(path.dirname(marker), 'codex-desktop-instance.salt');
     if (options.salt) fs.writeFileSync(salt, options.salt, { mode: 0o600 });
+    options.plantSalt?.(salt);
     if (options.marker !== null)
       fs.writeFileSync(marker, JSON.stringify(options.marker ?? { version: '2.0.0' }));
     const record = path.join(root, 'launched.json');
@@ -938,6 +1065,25 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     expect(other.result.messageCode).toBe('restart_not_running');
   });
 
+  it('has a usable salt in place before stop() runs', () => {
+    const { record } = run('idle', { marker: null, next: '3.0.0', procs: running });
+    expect(fs.readFileSync(`${record}.salt`, 'utf8')).toBe('true');
+  });
+
+  it('replaces a directory at the salt path and carries on', () => {
+    const { result, salt, marker } = run('fail', {
+      marker: null,
+      next: '3.0.0',
+      procs: running,
+      plantSalt: (file) => {
+        fs.mkdirSync(path.join(file, 'nested'), { recursive: true });
+      },
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(fs.statSync(salt).isFile()).toBe(true);
+    expect(read(marker).desktops).toEqual([keyedBy(salt)]);
+  });
+
   it('does not turn a marker that names nothing into a red row', () => {
     const { result, marker } = run('idle', { marker: { version: '2.0.0' } });
     expect(result.status).toBe('updated');
@@ -980,6 +1126,13 @@ describe('The per-home desktop salt', () => {
         const elsewhere = path.join(root, 'elsewhere');
         fs.writeFileSync(elsewhere, 'e'.repeat(64), { mode: 0o600 });
         fs.symlinkSync(elsewhere, target);
+      },
+      (target: string) => {
+        fs.mkdirSync(path.join(target, 'nested'), { recursive: true });
+      },
+      (target: string) => {
+        fs.writeFileSync(target, 'e'.repeat(64), { mode: 0o600 });
+        fs.chmodSync(target, 0o000);
       },
     ]) {
       const root = folder();

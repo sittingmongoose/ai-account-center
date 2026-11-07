@@ -89,7 +89,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/account-activity-collector.ts` | 3724 |
 | `src/web-server/services/account-analytics-activity.ts` | 1734 |
 | `src/web-server/model-pricing.ts` | 1322 |
-| `src/codex-auth/codex-activation-runtime.ts` | 1161 |
+| `src/codex-auth/codex-activation-runtime.ts` | 1170 |
 | `src/antigravity/registry.ts` | 1104 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 995 |
 | `src/web-server/services/usage-failover-service.ts` | 993 |
