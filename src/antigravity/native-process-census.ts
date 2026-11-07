@@ -148,6 +148,15 @@ function readCmdline(file: string): string {
  * against its new folder, and an absolute argument that reaches a root only
  * through a symlink elsewhere is not resolved. Both still match by name or
  * executable when those are Antigravity's.
+ *
+ * A non-dumpable process hides its working folder, so a relative script can't
+ * be placed. When such a process is an interpreter (python, node, sh, perl,
+ * lua, php and the like, by process name or argv0) running a relative script
+ * with a slash, it may be a live helper, so the census is incomplete rather
+ * than idle. Other non-dumpable processes (systemd --user, ssh-agent,
+ * gpg-agent, sshd-session, sandboxed browser renderers whose
+ * `--flag=/path` arguments read like relative paths) are not judged by a
+ * script path. An interpreter under a renamed binary is a known limit.
  */
 export function censusAntigravityProcesses(options: {
   home: string;
@@ -195,7 +204,7 @@ export function censusAntigravityProcesses(options: {
   // ssh-agent, sshd-session, whose rewritten title "sshd-session: user@pts/0" reads like a relative path) are not
   // judged by a script path at all.
   const INTERPRETER =
-    /^(?:python[\d.]*|node|nodejs|bun|deno|sh|bash|dash|zsh|ksh|fish|perl[\d.]*|ruby[\d.]*)$/;
+    /^(?:python[\d.]*|pypy[\d.]*|node|nodejs|bun|deno|sh|bash|dash|zsh|ksh|mksh|fish|perl[\d.]*|ruby[\d.]*|lua[\d.]*|luajit|php[\d.]*|tclsh[\d.]*|Rscript|julia)$/;
   let unplaced = false;
   let running = 0;
   try {

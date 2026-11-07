@@ -337,7 +337,10 @@ review list, is not proof of an unreviewed build: it keeps the coordinator.
   resolved (a dangling symlink, a folder that refuses access). The kernel hides
   the exe and working-folder links of non-dumpable processes (systemd --user,
   ssh-agent, sshd-session), so there only the name and the rest of the command
-  line decide;
+  line decide; but a non-dumpable interpreter (python, node, sh, perl, lua, php
+  and the like, by name or argv0) running a relative script it can't place makes
+  the census incomplete, so the row is blocked rather than updated over a helper
+  that may be live (an interpreter under a renamed binary is a known limit);
 - otherwise the native is backed up exactly as the managed path does
   (`antigravity-switching/native-backups/<sha256>`). The slow recheck (runtime
   still stopped, build still unreviewed) runs next, and the census runs again

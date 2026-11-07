@@ -448,11 +448,26 @@ describe('runtime-free Antigravity process census', () => {
     }) as typeof fs.readlinkSync);
     try {
       expect(value.census()).toEqual({ complete: false, running: 0 });
+      // a sandboxed renderer's `--flag=/path` arguments read like relative paths; it is no interpreter
+      value.add(
+        952,
+        'chrome',
+        '/opt/google/chrome/chrome',
+        ['/opt/google/chrome/chrome', '--type=renderer', '--user-data-dir=/home/me/.config/x'],
+        '/'
+      );
+      denied.add(path.join(value.proc, '952', 'exe'));
+      denied.add(path.join(value.proc, '952', 'cwd'));
       // the same helper with its cwd readable is counted; the sshd-session alone leaves the census complete
       denied.delete(path.join(value.proc, '950', 'cwd'));
       expect(value.census()).toEqual({ complete: true, running: 1 });
       fs.rmSync(path.join(value.proc, '950'), { recursive: true });
       expect(value.census()).toEqual({ complete: true, running: 0 });
+      // other interpreters count the same way (lua by its argv0, the process renamed)
+      value.add(953, 'helper', '/usr/bin/lua5.4', ['lua5.4', './bin/standin.lua'], helperDir);
+      denied.add(path.join(value.proc, '953', 'exe'));
+      denied.add(path.join(value.proc, '953', 'cwd'));
+      expect(value.census()).toEqual({ complete: false, running: 0 });
     } finally {
       spy.mockRestore();
     }
