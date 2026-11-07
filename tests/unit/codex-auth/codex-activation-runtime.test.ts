@@ -718,6 +718,26 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(checked[checked.length - 1]).toBe(999);
   });
 
+  it('leaves no marker and touches no daemon when the CLI updater fails having installed nothing', async () => {
+    const fake = harness([daemon]);
+    const { deps, marker } = click(fake);
+    const result = {
+      ...(await bridge.execute({
+        ...deps,
+        operation: 'cli',
+        readVersion: async () => '1.0.0',
+        update: async () => {
+          throw new Error('fixture network error');
+        },
+        runtime: (hooks = {}) => createCodexActivationRuntime(home, { ...fake.deps, ...hooks }),
+      })),
+    };
+    expect(result.status).toBe('failed');
+    expect(result.messageCode).toBe('update_failed');
+    expect(marker()).toBeNull();
+    expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
+  });
+
   it('accepts a respawned daemon once the readiness check passes', async () => {
     let checks = 0;
     const { run } = respawnedDaemon(async () => {

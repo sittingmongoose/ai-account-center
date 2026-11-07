@@ -1082,6 +1082,89 @@ describe('Pending-marker retry', () => {
     expect(other.restored).toEqual([earlier]);
   });
 
+  /** A CLI click with a daemon running, whose updater fails having installed nothing. */
+  const failedUpdater = (value: ReturnType<typeof fixture>, extra: object = {}) => ({
+    ...value.deps,
+    update: async () => {
+      throw new Error('network error');
+    },
+    operation: 'cli',
+    runtime: () => runtime({}, { daemon: true }),
+    ...extra,
+  });
+
+  it('reports a failed updater that installed nothing as a failed update, owing nothing', async () => {
+    const value = fixture();
+    const result = await bridge.execute(failedUpdater(value));
+    expect(result.status).toBe('failed');
+    expect(result.messageCode).toBe('update_failed');
+    expect(value.deps.marked()).toBeNull();
+  });
+
+  it('puts the earlier marker back exactly after a failed updater that installed nothing', async () => {
+    const value = fixture();
+    const earlier = JSON.stringify({ version: '0.9.0', target: '1.0.0' });
+    const result = await bridge.execute(failedUpdater(value, { markerSnapshot: () => earlier }));
+    expect(result.status).toBe('failed');
+    expect(value.restored).toEqual([earlier]);
+  });
+
+  it('owes nothing when the expected version was not installed and nothing changed', async () => {
+    const value = fixture();
+    const result = await bridge.execute(
+      failedUpdater(value, { update: async () => {}, expectedCandidate: '2.0.0' })
+    );
+    expect(result.status).toBe('failed');
+    expect(result.messageCode).toBe('update_failed');
+    expect(value.deps.marked()).toBeNull();
+  });
+
+  it('keeps the daemon owed when the updater installed a version other than expected', async () => {
+    const value = fixture();
+    let installed = '1.0.0';
+    const result = await bridge.execute(
+      failedUpdater(value, {
+        readVersion: async () => installed,
+        update: async () => {
+          installed = '1.5.0';
+        },
+        expectedCandidate: '2.0.0',
+      })
+    );
+    expect(result.status).toBe('restart_failed');
+    expect(value.deps.marked()?.daemon).toBe(true);
+  });
+
+  it('keeps the intent when the installed version cannot be read after a failed updater', async () => {
+    const value = fixture();
+    let reads = 0;
+    await bridge.execute(
+      failedUpdater(value, {
+        readVersion: async () => {
+          if (reads++ === 0) return '1.0.0';
+          throw new Error('private');
+        },
+      })
+    );
+    expect(value.deps.marked()?.daemon).toBe(true);
+  });
+
+  it('keeps what a retry owes when its updater fails', async () => {
+    const { value, deps } = retry({ daemon: true }, { daemon: true });
+    const result = await bridge.execute({
+      ...deps,
+      // An owed restart from another version: only the marker's own obligation makes this a retry.
+      marked: () => ({ version: '0.9.0', daemon: true }),
+      pending: () => false,
+      update: async () => {
+        throw new Error('network error');
+      },
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(value.restored).toEqual([]);
+    expect(value.pending()).toBe(true);
+  });
+
   it('writes no intent when no daemon is running', async () => {
     const value = fixture();
     let atUpdate: unknown = 'unset';

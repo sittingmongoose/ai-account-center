@@ -193,6 +193,8 @@ async function execute(deps) {
   const restartOnly = deps.restartOnly ?? flags['--restart-only'] === 'true';
   let runtime, prior, closed, retried = false, stopped = false, installed = false, updating = false, nothingOwed = false, busy = false, stopFailed = false;
   let earlierAtStop, intentWritten = false;
+  // Before the CLI updater: what was written, what was there before it, and what is installed now.
+  let intended = false, earlierAtInstall = null, pendingBefore = false, installedNow = null;
   try {
     output.previousVersion = output.version = version(await deps.readVersion());
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
@@ -215,20 +217,20 @@ async function execute(deps) {
       // be killed before anything else is written. So a running daemon goes in the marker first, and the
       // earlier marker comes back exactly if the update turns out to change nothing. An older runtime,
       // one that can't be created, or a failed scan can't say, so there is taken to be one.
-      const pendingBefore = deps.pending(output.previousVersion);
+      pendingBefore = deps.pending(output.previousVersion);
       let running = true;
       try {
         const probe = deps.runtime();
         if (probe.restartState) running = (await probe.restartState()).daemon;
       } catch { /* Stays true. */ }
       const intent = { ...prior, daemon: prior.daemon || running };
-      const intended = stillOwed(intent, { daemon: false, desktops: [] });
-      const earlierAtInstall = intended ? deps.markerSnapshot() : null;
+      intended = stillOwed(intent, { daemon: false, desktops: [] });
+      earlierAtInstall = intended ? deps.markerSnapshot() : null;
       if (intended) deps.mark(markerFields(intent));
       updating = true;
       await deps.update();
       updating = false;
-      output.version = version(await deps.readVersion());
+      output.version = installedNow = version(await deps.readVersion());
       if (!output.version) { output.messageCode = 'version_unknown'; return output; }
       if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
       if (output.version === output.previousVersion && !retried && !pendingBefore) {
@@ -307,6 +309,7 @@ async function execute(deps) {
     if (updating) {
       try {
         const now = version(await deps.readVersion());
+        installedNow = now;
         if (now && now !== output.version) {
           output.version = now;
           if (mode === 'cli') {
@@ -323,6 +326,16 @@ async function execute(deps) {
           }
         }
       } catch { /* The version stays as it was read before the install. */ }
+    }
+    // A CLI updater that failed, or installed a version other than expected, before anything stopped:
+    // if what is installed is the version this run started from and nothing was owed before, nothing
+    // changed, so the earlier marker comes back exactly and the row is a failed update. A version that
+    // can't be read keeps the intent.
+    if (mode === 'cli' && intended && !runtime && !retried && !pendingBefore && installedNow !== null && installedNow === output.previousVersion) {
+      try {
+        if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall);
+        nothingOwed = true;
+      } catch { /* The intent stays: the next click checks again. */ }
     }
     if (stopped) {
       try { await runtime.start(); } catch { /* Reported below as restart_failed. */ }
