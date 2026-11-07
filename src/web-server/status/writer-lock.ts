@@ -137,9 +137,13 @@ function createExclusive(file: string, text: string): boolean {
   try {
     fs.writeFileSync(fd, text);
     fs.fsyncSync(fd);
-  } finally {
+  } catch (error) {
+    // created here and never completed: it goes, so it can't name this process forever
     fs.closeSync(fd);
+    fs.rmSync(file, { force: true });
+    throw error;
   }
+  fs.closeSync(fd);
   return true;
 }
 
@@ -188,11 +192,14 @@ function takeOver(file: string, judged: string): boolean {
   if (!createExclusive(taking, mine)) {
     const other = readLock(taking);
     if (other === null) return true;
-    if (!stale(parseHolder(other.text), other.mtimeMs)) return false;
-    // a taker that ended mid-way: its marker goes, if it is still the one judged (a known limit: two processes
-    // clearing the same ended taker at the same moment)
-    if (readText(taking) === other.text) fs.rmSync(taking, { force: true });
-    return true;
+    const taker = parseHolder(other.text);
+    // a marker this very process left (an attempt that failed part-way), or one an ended taker left, goes if it is
+    // still the one judged (a known limit: two processes clearing the same ended taker at the same moment)
+    if (isSelf(taker) || stale(taker, other.mtimeMs)) {
+      if (readText(taking) === other.text) fs.rmSync(taking, { force: true });
+      return true;
+    }
+    return false;
   }
   try {
     if (readText(file) === judged) fs.rmSync(file, { force: true });

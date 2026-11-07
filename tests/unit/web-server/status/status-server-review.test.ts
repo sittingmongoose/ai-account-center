@@ -2668,6 +2668,113 @@ describe('round three', () => {
     expect(make().list()[0].doorbell.state).toBe('done');
   });
 
+  it('the answer store has one writer: an answer validated before the store changed hands is not recorded', async () => {
+    const { root, store, make, reader } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const script = path.join(dirs.make('ccs-status-other-'), 'other.ts');
+    const answersModule = path.resolve('src/web-server/status/answers.ts');
+    const readerModule = path.resolve('src/web-server/status/agent-reports-reader.ts');
+    fs.writeFileSync(
+      script,
+      `import { StatusAnswers } from ${JSON.stringify(answersModule)};
+import { AgentReportsReader } from ${JSON.stringify(readerModule)};
+const [root, store, entryJson, now] = process.argv.slice(2);
+const reader = new AgentReportsReader({ root: () => root, now: () => Number(now) });
+const answers = new StatusAnswers({ readCard: (id) => reader.readCardNow(id), storeDir: () => store,
+  reportsRoot: () => root, doorbell: async () => ({ ok: true, detail: 'Rang.' }), now: () => Number(now) });
+console.log(JSON.stringify(await answers.submitSet([JSON.parse(entryJson)], 'Other')));
+`
+    );
+    let other = '';
+    // while this dashboard reads the card, its lock is removed and another dashboard answers the same card and exits
+    const a = make({
+      readCard: (id) => {
+        if (!other) {
+          fs.rmSync(path.join(store, 'answers.lock'), { force: true });
+          other = spawnSync(
+            process.execPath,
+            [script, root, store, JSON.stringify(entry(CARD, q1)), String(NOW)],
+            { encoding: 'utf8', env: { ...process.env, AAC_STATUS_DOORBELL: 'off' } }
+          ).stdout;
+        }
+        return reader.readCardNow(id);
+      },
+    });
+    const [result] = await a.submitSet([entry(CARD, q1)], 'Mac');
+    expect(JSON.parse(other)[0].outcome).toBe('recorded');
+    expect(result.outcome).not.toBe('recorded');
+    const answers = fs
+      .readFileSync(path.join(store, 'answers.jsonl'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((line) => line.type === 'answer');
+    expect(answers).toHaveLength(1);
+  });
+
+  it('the answer store has one writer: a ring group another writer rang meanwhile is not rung again', async () => {
+    let calls = 0;
+    let ringElsewhere: (() => void) | null = null;
+    const { root, store, make } = setup({
+      doorbell: async () => {
+        calls += 1;
+        ringElsewhere?.();
+        return { ok: true, detail: 'Rang.' };
+      },
+    });
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.other', 'Q2'));
+    const storeFile = path.join(store, 'answers.jsonl');
+    // during the first ring, the lock goes and another writer rings both askers and records both done
+    ringElsewhere = () => {
+      ringElsewhere = null;
+      const ids = fs
+        .readFileSync(storeFile, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((line) => line.type === 'answer')
+        .map((line) => line.id);
+      fs.rmSync(path.join(store, 'answers.lock'), { force: true });
+      for (const id of ids)
+        fs.appendFileSync(
+          storeFile,
+          `\n${JSON.stringify({ type: 'delivery', id, step: 'doorbell', state: 'done', at: '2026-11-07T12:00:00.000Z', detail: 'Rang.', line: `elsewhere-${id}` })}\n`
+        );
+    };
+    const results = await make().submitSet([entry(CARD, q1), entry('vm.other--Q2', q2)], 'Mac');
+    expect(results.map((r) => r.outcome)).toEqual(['recorded', 'recorded']);
+    await settle();
+    expect(calls).toBe(1);
+  });
+
+  it('the answer store has one writer: a take-over marker this process failed to write is cleared', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    fs.mkdirSync(store, { recursive: true });
+    const lock = path.join(store, 'answers.lock');
+    const gone = spawnSync(process.execPath, ['-e', '0']).pid;
+    fs.writeFileSync(lock, JSON.stringify({ pid: gone, host: os.hostname(), at: 0 }));
+    // the marker's sync fails once (EIO): the send fails, and the marker must not be left naming this process
+    const realSync = fs.fsyncSync;
+    let failed = false;
+    const sync = spyOn(fs, 'fsyncSync').mockImplementation(((fd: number) => {
+      if (!failed && fs.existsSync(`${lock}.taking`)) {
+        failed = true;
+        throw Object.assign(new Error('io'), { code: 'EIO' });
+      }
+      return realSync(fd);
+    }) as typeof fs.fsyncSync);
+    try {
+      expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).not.toBe('recorded');
+    } finally {
+      sync.mockRestore();
+    }
+    expect(failed).toBe(true);
+    // with the disk well again, the next send takes the store over
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+  });
+
   it('the answer store has one writer: a lock naming this pid from another incarnation is not adopted', async () => {
     if (!fs.existsSync('/proc/sys/kernel/random/boot_id')) return;
     const { root, store, make } = setup();

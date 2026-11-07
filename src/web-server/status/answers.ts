@@ -356,6 +356,10 @@ export class StatusAnswers {
   private retrying = false;
   /** Whether this instance holds the store's writer lock (see writer()). */
   private owner = false;
+  /** Counts the times this instance gained the store; a send started under one count records only under it. */
+  private epoch = 0;
+  /** The count a send in progress started under (sends run one at a time, see serial()). */
+  private sendEpoch: number | null = null;
   /**
    * Records a retry must not ring: from the moment a send creates them until its own ring is over
    * (the send rings them itself, whole), and while any ring of them is running.
@@ -539,6 +543,7 @@ export class StatusAnswers {
       // are read again from the store before anything is judged against them. A record or send this process already
       // holds keeps its object (a ring or summary still running updates it), with the further-along delivery steps.
       this.owner = true;
+      this.epoch += 1;
       const heldEntries = new Map((this.entries ?? []).map((held) => [held.id, held]));
       const heldSends = new Map(this.sends);
       this.entries = null;
@@ -836,6 +841,17 @@ export class StatusAnswers {
     try {
       for (const group of groups.values()) {
         if (budget && budget.left() <= 0) break;
+        // Another writer may have rung while an earlier ring was out: the store is confirmed (gaining it again
+        // reconciles the delivery steps), and what is already rung is not rung again. Another holder rings its own.
+        try {
+          this.writer();
+        } catch {
+          break;
+        }
+        group.entries = group.entries.filter(
+          (entry) => entry.doorbell.state !== 'done' && entry.doorbell.state !== 'skipped'
+        );
+        if (group.entries.length === 0) continue;
         const records: SentRecord[] = group.entries.map((entry) => ({
           answer: entry.answer,
           card: entry.card,
@@ -902,6 +918,8 @@ export class StatusAnswers {
       };
       this.list();
       this.writer();
+      // the store changed hands since this send began: what it checked may be stale, so nothing is recorded
+      if (this.sendEpoch !== null && this.epoch !== this.sendEpoch) return null;
       appendLine(this.storeFile(), {
         type: 'answer',
         id: entry.id,
@@ -1051,6 +1069,7 @@ export class StatusAnswers {
         // replay or answer is judged against it
         try {
           this.writer();
+          this.sendEpoch = this.epoch;
         } catch (error) {
           const code = error instanceof WriterBusyError ? 'store_busy' : 'answer_not_saved';
           return entries.map((raw) => {
@@ -1102,6 +1121,8 @@ export class StatusAnswers {
           if (left > 0) await this.writeSummary(send, Math.min(this.timing.shareMs, left));
         }
         return out;
+      }).finally(() => {
+        this.sendEpoch = null;
       });
     } finally {
       // The claim passes to the ring in one step: it takes its records back before its first await.
