@@ -1195,8 +1195,45 @@ describe('runtime-free Antigravity process census', () => {
     } finally {
       listed.mockRestore();
     }
+    // a worker exiting normally can show a live state for a moment after its exe goes: the process is read again
+    // after a short pause, not judged on that moment
+    fs.rmSync(path.join(leader, 'task'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(leader, 'task', '1071'), { recursive: true });
+    fs.writeFileSync(
+      path.join(leader, 'task', '1071', 'stat'),
+      '1071 (helper-bin) S 1 1071 1071 0'
+    );
+    fs.writeFileSync(path.join(leader, 'stat'), '1070 (helper-bin) Z 1 1070 1070 0');
+    if (fs.existsSync(path.join(leader, 'exe'))) fs.rmSync(path.join(leader, 'exe'));
+    // for 15 ms after its exe goes the thread is still listed, then the kernel drops it from the listing
+    let lingerUntil = 0;
+    const lingering = spyOn(fs, 'readlinkSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === path.join(leader, 'task', '1071', 'exe')) {
+        lingerUntil ||= Date.now() + 15;
+        throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      }
+      return (realReadlink as (...a: unknown[]) => string)(file, ...rest);
+    }) as typeof fs.readlinkSync);
+    const realListing = fs.readdirSync;
+    const dropped = spyOn(fs, 'readdirSync').mockImplementation(((
+      folder: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(folder) === path.join(leader, 'task') && lingerUntil && Date.now() >= lingerUntil)
+        fs.rmSync(path.join(leader, 'task', '1071'), { recursive: true, force: true });
+      return (realListing as (...a: unknown[]) => unknown)(folder, ...rest);
+    }) as typeof fs.readdirSync);
+    try {
+      expect(value.census()).toEqual({ complete: true, running: 0 });
+    } finally {
+      lingering.mockRestore();
+      dropped.mockRestore();
+    }
     // the last worker exits normally between reads (its exe goes): the process is read again and found gone
-    fs.rmSync(path.join(leader, 'exe'));
+    fs.rmSync(path.join(leader, 'exe'), { force: true });
     fs.rmSync(path.join(leader, 'task'), { recursive: true, force: true });
     fs.mkdirSync(path.join(leader, 'task', '1071'), { recursive: true });
     fs.writeFileSync(

@@ -118,6 +118,11 @@ function networkMounts(file: string): string[] | null {
   });
 }
 
+/** Waits `ms` milliseconds without yielding (the census is synchronous). */
+function settle(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /** lstat results shared by one census's lookups, so repeated parent folders cost one call. */
 type StatCache = Map<string, fs.Stats | string>;
 
@@ -574,6 +579,8 @@ export function censusAntigravityProcesses(options: {
     for (let index = 0; index < queue.length; index += 1) {
       const name = queue[index];
       if (!/^\d{1,10}$/.test(name)) continue;
+      // a process read again waits a moment first (10 ms, then 20 ms): an exec or an exit settles in that time
+      if (index >= entries.length) settle(10 * (reread.get(name) ?? 1));
       const pid = Number(name);
       if (pid <= 1 || pid === self) continue;
       const directory = path.join(procRoot, name);
