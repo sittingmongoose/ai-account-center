@@ -12,7 +12,12 @@
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { isTransientShareError, MISSING_GRACE_MS } from './agent-reports-reader';
+import {
+  isTransientShareError,
+  MISSING_GRACE_MS,
+  PERSISTENT_SHARE_ERROR,
+  TransientMisses,
+} from './agent-reports-reader';
 import {
   count,
   fail,
@@ -277,6 +282,9 @@ const nodeFs: QuotaReaderFs = {
   readFile: (file) => readRegularFile(file, QUOTA_REPORT_CAP),
 };
 
+/** The one file this reader reads, as `TransientMisses` names it. */
+const REPORT = 'quota/report.json';
+
 export class QuotaReportReader {
   private good: QuotaReportState['good'] = null;
   private problem: QuotaReportState['problem'] = null;
@@ -284,6 +292,7 @@ export class QuotaReportReader {
   private scannedAt: number | null = null;
   private statKey = '';
   private missingSince: number | null = null;
+  private readonly misses = new TransientMisses();
 
   constructor(
     private readonly options: { root: () => string; now?: () => number; fs?: QuotaReaderFs }
@@ -323,16 +332,20 @@ export class QuotaReportReader {
     try {
       stat = await this.fs.stat(file);
     } catch (error) {
-      if (!isTransientShareError(error)) this.setProblem('could not be read');
+      this.failedRead(error);
       return done();
     }
     if (!stat.isFile()) {
+      this.misses.clear(REPORT);
       this.statKey = '';
       this.setProblem('is not a regular file');
       return done();
     }
     const statKey = `${stat.size}:${stat.mtimeMs}:${stat.ino}:${stat.ctimeMs}`;
-    if (statKey === this.statKey) return done();
+    if (statKey === this.statKey) {
+      this.misses.clear(REPORT);
+      return done();
+    }
     if (stat.size > QUOTA_REPORT_CAP) {
       this.statKey = statKey;
       this.setProblem('larger than the 512 KB cap');
@@ -342,9 +355,10 @@ export class QuotaReportReader {
     try {
       bytes = await this.fs.readFile(file);
     } catch (error) {
-      if (!isTransientShareError(error)) this.setProblem('could not be read');
+      this.failedRead(error);
       return done();
     }
+    this.misses.clear(REPORT);
     this.statKey = statKey;
     const parsed = parseQuotaReport(bytes);
     if (!parsed.ok) {
@@ -366,6 +380,7 @@ export class QuotaReportReader {
 
   /** No report listed: keep the last good copy through the rename gap, then report it missing. */
   private absent(done: () => boolean): boolean {
+    this.misses.clear(REPORT);
     const now = this.now();
     this.missingSince ??= now;
     if (!this.good || now - this.missingSince >= MISSING_GRACE_MS) {
@@ -377,8 +392,25 @@ export class QuotaReportReader {
     return done();
   }
 
-  private setProblem(reason: string): void {
-    if (this.problem?.reason !== reason) this.problem = { reason, since: this.now() };
+  /**
+   * A failed stat or read of the listed report. ENOENT or ESTALE once is the share's rename-over
+   * race and keeps the last good copy quietly; on the next scan too it is a named problem.
+   */
+  private failedRead(error: unknown): void {
+    if (!isTransientShareError(error)) {
+      this.misses.clear(REPORT);
+      this.setProblem('could not be read');
+      return;
+    }
+    const since = this.misses.miss(REPORT, this.now());
+    if (since === null) return;
+    // Read again on the first scan that can, whatever the stat says then.
+    this.statKey = '';
+    this.setProblem(PERSISTENT_SHARE_ERROR, since);
+  }
+
+  private setProblem(reason: string, since = this.now()): void {
+    if (this.problem?.reason !== reason) this.problem = { reason, since };
   }
 
   snapshot(): QuotaReportState {

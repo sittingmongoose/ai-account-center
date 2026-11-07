@@ -41,6 +41,10 @@ function setup(options: { registryDir?: string } = {}) {
     registry: false,
     nas1: 'ok' as 'ok' | 'error' | 'absent',
     simlock: 'ok' as 'ok' | 'starting' | 'worker',
+    /** Fields merged into Nas1's good browser-check state (display_problem, snapshot, phones). */
+    nas1Extra: {} as Record<string, unknown>,
+    /** Adds a Windows row with browser-check's `phones: null` (no Simlock worker there). */
+    windows: false,
   };
   const registryReader = {
     scan: async () => {
@@ -81,6 +85,9 @@ function setup(options: { registryDir?: string } = {}) {
     JSON.stringify({
       rows: [
         { machine: { name: 'vm', label: 'Ubuntu VM' }, state: good },
+        ...(fail.windows
+          ? [{ machine: { name: 'windows', label: 'Windows PC' }, state: { ...good, phones: null } }]
+          : []),
         ...(fail.nas1 === 'absent'
           ? []
           : [
@@ -89,7 +96,7 @@ function setup(options: { registryDir?: string } = {}) {
                 state:
                   fail.nas1 === 'error'
                     ? { error: 'session list failed: exit 1: backend unavailable' }
-                    : good,
+                    : { ...good, ...fail.nas1Extra },
                 free: fail.nas1 === 'error' ? null : { headless: 6, record: 4 },
               },
             ]),
@@ -387,6 +394,68 @@ describe('partial failures inside a secondary source', () => {
     expect(nas1.slotsSource).toMatchObject({ state: 'missing', asOf: null, ageSeconds: null });
     expect(view.machines.rows.find((r) => r.id === 'vm')?.slotsSource.state).toBe('ok');
   });
+  it('a host whose X desktop is down names it on the source and its slots, counts current', async () => {
+    const { service, clock, fail } = setup();
+    await warm(service);
+    fail.nas1Extra = { display_problem: 'X desktop :0 refuses this account' };
+    clock.now += 60_000;
+    await service.collect();
+    const view = service.view();
+    const browsers = view.sources.find((s) => s.id === 'browsers')!;
+    expect(browsers.state).toBe('error');
+    expect(browsers.detail).toContain('Nas1');
+    expect(browsers.detail).toContain('X desktop :0 refuses this account');
+    const nas1 = view.machines.rows.find((r) => r.id === 'nas1')!;
+    // The counts were read now; the host's problem rides with them.
+    expect(nas1.browsers).toEqual({ running: 6, max: 12 });
+    expect(nas1.slotsSource).toMatchObject({
+      state: 'error',
+      asOf: new Date(clock.now).toISOString(),
+      ageSeconds: 0,
+    });
+    expect(nas1.slotsSource.detail).toContain('X desktop :0 refuses this account');
+    expect(view.machines.rows.find((r) => r.id === 'vm')?.slotsSource.state).toBe('ok');
+
+    fail.nas1Extra = {};
+    clock.now += 60_000;
+    await service.collect();
+    const healed = service.view();
+    expect(healed.sources.find((s) => s.id === 'browsers')?.state).toBe('ok');
+    expect(healed.machines.rows.find((r) => r.id === 'nas1')?.slotsSource.state).toBe('ok');
+  });
+
+  it('counts browser-check took from session records (snapshot) are named, not a clean reading', async () => {
+    const { service, fail } = setup();
+    fail.nas1Extra = {
+      snapshot: 'backend busy (admission lock): counted from its session records',
+    };
+    await warm(service);
+    const view = service.view();
+    const browsers = view.sources.find((s) => s.id === 'browsers')!;
+    expect(browsers.state).toBe('error');
+    expect(browsers.detail).toContain('counted from its session records');
+    const nas1 = view.machines.rows.find((r) => r.id === 'nas1')!;
+    expect(nas1.browsers).toEqual({ running: 6, max: 12 });
+    expect(nas1.slotsSource.state).toBe('error');
+    expect(nas1.slotsSource.detail).toContain('counted from its session records');
+  });
+
+  it('a null phone report on a Simlock host is named and never read as zero phones', async () => {
+    const { service, fail } = setup();
+    fail.nas1Extra = { phones: null };
+    fail.windows = true;
+    await warm(service);
+    const view = service.view();
+    const browsers = view.sources.find((s) => s.id === 'browsers')!;
+    expect(browsers.state).toBe('error');
+    expect(browsers.detail).toContain('Nas1');
+    expect(browsers.detail).toContain('phone');
+    // Windows runs no Simlock worker: its null is the normal answer, not a problem.
+    expect(browsers.detail).not.toContain('Windows');
+    expect(view.machines.rows.find((r) => r.id === 'windows')?.slotsSource.state).toBe('ok');
+    expect(view.machines.rows.find((r) => r.id === 'nas1')?.slotsSource.state).toBe('error');
+  });
+
   it('a Simlock that is starting keeps its last reading cached instead of an empty fleet', async () => {
     const { service, clock, fail } = setup();
     await warm(service);

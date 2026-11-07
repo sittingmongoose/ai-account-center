@@ -46,7 +46,10 @@ not read runs; they feed the Model Scoreboard (`docs/scoreboard.md`).
 **Reading rules.** For each writer the reader lists the folder (and `cards/`) first and then reads what the listing
 names: a Mac rename-over through SMB is a delete then a rename, and NFS caches a missed lookup for about 20 s unless
 the folder is listed. ENOENT and ESTALE (Node: "Unknown system error -116") on a listed file, or on listing a writer
-folder, keep the last good copy and retry on the next scan; they never count as the thread going away. A file absent
+folder, keep the last good copy and retry on the next scan; they never count as the thread going away. Once is the
+share's rename-over race and says nothing; the same error on a listed file on the next scan too makes it a named
+problem ("could not be read on two scans in a row ..."), since its first failure, so the source is not `ok`. The
+Scoreboard's run and catalog files and the quota-watch report follow the same rule. A file absent
 from its folder's listing keeps its last good copy for 2 minutes before it counts as removed. A file containing a NUL
 byte is refused (Mac SMB appends wrote NULs into shared files). The fresh card read behind every answer also lists
 `cards/` first. Every share file is opened non-blocking and without following a link, and the open handle must be a
@@ -199,7 +202,11 @@ the source is not `ok` and its `detail` names each part with its reason and sinc
 a pm-mail registry file that can't be read, isn't JSON, is over 64 KB or isn't a regular file makes the registry
 `unreadable` ("1 registry file unreadable since 10:01 AM: registry-worker.json (could not be read). ..."); a host
 `browser-check slots --json` answers with `state: { error }` (exit 0) makes `browsers` `error` ("Nas1: session list
-failed: ... (since 10:01 AM)."); a Simlock gateway worker that is `disconnected` or `incompatible` makes `simlock`
+failed: ... (since 10:01 AM)."); a host browser-check did read but flags makes `browsers` `error` and names that
+host, with its counts current: `display_problem` ("browsers cannot start here: ..."), `snapshot` (its own words, such
+as "backend busy (...): counted from its session records"; it carries no time, so the reading time stays this read's),
+and `phones: null` on the VM, Mac or Nas1, which run a Simlock worker ("reported no phone count ..."; phones are
+unknown, never zero; Windows has no worker, so its null is normal); a Simlock gateway worker that is `disconnected` or `incompatible` makes `simlock`
 `error`. Each failed part is tried again on the next read and the problem clears on its first good one. A Simlock that
 answers `daemon.health: "starting"` (no devices, leases or capacity yet) or `"failed"` is a failed read, so its last
 good reading stays, shown cached, never an empty fleet.
@@ -357,7 +364,8 @@ reset", `warn` "claude main (7-day): full in 1d 11h, before its Nov 12 reset".
 **Spend** (source `quota-watch`): quota-watch's per-stream estimates of how much of each account meter a stream used,
 from `<reports>/v1/quota/report.json` (`quota-report@1`, one writer, rewritten whole every 10 minutes, 512 KB cap;
 field table: quota-watch README, "Share copy"). It is read with the agent-reports rules: the `quota/` folder is listed
-before the file is read; ENOENT and ESTALE keep the last good copy and retry; a file gone from the listing keeps its
+before the file is read; ENOENT and ESTALE keep the last good copy and retry (on two scans in a row, a named
+problem); a file gone from the listing keeps its
 last good copy for 2 minutes; NUL bytes, over 512 KB, a secret, a schema other than `quota-report@1`, `estimate` not
 `true` or a field that does not validate make it unreadable by name (the last good copy stays, marked); a lower
 `seq` than one already accepted is ignored.

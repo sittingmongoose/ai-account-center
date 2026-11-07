@@ -130,10 +130,13 @@ describe('runs reader', () => {
       errno('ESTALE'),
       new Error('Unknown system error -116'),
     ]) {
+      // Once, between good scans: the share's rename-over race, not a problem.
       fail = error;
       await runs.scan();
       expect(runs.snapshot().runs).toHaveLength(1);
       expect(runs.snapshot().problems).toEqual([]);
+      fail = null;
+      await runs.scan();
     }
     fail = null;
     failListing = errno('ESTALE');
@@ -148,6 +151,64 @@ describe('runs reader', () => {
     const state = runs.snapshot();
     expect(state.runs).toHaveLength(1);
     expect(state.problems.map((problem) => problem.reason)).toEqual(['not valid JSON']);
+  });
+
+  it('names a listed file whose ENOENT or ESTALE persists past one scan, keeping its copy', async () => {
+    for (const make of [
+      () => errno('ENOENT'),
+      () => errno('ESTALE'),
+      () => new Error('Unknown system error -116'),
+    ]) {
+      const root = dirs.make();
+      const file = writeRun(root, runDoc('vm.lead', 'A', { seq: 1 }));
+      let now = NOW;
+      let failRead = false;
+      let failStat = false;
+      const flaky: ReaderFs = {
+        ...nodeReaderFs,
+        stat: async (target) => {
+          if (failStat && target === file) throw make();
+          return nodeReaderFs.stat(target);
+        },
+        readFile: async (target, cap) => {
+          if (failRead && target === file) throw make();
+          return nodeReaderFs.readFile(target, cap);
+        },
+      };
+      const runs = reader(root, { fs: flaky, now: () => now });
+      await runs.scan();
+      // The listing still names the file; every read of it fails.
+      failStat = true;
+      now += 60_000;
+      await runs.scan();
+      expect(runs.snapshot().problems).toEqual([]);
+      now += 60_000;
+      await runs.scan();
+      let state = runs.snapshot();
+      expect(state.runs).toHaveLength(1);
+      expect(state.problems).toHaveLength(1);
+      expect(state.problems[0].file).toContain('vm.lead');
+      expect(state.problems[0].reason).toContain('two scans in a row');
+      // Since the first failure, not the scan that named it.
+      expect(state.problems[0].since).toBe(NOW + 60_000);
+      failStat = false;
+      await runs.scan();
+      expect(runs.snapshot().problems).toEqual([]);
+
+      // The same for a stat that works and a read that does not, on a file that changed.
+      fs.writeFileSync(file, JSON.stringify(runDoc('vm.lead', 'A', { seq: 2 })));
+      failRead = true;
+      await runs.scan();
+      expect(runs.snapshot().problems).toEqual([]);
+      await runs.scan();
+      state = runs.snapshot();
+      expect(state.problems.map((problem) => problem.reason)).toHaveLength(1);
+      expect(state.runs[0].doc.seq).toBe(1);
+      failRead = false;
+      await runs.scan();
+      expect(runs.snapshot().problems).toEqual([]);
+      expect(runs.snapshot().runs[0].doc.seq).toBe(2);
+    }
   });
 
   it('keeps a file absent from its listing for the grace period, then forgets it', async () => {

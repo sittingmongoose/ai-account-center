@@ -361,6 +361,19 @@ export interface BrowserMachine {
   gpuPct: number | null;
   memGb: number | null;
   sessions: BrowserSession[];
+  /**
+   * The host's Simlock phones as browser-check reported them (running counts reserved ones). Null:
+   * browser-check reported `phones: null` (unknown, never zero); undefined: it left the field out.
+   */
+  phones?: Partial<
+    Record<'ios' | 'android', { running: number | null; max: number | null }>
+  > | null;
+  /**
+   * What browser-check said is wrong with counts it did read: `display_problem` (no browser can
+   * start there), `snapshot` (counted from session records while the backend was busy), and a
+   * null phone report on a machine that runs a Simlock worker. Each is a named problem.
+   */
+  notes?: string[];
   /** browser-check could not read this host (`state.error`): the counts above are unknown. */
   error: string | null;
   /** Set by the service: when these counts were read (epoch ms), null before the first good reading. */
@@ -410,6 +423,16 @@ export function parseBrowserSlots(raw: unknown): BrowserMachine[] {
     }
     const caps = (state.caps ?? {}) as Record<string, unknown>;
     const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    const phones = parseSlotPhones(state.phones);
+    const notes: string[] = [];
+    const display = shortText(state.display_problem, 200);
+    if (display) notes.push(`browsers cannot start here: ${display}`);
+    // `snapshot` is browser-check's own words for counts it took from session records while the
+    // backend was busy. It carries no time: the counts are this reading's, so the read time stands.
+    const snapshot = shortText(state.snapshot, 200);
+    if (snapshot) notes.push(snapshot);
+    if (phones === null && SIMLOCK_MACHINES.includes(name as MachineId))
+      notes.push('reported no phone count (phones: null), so phones here are unknown');
     result.push({
       machine: name as MachineId,
       label: shortText(machine.label, 80),
@@ -427,10 +450,29 @@ export function parseBrowserSlots(raw: unknown): BrowserMachine[] {
           ageSeconds: int(s.age_s),
         };
       }),
+      ...(phones === undefined ? {} : { phones }),
+      notes,
       error: null,
     });
   }
   return result;
+}
+
+/** The machines that run a Simlock worker; elsewhere browser-check's `phones: null` is the normal answer. */
+const SIMLOCK_MACHINES: readonly MachineId[] = ['vm', 'mac', 'nas1'];
+
+/** browser-check's `phones`: null stays null and a missing count stays null, never zero. */
+function parseSlotPhones(value: unknown): BrowserMachine['phones'] {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const phones: NonNullable<BrowserMachine['phones']> = {};
+  for (const kind of ['ios', 'android'] as const) {
+    const row = (value as Record<string, unknown>)[kind];
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    phones[kind] = { running: int(r.running), max: int(r.max) };
+  }
+  return phones;
 }
 
 /**
@@ -444,8 +486,16 @@ export function mergeBrowserRows(
   now: number
 ): BrowserMachine[] {
   return rows.map((row) => {
-    if (row.error === null) return { ...row, readAt: now, problem: null };
     const last = before?.find((b) => b.machine === row.machine) ?? null;
+    if (row.error === null) {
+      // Counts read now, with what browser-check said is wrong with them named.
+      const notes = row.notes ?? [];
+      const problem =
+        notes.length > 0
+          ? nextProblem(last?.problem, row.label ?? row.machine, notes.join('; '), now)
+          : null;
+      return { ...row, readAt: now, problem };
+    }
     const problem = nextProblem(last?.problem, row.label ?? row.machine, row.error, now);
     if (last && typeof last.readAt === 'number')
       return { ...last, label: row.label ?? last.label, error: row.error, problem };

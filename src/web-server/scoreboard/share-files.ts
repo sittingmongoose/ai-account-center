@@ -3,11 +3,14 @@
  * (docs/status-tab.md, Reading rules): the caller lists a folder first and visits what the listing
  * names; a file is read only when its size, time or inode changed; a file that later fails keeps its
  * last good copy with a named problem; ENOENT and ESTALE on a listed file keep the copy and retry
- * next scan; a file absent from its listing counts as removed only after the grace period.
+ * next scan, and the same error on the next scan too is a named problem (since the first failure);
+ * a file absent from its listing counts as removed only after the grace period.
  */
 import {
   isTransientShareError,
   MISSING_GRACE_MS,
+  PERSISTENT_SHARE_ERROR,
+  TransientMisses,
   type ReaderFs,
   type ReportProblem,
 } from '../status/agent-reports-reader';
@@ -30,6 +33,7 @@ interface Entry<T> {
 
 export class ShareFiles<T> {
   private readonly entries = new Map<string, Entry<T>>();
+  private readonly misses = new TransientMisses();
 
   constructor(
     private readonly options: {
@@ -51,12 +55,17 @@ export class ShareFiles<T> {
     return entry;
   }
 
-  private setProblem(file: string, reason: string, statKey = ''): void {
+  private setProblem(file: string, reason: string, statKey = '', since = this.options.now()): void {
     const entry = this.entry(file);
-    if (entry.problem?.reason !== reason)
-      entry.problem = { file, reason, since: this.options.now() };
+    if (entry.problem?.reason !== reason) entry.problem = { file, reason, since };
     // A read error keeps the key empty so the next scan tries again.
     entry.statKey = statKey;
+  }
+
+  /** ENOENT or ESTALE on a listed file: the race once, a named problem when the last scan had it too. */
+  private transient(file: string): void {
+    const since = this.misses.miss(file, this.options.now());
+    if (since !== null) this.setProblem(file, PERSISTENT_SHARE_ERROR, '', since);
   }
 
   /**
@@ -78,7 +87,11 @@ export class ShareFiles<T> {
       size = stat.size;
     } catch (error) {
       seen.add(file);
-      if (!isTransientShareError(error)) this.setProblem(file, 'could not be read');
+      if (isTransientShareError(error)) this.transient(file);
+      else {
+        this.misses.clear(file);
+        this.setProblem(file, 'could not be read');
+      }
       return 0;
     }
     // Before the unchanged check: a file over its cap is never read, on this scan or any later one,
@@ -87,14 +100,22 @@ export class ShareFiles<T> {
       this.setProblem(file, `larger than the ${capBytes / 1024} KB cap`, statKey);
       return 0;
     }
-    if (this.entries.get(file)?.statKey === statKey) return size;
+    if (this.entries.get(file)?.statKey === statKey) {
+      this.misses.clear(file);
+      return size;
+    }
     let bytes: Buffer;
     try {
       bytes = await fs().readFile(absolute, capBytes);
     } catch (error) {
-      if (!isTransientShareError(error)) this.setProblem(file, 'could not be read');
+      if (isTransientShareError(error)) this.transient(file);
+      else {
+        this.misses.clear(file);
+        this.setProblem(file, 'could not be read');
+      }
       return size;
     }
+    this.misses.clear(file);
     const parsed = parse(bytes, file);
     if (!parsed.ok) {
       this.setProblem(file, parsed.reason, statKey);
@@ -115,6 +136,7 @@ export class ShareFiles<T> {
 
   /** After a scan: forgets files absent from their listing for longer than the grace period. */
   sweep(seen: Set<string>): void {
+    this.misses.keepOnly(seen);
     const now = this.options.now();
     for (const [file, entry] of [...this.entries]) {
       if (seen.has(file)) {

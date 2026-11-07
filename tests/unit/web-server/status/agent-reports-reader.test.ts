@@ -193,6 +193,53 @@ describe('agent reports reader', () => {
     expect(isTransientShareError({ code: 'EACCES' })).toBe(false);
   });
 
+  it('names a listed report whose ENOENT or ESTALE persists past one scan', async () => {
+    for (const code of ['ENOENT', 'ESTALE'] as const) {
+      const root = dirs.make();
+      writeReport(root, 'vm.lead', 'thread.json', threadDoc('vm.lead', { doing: 'First' }));
+      writeCard(root, cardDoc('vm.lead', 'Q1'));
+      let failing = false;
+      let now = NOW;
+      const r = new AgentReportsReader({
+        root: () => root,
+        now: () => now,
+        fs: {
+          readdir: (dir) => fs.promises.readdir(dir, { withFileTypes: true }),
+          stat: async (file) => {
+            if (failing && file.endsWith('thread.json'))
+              throw Object.assign(new Error(code), { code });
+            return fs.promises.stat(file);
+          },
+          readFile: (file) => fs.promises.readFile(file),
+        },
+      });
+      await r.scan();
+      failing = true;
+      now += 60_000;
+      await r.scan();
+      expect(r.snapshot().problems).toEqual([]);
+      now += 60_000;
+      await r.scan();
+      const state = r.snapshot();
+      expect(state.state).toBe('ok');
+      expect(state.threads[0].doc.doing).toBe('First');
+      expect(state.problems).toEqual([
+        {
+          file: 'writers/vm.lead/thread.json',
+          reason: expect.stringContaining('two scans in a row'),
+          since: NOW + 60_000,
+        },
+      ]);
+      expect(state.threads[0].problem?.file).toBe('writers/vm.lead/thread.json');
+      expect(state.complete).toBe(false);
+      failing = false;
+      await r.scan();
+      expect(r.snapshot().problems).toEqual([]);
+      expect(r.snapshot().threads[0].problem).toBeNull();
+      expect(r.snapshot().complete).toBe(true);
+    }
+  });
+
   it('accepts T3 writers without a pm-mail name, and quiet threads without a heartbeat', async () => {
     const root = dirs.make();
     writeReport(

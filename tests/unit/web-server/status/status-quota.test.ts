@@ -262,6 +262,46 @@ describe('quota-watch report: reading and source states', () => {
     ).toEqual({ ok: false, reason: 'refused: it contains what looks like an API key' });
   });
 
+  it('names a listed report whose ENOENT or ESTALE persists past one scan', async () => {
+    for (const where of ['stat', 'read'] as const) {
+      const root = dirs.make();
+      writeQuota(root, report());
+      let failing = false;
+      const stale = () => Object.assign(new Error('Unknown system error -116'), { errno: -116 });
+      const fsOverride: QuotaReaderFs = {
+        readdir: (dir) => fs.promises.readdir(dir),
+        stat: async (file) => {
+          if (failing && where === 'stat') throw stale();
+          return fs.promises.stat(file);
+        },
+        readFile: async (file) => {
+          if (failing && where === 'read') throw stale();
+          return fs.promises.readFile(file);
+        },
+      };
+      let now = NOW;
+      const r = reader(root, () => now, fsOverride);
+      await r.scan();
+      writeQuota(root, report({ seq: 6 }));
+      failing = true;
+      now += 60_000;
+      await r.scan();
+      expect(r.snapshot().problem).toBeNull();
+      now += 60_000;
+      await r.scan();
+      expect(r.snapshot().good?.doc.seq).toBe(5);
+      expect(r.snapshot().problem).toEqual({
+        reason: expect.stringContaining('two scans in a row'),
+        since: NOW + 60_000,
+      });
+      expect(quotaSource(r.snapshot(), now, 'UTC').state).not.toBe('ok');
+      failing = false;
+      await r.scan();
+      expect(r.snapshot().problem).toBeNull();
+      expect(r.snapshot().good?.doc.seq).toBe(6);
+    }
+  });
+
   it('reports a folder that cannot be listed as an error, and rides out ENOENT and ESTALE', async () => {
     const root = dirs.make();
     writeQuota(root, report());

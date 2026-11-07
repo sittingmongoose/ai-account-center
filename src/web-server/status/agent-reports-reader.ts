@@ -203,6 +203,39 @@ export function isTransientShareError(error: unknown): boolean {
   );
 }
 
+/**
+ * The reason for a listed file whose ENOENT or ESTALE came back on the next scan too: once is the
+ * share's rename-over race, twice in a row is a file this reader cannot read.
+ */
+export const PERSISTENT_SHARE_ERROR =
+  'could not be read on two scans in a row (the share says it is gone or stale)';
+
+/**
+ * Consecutive transient errors per listed file. `miss` resolves the first failure's time when the
+ * file failed on the scan before too (a persistent problem), else null (the race, said nothing).
+ */
+export class TransientMisses {
+  private readonly first = new Map<string, number>();
+
+  miss(file: string, now: number): number | null {
+    const since = this.first.get(file);
+    if (since === undefined) {
+      this.first.set(file, now);
+      return null;
+    }
+    return since;
+  }
+
+  clear(file: string): void {
+    this.first.delete(file);
+  }
+
+  /** After a scan: a file not listed this scan starts over. */
+  keepOnly(seen: ReadonlySet<string>): void {
+    for (const file of [...this.first.keys()]) if (!seen.has(file)) this.first.delete(file);
+  }
+}
+
 /** A name safe to show: printable ASCII without separators. */
 export function showable(name: string): boolean {
   return /^[\x21-\x7e]{1,100}$/.test(name) && !name.includes('/') && !name.includes('\\');
@@ -271,6 +304,7 @@ export class AgentReportsReader {
   private scanBytes = 0;
   private overBytes = 0;
   private scanning: Promise<boolean> | null = null;
+  private readonly misses = new TransientMisses();
 
   constructor(
     private readonly options: {
@@ -450,6 +484,7 @@ export class AgentReportsReader {
         changed = true;
       }
     }
+    this.misses.keepOnly(seen);
     if (!sameProblems(this.folderProblems, folderProblems)) changed = true;
     this.folderProblems.clear();
     for (const [key, value] of folderProblems) this.folderProblems.set(key, value);
@@ -479,8 +514,10 @@ export class AgentReportsReader {
     } catch (error) {
       seen.add(rel);
       this.scanPartial = true;
-      // Listed but gone or stale: keep the last good copy and read again next scan.
-      if (isTransientShareError(error)) return false;
+      // Listed but gone or stale: keep the last good copy and read again next scan; named when it
+      // happens again on the next scan.
+      if (isTransientShareError(error)) return this.transient(rel, kind, writer);
+      this.misses.clear(rel);
       return this.setProblem(rel, kind, writer, 'could not be read');
     }
     if (!stat.isFile()) {
@@ -498,7 +535,10 @@ export class AgentReportsReader {
     seen.add(rel);
     const statKey = `${stat.size}:${stat.mtimeMs}:${stat.ino}:${stat.ctimeMs}`;
     const entry = this.entries.get(rel);
-    if (entry && entry.statKey === statKey) return false;
+    if (entry && entry.statKey === statKey) {
+      this.misses.clear(rel);
+      return false;
+    }
     if (stat.size > REPORT_SIZE_CAPS[kind])
       return this.setProblem(
         rel,
@@ -512,9 +552,11 @@ export class AgentReportsReader {
       bytes = await this.fs.readFile(file, REPORT_SIZE_CAPS[kind]);
     } catch (error) {
       this.scanPartial = true;
-      if (isTransientShareError(error)) return false;
+      if (isTransientShareError(error)) return this.transient(rel, kind, writer);
+      this.misses.clear(rel);
       return this.setProblem(rel, kind, writer, 'could not be read');
     }
+    this.misses.clear(rel);
     const parsed =
       kind === 'card'
         ? parseReportFile('card', bytes, writer, cardId)
@@ -525,16 +567,25 @@ export class AgentReportsReader {
     return this.accept(rel, kind, writer, parsed.value, statKey);
   }
 
+  /** A transient error on a listed file: silent once, a named problem when the last scan had it too. */
+  private transient(rel: string, kind: ReportKind, writer: string): boolean {
+    const since = this.misses.miss(rel, this.now());
+    if (since === null) return false;
+    // The key stays empty, so the first scan that reads it again clears the problem.
+    return this.setProblem(rel, kind, writer, PERSISTENT_SHARE_ERROR, '', since);
+  }
+
   private setProblem(
     rel: string,
     kind: ReportKind,
     writer: string,
     reason: string,
-    statKey = ''
+    statKey = '',
+    since = this.now()
   ): boolean {
     const entry = this.entries.get(rel) ?? { kind, writer, statKey: '', good: null, problem: null };
     const changed = entry.problem?.reason !== reason;
-    entry.problem = changed ? { file: rel, reason, since: this.now() } : entry.problem;
+    entry.problem = changed ? { file: rel, reason, since } : entry.problem;
     // A read error keeps the key empty so the next scan tries again.
     entry.statKey = statKey;
     if (entry.good) entry.good = { ...entry.good, problem: entry.problem };

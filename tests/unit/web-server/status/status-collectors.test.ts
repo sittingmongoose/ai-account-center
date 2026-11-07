@@ -20,6 +20,45 @@ const dirs = tempDirs();
 afterEach(() => dirs.cleanup());
 
 describe('status collectors', () => {
+  it('reads browser-check phones, display_problem and snapshot without turning null into zero', () => {
+    const state = { caps: { max_browsers: 4 }, browsers: 1, recordings: 0, sessions: [] };
+    const rows = parseBrowserSlots({
+      rows: [
+        {
+          machine: { name: 'mac', label: 'MacBook' },
+          state: {
+            ...state,
+            phones: { ios: { running: 0, max: 2 }, android: { running: 1, max: null } },
+          },
+        },
+        {
+          machine: { name: 'vm', label: 'Ubuntu VM' },
+          state: { ...state, phones: null, display_problem: 'X desktop :0 refuses this account' },
+        },
+        {
+          machine: { name: 'nas1', label: 'Nas1' },
+          state: { ...state, snapshot: 'backend busy (x): counted from its session records' },
+        },
+        { machine: { name: 'windows', label: 'Windows PC' }, state },
+      ],
+    });
+    const by = Object.fromEntries(rows.map((row) => [row.machine, row]));
+    expect(by.mac.phones).toEqual({
+      ios: { running: 0, max: 2 },
+      android: { running: 1, max: null },
+    });
+    expect(by.mac.notes).toEqual([]);
+    expect(by.vm.phones).toBeNull();
+    expect(by.vm.notes).toEqual([
+      'browsers cannot start here: X desktop :0 refuses this account',
+      'reported no phone count (phones: null), so phones here are unknown',
+    ]);
+    expect(by.nas1.notes).toEqual(['backend busy (x): counted from its session records']);
+    // A field browser-check left out is not a null report.
+    expect(by.windows.phones).toBeUndefined();
+    expect(by.windows.notes).toEqual([]);
+  });
+
   it('shows browser sessions as host and path only, and keeps caps per machine', () => {
     const rows = parseBrowserSlots({
       rows: [
