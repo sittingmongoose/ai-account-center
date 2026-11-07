@@ -577,6 +577,48 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(result.messageCode).toBe('restart_not_running');
   });
 
+  it('judges the owed desktop after the readiness check, not before it', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    let checks = 0;
+    const { deps, marker } = click(fake);
+    const owed = {
+      version: '2.0.0',
+      desktop: true,
+      daemon: true,
+      desktops: [codexDesktopInstance('/fixture/.config/Codex')],
+    };
+    const result = {
+      ...(await bridge.execute({
+        ...deps,
+        operation: 'cli',
+        update: async () => {},
+        readVersion: async () => '2.0.0',
+        pending: () => true,
+        marked: () => owed,
+        runtime: () =>
+          createCodexActivationRuntime(home, {
+            ...fake.deps,
+            launch: (target, isDesktop) =>
+              bridge.relaunch(target, isDesktop, fake.deps.launch, { inside: () => true }),
+            verifyDaemon: async () => {
+              // The retry's own check comes after start()'s: the desktop exits while it waits.
+              if (++checks === 2) {
+                for (const entry of fake
+                  .current()
+                  .filter((item) => !item.args.includes('--listen')))
+                  await fake.deps.signal(entry, 'SIGKILL');
+              }
+            },
+          }),
+      })),
+    };
+    expect(checks).toBe(2);
+    expect(fake.current().some(isDesktop)).toBe(false);
+    expect(result.status).toBe('restart_failed');
+    expect(result.messageCode).toBe('restart_not_running');
+    expect(marker()).toBeNull();
+  });
+
   it('accepts a respawned daemon once the readiness check passes', async () => {
     let checks = 0;
     const { run } = respawnedDaemon(async () => {

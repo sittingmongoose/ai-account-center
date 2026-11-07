@@ -901,6 +901,27 @@ describe('Pending-marker retry', () => {
     expect(value.pending()).toBe(false);
   });
 
+  it('judges what is owed on a fresh scan taken after the readiness check', async () => {
+    const owed = { desktop: true, daemon: true, desktops: [A] };
+    for (const [afterCheck, status] of [
+      [{ daemon: true, desktops: [] }, 'restart_failed'],
+      [{ daemon: false, desktops: [A] }, 'restart_failed'],
+      [{ daemon: true, desktops: [A] }, 'updated'],
+    ] as Array<[Live, string]>) {
+      const { deps } = retry(owed, { daemon: true, desktops: [A] });
+      let checked = false;
+      deps.runtime = () => ({
+        ...runtime({}, {}),
+        restartState: async () => state(checked ? afterCheck : { daemon: true, desktops: [A] }),
+        verifyRunningDaemon: async () => {
+          checked = true;
+          return true;
+        },
+      });
+      expect((await bridge.execute(deps)).status).toBe(status);
+    }
+  });
+
   it('does not run the readiness check when no daemon is owed', async () => {
     const { deps } = retry({ desktop: true, desktops: [A] }, { desktops: [A], daemon: true });
     let checks = 0;

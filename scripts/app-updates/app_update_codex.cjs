@@ -166,11 +166,17 @@ const runtimeState = async (runtime, deps) => {
   const live = (await runtime.restartState?.()) ?? { daemon: false, desktops: [], proxy: false };
   return { ...live, desktops: sealed(deps, live.desktops) };
 };
-/** What runs now, with a daemon that owes readiness held to start()'s own bounded check. */
+/**
+ * What runs now, with a daemon that owes readiness held to start()'s own bounded check. That check can
+ * take about 40 seconds, so everything is judged on a scan taken after it: a desktop that exits while
+ * it waits is not back, and the daemon must still be running as well as have passed.
+ */
 const verifiedState = async (runtime, deps, owed) => {
   const live = await runtimeState(runtime, deps);
   if (!owed.daemon || !live.daemon) return live;
-  return (await runtime.verifyRunningDaemon?.()) === true ? live : { ...live, daemon: false };
+  const ready = (await runtime.verifyRunningDaemon?.()) === true;
+  const after = await runtimeState(runtime, deps);
+  return ready ? after : { ...after, daemon: false };
 };
 async function execute(deps) {
   const idle = Math.max(1, Math.min(seconds, deps.idleSeconds ?? IDLE_WAIT_SECONDS));
