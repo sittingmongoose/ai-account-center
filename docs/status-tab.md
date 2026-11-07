@@ -85,7 +85,9 @@ provider refresh. quota-watch: its share report `<reports>/v1/quota/report.json`
   Refusals: `404 not_found` (missing, outside the folder, not a writer, bad path), `413 too_large`, `415 not_media`,
   `416 range_not_satisfiable` (a JSON body, `no-store`). A writer folder that is itself a link is `404`. The file is
   checked and served from one open handle, so a swap after the check cannot change what is sent; a file that shrinks
-  mid-send ends in a broken connection rather than a short file under the promised `Content-Length`.
+  mid-send ends in a broken connection rather than a short file under the promised `Content-Length`. A client that takes
+  no bytes for 2 minutes loses its connection and the open file with it; the browser asks again by range. A client that
+  has left is never written to.
 - `/ws` sends `{ "type": "status-changed" }` to browser-session sockets when a source changes (at most one every 5 s);
   the page re-reads `/api/status`. The page also
   re-reads every `refresh.pollSeconds` while visible, so a missed hint only delays.
@@ -375,10 +377,14 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
 - **Draft key:** the optional entry `entryId` (32 lowercase hex; anything else, or the same id twice in one body, is
   `400 invalid_body`) is the real guard against recording twice. The page makes it from a random per-draft nonce plus the
   entry's content, so a retry of one draft carries the same id, even alone after the rest of its send closed, and a new
-  draft with identical words gets a new one. An entry whose id is already recorded answers `recorded` as it did the first
-  time and is not recorded, signed, written or rung again, nor counted in the new send's ring or summary. The same id
-  with other content (card, choice, note, via or kind) is refused `invalid_entry`. The card's `seq` and hash are not part
-  of that content, so an agent's reply on the card between a lost response and the retry does not record the words again.
+  draft with identical words gets a new one. For `note` and `object` the page's id leaves out the card's version (`cardSeq`
+  and `cardSha256`); for `answer` and `done` it includes it. An entry whose id is already recorded answers `recorded` as
+  it did the first time and is not recorded, signed, written or rung again, nor counted in the new send's ring or summary.
+  The same id with other content is refused `invalid_entry`. The server binds the same content as the page: card, choice,
+  note, via and kind, plus the card's version for `answer` and `done` (without `kind`, a choice makes an `answer` and no
+  choice a `note`). So an agent's reply on a card between a lost response and the retry does not record a note or an
+  objection again, and an answer's id replayed on a reopened card is refused, not reported as recorded while the new
+  version stays unanswered.
   Ids are kept with their records in the private store: all from the last 24 hours and the newest 1,000 whatever their
   age. An entry that was refused is not remembered and may be sent again. The id never reaches the share or the mail.
 - **Time limits:** one card read has 5 s, one signed file 10 s, one ring 40 s, one whole send 30 s and one retry pass 45 s,
@@ -410,7 +416,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   there: only folders below it are created, so an unmounted share grows no local folder, and the step reads
   "The reports share is not available."
 - **Send summary:** every POST that records at least one entry is a send with its own server-made `sendId` (a UUID, not
-  the request's retry key), written
+  the request's retry key; if the server stopped before the send was finished, the retry after a restart rebuilds the
+  summary from the stored records, so the file a ring names always comes), written
   signed to `<reports>/v1/answers/batches/<sendId>.json`: `{ schema: "agent-reports/send@1", sendId, at, answeredBy:
   "owner", device, entries: [ { cardId, seq, cardSha256, kind, choice, note } ], signature }`, entries in the order
   sent, signed exactly like an answer (`verifySignedDocument(fileText, publicKeyPem, "agent-reports/send@1")`).

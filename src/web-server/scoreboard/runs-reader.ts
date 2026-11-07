@@ -146,8 +146,12 @@ export class RunsReader {
       const runsRel = `${writerRel}/runs`;
       const dates = await listing(path.join(writersDir, name, 'runs'), runsRel);
       for (const date of dates ?? []) {
-        if (date.name.startsWith('.') || !date.isDirectory()) continue;
+        if (date.name.startsWith('.')) continue;
         const dateRel = `${runsRel}/${date.name}`;
+        if (!date.isDirectory()) {
+          if (showable(date.name)) folderProblem(dateRel, 'is not a folder');
+          continue;
+        }
         if (!DATE_FOLDER.test(date.name)) {
           if (showable(date.name)) folderProblem(dateRel, 'folder name is not a date');
           continue;

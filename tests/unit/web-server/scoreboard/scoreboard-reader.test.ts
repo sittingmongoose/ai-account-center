@@ -212,6 +212,44 @@ describe('runs reader', () => {
 });
 
 describe('scan limits', () => {
+  it('an oversized run file takes nothing from the byte budget, on any scan', async () => {
+    const root = dirs.make();
+    let now = NOW;
+    for (const local of ['A', 'B', 'C', 'D'])
+      writeRun(root, runDoc('vm.lead', local), '2026-11-05');
+    const big = path.join(root, 'v1', 'writers', 'vm.lead', 'runs', '2026-11-06', 'big.json');
+    fs.mkdirSync(path.dirname(big), { recursive: true });
+    fs.writeFileSync(big, '{}');
+    fs.truncateSync(big, 70 * 1024 * 1024);
+    const r = new RunsReader({ root: () => root, now: () => now });
+    for (let scan = 0; scan < 3; scan += 1) {
+      await r.scan();
+      const seen = r.snapshot();
+      expect([scan, seen.runs.length]).toEqual([scan, 4]);
+      expect(seen.problems.map((p) => p.file.split('/').pop())).toEqual(['big.json']);
+      // Past the grace period: a file wrongly left unread would be forgotten by the next look.
+      now += 3 * 60_000;
+    }
+  });
+
+  it('names anything but a folder directly in runs/', async () => {
+    const root = dirs.make();
+    const file = writeRun(root, runDoc('vm.a', 'R'), '2026-11-05');
+    const runs = path.join(root, 'v1', 'writers', 'vm.a', 'runs');
+    const elsewhere = dirs.make();
+    fs.copyFileSync(file, path.join(elsewhere, 'vm.a--S.json'));
+    fs.symlinkSync(elsewhere, path.join(runs, '2026-10-02'));
+    fs.writeFileSync(path.join(runs, 'stray.txt'), 'x');
+    fs.writeFileSync(path.join(runs, '.hidden'), 'x');
+    const r = reader(root);
+    await r.scan();
+    expect(r.snapshot().runs).toHaveLength(1);
+    expect(r.snapshot().problems.map((p) => [p.file.split('/').pop(), p.reason])).toEqual([
+      ['2026-10-02', 'is not a folder'],
+      ['stray.txt', 'is not a folder'],
+    ]);
+  });
+
   it('past the writer limit keeps the writers whose runs changed last, not the first by name', async () => {
     const root = dirs.make();
     for (const writer of ['vm.a', 'vm.b', 'vm.c']) writeRun(root, runDoc(writer, 'R'));
@@ -278,6 +316,28 @@ describe('scan limits', () => {
 });
 
 describe('catalog', () => {
+  it('names a look at a seed that fails, and writes nothing over what it cannot see', async () => {
+    const root = dirs.make();
+    const target = path.join(root, 'v1', 'catalog');
+    fs.mkdirSync(target, { recursive: true });
+    const realLstat = fs.promises.lstat;
+    const lstat = spyOn(fs.promises, 'lstat').mockImplementation(((file: fs.PathLike) =>
+      path.basename(String(file)) === 'models.json'
+        ? Promise.reject(Object.assign(new Error('system words'), { code: 'EACCES' }))
+        : realLstat(file)) as typeof fs.promises.lstat);
+    const failures: Array<{ file: string; code: string }> = [];
+    let written: string[];
+    try {
+      written = await seedCatalog(root, undefined, (failure) => failures.push(failure));
+    } finally {
+      lstat.mockRestore();
+    }
+    expect(failures).toEqual([{ file: 'models.json', code: 'EACCES' }]);
+    expect(written).not.toContain('models.json');
+    expect(written).toContain('uses.json');
+    expect(fs.existsSync(path.join(target, 'models.json'))).toBe(false);
+  });
+
   it('never overwrites a file written while the seed was on its way', async () => {
     const root = dirs.make();
     const target = path.join(root, 'v1', 'catalog');
