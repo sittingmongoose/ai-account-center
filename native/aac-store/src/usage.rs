@@ -7,6 +7,7 @@ use crate::engine::{Batch, DAY_MS, Engine, LogId, Projector, begin, civil_from_d
 use crate::error::Result;
 use crate::event::Event;
 use crate::fail;
+use crate::log::Finding;
 use crate::msgpack;
 use crate::pack;
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, WriteTransaction};
@@ -683,25 +684,40 @@ impl Projector for UsageProjector {
     fn reads(&self, _log: LogId) -> bool {
         true
     }
-    fn apply(&self, txn: &WriteTransaction, _log: LogId, event: &Event) -> Result<()> {
+    fn apply(&self, txn: &WriteTransaction, _log: LogId, event: &Event) -> Result<Vec<Finding>> {
+        let mut set_aside = Vec::new();
         match event.event_type.as_str() {
             "usage.sampled" => {
                 let batch: SampledBatch = serde_json::from_value(msgpack::to_json(&event.payload))?;
                 for sampled in &batch.observations {
+                    // New observations are checked before the append (`record`); one an older
+                    // build accepted is set aside here, so the rest of the history still opens.
+                    // The finding names the event, never the refused text.
+                    if let Err(e) = sampled.validate() {
+                        set_aside.push(Finding {
+                            kind: "event_quarantined".into(),
+                            detail: format!(
+                                "an observation in this usage.sampled event fails today's checks ({}) and was left out of the usage tables; the log keeps the event",
+                                e.message
+                            ),
+                            start_seq: Some(event.sequence_id),
+                            end_seq: Some(event.sequence_id),
+                        });
+                        continue;
+                    }
                     project_sampled(txn, sampled)?;
                 }
-                Ok(())
             }
             "usage.seen" => {
                 let batch: SeenBatch = serde_json::from_value(msgpack::to_json(&event.payload))?;
                 for seen in &batch.accounts {
                     project_seen(txn, seen)?;
                 }
-                Ok(())
             }
-            "usage.day_closed" => project_day_closed(txn, &msgpack::to_json(&event.payload)),
-            _ => Ok(()),
+            "usage.day_closed" => project_day_closed(txn, &msgpack::to_json(&event.payload))?,
+            _ => {}
         }
+        Ok(set_aside)
     }
     fn reset(&self, txn: &WriteTransaction) -> Result<()> {
         for def in [

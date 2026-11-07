@@ -1,6 +1,8 @@
-//! Credential shapes the store refuses to persist (docs/store.md 2.2). The same patterns as the
-//! dashboard's log redaction (`src/services/logging/log-redaction.ts`), plus private keys and
-//! fine-grained GitHub tokens; matched by hand so the crate takes no regex dependency.
+//! Credential shapes the store refuses to persist (docs/store.md 2.2). The dashboard's log
+//! redaction patterns (`src/services/logging/log-redaction.ts`), plus private keys, AWS keys and
+//! fine-grained GitHub tokens, narrowed for stored text: a prefix counts only at the start of a
+//! token, and an authorization scheme only before a credential-shaped value. Matched by hand so
+//! the crate takes no regex dependency.
 
 fn word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
@@ -22,14 +24,33 @@ pub fn looks_secret(text: &str) -> bool {
     (0..b.len()).any(|i| secret_at(b, i))
 }
 
+/// Characters of a credential value after an authorization scheme.
+fn credential(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || b"._~+/=-".contains(&c) || c == b'_'
+}
+
+/// An authorization credential: 16 or more credential characters with a digit or both cases,
+/// so a scheme word followed by ordinary words ("Token requests") is not one.
+fn credential_at(b: &[u8], at: usize) -> bool {
+    let len = span(b, at, credential);
+    let value = &b[at..at + len];
+    len >= 16
+        && (value.iter().any(|c| c.is_ascii_digit())
+            || (value.iter().any(|c| c.is_ascii_uppercase()) && value.iter().any(|c| c.is_ascii_lowercase())))
+}
+
 fn secret_at(b: &[u8], i: usize) -> bool {
+    // Credential prefixes count only at the start of a token: `sk-` inside `task-` is a word.
+    if i > 0 && word(b[i - 1]) {
+        return false;
+    }
     let rest = &b[i..];
     let after = |prefix: &str| rest.starts_with(prefix.as_bytes()).then(|| i + prefix.len());
     // An authorization scheme followed by a credential.
     for scheme in ["Bearer", "Basic", "Token"] {
         if let Some(at) = after(scheme) {
             let gap = span(b, at, |c| c.is_ascii_whitespace());
-            if gap > 0 && span(b, at + gap, |c| !c.is_ascii_whitespace()) >= 8 {
+            if gap > 0 && credential_at(b, at + gap) {
                 return true;
             }
         }
@@ -118,7 +139,8 @@ mod tests {
     #[test]
     fn credential_shapes_are_found_and_ordinary_text_is_not() {
         for secret in [
-            "Bearer abcdefgh12",
+            "Bearer abcdefgh1234567890",
+            "Authorization: Token 0123456789abcdef0123",
             "x Basic YWxhZGRpbjpvcGVu",
             "sk-ant-api03-abcdefghijklmnop",
             "key sk-abcdefghijklmnopqrstuvwxyz012345",
@@ -146,6 +168,13 @@ mod tests {
             "claude-opus-4-5-20251101",
             "sk-short",
             "task-runner",
+            "Token requests",
+            "Token budget for the week",
+            "task-0123456789abcdef0123456789abcdef",
+            "risk-0123456789abcdef0123456789abcdef",
+            "mask_0123456789abcdef0123456789abcdef_ghp_",
+            "Basic plan",
+            "Bearer of the weekly quota",
             "secret=short",
             "eyJabc.eyJabc.",
         ] {

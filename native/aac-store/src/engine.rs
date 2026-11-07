@@ -57,7 +57,9 @@ pub trait Projector: Send + Sync {
     fn name(&self) -> &'static str;
     fn version(&self) -> u32;
     fn reads(&self, log: LogId) -> bool;
-    fn apply(&self, txn: &WriteTransaction, log: LogId, event: &Event) -> Result<()>;
+    /// Projects one event. What it had to set aside (an event an older build accepted that
+    /// today's checks refuse) comes back as findings, and replay goes on.
+    fn apply(&self, txn: &WriteTransaction, log: LogId, event: &Event) -> Result<Vec<Finding>>;
     /// Drops this projector's tables before a rebuild.
     fn reset(&self, txn: &WriteTransaction) -> Result<()>;
 }
@@ -238,11 +240,7 @@ impl Engine {
         };
         let mut replay_findings = engine.replay()?;
         findings.append(&mut replay_findings);
-        let loss: Vec<_> = findings
-            .iter()
-            .filter(|f| f.kind.contains("degraded") || f.kind.contains("missing"))
-            .cloned()
-            .collect();
+        let loss: Vec<_> = findings.iter().filter(|f| is_loss(&f.kind)).cloned().collect();
         *engine.findings.lock().unwrap() = findings;
         let mut opened = Event::new(
             "store.opened",
@@ -320,7 +318,7 @@ impl Engine {
             let mut chain = base.clone();
             // For each checkpoint: the last surviving event at or below it, and the chain there.
             let mut reached: Vec<Option<(u64, Option<String>)>> = vec![None; checkpoints.len()];
-            let mut log_findings = log.read_ids(|sequence, event_id| {
+            let log_findings = log.read_ids(|sequence, event_id| {
                 chain = chain.as_deref().map(|c| db::chain_digest(c, sequence, event_id));
                 for (k, (_, cp)) in checkpoints.iter().enumerate() {
                     if sequence <= cp.last_sequence_id {
@@ -328,7 +326,7 @@ impl Engine {
                     }
                 }
             })?;
-            findings.append(&mut log_findings);
+            findings.extend(log_findings.iter().cloned());
             let retired_below = log.manifest().retired_below;
             let mut reanchor = false;
             for (k, (i, cp)) in checkpoints.iter().enumerate() {
@@ -366,12 +364,28 @@ impl Engine {
                         ),
                     )
                 };
-                let from = reached[k].as_ref().map(|(seq, _)| seq + 1).unwrap_or(retired_below);
+                // Where the loss is: past the last surviving event when the tail is gone, and from
+                // the first damaged or missing segment at or below the checkpoint. When neither
+                // says, the whole range the checkpoint covers. Always ordered.
+                let end = cp.last_sequence_id;
+                let lower = retired_below.max(1).min(end);
+                let mut start = match &reached[k] {
+                    Some((seq, _)) if *seq < end => seq + 1,
+                    _ => lower,
+                };
+                if let Some(damaged) = log_findings
+                    .iter()
+                    .filter_map(|f| f.start_seq)
+                    .filter(|s| *s <= end)
+                    .min()
+                {
+                    start = start.min(damaged.max(lower));
+                }
                 findings.push(Finding {
                     kind: kind.into(),
                     detail,
-                    start_seq: Some(from),
-                    end_seq: Some(cp.last_sequence_id),
+                    start_seq: Some(start.clamp(lower, end)),
+                    end_seq: Some(end),
                 });
                 if !stale.contains(i) {
                     stale.push(*i);
@@ -438,7 +452,10 @@ impl Engine {
                 }
                 let floor = checkpoints.iter().map(|(_, cp)| cp.last_sequence_id).min().unwrap_or(0);
                 let mut pending: Vec<Event> = Vec::new();
-                let flush = |pending: &mut Vec<Event>, checkpoints: &mut Vec<(usize, Checkpoint)>| -> Result<()> {
+                let flush = |pending: &mut Vec<Event>,
+                             checkpoints: &mut Vec<(usize, Checkpoint)>,
+                             found: &mut Vec<Finding>|
+                 -> Result<()> {
                     if pending.is_empty() {
                         return Ok(());
                     }
@@ -446,7 +463,7 @@ impl Engine {
                     for event in pending.iter() {
                         for (i, cp) in checkpoints.iter_mut() {
                             if event.sequence_id > cp.last_sequence_id {
-                                self.projectors[*i].apply(&txn, log_id, event)?;
+                                found.append(&mut self.projectors[*i].apply(&txn, log_id, event)?);
                                 cp.advance(event.sequence_id, &event.event_id);
                             }
                         }
@@ -462,11 +479,11 @@ impl Engine {
                 log.read_after(if floor == 0 { None } else { Some(floor) }, |event| {
                     pending.push(event);
                     if pending.len() >= PROJECTOR_BATCH {
-                        flush(&mut pending, &mut checkpoints)?;
+                        flush(&mut pending, &mut checkpoints, &mut findings)?;
                     }
                     Ok(())
                 })?;
-                flush(&mut pending, &mut checkpoints)?;
+                flush(&mut pending, &mut checkpoints, &mut findings)?;
             }
             Ok(findings)
         })
@@ -575,7 +592,7 @@ impl Engine {
         })?;
         let findings = self.findings.lock().unwrap().clone();
         Ok(json!({
-            "state": if findings.iter().any(|f| f.kind.contains("degraded") || f.kind.contains("missing")) { "degraded" } else { "ready" },
+            "state": if findings.iter().any(|f| is_loss(&f.kind)) { "degraded" } else { "ready" },
             "storeSchemaVersion": db::STORE_SCHEMA_VERSION,
             "instanceId": self.instance_id,
             "openedAt": self.opened_ms,
@@ -877,7 +894,10 @@ impl Batch<'_> {
         }
         self.log.assign(&mut event)?;
         for (i, cp) in self.checkpoints.iter_mut() {
-            self.engine.projectors[*i].apply(self.txn, self.log_id, &event)?;
+            let set_aside = self.engine.projectors[*i].apply(self.txn, self.log_id, &event)?;
+            if !set_aside.is_empty() {
+                self.engine.findings.lock().unwrap().extend(set_aside);
+            }
             cp.advance(event.sequence_id, &event.event_id);
         }
         let seq = event.sequence_id;
@@ -892,6 +912,12 @@ impl Batch<'_> {
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
+}
+
+/// A finding that means history is missing or set aside: disclosed in the ledger, and the store
+/// reports itself degraded.
+pub fn is_loss(kind: &str) -> bool {
+    kind.contains("degraded") || kind.contains("missing") || kind.contains("quarantined")
 }
 
 pub fn finding(kind: &str, detail: &str) -> Finding {

@@ -174,7 +174,7 @@ fn restore(dir: &Path, backup: &Path) -> Result<String, String> {
         "restore",
         &json!({ "dir": dir.to_str().unwrap(), "backupDir": backup.to_str().unwrap() }).to_string(),
     )
-    .map_err(|e| e.code.to_string())
+    .map_err(|e| format!("{}: {}", e.code, e.message))
 }
 
 fn write_backup(root: &Path, name: &str, manifest: &Json) -> std::path::PathBuf {
@@ -227,32 +227,53 @@ fn restore_refuses_manifests_that_reach_outside() {
         json!({ "schema": "aac-store-backup@1", "id": id, "storeSchemaVersion": 1, "withRedb": false,
                 "instanceId": "0".repeat(32), "logs": logs, "files": files })
     };
+    // (what, the backup's folder, the guard's words, manifest): each folder matches its id unless
+    // the id itself is the case, so every case reaches the guard it names.
     let cases = [
-        ("the reported id", manifest("x/../../../victim", json!([]), json!({}))),
+        (
+            "the reported id",
+            "case0",
+            "has an invalid id",
+            manifest("x/../../../victim", json!([]), json!({})),
+        ),
         (
             "an absolute id",
+            "case1",
+            "has an invalid id",
             manifest(victim.to_str().unwrap(), json!([]), json!({})),
         ),
         (
+            "a folder that is not its id",
+            "case2",
+            "does not match its folder",
+            manifest("b2", json!([]), good_logs.clone()),
+        ),
+        (
             "a file path with ..",
+            "b3",
+            "lists a file outside the backup",
             manifest(
-                "b1",
+                "b3",
                 json!([{ "path": "pool/readings/../../../victim/keep", "sha256": sha, "bytes": 7 }]),
                 good_logs.clone(),
             ),
         ),
         (
             "an absolute file path",
+            "b4",
+            "lists a file outside the backup",
             manifest(
-                "b2",
+                "b4",
                 json!([{ "path": victim.join("keep").to_str().unwrap(), "sha256": sha, "bytes": 7 }]),
                 good_logs.clone(),
             ),
         ),
         (
             "a segment name with ..",
+            "b5",
+            "names an invalid segment",
             manifest(
-                "b3",
+                "b5",
                 json!([]),
                 json!({
                     "readings": { "manifest": "readings.manifest.v1.msgpack", "segments": ["../../victim/keep"], "active": null },
@@ -262,14 +283,19 @@ fn restore_refuses_manifests_that_reach_outside() {
         ),
         (
             "a restored file without a hash",
-            manifest("b4", json!([]), good_logs.clone()),
+            "b6",
+            "does not list with a hash",
+            manifest("b6", json!([]), good_logs.clone()),
         ),
     ];
     let before = walk(&store);
-    for (i, (what, m)) in cases.iter().enumerate() {
-        let set = write_backup(&root, &format!("case{i}"), m);
+    for (what, folder, guard, m) in cases.iter() {
+        let set = write_backup(&root, folder, m);
         let answer = restore(&store, &set);
-        assert!(answer.is_err(), "{what}: {answer:?}");
+        let Err(error) = answer else {
+            panic!("{what}: restored {answer:?}");
+        };
+        assert!(error.contains(guard), "{what}: refused by another check: {error}");
         assert_eq!(fs::read(victim.join("keep")).unwrap(), b"keep me", "{what}");
         assert_eq!(walk(&store), before, "{what}: the store is unchanged");
     }
@@ -325,7 +351,8 @@ fn restore_refuses_a_linked_file() {
         return;
     }
     let before = walk(&store);
-    assert!(restore(&store, &set).is_err());
+    let error = restore(&store, &set).expect_err("a linked file is refused");
+    assert!(error.contains("a link"), "refused by another check: {error}");
     assert_eq!(walk(&store), before);
     fs::remove_dir_all(&base).unwrap();
 }
@@ -371,12 +398,25 @@ fn credentials_are_refused_before_the_log() {
             assert_eq!(answer["rejected"], 1, "{name} with {secret}: {answer}");
         }
     }
-    // Ordinary text that merely mentions tokens is still stored.
-    let ordinary = obs_with(t + MIN, 11.0, |o| {
-        o["windows"][0]["label"] = json!("Tokens per day");
-        o["account"]["source"] = json!("Codex token quota on Mac");
-    });
-    assert_eq!(record(&engine, vec![ordinary])["sampled"], 1);
+    // Ordinary text that merely mentions tokens, or holds a prefix inside a word, is stored.
+    for (i, label) in [
+        "Tokens per day",
+        "Token requests",
+        "Token budget for the week",
+        "task-0123456789abcdef0123456789abcdef",
+        "risk-0123456789abcdef0123456789abcdef",
+        "Basic plan",
+        "Bearer of the weekly quota",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let ordinary = obs_with(t + (i as i64 + 1) * MIN, 11.0 + i as f64, |o| {
+            o["windows"][0]["label"] = json!(label);
+            o["account"]["source"] = json!("Codex token quota on Mac");
+        });
+        assert_eq!(record(&engine, vec![ordinary])["sampled"], 1, "{label}");
+    }
     engine.close().unwrap();
     drop(engine);
     for (path, bytes) in walk(&dir) {
@@ -385,5 +425,112 @@ fn credentials_are_refused_before_the_log() {
             "{path} holds a synthetic credential"
         );
     }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Writes events straight into the readings log in the log format, as an older build did.
+fn append_raw(dir: &Path, events: Vec<(&str, Json)>) -> Vec<u64> {
+    let (mut log, _) = aac_store::log::Log::open(&dir.join("log").join("readings"), "readings", "r").unwrap();
+    let mut seqs = Vec::new();
+    for (event_type, payload) in events {
+        let mut event =
+            aac_store::event::Event::new(event_type, now_ms(), aac_store::msgpack::from_json(&payload).unwrap());
+        log.assign(&mut event).unwrap();
+        seqs.push(event.sequence_id);
+        log.write(&[event]).unwrap();
+    }
+    seqs
+}
+
+/// An event an older build accepted, which today's checks refuse, is set aside and disclosed;
+/// the rest of the history is still served, and new appends are still refused.
+#[test]
+fn an_old_event_refused_today_is_set_aside_not_fatal() {
+    let dir = temp_dir("review-old-event");
+    let bad = obs_with(T0, 10.0, |o| {
+        o["windows"][0]["label"] = json!("sk-ant-SYNTHETIC_SECRET_abcdefgh")
+    });
+    let other = obs_with(T0, 30.0, |o| {
+        o["account"]["identity"] = json!(format!("{:064x}", 2));
+        o["account"]["account_id"] = json!("claude:a2");
+    });
+    let seqs = append_raw(
+        &dir,
+        vec![
+            ("usage.sampled", json!({ "observations": [bad] })),
+            ("usage.sampled", json!({ "observations": [obs(T0 + 5 * MIN, 20.0)] })),
+            ("usage.sampled", json!({ "observations": [other] })),
+        ],
+    );
+    let engine = open(&dir);
+    let starts = raw_starts(&engine);
+    assert_eq!(
+        starts,
+        vec![T0 + 5 * MIN, T0],
+        "every event but the refused one is served"
+    );
+    let findings = engine.status().unwrap()["findings"].clone();
+    let set_aside: Vec<&Json> = findings
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "event_quarantined")
+        .collect();
+    assert_eq!(set_aside.len(), 1, "{findings:#}");
+    assert_eq!(set_aside[0]["start_seq"], seqs[0]);
+    assert_eq!(set_aside[0]["end_seq"], seqs[0]);
+    assert!(
+        !set_aside[0]["detail"].as_str().unwrap().contains("SYNTHETIC"),
+        "the finding never repeats it"
+    );
+    assert_eq!(engine.status().unwrap()["state"], "degraded");
+    // New appends with the same text are still refused.
+    let again = obs_with(T0 + 10 * MIN, 40.0, |o| {
+        o["windows"][0]["label"] = json!("sk-ant-SYNTHETIC_SECRET_abcdefgh")
+    });
+    assert_eq!(record(&engine, vec![again])["rejected"], 1);
+    engine.close().unwrap();
+    drop(engine);
+    // A rebuild sets it aside the same way.
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let engine = open(&dir);
+    assert_eq!(raw_starts(&engine), starts);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A lost frame at the start of a segment is reported with ordered bounds that hold it.
+#[test]
+fn loss_bounds_are_ordered_and_hold_the_lost_event() {
+    let dir = temp_dir("review-bounds");
+    {
+        let engine = open(&dir);
+        record(&engine, vec![obs(T0, 10.0)]);
+        record(&engine, vec![obs(T0 + 5 * MIN, 20.0)]);
+        engine.close().unwrap();
+    }
+    let sealed = find(&dir.join("log").join("readings"), ".seglog").pop().unwrap();
+    let mut bytes = fs::read(&sealed).unwrap();
+    let frames = aac_store::log::scan(&bytes).frames;
+    assert_eq!(frames.iter().map(|f| f.seq).collect::<Vec<_>>(), vec![1, 2]);
+    let end_of_first = frames[0].offset + frames[0].len - 1;
+    bytes[end_of_first] ^= 0x01;
+    fs::write(&sealed, &bytes).unwrap();
+    let engine = open(&dir);
+    assert_eq!(raw_starts(&engine), vec![T0 + 5 * MIN]);
+    let findings = engine.status().unwrap()["findings"].clone();
+    let loss = findings
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["kind"] == "projection_missing_events")
+        .cloned()
+        .unwrap_or_else(|| panic!("{findings:#}"));
+    let (start, end) = (loss["start_seq"].as_u64().unwrap(), loss["end_seq"].as_u64().unwrap());
+    assert!(start <= end, "{loss}");
+    assert!(start <= 1 && 1 <= end, "the lost event 1 is inside {start}..={end}");
+    engine.close().unwrap();
+    drop(engine);
     fs::remove_dir_all(&dir).unwrap();
 }
