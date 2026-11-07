@@ -840,29 +840,47 @@ describe('runtime-free Antigravity process census', () => {
     if (process.getuid?.() !== 0) {
       const locked = path.join(value.root, 'locked');
       fs.mkdirSync(path.join(locked, 'in'), { recursive: true });
+      // the same, under a folder whose name has a space
+      const spaced = path.join(value.root, 'My Scripts');
+      const spacedLocked = path.join(spaced, 'locked');
+      fs.mkdirSync(path.join(spacedLocked, 'in'), { recursive: true });
+      fs.symlinkSync(locked, path.join(value.root, 'to-locked'));
       fs.chmodSync(locked, 0o000);
+      fs.chmodSync(spacedLocked, 0o000);
+      const census = (argv: string[], cwd = value.root) => {
+        value.add(1011, argv[0], `/usr/bin/${argv[0]}`, argv, cwd);
+        try {
+          return value.census();
+        } finally {
+          fs.rmSync(path.join(value.proc, '1011'), { recursive: true });
+        }
+      };
       try {
-        value.add(
-          1011,
-          'python3',
-          '/usr/bin/python3',
-          ['python3', path.join(locked, 'in', 'h.py')],
-          value.root
-        );
-        expect(value.census()).toEqual({ complete: false, running: 0 });
-        fs.rmSync(path.join(value.proc, '1011'), { recursive: true });
-        // the same folder in a prose prompt (spaces) is no script: idle stays provable
-        value.add(
-          1013,
-          'node',
-          '/usr/bin/node',
-          ['node', 'app.js', `see ${locked}/in and/or later`],
-          value.root
-        );
-        expect(value.census()).toEqual({ complete: true, running: 0 });
-        fs.rmSync(path.join(value.proc, '1013'), { recursive: true });
+        const unknown = { complete: false, running: 0 };
+        const idle = { complete: true, running: 0 };
+        expect(census(['python3', path.join(locked, 'in', 'h.py')])).toEqual(unknown);
+        // A script is never prose, whatever spaces its path, its own name or its working folder has; a later
+        // argument is prose only when the space comes at or after the denied part.
+        for (const [argv, cwd] of [
+          [['python3', path.join(spacedLocked, 'in', 'h.py')]],
+          [['python3', path.join(locked, 'in', 'my helper.py')]],
+          [['python3', '-u', path.join(locked, 'in', 'my helper.py')]],
+          [['python3', 'locked/in/h.py'], spaced],
+          [['node', 'app.js', path.join(spacedLocked, 'in', 'h.js')]],
+          // past a link, the rest is no longer the argument as written: not prose
+          [['node', 'app.js', path.join(value.root, 'to-locked', 'a b')]],
+        ] as [string[], string?][])
+          expect([argv, census(argv, cwd)]).toEqual([argv, unknown]);
+        // a prose prompt that starts with the denied folder is no script: idle stays provable
+        for (const argv of [
+          ['node', 'app.js', `${locked}/in and/or later`],
+          ['node', 'app.js', `${spacedLocked}/in/notes are here`],
+          ['node', 'app.js', `--prompt=${locked}/in and/or later`],
+        ])
+          expect([argv, census(argv)]).toEqual([argv, idle]);
       } finally {
         fs.chmodSync(locked, 0o755);
+        fs.chmodSync(spacedLocked, 0o755);
       }
     }
     // start-up: a home whose .gemini is an automount resolves by spelling, with no lookup under it

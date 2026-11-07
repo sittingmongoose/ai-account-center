@@ -139,19 +139,25 @@ function cachedLstat(file: string, cache: StatCache): fs.Stats | string {
  * reached so far, after links (`/tmp/l/../h.py` with `/tmp/l -> root/sub` is `root/h.py`). Nothing on or under a mount
  * in `network` is touched: the path from there on is kept as written. A missing tail is kept (`/tmp/link/gone.py`
  * through `/tmp/link -> root` is `root/gone.py`), and so is a dangling link's target. What the kernel couldn't open
- * either (a missing name, one too long, a NUL byte, a chain past 40 links) is kept as written; a denied folder is kept
- * as written only for text with spaces (a prose prompt that mentions /root/...), since a script path the owner's own
- * processes can't reach may still be a helper's under other credentials; any other failure is UNRESOLVED.
+ * either (a missing name, one too long, a NUL byte, a chain past 40 links) is kept as written. A denied folder is
+ * kept as written only for prose: `prose` is the argument as written when it may be prose (never a script), and the
+ * walk is prose when, with no link followed, the part that couldn't be looked up and the rest after it come from that
+ * argument and hold a space (`/root/notes are here`). A script path the owner's own processes can't reach may still
+ * be a helper's under other credentials, whatever spaces its folders, its own name or its working folder have. Any
+ * other failure is UNRESOLVED.
  */
 function resolveLocally(
   file: string,
   network: readonly string[],
   cache: StatCache,
-  budget: { steps: number }
+  budget: { steps: number },
+  prose: string | null = null
 ): string | typeof UNRESOLVED | typeof OVER_BUDGET {
   // a NUL can't be in a path the kernel opens: nothing runs from it
   if (file.includes('\0')) return file;
-  const prose = /\s/.test(file);
+  const proseParts =
+    prose !== null && /\s/.test(prose) ? prose.split(path.sep).filter(Boolean).length : 0;
+  let linked = false;
   // components still to walk, last first, so each step is O(1)
   const stack = file.split(path.sep).filter(Boolean).reverse();
   let current: string = path.sep;
@@ -191,17 +197,21 @@ function resolveLocally(
       continue;
     }
     const stat = cachedLstat(next, cache);
-    if (typeof stat === 'string')
+    if (typeof stat === 'string') {
       // missing, not a folder, or a name the kernel can't open either (a long prompt's "and/or" reads as a path):
       // the rest is kept as written
-      return KERNEL_CANT_OPEN.has(stat) || (prose && (stat === 'EACCES' || stat === 'EPERM'))
-        ? path.join(current, part, ...[...stack].reverse())
+      const rest = [part, ...[...stack].reverse()];
+      const inProse = !linked && rest.length <= proseParts && /\s/.test(rest.join(path.sep));
+      return KERNEL_CANT_OPEN.has(stat) || (inProse && (stat === 'EACCES' || stat === 'EPERM'))
+        ? path.join(current, ...rest)
         : UNRESOLVED;
+    }
     if (!stat.isSymbolicLink()) {
       current = next;
       continue;
     }
     hops += 1;
+    linked = true;
     // past the kernel's own limit (ELOOP): nothing can be opened through this path
     if (hops > 40) return path.join(next, ...[...stack].reverse());
     let target: string;
@@ -325,8 +335,11 @@ function filePath(url: string): string {
  * up (a link that leads onto such a mount is read as written from there: a link
  * on the share pointing back into a root is a known limit, since following it
  * would block on a hung share and `~/.local/bin` links into the share are
- * common); a denied folder on a script-like path (no spaces) or an unreadable
- * link leaves an interpreter unplaced; at most 4096 lookups per process, past which an interpreter's script is
+ * common); a denied folder or an unreadable link leaves an interpreter unplaced,
+ * except a denied folder in prose: an argument other than the script whose
+ * space comes at or after the part that can't be looked up, with no link on the
+ * way (`node app.js "/root/notes are here"`); a script is never prose, whatever
+ * spaces its folders, its name or its working folder have; at most 4096 lookups per process, past which an interpreter's script is
  * unplaced.
  *
  * An interpreter is known by its process name, argv0 or executable (a
@@ -432,23 +445,25 @@ export function censusAntigravityProcesses(options: {
     }
     return links === null || links.has(name);
   };
-  const reachesRoot = (value: string, lookup = true): boolean => {
+  /** `prose`: the argument as written when it may be prose (see resolveLocally); a script never is. */
+  const reachesRoot = (value: string, lookup = true, prose: string | null = null): boolean => {
     if (isAntigravityPath(value)) return true;
     if (!lookup) return false;
-    let real = resolved.get(value);
+    const key = prose === null ? value : `${value}\0${prose}`;
+    let real = resolved.get(key);
     if (real === undefined) {
       if (lookups >= LOOKUPS_PER_PROCESS) {
         overLookups = true;
         return false;
       }
       lookups += 1;
-      const found = resolveLocally(value, network, stats, steps);
+      const found = resolveLocally(value, network, stats, steps, prose);
       if (found === OVER_BUDGET) {
         overLookups = true;
         return false;
       }
       real = found;
-      resolved.set(value, real);
+      resolved.set(key, real);
     }
     // where it leads is unknown (a denied folder, a link loop): an interpreter's script can't be placed
     if (real === UNRESOLVED) {
@@ -506,6 +521,15 @@ export function censusAntigravityProcesses(options: {
           (exe !== null && named(path.basename(exe)));
         const shell = SHELL.test(comm) || SHELL.test(path.basename(all[0] ?? ''));
         const operands = interpreter ? [...new Set(all.slice(1).flatMap(candidateScripts))] : [];
+        // An interpreter's script (its first argument that is no option) and the program itself are never prose.
+        const script = interpreter
+          ? all.slice(1).find((argument) => !argument.startsWith('-'))
+          : undefined;
+        const code = new Set([
+          all[0] ?? '',
+          ...(script === undefined ? [] : candidateScripts(script)),
+        ]);
+        const proseOf = (argument: string) => (code.has(argument) ? null : argument);
         let cwds: string[] | undefined;
         let cwdDenied = false;
         const resolveArgument = (argument: string, bare = false): string[] => {
@@ -532,14 +556,17 @@ export function censusAntigravityProcesses(options: {
           return (cwds ?? []).some((cwd) => reachesRoot(cwd));
         };
         if (
-          args.some((argument) => resolveArgument(argument).some((file) => reachesRoot(file))) ||
+          args.some((argument) =>
+            resolveArgument(argument).some((file) => reachesRoot(file, true, proseOf(argument)))
+          ) ||
           operands.some((argument) =>
             resolveArgument(argument, true).some((file) =>
               reachesRoot(
                 file,
                 path.isAbsolute(argument) ||
                   argument.includes(path.sep) ||
-                  isLinkIn(path.dirname(file), path.basename(file))
+                  isLinkIn(path.dirname(file), path.basename(file)),
+                proseOf(argument)
               )
             )
           ) ||
