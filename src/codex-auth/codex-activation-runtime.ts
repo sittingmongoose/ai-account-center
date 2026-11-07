@@ -192,17 +192,24 @@ function processArgv(process: CodexProcessSnapshot): string[] {
     });
 }
 
+/** base::TrimWhitespaceASCII(TRIM_ALL): tab, line feed, vertical tab, form feed, return, space. */
+function trimWhitespaceAscii(text: string): string {
+  return text.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, '');
+}
+
 /**
  * The switches Chromium reads from an argv, ported from base::CommandLine on Linux
  * (AppendSwitchesAndArguments, IsSwitch, GetSwitchPrefixLength, AppendSwitchNative): after argv[0],
- * up to an argument that is exactly `--`; a switch starts `--` or `-` and has more after its prefix;
- * its name runs to the first `=`, its value is the rest, and none means an empty value; a later
- * switch replaces an earlier one of the same name.
+ * each argument first loses ASCII whitespace at both ends; parsing stops at an argument that is then
+ * exactly `--`; a switch starts `--` or `-` and has more after its prefix; its name runs to the first
+ * `=`, its value is the rest, and none means an empty value; a later switch replaces an earlier one
+ * of the same name. (An embedder may install a duplicate-switch handler; it is not used for this
+ * folder.)
  */
 export function chromiumSwitches(argv: string[]): Map<string, string> {
   const switches = new Map<string, string>();
   let parseSwitches = true;
-  for (const arg of argv.slice(1)) {
+  for (const arg of argv.slice(1).map(trimWhitespaceAscii)) {
     parseSwitches = parseSwitches && arg !== '--';
     if (!parseSwitches) continue;
     const prefix = arg.startsWith('--') ? 2 : arg.startsWith('-') ? 1 : 0;
@@ -800,7 +807,7 @@ function desktopLauncher(
     const userData = desktopUserData(desktop, processes);
     const folder = path.isAbsolute(userData) ? userData : found?.value;
     // Before the terminator, or Chromium would read it as a plain argument.
-    const end = args.findIndex((word, index) => index > 0 && word === '--');
+    const end = args.findIndex((word, index) => index > 0 && trimWhitespaceAscii(word) === '--');
     args.splice(
       end < 0 ? args.length : end,
       0,

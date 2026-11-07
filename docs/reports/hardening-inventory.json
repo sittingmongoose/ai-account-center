@@ -779,7 +779,7 @@
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1338
+          "loc": 1345
         },
         {
           "file": "src/web-server/model-pricing.ts",

@@ -772,9 +772,10 @@ def sys_platform_linux():
 def desktop_arguments(context, platform):
     """Only an existing data-directory flag is reapplied; never replay work arguments.
 
-    The folder is the one Chromium takes: the last --user-data-dir before a "--" terminator, with any
-    switch prefix the platform accepts, its value only after "=". A bare switch or an empty value is
-    the default folder, whatever word follows it, so nothing is replayed. A relative folder is the
+    The folder is the one Chromium takes, each argument trimmed of whitespace first: the last
+    --user-data-dir before a "--" terminator, with any switch prefix the platform accepts, its value
+    only after "=". A bare switch or an empty value is the default folder, whatever word follows it,
+    so nothing is replayed. A relative folder is the
     app's own: it is resolved against the app's working directory, never this helper's, and dropped
     when that directory is unknown.
     """
@@ -794,8 +795,9 @@ def desktop_arguments(context, platform):
 
     value = None
     for arg in args:
-        # As base::CommandLine does: on Windows each argument is trimmed first.
-        arg = arg.strip() if windows else arg
+        # As base::CommandLine does: each argument is trimmed first, of any whitespace on Windows
+        # and of ASCII whitespace (0x09-0x0D and space) elsewhere.
+        arg = arg.strip() if windows else arg.strip(" \t\n\v\f\r")
         if arg == "--":
             break
         prefix = next((item for item in prefixes if arg.startswith(item) and len(arg) > len(item)), None)

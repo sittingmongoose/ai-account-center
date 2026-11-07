@@ -505,6 +505,24 @@ describe('Codex Desktop update retry on the real runtime', () => {
       owed: '/x/b',
     },
     {
+      form: 'leading whitespace is trimmed from an argument (T1)',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', ' --user-data-dir=/x/b'],
+      other: '/x/a',
+      owed: '/x/b',
+    },
+    {
+      form: 'trailing whitespace is trimmed, leaving a bare switch (T2)',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/b', '--user-data-dir '],
+      other: '/x/b',
+      owed: '',
+    },
+    {
+      form: 'a terminator with trailing whitespace still ends the switches (T3)',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '-- ', '--user-data-dir=/x/b'],
+      other: '/x/b',
+      owed: '',
+    },
+    {
       form: 'a whole argument with a space after the name is another switch',
       closed: ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', '--user-data-dir /x/b'],
       other: '',
@@ -1963,12 +1981,21 @@ afterEach(() => {
 
 /**
  * A small reference for base::CommandLine's switch parsing on Linux, written apart from the
- * runtime's port: everything after argv[0] and before the first `--` is read; a switch is `--` or
+ * runtime's port: each argument after argv[0] loses ASCII whitespace (0x09-0x0D and space) at both
+ * ends, as TrimWhitespaceASCII does; everything before the first `--` is read; a switch is `--` or
  * `-` and at least one more character; its name runs to the first `=`, its value is the rest; the
  * last one wins.
  */
 function referenceSwitches(argv: string[]): [string, string][] {
-  const rest = argv.slice(1);
+  const ascii = (code: number): boolean => code === 32 || (code >= 9 && code <= 13);
+  const trim = (arg: string): string => {
+    let start = 0;
+    let end = arg.length;
+    while (start < end && ascii(arg.charCodeAt(start))) start++;
+    while (end > start && ascii(arg.charCodeAt(end - 1))) end--;
+    return arg.slice(start, end);
+  };
+  const rest = argv.slice(1).map(trim);
   const end = rest.indexOf('--');
   const switches: Record<string, string> = Object.create(null);
   for (const arg of end < 0 ? rest : rest.slice(0, end)) {
@@ -2169,8 +2196,12 @@ describe('desktop main process detection', () => {
           return `--user-data-dir=${pick(values)}`;
       }
     };
+    // Whitespace around an element, including a no-break space, which ASCII trimming keeps.
+    const pads = ['', '', '', ' ', '\t', '\n', '\v', '\f', '\r', '  ', '\u00a0'];
+    const padded = (random: () => number): string =>
+      `${pads[Math.floor(random() * pads.length)]}${element(random)}${pads[Math.floor(random() * pads.length)]}`;
     const generate = (random: () => number): string[] =>
-      Array.from({ length: Math.floor(random() * 8) }, () => element(random));
+      Array.from({ length: Math.floor(random() * 8) }, () => padded(random));
     const sorted = (switches: Map<string, string>): [string, string][] =>
       [...switches.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 

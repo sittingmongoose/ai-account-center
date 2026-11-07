@@ -443,9 +443,10 @@ class UpdaterTests(unittest.TestCase):
         from app_update_processes import desktop_arguments
 
         def reference(argv):
-            # base::CommandLine on Linux: up to an exact "--"; "--" or "-" and more; name to the
-            # first "="; the last one wins.
-            rest = argv[1:]
+            # base::CommandLine on Linux: each argument loses ASCII whitespace (0x09-0x0D, space)
+            # at both ends; up to an exact "--"; "--" or "-" and more; name to the first "=";
+            # the last one wins.
+            rest = [re.sub(r"^[\x09-\x0d ]+|[\x09-\x0d ]+$", "", arg) for arg in argv[1:]]
             if "--" in rest:
                 rest = rest[:rest.index("--")]
             value = None
@@ -472,7 +473,8 @@ class UpdaterTests(unittest.TestCase):
             return generator.choice(values)
 
         for _ in range(3000):
-            argv = ["/app"] + [element() for _ in range(generator.randrange(7))]
+            pads = ["", "", " ", "\t", "\n", "\v", "\f", "\r", "\u00a0"]
+            argv = ["/app"] + [generator.choice(pads) + element() + generator.choice(pads) for _ in range(generator.randrange(7))]
             value = reference(argv)
             folder = None if not value else value if value.startswith("/") else "/fixture/" + value
             expected = ["--user-data-dir=" + folder] if folder else []
@@ -486,6 +488,9 @@ class UpdaterTests(unittest.TestCase):
             'only a positional after --': (['/app', '--', '--user-data-dir=/x/a'], []),
             'an empty last switch is the default folder': (['/app', '--user-data-dir=/x/a', '--user-data-dir='], []),
             'a single-dash switch counts': (['/app', '-user-data-dir=/x/b'], ['--user-data-dir=/x/b']),
+            'leading whitespace is trimmed': (['/app', '--user-data-dir=/x/a', ' --user-data-dir=/x/b'], ['--user-data-dir=/x/b']),
+            'trailing whitespace leaves a bare switch': (['/app', '--user-data-dir=/x/b', '--user-data-dir '], []),
+            'a terminator with trailing whitespace': (['/app', '-- ', '--user-data-dir=/x/b'], []),
             'a bare switch is the default folder, never the next word': (['/app', '--user-data-dir', '/x/b'], []),
             'a bare last switch overrides an earlier folder': (['/app', '--user-data-dir=/x/a', '--user-data-dir', '/x/b'], []),
             'a whole argument starting -- and a space is not the terminator': (['/app', '-- c', '--user-data-dir=/x/b'], ['--user-data-dir=/x/b']),

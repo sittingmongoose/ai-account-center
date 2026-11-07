@@ -730,7 +730,8 @@ the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder 
 0600 salt beside the marker (`codex-desktop-instance.salt`), never the path. Each desktop is one entry:
 two whose folders read alike, as a cmdline Electron rewrote into one string can make them, are the same
 hash twice, and both must be back. Switches are read by a port of Chromium's `base::CommandLine`
-parsing, checked against a reference over generated argv lists; a cmdline Electron rewrote into one
+parsing, which trims each argument of ASCII whitespace first, checked against a reference over
+generated argv lists; a cmdline Electron rewrote into one
 string is split back into argv first, and there an argument that held spaces can't be told from
 two. The folder is the one Chromium takes: the last `--user-data-dir`
 before a `--` terminator, from `--` or `-` (and `/` on Windows), an empty one meaning the default
