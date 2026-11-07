@@ -449,7 +449,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   persistence work. It is retried before ownership reconciliation, on retry, on server close and on process exit
   (including the CLI's existing SIGTERM/SIGINT cleanup), while the lock can be held. No new signal handler changes
   termination behavior. A completion persisted before a lock handoff prevents the next owner repeating it.
-  An external lock deletion while appends still fail cannot be made safe by this process; pending facts remain
+  An external lock deletion while a completion is still pending (until the next retry pass, each minute, server
+  close or exit writes it; a history read does not) cannot be made safe by this process; pending facts remain
   attached and are retried when it can own the store again.
   **Delivery is at least once.** A crash or kill between a ring and its done line can ring again after restart;
   receivers dedupe because the ring is only a doorbell. Every ring points at signed files whose names and
