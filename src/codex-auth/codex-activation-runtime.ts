@@ -125,18 +125,34 @@ function isCodex(process: CodexProcessSnapshot): boolean {
   );
 }
 
-/** Electron and its zygotes rewrite argv into one space-joined string. */
+/** Electron and its zygotes can rewrite a cmdline into one space-joined string. */
+function rewrittenCmdline(process: CodexProcessSnapshot): boolean {
+  return process.args.length === 1 && /\s--/.test(process.args[0]);
+}
+
 /**
  * A process's arguments, each one whole. The NUL-separated cmdline already gives whole arguments, so a
- * data folder such as `/home/me/Work One` stays one. Only a cmdline Electron rewrote into a single
- * space-joined string is split, and then only before each flag, so a value keeps its own spaces.
+ * data folder such as `/home/me/Work One` stays one. Only a rewritten cmdline is split, and then only
+ * before each flag, so a value keeps its own spaces and stays joined to its flag: `--class Codex`.
  */
 function argWords(process: CodexProcessSnapshot): string[] {
-  const [only] = process.args;
-  if (process.args.length === 1 && /\s--/.test(only)) {
-    return only.split(/\s+(?=--)/).filter(Boolean);
-  }
+  if (rewrittenCmdline(process)) return process.args[0].split(/\s+(?=--)/).filter(Boolean);
   return process.args.filter(Boolean);
+}
+
+/**
+ * A rewritten cmdline's words as real arguments again. A flag joined to its value becomes two
+ * arguments, as it was typed, except the data folder, which becomes `--user-data-dir=VALUE`: Chromium
+ * takes it whole that way, spaces and all, and it reads back as the same folder.
+ */
+function relaunchArguments(process: CodexProcessSnapshot): string[] {
+  if (!rewrittenCmdline(process)) return process.args.filter(Boolean);
+  return argWords(process).flatMap((word, index) => {
+    const joined = index > 0 ? /^(--[^\s=]+)\s+([\s\S]+)$/.exec(word) : null;
+    if (!joined) return [word];
+    const [, flag, value] = joined;
+    return flag === '--user-data-dir' ? [`${flag}=${value.trim()}`] : [flag, value.trim()];
+  });
 }
 
 /**
@@ -361,11 +377,15 @@ export function createCodexActivationRuntime(
         }
         await dependencies.verifyDaemon(launcher);
       }
+      // Each desktop closed is one main process back. Two whose data folders read alike, as a
+      // rewritten cmdline can make them, are still two: a main counted for one is not counted again.
+      const counted = new Set<number>();
       for (const launcher of launchers.filter(isDesktop)) {
         const matchesDesktop = (
           main: CodexProcessSnapshot,
           processes: CodexProcessSnapshot[]
         ): boolean =>
+          !counted.has(main.pid) &&
           isDesktop(main) &&
           desktopUserData(main, processes) === desktopUserData(launcher, [launcher]);
         const existing = await scan();
@@ -376,10 +396,10 @@ export function createCodexActivationRuntime(
         let ready = false;
         do {
           const processes = await scan();
-          const main = processes.find((entry) => matchesDesktop(entry, processes));
-          ready = Boolean(
-            main &&
-              descendants(main, processes).some(
+          const main = processes.find(
+            (entry) =>
+              matchesDesktop(entry, processes) &&
+              descendants(entry, processes).some(
                 (process) =>
                   isCodex(process) &&
                   usesHome(process, codexHome) &&
@@ -387,6 +407,8 @@ export function createCodexActivationRuntime(
                   !isProxy(process)
               )
           );
+          ready = main !== undefined;
+          if (main) counted.add(main.pid);
           if (ready) break;
           await dependencies.sleep(250);
         } while (dependencies.now() < deadline);
@@ -620,16 +642,16 @@ export function createCodexActivationRuntime(
   };
 }
 
+/**
+ * What a stop closes: one entry per desktop main process. Two whose data folders read alike, as a
+ * rewritten cmdline can make them, are two entries, so both are owed until two are back.
+ */
 function restartPlan(launchers: CodexProcessSnapshot[]): CodexRestartPlan {
   return {
     daemon: launchers.some(isDaemon),
-    desktops: [
-      ...new Set(
-        launchers
-          .filter(isDesktop)
-          .map((launcher) => codexDesktopInstance(desktopUserData(launcher, [launcher])))
-      ),
-    ],
+    desktops: launchers
+      .filter(isDesktop)
+      .map((launcher) => codexDesktopInstance(desktopUserData(launcher, [launcher]))),
   };
 }
 
@@ -680,7 +702,7 @@ function desktopLauncher(
       'Cannot recover the VM Codex desktop display; no account was changed.'
     );
   }
-  const args = [...argWords(desktop)];
+  const args = relaunchArguments(desktop);
   if (
     !args.some(
       (arg) =>

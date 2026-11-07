@@ -62,7 +62,7 @@ function createUpdateRuntime(createRuntime, deps = {}, hooks = {}) {
 /** What a marker's fields say an earlier run closed. Bad entries are dropped. */
 function markerObligations(marker, legacyDesktop) {
   const desktops = Array.isArray(marker?.desktops)
-    ? [...new Set(marker.desktops.filter((item) => typeof item === 'string' && /^[0-9a-f]{32}$/.test(item)))] : [];
+    ? marker.desktops.filter((item) => typeof item === 'string' && /^[0-9a-f]{32}$/.test(item)) : [];
   return {
     daemon: marker?.daemon === true,
     desktops,
@@ -70,12 +70,26 @@ function markerObligations(marker, legacyDesktop) {
     anyDesktop: desktops.length === 0 && (marker?.desktop === true || legacyDesktop),
   };
 }
+// Desktops are owed one entry each. Two whose data folders read alike are the same hash twice, and both
+// must be back: a hash counts as many times as it is listed.
+const tally = (items) => items.reduce((counts, item) => counts.set(item, (counts.get(item) ?? 0) + 1), new Map());
+/** The desktops in `owed` that `live` doesn't account for, each live entry used once. */
+function missingDesktops(owed, live) {
+  const left = tally(live);
+  return owed.filter((item) => {
+    const count = left.get(item) ?? 0;
+    left.set(item, count - 1);
+    return count <= 0;
+  });
+}
 function addObligations(prior, plan) {
-  return { daemon: prior.daemon || plan.daemon, desktops: [...new Set([...prior.desktops, ...plan.desktops])], anyDesktop: prior.anyDesktop || plan.anyDesktop === true };
+  // An earlier run and this one can name the same desktop, so each hash is owed as often as either says.
+  const desktops = [...prior.desktops, ...missingDesktops(plan.desktops, prior.desktops)];
+  return { daemon: prior.daemon || plan.daemon, desktops, anyDesktop: prior.anyDesktop || plan.anyDesktop === true };
 }
 const markerFields = (owed) => ({ desktop: owed.anyDesktop || owed.desktops.length > 0, daemon: owed.daemon, desktops: owed.desktops });
 const stillOwed = (owed, live) => (owed.daemon && !live.daemon) || (owed.anyDesktop && live.desktops.length === 0) ||
-  owed.desktops.some((item) => !live.desktops.includes(item));
+  missingDesktops(owed.desktops, live.desktops).length > 0;
 function run(binary, args, timeout = 10000) {
   return new Promise((resolve, reject) => execFile(binary, args, { timeout, maxBuffer: 65536, encoding: 'utf8',
     env: { ...cleanEnvironment(process.env), CODEX_NON_INTERACTIVE: '1', NO_UPDATE_NOTIFIER: '1', DEBIAN_FRONTEND: 'noninteractive' } },
@@ -362,7 +376,7 @@ async function execute(deps) {
         const live = await verifiedState(runtime, deps, retired);
         const lost = {
           daemon: retired.daemon && !live.daemon,
-          desktops: retired.desktops.filter((item) => !live.desktops.includes(item)),
+          desktops: missingDesktops(retired.desktops, live.desktops),
           anyDesktop: retired.anyDesktop === true && live.desktops.length === 0,
         };
         if (stillOwed(lost, nothing)) deps.mark(markerFields(addObligations(prior, lost)));

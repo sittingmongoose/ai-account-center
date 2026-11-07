@@ -373,6 +373,45 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(second.messageCode).toBe('restart_not_running');
   });
 
+  it('owes and relaunches two rewritten desktops that read as the same folder', async () => {
+    // Electron rewrote each main cmdline into one string, so `/x/a --b` and `/x/a --c` can't be told
+    // from a folder `/x/a` and a flag. Both read as `/x/a`, and each is still its own desktop.
+    const rewritten = (pid: number, tail: string) =>
+      processFixture(pid, [`/usr/lib/chatgpt/ChatGPT --user-data-dir=/x/a ${tail}`], {
+        env: { HOME: '/fixture', DISPLAY: ':8' },
+        exe: '/usr/lib/chatgpt/ChatGPT',
+      });
+    const pair = () => [rewritten(40, '--b'), childOf(41, 40), rewritten(50, '--c'), childOf(51, 50)];
+
+    const both = harness(pair());
+    const first = click(both);
+    expect((await first.run({})).status).toBe('updated');
+    expect(both.launches.filter(isDesktop).map((entry) => entry.args)).toEqual([
+      ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', '--b'],
+      ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', '--c'],
+    ]);
+    expect(first.marker()).toBeNull();
+
+    // The second relaunch fails: one desktop fewer is running, so it is not updated.
+    const fake = harness(pair());
+    let failSecond = true;
+    const { run, marker } = click(fake, async (target, isDesktop) => {
+      if (failSecond && target.args.includes('--c')) {
+        throw new CodexActivationRuntimeError('fixture launch failed');
+      }
+      await fake.deps.launch(target, isDesktop);
+    });
+    const failed = await run({});
+    expect(failed.status).toBe('restart_failed');
+    expect((marker() as { desktops: string[] }).desktops).toHaveLength(2);
+
+    // A retry finds only the one desktop running, closes and reopens it: one is still missing.
+    failSecond = false;
+    const second = await run({ restartOnly: true, launchOnly: true });
+    expect(second.status).toBe('restart_failed');
+    expect(second.messageCode).toBe('restart_not_running');
+  });
+
   it('is updated once every desktop it closed is back', async () => {
     const fake = harness([
       dataDesktop(40, '/private/data-a'),
@@ -1648,6 +1687,30 @@ describe('desktop main process detection', () => {
     expect(fake.launches[1].args).toEqual([
       '/usr/lib/chatgpt/ChatGPT',
       '--user-data-dir=/fixture/.config/Codex',
+    ]);
+  });
+
+  it('relaunches each rewritten flag and its separate value as their own arguments', async () => {
+    const rewritten = processFixture(
+      20,
+      ['/usr/lib/chatgpt/ChatGPT --user-data-dir /fixture/Work One --class Codex --enable-features=X'],
+      { env: {}, exe: '/usr/lib/chatgpt/ChatGPT' }
+    );
+    const fake = harness([daemon, rewritten, bundled]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    await runtime.start();
+    expect(fake.launches.filter(isDesktop).map((entry) => entry.args)).toEqual([
+      [
+        '/usr/lib/chatgpt/ChatGPT',
+        '--user-data-dir=/fixture/Work One',
+        '--class',
+        'Codex',
+        '--enable-features=X',
+      ],
+    ]);
+    expect((await runtime.restartState()).desktops).toEqual([
+      codexDesktopInstance('/fixture/Work One'),
     ]);
   });
 });
