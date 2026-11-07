@@ -189,6 +189,14 @@ export function censusAntigravityProcesses(options: {
       return natives.includes(resolved) || rootPaths.some((root) => within(resolved, root));
     });
   const deniedExe = new Set(['EACCES', 'EPERM']);
+  // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A
+  // non-dumpable one denies that link, and then the script can't be placed: such a process may be a live helper, so
+  // the census can't call the host idle. Only interpreters count here: other non-dumpable processes (systemd --user,
+  // ssh-agent, sshd-session, whose rewritten title "sshd-session: user@pts/0" reads like a relative path) are not
+  // judged by a script path at all.
+  const INTERPRETER =
+    /^(?:python[\d.]*|node|nodejs|bun|deno|sh|bash|dash|zsh|ksh|fish|perl[\d.]*|ruby[\d.]*)$/;
+  let unplaced = false;
   let running = 0;
   try {
     for (const name of entries) {
@@ -211,6 +219,7 @@ export function censusAntigravityProcesses(options: {
         const cmdline = readField(() => readCmdline(path.join(directory, 'cmdline')));
         const args = cmdline.split('\0').filter(Boolean).slice(0, 4);
         let cwds: string[] | undefined;
+        let cwdDenied = false;
         const resolveArgument = (argument: string): string[] => {
           if (path.isAbsolute(argument)) return [argument];
           if (!argument.includes('/')) return [];
@@ -222,11 +231,17 @@ export function censusAntigravityProcesses(options: {
             // A removed working folder reads as "<folder> (deleted)"; a live one
             // may really carry that name, so both readings are kept.
             cwds = link === null ? [] : pathSpellings(link).filter((cwd) => path.isAbsolute(cwd));
+            if (link === null) cwdDenied = true;
           }
           return cwds.map((cwd) => path.resolve(cwd, argument));
         };
-        if (args.some((argument) => resolveArgument(argument).some(isAntigravityPath)))
+        if (args.some((argument) => resolveArgument(argument).some(isAntigravityPath))) {
           running += 1;
+          continue;
+        }
+        const interpreter =
+          INTERPRETER.test(comm) || INTERPRETER.test(path.basename(args[0] ?? ''));
+        if (cwdDenied && interpreter) unplaced = true;
       } catch (error) {
         if (error instanceof ProcessGone) continue;
         throw error;
@@ -235,5 +250,7 @@ export function censusAntigravityProcesses(options: {
   } catch {
     return incomplete;
   }
+  // A counted helper already proves the host busy; an interpreter whose script couldn't be placed leaves idle unproven.
+  if (unplaced && running === 0) return incomplete;
   return { complete: true, running };
 }

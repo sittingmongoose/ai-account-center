@@ -418,6 +418,46 @@ describe('runtime-free Antigravity process census', () => {
     }
   });
 
+  test('an interpreter running a relative script with its working folder denied leaves idle unproven', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(path.join(helperDir, 'bin'), { recursive: true });
+    // A non-dumpable helper: `python3 ./bin/standin.py`, its exe and cwd links denied (EACCES).
+    value.add(950, 'python3', '/usr/bin/python3', ['python3', './bin/standin.py'], helperDir);
+    // An sshd-session title reads like a relative path; it is no interpreter, so its denied links prove nothing.
+    value.add(
+      951,
+      'sshd-session',
+      '/usr/lib/openssh/sshd-session',
+      ['sshd-session: me@pts/0'],
+      '/'
+    );
+    const denied = new Set([
+      path.join(value.proc, '950', 'exe'),
+      path.join(value.proc, '950', 'cwd'),
+      path.join(value.proc, '951', 'exe'),
+      path.join(value.proc, '951', 'cwd'),
+    ]);
+    const real = fs.readlinkSync;
+    const spy = spyOn(fs, 'readlinkSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (denied.has(String(file))) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return (real as (...a: unknown[]) => string)(file, ...rest);
+    }) as typeof fs.readlinkSync);
+    try {
+      expect(value.census()).toEqual({ complete: false, running: 0 });
+      // the same helper with its cwd readable is counted; the sshd-session alone leaves the census complete
+      denied.delete(path.join(value.proc, '950', 'cwd'));
+      expect(value.census()).toEqual({ complete: true, running: 1 });
+      fs.rmSync(path.join(value.proc, '950'), { recursive: true });
+      expect(value.census()).toEqual({ complete: true, running: 0 });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {
     // Read-only; any native path works. systemd --user, ssh-agent and sshd-session
     // deny their exe link, which must not make the census incomplete forever.
