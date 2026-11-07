@@ -495,9 +495,10 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   rebuilt without the send line, so a retry after a lost send line and a restart writes the same bytes (except in the void-failure limit above). A
   summary already on the share that this key signed with the same content but another `at` (from an earlier
   version, which stamped the send's end) is kept, not re-signed. A file there is replaced only once it is known not
-  to be that summary: read and found invalid, under another key or with other content, not a plain file, or absent
+  to be that summary: read and found invalid, under another key or with other content, a link or other non-folder entry, or absent
   (ENOENT and a fresh listing of `batches/` without it). Any other read error, or an ENOENT for a file the folder
-  still lists, fails that attempt, to be retried, so a read fault never re-signs it. A record stored before kinds existed is shared
+  still lists, fails that attempt, to be retried, so a read fault never re-signs it. A folder at that path can't be
+  replaced (the rename onto it fails): the step fails each pass and stops after 20 tries, shown as such. A record stored before kinds existed is shared
   exactly as it was signed, without `kind`.
 - The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind: "answer" | "note" |
   "object" | "done", choice, note, via,
