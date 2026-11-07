@@ -63,9 +63,35 @@ export interface CodexRestartState extends CodexRestartPlan {
 export function codexDesktopInstance(userData: string): string {
   const folder = userData || path.join(os.homedir(), '.config', 'Codex');
   return createHash('sha256')
-    .update(path.isAbsolute(folder) ? path.resolve(folder) : folder)
+    .update(path.isAbsolute(folder) ? realFolder(folder) : folder)
     .digest('hex')
     .slice(0, 32);
+}
+
+/**
+ * The folder Chromium uses for an absolute path: it follows symlinks before `..`, so
+ * `/x/link/../profile` is the profile beside the link's target, not beside the link. This walks one
+ * part at a time, since a runtime's realpath may cancel `..` as text first. Past the first part that
+ * doesn't exist, the rest is kept as text, on top of the real folders above it.
+ */
+function realFolder(absolute: string): string {
+  const parts = absolute.split('/').filter(Boolean);
+  let current = '/';
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    if (part === '.') continue;
+    if (part === '..') {
+      current = path.dirname(current);
+      continue;
+    }
+    try {
+      // `current` is already real and `part` a plain name, so there is no `..` here to cancel.
+      current = fs.realpathSync(path.join(current, part));
+    } catch {
+      return path.resolve(current, ...parts.slice(index));
+    }
+  }
+  return current;
 }
 
 export class CodexActivationRuntimeError extends Error {
@@ -712,8 +738,11 @@ function desktopUserData(desktop: CodexProcessSnapshot, processes: CodexProcessS
   const found = desktopFolderArgument(desktop, processes);
   if (!found) return '';
   const { value, owner } = found;
-  if (path.isAbsolute(value)) return value;
-  if (owner.cwd && path.isAbsolute(owner.cwd)) return path.resolve(owner.cwd, value);
+  if (path.isAbsolute(value)) return realFolder(value);
+  // Joined as text, so `link/..` still reaches the filesystem rather than cancelling out here.
+  if (owner.cwd && path.isAbsolute(owner.cwd)) {
+    return realFolder(`${owner.cwd.replace(/\/+$/, '')}/${value}`);
+  }
   return `\0unresolved:${owner.pid}:${owner.startTime}:${value}`;
 }
 

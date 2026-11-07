@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1346,
+    "totalOccurrences": 1347,
     "filesAffected": 134,
     "hotpathOccurrences": 698,
     "hotpathFilesAffected": 79,
@@ -333,18 +333,22 @@
         "markers": []
       },
       {
-        "file": "src/management/shared-manager/migrations.ts",
+        "file": "src/codex-auth/codex-activation-runtime.ts",
         "count": 25,
         "calls": [
-          "copyFileSync",
-          "cpSync",
-          "existsSync",
+          "closeSync",
+          "fstatSync",
           "lstatSync",
           "mkdirSync",
+          "openSync",
           "readdirSync",
-          "symlinkSync",
-          "unlinkSync",
-          "writeFileSync"
+          "readFileSync",
+          "readlinkSync",
+          "readSync",
+          "realpathSync",
+          "renameSync",
+          "statSync",
+          "unlinkSync"
         ],
         "markers": []
       }
@@ -779,7 +783,7 @@
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1288
+          "loc": 1317
         },
         {
           "file": "src/antigravity/registry.ts",

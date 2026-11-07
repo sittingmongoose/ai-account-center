@@ -145,6 +145,25 @@ function harness(initial: CodexProcessSnapshot[]) {
   };
 }
 
+/**
+ * A folder `link/../profile` under a fresh root, where `link` points into `real/a`. Chromium follows
+ * the link before `..`, so it uses `real/profile`; read as text it would be `profile` beside `link`.
+ */
+function symlinkedProfile() {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-runtime-link-')));
+  temporaryDirectories.push(root);
+  fs.mkdirSync(path.join(root, 'real/a'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'real/profile'));
+  fs.mkdirSync(path.join(root, 'profile'));
+  fs.symlinkSync(path.join(root, 'real/a'), path.join(root, 'link'));
+  return {
+    root,
+    linked: path.join(root, 'link') + '/../profile',
+    used: path.join(root, 'real/profile'),
+    textual: path.join(root, 'profile'),
+  };
+}
+
 describe('Codex Desktop update retry on the real runtime', () => {
   const bridge = require('../../../scripts/app-updates/app_update_codex.cjs');
 
@@ -399,6 +418,39 @@ describe('Codex Desktop update retry on the real runtime', () => {
       // Before the retry, a desktop in project-b starts; the one in project-a stays closed.
       fail = false;
       fake.inject(inDirectory(60, b, '/fixture/project-b'));
+      fake.inject(childOf(61, 60));
+      const second = await run({ restartOnly: true, launchOnly: true });
+      expect([second.status, second.messageCode]).toEqual([
+        'restart_failed',
+        'restart_not_running',
+      ]);
+    }
+  );
+
+  it.each(['absolute', 'relative'])(
+    'owes a desktop by the folder Chromium uses through a symlink, not by its text (%s)',
+    async (form) => {
+      const { root, linked, used, textual } = symlinkedProfile();
+      const at = (pid: number, data: string) =>
+        processFixture(pid, ['/usr/lib/chatgpt/ChatGPT', `--user-data-dir=${data}`], {
+          cwd: root,
+          env: { HOME: '/fixture', DISPLAY: ':8' },
+        });
+      const fake = harness([
+        at(40, form === 'absolute' ? linked : 'link/../profile'),
+        childOf(41, 40),
+      ]);
+      let fail = true;
+      const { run, marker } = click(fake, async (target, isDesktop) => {
+        if (fail && isDesktop) throw new CodexActivationRuntimeError('fixture launch failed');
+        await fake.deps.launch(target, isDesktop);
+      });
+      expect((await run({})).status).toBe('restart_failed');
+      expect((marker() as { desktops: string[] }).desktops).toEqual([codexDesktopInstance(used)]);
+
+      // Another desktop runs on the folder the text names. The one Chromium used stays closed.
+      fail = false;
+      fake.inject(at(60, textual));
       fake.inject(childOf(61, 60));
       const second = await run({ restartOnly: true, launchOnly: true });
       expect([second.status, second.messageCode]).toEqual([
@@ -1831,6 +1883,34 @@ describe('desktop main process detection', () => {
     expect(fake.launches[1].args).toEqual([
       '/usr/lib/chatgpt/ChatGPT',
       `--user-data-dir=${path.join(os.homedir(), '.config', 'Codex')}`,
+    ]);
+  });
+
+  it('names a data folder by its real path, and a missing one where Chromium would make it', async () => {
+    const { root, linked, used } = symlinkedProfile();
+    const at = (data: string) =>
+      processFixture(20, ['/usr/lib/chatgpt/ChatGPT', `--user-data-dir=${data}`], {
+        cwd: root,
+        env: { DISPLAY: ':8' },
+        exe: '/usr/lib/chatgpt/ChatGPT',
+      });
+    const state = async (data: string) =>
+      (
+        await createCodexActivationRuntime(
+          home,
+          harness([daemon, at(data), bundled]).deps
+        ).restartState()
+      ).desktops;
+    expect(await state(linked)).toEqual([codexDesktopInstance(used)]);
+    expect(await state('link/../profile')).toEqual([codexDesktopInstance(used)]);
+    expect(await state(used)).toEqual([codexDesktopInstance(used)]);
+    // A folder that isn't there yet is named where Chromium would make it: the real folders
+    // above it, then the rest as text.
+    expect(await state('link/../missing')).toEqual([
+      codexDesktopInstance(path.join(root, 'real/missing')),
+    ]);
+    expect(await state(path.join(root, 'gone/../../x'))).toEqual([
+      codexDesktopInstance(path.join(path.dirname(root), 'x')),
     ]);
   });
 
