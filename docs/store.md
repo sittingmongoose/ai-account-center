@@ -636,7 +636,7 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 | Device token reaches only the new GET routes | pass (`tests/unit/store/store-routes.test.ts`) |
 | Dashboard without the module, and with `AAC_STORE=off` | pass (JSON path) |
 | Memory: a store-only process over 10 days (16 accounts, minute samples, daily maintenance) | 36 MiB peak working set: pass |
-| Bytes per reading below today's, on the 30-day busy run | **pass: 216 B against 277 B** (176 B with a one-day raw tail); per reading also with the snapshot's 5/32 fractional mix (65 B against 279 B), but that mix's total is 31.81 MB against 18.06 MB: see 11.4 |
+| Bytes per reading below today's, on the 30-day busy run | **pass: 216 B against 277 B** (176 B with a one-day raw tail); also with the snapshot's 5/32 fractional mix, 65 B against 279 B, whose 31.81 MB total is the planned every-change history (section 5): see 11.4 |
 | `.node` built on the dashboard VM | not done: Rust builds are not allowed on the VM now; see 11.5 |
 
 ### 11.4 Measured size and query cost (Windows, synthetic busy workload)
@@ -664,6 +664,10 @@ free page and redb doubles the file (22.3 MB became 30.5 MB in the old layout). 
 when the file is over twice its used pages, so here it does nothing. If it were forced, this run would end
 at 7.50 MB of redb, 16.85 MB in total, 249 B.
 
+**The bar is bytes per reading** (section 5): the store keeps every change for 90 days (D1), so its total is
+expected to exceed the thinned JSON file; section 5 estimated "about 29 MB with every change kept" for the same
+30 days. A larger total with fewer bytes per reading is the plan, not a failure.
+
 **Variants and the steady-state tail.** `STEADY=1` closes and reopens the store before the last day, so every
 earlier segment is sealed and compressed and the raw tail is one real day, the most a store sealing at midnight
 carries just before it seals. Without it the replay's segments seal on the wall clock, so up to 8 MiB stays raw.
@@ -677,20 +681,23 @@ day closed:
 |---|---|---:|---:|---:|---:|---|
 | Round | replay leftover, 7.00 MB | 14.64 MB | 216 B | 17.45 MB | 277 B | pass |
 | Round | one day, 4.17 MB | 11.90 MB | 176 B | 17.45 MB | 277 B | pass |
-| Mixed, 5/32 fractional | replay leftover, 6.11 MB | 32.35 MB | 66 B | 18.06 MB | 279 B | per reading pass, **total fails** |
-| Mixed, 5/32 fractional | one day, 5.49 MB | 31.81 MB | 65 B | 18.06 MB | 279 B | per reading pass, **total fails** |
+| Mixed, 5/32 fractional | replay leftover, 6.11 MB | 32.35 MB | 66 B | 18.06 MB | 279 B | pass (total is the planned every-change history) |
+| Mixed, 5/32 fractional | one day, 5.49 MB | 31.81 MB | 65 B | 18.06 MB | 279 B | pass (total is the planned every-change history) |
 | All fractional (known worst case) | replay leftover, 8.57 MB | 22.18 MB | 313 B | 18.87 MB | 300 B | fails |
 | All fractional (known worst case) | one day, 4.23 MB | 17.99 MB | 254 B | 18.87 MB | 300 B | pass |
 
-**Why the mixed run's total fails.** A fractional series changes every sample, so the store keeps 490,493 spans
-against 67,691 in the round run, and its account's tick is a `usage.sampled` event every minute instead of a
-`usage.seen` every five. The JSON history keeps those series thinned to one record an hour beyond the last day.
-The store's 31.81 MB is redb 16.84 MB (13.82 MB of pages, of which `reading_day` 7.29 MB stored, about 15 B per
-span: a 4-decimal value takes a marker and 8 raw bytes) and the log 9.46 MB compressed plus 5.49 MB raw. Each
-reading costs a quarter of the JSON history's, but the store keeps seven times as many. Packing `account_state`
-(0.44 MB stored) and `period` (0.42 MB) would save at most about 1.5 MB of the 13.7 MB gap, so it was not done;
-closing the gap needs a decision on what to keep (for example thinning a series' minute-by-minute changes
-after a day, as the JSON history does) or a smaller log, not denser tables.
+**Why the mixed run's total is larger.** A fractional series changes every sample, so the store keeps 490,493
+spans against 67,691 in the round run, and its account's tick is a `usage.sampled` event every minute instead of
+a `usage.seen` every five. The JSON history keeps those series thinned to one record an hour beyond the last
+day. The store's 31.81 MB is redb 16.84 MB (13.82 MB of pages, of which `reading_day` 7.29 MB stored, about 15 B
+per span: a 4-decimal value takes a marker and 8 raw bytes) and the log 9.46 MB compressed plus 5.49 MB raw.
+Each reading costs a quarter of the JSON history's while the store keeps seven times as many: the planned
+every-change history, close to section 5's 29 MB estimate. Packing `account_state` (0.44 MB stored) and `period`
+(0.42 MB) would save at most about 1.5 MB, so it was not done.
+
+**A possible later saving, not built:** store 4-decimal values as scaled integers (ten-thousandths in a varint,
+as hundredths are now), about 5 bytes instead of 9 per changed value, a few bytes per span of a fractional
+series.
 
 **The doubling.** It is real: redb's region size is not configurable outside its own tests, so in these runs the
 file stepped at about 1.3, 2.6, 5.3, 10.6 and 15.8 MB. The round run by day: days 2 to 20 fall from 1,965 B to 316 B (a small store
