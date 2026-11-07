@@ -121,6 +121,15 @@ pub fn CardsPanel() -> impl IntoView {
             problem.set(None);
         }
     });
+    // An idle review whose cards all closed has given way to "No questions waiting"; a question arriving later opens
+    // on the deck, not on that stale review.
+    Effect::new(move |_| {
+        let idle_review =
+            deck_view.get() == DeckView::Review && !sending.get() && problem.with(|p| p.is_none());
+        if idle_review && open.with(|o| o.is_empty()) {
+            deck_view.set(DeckView::Cards);
+        }
+    });
 
     // Keep drafts on this device; drop drafts of cards that closed (see the prune below).
     Effect::new(move |_| drafts.with(drafts::save));
@@ -811,7 +820,15 @@ fn Review(
                 </button>
                 <button class="secondary" disabled=move || sending.get() on:click=move |_| deck_view.set(DeckView::Cards)>"Back to the cards"</button>
             </div>
-            {move || problem.get().map(|p| view! { <p class="item-note" data-tone="crit" role="alert">{p}</p> })}
+            // once the drafts the failure speaks of are gone (their cards closed), say so instead of offering a resend
+            {move || problem.get().map(|p| {
+                let words = if count() == 0 {
+                    "The send didn't confirm, and these questions have since closed, so nothing is left to send. Reload to see what was recorded.".to_string()
+                } else {
+                    p
+                };
+                view! { <p class="item-note" data-tone="crit" role="alert">{words}</p> }
+            })}
             <p class="fine">
                 {move || {
                     // Answers and "done" close their cards; notes, objections and samples stay open.

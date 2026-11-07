@@ -1796,6 +1796,23 @@ process.exit(0);
 describe('round three', () => {
   const ID = 'd'.repeat(32);
 
+  it('a torn last store line does not swallow the next record after a restart', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    await settle();
+    // a crash mid-write: half a line, no newline
+    fs.appendFileSync(path.join(store, 'answers.jsonl'), '{"kind":"record","cardId":"vm.le');
+    const restarted = make();
+    expect((await restarted.submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].outcome).toBe(
+      'recorded'
+    );
+    await settle();
+    const again = make().list();
+    expect(again.map((r) => r.card.id).sort()).toEqual([CARD, 'vm.lead--Q2']);
+  });
+
   describe('the card version in the entry binding', () => {
     it('refuses an answer id replayed on another version of the card', async () => {
       const { root, answers, rings } = setup();

@@ -300,4 +300,62 @@ export const tests = {
 		await t.page.click('.sent button >> text=Back to the questions');
 		await t.text('#cards .empty', /No questions waiting/);
 	},
+
+	// A send that fails after a read emptied the cards keeps its review and says nothing is left to send; an idle
+	// review whose cards closed gives way, and a question that arrives later opens on the deck.
+	async 'status a failed send and an idle review when the cards empty'(t) {
+		await t.viewport(1440, 900);
+		await t.app.signIn();
+		const full = fixture('status-view.json');
+		const empty = { ...full, cards: { ...full.cards, open: [], batches: [] } };
+		let current = full;
+		let gets = 0;
+		let release;
+		const held = new Promise((resolve) => (release = resolve));
+		await t.page.route((u) => new URL(u).pathname === '/api/status', (r) => {
+			gets += 1;
+			return r.fulfill({ json: current });
+		});
+		await t.page.route((u) => new URL(u).pathname === '/api/status/answers', async (r) => {
+			await held;
+			await r.fulfill({ status: 500, json: { error: 'Boom.', code: 'answers_failed' } });
+		});
+		await stubMedia(t);
+		await t.goto('/app/status', { settleMs: 300 });
+		await t.page.waitForSelector('.deck .card .note textarea');
+		const reread = async () => {
+			const before = gets;
+			await t.page.evaluate(() => window.dispatchEvent(new Event('online')));
+			for (let i = 0; i < 50 && gets === before; i++) await t.page.waitForTimeout(100);
+			await t.page.waitForTimeout(300);
+			return gets > before;
+		};
+		// an idle review: the cards close under it, then a new question arrives
+		await t.page.click('button[role="tab"] >> text=Review');
+		await t.page.waitForSelector('.review');
+		current = empty;
+		await t.check('re-read (cards gone)', await reread());
+		await t.text('#cards .empty', /No questions waiting/);
+		current = full;
+		await t.check('re-read (a question back)', await reread());
+		await t.check('the question opens on the deck, not the old review', async () =>
+			t.page.evaluate(() => !!document.querySelector('.deck .card') && !document.querySelector('.review'))
+		);
+		// a send that fails after the cards emptied
+		await t.page.fill('.note textarea', 'one note');
+		await t.page.click('button[role="tab"] >> text=Review');
+		await t.page.click('.review-actions .primary');
+		current = empty;
+		await t.check('re-read mid-send', await reread());
+		release();
+		await t.page.waitForSelector('.review [role="alert"]', { timeout: 10000 });
+		await t.text('.review [role="alert"]', /nothing is left to send/);
+		await t.check('the failure says nothing about sending again', async () =>
+			t.page.evaluate(() => !/Sending the same answers again/.test(document.querySelector('.review [role="alert"]').textContent))
+		);
+		await t.page.click('.review-actions button >> text=Back');
+		await t.text('#cards .empty', /No questions waiting/);
+		// the 500 this test answered on purpose is the only console error allowed
+		await t.noConsoleErrors('console (only the stubbed 500 on /api/status/answers)', { allow: [/status of 500 .*\/api\/status\/answers/] });
+	},
 };

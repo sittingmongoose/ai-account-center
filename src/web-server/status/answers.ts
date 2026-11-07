@@ -227,9 +227,18 @@ async function writeAtomic(
 
 function appendLine(file: string, record: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const fd = fs.openSync(file, 'a', 0o600);
+  const fd = fs.openSync(file, 'a+', 0o600);
   try {
-    fs.writeSync(fd, `${JSON.stringify(record)}\n`);
+    // A crash mid-write can leave a torn last line with no newline. Joined to it, the next record would be one
+    // unparseable line and be lost on the next load, so end the torn line first (it stays unparseable on its own).
+    const { size } = fs.fstatSync(fd);
+    let lead = '';
+    if (size > 0) {
+      const last = Buffer.alloc(1);
+      fs.readSync(fd, last, 0, 1, size - 1);
+      if (last[0] !== 0x0a) lead = '\n';
+    }
+    fs.writeSync(fd, `${lead}${JSON.stringify(record)}\n`);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);

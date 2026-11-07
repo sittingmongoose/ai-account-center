@@ -417,7 +417,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   "The reports share is not available."
 - **Send summary:** every POST that records at least one entry is a send with its own server-made `sendId` (a UUID, not
   the request's retry key; if the server stopped before the send was finished, the retry after a restart rebuilds the
-  summary from the stored records, so the file a ring names always comes), written
+  summary from the stored records; a ring can go out before its summary is written, and the file then follows on a
+  retry, up to the retry limit), written
   signed to `<reports>/v1/answers/batches/<sendId>.json`: `{ schema: "agent-reports/send@1", sendId, at, answeredBy:
   "owner", device, entries: [ { cardId, seq, cardSha256, kind, choice, note } ], signature }`, entries in the order
   sent, signed exactly like an answer (`verifySignedDocument(fileText, publicKeyPem, "agent-reports/send@1")`).
