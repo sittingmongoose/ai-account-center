@@ -15,7 +15,7 @@
     },
     {
       "path": "linux_process_guard.py",
-      "sha256": "594f6f33285804274fa41a616c502f14c56347903a143fdf9fef6c228b2ba27d"
+      "sha256": "0c59d4f3f8cfce01790ee3a958f7ad7b2c767af0c5ce8b01550e3faaeb6d78ed"
     },
     {
       "path": "native_credential_worker.py",
@@ -51,7 +51,7 @@
     },
     {
       "path": "native_status_identity_worker.py",
-      "sha256": "286b7d30d4806ad451464ee23ca2e644a23883d1bce08b311b6ac652f238b711"
+      "sha256": "5da73f1011275069497bcbeb1973035579b328d362c894e5e12061e14bc526df"
     },
     {
       "path": "native_status_inbox.py",

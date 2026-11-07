@@ -343,6 +343,11 @@ that changes before the final recheck reports `failed` / `runtime_paused_blocked
 before the updater runs. A failed `agy update` reports `failed` /
 `runtime_paused` and records the attempt.
 
+Known issue, not fixed here: the runtime's process guard can refuse an owned
+identity worker that exits just as it is checked, which loses that worker's
+result. The race predates the paused path and is on `main` too; its fix is on
+its own branch, `fix/antigravity-worker-exit-race`.
+
 A listening (or unclear) runtime socket keeps the coordinator, as do a reviewed
 build and an unreadable native whose runtime is down. The coordinator's
 idle-only rule for managed sessions is unchanged: a running managed session
