@@ -169,24 +169,33 @@ const CREDENTIAL_KEY =
   /^(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)$/i;
 
 /**
+ * A secret written the way a person types one in prose or a shell (`password: hunter2isbad`, `DB_PASSWORD=...`,
+ * `OPENAI_API_KEY=abc123def456`): the patterns above are shaped for JSON files. The name may be part of a longer one
+ * (`AWS_SECRET_ACCESS_KEY`); the value must be 8 or more characters with a digit and not look like a path, URL,
+ * date or grouped number, so "token: refresh it" and "pwd: /home/me/src/v2" are left alone. For the owner's notes,
+ * which go to the share.
+ */
+const TYPED_SECRET = new RegExp(
+  '(?<![A-Za-z0-9])' +
+    '(?:password|passwd|passphrase|pwd|pass|pw|secret(?:[_ -]?(?:access[_ -]?)?key)?|api[_ -]?key|' +
+    '(?:access|auth|refresh|session|id|bearer)[_ -]?token|token)' +
+    '\\s*[:=]\\s*["\']?' +
+    '(?![/~]|https?:|\\d{4}-\\d{2}-\\d{2}|\\d{1,3}(?:,\\d{3})+\\b)' +
+    '(?=\\S*\\d)\\S{8,}',
+  'i'
+);
+
+export function findTypedSecret(text: string): string | null {
+  return TYPED_SECRET.test(text) ? 'a password or key' : null;
+}
+
+/**
  * The secret check for a parsed JSON file: over the text as written, then over every decoded key and string of the
  * parsed value, so an escape (`"\u0073k-..."`), a newline or tab before a token (`"key:\nsk-..."`, which stays `\n`
  * when written back out) or JSON text inside a string is seen as the reader would see it. The walk is iterative: a
  * file nested thousands of levels deep (which `JSON.parse` takes and `JSON.stringify` throws on) is walked, not a
  * crash of the scan. Any hit refuses the file.
  */
-/**
- * A secret written the way a person types one in prose (`password: hunter2isbad`, `api_key=abc123def456`): the
- * patterns above are shaped for JSON files. Only a value of 8 or more characters with a digit counts, so ordinary words
- * after a colon ("token: refresh it") are left alone. For the owner's notes, which go to the share.
- */
-const TYPED_SECRET =
-  /\b(?:password|passwd|pwd|passphrase|secret|api[_ -]?key|access[_ -]?token|auth[_ -]?token|token)\s*[:=]\s*(?=\S*\d)\S{8,}/i;
-
-export function findTypedSecret(text: string): string | null {
-  return TYPED_SECRET.test(text) ? 'a password or key' : null;
-}
-
 export function findSecretIn(source: string, value: unknown): string | null {
   const raw = findSecret(source);
   if (raw) return raw;

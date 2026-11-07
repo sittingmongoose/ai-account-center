@@ -33,6 +33,7 @@ import {
   isCardId,
   isPmMailName,
   isWriterName,
+  findTypedSecret,
   jsonFromBytes,
   realTimestamp,
   REPORT_SIZE_CAPS,
@@ -2004,6 +2005,30 @@ describe('round three', () => {
     expect(make().list()).toHaveLength(1);
   });
 
+  it('typed secrets: env-style names are caught, ordinary values with digits are not', () => {
+    for (const text of [
+      'DB_PASSWORD=hunter2isbad',
+      'OPENAI_API_KEY=abc123def456',
+      'GITHUB_TOKEN=ghx1234567890ab',
+      'client_secret=abcd1234efgh',
+      'refresh_token=xyz12345678',
+      'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI1K7MDENG',
+      'pass: hunter2isbad',
+      'token: "abc123def456"',
+    ])
+      expect([text, findTypedSecret(text)]).toEqual([text, 'a password or key']);
+    for (const text of [
+      'token: refresh it later',
+      'token_count=128000000',
+      'pwd: /home/me/src/v2',
+      'token: 2026-11-07',
+      'token: 1,000,000',
+      'token: https://example.org/v2',
+      'passing: 12345678 tests',
+    ])
+      expect([text, findTypedSecret(text)]).toEqual([text, null]);
+  });
+
   it('notes: typed secrets and token prefixes are refused by kind; ordinary prose is not', async () => {
     const { root, make } = setup();
     const answers = make();
@@ -2036,31 +2061,59 @@ describe('round three', () => {
     }
   });
 
-  it('a record whose write fails is cut back out of the store, and the answer key is never half written', async () => {
+  it('a record whose fsync fails is cut back out of the store and never comes back', async () => {
     const { root, store, make } = setup();
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
-    const answers = make();
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    // one good answer first: the key and the store exist, so only the store's own fsync is failed below
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    await settle();
+    const storeFile = path.join(store, 'answers.jsonl');
+    const before = fs.statSync(storeFile).size;
+    const storeIno = fs.statSync(storeFile).ino;
     const realFsync = fs.fsyncSync;
     const fsync = spyOn(fs, 'fsyncSync').mockImplementation(((fd: number) => {
-      if (
-        fs.fstatSync(fd).size > 0 &&
-        String(fs.readFileSync(path.join(store, 'answers.jsonl'), 'utf8')).includes(
-          '"type":"answer"'
-        )
-      )
+      if (fs.fstatSync(fd).ino === storeIno)
         throw Object.assign(new Error('disk gone'), { code: 'EIO' });
       return realFsync(fd);
     }) as typeof fs.fsyncSync);
     let result;
     try {
-      [result] = await answers.submitSet([entry(CARD, q1)], 'Mac');
+      [result] = await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac');
     } finally {
       fsync.mockRestore();
     }
     expect(result?.outcome).toBe('refused');
-    expect(make().list()).toHaveLength(0);
-    // the key: no partial file is ever at answer-key.pem, and no temp file is left
-    expect(fs.readdirSync(store).filter((f) => f.startsWith('.answer-key'))).toEqual([]);
+    // the refused record's bytes are gone, so a restart neither lists nor rings it
+    expect(fs.statSync(storeFile).size).toBe(before);
+    expect(
+      make()
+        .list()
+        .map((r) => r.card.id)
+    ).toEqual([CARD]);
+  });
+
+  it('the answer key: a key another process links first wins the race, and no temp file is left', () => {
+    const dir = path.join(dirs.make('ccs-status-key-'), 'status');
+    const otherDir = path.join(dirs.make('ccs-status-key-other-'), 'status');
+    const other = loadOrCreateAnswerKey(otherDir);
+    const otherPem = fs.readFileSync(path.join(otherDir, 'answer-key.pem'), 'utf8');
+    // between our temp write and our link, another process links its key into place
+    const target = path.join(dir, 'answer-key.pem');
+    const realLink = fs.linkSync;
+    const link = spyOn(fs, 'linkSync').mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to) === target && !fs.existsSync(target))
+        fs.writeFileSync(target, otherPem, { mode: 0o600 });
+      return realLink(from, to);
+    }) as typeof fs.linkSync);
+    let mine;
+    try {
+      mine = loadOrCreateAnswerKey(dir);
+    } finally {
+      link.mockRestore();
+    }
+    expect(mine.keyId).toBe(other.keyId);
+    expect(fs.readdirSync(dir).filter((f) => f.startsWith('.answer-key'))).toEqual([]);
   });
 
   it('a torn last store line does not swallow the next record after a restart', async () => {

@@ -256,11 +256,16 @@ function appendLine(file: string, record: unknown): void {
       }
       fs.fsyncSync(fd);
     } catch (error) {
-      // A refused record must not be left in the store (a restart would ring it): cut back to where it began.
+      // A refused record must not be left in the store (a restart would ring it): cut back to where it began. A
+      // descriptor opened for append may refuse to truncate (Windows), so the path is truncated instead.
       try {
         fs.ftruncateSync(fd, size);
       } catch {
-        /* the store is unwritable: the next load reads at most a torn last line, which is skipped */
+        try {
+          fs.truncateSync(file, size);
+        } catch {
+          /* the store can't be cut back: the record may come back after a restart; the error still refuses it */
+        }
       }
       throw error;
     }

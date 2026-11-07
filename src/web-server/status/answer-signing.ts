@@ -85,6 +85,17 @@ export interface AnswerKey {
 export function loadOrCreateAnswerKey(dir: string): AnswerKey {
   const file = path.join(dir, 'answer-key.pem');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // a crash between writing and cleaning up leaves a private key in a temp file: remove any an hour old
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!/^\.answer-key\..+\.tmp$/.test(name)) continue;
+      const stale = path.join(dir, name);
+      if (Date.now() - fs.lstatSync(stale).mtimeMs > 60 * 60 * 1000)
+        fs.rmSync(stale, { force: true });
+    }
+  } catch {
+    /* best effort */
+  }
   let pem: string;
   try {
     pem = fs.readFileSync(file, 'utf8');
@@ -107,8 +118,32 @@ export function loadOrCreateAnswerKey(dir: string): AnswerKey {
         fs.linkSync(temp, file);
         pem = created;
       } catch (linkError) {
-        if ((linkError as NodeJS.ErrnoException).code !== 'EEXIST') throw linkError;
-        pem = fs.readFileSync(file, 'utf8');
+        const linkCode = (linkError as NodeJS.ErrnoException).code;
+        if (linkCode === 'EEXIST') {
+          pem = fs.readFileSync(file, 'utf8');
+        } else if (linkCode === 'EPERM' || linkCode === 'ENOTSUP' || linkCode === 'EXDEV') {
+          // no hard links here: create in place, exclusively, as before
+          try {
+            fs.writeFileSync(file, created, { mode: 0o600, flag: 'wx' });
+            pem = created;
+          } catch (writeError) {
+            if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
+            pem = fs.readFileSync(file, 'utf8');
+          }
+        } else {
+          throw linkError;
+        }
+      }
+      // the new name is durable only once its folder is
+      try {
+        const folder = fs.openSync(dir, 'r');
+        try {
+          fs.fsyncSync(folder);
+        } finally {
+          fs.closeSync(folder);
+        }
+      } catch {
+        /* not every platform syncs a folder */
       }
     } finally {
       fs.rmSync(temp, { force: true });
