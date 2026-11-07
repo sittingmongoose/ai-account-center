@@ -513,31 +513,49 @@ export function censusAntigravityProcesses(options: {
   ): 'gone' | 'running' | 'unplaced' | 'reread' => {
     let tids: string[];
     try {
-      tids = fs.readdirSync(path.join(directory, 'task')).filter((tid) => tid !== String(pid));
+      tids = fs.readdirSync(path.join(directory, 'task'));
     } catch (error) {
       return GONE.has(code(error)) ? 'gone' : 'unplaced';
     }
+    const others = tids.filter((tid) => tid !== String(pid));
     let live = false;
     let vanished = false;
-    for (const tid of tids) {
+    for (const tid of others) {
       const task = path.join(directory, 'task', tid);
+      // a thread that went while it was read may have exec'd (its new image runs as the leader) or exited: read the
+      // process again rather than judge it on half a reading
+      let state: string;
       try {
         const stat = fs.readFileSync(path.join(task, 'stat'), 'utf8');
-        const state = stat.charAt(stat.lastIndexOf(')') + 2);
-        if (state === 'Z' || state === 'X') continue;
-        live = true;
-        const exe = fs.readlinkSync(path.join(task, 'exe'));
-        if (isAntigravityPath(exe)) return 'running';
+        state = stat.charAt(stat.lastIndexOf(')') + 2);
       } catch (error) {
-        // a thread that went while it was read may have exec'd: its new image runs as the leader, read again
-        if (GONE.has(code(error))) {
-          vanished = true;
-          continue;
-        }
-        live = true;
+        if (GONE.has(code(error))) vanished = true;
+        else live = true;
+        continue;
       }
+      if (state === 'Z' || state === 'X') continue;
+      let exe: string;
+      try {
+        exe = fs.readlinkSync(path.join(task, 'exe'));
+      } catch (error) {
+        if (GONE.has(code(error))) vanished = true;
+        else live = true;
+        continue;
+      }
+      live = true;
+      if (isAntigravityPath(exe)) return 'running';
     }
-    return live ? 'unplaced' : vanished ? 'reread' : 'gone';
+    if (live) return 'unplaced';
+    if (vanished) return 'reread';
+    if (others.length > 0) return 'gone';
+    // only the leader is listed: a zombie is gone; one that still runs has just exec'd, so it is read again
+    try {
+      const stat = fs.readFileSync(path.join(directory, 'stat'), 'utf8');
+      const state = stat.charAt(stat.lastIndexOf(')') + 2);
+      return state === 'Z' || state === 'X' ? 'gone' : 'reread';
+    } catch (error) {
+      return GONE.has(code(error)) ? 'gone' : 'unplaced';
+    }
   };
   // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A
   // non-dumpable one denies that link, and then the script can't be placed: such a process may be a live helper, so

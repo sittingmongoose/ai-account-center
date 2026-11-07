@@ -1128,6 +1128,7 @@ describe('runtime-free Antigravity process census', () => {
     fs.mkdirSync(helperDir, { recursive: true });
     const helperExe = path.join(helperDir, 'helper-bin');
     fs.writeFileSync(helperExe, '');
+    const realReadlink = fs.readlinkSync;
     // the main thread called pthread_exit: the leader's exe reads ENOENT, but a worker thread still runs the helper
     value.add(1070, 'helper-bin', helperExe, ['helper-bin'], value.root);
     const leader = path.join(value.proc, '1070');
@@ -1173,6 +1174,50 @@ describe('runtime-free Antigravity process census', () => {
       expect(value.census()).toEqual({ complete: true, running: 1 });
     } finally {
       exec.mockRestore();
+    }
+    // the worker exec'd just before the threads were listed: only the leader is listed, and it runs the helper now
+    fs.rmSync(path.join(leader, 'exe'));
+    fs.rmSync(path.join(leader, 'task'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(leader, 'task', '1070'), { recursive: true });
+    fs.writeFileSync(path.join(leader, 'stat'), '1070 (helper-bin) S 1 1070 1070 0');
+    const realList = fs.readdirSync;
+    const listed = spyOn(fs, 'readdirSync').mockImplementation(((
+      folder: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      const names = (realList as (...a: unknown[]) => unknown)(folder, ...rest);
+      if (String(folder) === path.join(leader, 'task') && !fs.existsSync(path.join(leader, 'exe')))
+        fs.symlinkSync(helperExe, path.join(leader, 'exe'));
+      return names;
+    }) as typeof fs.readdirSync);
+    try {
+      expect(value.census()).toEqual({ complete: true, running: 1 });
+    } finally {
+      listed.mockRestore();
+    }
+    // the last worker exits normally between reads (its exe goes): the process is read again and found gone
+    fs.rmSync(path.join(leader, 'exe'));
+    fs.rmSync(path.join(leader, 'task'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(leader, 'task', '1071'), { recursive: true });
+    fs.writeFileSync(
+      path.join(leader, 'task', '1071', 'stat'),
+      '1071 (helper-bin) S 1 1071 1071 0'
+    );
+    fs.writeFileSync(path.join(leader, 'stat'), '1070 (helper-bin) Z 1 1070 1070 0');
+    const exited = spyOn(fs, 'readlinkSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === path.join(leader, 'task', '1071', 'exe')) {
+        fs.rmSync(path.join(leader, 'task', '1071'), { recursive: true, force: true });
+        throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      }
+      return (realReadlink as (...a: unknown[]) => string)(file, ...rest);
+    }) as typeof fs.readlinkSync);
+    try {
+      expect(value.census()).toEqual({ complete: true, running: 0 });
+    } finally {
+      exited.mockRestore();
     }
     fs.rmSync(leader, { recursive: true });
     for (const [argv, exe] of [
