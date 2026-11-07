@@ -210,6 +210,15 @@ export function isTransientShareError(error: unknown): boolean {
 export const PERSISTENT_SHARE_ERROR =
   'could not be read on two scans in a row (the share says it is gone or stale)';
 
+/** The same rule for a listed folder whose own listing fails with ENOENT or ESTALE twice in a row. */
+export const PERSISTENT_LISTING_ERROR =
+  'folder could not be listed on two scans in a row (the share says it is gone or stale)';
+
+/** The problem on a row whose folder could not be listed: the row is its last good reading. */
+export function folderRowProblem(folderReason: string): string {
+  return `its ${folderReason}`;
+}
+
 /**
  * Consecutive transient errors per listed file. `miss` resolves the first failure's time when the
  * file failed on the scan before too (a persistent problem), else null (the race, said nothing).
@@ -305,6 +314,8 @@ export class AgentReportsReader {
   private overBytes = 0;
   private scanning: Promise<boolean> | null = null;
   private readonly misses = new TransientMisses();
+  /** The same two-scan rule for folder listings (`writers/<name>`, `writers/<name>/cards`). */
+  private readonly listingMisses = new TransientMisses();
 
   constructor(
     private readonly options: {
@@ -371,17 +382,44 @@ export class AgentReportsReader {
     this.state = 'ok';
     const seen = new Set<string>();
     const folderProblems = new Map<string, ReportProblem>();
-    const folderProblem = (file: string, reason: string) => {
+    const folderProblem = (file: string, reason: string, since = this.now()) => {
       const before = this.folderProblems.get(file);
       folderProblems.set(file, {
         file,
         reason,
-        since: before?.reason === reason ? before.since : this.now(),
+        since: before?.reason === reason ? before.since : since,
       });
     };
-    const keepWriter = (name: string, folder = '') => {
+    const failedListings = new Set<string>();
+    /**
+     * A writer or `cards/` folder that could not be listed. Not listed is not withdrawn: its known
+     * files are kept. ENOENT or ESTALE once is the share's race and says nothing; a lasting failure
+     * (any other error, or the same error on the scan before too) is named on the folder and on
+     * every row under it, so those rows show as their last good reading, never as current.
+     */
+    const listingFailed = (name: string, folder: '' | 'cards/', error: unknown) => {
+      this.scanPartial = true;
+      const rel = folder ? `writers/${name}/cards` : `writers/${name}`;
+      let reason: string | null = 'folder could not be listed';
+      let since = this.now();
+      if (isTransientShareError(error)) {
+        failedListings.add(rel);
+        const first = this.listingMisses.miss(rel, since);
+        reason = first === null ? null : PERSISTENT_LISTING_ERROR;
+        since = first ?? since;
+      }
+      if (reason !== null) folderProblem(rel, reason, since);
       const prefix = `writers/${name}/${folder}`;
-      for (const key of this.entries.keys()) if (key.startsWith(prefix)) seen.add(key);
+      for (const [key, entry] of [...this.entries]) {
+        if (!key.startsWith(prefix)) continue;
+        seen.add(key);
+        // setProblem keeps the row's earlier start while the reason stays the same.
+        if (
+          reason !== null &&
+          this.setProblem(key, entry.kind, entry.writer, folderRowProblem(reason), '', since)
+        )
+          changed = true;
+      }
     };
     const names: string[] = [];
     for (const dirent of writers) {
@@ -413,10 +451,7 @@ export class AgentReportsReader {
       try {
         listed = new Set((await this.fs.readdir(base)).map((entry) => entry.name));
       } catch (error) {
-        this.scanPartial = true;
-        if (!isTransientShareError(error))
-          folderProblem(`writers/${name}`, 'folder could not be listed');
-        keepWriter(name);
+        listingFailed(name, '', error);
         continue;
       }
       for (const [file, kind] of [
@@ -432,11 +467,8 @@ export class AgentReportsReader {
       try {
         cards = await this.fs.readdir(path.join(base, 'cards'));
       } catch (error) {
-        this.scanPartial = true;
-        if (!isTransientShareError(error))
-          folderProblem(`writers/${name}/cards`, 'folder could not be listed');
         // A listing failure is not a withdrawal: keep the cards already known.
-        keepWriter(name, 'cards/');
+        listingFailed(name, 'cards/', error);
       }
       for (const card of [...cards].sort((a, b) => a.name.localeCompare(b.name))) {
         if (card.name.startsWith('.') || !card.name.endsWith('.json')) continue;
@@ -485,6 +517,8 @@ export class AgentReportsReader {
       }
     }
     this.misses.keepOnly(seen);
+    // A folder listed well this scan (or not tried) starts over.
+    this.listingMisses.keepOnly(failedListings);
     if (!sameProblems(this.folderProblems, folderProblems)) changed = true;
     this.folderProblems.clear();
     for (const [key, value] of folderProblems) this.folderProblems.set(key, value);

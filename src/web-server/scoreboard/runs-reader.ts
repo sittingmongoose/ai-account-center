@@ -10,7 +10,9 @@ import {
   isTransientShareError,
   newestFolders,
   nodeReaderFs,
+  PERSISTENT_LISTING_ERROR,
   showable,
+  TransientMisses,
   type ReaderFs,
   type ReportProblem,
 } from '../status/agent-reports-reader';
@@ -44,6 +46,8 @@ export interface RunsState {
 export class RunsReader {
   private readonly files: ShareFiles<RunDoc>;
   private readonly folderProblems = new Map<string, ReportProblem>();
+  /** ENOENT or ESTALE on a folder listing: the race once, a named problem on the next scan too. */
+  private readonly listingMisses = new TransientMisses();
   private state: RunsState['state'] = 'missing';
   private scannedAt: number | null = null;
   private scanning: Promise<void> | null = null;
@@ -106,20 +110,29 @@ export class RunsReader {
     const limits = { ...RUN_LIMITS, ...this.options.limits };
     const seen = new Set<string>();
     const folderProblems = new Map<string, ReportProblem>();
-    const folderProblem = (file: string, reason: string) => {
+    const folderProblem = (file: string, reason: string, since = this.now()) => {
       const before = this.folderProblems.get(file);
       folderProblems.set(file, {
         file,
         reason,
-        since: before?.reason === reason ? before.since : this.now(),
+        since: before?.reason === reason ? before.since : since,
       });
     };
-    /** Lists a folder; on failure keeps what is known under it and names a lasting failure. */
+    const failedListings = new Set<string>();
+    /**
+     * Lists a folder; on failure keeps what is known under it and names a lasting failure: any
+     * error but ENOENT or ESTALE at once, those two when the scan before failed the same way too.
+     */
     const listing = async (dir: string, rel: string) => {
       try {
         return await this.fs.readdir(dir);
       } catch (error) {
         if (!isTransientShareError(error)) folderProblem(rel, 'folder could not be listed');
+        else {
+          failedListings.add(rel);
+          const first = this.listingMisses.miss(rel, this.now());
+          if (first !== null) folderProblem(rel, PERSISTENT_LISTING_ERROR, first);
+        }
         this.files.keep(`${rel}/`, seen);
         return null;
       }
@@ -187,6 +200,8 @@ export class RunsReader {
         `${candidates.length - visited} run files past the limit of ${limits.runs} runs or ${limits.bytes / (1024 * 1024)} MB were not read (the newest days are kept)`
       );
     this.files.sweep(seen);
+    // A folder listed well this scan (or not tried) starts over.
+    this.listingMisses.keepOnly(failedListings);
     this.folderProblems.clear();
     for (const [key, value] of folderProblems) this.folderProblems.set(key, value);
     this.scannedAt = this.now();

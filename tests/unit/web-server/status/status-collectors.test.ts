@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -14,6 +14,7 @@ import {
   sessionUrl,
   type CommandRunner,
 } from '../../../../src/web-server/status/status-collectors';
+import { PERSISTENT_SHARE_ERROR } from '../../../../src/web-server/status/agent-reports-reader';
 import { tempDirs } from './status-test-helpers';
 
 const dirs = tempDirs();
@@ -314,5 +315,45 @@ describe('status collectors', () => {
     await expect(new PmMailRegistryReader(() => path.join(dir, 'nope')).scan()).rejects.toThrow(
       'missing'
     );
+  });
+
+  it('keeps a registry row through one ENOENT race and names a listed file gone twice in a row', async () => {
+    const dir = dirs.make();
+    const file = path.join(dir, 'lead.json');
+    fs.writeFileSync(file, JSON.stringify({ name: 'lead', about: 'Working' }));
+    const reader = new PmMailRegistryReader(() => dir);
+    expect((await reader.scan(1_000)).threads).toHaveLength(1);
+    const realStat = fs.promises.stat;
+    const stat = spyOn(fs.promises, 'stat').mockImplementation((async (
+      target: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(target) === file) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      return (realStat as (...args: unknown[]) => Promise<fs.Stats>)(target, ...rest);
+    }) as typeof fs.promises.stat);
+    try {
+      // Listed, then gone at the stat: pm-mail's rename-over. The row stays, nothing is said.
+      let scan = await reader.scan(2_000);
+      expect(scan.threads.map((thread) => [thread.name, thread.readAt, thread.problem])).toEqual([
+        ['lead', 1_000, null],
+      ]);
+      expect(scan.problems).toEqual([]);
+      // Listed and gone again: a named problem since the first failure, on the row too.
+      scan = await reader.scan(3_000);
+      expect(scan.threads[0].problem).toEqual({
+        item: 'lead.json',
+        reason: PERSISTENT_SHARE_ERROR,
+        since: 2_000,
+      });
+      expect(scan.problems).toHaveLength(1);
+    } finally {
+      stat.mockRestore();
+    }
+    const scan = await reader.scan(4_000);
+    expect(scan.threads[0].problem).toBeNull();
+    expect(scan.problems).toEqual([]);
+    // Removed for real: gone from the listing, gone from the page.
+    fs.rmSync(file);
+    expect((await reader.scan(5_000)).threads).toEqual([]);
   });
 });

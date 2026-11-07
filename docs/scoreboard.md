@@ -48,7 +48,8 @@ Accounts are not part of the identity (they change cost, not the model); they st
 
 ## Reading runs
 Same share rules as the Status reader (`docs/status-tab.md`, Reading rules): every level is listed before it is read,
-ENOENT and ESTALE keep the last good copy and retry, a file absent from its listing stays for 2 minutes, temporary (dot)
+ENOENT and ESTALE keep the last good copy and retry (on a file or a folder listing, the same error on two scans in a
+row is named in the runs Source), a file absent from its listing stays for 2 minutes, temporary (dot)
 files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, only changed files are read. The highest
 `seq` per run id wins, across date folders. A file that does not read is counted and named in the runs Source, never
 dropped silently; a FIFO or a link in a run folder, or anything but a folder directly in `runs/`, is named too. A file over its cap takes nothing from the 64 MB. One scan reads at most 1,000 writer folders, 5,000 run files and 64 MB (over a limit the most recently changed

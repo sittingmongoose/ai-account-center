@@ -16,6 +16,7 @@ import { NetworkError, ValidationError } from '../../errors/error-types';
 import { DeadlineExceededError, withProcessDeadline } from '../../utils/settle-deadline';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
 import { isSafeUsageSshAlias } from '../services/additional-usage-transport';
+import { PERSISTENT_SHARE_ERROR, TransientMisses } from './agent-reports-reader';
 import { findSecret, MACHINES, type MachineId } from './report-schema';
 import { readRegularFile } from './share-read';
 import { realTimestamp } from './schema-helpers';
@@ -239,6 +240,8 @@ export class PmMailRegistryReader {
   >();
   /** Files with no good reading yet, by name. */
   private readonly failing = new Map<string, ReadProblem>();
+  /** Listed files whose stat said ENOENT: the rename-over race once, a named problem twice in a row. */
+  private readonly misses = new TransientMisses();
 
   constructor(private readonly dir: () => string = pmMailRegistryDir) {}
 
@@ -257,10 +260,10 @@ export class PmMailRegistryReader {
     }
     let changed = false;
     const seen = new Set<string>();
-    const fail = (name: string, reason: string) => {
+    const fail = (name: string, reason: string, since = now) => {
       const entry = this.files.get(name);
       if (entry) {
-        const problem = nextProblem(entry.problem, name, reason, now);
+        const problem = nextProblem(entry.problem, name, reason, since);
         if (entry.problem?.reason !== reason) changed = true;
         entry.problem = problem;
         // Read again next scan, whatever the file's stat says then.
@@ -269,7 +272,7 @@ export class PmMailRegistryReader {
       }
       const before = this.failing.get(name);
       if (before?.reason !== reason) changed = true;
-      this.failing.set(name, nextProblem(before, name, reason, now));
+      this.failing.set(name, nextProblem(before, name, reason, since));
     };
     for (const name of names) {
       if (name.startsWith('.') || !name.endsWith('.json')) continue;
@@ -278,12 +281,19 @@ export class PmMailRegistryReader {
       try {
         stat = await fs.promises.stat(file);
       } catch (error) {
-        // Gone between the listing and the stat: as if it was not listed.
-        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
         seen.add(name);
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          // Gone between the listing and the stat: pm-mail's rename-over. Keep the last row for this
+          // scan (the next listing says whether it was removed); listed and gone again is a problem.
+          const since = this.misses.miss(name, now);
+          if (since !== null) fail(name, PERSISTENT_SHARE_ERROR, since);
+          continue;
+        }
+        this.misses.clear(name);
         fail(name, 'could not be read');
         continue;
       }
+      this.misses.clear(name);
       seen.add(name);
       if (!stat.isFile()) {
         fail(name, 'is not a regular file');
@@ -320,6 +330,7 @@ export class PmMailRegistryReader {
       this.files.set(name, { key, thread, readAt: now, problem: null });
       this.failing.delete(name);
     }
+    this.misses.keepOnly(seen);
     for (const name of [...this.files.keys()])
       if (!seen.has(name)) {
         this.files.delete(name);

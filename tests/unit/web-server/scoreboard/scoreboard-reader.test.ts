@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   nodeReaderFs,
+  PERSISTENT_LISTING_ERROR,
   type ReaderFs,
 } from '../../../../src/web-server/status/agent-reports-reader';
 import { RunsReader } from '../../../../src/web-server/scoreboard/runs-reader';
@@ -208,6 +209,44 @@ describe('runs reader', () => {
       await runs.scan();
       expect(runs.snapshot().problems).toEqual([]);
       expect(runs.snapshot().runs[0].doc.seq).toBe(2);
+    }
+  });
+
+  it('names a runs folder whose listing fails on two scans in a row, keeping its runs', async () => {
+    for (const [folder, make] of [
+      ['2026-11-06', () => errno('ESTALE')],
+      ['runs', () => errno('ENOENT')],
+      ['vm.lead', () => new Error('Unknown system error -116')],
+    ] as const) {
+      const root = dirs.make();
+      writeRun(root, runDoc('vm.lead', 'A', { seq: 1 }));
+      let now = NOW;
+      let failing = false;
+      const flaky: ReaderFs = {
+        ...nodeReaderFs,
+        readdir: async (dir) => {
+          if (failing && path.basename(dir) === folder) throw make();
+          return nodeReaderFs.readdir(dir);
+        },
+      };
+      const runs = reader(root, { fs: flaky, now: () => now });
+      await runs.scan();
+      failing = true;
+      now += 60_000;
+      await runs.scan();
+      expect(runs.snapshot().problems).toEqual([]);
+      now += 60_000;
+      await runs.scan();
+      const state = runs.snapshot();
+      expect(state.runs).toHaveLength(1);
+      expect(state.problems).toHaveLength(1);
+      expect(state.problems[0].file.endsWith(folder)).toBe(true);
+      expect(state.problems[0].reason).toBe(PERSISTENT_LISTING_ERROR);
+      expect(state.problems[0].since).toBe(NOW + 60_000);
+      failing = false;
+      await runs.scan();
+      expect(runs.snapshot().problems).toEqual([]);
+      expect(runs.snapshot().runs).toHaveLength(1);
     }
   });
 

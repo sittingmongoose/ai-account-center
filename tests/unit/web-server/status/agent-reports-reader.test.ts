@@ -6,6 +6,7 @@ import {
   ensureReportsLayout,
   isTransientShareError,
   MISSING_GRACE_MS,
+  PERSISTENT_LISTING_ERROR,
   shareLocalPath,
 } from '../../../../src/web-server/status/agent-reports-reader';
 import {
@@ -99,7 +100,12 @@ describe('agent reports reader', () => {
     await r.scan();
     expect(r.snapshot().threads[0].doc.doing).toBe('Newer');
     expect(r.snapshot().problems.map((p) => p.file)).toEqual(['writers/vm.lead/thread.json']);
-    writeReport(root, 'vm.lead', 'thread.json', threadDoc('vm.lead', { seq: 6, doing: 'The newest' }));
+    writeReport(
+      root,
+      'vm.lead',
+      'thread.json',
+      threadDoc('vm.lead', { seq: 6, doing: 'The newest' })
+    );
     await r.scan();
     expect(r.snapshot().threads[0].doc.doing).toBe('The newest');
     expect(r.snapshot().problems).toEqual([]);
@@ -237,6 +243,79 @@ describe('agent reports reader', () => {
       expect(r.snapshot().problems).toEqual([]);
       expect(r.snapshot().threads[0].problem).toBeNull();
       expect(r.snapshot().complete).toBe(true);
+    }
+  });
+
+  it('names a writer or cards folder whose listing fails on two scans in a row, on its rows too', async () => {
+    for (const [folder, code] of [
+      ['vm.lead', 'ESTALE'],
+      ['vm.lead', 'ENOENT'],
+      ['cards', 'ESTALE'],
+      ['vm.lead', 'EACCES'],
+    ] as const) {
+      const root = dirs.make();
+      writeReport(root, 'vm.lead', 'thread.json', threadDoc('vm.lead', { doing: 'First' }));
+      writeCard(root, cardDoc('vm.lead', 'Q1'));
+      let failing = false;
+      let now = NOW;
+      const r = new AgentReportsReader({
+        root: () => root,
+        now: () => now,
+        fs: {
+          readdir: (dir) => {
+            if (failing && path.basename(dir) === folder)
+              throw Object.assign(new Error(code), { code });
+            return fs.promises.readdir(dir, { withFileTypes: true });
+          },
+          stat: (file) => fs.promises.stat(file),
+          readFile: (file) => fs.promises.readFile(file),
+        },
+      });
+      await r.scan();
+      failing = true;
+      now += 60_000;
+      await r.scan();
+      const rel = folder === 'cards' ? 'writers/vm.lead/cards' : 'writers/vm.lead';
+      if (code !== 'EACCES') {
+        // Once is the share's race: nothing said, every row kept.
+        expect(r.snapshot().problems).toEqual([]);
+        expect(r.snapshot().threads[0].problem).toBeNull();
+        expect(r.snapshot().complete).toBe(false);
+        now += 60_000;
+        await r.scan();
+      }
+      const state = r.snapshot();
+      // Since the first failure, not the scan that named it.
+      const since = NOW + 60_000;
+      const reason = code === 'EACCES' ? 'folder could not be listed' : PERSISTENT_LISTING_ERROR;
+      expect(state.state).toBe('ok');
+      expect(state.problems).toContainEqual({ file: rel, reason, since });
+      // Each row under the folder is its last good reading, with the folder's problem.
+      const card = state.cards[0];
+      expect(card?.problem?.reason).toBe(`its ${reason}`);
+      expect(card?.problem?.since).toBe(since);
+      if (folder === 'cards') expect(state.threads[0].problem).toBeNull();
+      else {
+        expect(state.threads[0].doc.doing).toBe('First');
+        expect(state.threads[0].problem?.reason).toBe(`its ${reason}`);
+      }
+      expect(state.complete).toBe(false);
+      // A third failing scan keeps the first failure's time.
+      now += 60_000;
+      await r.scan();
+      expect(r.snapshot().problems).toContainEqual({ file: rel, reason, since });
+      failing = false;
+      await r.scan();
+      expect(r.snapshot().problems).toEqual([]);
+      expect(r.snapshot().threads[0].problem).toBeNull();
+      expect(r.snapshot().cards[0].problem).toBeNull();
+      expect(r.snapshot().complete).toBe(true);
+      // After a good listing, one failure is the race again.
+      failing = true;
+      if (code !== 'EACCES') {
+        await r.scan();
+        expect(r.snapshot().problems).toEqual([]);
+      }
     }
   });
 

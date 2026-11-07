@@ -48,8 +48,13 @@ names: a Mac rename-over through SMB is a delete then a rename, and NFS caches a
 the folder is listed. ENOENT and ESTALE (Node: "Unknown system error -116") on a listed file, or on listing a writer
 folder, keep the last good copy and retry on the next scan; they never count as the thread going away. Once is the
 share's rename-over race and says nothing; the same error on a listed file on the next scan too makes it a named
-problem ("could not be read on two scans in a row ..."), since its first failure, so the source is not `ok`. The
-Scoreboard's run and catalog files and the quota-watch report follow the same rule. A file absent
+problem ("could not be read on two scans in a row ..."), since its first failure, so the source is not `ok`. A writer
+or `cards/` folder whose own listing fails the same way twice in a row is named too ("folder could not be listed on
+two scans in a row ..."), and so is one whose listing fails with any other error, at once; either way every row under
+it carries that problem ("its folder could not be listed ...") and shows as its last good reading, never as current,
+until the folder lists again. A pm-mail registry file that is listed but gone at the stat (pm-mail's rename-over)
+keeps its row for that scan; listed and gone on the next scan too, it is a named problem. The Scoreboard's run and
+catalog files, its writer, `runs/` and date folders, and the quota-watch report follow the same rule. A file absent
 from its folder's listing keeps its last good copy for 2 minutes before it counts as removed. A file containing a NUL
 byte is refused (Mac SMB appends wrote NULs into shared files). The fresh card read behind every answer also lists
 `cards/` first. Every share file is opened non-blocking and without following a link, and the open handle must be a
