@@ -175,29 +175,29 @@ const CREDENTIAL_KEY =
 export function findSecretIn(source: string, value: unknown): string | null {
   const raw = findSecret(source);
   if (raw) return raw;
-  // Each entry: a value, whether it sits under a credential key (anything long enough under one is refused), and how
-  // many levels of JSON text inside strings it is (that text is parsed and walked too, within a size budget).
-  const stack: Array<[unknown, boolean, number]> = [[value, false, 0]];
+  // Each entry: a value, and whether it sits under a credential key (anything long enough under one is refused). JSON
+  // text inside strings is parsed and walked too, within a size budget.
+  const stack: Array<[unknown, boolean]> = [[value, false]];
   const work: EmbeddedWork = { used: 0, failed: 0 };
   for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
-    const [node, credential, level] = entry;
+    const [node, credential] = entry;
     if (typeof node === 'string') {
       if (credential && node.length >= 6) return 'a credential field';
       const found =
         findSecret(node) ?? (node.includes('\\') ? findSecret(unescapeText(node)) : null);
       if (found) return found;
       const inner = embeddedJson(node, work);
-      if (inner === TOO_DEEP) return 'more JSON text than can be checked';
-      if (inner !== undefined) stack.push([inner, credential, level + 1]);
+      if (inner === UNCHECKED) return 'JSON text that could not be checked';
+      if (inner !== undefined) stack.push([inner, credential]);
     } else if (typeof node === 'number') {
       if (credential && String(Math.abs(Math.trunc(node))).length >= 6) return 'a credential field';
     } else if (Array.isArray(node)) {
-      for (const item of node) stack.push([item, credential, level]);
+      for (const item of node) stack.push([item, credential]);
     } else if (node && typeof node === 'object') {
       for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
         const found = findSecret(key);
         if (found) return found;
-        stack.push([item, credential || CREDENTIAL_KEY.test(key), level]);
+        stack.push([item, credential || CREDENTIAL_KEY.test(key)]);
       }
     }
   }
@@ -207,15 +207,18 @@ export function findSecretIn(source: string, value: unknown): string | null {
 /** How many characters of JSON text inside strings are parsed per file, and how many such parses may fail. */
 const EMBEDDED_BUDGET = 4 * 1024 * 1024;
 const EMBEDDED_FAILURES = 256;
-/** JSON text past the budget: the file is refused, not read unchecked. */
-const TOO_DEEP = Symbol('too deep');
+/** JSON text that can't be checked within the budget: the file is refused, not read unchecked. */
+const UNCHECKED = Symbol('unchecked');
+/** A credential key written anywhere in text (quoted, as JSON writes keys). */
+const CREDENTIAL_KEY_TEXT =
+  /"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)"/i;
 
 /** Running totals for one file's embedded JSON. */
 type EmbeddedWork = { used: number; failed: number };
 
 /**
- * A string that is itself JSON (an object, an array or a string, as double-encoded text is), parsed; `TOO_DEEP` past
- * the size budget; undefined for text that isn't JSON. Only text whose last character closes its first is parsed, and
+ * A string that is itself JSON (an object, an array or a string, as double-encoded text is), parsed; `UNCHECKED` when it
+ * can't be checked within the budget; undefined for text that isn't JSON. Only text whose last character closes its first is parsed, and
  * after EMBEDDED_FAILURES failed parses no more are tried (each failure throws, which is slow in bulk).
  */
 function embeddedJson(text: string, work: EmbeddedWork): unknown {
@@ -227,8 +230,12 @@ function embeddedJson(text: string, work: EmbeddedWork): unknown {
     ((open === '{' && close === '}') ||
       (open === '[' && close === ']') ||
       (open === '"' && close === '"'));
-  if (!shaped || work.failed >= EMBEDDED_FAILURES) return undefined;
-  if (work.used + text.length > EMBEDDED_BUDGET) return TOO_DEEP;
+  if (!shaped) return undefined;
+  // past the failure cap or the size budget, text that names a credential key can't be read unchecked
+  if (work.failed >= EMBEDDED_FAILURES || work.used + text.length > EMBEDDED_BUDGET)
+    return CREDENTIAL_KEY_TEXT.test(unescapeText(text)) || work.used + text.length > EMBEDDED_BUDGET
+      ? UNCHECKED
+      : undefined;
   try {
     const parsed: unknown = JSON.parse(trimmed);
     work.used += text.length;

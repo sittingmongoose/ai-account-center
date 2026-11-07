@@ -326,7 +326,14 @@ pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
             // words: those words stay, whatever their nonce
             let emptied_by_send =
                 !c.has_answer() && c.recorded != b.recorded && words(theirs) != words(b);
-            if words(b) == words(c) || emptied_by_send {
+            // this tab's change was ids only: the same words, maybe under a nonce its send just rotated
+            let without_nonce = |d: &Draft| Draft {
+                nonce: String::new(),
+                ..words(d)
+            };
+            let ids_only = words(b) == words(c)
+                || (c.nonce != b.nonce && without_nonce(b) == without_nonce(c));
+            if ids_only || emptied_by_send {
                 let mut kept = theirs.clone();
                 if kept.nonce == c.nonce {
                     // ids only mean something to the nonce they were made from
@@ -662,6 +669,28 @@ mod tests {
         let mut again = merged.clone();
         set_note(&mut again, &x, "W".into());
         assert_ne!(entries(&again, &[x])[0].entry_id, ninth.entry_id);
+    }
+
+    #[test]
+    fn a_send_that_rotates_the_nonce_never_writes_over_another_tabs_words() {
+        let x = card("x", 1, None);
+        // this tab holds W2 with a full set of ids; a send of its older W1 lands and rotates the nonce
+        let mut base = Drafts::new();
+        set_note(&mut base, &x, "W2".into());
+        base.get_mut("x").unwrap().recorded = (0..RECORDED_KEPT).map(|i| format!("r{i}")).collect();
+        let older = AnswerEntry {
+            entry_id: "w1".into(),
+            ..entries(&base, &[x.clone()]).remove(0)
+        };
+        let mut mine = base.clone();
+        forget_sent(&mut mine, &[x.clone()], &older);
+        assert_ne!(mine["x"].nonce, base["x"].nonce);
+        // another tab wrote W3 meanwhile: it stays, on the new nonce
+        let mut theirs = base.clone();
+        set_note(&mut theirs, &x, "W3".into());
+        let merged = merge(&theirs, &base, &mine);
+        assert_eq!(merged["x"].note, "W3");
+        assert_eq!(merged["x"].nonce, mine["x"].nonce);
     }
 
     #[test]

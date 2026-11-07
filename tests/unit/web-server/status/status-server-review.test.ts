@@ -245,11 +245,18 @@ describe('secret search', () => {
       { password: ['hunter2hunter2'] },
       { password: { value: 'hunter2hunter2' } },
       { api_key: 123456789 },
+      // a credential behind 256 decoys that fail to parse
+      {
+        items: [
+          '{"password":["hunter2222"]}',
+          ...Array.from({ length: 300 }, () => '[x]'),
+        ],
+      },
       // escaped keys and token prefixes inside JSON text inside a string
       { note: '{"pass\\u0077ord":"hunter2-hunter2"}' },
       { note: `{"x":"\\u0073${token.slice(1)}"}` },
       { note: JSON.stringify({ inner: '{"pass\\u0077ord":"hunter2-hunter2"}' }) },
-      // double-encoded text, a backslash made by an escape, and JSON nested deeper than is checked
+      // double-encoded text and a backslash made by an escape
       { note: JSON.stringify(JSON.stringify({ password: ['hunter2222'] })) },
       { note: `x \\u005cu0073${token.slice(1)}` },
       // credential JSON three levels down, under tool output that ends in [] (no level cap stops the walk)
