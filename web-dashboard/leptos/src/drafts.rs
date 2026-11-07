@@ -186,16 +186,22 @@ pub fn forget_sent(drafts: &mut Drafts, cards: &[Card], sent: &AnswerEntry) {
     let unchanged = entries(drafts, std::slice::from_ref(card))
         .first()
         .is_some_and(|now| now.entry_id == sent.entry_id);
+    let Some(d) = drafts.get_mut(&sent.card_id) else {
+        return;
+    };
     if unchanged {
-        drafts.remove(&sent.card_id);
-    } else if let Some(kept) = drafts.get_mut(&sent.card_id) {
-        // Keep the nonce (another tab's send of this very draft must still match its own result), but remember the
-        // recorded id: an edit that would make it again takes a fresh nonce.
-        if !kept.recorded.contains(&sent.entry_id) {
-            kept.recorded.push(sent.entry_id.clone());
-            if kept.recorded.len() > 8 {
-                kept.recorded.remove(0);
-            }
+        // Recorded: the words go, but the draft stays as an empty marker with its nonce and the recorded id, so a tab
+        // whose newer words win the merge still knows that id, and the same words typed again are a new answer.
+        d.choice.clear();
+        d.note.clear();
+        d.via.clear();
+    }
+    // Keep the nonce (another tab's send of this very draft must still match its own result), and remember the
+    // recorded id: an edit that would make it again takes a fresh nonce.
+    if !d.recorded.contains(&sent.entry_id) {
+        d.recorded.push(sent.entry_id.clone());
+        if d.recorded.len() > 8 {
+            d.recorded.remove(0);
         }
     }
 }
@@ -295,13 +301,15 @@ pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
         if base.get(id) == current.get(id) {
             continue;
         }
-        // A change of recorded ids alone (a send's result) is not an edit: keep storage's words and join the ids.
+        // A send's result is not an edit of the words: a change of recorded ids alone, or this tab's recorded draft
+        // emptied while another tab wrote newer words, keeps storage's words and joins the ids.
         if let (Some(b), Some(c), Some(theirs)) = (base.get(id), current.get(id), stored.get(id)) {
             let words = |d: &Draft| Draft {
                 recorded: Vec::new(),
                 ..d.clone()
             };
-            if words(b) == words(c) {
+            let emptied_under_newer = !c.has_answer() && theirs != b && theirs.nonce == c.nonce;
+            if words(b) == words(c) || emptied_under_newer {
                 let mut kept = theirs.clone();
                 for r in &c.recorded {
                     if !kept.recorded.contains(r) {
@@ -463,7 +471,8 @@ mod tests {
         // unchanged: the recorded draft goes
         let mut same = d.clone();
         forget_sent(&mut same, &[n.clone()], &sent);
-        assert!(same.is_empty());
+        assert!(!same["n"].has_answer(), "the recorded words go");
+        assert_eq!(same["n"].recorded, vec![sent.entry_id.clone()]);
         // another tab edited it while the send was on its way: the newer words stay
         set_note(&mut d, &n, "second thoughts".into());
         forget_sent(&mut d, &[n.clone()], &sent);
@@ -475,7 +484,10 @@ mod tests {
         // the other tab sent its words before this tab's reply came back: its own reply still matches and clears it
         let theirs = entries(&d, &[n.clone()]).remove(0);
         forget_sent(&mut d, &[n], &theirs);
-        assert!(d.is_empty(), "the other tab's recorded draft goes too");
+        assert!(
+            !d["n"].has_answer(),
+            "the other tab's recorded words go too"
+        );
     }
 
     #[test]
@@ -547,6 +559,26 @@ mod tests {
         d.get_mut("x").unwrap().recorded = vec![made.clone()];
         refresh_recorded(&mut d, &[x.clone()]);
         assert_ne!(entries(&d, &[x])[0].entry_id, made);
+    }
+
+    #[test]
+    fn a_tab_that_wrote_newer_words_learns_the_recorded_id_of_the_send_it_raced() {
+        let x = card("x", 1, None);
+        // tab A sends W0; tab B, with A's nonce, writes W1 before A's result lands
+        let mut base = Drafts::new();
+        set_note(&mut base, &x, "W0".into());
+        let sent = entries(&base, &[x.clone()]).remove(0);
+        let mut stored = base.clone();
+        set_note(&mut stored, &x, "W1".into());
+        let mut a = base.clone();
+        forget_sent(&mut a, &[x.clone()], &sent);
+        let merged = merge(&stored, &base, &a);
+        assert_eq!(merged["x"].note, "W1", "B's newer words stay");
+        assert!(merged["x"].recorded.contains(&sent.entry_id));
+        // B later types W0 again: a new answer, not a retry of the recorded one
+        let mut b = merged.clone();
+        set_note(&mut b, &x, "W0".into());
+        assert_ne!(entries(&b, &[x])[0].entry_id, sent.entry_id);
     }
 
     #[test]

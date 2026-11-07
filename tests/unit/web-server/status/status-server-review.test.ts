@@ -223,6 +223,10 @@ describe('secret search', () => {
       { password: ['hunter2hunter2'] },
       { password: { value: 'hunter2hunter2' } },
       { api_key: 123456789 },
+      // escaped keys and token prefixes inside JSON text inside a string
+      { note: '{"pass\\u0077ord":"hunter2-hunter2"}' },
+      { note: `{"x":"\\u0073${token.slice(1)}"}` },
+      { note: JSON.stringify({ inner: '{"pass\\u0077ord":"hunter2-hunter2"}' }) },
     ]) {
       const parsed = jsonFromBytes(Buffer.from(JSON.stringify(value)), 64 * 1024);
       expect([value, parsed.ok]).toEqual([value, false]);

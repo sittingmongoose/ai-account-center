@@ -175,36 +175,60 @@ const CREDENTIAL_KEY =
 export function findSecretIn(source: string, value: unknown): string | null {
   const raw = findSecret(source);
   if (raw) return raw;
-  // Each entry: a value, and whether it sits under a credential key (anything long enough under one is refused).
-  const stack: Array<[unknown, boolean]> = [[value, false]];
+  // Each entry: a value, whether it sits under a credential key (anything long enough under one is refused), and how
+  // many levels of JSON text inside strings it is (that text is parsed and walked too, a few levels deep).
+  const stack: Array<[unknown, boolean, number]> = [[value, false, 0]];
+  let embedded = 0;
   for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
-    const [node, credential] = entry;
+    const [node, credential, level] = entry;
     if (typeof node === 'string') {
       if (credential && node.length >= 6) return 'a credential field';
       const found =
         findSecret(node) ?? (node.includes('\\') ? findSecret(unescapeText(node)) : null);
       if (found) return found;
+      const inner = embeddedJson(node, level, embedded);
+      if (inner !== undefined) {
+        embedded += node.length;
+        stack.push([inner, credential, level + 1]);
+      }
     } else if (typeof node === 'number') {
       if (credential && String(Math.abs(Math.trunc(node))).length >= 6) return 'a credential field';
     } else if (Array.isArray(node)) {
-      for (const item of node) stack.push([item, credential]);
+      for (const item of node) stack.push([item, credential, level]);
     } else if (node && typeof node === 'object') {
       for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
         const found = findSecret(key);
         if (found) return found;
-        stack.push([item, credential || CREDENTIAL_KEY.test(key)]);
+        stack.push([item, credential || CREDENTIAL_KEY.test(key), level]);
       }
     }
   }
   return null;
 }
 
+/** How deep JSON text inside strings is parsed, and how many characters of it in all (bounded work per file). */
+const EMBEDDED_LEVELS = 3;
+const EMBEDDED_BUDGET = 1024 * 1024;
+
+/** A string that is itself JSON (an object or array), parsed, within the level and size budget; else undefined. */
+function embeddedJson(text: string, level: number, used: number): unknown {
+  if (level >= EMBEDDED_LEVELS || used + text.length > EMBEDDED_BUDGET) return undefined;
+  const start = text.trimStart()[0];
+  if (start !== '{' && start !== '[') return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * JSON text inside a string, read one level down without parsing it: escapes of any depth (`\\n`, `\\\\n`, `\\"`) become
- * what they stand for, so a token after an escaped newline or a quoted credential key inside nested JSON is seen.
+ * JSON text inside a string that doesn't parse, read without parsing: escapes of any depth (`\\n`, `\\\\n`, `\\"`,
+ * `\\u0073`) become what they stand for, so a token after an escaped newline or a credential key inside it is seen.
  */
 function unescapeText(text: string): string {
   return text
+    .replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
     .replace(/\\+[nrtbf]/g, ' ')
     .replace(/\\+"/g, '"')
     .replace(/\\+\//g, '/');
