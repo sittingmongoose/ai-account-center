@@ -2,7 +2,6 @@ import { AntigravityError } from './errors';
 import type { AntigravitySwitchDriver, StopReceipt } from './types';
 import { checkedPlan, planFingerprint } from './confirmation';
 import { AntigravityProfileRegistry, credentialFingerprint, identityKey } from './registry';
-import type { NativeProcessCensus } from './native-process-census';
 import type { RuntimeSocketState } from './runtime-socket-probe';
 
 export interface ManagedNativeUpdate {
@@ -207,16 +206,14 @@ export async function updateManagedAntigravity(deps: {
 /**
  * The managed update while switching is paused: the installed native build
  * has no switching review, so the resident runtime refuses to start and holds
- * no managed session. Its census is unavailable, so a runtime-free same-user
- * census decides instead. Always idle-only: any Antigravity process answers
- * in_use and nothing changes. Otherwise the native is backed up exactly as the
- * managed path does and `agy update` runs under the same account lock.
+ * no managed session. Like Antigravity's own updater, it replaces the native
+ * without checking for running copies; those keep their old binary until restart.
+ * The native is backed up and `agy update` runs under the account lock.
  * Failures carry runtimePaused, so the row can say why.
  */
 export async function updatePausedAntigravity(deps: {
   registry: AntigravityProfileRegistry;
   native: ManagedNativeUpdate;
-  census: () => NativeProcessCensus;
   /** True only while the runtime certainly is not running and the build is still unreviewed. */
   stillPaused: () => Promise<boolean>;
 }): Promise<ManagedUpdateResult> {
@@ -234,23 +231,15 @@ export async function updatePausedAntigravity(deps: {
     updateAttempted: false,
   };
   const failed = { ...unchanged, status: 'failed' as const, runtimePaused: true as const };
-  const inUse = { ...unchanged, status: 'in_use' as const };
   try {
     return await registry.withLock(async () => {
       // A pending managed recovery record needs the runtime; never replace its native.
       if (registry.hasRecovery()) return failed;
-      const first = deps.census();
-      if (!first.complete) return failed;
-      if (first.running) return inUse;
       let attempted = false;
       try {
         await native.backup();
-        // The slow recheck (it re-hashes the native) runs first; the census runs
-        // last, with no await between it and the update.
+        // Recheck last: nothing is awaited between this and the native update.
         if (!(await deps.stillPaused())) return failed;
-        const latest = deps.census();
-        if (!latest.complete) return failed;
-        if (latest.running) return inUse;
         attempted = true;
         await native.update();
         const after = await native.version();
@@ -285,7 +274,6 @@ export async function routeManagedAntigravityUpdate(deps: {
   /** Hashes the native once; only 'unreviewed' can take the paused path. */
   nativeReview: () => NativeReviewState;
   runtimeSocket: () => Promise<RuntimeSocketState>;
-  census: () => NativeProcessCensus;
 }): Promise<ManagedUpdateResult> {
   // The cheap socket probe runs before the hash, which is skipped for a live runtime.
   const paused = async () =>
@@ -294,7 +282,6 @@ export async function routeManagedAntigravityUpdate(deps: {
     return updatePausedAntigravity({
       registry: deps.registry,
       native: deps.native,
-      census: deps.census,
       stillPaused: paused,
     });
   return updateManagedAntigravity({

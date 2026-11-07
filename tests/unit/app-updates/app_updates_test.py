@@ -2049,7 +2049,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
                 self.assertEqual((row['status'], row['messageCode']), ('failed', 'update_failed'))
 
     def test_managed_bridge_paused_and_unavailable_runtime_reasons_are_kept(self):
-        # Paused-runtime case (2026-11-06): the bridge itself censuses and updates
+        # Paused-runtime case (2026-11-07): the bridge itself updates
         # without the stopped runtime; this helper still never scans or falls through,
         # and keeps the bridge's reason instead of a generic update_failed.
         paused_update = {**self.BRIDGE_UPDATED, 'previousVersion': '1.4.12', 'version': '1.5.2'}

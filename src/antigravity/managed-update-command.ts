@@ -16,7 +16,6 @@ import {
   type NativeReviewState,
 } from './managed-updater';
 import { defaultNativeReleaseFile, readNativeRelease } from './native-version';
-import { censusAntigravityProcesses } from './native-process-census';
 import { probeRuntimeSocket } from './runtime-socket-probe';
 import { AntigravityError } from './errors';
 
@@ -368,7 +367,6 @@ export async function runInstalledManagedAntigravityUpdate(
           idleOnly,
           nativeReview: () => nativeReviewState(nativeBinary, releaseFile),
           runtimeSocket: () => probeRuntimeSocket(socketPath),
-          census: () => censusAntigravityProcesses({ home, nativeBinary }),
         }),
     });
   } catch {

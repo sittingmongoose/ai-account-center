@@ -66,7 +66,7 @@ modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
 | --- | --- |
-| Antigravity CLI | Active native `agy update`; on a managed switching installation an unreviewed newest build installs only while no Antigravity process runs (see below) |
+| Antigravity CLI | Active native `agy update`; on a managed switching installation a paused unreviewed runtime updates without checking running copies (see below) |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
@@ -295,10 +295,10 @@ run reads the packaged release file):
   sessions and reopen them on the new build;
 - newest build not reviewed, or the review list or manifest unreadable: the
   managed update runs idle-only (`managed-update-command.js --idle-only`). With
-  no Antigravity process running it installs the build and reports
+  a running coordinator, no managed session may be running; the update reports
   `updated_unreviewed` ("Updated, but this Antigravity version has no switching
   review yet; Antigravity switching is paused until it is reviewed."). A running
-  Antigravity process is never stopped: the runtime could not restart a managed
+  managed session is never stopped: the runtime could not restart a managed
   session on an unreviewed build, so the row is `action_required` / `in_use` and
   nothing changes until Antigravity is closed;
 - an update that lands outside the list in any other way (a release published
@@ -321,64 +321,33 @@ the coordinator. The socket is probed first, and the native is hashed once
 against the whole reviewed set. A native that cannot be read, or an unusable
 review list, is not proof of an unreviewed build: it keeps the coordinator.
 
-- under the same account lock, a pending managed recovery record stops the
-  update. A same-user `/proc` census then counts Antigravity processes without
-  the runtime: the process names the runtime's own census uses, the native
-  binary (also once replaced), `~/.gemini/antigravity-cli` helpers and anything
-  run from the managed runtime folder such as the launcher shim (roots matched
-  as named and as resolved; the first 64 KB of a command line, whose first four
-  arguments are checked). A relative argument that names a path (it contains a
-  slash, such as `./bin/helper.js`) is resolved against the process's working
-  folder, also when that folder was removed; a bare word is not, except an
-  interpreter's script (python, node, sh and the like, known by name, argv0 or
-  executable: candidates at argument starts, glued short-option offsets, after
-  `=`, `,`, `:`, `;`, `@`, and at absolute or `~/`, `./`, `../` path starts; whole
-  values and endings before later `,`, `:`, `;`, `=` are kept. Every `file:`
-  occurrence is decoded whole and before later colons or commas; `--` operands
-  stay as written. Candidate generation and path lookups are capped at 4096
-  per process; exhaustion leaves the interpreter unplaced), and an
-  interpreter working inside a root counts whatever its arguments
-  (`python3 -m mod` or a script on stdin there, including a shell with no arguments).
-  A shell parked in the runtime folder holds the update. Open `/proc/PID/fd/*`
-  links into a runtime also count, including stdin scripts and held modules. A
-  denied cwd, or denied fd listing with candidate arguments, leaves idle unproven.
-  A script removed after it loaded reads as gone unless another path, cwd or
-  open fd still places it. Any match
-  reports `action_required` / `in_use` and nothing changes. The census is
-  complete only when every same-user process was read and the listing includes
-  the census's own process; a read failure other than the process exiting makes
-  it incomplete, and so does a root folder or native path that cannot be
-  resolved (a dangling symlink, a folder that refuses access). The kernel hides
-  the exe and working-folder links of non-dumpable processes (systemd --user,
-  ssh-agent, sshd-session), so there only the name and the rest of the command
-  line decide; but a non-dumpable interpreter (python, node, sh, perl, lua, php
-  and the like, by name or argv0) running a relative script it can't place makes
-  the census incomplete, so the row is blocked rather than updated over a helper
-  that may be live (an interpreter under a renamed binary is a known limit);
-- otherwise the native is backed up exactly as the managed path does
-  (`antigravity-switching/native-backups/<sha256>`). The slow recheck (runtime
-  still stopped, build still unreviewed) runs next, and the census runs again
-  last, with nothing awaited between it and `agy update`. The row is `updated`
-  (`updated_unreviewed` after `mark_unreviewed` when the new build is not
-  reviewed either) or `current`;
-- a refusal before `agy update` ran (pending recovery, incomplete census,
-  failed backup, a runtime that started meanwhile, an unreadable version) is
-  `failed` / `runtime_paused_blocked` ("... the update could not safely start
-  without it (a pending switch recovery, a process check that could not finish,
-  or a failed backup), so nothing was installed."). A failed `agy update` is
-  `failed` / `runtime_paused` ("Antigravity switching is paused on an unreviewed
-  build, so the update ran without its runtime and did not finish; nothing
-  running was stopped.").
+Owner decision (Jared, 2026-11-07): "No check, like Antigravity's own updater".
 
-The paused path is always idle-only and never runs the ordinary updater. A
-listening (or unclear) runtime socket keeps the coordinator, and so do a
-reviewed build and an unreadable native whose runtime is down: the row is then
-`failed` / `runtime_unavailable` ("The Antigravity switching runtime is not
-running or did not answer, so the managed update could not check for running
-sessions; nothing was installed.") instead of the generic `update_failed`, and
-nothing is installed. Until 2026-11-06 the paused case failed the same way, so
-once an unreviewed build landed (Ubuntu VM, agy 1.4.12) every later managed
-update failed and the computer could not move forward.
+Under the account lock, a pending managed recovery record stops the paused
+update. Otherwise AAC backs up the native to
+`antigravity-switching/native-backups/<sha256>`, then rechecks that the runtime
+is still stopped and the build still unreviewed. This slow recheck runs last,
+with nothing awaited between it and `agy update`.
+
+The paused path does not look for running Antigravity processes and stops
+nothing. Antigravity's own background updater already replaces the binary
+while copies are running. Copies already open keep the old version until they
+restart. A successful changed version reports `updated` (or
+`updated_unreviewed` if the new build also has no review), with that restart
+note; an unchanged version reports `current`.
+
+A pending recovery, failed backup, unreadable version, or a runtime or build
+that changes before the final recheck reports `failed` / `runtime_paused_blocked`
+before the updater runs. A failed `agy update` reports `failed` /
+`runtime_paused` and records the attempt.
+
+A listening (or unclear) runtime socket keeps the coordinator, as do a reviewed
+build and an unreadable native whose runtime is down. The coordinator's
+idle-only rule for managed sessions is unchanged: a running managed session
+reports `action_required` / `in_use` when the newest build is unreviewed.
+A coordinator that cannot reach its runtime reports `failed` /
+`runtime_unavailable` and installs nothing. Until 2026-11-06 the paused case
+failed this way too, preventing later updates once an unreviewed build landed.
 
 `agy` keeps working on an unreviewed build: the managed launcher runs the native
 CLI directly when its hash does not match the reviewed pin. Switching resumes

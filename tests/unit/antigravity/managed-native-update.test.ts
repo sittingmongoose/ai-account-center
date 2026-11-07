@@ -630,9 +630,6 @@ describe('managed Antigravity native updater: public files and injected commands
         idleOnly,
         nativeReview: () => 'unreviewed',
         runtimeSocket: async () => 'listening',
-        census: () => {
-          throw new Error('the runtime-free census ran beside a live runtime');
-        },
       });
       // idle-only stops at the census; otherwise it goes on to the release gate.
       expect(result.status).toBe(idleOnly ? 'in_use' : 'failed');

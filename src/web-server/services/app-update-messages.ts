@@ -33,13 +33,13 @@ export const MESSAGES = {
   held_unchecked:
     'Update held: the newest Antigravity version could not be checked against the switching review, so nothing was installed.',
   updated_unreviewed:
-    'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
+    'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed. Copies already open keep the old version until restarted.',
   runtime_unavailable:
     'The Antigravity switching runtime is not running or did not answer, so the managed update could not check for running sessions; nothing was installed.',
   runtime_paused:
     'Antigravity switching is paused on an unreviewed build, so the update ran without its runtime and did not finish; nothing running was stopped.',
   runtime_paused_blocked:
-    'Antigravity switching is paused on an unreviewed build and its runtime is stopped; the update could not safely start without it (a pending switch recovery, a process check that could not finish, or a failed backup), so nothing was installed.',
+    'Antigravity switching is paused on an unreviewed build and its runtime is stopped; the update could not safely start without it (a pending switch recovery, a failed backup, or a changed runtime or build), so nothing was installed.',
   t3_updated: 'Updated T3 Code and its installed server runtime.',
   t3_restart_scheduled:
     'Updated; the T3 server restart is scheduled about 30 seconds after this update job finishes. Running T3 threads will disconnect. A release that upgrades a large T3 database can keep T3 offline for several minutes before it reconnects.',
@@ -66,3 +66,11 @@ export const MESSAGES = {
     'Windows still reports the app package in use after the close; the update was attempted but did not install.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
+
+/** Fixed older wording remains readable in saved jobs. Never emitted for new results. */
+export const LEGACY_MESSAGES: Partial<Record<MessageCode, string>> = {
+  updated_unreviewed:
+    'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
+  runtime_paused_blocked:
+    'Antigravity switching is paused on an unreviewed build and its runtime is stopped; the update could not safely start without it (a pending switch recovery, a process check that could not finish, or a failed backup), so nothing was installed.',
+};

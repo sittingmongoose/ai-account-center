@@ -236,6 +236,7 @@ export interface MessageContext {
   strays?: AppUpdateStray[];
   version?: string | null;
   parts?: AdapterPart[];
+  restartedProcesses?: number;
 }
 
 /**
@@ -245,9 +246,12 @@ export interface MessageContext {
 export function messageFor(
   code: MessageCode,
   appId: UpdateAppId,
-  { strays = [], version = null, parts = [] }: MessageContext = {}
+  { strays = [], version = null, parts = [], restartedProcesses }: MessageContext = {}
 ): string {
-  const words = codeWords(code, appId, parts);
+  const words =
+    code === 'updated' && appId === 'antigravity-cli' && restartedProcesses === 0
+      ? 'Updated Antigravity. Copies already open keep the old version until restarted.'
+      : codeWords(code, appId, parts);
   const older = olderShadow(strays, version);
   if (!older) return words;
   // Some words end without a full stop ("Skipped: cancelled"); the sentence needs one before it.
@@ -262,6 +266,7 @@ export function rowMessage(
   code: MessageCode
 ): string {
   return messageFor(code, appId, {
+    restartedProcesses: row.restartedProcesses as number | undefined,
     strays: rowStrays(row, appId),
     version: safeVersion(row.version) ?? safeVersion(row.previousVersion),
     parts: appId === 't3-acp-adapters' ? normalizeParts(row.parts) : [],
