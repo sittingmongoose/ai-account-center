@@ -216,6 +216,11 @@ fn note_refused(txn: &WriteTransaction, day: u32, fingerprints: &[String]) -> Re
     for fp in fingerprints {
         let Some(key) = refused_key(day, fp) else { continue };
         put_index(txn, db::REFUSED, &key)?;
+        put_index(
+            txn,
+            db::REFUSED_BY_SERIES,
+            Key::new().bytes(&key[4..]).u32(day).as_slice(),
+        )?;
         let mut rows: Vec<(Bytes, Vec<u8>, Vec<u8>)> = Vec::new();
         if let Some(value) = get(txn, db::SUMMARY_UNMARKED, &key)? {
             rows.push((db::SUMMARY_UNMARKED, key.clone(), value));
@@ -297,15 +302,17 @@ enum Reach {
 /// What numbers covering `[first_ms, last_ms]` depend on: the days they cover and, before them,
 /// the reading that came last before `first_ms`, since it decides the first consumption and
 /// whether a reset happened. That reading is found as the series' previous surviving reading
-/// when the readings still replay, whatever the window. Without one: for a window of known length,
-/// one length back (a longer silence passes the provider's reset time, which resets the window
-/// whatever that reading was); for an unknown length, every earlier day.
+/// when the readings still replay, whatever the window. Without one: one window length back when
+/// the length and the provider's reset time are both known (a longer silence passes the reset
+/// time, which resets the window whatever that reading was); otherwise every earlier day, since
+/// without a reset time nothing ends a period by time.
 fn reach(
     txn: &WriteTransaction,
     ids: Option<(u32, u32)>,
     first_ms: u64,
     last_ms: i64,
     window_minutes: Option<f64>,
+    reset_known: bool,
 ) -> Result<Reach> {
     let last = day_of(last_ms.max(first_ms as i64) as u64);
     if let (Some((a, w)), Some(before)) = (ids, first_ms.checked_sub(1)) {
@@ -316,7 +323,8 @@ fn reach(
             return Ok(Reach::Days(day_of(row.last_seen.min(before)), last));
         }
     }
-    if let Some(m) = window_minutes.filter(|m| m.is_finite() && *m > 0.0) {
+    // A silence longer than the window resets it only through the provider's reset time.
+    if reset_known && let Some(m) = window_minutes.filter(|m| m.is_finite() && *m > 0.0) {
         let lookback = ((m * 60_000.0) / DAY_MS as f64).ceil().clamp(1.0, 366.0) as u32;
         return Ok(Reach::Days(day_of(first_ms).saturating_sub(lookback), last));
     }
@@ -340,13 +348,14 @@ fn reach_refused(txn: &WriteTransaction, fingerprint: &str, reach: &Reach) -> Re
             let Some(probe) = refused_key(0, fingerprint) else {
                 return Ok(false);
             };
-            for item in txn.open_table(db::REFUSED)?.iter()? {
-                let (k, _) = item?;
-                if k.value()[4..] == probe[4..] && db::be_u32(k.value(), 0) <= last {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
+            // One seek: the series' first refused day, if it is not after the last day.
+            let lo = Key::new().bytes(&probe[4..]).u32(0);
+            let hi = Key::new().bytes(&probe[4..]).u32(last);
+            Ok(txn
+                .open_table(db::REFUSED_BY_SERIES)?
+                .range(lo.as_slice()..=hi.as_slice())?
+                .next()
+                .is_some())
         }
     }
 }
@@ -893,10 +902,12 @@ pub struct UsageProjector;
 /// Bump when projection rules change: the usage tables are then rebuilt from the logs.
 /// Version 3: observations refused by today's checks are set aside, and closed-day summaries
 /// built from them are not trusted; earlier projections are rebuilt from the logs. Version 4: an
-/// older summary's reset periods are checked against every day they cover. Version 5: its day and
+/// older summary's reset periods are checked against every day they cover. Version 6: a window
+/// length bounds that dependence only when the reset time is known; `refused_by_series`.
+/// Version 5: its day and
 /// hour rollups and its periods are checked against every day they depend on, back to the series'
 /// previous surviving reading when the window length is unknown.
-pub const USAGE_PROJECTOR_VERSION: u32 = 5;
+pub const USAGE_PROJECTOR_VERSION: u32 = 6;
 
 impl Projector for UsageProjector {
     fn name(&self) -> &'static str {
@@ -988,6 +999,7 @@ impl Projector for UsageProjector {
             db::LEGACY_READING_BY_TIME,
             db::DAY_CLOSED,
             db::REFUSED,
+            db::REFUSED_BY_SERIES,
         ] {
             txn.delete_table(def)?;
         }
@@ -1528,6 +1540,7 @@ fn project_day_closed(txn: &WriteTransaction, event: &Event, payload: &Json) -> 
             day_start,
             (day_start + DAY_MS - 1) as i64,
             window.window_minutes,
+            false,
         )?;
         let rollups_ok = marked || !reach_refused(txn, &fingerprint, &rollup_reach)?;
         // Each reset period separately, against every day it depends on.
@@ -1536,7 +1549,14 @@ fn project_day_closed(txn: &WriteTransaction, event: &Event, payload: &Json) -> 
         for period in series["periods"].as_array().into_iter().flatten() {
             let start = period["start_ms"].as_u64().unwrap_or(0);
             let mut value: Period = serde_json::from_value(period["period"].clone())?;
-            let period_reach = reach(txn, known, start, value.end_ms, window.window_minutes)?;
+            let period_reach = reach(
+                txn,
+                known,
+                start,
+                value.end_ms,
+                window.window_minutes,
+                value.reset_at_ms.is_some(),
+            )?;
             if !marked && reach_refused(txn, &fingerprint, &period_reach)? {
                 periods_refused = true;
                 continue;
@@ -1813,7 +1833,7 @@ fn day_series(txn: &WriteTransaction, day: u32) -> Result<Vec<Json>> {
     }
     let mut out = Vec::new();
     for (a, w) in keys {
-        if let Some(entry) = series_close(txn, (a, w), day, |p| p.is_final && !p.emitted)? {
+        if let Some(entry) = series_close(txn, (a, w), day, Periods::Unemitted)? {
             out.push(entry);
         }
     }
@@ -1822,12 +1842,17 @@ fn day_series(txn: &WriteTransaction, day: u32) -> Result<Vec<Json>> {
 
 /// One series' entry in a day's close: its metadata, hourly and day rollups, and the reset
 /// periods `include` selects. `None` when the series has no rollup that day.
-fn series_close(
-    txn: &WriteTransaction,
-    (a, w): (u32, u32),
-    day: u32,
-    include: impl Fn(&Period) -> bool,
-) -> Result<Option<Json>> {
+/// Which reset periods a day's close entry carries.
+#[derive(Clone, Copy)]
+enum Periods {
+    /// Final periods not yet emitted by a close (the regular close).
+    Unemitted,
+    /// Final periods that overlap the day (a replacement close): read by start key, the one
+    /// open at the day's start and those starting in it, not the series' whole history.
+    OverlappingDay,
+}
+
+fn series_close(txn: &WriteTransaction, (a, w): (u32, u32), day: u32, pick: Periods) -> Result<Option<Json>> {
     let Some(day_rollup) = get(txn, db::ROLLUP_DAY, Key::new().u32(a).u32(w).u32(day).as_slice())? else {
         return Ok(None);
     };
@@ -1847,12 +1872,34 @@ fn series_close(
     {
         let table = txn.open_table(db::PERIOD)?;
         let prefix = Key::new().u32(a).u32(w);
-        let end = db::prefix_end(prefix.as_slice());
-        for item in table.range(prefix.as_slice()..end.as_slice())? {
-            let (k, v) = item?;
-            let period: Period = db::unpack(v.value())?;
+        let mut push = |k: &[u8], v: &[u8], include: &dyn Fn(&Period) -> bool| -> Result<()> {
+            let period: Period = db::unpack(v)?;
             if include(&period) {
-                periods.push(json!({ "start_ms": db::be_u64(k.value(), 8), "period": period }));
+                periods.push(json!({ "start_ms": db::be_u64(k, 8), "period": period }));
+            }
+            Ok(())
+        };
+        match pick {
+            Periods::Unemitted => {
+                let end = db::prefix_end(prefix.as_slice());
+                for item in table.range(prefix.as_slice()..end.as_slice())? {
+                    let (k, v) = item?;
+                    push(k.value(), v.value(), &|p| p.is_final && !p.emitted)?;
+                }
+            }
+            Periods::OverlappingDay => {
+                let day_start = day as u64 * DAY_MS;
+                let start_key = prefix.clone().u64(day_start);
+                let end_key = prefix.clone().u64(day_start + DAY_MS);
+                let final_since = |p: &Period| p.is_final && p.end_ms >= day_start as i64;
+                if let Some(item) = table.range(prefix.as_slice()..start_key.as_slice())?.next_back() {
+                    let (k, v) = item?;
+                    push(k.value(), v.value(), &final_since)?;
+                }
+                for item in table.range(start_key.as_slice()..end_key.as_slice())? {
+                    let (k, v) = item?;
+                    push(k.value(), v.value(), &final_since)?;
+                }
             }
         }
     }
@@ -1901,7 +1948,7 @@ pub fn write_replacement_closes(engine: &Engine) -> Result<usize> {
             let (start, end) = (day as i64 * DAY_MS as i64, (day as i64 + 1) * DAY_MS as i64);
             let mut series = Vec::new();
             for (_, a, w) in pending.iter().filter(|(d, _, _)| *d == day) {
-                if let Some(entry) = series_close(batch.txn, (*a, *w), day, |p| p.is_final)? {
+                if let Some(entry) = series_close(batch.txn, (*a, *w), day, Periods::OverlappingDay)? {
                     series.push(filter_periods_to_day(entry, start, end));
                 }
             }

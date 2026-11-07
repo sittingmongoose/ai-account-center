@@ -1,0 +1,104 @@
+[
+ {
+  "record": {
+   "t": 1792994400000,
+   "acct": "a",
+   "win": "five",
+   "label": "w",
+   "used": 10,
+   "wm": 300
+  }
+ },
+ {
+  "maintain": 1793062800000
+ },
+ {
+  "maintain": 1793149200000
+ },
+ {
+  "maintain": 1793235600000
+ },
+ {
+  "record": {
+   "t": 1793253600000,
+   "acct": "a",
+   "win": "five",
+   "label": "sk-ant-SYNTHETIC_SECRET_abcdefgh",
+   "used": 50,
+   "wm": 300
+  }
+ },
+ {
+  "maintain": 1793322000000
+ },
+ {
+  "maintain": 1793408400000
+ },
+ {
+  "maintain": 1793494800000
+ },
+ {
+  "maintain": 1793581200000
+ },
+ {
+  "record": {
+   "t": 1793599200000,
+   "acct": "a",
+   "win": "five",
+   "label": "w",
+   "used": 20,
+   "wm": 300
+  }
+ },
+ {
+  "maintain": 1793667600000
+ },
+ {
+  "record": {
+   "t": 1793685600000,
+   "acct": "a",
+   "win": "five",
+   "label": "w",
+   "used": 30,
+   "wm": 300
+  }
+ },
+ {
+  "maintain": 1793754000000
+ },
+ {
+  "record": {
+   "t": 1793772000000,
+   "acct": "a",
+   "win": "five",
+   "label": "w",
+   "used": 5,
+   "wm": 300
+  }
+ },
+ {
+  "maintain": 1793840400000
+ },
+ {
+  "record": {
+   "t": 1793858400000,
+   "acct": "a",
+   "win": "five",
+   "label": "w",
+   "used": 8,
+   "wm": 300
+  }
+ },
+ {
+  "maintain": 1793926800000
+ },
+ {
+  "maintain": 1794013200000
+ },
+ {
+  "maintain": 1794099600000
+ },
+ {
+  "maintain": 1794186000000
+ }
+]

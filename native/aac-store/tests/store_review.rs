@@ -927,3 +927,133 @@ fn a_window_filter_reads_only_that_windows_series() {
     drop(engine);
     fs::remove_dir_all(&dir).unwrap();
 }
+
+const MANY: usize = 20_000;
+
+/// A readings log holding `MANY` observations an older build accepted and this build refuses,
+/// written in the log format in large groups.
+fn many_refused(dir: &Path) {
+    let (mut log, _) = aac_store::log::Log::open(&dir.join("log").join("readings"), "readings", "r").unwrap();
+    let mut group = Vec::new();
+    for i in 0..MANY {
+        let t = T0 + i as i64 * MIN;
+        let o = obs_with(t, (i % 90) as f64, |o| {
+            o["windows"][0]["label"] = json!("sk-ant-SYNTHETIC_SECRET_abcdefgh")
+        });
+        let mut event = aac_store::event::Event::new(
+            "usage.sampled",
+            now_ms(),
+            aac_store::msgpack::from_json(&json!({ "observations": [o] })).unwrap(),
+        );
+        log.assign(&mut event).unwrap();
+        group.push(event);
+        if group.len() == 1000 {
+            log.write(&group).unwrap();
+            group.clear();
+        }
+    }
+    log.write(&group).unwrap();
+}
+
+/// The ledger's `store.integrity_detected` events for refused events, by sequence.
+fn ledgered_refusals(dir: &Path) -> Vec<u64> {
+    let (log, _) = aac_store::log::Log::open(&dir.join("log").join("ledger"), "ledger", "l").unwrap();
+    let mut out = Vec::new();
+    log.read_after(None, |e| {
+        if e.event_type == "store.integrity_detected" {
+            let payload = aac_store::msgpack::to_json(&e.payload);
+            if payload["kind"] == "event_quarantined" {
+                out.push(payload["start_seq"].as_u64().unwrap());
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    out
+}
+
+fn quarantined(engine: &Engine) -> usize {
+    kinds(engine).iter().filter(|k| *k == "event_quarantined").count()
+}
+
+/// More refused events than one batch holds: the store still opens, discloses each once, and a
+/// reopen adds nothing to the ledger.
+#[test]
+fn a_store_with_twenty_thousand_refused_events_opens() {
+    let dir = temp_dir("review-many");
+    many_refused(&dir);
+    let engine = open(&dir);
+    assert_eq!(quarantined(&engine), MANY);
+    assert_eq!(engine.status().unwrap()["state"], "degraded");
+    engine.close().unwrap();
+    drop(engine);
+    assert_eq!(ledgered_refusals(&dir).len(), MANY);
+    let engine = open(&dir);
+    assert_eq!(quarantined(&engine), MANY);
+    engine.close().unwrap();
+    drop(engine);
+    assert_eq!(ledgered_refusals(&dir).len(), MANY, "a reopen ledgers nothing again");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Opens the store named by `AAC_CHILD_DIR` and closes it: run in a child process that the kill
+/// test stops part way.
+#[test]
+#[ignore]
+fn child_opens_the_store() {
+    if let Ok(dir) = std::env::var("AAC_CHILD_DIR") {
+        let engine = open(Path::new(&dir));
+        engine.close().unwrap();
+    }
+}
+
+/// A kill while the open ledgers its findings leaves nothing half written: the next open
+/// discloses every refused event exactly once.
+#[test]
+fn a_kill_while_ledgering_many_findings_recovers() {
+    let dir = temp_dir("review-many-kill");
+    many_refused(&dir);
+    let exe = std::env::current_exe().unwrap();
+    let mut stopped = 0;
+    for wait_ms in [1_500u64, 4_000, 8_000, 12_000, 16_000] {
+        let mut child = std::process::Command::new(&exe)
+            .args([
+                "--ignored",
+                "--exact",
+                "child_opens_the_store",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("AAC_CHILD_DIR", &dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+        if child.try_wait().unwrap().is_none() {
+            child.kill().unwrap();
+            stopped += 1;
+        }
+        child.wait().unwrap();
+        let mut seen = ledgered_refusals(&dir);
+        let all = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            all,
+            "after a kill at {wait_ms} ms: no refusal is ledgered twice"
+        );
+    }
+    assert!(stopped > 0, "at least one open was killed part way");
+    let engine = open(&dir);
+    assert_eq!(quarantined(&engine), MANY, "every refused event is disclosed");
+    engine.close().unwrap();
+    drop(engine);
+    let mut seen = ledgered_refusals(&dir);
+    assert_eq!(seen.len(), MANY);
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), MANY, "each exactly once");
+    fs::remove_dir_all(&dir).unwrap();
+}

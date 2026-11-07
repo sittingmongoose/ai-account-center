@@ -31,6 +31,9 @@ pub const ROLLUP_DAY: Bytes = TableDefinition::new("rollup_day");
 pub const DAY_CLOSED: Index = TableDefinition::new("day_closed");
 /// Series and days a refused observation touched: `day u32 | fingerprint (16 bytes)`.
 pub const REFUSED: Index = TableDefinition::new("refused");
+/// The same rows by series: `fingerprint | day u32`, so "any refusal of this series up to a day"
+/// is one seek.
+pub const REFUSED_BY_SERIES: Index = TableDefinition::new("refused_by_series");
 /// What closed-day summaries applied without this build's exclusion of refused observations wrote
 /// for a series, under every day those numbers depend on: `day u32 | fingerprint` to `a u32 |
 /// w u32 | entries`, each entry `1 | rollup day u64` or `2 | period start u64`. A refusal on that
@@ -85,7 +88,7 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
     ] {
         txn.open_table(def)?;
     }
-    for def in [SERIES_BY_PROVIDER, DAY_CLOSED, REFUSED, RECLOSE] {
+    for def in [SERIES_BY_PROVIDER, DAY_CLOSED, REFUSED, REFUSED_BY_SERIES, RECLOSE] {
         txn.open_table(def)?;
     }
     Ok(())

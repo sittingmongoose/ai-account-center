@@ -1,0 +1,143 @@
+[
+ {
+  "record": {
+   "t": 1792994400000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 10
+  }
+ },
+ {
+  "maintain": 1793062800000
+ },
+ {
+  "record": {
+   "t": 1793080800000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 20
+  }
+ },
+ {
+  "maintain": 1793149200000
+ },
+ {
+  "record": {
+   "t": 1793167200000,
+   "acct": "a",
+   "win": "seven",
+   "label": "sk-ant-SYNTHETIC_SECRET_abcdefgh",
+   "used": 35
+  }
+ },
+ {
+  "maintain": 1793235600000
+ },
+ {
+  "record": {
+   "t": 1793253600000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 0
+  }
+ },
+ {
+  "maintain": 1793322000000
+ },
+ {
+  "record": {
+   "t": 1793340000000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 5
+  }
+ },
+ {
+  "maintain": 1793408400000
+ },
+ {
+  "record": {
+   "t": 1793426400000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 8
+  }
+ },
+ {
+  "maintain": 1793494800000
+ },
+ {
+  "record": {
+   "t": 1793512800000,
+   "acct": "a",
+   "win": "seven",
+   "label": "sk-ant-SYNTHETIC_SECRET_abcdefgh",
+   "used": 1
+  }
+ },
+ {
+  "maintain": 1793581200000
+ },
+ {
+  "record": {
+   "t": 1793599200000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 9
+  }
+ },
+ {
+  "maintain": 1793667600000
+ },
+ {
+  "record": {
+   "t": 1793685600000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 12
+  }
+ },
+ {
+  "maintain": 1793754000000
+ },
+ {
+  "record": {
+   "t": 1793772000000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 0
+  }
+ },
+ {
+  "maintain": 1793840400000
+ },
+ {
+  "record": {
+   "t": 1793858400000,
+   "acct": "a",
+   "win": "seven",
+   "label": "w",
+   "used": 3
+  }
+ },
+ {
+  "maintain": 1793926800000
+ },
+ {
+  "maintain": 1794013200000
+ },
+ {
+  "maintain": 1794099600000
+ },
+ {
+  "maintain": 1794186000000
+ }
+]

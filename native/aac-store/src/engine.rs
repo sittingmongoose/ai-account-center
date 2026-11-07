@@ -260,18 +260,24 @@ impl Engine {
             }))?,
         );
         opened.idempotency_key = None;
-        engine.commit(LogId::Ledger, |batch| {
-            batch.push(opened)?;
-            for f in &loss {
-                let event = Event::new(
-                    "store.integrity_detected",
-                    now_ms(),
-                    crate::msgpack::from_json(&serde_json::to_value(f)?)?,
-                );
-                batch.push(event)?;
-            }
-            Ok(())
-        })?;
+        engine.commit(LogId::Ledger, |batch| batch.push(opened).map(|_| ()))?;
+        // Each disclosed finding is already kept in redb with the rows it explains, marked not yet
+        // ledgered; each commit below ledgers a group and marks it, so a kill between groups
+        // leaves the rest to the next open, and none is written twice. One group holds at most
+        // a projector batch.
+        for group in loss.chunks(PROJECTOR_BATCH - 1) {
+            engine.commit(LogId::Ledger, |batch| {
+                for f in group {
+                    let event = Event::new(
+                        "store.integrity_detected",
+                        now_ms(),
+                        crate::msgpack::from_json(&serde_json::to_value(f)?)?,
+                    );
+                    batch.push(event)?;
+                }
+                Ok(())
+            })?;
+        }
         Ok(engine)
     }
 
@@ -416,6 +422,11 @@ impl Engine {
         self.with_db(|db| {
             let (lost, mut findings) = self.check_checkpoints(&mut logs, db)?;
             let txn = begin(db)?;
+            // Kept in the same transaction as the rebuild they cause, so a kill before the ledger
+            // records them cannot leave a rebuilt store that no longer says why.
+            for f in findings.iter().filter(|f| is_loss(&f.kind)) {
+                keep_finding(&txn, f, false)?;
+            }
             for (index, projector) in self.projectors.iter().enumerate() {
                 let mut stale = lost.contains(&index);
                 {

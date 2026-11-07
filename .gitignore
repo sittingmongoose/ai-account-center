@@ -14,7 +14,7 @@ repomix-output.xml
 *~
 
 # Plans directory
-plans/
+/plans/
 *.tgz
 
 # Node.js (no trailing slash, so a worktree's node_modules symlink is ignored too)

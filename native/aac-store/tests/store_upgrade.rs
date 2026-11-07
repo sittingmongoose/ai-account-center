@@ -515,13 +515,16 @@ fn reopen_and_log_only_rebuild_agree_after_retirement() {
 // times. `store-v2-000a0ac7/<name>` is that plan written by the 000a0ac7 build. A clean
 // reference replays the same plan with this build, leaving out the refused readings.
 
-const PLANS: [&str; 6] = [
+const PLANS: [&str; 8] = [
     "forward",
     "forward-wm",
     "long-unknown-lookback",
     "long-unknown-inside",
     "edges",
     "two-windows",
+    // A known window length without reset times: after retirement nothing bounds the reach.
+    "week-apart-5h",
+    "week8-wm7",
 ];
 
 fn plan(name: &str) -> Vec<Json> {

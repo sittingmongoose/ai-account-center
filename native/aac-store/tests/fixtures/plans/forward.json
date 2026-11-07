@@ -1,0 +1,105 @@
+[
+ {
+  "record": {
+   "t": 1792994400000,
+   "acct": "a",
+   "win": "seven",
+   "label": "weekly",
+   "used": 10,
+   "reset": 1793595600000
+  }
+ },
+ {
+  "maintain": 1793062800000
+ },
+ {
+  "record": {
+   "t": 1793080800000,
+   "acct": "a",
+   "win": "seven",
+   "label": "weekly",
+   "used": 20,
+   "reset": 1793595600000
+  }
+ },
+ {
+  "maintain": 1793149200000
+ },
+ {
+  "record": {
+   "t": 1793167200000,
+   "acct": "a",
+   "win": "seven",
+   "label": "weekly",
+   "used": 30,
+   "reset": 1793595600000
+  }
+ },
+ {
+  "maintain": 1793235600000
+ },
+ {
+  "record": {
+   "t": 1793253600000,
+   "acct": "a",
+   "win": "seven",
+   "label": "sk-ant-SYNTHETIC_SECRET_abcdefgh",
+   "used": 0,
+   "reset": 1793595600000
+  }
+ },
+ {
+  "maintain": 1793322000000
+ },
+ {
+  "record": {
+   "t": 1793340000000,
+   "acct": "a",
+   "win": "seven",
+   "label": "weekly",
+   "used": 40,
+   "reset": 1793595600000
+  }
+ },
+ {
+  "maintain": 1793408400000
+ },
+ {
+  "record": {
+   "t": 1793426400000,
+   "acct": "a",
+   "win": "seven",
+   "label": "weekly",
+   "used": 50,
+   "reset": 1793595600000
+  }
+ },
+ {
+  "maintain": 1793494800000
+ },
+ {
+  "record": {
+   "t": 1793512800000,
+   "acct": "a",
+   "win": "seven",
+   "label": "weekly",
+   "used": 60,
+   "reset": 1793595600000
+  }
+ },
+ {
+  "maintain": 1793581200000
+ },
+ {
+  "maintain": 1793667600000
+ },
+ {
+  "maintain": 1793754000000
+ },
+ {
+  "maintain": 1793840400000
+ },
+ {
+  "maintain": 1793926800000
+ }
+]

@@ -20,7 +20,8 @@ projection and checkpoints are that build's own. Synthetic values only: the labe
   period on day 6.
 
 - `forward`, `forward-wm`, `long-unknown-lookback`, `long-unknown-inside`, `edges`, `two-windows`:
-  the round-5 recheck's plans (`../plans/<name>.json`, records and maintenance times), written by
+  plus `week-apart-5h` and `week8-wm7` (a known length without reset times, from the round-6 recheck):
+  the recheck plans (`../plans/<name>.json`, records and maintenance times), written by
   that build with its plan runner. The tests replay each plan without its refused readings to get
   the clean reference.
 
