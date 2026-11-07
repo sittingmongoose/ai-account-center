@@ -150,11 +150,14 @@ describe('Codex Desktop update retry on the real runtime', () => {
     fake: ReturnType<typeof harness>,
     launch?: CodexActivationRuntimeDependencies['launch']
   ) {
+    let clock = 0;
     let installed = '1.0.0';
     let marker: { version: string; desktop?: boolean; daemon?: boolean } | null = null;
     const deps = {
-      now: () => 0,
-      sleep: async () => {},
+      now: () => clock,
+      sleep: async (ms: number) => {
+        clock += ms;
+      },
       readVersion: async () => installed,
       update: async () => {
         installed = '2.0.0';
@@ -168,10 +171,7 @@ describe('Codex Desktop update retry on the real runtime', () => {
         marker = null;
       },
       hasOldProxies: async () => false,
-      running: async () => ({
-        desktop: bridge.desktopReady(fake.current(), home),
-        daemon: bridge.daemonRunning(fake.current(), home),
-      }),
+      running: async () => bridge.runningState(fake.current(), home),
       runtime: () =>
         createCodexActivationRuntime(home, {
           ...fake.deps,
@@ -204,6 +204,56 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(second.status).toBe('restart_failed');
     expect(second.messageCode).toBe('restart_not_running');
     expect(marker()).toBeNull();
+  });
+
+  const proxyChild = processFixture(
+    23,
+    ['/usr/lib/chatgpt/resources/codex', 'app-server', 'proxy'],
+    { ppid: 20, env: { HOME: '/fixture', CODEX_HOME: home, DISPLAY: ':8' } }
+  );
+
+  it('remembers a desktop whose only Codex child was a proxy', async () => {
+    const fake = harness([desktop, proxyChild]);
+    const { run, marker } = click(fake, async (target, isDesktop) => {
+      await fake.deps.launch(target, isDesktop);
+      const servers = fake.current().filter((entry) => entry.exe.endsWith('/resources/codex'));
+      for (const server of servers) await fake.deps.signal(server, 'SIGKILL');
+    });
+    const first = await run({});
+    expect(first.status).toBe('restart_failed');
+    expect(marker()).toEqual({ version: '2.0.0', desktop: true, daemon: false });
+
+    const second = await run({ restartOnly: true });
+    expect(second.status).toBe('restart_failed');
+    expect(second.messageCode).toBe('restart_not_running');
+  });
+
+  it('records the daemon when stop() closes it and its own recovery fails', async () => {
+    const fake = harness([daemon]);
+    const { deps, marker } = click(fake, async () => {
+      throw new CodexActivationRuntimeError('fixture launch failed');
+    });
+    const interrupted = {
+      ...deps,
+      runtime: () =>
+        createCodexActivationRuntime(home, {
+          ...fake.deps,
+          signal: async (target, signal) => {
+            await fake.deps.signal(target, signal);
+            // A new writer appears once the daemon is gone, so stop() must recover.
+            fake.inject(processFixture(30, ['/fixture/bin/codex', 'exec'], {}));
+          },
+          launch: async () => {
+            throw new CodexActivationRuntimeError('fixture launch failed');
+          },
+        }),
+    };
+    bridge.output.restartedProcesses = 0;
+    const result = {
+      ...(await bridge.execute({ ...interrupted, operation: 'cli', expectedCandidate: '2.0.0' })),
+    };
+    expect(result.status).toBe('restart_failed');
+    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true });
   });
 
   it('does not call a desktop whose app server never started a restart', async () => {

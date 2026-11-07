@@ -24,6 +24,7 @@ const seconds = /^\d+$/.test(flags['--timeout-seconds'] || '') ? Math.max(30, Ma
 // a busy Codex becomes an honest "Codex is busy" row instead.
 const IDLE_WAIT_SECONDS = 60;
 const LOCK_WAIT_SECONDS = 30;
+const RESTART_SETTLE_MS = 10000;
 const output = { appId: operation === 'desktop' ? 'codex-desktop' : 'codex-cli', platform: 'ubuntu',
   status: 'failed', previousVersion: null, version: null, manager: operation === 'desktop' ? 'apt' : 'native',
   messageCode: 'update_failed', updateAttempted: false, restartedProcesses: 0, forcedStops: 0 };
@@ -57,18 +58,22 @@ function createUpdateRuntime(createRuntime, deps = {}) {
   return createRuntime(path.join(home, '.codex'), { scan: async () => privateScan(),
     launch: (target, desktop, outside) => relaunch(target, desktop, outside, deps) });
 }
-/** A Codex app server on this home. Proxies don't count, nor do servers on another home (T3's). */
-function serverOnHome(item, codexHome) {
-  const index = item.args.indexOf('app-server');
-  if (path.basename(item.exe) !== 'codex' || index < 0 || item.args[index + 1] === 'proxy') return false;
+/** A Codex process on this home; a server on another home (T3's) is not one. */
+function codexOnHome(item, codexHome) {
+  if (path.basename(item.exe) !== 'codex') return false;
   return path.resolve(item.env.CODEX_HOME || path.join(item.env.HOME || home, '.codex')) === path.resolve(codexHome);
+}
+function isProxy(item) { const index = item.args.indexOf('app-server'); return index >= 0 && item.args[index + 1] === 'proxy'; }
+/** A Codex app server on this home; a proxy is not one. */
+function serverOnHome(item, codexHome) {
+  return codexOnHome(item, codexHome) && item.args.includes('app-server') && !isProxy(item);
 }
 /** The shared daemon on this home; a desktop's own bundled server is not it. */
 function daemonRunning(processes, codexHome = path.join(home, '.codex')) {
   return processes.some((item) => serverOnHome(item, codexHome) && item.args[item.args.indexOf('--listen') + 1]?.startsWith('unix://') === true);
 }
-/** start()'s own test: a Codex Desktop main process with a live app server on this home under it. */
-function desktopReady(processes, codexHome = path.join(home, '.codex')) {
+/** A Codex Desktop main process with a process below it that `accepts` takes. */
+function desktopWith(processes, accepts) {
   return processes.some((main) => {
     if (main.exe !== '/usr/lib/chatgpt/ChatGPT' || main.args.join(' ').includes('--type=')) return false;
     const under = new Set([main.pid]);
@@ -76,8 +81,24 @@ function desktopReady(processes, codexHome = path.join(home, '.codex')) {
       grew = false;
       for (const item of processes) if (under.has(item.ppid) && !under.has(item.pid)) { under.add(item.pid); grew = true; }
     }
-    return processes.some((item) => item.pid !== main.pid && under.has(item.pid) && serverOnHome(item, codexHome));
+    return processes.some((item) => item.pid !== main.pid && under.has(item.pid) && accepts(item));
   });
+}
+/** start()'s readiness test: a live app server on this home under the desktop. */
+function desktopReady(processes, codexHome = path.join(home, '.codex')) {
+  return desktopWith(processes, (item) => serverOnHome(item, codexHome));
+}
+/** stop()'s rule for closing a desktop: any Codex process on this home under it, proxies included. */
+function desktopClosable(processes, codexHome = path.join(home, '.codex')) {
+  return desktopWith(processes, (item) => codexOnHome(item, codexHome));
+}
+function runningState(processes, codexHome = path.join(home, '.codex')) {
+  return {
+    desktop: desktopReady(processes, codexHome),
+    closableDesktop: desktopClosable(processes, codexHome),
+    daemon: daemonRunning(processes, codexHome),
+    proxy: processes.some((item) => codexOnHome(item, codexHome) && isProxy(item)),
+  };
 }
 function run(binary, args, timeout = 10000) {
   return new Promise((resolve, reject) => execFile(binary, args, { timeout, maxBuffer: 65536, encoding: 'utf8',
@@ -132,19 +153,21 @@ async function execute(deps) {
   const mode = deps.operation ?? operation;
   const expected = deps.expectedCandidate ?? flags['--expected-version'];
   const restartOnly = deps.restartOnly ?? flags['--restart-only'] === 'true';
-  let runtime, stopped = false, busy = false;
+  let runtime, prior, seen, stopped = false, busy = false, stopFailed = false;
   try {
     output.previousVersion = output.version = version(await deps.readVersion());
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
     // A retry restarts only what its own stop() finds, because the launch snapshot of a failed
     // earlier run is gone. The marker says what that run closed, and only a marker that names
     // something is a retry: a run stopped by a busy Codex, or a marker the Python path wrote,
-    // closed nothing. A desktop marker from before these fields counts as a closed desktop,
-    // because the old bridge wrote those only after stopping.
+    // closed nothing. A desktop marker from before these fields counts as a closed desktop: the old
+    // bridge wrote one after any stop(), even with no desktop running, so a host with only a
+    // daemon can see one false restart_not_running before the marker clears. Versions compare on
+    // their numeric part, since the Python path writes a prerelease in full.
     const marker = deps.marked();
-    const current = restartOnly || marker?.version === output.previousVersion;
+    const current = restartOnly || version(marker?.version) === output.previousVersion;
     const unnamed = marker && marker.desktop === undefined && marker.daemon === undefined;
-    const prior = {
+    prior = {
       desktop: Boolean(current && (marker?.desktop === true || (mode === 'desktop' && unnamed))),
       daemon: Boolean(current && marker?.daemon === true),
     };
@@ -161,16 +184,15 @@ async function execute(deps) {
       deps.mark(retried ? prior : undefined);
     }
     runtime = deps.runtime();
-    let seen;
     while (true) {
       try { seen = await deps.running(); await runtime.stop(); stopped = true; break; }
       catch (error) {
-        if (error.code !== 'busy') throw error;
+        if (error.code !== 'busy') { stopFailed = seen !== undefined; throw error; }
         if (deps.now() >= deadline) { busy = true; throw error; }
         await deps.sleep(Math.min(5000, deadline - deps.now()));
       }
     }
-    const closed = { desktop: prior.desktop || seen.desktop, daemon: prior.daemon || seen.daemon };
+    const closed = { desktop: prior.desktop || seen.closableDesktop === true, daemon: prior.daemon || seen.daemon };
     if (mode === 'cli') deps.mark(closed);
     if (mode === 'desktop') {
       output.updateAttempted = !restartOnly;
@@ -183,9 +205,15 @@ async function execute(deps) {
     await runtime.start(); stopped = false;
     if (await deps.hasOldProxies()) throw new Error('An old proxy has no verified restart supervisor.');
     // Leaving closed what an earlier run closed is not a restart: say so once. The marker goes too,
-    // since nothing here could ever finish it.
+    // since nothing here could ever finish it. start() has just retired any daemon a proxy respawned
+    // too early, so while a live proxy could bring the daemon back it gets a short while to do so.
     if (retried) {
-      const live = await deps.running();
+      const settleBy = deps.now() + (deps.settleMs ?? RESTART_SETTLE_MS);
+      let live = await deps.running();
+      while (closed.daemon && !live.daemon && live.proxy && deps.now() < settleBy) {
+        await deps.sleep(250);
+        live = await deps.running();
+      }
       if ((closed.desktop && !live.desktop) || (closed.daemon && !live.daemon)) {
         deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running';
         return output;
@@ -197,6 +225,14 @@ async function execute(deps) {
     // retried here. The marker stays, and the next click reports what it finds (restart_not_running):
     // the updaters send a matching marker here even with no daemon running.
     if (stopped) { try { await runtime.start(); } catch { /* Reported below as restart_failed. */ } }
+    // A stop() that failed partway may have closed something its own recovery could not bring back.
+    if (stopFailed) {
+      try {
+        const live = await deps.running();
+        const lost = { desktop: seen.closableDesktop === true && !live.closableDesktop, daemon: seen.daemon === true && !live.daemon };
+        if (lost.desktop || lost.daemon) deps.mark({ desktop: prior.desktop || lost.desktop, daemon: prior.daemon || lost.daemon });
+      } catch { /* The row below still says the restart failed. */ }
+    }
     if (busy) {
       // Nothing was stopped. The CLI package may already be new (the pending
       // marker stays, so the next click restarts the daemon once Codex is idle);
@@ -238,7 +274,7 @@ function bridgeDeps(createCodexActivationRuntime) {
   return { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     readVersion: () => operation === 'desktop' ? run('/usr/bin/dpkg-query', ['-W', '-f=${Version}', 'chatgpt']) : run(executable, ['--version']),
     update: () => operation === 'desktop' ? run('/usr/bin/sudo', ['-n', '/usr/bin/apt-get', 'install', '--only-upgrade', '-y', 'chatgpt'], 180000) : run(executable, ['update'], 180000),
-    pending: (expected) => readMarker()?.version === expected,
+    pending: (expected) => version(readMarker()?.version) === expected,
     mark: markPending, clear: () => { try { fs.unlinkSync(markerFile()); } catch {} },
     restartProxies: async () => {
       if (operation !== 'cli') return;
@@ -267,7 +303,7 @@ function bridgeDeps(createCodexActivationRuntime) {
     },
     runtime: () => createUpdateRuntime(createCodexActivationRuntime),
     marked: readMarker,
-    running: () => { const processes = privateScan(); return { desktop: desktopReady(processes), daemon: daemonRunning(processes) }; },
+    running: () => runningState(privateScan()),
     };
 }
 async function main() {
@@ -287,5 +323,5 @@ async function main() {
     return await execute(bridgeDeps(createCodexActivationRuntime));
   } finally { await release(); }
 }
-module.exports = { bridgeDeps, createUpdateRuntime, daemonRunning, desktopReady, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
+module.exports = { bridgeDeps, createUpdateRuntime, daemonRunning, desktopClosable, desktopReady, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, runningState, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

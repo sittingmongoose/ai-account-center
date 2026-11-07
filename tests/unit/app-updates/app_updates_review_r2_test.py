@@ -218,6 +218,25 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(next(row for row in rows if row["appId"] == "omp")["status"], "current")
         self.assertTrue(all(row["messageCode"] == "host_timeout" for row in rows if row["appId"] != "omp"))
 
+    def test_pending_desktop_restart_matches_a_package_suffix_on_the_installed_version(self):
+        # The bridge writes the numeric part; the installed package version keeps its suffix.
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)):
+            pending = pathlib.Path(folder) / ".ccs/app-updates/codex-desktop-pending-restart.json"
+            common.write_private_json(pending, {"version": "26.1.1"})
+            install = common.Install("codex-desktop", "ubuntu", pathlib.Path("/fixture"), "26.1.1-1", "apt", "chatgpt")
+            calls = []
+            def command(argv, **kwargs):
+                calls.append(argv)
+                if "policy" in argv:
+                    return "Candidate: 26.1.1-1\n 500 https://persistent.oaistatic.com/codex-app-prod/linux/deb stable/main amd64 Packages"
+                if "madison" in argv:
+                    return "chatgpt | 26.1.1-1 | https://persistent.oaistatic.com/codex-app-prod/linux/deb stable/main amd64 Packages"
+                return '{"status":"updated"}'
+            with mock.patch.object(desktop, "command", side_effect=command):
+                self.assertEqual(desktop.update_linux(install)["status"], "updated")
+            bridge = calls[-1]
+            self.assertEqual(bridge[bridge.index("--restart-only") + 1], "true")
+
     def test_pending_desktop_restart_uses_installed_version_when_candidate_is_older(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)):
             pending = pathlib.Path(folder) / ".ccs/app-updates/codex-desktop-pending-restart.json"

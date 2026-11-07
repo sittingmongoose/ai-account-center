@@ -138,7 +138,9 @@ def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple", prope
              if systemd_can_carry(key, value)]
     wrapped.extend("--setenv=" + key for key in names)
     wrapped.append("--")
-    if any(key.startswith(LOADER_ENV_PREFIX) for key in names):
+    # systemd-run looks up the executable itself and does not expand it, so an escaped $ there would
+    # name a path that does not exist. The sh step takes that path as an ordinary argument.
+    if "$" in str(argv[0]) or any(key.startswith(LOADER_ENV_PREFIX) for key in names):
         wrapped.extend(["/bin/sh", "-c", LOADER_TRAMPOLINE, "sh"])
     # systemd expands $NAME in a command line, and a relaunch replays whatever the app was given.
     wrapped.extend(str(word).replace("$", "$$") for word in argv)

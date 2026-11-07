@@ -149,7 +149,9 @@ export function buildSystemdRunArgs(spec: AppLaunchSpec, unit: string): string[]
     argv.push('--property=StandardOutput=null', '--property=StandardError=null');
   }
   argv.push('--');
-  if (names.some((key) => key.startsWith(LOADER_ENV_PREFIX))) {
+  // systemd-run looks up the executable itself and does not expand it, so an escaped $ there would
+  // name a path that does not exist. The sh step takes that path as an ordinary argument.
+  if (spec.exe.includes('$') || names.some((key) => key.startsWith(LOADER_ENV_PREFIX))) {
     argv.push('/bin/sh', '-c', LOADER_TRAMPOLINE, 'sh');
   }
   // systemd expands $NAME in a command line, and a relaunch replays whatever the app was given.

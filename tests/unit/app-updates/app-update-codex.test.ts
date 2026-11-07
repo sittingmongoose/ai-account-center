@@ -433,7 +433,7 @@ describe('Pending-marker retry', () => {
     start: async () => {},
     dispose: async () => {},
   });
-  type Live = { desktop: boolean; daemon: boolean };
+  type Live = { desktop: boolean; daemon: boolean; closableDesktop?: boolean; proxy?: boolean };
   const nothing: Live = { desktop: false, daemon: false };
   /** A second click: the marker as given, and what is running before stop() and after start(). */
   function retry(marker: Record<string, unknown> | null, after: Live, before: Live = nothing) {
@@ -544,7 +544,7 @@ describe('Pending-marker retry', () => {
     let atStop: unknown[] = [];
     await bridge.execute({
       ...first.deps,
-      running: async () => ({ desktop: true, daemon: true }),
+      running: async () => ({ desktop: true, closableDesktop: true, daemon: true }),
       operation: 'cli',
       runtime: () => ({
         ...idleRuntime(),
@@ -562,6 +562,120 @@ describe('Pending-marker retry', () => {
       { desktop: true, daemon: false },
       { desktop: true, daemon: true },
     ]);
+  });
+
+  it('records a desktop by the rule stop() closes it with, not by readiness', async () => {
+    const proxyOnly = { desktop: false, closableDesktop: true, daemon: false };
+    const first = fixture();
+    await bridge.execute({
+      ...first.deps,
+      running: async () => proxyOnly,
+      operation: 'cli',
+      runtime: idleRuntime,
+    });
+    expect(first.marks).toEqual([undefined, { desktop: true, daemon: false }]);
+  });
+
+  it('gives a live proxy a bounded while to bring the daemon back', async () => {
+    const value = fixture();
+    let checks = 0;
+    const result = await bridge.execute({
+      ...value.deps,
+      update: async () => {},
+      marked: () => ({ version: '1.0.0', daemon: true }),
+      pending: () => true,
+      operation: 'cli',
+      runtime: idleRuntime,
+      running: async () => {
+        checks++;
+        return { desktop: false, daemon: checks > 3, proxy: true };
+      },
+    });
+    expect(result.status).toBe('updated');
+    expect(value.events).toContain('wait');
+  });
+
+  it('stops waiting for a proxy at the bound and reports the daemon closed', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      update: async () => {},
+      marked: () => ({ version: '1.0.0', daemon: true }),
+      pending: () => true,
+      operation: 'cli',
+      runtime: idleRuntime,
+      settleMs: 1000,
+      running: async () => ({ desktop: false, daemon: false, proxy: true }),
+    });
+    expect(result.messageCode).toBe('restart_not_running');
+    expect(value.events.filter((event) => event === 'wait').length).toBe(4);
+  });
+
+  it('does not wait with no proxy to bring the daemon back', async () => {
+    const { value, deps } = retry({ daemon: true }, nothing);
+    await bridge.execute(deps);
+    expect(value.events).not.toContain('wait');
+  });
+
+  it('records what a failed stop() left closed', async () => {
+    const value = fixture();
+    let stopped = false;
+    const result = await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      running: async () =>
+        stopped
+          ? { desktop: false, closableDesktop: false, daemon: false }
+          : { desktop: true, closableDesktop: true, daemon: true },
+      runtime: () => ({
+        ...idleRuntime(),
+        stop: async () => {
+          stopped = true;
+          throw new Error('private');
+        },
+      }),
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(value.marks).toEqual([undefined, { desktop: true, daemon: true }]);
+  });
+
+  it('adds nothing when a failed stop() recovered what it closed', async () => {
+    const value = fixture();
+    await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      running: async () => ({ desktop: true, closableDesktop: true, daemon: true }),
+      runtime: () => ({
+        ...idleRuntime(),
+        stop: async () => {
+          throw new Error('private');
+        },
+      }),
+    });
+    expect(value.marks).toEqual([undefined]);
+  });
+
+  it('keeps what an earlier run closed when a failed stop() loses something more', async () => {
+    const value = fixture();
+    value.deps.mark();
+    value.marks.length = 0;
+    let stopped = false;
+    await bridge.execute({
+      ...value.deps,
+      update: async () => {},
+      marked: () => ({ version: '1.0.0', desktop: true }),
+      pending: () => true,
+      operation: 'cli',
+      running: async () => ({ desktop: false, daemon: !stopped }),
+      runtime: () => ({
+        ...idleRuntime(),
+        stop: async () => {
+          stopped = true;
+          throw new Error('private');
+        },
+      }),
+    });
+    expect(value.marks[value.marks.length - 1]).toEqual({ desktop: true, daemon: true });
   });
 
   it('leaves a busy run with a marker that names nothing', async () => {
@@ -620,6 +734,32 @@ describe('What counts as running', () => {
     expect(bridge.desktopReady([renderer, server(10)], codexHome)).toBe(false);
   });
 
+  it('closes a desktop by any Codex process on this home under it, proxies included', () => {
+    const main = item(10, 1, desktop, [desktop]);
+    const proxy = (env: Record<string, string>) =>
+      item(11, 10, '/usr/lib/chatgpt/resources/codex', ['codex', 'app-server', 'proxy'], env);
+    expect(bridge.desktopClosable([main, proxy({ HOME: home })], codexHome)).toBe(true);
+    expect(bridge.desktopReady([main, proxy({ HOME: home })], codexHome)).toBe(false);
+    expect(bridge.desktopClosable([main, server(10)], codexHome)).toBe(true);
+    expect(bridge.desktopClosable([main], codexHome)).toBe(false);
+    expect(
+      bridge.desktopClosable([main, proxy({ CODEX_HOME: '/t3/shadow/.codex' })], codexHome)
+    ).toBe(false);
+  });
+
+  it('names a proxy on this home in the running state', () => {
+    const proxy = (env: Record<string, string>) =>
+      item(20, 1, '/fixture/bin/codex', ['codex', 'app-server', 'proxy'], env);
+    expect(bridge.runningState([proxy({ HOME: home })], codexHome).proxy).toBe(true);
+    expect(bridge.runningState([proxy({ CODEX_HOME: '/t3/.codex' })], codexHome).proxy).toBe(false);
+    expect(bridge.runningState([], codexHome)).toEqual({
+      desktop: false,
+      closableDesktop: false,
+      daemon: false,
+      proxy: false,
+    });
+  });
+
   it('counts only the shared daemon on this home as the daemon', () => {
     const daemon = (args: string[], env: Record<string, string>) =>
       bridge.daemonRunning([item(20, 1, '/fixture/bin/codex', args, env)], codexHome);
@@ -674,7 +814,8 @@ exports.lockfile = { lock: async () => async () => {} };
 exports.createCodexActivationRuntime = (home, overrides) => ({
   stop: async () => {
     if (process.env.FIXTURE_AT_STOP) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_STOP);
-    procs = [];
+    if (process.env.FIXTURE_STOP !== 'fail-recovered') procs = [];
+    if (process.env.FIXTURE_STOP) throw new Error('private');
   },
   start: async () => {
     if (process.env.FIXTURE_START === 'fail') throw new Error('private');
@@ -686,7 +827,13 @@ exports.createCodexActivationRuntime = (home, overrides) => ({
 `;
   function run(
     start: 'launch' | 'fail' | 'idle',
-    options: { marker?: object | null; next?: string; procs?: (root: string) => object[] } = {}
+    options: {
+      marker?: object | null;
+      next?: string;
+      installed?: string;
+      stop?: string;
+      procs?: (root: string) => object[];
+    } = {}
   ) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-bridge-'));
     directories.push(root);
@@ -696,7 +843,7 @@ exports.createCodexActivationRuntime = (home, overrides) => ({
     fs.writeFileSync(path.join(root, 'bridge', 'app_update_codex_runtime.cjs'), RUNTIME);
     const codex = path.join(root, '.local/bin/codex');
     fs.mkdirSync(path.dirname(codex), { recursive: true });
-    fs.writeFileSync(path.join(root, 'version'), '2.0.0\n');
+    fs.writeFileSync(path.join(root, 'version'), `${options.installed ?? '2.0.0'}\n`);
     const update = options.next ? `echo ${options.next} > "$HOME/version"` : ':';
     fs.writeFileSync(
       codex,
@@ -716,6 +863,7 @@ exports.createCodexActivationRuntime = (home, overrides) => ({
         HOME: root,
         FIXTURE_RECORD: record,
         FIXTURE_START: start,
+        FIXTURE_STOP: options.stop ?? '',
         FIXTURE_MARKER: marker,
         FIXTURE_AT_STOP: atStop,
         FIXTURE_PROCS: JSON.stringify(options.procs?.(root) ?? []),
@@ -783,6 +931,66 @@ exports.createCodexActivationRuntime = (home, overrides) => ({
   it('keeps what an earlier run closed on the real marker across a failed retry', () => {
     const { marker } = run('fail', { marker: { version: '2.0.0', desktop: true } });
     expect(read(marker)).toEqual({ version: '2.0.0', desktop: true, daemon: false });
+  });
+
+  it('records a proxy-only desktop on the real marker', () => {
+    const proxyOnly = (root: string) => [
+      {
+        pid: 102,
+        ppid: 1,
+        exe: '/usr/lib/chatgpt/ChatGPT',
+        args: ['ChatGPT'],
+        env: { HOME: root },
+      },
+      {
+        pid: 103,
+        ppid: 102,
+        exe: '/usr/lib/chatgpt/resources/codex',
+        args: ['codex', 'app-server', 'proxy'],
+        env: { HOME: root },
+      },
+    ];
+    const { marker } = run('fail', { marker: null, next: '3.0.0', procs: proxyOnly });
+    expect(read(marker)).toEqual({ version: '3.0.0', desktop: true, daemon: false });
+  });
+
+  it('records on the real marker what a failed stop() could not bring back', () => {
+    const { result, marker } = run('idle', {
+      marker: null,
+      next: '3.0.0',
+      stop: 'fail',
+      procs: running,
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(read(marker)).toEqual({ version: '3.0.0', desktop: true, daemon: true });
+  });
+
+  it('leaves the real marker naming nothing when a failed stop() recovered', () => {
+    const { marker } = run('idle', {
+      marker: null,
+      next: '3.0.0',
+      stop: 'fail-recovered',
+      procs: running,
+    });
+    expect(read(marker)).toEqual({ version: '3.0.0' });
+  });
+
+  it('reads a marker the Python path wrote for a prerelease as a retry', () => {
+    const { result, marker } = run('idle', {
+      installed: '2.0.0-alpha.1',
+      marker: { version: '2.0.0-alpha.1', daemon: true },
+    });
+    expect(result.messageCode).toBe('restart_not_running');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('reads a prerelease marker naming nothing as a restart owed, not as current', () => {
+    const { result, marker } = run('idle', {
+      installed: '2.0.0-alpha.1',
+      marker: { version: '2.0.0-alpha.1' },
+    });
+    expect(result.status).toBe('updated');
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it('does not turn a marker that names nothing into a red row', () => {

@@ -575,14 +575,22 @@ class UpdaterTests(unittest.TestCase):
                 _, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', **case)
             self.assertFalse(bridged, case)
 
-    def test_systemd_argv_escapes_every_dollar_in_the_command(self):
-        command = ['/opt/$HOME/app', '--user-data-dir=/d$HOME/x', '$$', '${X}', 'plain']
+    def test_systemd_argv_escapes_every_dollar_in_the_arguments(self):
+        command = ['/opt/app', '--user-data-dir=/d$HOME/x', '$$', '${X}', 'plain']
         with mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
             argv = common.systemd_user_service_argv('unit', '/tmp', {}, command)
         words = argv[argv.index('--') + 1:]
         for word in words:
             self.assertNotRegex(word, r'(^|[^$])\$([^$]|$)')
         self.assertEqual([word.replace('$$', '$') for word in words], command)
+
+    def test_systemd_argv_runs_an_executable_with_a_dollar_through_the_sh_step(self):
+        # systemd-run looks up word 0 itself and would find no /opt/a$$b/app.
+        with mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            argv = common.systemd_user_service_argv('unit', '/tmp', {}, ['/opt/a$b/app', '$x'])
+        words = argv[argv.index('--') + 1:]
+        self.assertEqual(words[:2], ['/bin/sh', '-c'])
+        self.assertEqual(words[3:], ['sh', '/opt/a$$b/app', '$$x'])
 
     def test_tmux_relaunch_gives_systemd_run_its_own_environment(self):
         install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/$HOME/codex'), '0.160.0')

@@ -154,11 +154,11 @@ describe('app-launcher', () => {
     expect(seen.trim()).toBe('/nonexistent/lib||yes');
   });
 
-  it('escapes every $ in the command so systemd hands it over literally', () => {
+  it('escapes every $ in the arguments so systemd hands them over literally', () => {
     const argv = buildSystemdRunArgs(
       {
         app: 'app',
-        exe: '/opt/$HOME/app',
+        exe: '/opt/app',
         args: ['--user-data-dir=/d$HOME/x', '$$', '${X}', 'plain'],
       },
       'unit'
@@ -166,12 +166,20 @@ describe('app-launcher', () => {
     const command = argv.slice(argv.indexOf('--') + 1);
     for (const word of command) expect(word).not.toMatch(/(^|[^$])\$([^$]|$)/);
     expect(command.map((word) => word.replaceAll('$$', '$'))).toEqual([
-      '/opt/$HOME/app',
+      '/opt/app',
       '--user-data-dir=/d$HOME/x',
       '$$',
       '${X}',
       'plain',
     ]);
+  });
+
+  it('runs an executable with a $ in its path through the sh step', () => {
+    const argv = buildSystemdRunArgs({ app: 'app', exe: '/opt/a$b/app', args: ['$x'] }, 'unit');
+    const command = argv.slice(argv.indexOf('--') + 1);
+    // systemd-run looks up word 0 itself and would find no /opt/a$$b/app.
+    expect(command.slice(0, 2)).toEqual(['/bin/sh', '-c']);
+    expect(command.slice(3)).toEqual(['sh', '/opt/a$$b/app', '$$x']);
   });
 
   it('escapes the replayed command behind the loader step too', () => {
