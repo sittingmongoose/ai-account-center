@@ -450,7 +450,11 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   list and history refuse after a read error until a good authoritative read succeeds. A second dashboard
   may recover by reading without ownership; it still refuses every store-dependent decision with `store_busy`.
   It reads the journal again whenever its size, mtime or inode changed (on each history read and retry pass), so
-  its history follows the writer's; delivery objects it holds stay attached and are merged back by id on a gain.
+  its history follows the writer's. Each read replaces that read-only history; it never holds what it read. Only
+  this process's own delivery objects stay attached (records it wrote, and records or sends whose share write, ring,
+  summary or completion it started) and are merged back by id on a gain. A gain never puts back a record this
+  process did not write, or one the fresh read shows voided: a record cancelled by a failed fsync stays cancelled
+  even if another dashboard read it in the moment before its void line, so it is never shared or rung.
   Successful delivery effects append their completion lines immediately under the writer lock, even if a
   journal read failed: appending a true, idempotent done fact needs no read. Only a failed append leaves pending
   persistence work. It is retried before ownership reconciliation, on retry, on server close and on process exit

@@ -410,8 +410,20 @@ function isEntryResult(value: unknown): value is EntryResult {
 
 export class StatusAnswers {
   private entries: AnswerHistoryEntry[] | null = null;
-  /** Delivery objects survive failed reads, but are never served as authoritative history. */
+  /**
+   * This process's own delivery objects (see holdsEntry), kept across failed reads and reads made without the store;
+   * never served as authoritative history. A record another process wrote is never held: the journal has it.
+   */
   private readonly heldEntries = new Map<string, AnswerHistoryEntry>();
+  /** Ids of the answer lines this process appended and stored (fsync succeeded). */
+  private readonly written = new Set<string>();
+  /** Ids whose share write this process is running. */
+  private readonly sharing = new Set<string>();
+  /** Send ids this process created, or whose summary it is writing. */
+  private readonly ownSends = new Set<string>();
+  private readonly summarizing = new Set<string>();
+  /** Record ids the last journal fold found cancelled by a void line. */
+  private voidedIds = new Set<string>();
   private historyUnavailable = false;
   /** The journal's size, mtime and inode when `entries` was read; a non-owner reads it again once it changes. */
   private loadedFrom: string | null = null;
@@ -505,9 +517,9 @@ export class StatusAnswers {
     if (this.entries && (this.owner || (from !== null && from === this.loadedFrom)))
       return this.entries;
     if (this.entries) {
-      // Held delivery objects stay attached: the next gain of the store merges them back by id.
-      for (const held of this.entries)
-        if (!this.heldEntries.has(held.id)) this.heldEntries.set(held.id, held);
+      // The fresh read replaces this read-only history. Only this process's own delivery objects stay attached (the
+      // next gain merges them back by id); a record it merely read is never held, so a cancelled one cannot return.
+      this.holdOwn(this.entries);
       this.entries = null;
     }
     let text = '';
@@ -520,7 +532,8 @@ export class StatusAnswers {
         throw error;
       }
     }
-    for (const [id, send] of this.sends) if (!this.heldSends.has(id)) this.heldSends.set(id, send);
+    for (const [id, send] of this.sends)
+      if (this.holdsSend(id) && !this.heldSends.has(id)) this.heldSends.set(id, send);
     this.sends.clear();
     this.replays.clear();
     this.drafts.clear();
@@ -528,6 +541,35 @@ export class StatusAnswers {
     this.loadedFrom = from;
     this.historyUnavailable = false;
     return loaded;
+  }
+
+  /**
+   * Whether this process still needs this record's object: it wrote the record, or a share write, ring or pending
+   * completion it started still updates the object.
+   */
+  private holdsEntry(id: string): boolean {
+    return (
+      this.written.has(id) ||
+      this.sharing.has(id) ||
+      this.ringing.has(id) ||
+      this.pendingCompletions.has(id + ':share') ||
+      this.pendingCompletions.has(id + ':doorbell')
+    );
+  }
+
+  private holdsSend(sendId: string): boolean {
+    return (
+      this.ownSends.has(sendId) ||
+      this.summarizing.has(sendId) ||
+      this.pendingCompletions.has(sendId + ':summary')
+    );
+  }
+
+  /** Keeps this process's own delivery objects among `entries` attached; everything else is the journal's. */
+  private holdOwn(entries: AnswerHistoryEntry[]): void {
+    for (const held of entries)
+      if (this.holdsEntry(held.id) && !this.heldEntries.has(held.id))
+        this.heldEntries.set(held.id, held);
   }
 
   /** What identifies the journal's current contents: it is only appended to, so any change moves its size. */
@@ -560,9 +602,13 @@ export class StatusAnswers {
         /* a torn or partial line */
       }
     }
+    const voidedIds = new Set<string>();
     for (const record of records) {
       // a record its writer cancelled (it failed to be stored whole) does not count
-      if (typeof record.line === 'string' && voided.has(record.line)) continue;
+      if (typeof record.line === 'string' && voided.has(record.line)) {
+        if (typeof record.id === 'string' && record.type === 'answer') voidedIds.add(record.id);
+        continue;
+      }
       if (
         record.type === 'answer' &&
         typeof record.id === 'string' &&
@@ -677,6 +723,7 @@ export class StatusAnswers {
         entry[step] = stepFrom(record, entry[step]);
       }
     }
+    this.voidedIds = voidedIds;
     this.entries = entries;
     return entries;
   }
@@ -726,17 +773,19 @@ export class StatusAnswers {
       } catch (error) {
         this.owner = false;
         if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
-          for (const held of this.entries ?? []) this.heldEntries.set(held.id, held);
+          this.holdOwn(this.entries ?? []);
           this.entries = null;
           this.historyUnavailable = true;
           throw error;
         }
         text = '';
       }
-      const heldEntries = new Map(this.heldEntries);
-      for (const held of this.entries ?? [])
-        if (!heldEntries.has(held.id)) heldEntries.set(held.id, held);
-      const heldSends = new Map([...this.sends, ...this.heldSends]);
+      // Only this process's own delivery objects carry over; whatever else the cache held is read again.
+      this.holdOwn(this.entries ?? []);
+      const heldEntries = new Map([...this.heldEntries].filter(([id]) => this.holdsEntry(id)));
+      const heldSends = new Map(
+        [...this.sends, ...this.heldSends].filter(([id]) => this.holdsSend(id))
+      );
       this.entries = null;
       this.sends.clear();
       this.replays.clear();
@@ -749,14 +798,16 @@ export class StatusAnswers {
         held.doorbell = furthest(held.doorbell, fresh.doorbell);
         return held;
       });
-      // Even an outstanding record absent from this reload must not be detached.
-      this.entries.push(...heldEntries.values());
+      // A record of this process's own that is absent from this reload stays attached; one the reload shows
+      // cancelled, or one this process did not write, is not put back (the journal is the history).
+      for (const held of heldEntries.values())
+        if (this.written.has(held.id) && !this.voidedIds.has(held.id)) this.entries.push(held);
       for (const [sendId, held] of heldSends) {
         const fresh = this.sends.get(sendId);
         if (fresh) {
           held.summary = furthest(held.summary, fresh.summary);
           held.entryIds = fresh.entryIds;
-        }
+        } else if (!this.ownSends.has(sendId)) continue;
         this.sends.set(sendId, held);
       }
       this.heldEntries.clear();
@@ -1031,6 +1082,17 @@ export class StatusAnswers {
 
   /** Writes one record's signed copy to the share. */
   private async writeShare(entry: AnswerHistoryEntry, limitMs: number): Promise<boolean> {
+    // While it runs, this object is this process's own delivery (see holdsEntry).
+    if (this.sharing.has(entry.id)) return this.writeShareHeld(entry, limitMs);
+    this.sharing.add(entry.id);
+    try {
+      return await this.writeShareHeld(entry, limitMs);
+    } finally {
+      this.sharing.delete(entry.id);
+    }
+  }
+
+  private async writeShareHeld(entry: AnswerHistoryEntry, limitMs: number): Promise<boolean> {
     if (this.superseded(entry)) {
       this.markSuperseded(entry);
       return false;
@@ -1068,6 +1130,16 @@ export class StatusAnswers {
 
   /** Writes a send's signed summary to `answers/batches/<sendId>.json`. */
   private async writeSummary(send: SendRecord, limitMs: number): Promise<boolean> {
+    if (this.summarizing.has(send.sendId)) return this.writeSummaryHeld(send, limitMs);
+    this.summarizing.add(send.sendId);
+    try {
+      return await this.writeSummaryHeld(send, limitMs);
+    } finally {
+      this.summarizing.delete(send.sendId);
+    }
+  }
+
+  private async writeSummaryHeld(send: SendRecord, limitMs: number): Promise<boolean> {
     const byId = new Map(this.list().map((entry) => [entry.id, entry]));
     const answers = send.entryIds.flatMap((id) => {
       const entry = byId.get(id);
@@ -1240,6 +1312,7 @@ export class StatusAnswers {
       return null;
     }
     // No await since the line was written: a retry sees the record only with its claim on it.
+    this.written.add(entry.id);
     this.list().push(entry);
     this.ringing.add(entry.id);
     recorded.push(entry);
@@ -1440,6 +1513,7 @@ export class StatusAnswers {
             entryIds: send.entryIds,
             ...(clientSendId ? { clientSendId, results: out, entriesHash } : {}),
           });
+          this.ownSends.add(sendId);
           this.sends.set(sendId, send);
           if (clientSendId) this.remember(clientSendId, this.now(), out, entriesHash, false);
           // Out of time, the summary stays pending and the retry writes it.

@@ -53,6 +53,28 @@ fs.writeSync = ((fd: any, data: any, ...args: any[]) => {
     throw Object.assign(Error('Injected completion append failure'), { code: faultCode });
   return (realWrite as any)(fd, data, ...args);
 }) as typeof fs.writeSync;
+// A slow failing fsync on the next `type: "answer"` line: the line is on disk, unvoided, until `<root>/fsync-go`
+// appears; then the fsync throws and appendLine writes its void line. Only the journal's descriptors are touched.
+let fsyncFault = false;
+const lastJournalData = new Map<number, string>();
+const realWriteSync = fs.writeSync;
+fs.writeSync = ((fd: any, data: any, ...args: any[]) => {
+  if (journalFds.has(fd)) lastJournalData.set(fd, Buffer.from(data).toString());
+  return (realWriteSync as any)(fd, data, ...args);
+}) as typeof fs.writeSync;
+const realFsync = fs.fsyncSync;
+fs.fsyncSync = ((fd: number) => {
+  if (fsyncFault && journalFds.has(fd) && lastJournalData.get(fd)?.includes('"type":"answer"')) {
+    fsyncFault = false;
+    emit({ event: 'fsync-paused' });
+    const until = Date.now() + 15000;
+    while (!fs.existsSync(path.join(root, 'fsync-go')) && Date.now() < until) {
+      /* spin: a slow fsync, so another process can read the unvoided line */
+    }
+    throw Object.assign(Error('Injected slow journal fsync error'), { code: 'EIO' });
+  }
+  return realFsync(fd);
+}) as typeof fs.fsyncSync;
 let ringResume: (() => void) | null = null;
 let gateRing = false;
 const realRead = fs.readFileSync;
@@ -167,6 +189,11 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     }
     if (cmd.cmd === 'close-fault') {
       closeFault = cmd.code ?? 'EIO';
+      emit({ event: 'armed' });
+      return;
+    }
+    if (cmd.cmd === 'fsync-fault') {
+      fsyncFault = true;
       emit({ event: 'armed' });
       return;
     }

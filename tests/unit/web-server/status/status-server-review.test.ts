@@ -3955,6 +3955,59 @@ describe('real-process journal and publication fences', () => {
       await b?.kill();
     }
   });
+  for (const firstRead of ['empty', 'during']) {
+    it(
+      'a second dashboard that read a record before its void never shares or rings it after a gain: ' +
+        firstRead,
+      async () => {
+        const { root, entry } = fixture('viewer-void-' + firstRead);
+        const note = { ...noteEntry(entry), entryId: 'e'.repeat(32) };
+        const a = new Worker(root),
+          c = new Worker(root);
+        try {
+          await Promise.all([a.next('ready'), c.next('ready')]);
+          a.send({ cmd: 'retry' });
+          await a.next('retried');
+          if (firstRead === 'empty') {
+            c.send({ cmd: 'routes' });
+            assert.equal((await c.next('routes')).history.answers.length, 0);
+          }
+          a.send({ cmd: 'fsync-fault' });
+          await a.next('armed');
+          a.send({ cmd: 'submit', entries: [note], clientSendId: 'viewer-void-1234' });
+          await a.next('fsync-paused');
+          // The answer line is on disk and not yet voided: the viewer reads it.
+          c.send({ cmd: 'routes' });
+          assert.equal((await c.next('routes')).history.answers.length, 1);
+          fs.writeFileSync(path.join(root, 'fsync-go'), '1');
+          const refused = (await a.next('submitted')).result[0];
+          assert.equal(refused.code, 'answer_not_saved');
+          assert.match(refused.error, /Nothing was sent/);
+          c.send({ cmd: 'routes' });
+          assert.equal((await c.next('routes')).history.answers.length, 0);
+          await a.exit();
+          for (let i = 0; i < 2; i++) {
+            c.send({ cmd: 'retry' });
+            await c.next('retried');
+          }
+          c.send({ cmd: 'routes' });
+          const gained = await c.next('routes');
+          assert.equal(gained.historyStatus, 200);
+          assert.equal(gained.history.answers.length, 0);
+          assert.equal(answerRecords(root).length, 1);
+          assert.equal(records(root).filter((x) => x.type === 'void').length, 1);
+          const shared = path.join(root, 'reports', 'v1', 'answers');
+          assert.deepEqual(
+            fs.existsSync(shared) ? fs.readdirSync(shared, { recursive: true }) : [],
+            []
+          );
+          assert.equal(ringCount(root), 0);
+        } finally {
+          await Promise.all([a.kill(), c.kill()]);
+        }
+      }
+    );
+  }
   it('a second dashboard refreshes read-only history when the journal changes', async () => {
     const { root, entry } = fixture('viewer-refresh');
     const a = new Worker(root),
