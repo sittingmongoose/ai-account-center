@@ -2,6 +2,7 @@
 'use strict';
 
 // Fixed Codex family updates. Runtime snapshots/auth environments remain in memory.
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -114,7 +115,7 @@ function markerFile() { return path.join(home, '.ccs/app-updates', output.appId 
 function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'utf8')); } catch { return null; } }
 /**
  * `closed`: what a run's stop() has closed, which a retry must see running again: the `daemon`, and
- * each desktop in `desktops` by a hash of its data folder (`desktop` says whether any). A marker
+ * each desktop in `desktops` by a salted hash of its data folder (`desktop` says whether any). A marker
  * without them, written before stop(), says only that a restart is owed.
  */
 function markPending(closed = {}) {
@@ -123,9 +124,37 @@ function markPending(closed = {}) {
   fs.writeFileSync(temporary, JSON.stringify({ version: output.version, ...closed }), { mode: 0o600 });
   fs.renameSync(temporary, markerFile());
 }
-// An older runtime reports neither, and so can owe nothing or show nothing running.
-const runtimePlan = (runtime) => runtime.stopPlan?.() ?? { daemon: false, desktops: [] };
-const runtimeState = async (runtime) => (await runtime.restartState?.()) ?? { daemon: false, desktops: [], presentDesktops: [], proxy: false };
+/**
+ * A random salt for this home, 0600 beside the marker. A desktop's instance hash goes in the marker
+ * only keyed with it, so a guessed data folder path can't be tested against a marker. A missing or
+ * unsafe salt is replaced, and a marker from the old one then reads as a desktop still owed, once.
+ */
+function desktopSalt(directory = path.dirname(markerFile())) {
+  const file = path.join(directory, 'codex-desktop-instance.salt');
+  let stat = null;
+  try { stat = fs.lstatSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (stat) {
+    const value = stat.isFile() && (stat.mode & 0o077) === 0 ? fs.readFileSync(file, 'utf8').trim() : '';
+    if (/^[0-9a-f]{64}$/.test(value)) return value;
+    fs.rmSync(file, { force: true });
+  }
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const value = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(file, value, { flag: 'wx', mode: 0o600 });
+  return value;
+}
+const sealInstance = (instance, salt = desktopSalt()) => crypto.createHmac('sha256', salt).update(instance).digest('hex').slice(0, 32);
+// An older runtime reports neither, and so can owe nothing or show nothing running. The runtime names
+// desktops by an unsalted hash, in memory; the bridge keys it before comparing or writing a marker.
+const sealed = (deps, instances) => instances.map((item) => (deps.sealInstance ? deps.sealInstance(item) : item));
+const runtimePlan = (runtime, deps) => {
+  const plan = runtime.stopPlan?.() ?? { daemon: false, desktops: [] };
+  return { ...plan, desktops: sealed(deps, plan.desktops) };
+};
+const runtimeState = async (runtime, deps) => {
+  const live = (await runtime.restartState?.()) ?? { daemon: false, desktops: [], presentDesktops: [], proxy: false };
+  return { ...live, desktops: sealed(deps, live.desktops), presentDesktops: sealed(deps, live.presentDesktops) };
+};
 async function execute(deps) {
   const idle = Math.max(1, Math.min(seconds, deps.idleSeconds ?? IDLE_WAIT_SECONDS));
   const deadline = deps.now() + idle * 1000;
@@ -170,7 +199,7 @@ async function execute(deps) {
     }
     // The runtime's own plan, captured under its lock: a process that appeared just before that lock
     // is closed with the rest, so an earlier scan here could miss it.
-    const closed = addObligations(prior, runtimePlan(runtime));
+    const closed = addObligations(prior, runtimePlan(runtime, deps));
     if (mode === 'cli') deps.mark(markerFields(closed));
     if (mode === 'desktop') {
       output.updateAttempted = !restartOnly;
@@ -187,10 +216,10 @@ async function execute(deps) {
     // too early, so while a live proxy could bring the daemon back it gets a short while to do so.
     if (retried) {
       const settleBy = deps.now() + (deps.settleMs ?? RESTART_SETTLE_MS);
-      let live = await runtimeState(runtime);
+      let live = await runtimeState(runtime, deps);
       while (closed.daemon && !live.daemon && live.proxy && deps.now() < settleBy) {
         await deps.sleep(250);
-        live = await runtimeState(runtime);
+        live = await runtimeState(runtime, deps);
       }
       if (stillOwed(closed, live)) {
         deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running';
@@ -206,8 +235,8 @@ async function execute(deps) {
     // A stop() that failed partway may have closed something its own recovery could not bring back.
     if (stopFailed) {
       try {
-        const plan = runtimePlan(runtime);
-        const live = await runtimeState(runtime);
+        const plan = runtimePlan(runtime, deps);
+        const live = await runtimeState(runtime, deps);
         const lost = { daemon: plan.daemon && !live.daemon, desktops: plan.desktops.filter((item) => !live.presentDesktops.includes(item)) };
         if (lost.daemon || lost.desktops.length > 0) deps.mark(markerFields(addObligations(prior, lost)));
       } catch { /* The row below still says the restart failed. */ }
@@ -282,6 +311,7 @@ function bridgeDeps(createCodexActivationRuntime) {
     },
     runtime: () => createUpdateRuntime(createCodexActivationRuntime),
     marked: readMarker,
+    sealInstance,
     };
 }
 async function main() {
@@ -301,5 +331,5 @@ async function main() {
     return await execute(bridgeDeps(createCodexActivationRuntime));
   } finally { await release(); }
 }
-module.exports = { bridgeDeps, createUpdateRuntime, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
+module.exports = { bridgeDeps, createUpdateRuntime, desktopSalt, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, sealInstance, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

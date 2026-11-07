@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { createHmac } from 'crypto';
 const BRIDGE_SOURCE = path.resolve(
   import.meta.dir,
   '../../../scripts/app-updates/app_update_codex.cjs'
@@ -742,7 +743,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     stop: async () => {
       if (process.env.FIXTURE_AT_STOP) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_STOP);
       plan = await read();
-      if (process.env.FIXTURE_STOP !== 'fail-recovered') procs = [];
+      if (process.env.FIXTURE_STOP !== 'fail-recovered' && !process.env.FIXTURE_KEEP) procs = [];
       if (process.env.FIXTURE_STOP) throw new Error('private');
     },
     start: async () => {
@@ -761,6 +762,8 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       next?: string;
       installed?: string;
       stop?: string;
+      salt?: string;
+      keep?: boolean;
       procs?: (root: string) => object[];
     } = {}
   ) {
@@ -782,6 +785,8 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     fs.mkdirSync(path.join(root, '.codex'));
     const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
     fs.mkdirSync(path.dirname(marker), { recursive: true });
+    const salt = path.join(path.dirname(marker), 'codex-desktop-instance.salt');
+    if (options.salt) fs.writeFileSync(salt, options.salt, { mode: 0o600 });
     if (options.marker !== null)
       fs.writeFileSync(marker, JSON.stringify(options.marker ?? { version: '2.0.0' }));
     const record = path.join(root, 'launched.json');
@@ -793,13 +798,14 @@ exports.createCodexActivationRuntime = (home, overrides) => {
         FIXTURE_RECORD: record,
         FIXTURE_START: start,
         FIXTURE_STOP: options.stop ?? '',
+        FIXTURE_KEEP: options.keep ? '1' : '',
         FIXTURE_MARKER: marker,
         FIXTURE_AT_STOP: atStop,
         FIXTURE_PROCS: JSON.stringify(options.procs?.(root) ?? []),
       },
       encoding: 'utf8',
     });
-    return { result: JSON.parse(stdout), record, marker, codex, atStop };
+    return { result: JSON.parse(stdout), record, marker, codex, atStop, salt };
   }
   const running = (root: string) => [
     {
@@ -819,6 +825,10 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     },
   ];
   const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8'));
+  const INSTANCE = 'a'.repeat(32);
+  const keyed = (saltValue: string) =>
+    createHmac('sha256', saltValue).update(INSTANCE).digest('hex').slice(0, 32);
+  const keyedBy = (file: string) => keyed(fs.readFileSync(file, 'utf8').trim());
 
   it('starts the updated executable through the runtime launcher', () => {
     const { result, record, marker, codex } = run('launch', {
@@ -842,7 +852,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
   });
 
   it('writes what stop() closed to the real marker, and nothing before stop()', () => {
-    const { result, marker, atStop } = run('fail', {
+    const { result, marker, atStop, salt } = run('fail', {
       marker: null,
       next: '3.0.0',
       procs: running,
@@ -853,7 +863,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       version: '3.0.0',
       desktop: true,
       daemon: true,
-      desktops: ['a'.repeat(32)],
+      desktops: [keyedBy(salt)],
     });
   });
 
@@ -868,7 +878,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
   });
 
   it('records on the real marker what a failed stop() could not bring back', () => {
-    const { result, marker } = run('idle', {
+    const { result, marker, salt } = run('idle', {
       marker: null,
       next: '3.0.0',
       stop: 'fail',
@@ -879,7 +889,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       version: '3.0.0',
       desktop: true,
       daemon: true,
-      desktops: ['a'.repeat(32)],
+      desktops: [keyedBy(salt)],
     });
   });
 
@@ -911,9 +921,75 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
+  it('keeps the marker hash keyed with a private salt beside it', () => {
+    const { marker, salt } = run('fail', { marker: null, next: '3.0.0', procs: running });
+    expect(fs.statSync(salt).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(salt, 'utf8')).toMatch(/^[0-9a-f]{64}$/);
+    // The runtime's own unsalted name, which a guessed path could be tested against, is not stored.
+    expect(read(marker).desktops).not.toContain(INSTANCE);
+  });
+
+  it('matches a retry through the salt, and not through a different one', () => {
+    const first = 'c'.repeat(64);
+    const owed = { version: '2.0.0', desktop: true, desktops: [keyed(first)] };
+    const same = run('idle', { marker: owed, salt: first, keep: true, procs: running });
+    expect(same.result.status).toBe('updated');
+    const other = run('idle', { marker: owed, salt: 'd'.repeat(64), keep: true, procs: running });
+    expect(other.result.messageCode).toBe('restart_not_running');
+  });
+
   it('does not turn a marker that names nothing into a red row', () => {
     const { result, marker } = run('idle', { marker: { version: '2.0.0' } });
     expect(result.status).toBe('updated');
     expect(fs.existsSync(marker)).toBe(false);
+  });
+});
+
+describe('The per-home desktop salt', () => {
+  const folder = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-salt-'));
+    directories.push(root);
+    return root;
+  };
+  const file = (root: string) => path.join(root, 'state', 'codex-desktop-instance.salt');
+
+  it('is created private, then stays the same', () => {
+    const root = folder();
+    const directory = path.dirname(file(root));
+    const value = bridge.desktopSalt(directory);
+    expect(value).toMatch(/^[0-9a-f]{64}$/);
+    expect(fs.statSync(file(root)).mode & 0o777).toBe(0o600);
+    expect(bridge.desktopSalt(directory)).toBe(value);
+  });
+
+  it('differs between homes, and so does the same desktop under it', () => {
+    const one = bridge.desktopSalt(path.dirname(file(folder())));
+    const two = bridge.desktopSalt(path.dirname(file(folder())));
+    expect(one).not.toBe(two);
+    expect(bridge.sealInstance('a'.repeat(32), one)).not.toBe(
+      bridge.sealInstance('a'.repeat(32), two)
+    );
+    expect(bridge.sealInstance('a'.repeat(32), one)).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('replaces a salt that is readable by others, malformed, or a link', () => {
+    for (const plant of [
+      (target: string) => fs.writeFileSync(target, 'e'.repeat(64), { mode: 0o644 }),
+      (target: string) => fs.writeFileSync(target, 'short', { mode: 0o600 }),
+      (target: string, root: string) => {
+        const elsewhere = path.join(root, 'elsewhere');
+        fs.writeFileSync(elsewhere, 'e'.repeat(64), { mode: 0o600 });
+        fs.symlinkSync(elsewhere, target);
+      },
+    ]) {
+      const root = folder();
+      fs.mkdirSync(path.dirname(file(root)));
+      plant(file(root), root);
+      const value = bridge.desktopSalt(path.dirname(file(root)));
+      expect(value).toMatch(/^[0-9a-f]{64}$/);
+      expect(value).not.toBe('e'.repeat(64));
+      expect(fs.lstatSync(file(root)).isSymbolicLink()).toBe(false);
+      expect(fs.statSync(file(root)).mode & 0o777).toBe(0o600);
+    }
   });
 });

@@ -724,7 +724,8 @@ Account activation used to put the values on argv, and no longer does.
 
 A pending-marker retry restarts only what it finds running, since the launch snapshot of the failed
 run is gone. Once `stop()` has succeeded, the marker records what the runtime's own stop plan closed:
-the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder, never the path. A
+the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder keyed with a random
+0600 salt beside the marker (`codex-desktop-instance.salt`), never the path. A
 `stop()` that failed partway records what its recovery could not bring back. A marker naming nothing
 is not a retry. `update_cli` routes a marker that names something, for the installed version, to the
 bridge even with no daemon running. A retry that leaves any of them closed is `restart_failed` with

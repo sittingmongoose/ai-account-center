@@ -33,7 +33,8 @@ export interface CodexRestartState extends CodexRestartPlan {
 }
 
 /**
- * Names one Codex Desktop by its data folder, without keeping the path: this goes in a marker file.
+ * Names one Codex Desktop by its data folder, without keeping the path. The update bridge keys this
+ * with a per-home salt before it goes in a marker file.
  * A desktop started with no folder uses the default one, which a relaunch names explicitly.
  */
 export function codexDesktopInstance(userData: string): string {
