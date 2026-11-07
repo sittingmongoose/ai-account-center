@@ -2115,6 +2115,10 @@ describe('round three', () => {
       // a short password after "is" that ends the clause
       'password is hunter2',
       'the password is s3cr3t.',
+      // multi-word human passwords after a bare pass
+      'pass=Summer_Winter_2026',
+      'pass: My_Secret_2026',
+      'pw=Hello_World_2026',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, 'a password or key']);
   });
@@ -2181,6 +2185,8 @@ describe('round three', () => {
       'After login: nix-shell -p python311Packages',
       'login then cargo test -p crate2026',
       'login and pnpm -p @scope/pkg2026',
+      'docker login\nnix-shell -p python311Packages',
+      'sshpass\ncargo test -p crate2026',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, null]);
   });

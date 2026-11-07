@@ -42,8 +42,9 @@ const AUTH_VALUE = /(?<![A-Za-z0-9])(?:bearer|basic)\s{1,4}(?=([^\s'"`]{1,256}))
 const URL_PASSWORD =
   /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@]{0,64}:(?=([^\s/@]{1,256})@)/g;
 const GLUED_PASSWORD = /(?<![A-Za-z0-9-])-p(?=([^\s'"=-][^\s'"]{0,255}))/g;
+// within one command: spaces and tabs only, never a newline or a shell separator
 const LOGIN_PASSWORD =
-  /(?<![A-Za-z0-9-])(?:sshpass|(?:docker|podman|nerdctl|helm|oras|buildah|skopeo|oc|crane|regctl|az|cf)(?:\s{1,4}[a-z]{1,16}){0,2}\s{1,4}login)(?=(?:\s{1,4}[^\s;|&]{1,128}){0,8}?\s{1,4}-p\s{1,4}['"]?([^\s;|&'"]{1,256}))/g;
+  /(?<![A-Za-z0-9-])(?:sshpass|(?:docker|podman|nerdctl|helm|oras|buildah|skopeo|oc|crane|regctl|az|cf)(?:[^\S\n]{1,4}[a-z]{1,16}){0,2}[^\S\n]{1,4}login)(?=(?:[^\S\n]{1,4}[^\s;|&]{1,128}){0,8}?[^\S\n]{1,4}-p[^\S\n]{1,4}['"]?([^\s;|&'"]{1,256}))/g;
 const USER_PASSWORD =
   /(?<![A-Za-z0-9-])(?:-u|--user)(?:\s{1,4}|=)['"]?[^\s:'"]{1,64}:(?=([^\s'"@]{1,256}))/g;
 const NOT_A_SECRET_NAME = new Set(
@@ -130,9 +131,12 @@ function secretValue(kind: SecretKind, raw: string, separator = '=', more = fals
     if (/[\\/]/.test(value)) return false;
     if (longestMixedRun(value, /[-._:]+/) >= 6) return true;
     const human = value.length >= 8 && /[A-Za-z]/.test(value) && /\d/.test(value);
-    // a test or step name (`TestAuth_2`, `Step_2_Done`, `round_16_ok`) is no password
+    // a test or step name (`TestAuth_2`, `Step_2_Done`, `round_16_ok`) is no password; a password ends in a digit
+    // or a symbol (`Summer_Winter_2026`)
     const words = value.split(/[_-]+/).filter((part) => /^[A-Za-z]+$/.test(part)).length;
-    if (!human || /^test/i.test(value) || words >= 2) return false;
+    const testName =
+      /^(?:test|step|case|stage|phase)/i.test(value) || (words >= 2 && /[A-Za-z]$/.test(value));
+    if (!human || testName) return false;
     return separator === '=' || /[A-Z]/.test(value) || /[^A-Za-z0-9_.-]/.test(value);
   }
   // a password: human ones are a word and a number (`Summer_2026`), so the whole value counts
