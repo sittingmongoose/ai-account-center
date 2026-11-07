@@ -17,8 +17,34 @@ let faultCount = 0;
 let faults = 0;
 let faultCode = 'EIO';
 let failCompletionAppends = false;
+// One-shot journal faults: a close error after the real write, fsync and close succeeded, and a
+// write error on the `type: "send"` line only. Only the journal's append descriptors are touched.
+let closeFault: string | null = null;
+let sendFault: string | null = null;
+const journalFds = new Set<number>();
+const realOpen = fs.openSync;
+fs.openSync = ((file: any, ...args: any[]) => {
+  const fd = (realOpen as any)(file, ...args);
+  if (String(file) === path.join(store, 'answers.jsonl') && args[0] === 'a+') journalFds.add(fd);
+  return fd;
+}) as typeof fs.openSync;
+const realClose = fs.closeSync;
+fs.closeSync = ((fd: number) => {
+  const journal = journalFds.delete(fd);
+  realClose(fd);
+  if (journal && closeFault) {
+    const code = closeFault;
+    closeFault = null;
+    throw Object.assign(Error('Injected journal close error after write and fsync'), { code });
+  }
+}) as typeof fs.closeSync;
 const realWrite = fs.writeSync;
 fs.writeSync = ((fd: any, data: any, ...args: any[]) => {
+  if (sendFault && journalFds.has(fd) && String(data).includes('\"type\":\"send\"')) {
+    const code = sendFault;
+    sendFault = null;
+    throw Object.assign(Error('Injected send line write error'), { code });
+  }
   if (
     failCompletionAppends &&
     String(data).includes('\"step\":\"doorbell\"') &&
@@ -136,6 +162,16 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     if (cmd.cmd === 'append-fault') {
       failCompletionAppends = cmd.fail;
       faultCode = cmd.code ?? 'EIO';
+      emit({ event: 'armed' });
+      return;
+    }
+    if (cmd.cmd === 'close-fault') {
+      closeFault = cmd.code ?? 'EIO';
+      emit({ event: 'armed' });
+      return;
+    }
+    if (cmd.cmd === 'send-fault') {
+      sendFault = cmd.code ?? 'EIO';
       emit({ event: 'armed' });
       return;
     }

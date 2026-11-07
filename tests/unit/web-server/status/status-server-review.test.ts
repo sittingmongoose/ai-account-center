@@ -3836,4 +3836,155 @@ describe('real-process journal and publication fences', () => {
       await Promise.all([a.kill(), b.kill()]);
     }
   });
+  const ringCount = (root: string) =>
+    fs.existsSync(path.join(root, 'rings.jsonl'))
+      ? fs.readFileSync(path.join(root, 'rings.jsonl'), 'utf8').trim().split('\n').length
+      : 0;
+  const noteEntry = (entry: Record<string, unknown>) => ({
+    ...entry,
+    choice: [],
+    note: 'Please keep this exact note.',
+  });
+  for (const code of ['EIO', 'ENOSPC']) {
+    it(
+      'a close error after fsync keeps the durable note, and its retry records nothing: ' + code,
+      async () => {
+        const { root, entry } = fixture('close-' + code);
+        const note = noteEntry(entry);
+        const a = new Worker(root);
+        let b: Worker | undefined;
+        try {
+          await a.next('ready');
+          a.send({ cmd: 'retry' });
+          await a.next('retried');
+          a.send({ cmd: 'close-fault', code });
+          await a.next('armed');
+          a.send({ cmd: 'submit', entries: [note], clientSendId: 'close-error-retry-1234' });
+          const first = await a.next('submitted');
+          assert.equal(first.result[0].outcome, 'recorded');
+          assert.equal(answerRecords(root).length, 1);
+          a.send({ cmd: 'routes' });
+          assert.equal((await a.next('routes')).history.answers.length, 1);
+          // The same draft again, under the same retry key and under a new one.
+          a.send({ cmd: 'submit', entries: [note], clientSendId: 'close-error-retry-1234' });
+          assert.equal((await a.next('submitted')).result[0].outcome, 'recorded');
+          a.send({ cmd: 'submit', entries: [note], clientSendId: 'close-error-retry-5678' });
+          assert.equal((await a.next('submitted')).result[0].outcome, 'recorded');
+          assert.equal(answerRecords(root).length, 1);
+          await a.exit();
+          b = new Worker(root);
+          await b.next('ready');
+          b.send({ cmd: 'submit', entries: [note], clientSendId: 'close-error-retry-9012' });
+          assert.equal((await b.next('submitted')).result[0].outcome, 'recorded');
+          b.send({ cmd: 'retry' });
+          await b.next('retried');
+          assert.equal(answerRecords(root).length, 1);
+          assert.equal(ringCount(root), 1);
+        } finally {
+          await a.kill();
+          await b?.kill();
+        }
+      }
+    );
+    it('a failed send line keeps the retry key across a graceful restart: ' + code, async () => {
+      const { root, entry } = fixture('sendline-' + code);
+      const { entryId: _omitted, ...plain } = noteEntry(entry);
+      const a = new Worker(root);
+      let b: Worker | undefined;
+      try {
+        await a.next('ready');
+        a.send({ cmd: 'send-fault', code });
+        await a.next('armed');
+        a.send({ cmd: 'submit', entries: [plain], clientSendId: 'send-line-retry-1234' });
+        assert.equal((await a.next('submitted')).result[0].outcome, 'recorded');
+        assert.equal(records(root).filter((x) => x.type === 'send').length, 0);
+        assert.equal(ringCount(root), 1);
+        await a.exit();
+        b = new Worker(root);
+        await b.next('ready');
+        b.send({ cmd: 'submit', entries: [plain], clientSendId: 'send-line-retry-1234' });
+        assert.equal((await b.next('submitted')).result[0].outcome, 'recorded');
+        b.send({ cmd: 'retry' });
+        await b.next('retried');
+        assert.equal(answerRecords(root).length, 1);
+        assert.equal(ringCount(root), 1);
+        // A different request under that key is still a new send.
+        b.send({
+          cmd: 'submit',
+          entries: [{ ...plain, note: 'Another note.' }],
+          clientSendId: 'send-line-retry-1234',
+        });
+        assert.equal((await b.next('submitted')).result[0].outcome, 'recorded');
+        assert.equal(answerRecords(root).length, 2);
+      } finally {
+        await a.kill();
+        await b?.kill();
+      }
+    });
+  }
+  it('a partly recorded send rebuilt from its answer lines records only what it had not', async () => {
+    const { root, doc, entry } = fixture('sendline-partial');
+    const { entryId: _omitted, ...plain } = noteEntry(entry);
+    const other = cardDoc('vm.first', 'Q2');
+    const otherHash = writeCard(path.join(root, 'reports'), other);
+    const later = { ...plain, cardId: other.id, cardSha256: otherHash };
+    const refusedFirst = { ...plain, cardSeq: doc.seq + 5 };
+    const refusedLast = { ...later, cardSeq: other.seq + 5 };
+    const entries = [refusedFirst, plain, later, refusedLast];
+    const a = new Worker(root);
+    let b: Worker | undefined;
+    try {
+      await a.next('ready');
+      a.send({ cmd: 'send-fault' });
+      await a.next('armed');
+      a.send({ cmd: 'submit', entries, clientSendId: 'send-line-partial-1234' });
+      const first = (await a.next('submitted')).result;
+      assert.deepEqual(
+        first.map((r: any) => r.outcome),
+        ['card_changed', 'recorded', 'recorded', 'card_changed']
+      );
+      await a.exit();
+      b = new Worker(root);
+      await b.next('ready');
+      b.send({ cmd: 'submit', entries, clientSendId: 'send-line-partial-1234' });
+      assert.deepEqual((await b.next('submitted')).result, first);
+      assert.equal(answerRecords(root).length, 2);
+      assert.equal(ringCount(root), 1);
+    } finally {
+      await a.kill();
+      await b?.kill();
+    }
+  });
+  it('a second dashboard refreshes read-only history when the journal changes', async () => {
+    const { root, entry } = fixture('viewer-refresh');
+    const a = new Worker(root),
+      c = new Worker(root);
+    try {
+      await Promise.all([a.next('ready'), c.next('ready')]);
+      a.send({ cmd: 'retry' });
+      await a.next('retried');
+      c.send({ cmd: 'routes' });
+      const before = await c.next('routes');
+      assert.equal(before.history.answers.length, 0);
+      assert.equal(before.view.cards.open.length, 1);
+      a.send({ cmd: 'submit', entries: [entry] });
+      assert.equal((await a.next('submitted')).result[0].outcome, 'recorded');
+      for (let i = 0; i < 2; i++) {
+        c.send({ cmd: 'retry' });
+        await c.next('retried');
+        c.send({ cmd: 'routes' });
+        const poll = await c.next('routes');
+        assert.equal(poll.historyStatus, 200);
+        assert.equal(poll.history.answers.length, 1);
+        assert.equal(poll.view.cards.open.length, 0);
+        assert.equal(poll.view.cards.answerHistoryProblem, null);
+      }
+      c.send({ cmd: 'submit', entries: [{ ...entry, entryId: 'b'.repeat(32) }] });
+      assert.equal((await c.next('submitted')).result[0].code, 'store_busy');
+      assert.equal(answerRecords(root).length, 1);
+      assert.equal(ringCount(root), 1);
+    } finally {
+      await Promise.all([a.kill(), c.kill()]);
+    }
+  });
 });

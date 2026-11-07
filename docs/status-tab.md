@@ -383,7 +383,10 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   even after a reload, and any edit makes a new one. A repeat with the same entries answers with the first send's
   per-entry results and records, writes and rings nothing; one that arrives while the first is still running waits its
   turn and answers the same way. The same id with different entries (draft ids included) is a new send. The last 200 ids
-  are kept for 24 hours, in the private store, so this survives a restart. A send that recorded nothing is not remembered,
+  are kept for 24 hours, in the private store, so this survives a restart. Each answer line carries the retry key too
+  (the id, the entries hash, its place in the request and the results of the entries before it since the send's previous
+  record), so a send whose own `send` line failed to append is still recognised after a restart: the known results
+  stand and only entries after its last stored record, none of which was stored, are judged again. A send that recorded nothing is not remembered,
   since a retry may yet succeed. It is only a dedupe key: it is never the summary's `sendId` below, which the server makes
   and signs, and it never reaches the share or the mail.
 - **Draft key:** the optional entry `entryId` (32 lowercase hex; anything else, or the same id twice in one body, is
@@ -426,7 +429,9 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   characters other than tab and newlines.
 - Stored in `<ccsDir>/status/answers.jsonl` (append-only, local disk, this server only. Each line carries its own id;
   each record starts on a line of its own and is written in one piece or refused; a record that fails to be written
-  whole is cancelled by a `void` line naming it, never cut, so no writer can remove another's record. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
+  whole is cancelled by a `void` line naming it, never cut, so no writer can remove another's record. A record counts
+  once its fsync succeeds: a later close error is logged and changes nothing, so a durable record is never answered
+  `answer_not_saved` and its draft id still guards a retry. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
   each minute. Only ENOENT means an empty journal; other journal read errors refuse store-dependent decisions
   (answers return `answer_not_saved`) and mark history unavailable even after a warm cache; a later good authoritative read recovers. A second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
   over when its holder on this computer has ended, or on Linux was written in an earlier boot or names a pid since
@@ -444,6 +449,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   and retries reconciliation by id on the next gain. Held objects are kept separately from readable history:
   list and history refuse after a read error until a good authoritative read succeeds. A second dashboard
   may recover by reading without ownership; it still refuses every store-dependent decision with `store_busy`.
+  It reads the journal again whenever its size, mtime or inode changed (on each history read and retry pass), so
+  its history follows the writer's; delivery objects it holds stay attached and are merged back by id on a gain.
   Successful delivery effects append their completion lines immediately under the writer lock, even if a
   journal read failed: appending a true, idempotent done fact needs no read. Only a failed append leaves pending
   persistence work. It is retried before ownership reconciliation, on retry, on server close and on process exit

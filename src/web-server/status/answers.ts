@@ -66,6 +66,9 @@ import { findTypedSecret } from './typed-secrets';
 import { holdWriterLock, WriterBusyError } from './writer-lock';
 import { registerCleanup } from '../../errors/cleanup-registry';
 import { ConfigError } from '../../errors/error-types';
+import { createLogger } from '../../services/logging';
+
+const logger = createLogger('status-answers');
 
 export * from './answer-entries';
 export {
@@ -249,6 +252,10 @@ async function writeAtomic(
  * Appends one record to the store. The store is only ever appended to, never cut or overwritten, so no writer can
  * remove or damage a record another wrote: each line carries its own id (`line`), and a record that fails to be
  * written whole and synced is cancelled by a `void` line naming that id, which the loader honours.
+ *
+ * The append is committed once its fsync succeeds: the line is then durable and uncancelled, and every reader
+ * after a restart counts it. A close error after that changes nothing (it is logged), so a durable record is
+ * never reported unsaved while it stays in the journal, where a retry of the same draft would record it again.
  */
 function appendLine(file: string, record: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -285,7 +292,18 @@ function appendLine(file: string, record: Record<string, unknown>): void {
       throw error;
     }
   } finally {
-    fs.closeSync(fd);
+    try {
+      fs.closeSync(fd);
+    } catch (error) {
+      // Committed or refused, the outcome is already decided above; a close error cannot change it.
+      try {
+        logger.warn('status.answer_store_close_failed', 'The answer store could not be closed', {
+          code: (error as NodeJS.ErrnoException | null)?.code ?? null,
+        });
+      } catch {
+        /* Logging never changes a record's outcome. */
+      }
+    }
   }
 }
 
@@ -359,11 +377,44 @@ export interface StatusAnswersDeps {
 
 const RECORD_KINDS: readonly string[] = ['answer', 'note', 'object', 'done'];
 
+interface Replay {
+  at: number;
+  results: EntryResult[];
+  entriesHash: string | null;
+  partial: boolean;
+}
+
+/**
+ * The client retry key an answer line carries, so a restart can rebuild the send's deduplication from the answer
+ * lines alone, without its send line: the request's id and entries hash, this entry's place in the request, and
+ * the results of the entries since the send's previous stored record (none of which was stored).
+ */
+interface RequestKey {
+  clientSendId: string;
+  entriesHash: string;
+  entryIndex: number;
+  priorResults: EntryResult[];
+}
+
+function isEntryResult(value: unknown): value is EntryResult {
+  const result = value as EntryResult | null;
+  return (
+    !!result &&
+    typeof result === 'object' &&
+    (result.cardId === null || typeof result.cardId === 'string') &&
+    typeof result.outcome === 'string' &&
+    (result.code === null || typeof result.code === 'string') &&
+    (result.error === null || typeof result.error === 'string')
+  );
+}
+
 export class StatusAnswers {
   private entries: AnswerHistoryEntry[] | null = null;
   /** Delivery objects survive failed reads, but are never served as authoritative history. */
   private readonly heldEntries = new Map<string, AnswerHistoryEntry>();
   private historyUnavailable = false;
+  /** The journal's size, mtime and inode when `entries` was read; a non-owner reads it again once it changes. */
+  private loadedFrom: string | null = null;
   private readonly heldSends = new Map<string, SendRecord>();
   /** Successful effects awaiting a durable completion line; repair persistence without repeating them. */
   private readonly pendingCompletions = new Map<
@@ -390,11 +441,12 @@ export class StatusAnswers {
    * (the send rings them itself, whole), and while any ring of them is running.
    */
   private readonly ringing = new Set<string>();
-  /** Client send id -> what that send answered, oldest first. Never the server's own batch id. */
-  private readonly replays = new Map<
-    string,
-    { at: number; results: EntryResult[]; entriesHash: string | null }
-  >();
+  /**
+   * Client send id -> what that send answered, oldest first. Never the server's own batch id. `partial` marks
+   * results rebuilt from answer lines alone (the send line never landed): they cover the request up to its last
+   * stored record, and the entries after it, none of which was recorded, are judged again.
+   */
+  private readonly replays = new Map<string, Replay>();
   /** Draft id -> the content it was recorded with and when, oldest first. */
   private readonly drafts = new Map<string, { at: number; hash: string }>();
   private readonly timing: AnswerTiming;
@@ -446,7 +498,18 @@ export class StatusAnswers {
         // A viewer needs an authoritative read, but no writer ownership or decision authority.
       }
     }
-    if (this.entries) return this.entries;
+    // The writer's cache is the history: only it appends. Anyone else (a second dashboard, or this one after
+    // losing the store) reads the journal again whenever it changed, so a viewer never serves its first
+    // snapshot forever.
+    const from = this.owner && this.entries ? this.loadedFrom : this.journalStamp();
+    if (this.entries && (this.owner || (from !== null && from === this.loadedFrom)))
+      return this.entries;
+    if (this.entries) {
+      // Held delivery objects stay attached: the next gain of the store merges them back by id.
+      for (const held of this.entries)
+        if (!this.heldEntries.has(held.id)) this.heldEntries.set(held.id, held);
+      this.entries = null;
+    }
     let text = '';
     try {
       text = fs.readFileSync(this.storeFile(), 'utf8');
@@ -462,8 +525,20 @@ export class StatusAnswers {
     this.replays.clear();
     this.drafts.clear();
     const loaded = this.load(text);
+    this.loadedFrom = from;
     this.historyUnavailable = false;
     return loaded;
+  }
+
+  /** What identifies the journal's current contents: it is only appended to, so any change moves its size. */
+  private journalStamp(): string | null {
+    try {
+      const stat = fs.statSync(this.storeFile());
+      return `${stat.size}:${stat.mtimeMs}:${stat.ino}`;
+    } catch (error) {
+      // Absent is a state of its own; any other failure leaves the stamp unknown, so the read decides.
+      return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'absent' : null;
+    }
   }
 
   /** Fold an already-read journal; I/O failures cannot clear held delivery objects. */
@@ -472,6 +547,8 @@ export class StatusAnswers {
     const byId = new Map<string, AnswerHistoryEntry>();
     const records: Record<string, unknown>[] = [];
     const voided = new Set<string>();
+    /** Client send id -> the request's results, by entry index, as far as its answer lines say. */
+    const requests = new Map<string, { hash: string; slots: Array<EntryResult | undefined> }>();
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
       try {
@@ -523,6 +600,48 @@ export class StatusAnswers {
             typeof record.at === 'string' ? Date.parse(record.at) : 0,
             record.entryHash
           );
+        const index = record.entryIndex;
+        if (
+          typeof record.clientSendId === 'string' &&
+          typeof record.entriesHash === 'string' &&
+          typeof index === 'number' &&
+          Number.isInteger(index) &&
+          index >= 0 &&
+          Array.isArray(record.priorResults) &&
+          record.priorResults.length <= index &&
+          record.priorResults.every(isEntryResult)
+        ) {
+          const known = requests.get(record.clientSendId);
+          const request =
+            known && known.hash === record.entriesHash
+              ? known
+              : { hash: record.entriesHash, slots: [] as Array<EntryResult | undefined> };
+          requests.set(record.clientSendId, request);
+          const prior = record.priorResults as EntryResult[];
+          for (let k = 0; k < prior.length; k += 1) {
+            const slot = index - prior.length + k;
+            if (!request.slots[slot]) request.slots[slot] = prior[k];
+          }
+          // A stored record always answers recorded: it is in the journal, whatever an earlier line said.
+          request.slots[index] = {
+            cardId: entry.answer.cardId,
+            outcome: 'recorded',
+            code: null,
+            error: null,
+          };
+          const results: EntryResult[] = [];
+          for (const slot of request.slots) {
+            if (!slot) break;
+            results.push(slot);
+          }
+          this.remember(
+            record.clientSendId,
+            typeof record.at === 'string' ? Date.parse(record.at) : 0,
+            results,
+            record.entriesHash,
+            true
+          );
+        }
       } else if (record.type === 'send' && typeof record.sendId === 'string') {
         this.sends.set(record.sendId, {
           sendId: record.sendId,
@@ -533,13 +652,19 @@ export class StatusAnswers {
             : [],
           summary: { ...PENDING },
         });
-        if (typeof record.clientSendId === 'string' && Array.isArray(record.results))
+        if (typeof record.clientSendId === 'string' && Array.isArray(record.results)) {
+          const results = record.results as EntryResult[];
+          const hash = typeof record.entriesHash === 'string' ? record.entriesHash : null;
           this.remember(
             record.clientSendId,
             typeof record.at === 'string' ? Date.parse(record.at) : 0,
-            record.results as EntryResult[],
-            typeof record.entriesHash === 'string' ? record.entriesHash : null
+            results,
+            hash,
+            false
           );
+          if (hash) requests.set(record.clientSendId, { hash, slots: [...results] });
+          else requests.delete(record.clientSendId);
+        }
       } else if (record.type === 'delivery' && typeof record.id === 'string') {
         if (record.step === 'summary') {
           const send = this.sends.get(record.id);
@@ -594,6 +719,7 @@ export class StatusAnswers {
       // holds keeps its object (a ring or summary still running updates it), with the further-along delivery steps.
       // Read first: a failed gain must keep the objects an in-flight delivery still updates.
       // Fold this successful read only after ownership reconciliation can proceed.
+      const from = this.journalStamp();
       let text: string;
       try {
         text = fs.readFileSync(this.storeFile(), 'utf8');
@@ -635,6 +761,7 @@ export class StatusAnswers {
       }
       this.heldEntries.clear();
       this.heldSends.clear();
+      this.loadedFrom = from;
       this.historyUnavailable = false;
       this.owner = true;
       this.epoch += 1;
@@ -767,10 +894,11 @@ export class StatusAnswers {
     clientSendId: string,
     at: number,
     results: EntryResult[],
-    entriesHash: string | null
+    entriesHash: string | null,
+    partial: boolean
   ): void {
     this.replays.delete(clientSendId);
-    this.replays.set(clientSendId, { at, results, entriesHash });
+    this.replays.set(clientSendId, { at, results, entriesHash, partial });
     for (const oldest of this.replays.keys()) {
       if (this.replays.size <= MAX_REMEMBERED_SENDS) break;
       this.replays.delete(oldest);
@@ -782,11 +910,11 @@ export class StatusAnswers {
    * same entries (draft ids included): the id is the client's claim, and different entries under it
    * are a new send. Sends stored before the hash existed cannot be compared and count as the same.
    */
-  private replayOf(clientSendId: string, entriesHash: string): EntryResult[] | null {
+  private replayOf(clientSendId: string, entriesHash: string): Replay | null {
     this.list();
     const held = this.replays.get(clientSendId);
     if (!held || this.now() - held.at >= REMEMBER_SEND_MS) return null;
-    return held.entriesHash === null || held.entriesHash === entriesHash ? held.results : null;
+    return held.entriesHash === null || held.entriesHash === entriesHash ? held : null;
   }
 
   /**
@@ -856,11 +984,14 @@ export class StatusAnswers {
   private superseded(entry: AnswerHistoryEntry): boolean {
     if (!CLOSING_KINDS.has(entry.answer.kind)) return false;
     const all = this.list();
+    // By id: a non-owner's refreshed history holds fresh objects, while a delivery may hold the earlier one.
     return all
-      .slice(all.indexOf(entry) + 1)
+      .slice(all.findIndex((held) => held.id === entry.id) + 1)
       .some(
         (later) =>
-          CLOSING_KINDS.has(later.answer.kind) && later.answer.cardId === entry.answer.cardId
+          later.id !== entry.id &&
+          CLOSING_KINDS.has(later.answer.kind) &&
+          later.answer.cardId === entry.answer.cardId
       );
   }
 
@@ -1064,7 +1195,8 @@ export class StatusAnswers {
     sendId: string,
     budget: Budget,
     recorded: AnswerHistoryEntry[],
-    draft: { entryId: string; hash: string } | null
+    draft: { entryId: string; hash: string } | null,
+    request: RequestKey | null
   ): Promise<AnswerHistoryEntry | null> {
     const id = randomUUID();
     const unsigned: UnsignedAnswer = {
@@ -1102,6 +1234,7 @@ export class StatusAnswers {
         answer: entry.answer,
         card: entry.card,
         ...(draft ? { entryId: draft.entryId, entryHash: draft.hash } : {}),
+        ...(request ?? {}),
       });
     } catch {
       return null;
@@ -1161,7 +1294,8 @@ export class StatusAnswers {
     device: string,
     sendId: string,
     recorded: AnswerHistoryEntry[],
-    budget: Budget
+    budget: Budget,
+    request: RequestKey | null
   ): Promise<EntryResult> {
     const entry = parseAnswerEntry(raw);
     const named = (raw as { cardId?: unknown } | null)?.cardId;
@@ -1213,7 +1347,8 @@ export class StatusAnswers {
       sendId,
       budget,
       recorded,
-      entry.entryId && hash ? { entryId: entry.entryId, hash } : null
+      entry.entryId && hash ? { entryId: entry.entryId, hash } : null,
+      request
     );
     if (!done) return refused(entry.cardId, 'answer_not_saved');
     return { cardId: entry.cardId, outcome: 'recorded', code: null, error: null };
@@ -1253,13 +1388,27 @@ export class StatusAnswers {
         }
         const replay =
           clientSendId && entriesHash ? this.replayOf(clientSendId, entriesHash) : null;
-        if (replay) return replay;
+        if (replay && (!replay.partial || replay.results.length >= entries.length))
+          return replay.results.slice(0, entries.length);
+        // Rebuilt from answer lines alone: the known results stand, and only the entries after the request's last
+        // stored record, none of which was stored, are judged again.
+        const out: EntryResult[] = replay ? replay.results.slice() : [];
         const budget = startBudget(this.timing.sendBudgetMs);
-        const out: EntryResult[] = [];
-        for (const raw of entries) {
+        let lastStored = out.length - 1;
+        for (let index = out.length; index < entries.length; index += 1) {
+          const raw = entries[index];
           const before = recorded.length;
+          const request: RequestKey | null =
+            clientSendId && entriesHash
+              ? {
+                  clientSendId,
+                  entriesHash,
+                  entryIndex: index,
+                  priorResults: out.slice(lastStored + 1),
+                }
+              : null;
           try {
-            out.push(await this.recordEntry(raw, device, sendId, recorded, budget));
+            out.push(await this.recordEntry(raw, device, sendId, recorded, budget, request));
           } catch {
             // Whatever went wrong, the other entries still get their answers. A record that exists
             // says so: its delivery is retried like any other.
@@ -1271,6 +1420,7 @@ export class StatusAnswers {
                 : refused(cardId, 'answer_not_saved')
             );
           }
+          if (recorded.length > before) lastStored = index;
         }
         if (recorded.length > 0) {
           const send: SendRecord = {
@@ -1280,6 +1430,8 @@ export class StatusAnswers {
             entryIds: recorded.map((entry) => entry.id),
             summary: { ...PENDING },
           };
+          // A send line that fails to append loses nothing a restart needs: each answer line carries the retry key
+          // (see RequestKey), and the summary is rebuilt from the records.
           this.record({
             type: 'send',
             sendId,
@@ -1289,7 +1441,7 @@ export class StatusAnswers {
             ...(clientSendId ? { clientSendId, results: out, entriesHash } : {}),
           });
           this.sends.set(sendId, send);
-          if (clientSendId) this.remember(clientSendId, this.now(), out, entriesHash);
+          if (clientSendId) this.remember(clientSendId, this.now(), out, entriesHash, false);
           // Out of time, the summary stays pending and the retry writes it.
           const left = budget.left();
           if (left > 0) await this.writeSummary(send, Math.min(this.timing.shareMs, left));
@@ -1308,10 +1460,15 @@ export class StatusAnswers {
   /** Retries every share write, send summary and ring that has not succeeded and has attempts left. */
   async retryPending(): Promise<void> {
     if (this.retrying) return;
-    // another process holds the store: its retries are its own
+    // another process holds the store: its retries are its own, but its history is read again if it changed
     try {
       this.writer();
     } catch {
+      try {
+        this.list();
+      } catch {
+        /* history now reads unavailable until a good read */
+      }
       return;
     }
     this.retrying = true;
