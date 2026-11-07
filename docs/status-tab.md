@@ -77,7 +77,10 @@ provider refresh. quota-watch: its share report `<reports>/v1/quota/report.json`
   id, card: { id, label, seq, title, project, stream, askedBy, options: [ { key, label } ], recommendation, cardSha256
   }, answer: { kind, choice, note, via, answeredAt, device, delivery } } ] }`.
 - `GET /api/status/files/<writer>/<path>`: an image or video a card names, from that writer's own folder only (no
-  `..`, no links out of the folder). The type comes from the content, never the name: images PNG, JPEG or WebP up to
+  `..`, no links out of the folder, checked again on the opened file before a byte is read: on Linux by what the
+  descriptor really holds, so a parent folder swapped for a link after the path check is refused; without `/proc` (macOS,
+  Windows) by looking at every path segment again, which leaves one race there, a folder swapped out for the open and back
+  before that look). The type comes from the content, never the name: images PNG, JPEG or WebP up to
   2 MB; videos MP4 (an `ftyp` box; still-image brands such as HEIC/AVIF refused) or WebM (an EBML header naming
   `webm`) up to 50 MB. Every file answers byte ranges (`Accept-Ranges: bytes`, one `Range: bytes=` range gives
   `206 Partial Content` with `Content-Range`, a range past the end gives `416`): iOS Safari plays no video without
@@ -395,6 +398,11 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   optional). Without `kind`, an entry with a choice is an `answer` and one with only a note is a `note`; `object` and
   `done` must be sent as `kind`. `answer` and `done` close the card version; `note` and `object` leave it open (the
   agent replies on the card or withdraws it), and both show on the open card in `notes[]`.
+- The card must not be older than a `seq` the reader has already read or any record the store holds for that card (an
+  older copy can land on the share and read fresh; it is `card_changed`, and the card shows `answerable: false`, also
+  after a restart). Publishing checks again: `<card>.json` is never renamed over a file with this server's signature and
+  a higher `cardSeq` (that record then reads as superseded). A higher one signed by another key does not count, so a file
+  dropped on the share cannot block a real answer.
 - The card must be open on disk at that `seq` and hash (read fresh, not from the last scan) and that version not yet
   answered. Otherwise that entry is `card_changed` and the page reloads the card.
 - `choice` keys must be the card's option keys, without repeats (one unless `multiple`).

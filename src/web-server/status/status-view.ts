@@ -4,7 +4,7 @@
  * same view. A missing value is null with a reason, never 0, and nothing from a stale source is
  * presented as live.
  */
-import type { ReportProblem, SeenReport } from './agent-reports-reader';
+import { SEQ_WENT_BACK, type ReportProblem, type SeenReport } from './agent-reports-reader';
 import { CLOSING_KINDS, deliveryView } from './answers';
 import {
   ITEM_STATES,
@@ -394,12 +394,23 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
     });
     notes.set(entry.answer.cardId, list);
   }
+  // After a restart the scan has no memory of a higher seq, but the records do: a card older than
+  // one the owner already answered cannot be answered, and saying so spares the owner a loop.
+  const highest = new Map<string, number>();
+  for (const { answer } of inputs.answers)
+    highest.set(answer.cardId, Math.max(highest.get(answer.cardId) ?? 0, answer.cardSeq));
   const open = inputs.reports.cards
     .filter(
       (row) =>
         row.doc.state === 'open' && !answered.has(`${row.doc.id}\n${row.doc.seq}\n${row.sha256}`)
     )
-    .map((row) => cardView(inputs, row.doc, row.sha256, row.problem, notes.get(row.doc.id)))
+    .map((row) => {
+      const older = row.doc.seq < (highest.get(row.doc.id) ?? 0);
+      const problem =
+        row.problem ??
+        (older ? { file: row.file, reason: SEQ_WENT_BACK, since: inputs.now } : null);
+      return cardView(inputs, row.doc, row.sha256, problem, notes.get(row.doc.id));
+    })
     .sort(
       (a, b) =>
         URGENCIES.indexOf(a.urgency) - URGENCIES.indexOf(b.urgency) ||

@@ -156,7 +156,7 @@ interface Entry {
   missingSince?: number | null;
 }
 
-const SEQ_WENT_BACK = 'its seq is lower than one already read, so this copy is ignored';
+export const SEQ_WENT_BACK = 'its seq is lower than one already read, so this copy is ignored';
 
 /**
  * A file absent from its folder's listing is kept (last good copy) this long before it counts as
@@ -629,7 +629,8 @@ export class AgentReportsReader {
 
   /**
    * The card as it is on disk now (for an answer): read fresh, never from the last scan. Null when
-   * the share says the card is not there or the file does not pass the reader's rules. Rejects when
+   * the share says the card is not there, the file does not pass the reader's rules, or it is older
+   * than a seq this reader has already read. Rejects when
    * the share cannot say: that is not the card changing, and the owner must not be told it did.
    */
   async readCardNow(cardId: string): Promise<ParsedReport<CardDoc> | null> {
@@ -653,7 +654,10 @@ export class AgentReportsReader {
     if (!stat.isFile() || stat.size > REPORT_SIZE_CAPS.card) return null;
     const bytes = await this.fs.readFile(file, REPORT_SIZE_CAPS.card);
     const parsed = parseReportFile('card', bytes, writer, cardId);
-    return parsed.ok ? parsed.value : null;
+    if (!parsed.ok) return null;
+    // An older copy on disk is not the card: the scan keeps the higher seq, and so does this read.
+    const held = this.entries.get(`writers/${writer}/cards/${cardId}.json`)?.good;
+    return held && parsed.value.doc.seq < held.doc.seq ? null : parsed.value;
   }
 }
 
