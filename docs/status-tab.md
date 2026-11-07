@@ -452,11 +452,10 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   An external lock deletion while appends still fail cannot be made safe by this process; pending facts remain
   attached and are retried when it can own the store again.
   **Delivery is at least once.** A crash or kill between a ring and its done line can ring again after restart;
-  receivers must dedupe by answer id. New agent-report `answer@1` files carry the signed `answerId` (the private
-  record UUID), also named in the doorbell. Tests check it matches the stored id and survives a restart/retry.
-  The field is optional for legacy files: those carry `signature.keyId` and `signature.value`, which receivers can
-  use together as a fallback signed-content identity. Persist the id after verifying the pinned signing key;
-  card id alone cannot distinguish multiple notes.
+  receivers dedupe because the ring is only a doorbell. Every ring points at signed files whose names and
+  signatures (`signature.keyId` + `signature.value`) are stable across retries, so reading them twice changes
+  nothing. There is one answer file per card; each note or objection has its own `<card>.note-<12 hex>.json`
+  or `<card>.object-<12 hex>.json` file. Receivers verify the pinned signing key before accepting the file.
   Persistence repair never rings again. Durable done steps
   stay done, and persistence retries continue even after the delivery attempt limit. Nothing is written when `<reports>/v1` is not
   there: only folders below it are created, so an unmounted share grows no local folder, and the step reads
@@ -468,7 +467,7 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   signed to `<reports>/v1/answers/batches/<sendId>.json`: `{ schema: "agent-reports/send@1", sendId, at, answeredBy:
   "owner", device, entries: [ { cardId, seq, cardSha256, kind, choice, note } ], signature }`, entries in the order
   sent, signed exactly like an answer (`verifySignedDocument(fileText, publicKeyPem, "agent-reports/send@1")`).
-- The answer file: `{ schema: "agent-reports/answer@1", answerId, cardId, cardSeq, cardSha256, kind: "answer" | "note" |
+- The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind: "answer" | "note" |
   "object" | "done", choice, note, via,
   answeredAt, answeredBy: "owner", device, signature }`. `device` is a word from the browser (`iPhone`, `iPad`,
   `Android`, `Mac`, `Windows`, `Linux`, `browser`).

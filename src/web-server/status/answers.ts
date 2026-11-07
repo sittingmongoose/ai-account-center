@@ -649,7 +649,7 @@ export class StatusAnswers {
   /**
    * Completion facts require no read or decision: done stays done. Delivery is at least once:
    * a crash/kill between ringing and appending done can ring again. Receivers dedupe by the
-   * signed answerId (legacy files: signature.keyId + signature.value), stable across retries.
+   * file name plus signature.keyId + signature.value, stable across retries.
    */
   flushCompletions(): void {
     if (!this.pendingCompletions.size) return;
@@ -1069,7 +1069,6 @@ export class StatusAnswers {
     const id = randomUUID();
     const unsigned: UnsignedAnswer = {
       schema: ANSWER_SCHEMA,
-      answerId: id,
       cardId: parsed.doc.id,
       cardSeq: parsed.doc.seq,
       cardSha256: parsed.sha256,

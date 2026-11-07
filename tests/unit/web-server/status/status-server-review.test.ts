@@ -3393,6 +3393,37 @@ process.exit(0);
   });
 });
 
+describe('signed answer retry identity', () => {
+  for (const restart of [false, true]) {
+    it('re-publishes identical signed bytes after ' + (restart ? 'restart' : 'retry'), async () => {
+      const { root, store, answers, make } = setup();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const file = path.join(root, 'v1', 'answers', CARD + '.json');
+      const realRename = fs.renameSync;
+      const rename = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        realRename(from, to);
+        // Publication succeeded, but the caller did not observe success.
+        if (String(to) === file) throw Object.assign(Error('lost completion'), { code: 'EIO' });
+      });
+      try {
+        await answers.submitSet([entry(CARD, sha)], 'Linux');
+      } finally {
+        rename.mockRestore();
+      }
+      expect(answers.list()[0].share.state).toBe('failed');
+      const original = fs.readFileSync(file, 'utf8');
+      expect(Object.prototype.hasOwnProperty.call(JSON.parse(original), 'answerId')).toBe(false);
+      // Removing the copy proves that retry actually re-publishes it.
+      fs.unlinkSync(file);
+      if (restart) fs.unlinkSync(path.join(store, 'answers.lock'));
+      const receiver = restart ? make() : answers;
+      await receiver.retryPending();
+      expect(receiver.list()[0].share.state).toBe('done');
+      expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    });
+  }
+});
+
 describe('real-process journal and publication fences', () => {
   const records = (root: string) =>
     fs
@@ -3480,6 +3511,8 @@ describe('real-process journal and publication fences', () => {
           a.send({ cmd: 'submit', entries: [entry] });
           await a.next('ring-wait');
           await a.next('submitted');
+          const signedFile = path.join(root, 'reports', 'v1', 'answers', entry.cardId + '.json');
+          const originalFile = fs.readFileSync(signedFile, 'utf8');
           fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
           a.send({ cmd: 'arm', n: 100000, code });
           await a.next('armed');
@@ -3499,15 +3532,11 @@ describe('real-process journal and publication fences', () => {
           await b.next('ready');
           b.send({ cmd: 'retry' });
           await b.next('retried');
-          const signed = JSON.parse(
-            fs.readFileSync(
-              path.join(root, 'reports', 'v1', 'answers', entry.cardId + '.json'),
-              'utf8'
-            )
-          );
+          const retriedFile = fs.readFileSync(signedFile, 'utf8');
+          assert.equal(retriedFile, originalFile);
+          const signed = JSON.parse(retriedFile);
           const stored = answerRecords(root)[0].answer;
-          assert.equal(signed.answerId, answerRecords(root)[0].id);
-          assert.equal(signed.answerId, stored.answerId);
+          assert.equal(Object.prototype.hasOwnProperty.call(signed, 'answerId'), false);
           assert.equal(signed.signature.keyId, stored.signature.keyId);
           assert.equal(signed.signature.value, stored.signature.value);
           assert.ok(signed.signature.value);
