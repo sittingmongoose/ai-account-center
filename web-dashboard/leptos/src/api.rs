@@ -511,6 +511,8 @@ pub struct Delivery {
     pub at: Option<String>,
     #[serde(deserialize_with = "nullable")]
     pub detail: String,
+    /// The send summary not on the share yet (pending, retrying or given up, with its attempts).
+    pub summary_warning: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -1142,6 +1144,27 @@ mod tests {
         )
         .unwrap();
         assert!(recovered.answer_history_problem.is_none());
+    }
+
+    #[test]
+    fn a_send_summary_warning_reads_beside_the_ring() {
+        let delivery: Delivery = serde_json::from_value(serde_json::json!({
+            "state": "rang", "at": null, "detail": "Rang.",
+            "summary": {"state": "failed", "at": null, "detail": "x", "attempts": 20},
+            "summaryWarning": "The signed send summary could not be written to the share after 20 attempts; no more retries."
+        }))
+        .unwrap();
+        assert_eq!(delivery.state, "rang");
+        assert!(
+            delivery
+                .summary_warning
+                .as_deref()
+                .is_some_and(|w| w.contains("after 20 attempts"))
+        );
+        let done: Delivery =
+            serde_json::from_value(serde_json::json!({"state": "rang", "summaryWarning": null}))
+                .unwrap();
+        assert!(done.summary_warning.is_none());
     }
 
     #[test]

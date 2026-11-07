@@ -693,7 +693,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
             {(!c.notes.is_empty() || !c.replies.is_empty()).then(|| view! {
                 <ul class="talk">
                     {c.notes.iter().map(|n| view! {
-                        <li class="mine" data-kind=n.kind.clone()><span class="who">{format!("{} · {}", if n.kind == "object" { "You objected" } else { "You" }, n.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{n.note.clone()}</li>
+                        <li class="mine" data-kind=n.kind.clone()><span class="who">{format!("{} · {}", if n.kind == "object" { "You objected" } else { "You" }, n.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{n.note.clone()}{n.delivery.summary_warning.clone().map(|w| view! { <div class="item-note" data-tone="warn">{w}</div> })}</li>
                     }).collect_view()}
                     {c.replies.iter().map(|r| view! {
                         <li class="theirs"><span class="who">{format!("{} · {}", asker, r.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{r.text.clone()}</li>
@@ -922,6 +922,7 @@ fn AnsweredView(answered: AnsweredCard) -> impl IntoView {
             {a.note.clone().filter(|n| !n.is_empty()).map(|n| view! { <blockquote>{n}</blockquote> })}
             <div class="muted">{format!("{} · {} · {delivery}", c.asked_by, fmt::clock(&a.answered_at))}</div>
             {(a.delivery.state == "failed").then(|| view! { <div class="item-note" data-tone="warn">{a.delivery.detail.clone()}</div> })}
+            {a.delivery.summary_warning.clone().map(|w| view! { <div class="item-note" data-tone="warn">{w}</div> })}
         </li>
     }
 }
