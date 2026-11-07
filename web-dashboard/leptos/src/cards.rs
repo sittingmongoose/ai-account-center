@@ -742,9 +742,12 @@ fn Review(
                                         summary.askers.push(c.asked_by.clone());
                                     }
                                 }
-                                drafts.update(|d| {
-                                    d.remove(&r.card_id);
-                                });
+                                // Drop the draft only if it is still the one sent: another tab may have
+                                // edited it while this send was on its way, and that newer draft stays.
+                                if let Some(sent) = entries.iter().find(|e| e.card_id == r.card_id)
+                                {
+                                    drafts.update(|d| drafts::forget_sent(d, &cards, sent));
+                                }
                             }
                             "card_changed" => summary.changed.push(label_of(&r.card_id)),
                             _ => summary.refused.push(format!(

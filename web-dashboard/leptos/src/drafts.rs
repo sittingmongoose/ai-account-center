@@ -172,6 +172,20 @@ pub fn use_recommendations(drafts: &mut Drafts, cards: &[Card]) -> usize {
     filled
 }
 
+/// After an entry was recorded: drop its card's draft, unless the draft has changed since that entry was made from it
+/// (another tab edited it while the send was on its way), in which case the newer draft stays.
+pub fn forget_sent(drafts: &mut Drafts, cards: &[Card], sent: &AnswerEntry) {
+    let Some(card) = cards.iter().find(|c| c.id == sent.card_id) else {
+        return;
+    };
+    let unchanged = entries(drafts, std::slice::from_ref(card))
+        .first()
+        .is_some_and(|now| now.entry_id == sent.entry_id);
+    if unchanged {
+        drafts.remove(&sent.card_id);
+    }
+}
+
 /// Drop drafts for cards that are no longer open.
 pub fn prune(drafts: &mut Drafts, cards: &[Card]) {
     drafts.retain(|id, _| cards.iter().any(|c| &c.id == id));
@@ -328,6 +342,22 @@ mod tests {
         // an edit is a new entry too
         set_note(&mut d, &n, "check the logs again".into());
         assert_ne!(entries(&d, &[n])[0].entry_id, both[1].entry_id);
+    }
+
+    #[test]
+    fn a_recorded_send_keeps_a_draft_another_tab_changed_meanwhile() {
+        let n = card("n", 1, None);
+        let mut d = Drafts::new();
+        set_note(&mut d, &n, "first words".into());
+        let sent = entries(&d, &[n.clone()]).remove(0);
+        // unchanged: the recorded draft goes
+        let mut same = d.clone();
+        forget_sent(&mut same, &[n.clone()], &sent);
+        assert!(same.is_empty());
+        // another tab edited it while the send was on its way: the newer words stay
+        set_note(&mut d, &n, "second thoughts".into());
+        forget_sent(&mut d, &[n.clone()], &sent);
+        assert_eq!(d["n"].note, "second thoughts");
     }
 
     #[test]
