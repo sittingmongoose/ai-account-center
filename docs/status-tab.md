@@ -262,7 +262,8 @@ share):
   gives old and new values and `oldAnswer` quotes any earlier answer.
 
 **AnsweredCard**: `{ card: Card, answer: { kind: "answer" | "done", choice, note, via, answeredAt, device, delivery: { state:
-"rang" | "failed" | "pending", at, detail, share: Step, doorbell: Step } } }`, newest first, at most 50 (the full
+"rang" | "failed" | "pending", at, detail, share: Step, doorbell: Step, summary: Step | null, summaryWarning } } }`,
+newest first, at most 50 (the full
 history, notes included, is `GET /api/status/answers`). **Step**: `{ state: "pending" | "done" | "failed" |
 "skipped", at, detail, attempts }`. `failed` covers a share write or doorbell still being retried, one that gave up
 after 20 attempts, a doorbell turned off on a test server (`skipped`), or an answer a newer answer to that card replaced
@@ -270,6 +271,10 @@ before its signed copy reached the share (both steps `skipped`, `state: "failed"
 answer cannot land over the newer one); `detail` says which. A card with no
 pm-mail name is delivered once its signed file is on the share: `state: "rang"` with `detail` "No mail name; the agent
 reads its answers file." (doorbell step `skipped`).
+`summary` is the step of the record's send summary (null for a record from before sends), shown beside `state`
+without changing it: `summaryWarning` is null once it is written, else says it is not on the share yet, is being
+retried ("attempt N of 20"), or gave up after 20 attempts. The same `delivery` is on each `notes` entry and in
+`GET /api/status/answers`.
 
 **Batch**: `{ id, label, cardIds: [...] }`: open cards that share `batch`, kept together in the deck.
 
@@ -489,7 +494,10 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   Its `at` is the first record's signed `answeredAt`, the same in the send line, the first summary and a summary
   rebuilt without the send line, so a retry after a lost send line and a restart writes the same bytes (except in the void-failure limit above). A
   summary already on the share that this key signed with the same content but another `at` (from an earlier
-  version, which stamped the send's end) is kept, not re-signed. A record stored before kinds existed is shared
+  version, which stamped the send's end) is kept, not re-signed. A file there is replaced only once it is known not
+  to be that summary: read and found invalid, under another key or with other content, not a plain file, or absent
+  (ENOENT and a fresh listing of `batches/` without it). Any other read error, or an ENOENT for a file the folder
+  still lists, fails that attempt, to be retried, so a read fault never re-signs it. A record stored before kinds existed is shared
   exactly as it was signed, without `kind`.
 - The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind: "answer" | "note" |
   "object" | "done", choice, note, via,

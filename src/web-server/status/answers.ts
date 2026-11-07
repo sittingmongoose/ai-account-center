@@ -229,6 +229,10 @@ export interface AnswerDelivery {
   detail: string | null;
   share: StepState;
   doorbell: StepState;
+  /** The signed summary of the send this record came in; null for a record from before sends. */
+  summary: StepState | null;
+  /** Words for a summary not on the share yet (pending, retrying or given up), else null. */
+  summaryWarning: string | null;
 }
 
 /**
@@ -293,7 +297,10 @@ async function writeAtomic(
  * Throws SummaryPublishedError when `file` already holds this send's summary: valid under this key, with the same
  * content apart from `at`. An earlier version stamped a send's summary when the send ended, and a send rebuilt
  * without its send line cannot know that time; the file a ring named keeps its name and signature, never re-signed
- * with other bytes. Anything else there (missing, unreadable, another key, other entries) is replaced.
+ * with other bytes. So it is replaced only once it is known not to be that summary: read and found invalid, under
+ * another key or with other content; not a plain file; or absent, by ENOENT and a fresh listing of its folder
+ * without it (a listing refreshes the share's view, which can answer ENOENT for a file renamed into place).
+ * Any other read error, or an ENOENT for a file the folder lists, throws: the write fails and is retried.
  */
 async function keepPublishedSummary(
   file: string,
@@ -304,8 +311,15 @@ async function keepPublishedSummary(
   let bytes: Buffer;
   try {
     bytes = await readRegularFile(file, Buffer.byteLength(body) + 64 * 1024);
-  } catch {
-    return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === 'ENOTREG' || code === 'ELOOP') return;
+    if (
+      code === 'ENOENT' &&
+      !(await fs.promises.readdir(path.dirname(file))).includes(path.basename(file))
+    )
+      return;
+    throw error;
   }
   if (bytes.toString('utf8') === body) throw new SummaryPublishedError();
   const held = verifySignedDocument(bytes, publicKeyPem, SEND_SCHEMA);
@@ -389,10 +403,33 @@ function stepFrom(record: Record<string, unknown>, before: StepState): StepState
   };
 }
 
-/** The page's delivery summary for one record. */
-export function deliveryView(entry: AnswerHistoryEntry): AnswerDelivery {
+/** The words for a send summary that is not on the share, with its attempts; null once it is. */
+export function summaryWarning(summary: StepState | null): string | null {
+  if (!summary || summary.state === 'done') return null;
+  if (summary.state === 'skipped') return summary.detail;
+  if (summary.state === 'pending' || summary.attempts === 0)
+    return 'The signed send summary is not on the share yet.';
+  return summary.attempts >= MAX_DELIVERY_ATTEMPTS
+    ? `The signed send summary could not be written to the share after ${summary.attempts} attempts; no more retries.`
+    : `The signed send summary could not be written to the share yet (attempt ${summary.attempts} of ${MAX_DELIVERY_ATTEMPTS}); retrying.`;
+}
+
+/** Each send's summary step by send id, for deliveryView. */
+export function summarySteps(sends: readonly SendRecord[]): ReadonlyMap<string, StepState> {
+  return new Map(sends.map((send) => [send.sendId, send.summary]));
+}
+
+/**
+ * The page's delivery summary for one record. `summaries` (from summarySteps) adds the record's send summary step
+ * beside its share and ring steps; the overall state stays the answer's own.
+ */
+export function deliveryView(
+  entry: AnswerHistoryEntry,
+  summaries?: ReadonlyMap<string, StepState>
+): AnswerDelivery {
   const { share, doorbell } = entry;
-  const base = { share, doorbell };
+  const summary = (entry.sendId && summaries?.get(entry.sendId)) || null;
+  const base = { share, doorbell, summary, summaryWarning: summaryWarning(summary) };
   if (share.state === 'skipped')
     return { ...base, state: 'failed', at: share.at, detail: share.detail };
   if (share.state === 'failed')

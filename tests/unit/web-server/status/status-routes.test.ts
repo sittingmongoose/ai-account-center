@@ -128,6 +128,78 @@ describe('status routes', () => {
       expect((await history.json()).answers).toHaveLength(1);
     });
 
+  it('shows a send summary that cannot be written, with its attempts, beside the ring', async () => {
+    const { root, base, service, rings } = await start();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    await service.scanReports();
+    // Real permissions: answer files are written and rung, the batches folder refuses every summary.
+    const batches = path.join(root, 'v1', 'answers', 'batches');
+    fs.mkdirSync(batches, { recursive: true });
+    fs.chmodSync(batches, 0o555);
+    try {
+      const base_ = { choice: [], via: 'deck' as const };
+      await service.answers.submitSet(
+        [
+          { ...base_, cardId: 'vm.lead--Q1', cardSeq: 1, cardSha256: q1, note: 'A note.' },
+          { ...base_, cardId: 'vm.lead--Q2', cardSeq: 1, cardSha256: q2, choice: ['A'], note: '' },
+        ],
+        'Linux'
+      );
+      const deliveries = async () => {
+        const view = await (await fetch(`${base}/api/status`, { headers: session })).json();
+        const history = await (
+          await fetch(`${base}/api/status/answers`, { headers: session })
+        ).json();
+        return [
+          view.cards.open[0].notes[0].delivery,
+          view.cards.answered[0].answer.delivery,
+          ...history.answers.map((a: any) => a.answer.delivery),
+        ];
+      };
+      let seen = await deliveries();
+      expect(seen).toHaveLength(4);
+      for (const delivery of seen) {
+        expect(delivery.state).toBe('rang');
+        expect(delivery.summary).toMatchObject({ state: 'failed', attempts: 1 });
+        expect(delivery.summaryWarning).toBe(
+          'The signed send summary could not be written to the share yet (attempt 1 of 20); retrying.'
+        );
+      }
+      for (let i = 0; i < 25; i += 1) await service.answers.retryPending();
+      seen = await deliveries();
+      for (const delivery of seen) {
+        expect(delivery.summary).toMatchObject({ state: 'failed', attempts: 20 });
+        expect(delivery.summaryWarning).toBe(
+          'The signed send summary could not be written to the share after 20 attempts; no more retries.'
+        );
+      }
+      expect(rings).toHaveLength(1);
+    } finally {
+      fs.chmodSync(batches, 0o755);
+    }
+    await service.answers.retryPending();
+    // Retries have stopped: it stays shown, never hidden.
+    const after = await (await fetch(`${base}/api/status`, { headers: session })).json();
+    expect(after.cards.answered[0].answer.delivery.summary.state).toBe('failed');
+  });
+
+  it('says nothing about a send summary once it is written', async () => {
+    const { root, base, service } = await start();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    await service.scanReports();
+    await service.answers.submitSet(
+      [{ cardId: 'vm.lead--Q1', cardSeq: 1, cardSha256: q1, choice: ['A'], note: '', via: 'deck' }],
+      'Linux'
+    );
+    const view = await (await fetch(`${base}/api/status`, { headers: session })).json();
+    const delivery = view.cards.answered[0].answer.delivery;
+    expect(delivery.summary).toMatchObject({ state: 'done', attempts: 1 });
+    expect(delivery.summaryWarning).toBeNull();
+    const history = await (await fetch(`${base}/api/status/answers`, { headers: session })).json();
+    expect(history.answers[0].answer.delivery.summaryWarning).toBeNull();
+  });
+
   it('serves the view to a browser session only, never cached', async () => {
     const { base } = await start();
     const anonymous = await fetch(`${base}/api/status`);

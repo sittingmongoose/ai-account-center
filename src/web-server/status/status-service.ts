@@ -326,10 +326,13 @@ export class StatusService {
     if (idle || now - this.lastCollect >= COLLECT_EVERY_MS) void this.collect();
     // A failed private source must not hide the independently collected panels.
     let answers: ReturnType<StatusAnswers['list']> = [];
+    let sends: ReturnType<StatusAnswers['sendList']> = [];
     let answerHistoryProblem: string | null = null;
     try {
       answers = this.answers.list();
+      sends = this.answers.sendList();
     } catch {
+      answers = [];
       answerHistoryProblem = "The answer history can't be read right now.";
     }
     return buildStatusView({
@@ -342,6 +345,7 @@ export class StatusService {
       simlock: this.simlock,
       usage: this.usage,
       answers,
+      sends,
       answerHistoryProblem,
       hiddenThreadNames: [DOORBELL_SENDER],
       quota: this.quotaReader.snapshot(),

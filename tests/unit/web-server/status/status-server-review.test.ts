@@ -4220,6 +4220,58 @@ describe('a send summary keeps its signed identity across restart', () => {
     );
   });
 
+  for (const code of ['EIO', 'ESTALE', 'EACCES', 'ENOENT']) {
+    it('keeps a rung legacy summary through a ' + code + ' read and its recovery', async () => {
+      // A rings with an earlier version's summary and dies before its ring is stored; B's first read of that
+      // summary fails (ENOENT here is the share's stale view: the folder still lists the file).
+      const root = fixture('legacy-read-' + code);
+      assert.equal((await run(root, 'a', 'legacy-ring')).signal, 'SIGKILL');
+      assert.equal(liveSends(root), 0);
+      const file = batchFile(root);
+      const before = fs.readFileSync(file, 'utf8');
+      const summaryLines = (state: string) =>
+        journal(root).filter(
+          (x) => x.type === 'delivery' && x.step === 'summary' && x.state === state
+        ).length;
+      assert.equal((await run(root, 'b', code)).code, 0);
+      assert.equal(fs.readFileSync(file, 'utf8'), before);
+      assert.equal(summaryLines('done'), 0);
+      // The next pass reads it and keeps it.
+      assert.equal((await run(root, 'b')).code, 0);
+      assert.equal(fs.readFileSync(file, 'utf8'), before);
+      assert.equal(summaryLines('done'), 1);
+      const rings = fs
+        .readFileSync(path.join(root, 'rings.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      assert.equal(rings.length, 2);
+      const signed = JSON.parse(before);
+      assert.ok(
+        verifySignedDocument(
+          before,
+          publicKey(root, signed.signature.keyId),
+          'agent-reports/send@1'
+        ).ok
+      );
+      assert.deepEqual(
+        [...new Set(rings.map((r) => r.file + '/' + r.keyId + '/' + r.signature))],
+        [path.basename(file) + '/' + signed.signature.keyId + '/' + signed.signature.value]
+      );
+    });
+  }
+
+  it('replaces a summary only once a fresh listing shows it absent', async () => {
+    // Nothing published yet: the first read is ENOENT and the folder does not list it, so it is written.
+    const root = fixture('absent');
+    assert.equal((await run(root, 'a', 'send-write')).signal, 'SIGKILL');
+    const file = batchFile(root);
+    const good = fs.readFileSync(file, 'utf8');
+    fs.rmSync(file);
+    assert.equal((await run(root, 'b', 'ENOENT')).code, 0);
+    assert.equal(fs.readFileSync(file, 'utf8'), good);
+  });
+
   for (const change of ['entries', 'signature', 'key']) {
     it('replaces a published summary that does not match by its ' + change, async () => {
       const root = fixture('legacy-' + change);

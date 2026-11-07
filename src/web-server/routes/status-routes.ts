@@ -8,9 +8,11 @@ import {
   answerDevice,
   deliveryView,
   isClientSendId,
+  summarySteps,
   validEntryIds,
   type AnswerHistoryEntry,
   type EntryResult,
+  type StepState,
 } from '../status/answers';
 import { openCardFile, parseByteRange, sendFileBytes } from '../status/status-files';
 
@@ -71,7 +73,7 @@ function postBody(req: Request, res: Response): Record<string, unknown> | null {
   return body as Record<string, unknown>;
 }
 
-function entryView(entry: AnswerHistoryEntry) {
+function entryView(entry: AnswerHistoryEntry, summaries: ReadonlyMap<string, StepState>) {
   return {
     id: entry.id,
     card: {
@@ -96,7 +98,7 @@ function entryView(entry: AnswerHistoryEntry) {
       via: entry.answer.via,
       answeredAt: entry.answer.answeredAt,
       device: entry.answer.device,
-      delivery: deliveryView(entry),
+      delivery: deliveryView(entry, summaries),
     },
   };
 }
@@ -150,7 +152,9 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       limit = Number(raw);
     }
     try {
-      res.json({ answers: service().answers.history(limit).map(entryView) });
+      const answers = service().answers;
+      const summaries = summarySteps(answers.sendList());
+      res.json({ answers: answers.history(limit).map((entry) => entryView(entry, summaries)) });
     } catch {
       sendError(res, 503, 'answers_unavailable', "The answer history can't be read right now.");
     }

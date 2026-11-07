@@ -3,7 +3,7 @@ import type { QuotaReportState } from './quota-report';
 import type { SpendView } from './status-view-quota';
 import type { SnapshotAccount } from '../agent-usage/agent-usage-snapshot';
 import type { AgentReportsState } from './agent-reports-reader';
-import type { AnswerDelivery, AnswerHistoryEntry } from './answers';
+import type { AnswerDelivery, AnswerHistoryEntry, SendRecord } from './answers';
 import type {
   BlockedOn,
   CardSection,
@@ -58,6 +58,8 @@ export interface StatusInputs {
   usage: UsageInput | null;
   /** Every stored answer, oldest first. */
   answers: AnswerHistoryEntry[];
+  /** The sends those answers came in, so each delivery shows its send summary step. */
+  sends?: readonly SendRecord[];
   answerHistoryProblem?: string | null;
   /** Names that never appear as threads (the doorbell's own pm-mail name). */
   hiddenThreadNames?: readonly string[];

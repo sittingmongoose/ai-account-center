@@ -5,7 +5,7 @@
  * presented as live.
  */
 import { SEQ_WENT_BACK, type ReportProblem, type SeenReport } from './agent-reports-reader';
-import { CLOSING_KINDS, deliveryView } from './answers';
+import { CLOSING_KINDS, deliveryView, summarySteps } from './answers';
 import {
   ITEM_STATES,
   MACHINES,
@@ -378,6 +378,7 @@ function cardsComplete(inputs: StatusInputs): boolean {
 }
 
 function buildCards(inputs: StatusInputs): StatusView['cards'] {
+  const summaries = summarySteps(inputs.sends ?? []);
   // Answers and dones close a card version; notes and objections stay on the open card.
   const answers = inputs.answers.filter((e) => CLOSING_KINDS.has(e.answer.kind));
   const answered = new Set(
@@ -391,7 +392,7 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
       kind: entry.answer.kind === 'object' ? 'object' : 'note',
       note: entry.answer.note,
       at: entry.answer.answeredAt,
-      delivery: deliveryView(entry),
+      delivery: deliveryView(entry, summaries),
     });
     notes.set(entry.answer.cardId, list);
   }
@@ -446,7 +447,7 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
             via: entry.answer.via,
             answeredAt: entry.answer.answeredAt,
             device: entry.answer.device,
-            delivery: deliveryView(entry),
+            delivery: deliveryView(entry, summaries),
           },
         })),
     batches: [...batches.values()],
