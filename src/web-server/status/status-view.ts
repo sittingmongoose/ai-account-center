@@ -371,6 +371,7 @@ function cardView(
 
 /** Whether the shown cards are all there are: see `cards.complete` in status-view-types.ts. */
 function cardsComplete(inputs: StatusInputs): boolean {
+  if (inputs.answerHistoryProblem) return false;
   const { state, complete, scannedAt } = inputs.reports;
   if (state !== 'ok' || !complete || scannedAt === null) return false;
   return (ageSeconds(inputs.now, scannedAt) ?? 0) <= STALE_AFTER_SECONDS['agent-reports'];
@@ -409,7 +410,12 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
       const problem =
         row.problem ??
         (older ? { file: row.file, reason: SEQ_WENT_BACK, since: inputs.now } : null);
-      return cardView(inputs, row.doc, row.sha256, problem, notes.get(row.doc.id));
+      const card = cardView(inputs, row.doc, row.sha256, problem, notes.get(row.doc.id));
+      if (inputs.answerHistoryProblem) {
+        card.answerable = false;
+        card.problem = inputs.answerHistoryProblem;
+      }
+      return card;
     })
     .sort(
       (a, b) =>
@@ -428,18 +434,21 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
   return {
     source: 'agent-reports',
     open,
-    answered: history.map((entry) => ({
-      card: cardView(inputs, entry.card, entry.answer.cardSha256, null),
-      answer: {
-        kind: entry.answer.kind as 'answer' | 'done',
-        choice: entry.answer.choice,
-        note: entry.answer.note,
-        via: entry.answer.via,
-        answeredAt: entry.answer.answeredAt,
-        device: entry.answer.device,
-        delivery: deliveryView(entry),
-      },
-    })),
+    answerHistoryProblem: inputs.answerHistoryProblem ?? null,
+    answered: inputs.answerHistoryProblem
+      ? null
+      : history.map((entry) => ({
+          card: cardView(inputs, entry.card, entry.answer.cardSha256, null),
+          answer: {
+            kind: entry.answer.kind as 'answer' | 'done',
+            choice: entry.answer.choice,
+            note: entry.answer.note,
+            via: entry.answer.via,
+            answeredAt: entry.answer.answeredAt,
+            device: entry.answer.device,
+            delivery: deliveryView(entry),
+          },
+        })),
     batches: [...batches.values()],
     complete: cardsComplete(inputs),
   };

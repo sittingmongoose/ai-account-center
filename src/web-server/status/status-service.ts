@@ -324,6 +324,14 @@ export class StatusService {
     const idle = !this.wanted();
     this.lastDemand = now;
     if (idle || now - this.lastCollect >= COLLECT_EVERY_MS) void this.collect();
+    // A failed private source must not hide the independently collected panels.
+    let answers: ReturnType<StatusAnswers['list']> = [];
+    let answerHistoryProblem: string | null = null;
+    try {
+      answers = this.answers.list();
+    } catch {
+      answerHistoryProblem = "The answer history can't be read right now.";
+    }
     return buildStatusView({
       now,
       timeZone: this.timeZone(),
@@ -333,7 +341,8 @@ export class StatusService {
       browsers: this.browsers,
       simlock: this.simlock,
       usage: this.usage,
-      answers: this.answers.list(),
+      answers,
+      answerHistoryProblem,
       hiddenThreadNames: [DOORBELL_SENDER],
       quota: this.quotaReader.snapshot(),
     });

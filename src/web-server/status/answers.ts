@@ -423,8 +423,6 @@ export class StatusAnswers {
   /** Every record in the private store, oldest first (folded with its delivery steps). */
   list(): AnswerHistoryEntry[] {
     if (this.entries) return this.entries;
-    const entries: AnswerHistoryEntry[] = [];
-    const byId = new Map<string, AnswerHistoryEntry>();
     let text = '';
     try {
       text = fs.readFileSync(this.storeFile(), 'utf8');
@@ -432,6 +430,13 @@ export class StatusAnswers {
       // Only absence is an empty journal. Failed reads leave the cache unloaded for a later retry.
       if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
     }
+    return this.load(text);
+  }
+
+  /** Fold an already-read journal; I/O failures cannot clear held delivery objects. */
+  private load(text: string): AnswerHistoryEntry[] {
+    const entries: AnswerHistoryEntry[] = [];
+    const byId = new Map<string, AnswerHistoryEntry>();
     const records: Record<string, unknown>[] = [];
     const voided = new Set<string>();
     for (const line of text.split('\n')) {
@@ -553,30 +558,42 @@ export class StatusAnswers {
       // Newly the store's writer: another process may have written meanwhile, so history, sends, replays and drafts
       // are read again from the store before anything is judged against them. A record or send this process already
       // holds keeps its object (a ring or summary still running updates it), with the further-along delivery steps.
-      this.owner = true;
-      this.epoch += 1;
+      // Read first: a failed gain must keep the objects an in-flight delivery still updates.
+      // Fold this successful read only after ownership reconciliation can proceed.
+      let text: string;
+      try {
+        text = fs.readFileSync(this.storeFile(), 'utf8');
+      } catch (error) {
+        this.owner = false;
+        if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
+        text = '';
+      }
       const heldEntries = new Map((this.entries ?? []).map((held) => [held.id, held]));
       const heldSends = new Map(this.sends);
       this.entries = null;
       this.sends.clear();
       this.replays.clear();
       this.drafts.clear();
-      if (heldEntries.size > 0 || heldSends.size > 0) {
-        this.entries = this.list().map((fresh) => {
-          const held = heldEntries.get(fresh.id);
-          if (!held) return fresh;
-          held.share = furthest(held.share, fresh.share);
-          held.doorbell = furthest(held.doorbell, fresh.doorbell);
-          return held;
-        });
-        for (const [sendId, fresh] of this.sends) {
-          const held = heldSends.get(sendId);
-          if (!held) continue;
+      this.entries = this.load(text).map((fresh) => {
+        const held = heldEntries.get(fresh.id);
+        if (!held) return fresh;
+        heldEntries.delete(fresh.id);
+        held.share = furthest(held.share, fresh.share);
+        held.doorbell = furthest(held.doorbell, fresh.doorbell);
+        return held;
+      });
+      // Even an outstanding record absent from this reload must not be detached.
+      this.entries.push(...heldEntries.values());
+      for (const [sendId, held] of heldSends) {
+        const fresh = this.sends.get(sendId);
+        if (fresh) {
           held.summary = furthest(held.summary, fresh.summary);
           held.entryIds = fresh.entryIds;
-          this.sends.set(sendId, held);
         }
+        this.sends.set(sendId, held);
       }
+      this.owner = true;
+      this.epoch += 1;
     }
     // Even an empty in-memory store must load successfully before replay, recording or ringing.
     this.list();

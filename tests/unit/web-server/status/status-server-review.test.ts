@@ -3467,6 +3467,51 @@ describe('real-process journal and publication fences', () => {
     };
     return { root, doc, entry };
   };
+  it('a failed reload during an in-flight ring preserves the held record across a page poll', async () => {
+    const { root, entry } = fixture('reload-ring-eio');
+    const a = new Worker(root),
+      b = new Worker(root);
+    try {
+      await Promise.all([a.next('ready'), b.next('ready')]);
+      a.send({ cmd: 'ring-gate' });
+      await a.next('gated');
+      a.send({ cmd: 'submit', entries: [entry] });
+      await a.next('ring-wait');
+      await a.next('submitted');
+      fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
+      // A real second dashboard gains the store and refuses the already recorded closing answer.
+      b.send({ cmd: 'submit', entries: [{ ...entry, choice: ['B'], entryId: 'b'.repeat(32) }] });
+      assert.equal((await b.next('submitted')).result[0].code, 'card_changed');
+      await b.exit();
+      a.send({ cmd: 'arm' });
+      await a.next('armed');
+      a.send({ cmd: 'retry' });
+      await a.next('retried');
+      a.send({ cmd: 'history' });
+      assert.equal((await a.next('history')).entries[0].doorbell, 'pending');
+      a.send({ cmd: 'release-ring' });
+      // Wait for the real completion, not an arbitrary filesystem timestamp tick.
+      for (let i = 0; i < 100; i++) {
+        a.send({ cmd: 'history' });
+        if ((await a.next('history')).entries[0].doorbell === 'done') break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      a.send({ cmd: 'retry' });
+      await a.next('retried');
+      assert.equal(
+        fs.readFileSync(path.join(root, 'rings.jsonl'), 'utf8').trim().split('\n').length,
+        1
+      );
+      assert.equal(
+        records(root).filter(
+          (x) => x.type === 'delivery' && x.step === 'doorbell' && x.state === 'done'
+        ).length,
+        1
+      );
+    } finally {
+      await Promise.all([a.kill(), b.kill()]);
+    }
+  });
   it('journal-read-error-never-creates-a-conflicting-answer', async () => {
     const { root, entry } = fixture('journal-eio');
     const a = new Worker(root),

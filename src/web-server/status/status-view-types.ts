@@ -58,6 +58,7 @@ export interface StatusInputs {
   usage: UsageInput | null;
   /** Every stored answer, oldest first. */
   answers: AnswerHistoryEntry[];
+  answerHistoryProblem?: string | null;
   /** Names that never appear as threads (the doorbell's own pm-mail name). */
   hiddenThreadNames?: readonly string[];
   /** quota-watch's share copy; absent when the server does not read it (shown as unconfigured). */
@@ -301,13 +302,16 @@ export interface StatusView {
   cards: {
     source: 'agent-reports';
     open: CardView[];
-    answered: AnsweredCardView[];
+    /** null means unreadable, never an empty successful history. */
+    answered: AnsweredCardView[] | null;
+    answerHistoryProblem: string | null;
     batches: BatchView[];
     /**
      * True only when the latest scan is known to have seen every card: it listed `v1/writers` and
      * every writer and `cards/` folder, read every file it tried (a file refused for its content is
      * a named problem and does not count), hit no scan limit and is not stale. While false, a card
      * missing from `open` may simply not have been read, so nothing may be concluded from it.
+     * Unavailable answer history also makes this false, preserving drafts until it recovers.
      */
     complete: boolean;
   };

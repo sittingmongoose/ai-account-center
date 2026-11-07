@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import express from 'express';
 import http, { type Server } from 'http';
 import type { AddressInfo } from 'net';
@@ -64,12 +64,70 @@ async function start() {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { root, base, service, rings };
+  return { root, store, base, service, rings };
 }
 
 const session = { 'x-test-session': 'true' };
 
 describe('status routes', () => {
+  for (const code of ['EIO', 'EACCES'])
+    it(`isolates ${code} history failures and recovers both GET routes`, async () => {
+      const { root, store, base, service } = await start();
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      await service.scanReports();
+      await service.answers.submitSet(
+        [
+          {
+            cardId: 'vm.lead--Q1',
+            cardSeq: 1,
+            cardSha256: sha,
+            choice: ['A'],
+            note: '',
+            via: 'deck',
+          },
+        ],
+        'Linux'
+      );
+      // A restarted reader has no cache to mask the failed private source.
+      (service.answers as unknown as { entries: unknown }).entries = null;
+      const read = fs.readFileSync;
+      const fault = spyOn(fs, 'readFileSync').mockImplementation(((file: any, ...args: any[]) => {
+        if (String(file) === path.join(store, 'answers.jsonl'))
+          throw Object.assign(Error('private error'), { code });
+        return (read as any)(file, ...args);
+      }) as typeof fs.readFileSync);
+      try {
+        const res = await fetch(`${base}/api/status`, { headers: session });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        const view = await res.json();
+        expect(view.cards.answerHistoryProblem).toBe("The answer history can't be read right now.");
+        expect(view.cards.answered).toBeNull();
+        expect(view.cards.open).toHaveLength(1);
+        expect(view.cards.open[0].answerable).toBe(false);
+        expect(view.cards.complete).toBe(false);
+        expect(view.sources.some((s: any) => s.id === 'machines')).toBe(true);
+        const history = await fetch(`${base}/api/status/answers`, { headers: session });
+        expect(history.status).toBe(503);
+        expect(history.headers.get('cache-control')).toBe('no-store');
+        expect(await history.json()).toEqual({
+          code: 'answers_unavailable',
+          error: "The answer history can't be read right now.",
+        });
+      } finally {
+        fault.mockRestore();
+      }
+      const recovered = await fetch(`${base}/api/status`, { headers: session });
+      expect(recovered.status).toBe(200);
+      const view = await recovered.json();
+      expect(view.cards.answerHistoryProblem).toBeNull();
+      expect(view.cards.answered).toHaveLength(1);
+      expect(view.cards.open).toHaveLength(0);
+      const history = await fetch(`${base}/api/status/answers`, { headers: session });
+      expect(history.status).toBe(200);
+      expect((await history.json()).answers).toHaveLength(1);
+    });
+
   it('serves the view to a browser session only, never cached', async () => {
     const { base } = await start();
     const anonymous = await fetch(`${base}/api/status`);

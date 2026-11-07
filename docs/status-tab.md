@@ -76,6 +76,7 @@ provider refresh. quota-watch: its share report `<reports>/v1/quota/report.json`
 - `GET /api/status/answers?limit=N`: the read-only answer history (answers and notes), newest first: `{ answers: [ {
   id, card: { id, label, seq, title, project, stream, askedBy, options: [ { key, label } ], recommendation, cardSha256
   }, answer: { kind, choice, note, via, answeredAt, device, delivery } } ] }`.
+  An unreadable private journal returns `503 answers_unavailable`, "The answer history can't be read right now.".
 - `GET /api/status/files/<writer>/<path>`: an image or video a card names, from that writer's own folder only (no
   `..`, no links out of the folder, checked again on the opened file before a byte is read: on Linux by what the
   descriptor really holds, so a parent folder swapped for a link after the path check is refused; without `/proc` (macOS,
@@ -168,6 +169,11 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
   "spend": Spend
 }
 ```
+
+If the private answer journal cannot be read, the rest of the view still returns normally. `cards.answered` is
+`null`, and `cards.answerHistoryProblem` reads "The answer history can't be read right now." (otherwise null).
+Cards remain visible but cannot be answered until history recovers; `cards.complete` is false so drafts stay safe.
+The page shows this problem beside the questions. A later successful read restores history automatically.
 
 Every number the page shows is in this view, already rounded and worded. A missing value is `null` with a reason
 word, never 0. Times are ISO UTC; the page shows them as relative ages ("2m ago") and Eastern 12-hour on hover/tap.
@@ -434,7 +440,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   retried every minute (up to 20 times) and shown, never hidden. A retry never writes an answer or a done once a newer
   one for that card exists. Each share attempt checks its writer ownership generation after asynchronous work
   and synchronously immediately before rename. Losing or regaining the lock drops that attempt; reacquisition
-  reloads and reconciles history before a later retry decides what still needs delivery. Nothing is written when `<reports>/v1` is not
+  reloads and reconciles history before a later retry decides what still needs delivery. A failed reload keeps the held records and sends attached to in-flight deliveries, leaves ownership unconfirmed,
+  and retries reconciliation by id on the next gain; completed steps stay done. Nothing is written when `<reports>/v1` is not
   there: only folders below it are created, so an unmounted share grows no local folder, and the step reads
   "The reports share is not available."
 - **Send summary:** every POST that records at least one entry is a send with its own server-made `sendId` (a UUID, not

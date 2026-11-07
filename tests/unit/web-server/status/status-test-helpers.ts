@@ -112,7 +112,9 @@ export function writeReport(root: string, writer: string, rel: string, value: un
   const file = path.join(root, 'v1', 'writers', writer, rel);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const bytes = Buffer.isBuffer(value) ? value : Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-  fs.writeFileSync(file, bytes);
+  const temp = `${file}.tmp`;
+  fs.writeFileSync(temp, bytes);
+  fs.renameSync(temp, file);
   return createHash('sha256').update(bytes).digest('hex');
 }
 

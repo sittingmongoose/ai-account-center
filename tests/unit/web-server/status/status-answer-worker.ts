@@ -10,6 +10,18 @@ const [root, mode] = process.argv.slice(2);
 const store = path.join(root, 'store');
 const reports = path.join(root, 'reports');
 let faultCount = 0;
+let faults = 0;
+let ringResume: (() => void) | null = null;
+let gateRing = false;
+const realRead = fs.readFileSync;
+fs.readFileSync = ((file: any, ...args: any[]) => {
+  if (String(file) === path.join(store, 'answers.jsonl') && faults > 0) {
+    faults--;
+    faultCount++;
+    throw Object.assign(Error('Injected journal EIO'), { code: 'EIO' });
+  }
+  return (realRead as any)(file, ...args);
+}) as typeof fs.readFileSync;
 let resume: (() => void) | null = null;
 if (mode === 'load-eio') {
   const read = fs.readFileSync;
@@ -48,6 +60,13 @@ const answers = new StatusAnswers({
   now: () => NOW,
   readCard: (id) => reader.readCardNow(id),
   doorbell: async (to: string) => {
+    if (gateRing) {
+      gateRing = false;
+      await new Promise<void>((resolve) => {
+        ringResume = resolve;
+        emit({ event: 'ring-wait' });
+      });
+    }
     fs.appendFileSync(
       path.join(root, 'rings.jsonl'),
       JSON.stringify({ pid: process.pid, to }) + '\n'
@@ -58,6 +77,20 @@ const answers = new StatusAnswers({
 createInterface({ input: process.stdin }).on('line', async (line) => {
   const cmd = JSON.parse(line);
   try {
+    if (cmd.cmd === 'arm') {
+      faults = 1;
+      emit({ event: 'armed' });
+      return;
+    }
+    if (cmd.cmd === 'ring-gate') {
+      gateRing = true;
+      emit({ event: 'gated' });
+      return;
+    }
+    if (cmd.cmd === 'release-ring') {
+      ringResume?.();
+      return;
+    }
     if (cmd.cmd === 'exit') process.exit(0);
     if (cmd.cmd === 'release') {
       resume?.();
@@ -75,14 +108,12 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     if (cmd.cmd === 'history')
       emit({
         event: 'history',
-        entries: answers
-          .list()
-          .map((e: any) => ({
-            seq: e.answer.cardSeq,
-            kind: e.answer.kind,
-            share: e.share.state,
-            doorbell: e.doorbell.state,
-          })),
+        entries: answers.list().map((e: any) => ({
+          seq: e.answer.cardSeq,
+          kind: e.answer.kind,
+          share: e.share.state,
+          doorbell: e.doorbell.state,
+        })),
       });
   } catch (error) {
     emit({ event: 'error', error: String(error) });

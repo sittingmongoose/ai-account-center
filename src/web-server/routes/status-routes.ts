@@ -149,7 +149,11 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       }
       limit = Number(raw);
     }
-    res.json({ answers: service().answers.history(limit).map(entryView) });
+    try {
+      res.json({ answers: service().answers.history(limit).map(entryView) });
+    } catch {
+      sendError(res, 503, 'answers_unavailable', "The answer history can't be read right now.");
+    }
   });
 
   router.post('/answers', async (req, res) => {
