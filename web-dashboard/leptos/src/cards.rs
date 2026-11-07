@@ -693,7 +693,16 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
             {(!c.notes.is_empty() || !c.replies.is_empty()).then(|| view! {
                 <ul class="talk">
                     {c.notes.iter().map(|n| view! {
-                        <li class="mine" data-kind=n.kind.clone()><span class="who">{format!("{} · {}", if n.kind == "object" { "You objected" } else { "You" }, n.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{n.note.clone()}{n.delivery.summary_warning.clone().map(|w| view! { <div class="item-note" data-tone="warn">{w}</div> })}</li>
+                        <li class="mine" data-kind=n.kind.clone() data-delivery=n.delivery.state.clone()>
+                            <span class="who">{format!(
+                                "{} · {}{}",
+                                if n.kind == "object" { "You objected" } else { "You" },
+                                n.at.as_deref().map(fmt::clock).unwrap_or_default(),
+                                n.delivery.not_told().map(|t| format!(" · {t}")).unwrap_or_default(),
+                            )}</span>
+                            {n.note.clone()}
+                            <DeliveryWarnings delivery=n.delivery.clone()/>
+                        </li>
                     }).collect_view()}
                     {c.replies.iter().map(|r| view! {
                         <li class="theirs"><span class="who">{format!("{} · {}", asker, r.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{r.text.clone()}</li>
@@ -910,19 +919,24 @@ fn AnsweredView(answered: AnsweredCard) -> impl IntoView {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let delivery = match a.delivery.state.as_str() {
-        "rang" => "the agent was told",
-        "failed" => "could not tell the agent",
-        _ => "telling the agent",
-    };
+    let delivery = a.delivery.told();
     view! {
         <li class="answered-row" data-delivery=a.delivery.state.clone()>
             <div class="card-title-sm"><span class="card-label">{c.short()}</span>" "{c.title.clone()}</div>
             <div>{if labels.is_empty() { "Note only".to_string() } else { labels }}{(a.via == "recommended").then_some(" (recommended)")}</div>
             {a.note.clone().filter(|n| !n.is_empty()).map(|n| view! { <blockquote>{n}</blockquote> })}
             <div class="muted">{format!("{} · {} · {delivery}", c.asked_by, fmt::clock(&a.answered_at))}</div>
-            {(a.delivery.state == "failed").then(|| view! { <div class="item-note" data-tone="warn">{a.delivery.detail.clone()}</div> })}
-            {a.delivery.summary_warning.clone().map(|w| view! { <div class="item-note" data-tone="warn">{w}</div> })}
+            <DeliveryWarnings delivery=a.delivery.clone()/>
         </li>
     }
+}
+
+/// A record's delivery warnings (`Delivery::warnings`), shared by answered rows and an open card's notes.
+#[component]
+fn DeliveryWarnings(delivery: Delivery) -> impl IntoView {
+    delivery
+        .warnings()
+        .into_iter()
+        .map(|w| view! { <div class="item-note" data-tone="warn">{w}</div> })
+        .collect_view()
 }

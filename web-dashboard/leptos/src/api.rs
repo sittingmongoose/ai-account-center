@@ -515,6 +515,44 @@ pub struct Delivery {
     pub summary_warning: Option<String>,
 }
 
+impl Delivery {
+    /// Whether the asking agent has been told, for the line under a record.
+    pub fn told(&self) -> &'static str {
+        match self.state.as_str() {
+            "rang" => "the agent was told",
+            "failed" => "could not tell the agent",
+            _ => "telling the agent",
+        }
+    }
+
+    /// The same words, only while the agent has not been told: a delivered note or objection says nothing extra.
+    pub fn not_told(&self) -> Option<&'static str> {
+        (self.state != "rang").then(|| self.told())
+    }
+
+    /// What a record's row warns about its delivery, in order: its own failed share write or ring (the server's
+    /// words, with the attempt), then its send summary not on the share. Answered rows and the notes and
+    /// objections on an open card both show this, so a failure is never hidden behind a written summary.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.state == "failed" {
+            out.push(if self.detail.trim().is_empty() {
+                "Could not tell the agent.".to_string()
+            } else {
+                self.detail.clone()
+            });
+        }
+        if let Some(w) = self
+            .summary_warning
+            .as_deref()
+            .filter(|w| !w.trim().is_empty())
+        {
+            out.push(w.to_string());
+        }
+        out
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Batch {
@@ -1144,6 +1182,106 @@ mod tests {
         )
         .unwrap();
         assert!(recovered.answer_history_problem.is_none());
+    }
+
+    fn sent_note(value: serde_json::Value) -> SentNote {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_note_whose_share_write_failed_says_so_though_its_summary_is_written() {
+        let n = sent_note(serde_json::json!({
+            "kind": "note", "note": "A note.", "at": "2026-11-07T10:00:00.000Z",
+            "delivery": {
+                "state": "failed", "at": null,
+                "detail": "The signed copy could not be written to the share after 20 attempts; no more retries.",
+                "share": {"state": "failed", "at": null, "detail": "EACCES", "attempts": 20},
+                "doorbell": {"state": "pending", "at": null, "detail": null, "attempts": 0},
+                "summary": {"state": "done", "at": null, "detail": null, "attempts": 1},
+                "summaryWarning": null
+            }
+        }));
+        assert_eq!(
+            n.delivery.warnings(),
+            vec![
+                "The signed copy could not be written to the share after 20 attempts; no more retries."
+                    .to_string()
+            ]
+        );
+        assert_eq!(n.delivery.not_told(), Some("could not tell the agent"));
+    }
+
+    #[test]
+    fn an_objection_whose_ring_failed_says_so_with_its_attempt() {
+        let n = sent_note(serde_json::json!({
+            "kind": "object", "note": "Keep the old layout.", "at": null,
+            "delivery": {
+                "state": "failed", "at": null,
+                "detail": "The asker could not be rung yet (attempt 3 of 20); retrying. The signed answer is on the share.",
+                "summary": {"state": "done", "at": null, "detail": null, "attempts": 1},
+                "summaryWarning": null
+            }
+        }));
+        assert_eq!(n.kind, "object");
+        let warnings = n.delivery.warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("(attempt 3 of 20)"));
+        assert_eq!(n.delivery.not_told(), Some("could not tell the agent"));
+    }
+
+    #[test]
+    fn a_delivered_note_with_a_failed_summary_shows_only_the_summary() {
+        let n = sent_note(serde_json::json!({
+            "kind": "note", "note": "A note.",
+            "delivery": {
+                "state": "rang", "detail": "Rang lead.",
+                "summaryWarning": "The signed send summary could not be written to the share yet (attempt 2 of 20); retrying."
+            }
+        }));
+        assert_eq!(
+            n.delivery.warnings(),
+            vec![
+                "The signed send summary could not be written to the share yet (attempt 2 of 20); retrying."
+                    .to_string()
+            ]
+        );
+        assert_eq!(n.delivery.not_told(), None);
+    }
+
+    #[test]
+    fn a_failed_note_and_a_failed_summary_are_both_shown_record_first() {
+        let n = sent_note(serde_json::json!({
+            "kind": "note", "note": "x",
+            "delivery": {"state": "failed", "detail": null, "summaryWarning": "Summary not on the share yet."}
+        }));
+        assert_eq!(
+            n.delivery.warnings(),
+            vec![
+                "Could not tell the agent.".to_string(),
+                "Summary not on the share yet.".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clean_note_shows_nothing_about_delivery() {
+        let n = sent_note(serde_json::json!({
+            "kind": "note", "note": "A note.",
+            "delivery": {"state": "rang", "detail": "Rang lead.", "summaryWarning": null}
+        }));
+        assert!(n.delivery.warnings().is_empty());
+        assert_eq!(n.delivery.not_told(), None);
+        assert_eq!(n.delivery.told(), "the agent was told");
+    }
+
+    #[test]
+    fn a_pending_note_is_told_without_a_warning() {
+        let n = sent_note(serde_json::json!({
+            "kind": "note", "note": "A note.",
+            "delivery": {"state": "pending", "detail": "Delivering.", "summaryWarning": null}
+        }));
+        assert!(n.delivery.warnings().is_empty());
+        assert_eq!(n.delivery.not_told(), Some("telling the agent"));
     }
 
     #[test]
