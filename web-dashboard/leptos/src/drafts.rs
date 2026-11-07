@@ -197,7 +197,9 @@ pub fn forget_sent(drafts: &mut Drafts, cards: &[Card], sent: &AnswerEntry) {
         d.via.clear();
     }
     // Keep the nonce (another tab's send of this very draft must still match its own result), and remember the
-    // recorded id: an edit that would make it again takes a fresh nonce.
+    // recorded id: an edit that would make it again takes a fresh nonce. Past RECORDED_KEPT ids the nonce does
+    // rotate; another tab's send in flight on the old nonce then stays a ready draft once recorded (a known limit:
+    // it takes nine sends of one card and a race between tabs).
     join_recorded(d, std::slice::from_ref(&sent.entry_id));
 }
 
@@ -322,12 +324,18 @@ pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
             };
             // emptied by a send's result (its ids grew), not cleared by the owner, while another tab wrote newer
             // words: those words stay, whatever their nonce
-            let emptied_by_send = !c.has_answer() && c.recorded != b.recorded && theirs != b;
+            let emptied_by_send =
+                !c.has_answer() && c.recorded != b.recorded && words(theirs) != words(b);
             if words(b) == words(c) || emptied_by_send {
                 let mut kept = theirs.clone();
-                // ids only mean something to the nonce they were made from
                 if kept.nonce == c.nonce {
+                    // ids only mean something to the nonce they were made from
                     join_recorded(&mut kept, &c.recorded);
+                } else if c.nonce != b.nonce && kept.nonce == b.nonce {
+                    // this tab's send rotated the nonce (too many ids): the kept words move to the new nonce with it,
+                    // or the id that overflowed would be lost and those words remade as a dropped retry
+                    kept.nonce = c.nonce.clone();
+                    kept.recorded = c.recorded.clone();
                 }
                 out.insert(id.clone(), kept);
                 continue;
@@ -620,6 +628,40 @@ mod tests {
         }
         set_note(&mut d, &x, "first".into());
         assert_ne!(entries(&d, &[x])[0].entry_id, first.entry_id);
+    }
+
+    #[test]
+    fn a_rotation_or_an_ids_only_change_in_storage_never_brings_sent_words_back() {
+        let x = card("x", 1, None);
+        // N3: storage differs from base only in recorded ids; this tab's send empties the draft: it stays empty
+        let mut base = Drafts::new();
+        set_note(&mut base, &x, "W1".into());
+        let sent = entries(&base, &[x.clone()]).remove(0);
+        let mut stored = base.clone();
+        stored.get_mut("x").unwrap().recorded = vec!["other".into()];
+        let mut a = base.clone();
+        forget_sent(&mut a, &[x.clone()], &sent);
+        assert!(!merge(&stored, &base, &a)["x"].has_answer());
+        // N2: the 9th id rotates this tab's nonce while another tab wrote newer words on the old one
+        let mut full = Drafts::new();
+        set_note(&mut full, &x, "W".into());
+        full.get_mut("x").unwrap().recorded = (0..RECORDED_KEPT).map(|i| format!("r{i}")).collect();
+        let ninth = entries(&full, &[x.clone()]).remove(0);
+        let mut theirs = full.clone();
+        set_note(&mut theirs, &x, "newer".into());
+        let mut mine = full.clone();
+        forget_sent(&mut mine, &[x.clone()], &ninth);
+        assert_ne!(mine["x"].nonce, full["x"].nonce, "the overflow rotated");
+        let merged = merge(&theirs, &full, &mine);
+        assert_eq!(merged["x"].note, "newer");
+        assert_eq!(
+            merged["x"].nonce, mine["x"].nonce,
+            "the kept words move to the new nonce"
+        );
+        // the ninth sent words typed again are a new answer
+        let mut again = merged.clone();
+        set_note(&mut again, &x, "W".into());
+        assert_ne!(entries(&again, &[x])[0].entry_id, ninth.entry_id);
     }
 
     #[test]

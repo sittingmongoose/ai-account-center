@@ -200,6 +200,15 @@ describe('secret search', () => {
         findSecretIn(source, value);
         expect([unit, performance.now() - started < 1000]).toEqual([unit, true]);
       }
+      // many short strings shaped like JSON that don't parse (each failed parse throws)
+      for (const unit of ['{x}', '[x]', '"\\x"', '{"a":}']) {
+        const value = {
+          items: Array.from({ length: Math.floor(bytes / (unit.length + 3)) }, () => unit),
+        };
+        const started = performance.now();
+        findSecretIn(JSON.stringify(value), value);
+        expect([unit, performance.now() - started < 1000]).toEqual([unit, true]);
+      }
     });
 
   it('sees through JSON escapes in strings and keys', () => {
@@ -243,10 +252,32 @@ describe('secret search', () => {
       // double-encoded text, a backslash made by an escape, and JSON nested deeper than is checked
       { note: JSON.stringify(JSON.stringify({ password: ['hunter2222'] })) },
       { note: `x \\u005cu0073${token.slice(1)}` },
-      { note: JSON.stringify(JSON.stringify(JSON.stringify(JSON.stringify({ a: 1 })))) },
+      // credential JSON three levels down, under tool output that ends in [] (no level cap stops the walk)
+      {
+        note: JSON.stringify({
+          result: JSON.stringify({
+            content: JSON.stringify([{ text: JSON.stringify({ password: ['hunter2222'] }) }]),
+          }),
+        }),
+      },
     ]) {
       const parsed = jsonFromBytes(Buffer.from(JSON.stringify(value)), 64 * 1024);
       expect([value, parsed.ok]).toEqual([value, false]);
+    }
+  });
+
+  it('legitimate notes with JSON-looking text read', () => {
+    for (const note of [
+      '"done"',
+      '""',
+      '"',
+      '"[1,2]"',
+      '[link](url)',
+      '{not json}',
+      JSON.stringify({ result: JSON.stringify({ content: JSON.stringify([{ text: '[]' }]) }) }),
+    ]) {
+      const parsed = jsonFromBytes(Buffer.from(JSON.stringify({ note })), 64 * 1024);
+      expect([note, parsed.ok]).toEqual([note, true]);
     }
   });
 

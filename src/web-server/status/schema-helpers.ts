@@ -176,9 +176,9 @@ export function findSecretIn(source: string, value: unknown): string | null {
   const raw = findSecret(source);
   if (raw) return raw;
   // Each entry: a value, whether it sits under a credential key (anything long enough under one is refused), and how
-  // many levels of JSON text inside strings it is (that text is parsed and walked too, a few levels deep).
+  // many levels of JSON text inside strings it is (that text is parsed and walked too, within a size budget).
   const stack: Array<[unknown, boolean, number]> = [[value, false, 0]];
-  let embedded = 0;
+  const work: EmbeddedWork = { used: 0, failed: 0 };
   for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
     const [node, credential, level] = entry;
     if (typeof node === 'string') {
@@ -186,12 +186,9 @@ export function findSecretIn(source: string, value: unknown): string | null {
       const found =
         findSecret(node) ?? (node.includes('\\') ? findSecret(unescapeText(node)) : null);
       if (found) return found;
-      const inner = embeddedJson(node, level, embedded);
-      if (inner === TOO_DEEP) return 'JSON text nested too deep to check';
-      if (inner !== undefined) {
-        embedded += node.length;
-        stack.push([inner, credential, level + 1]);
-      }
+      const inner = embeddedJson(node, work);
+      if (inner === TOO_DEEP) return 'more JSON text than can be checked';
+      if (inner !== undefined) stack.push([inner, credential, level + 1]);
     } else if (typeof node === 'number') {
       if (credential && String(Math.abs(Math.trunc(node))).length >= 6) return 'a credential field';
     } else if (Array.isArray(node)) {
@@ -207,32 +204,44 @@ export function findSecretIn(source: string, value: unknown): string | null {
   return null;
 }
 
-/** How deep JSON text inside strings is parsed, and how many characters of it in all (bounded work per file). */
-const EMBEDDED_LEVELS = 3;
+/** How many characters of JSON text inside strings are parsed per file, and how many such parses may fail. */
 const EMBEDDED_BUDGET = 4 * 1024 * 1024;
-/** JSON text that would need more than the levels or budget to check: the file is refused, not read unchecked. */
+const EMBEDDED_FAILURES = 256;
+/** JSON text past the budget: the file is refused, not read unchecked. */
 const TOO_DEEP = Symbol('too deep');
 
+/** Running totals for one file's embedded JSON. */
+type EmbeddedWork = { used: number; failed: number };
+
 /**
- * A string that is itself JSON (an object, an array or a string, as double-encoded text is), parsed; `TOO_DEEP` when
- * the level or size budget would be passed; undefined for text that isn't JSON.
+ * A string that is itself JSON (an object, an array or a string, as double-encoded text is), parsed; `TOO_DEEP` past
+ * the size budget; undefined for text that isn't JSON. Only text whose last character closes its first is parsed, and
+ * after EMBEDDED_FAILURES failed parses no more are tried (each failure throws, which is slow in bulk).
  */
-function embeddedJson(text: string, level: number, used: number): unknown {
-  const start = text.trimStart()[0];
-  if (start !== '{' && start !== '[' && start !== '"') return undefined;
-  let parsed: unknown;
+function embeddedJson(text: string, work: EmbeddedWork): unknown {
+  const trimmed = text.trim();
+  const open = trimmed[0];
+  const close = trimmed[trimmed.length - 1];
+  const shaped =
+    trimmed.length >= 2 &&
+    ((open === '{' && close === '}') ||
+      (open === '[' && close === ']') ||
+      (open === '"' && close === '"'));
+  if (!shaped || work.failed >= EMBEDDED_FAILURES) return undefined;
+  if (work.used + text.length > EMBEDDED_BUDGET) return TOO_DEEP;
   try {
-    parsed = JSON.parse(text);
+    const parsed: unknown = JSON.parse(trimmed);
+    work.used += text.length;
+    return parsed;
   } catch {
+    work.failed += 1;
     return undefined;
   }
-  if (level >= EMBEDDED_LEVELS || used + text.length > EMBEDDED_BUDGET) return TOO_DEEP;
-  return parsed;
 }
 
 /**
- * JSON text inside a string that doesn't parse, read without parsing: escapes of any depth (`\\n`, `\\\\n`, `\\"`,
- * `\\u0073`, a `\\u005c` that makes another escape) become what they stand for, so a token after an escaped newline or
+ * JSON text inside a string that doesn't parse, read without parsing: escapes of any depth of backslashes (`\\n`,
+ * `\\\\n`, `\\"`, `\\u0073`, and up to two `\\u005c` that make another escape) become what they stand for, so a token after an escaped newline or
  * a credential key inside it is seen. Linear: one scan per pass and at most three passes (a regex starting with a
  * repeat was quadratic on a long run of backslashes).
  */
