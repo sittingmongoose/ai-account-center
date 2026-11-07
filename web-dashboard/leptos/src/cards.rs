@@ -176,6 +176,8 @@ pub fn CardsPanel() -> impl IntoView {
 
     view! {
         <Panel title="Questions for you" source=source id="cards">
+            {move || live.view.with(|v| v.as_ref().and_then(|v| v.cards.answer_history_problem.clone()))
+                .map(|message| view! { <p class="warn" role="status">{message}</p> })}
             <Show
                 // A send's result outlives the cards: while a send runs, after it fails and on the sent screen the deck
                 // stays even when a read empties the cards under it. An idle review with no cards gives way.

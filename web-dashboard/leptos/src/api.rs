@@ -204,6 +204,7 @@ pub struct Cards {
     pub open: Vec<Card>,
     #[serde(deserialize_with = "nullable")]
     pub answered: Vec<AnsweredCard>,
+    pub answer_history_problem: Option<String>,
     #[serde(deserialize_with = "nullable")]
     pub batches: Vec<Batch>,
     /// True only when the server's latest scan read every writer folder: then a card missing from `open` has closed.
@@ -1122,6 +1123,26 @@ pub async fn post_answers(answers: &[AnswerEntry]) -> SendOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_answer_history_is_explicit_and_recovers() {
+        let cards: Cards = serde_json::from_value(serde_json::json!({
+            "answered": null,
+            "answerHistoryProblem": "The answer history can't be read right now.",
+            "complete": false
+        }))
+        .unwrap();
+        assert_eq!(
+            cards.answer_history_problem.as_deref(),
+            Some("The answer history can't be read right now.")
+        );
+        assert!(!cards.proves_closed());
+        let recovered: Cards = serde_json::from_value(
+            serde_json::json!({"answered": [], "answerHistoryProblem": null}),
+        )
+        .unwrap();
+        assert!(recovered.answer_history_problem.is_none());
+    }
 
     #[test]
     fn the_fixture_reads_as_view_v1() {
