@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1353,
-    "filesAffected": 135,
+    "totalOccurrences": 1344,
+    "filesAffected": 134,
     "hotpathOccurrences": 698,
     "hotpathFilesAffected": 79,
     "topHotpathFiles": [
@@ -351,8 +351,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 226,
-    "filesAffected": 79,
+    "totalMarkers": 225,
+    "filesAffected": 78,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -533,11 +533,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 706,
+      "totalThrows": 705,
       "typedThrows": 195,
       "plainThrows": 72,
-      "otherThrows": 439,
-      "adoptionRatio": 0.2762,
+      "otherThrows": 438,
+      "adoptionRatio": 0.2766,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -547,7 +547,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 166,
+          "count": 165,
           "typed": 0,
           "plain": 0
         },
@@ -615,8 +615,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 42,
-      "totalSourceFiles": 457,
-      "coverageRatio": 0.0919,
+      "totalSourceFiles": 456,
+      "coverageRatio": 0.0921,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -653,7 +653,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 39,
+          "count": 38,
           "withLogger": 0
         },
         {
