@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 /**
  * Process names the resident runtime's own census (runtime_continuity.census_cli)
@@ -141,14 +142,23 @@ function candidateScripts(argument: string): string[] {
         ? argument.slice(equals + 1)
         : argument;
   }
+  // A file URL is one path, decoded (`file:///x/%2Egemini/h.mjs` is `/x/.gemini/h.mjs`); anything else may be a list.
   const parts = value
-    .replace(/^file:\/\//, '')
-    .split(/[:,]/)
-    .map((part) => part.replace(/^file:\/\//, ''))
+    .split(',')
+    .flatMap((item) => (item.startsWith('file:') ? [filePath(item)] : item.split(':')))
     .filter(Boolean);
   return argument.startsWith('-')
     ? parts
     : [argument, ...parts.filter((part) => part !== argument)];
+}
+
+/** A `file:` URL as its path, percent-escapes decoded; a URL that doesn't parse keeps its text after the scheme. */
+function filePath(url: string): string {
+  try {
+    return fileURLToPath(url);
+  } catch {
+    return url.replace(/^file:(?:\/\/)?/, '');
+  }
 }
 
 /**
@@ -172,11 +182,11 @@ function candidateScripts(argument: string): string[] {
  * process's working folder. A bare relative word (`helper.js`) is not, except
  * as an interpreter's script (below), so another program started by bare name
  * from inside a root folder matches only by its process name or executable.
- * Two further limits are known: `./bin/x` started
+ * One further limit is known: `./bin/x` started
  * from a root by a process that then changes folder (`chdir("/")`) resolves
- * against its new folder, and an absolute argument that reaches a root only
- * through a symlink elsewhere is not resolved. Both still match by name or
- * executable when those are Antigravity's.
+ * against its new folder (it still matches by name or executable when those
+ * are Antigravity's). A path that reaches a root through a symlink elsewhere
+ * matches by where it really leads.
  *
  * An interpreter is known by its process name, argv0 or executable (a
  * rewritten title still runs /usr/bin/python3). For one, every non-option
@@ -235,6 +245,16 @@ export function censusAntigravityProcesses(options: {
       const resolved = path.resolve(file);
       return natives.includes(resolved) || rootPaths.some((root) => within(resolved, root));
     });
+  // A path as written, or where it really leads: a script reached through a symlink elsewhere (`/tmp/link/h.py` with
+  // /tmp/link -> a root) is a root's script. A path that doesn't exist or can't be resolved counts as written only.
+  const reachesRoot = (value: string): boolean => {
+    if (isAntigravityPath(value)) return true;
+    try {
+      return isAntigravityPath(fs.realpathSync(value));
+    } catch {
+      return false;
+    }
+  };
   const deniedExe = new Set(['EACCES', 'EPERM']);
   // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A
   // non-dumpable one denies that link, and then the script can't be placed: such a process may be a live helper, so
@@ -302,11 +322,11 @@ export function censusAntigravityProcesses(options: {
         // empty or reaped command line) is no evidence either way.
         const inRoot = (): boolean => {
           resolveArgument('./x', true);
-          return (cwds ?? []).some(isAntigravityPath);
+          return (cwds ?? []).some(reachesRoot);
         };
         if (
-          args.some((argument) => resolveArgument(argument).some(isAntigravityPath)) ||
-          operands.some((argument) => resolveArgument(argument, true).some(isAntigravityPath)) ||
+          args.some((argument) => resolveArgument(argument).some(reachesRoot)) ||
+          operands.some((argument) => resolveArgument(argument, true).some(reachesRoot)) ||
           // a shell needs arguments (an interactive one parked in a root folder is no helper); another interpreter
           // with none reads its script from stdin
           (interpreter && (all.length > 1 || (all.length === 1 && !shell)) && inRoot())

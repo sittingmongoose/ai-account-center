@@ -551,7 +551,14 @@ describe('runtime-free Antigravity process census', () => {
     value.add(970, 'helper', '/usr/bin/python3.12', ['helper', 'x.py'], helperDir);
     expect(value.census()).toEqual({ complete: true, running: 1 });
     fs.rmSync(path.join(value.proc, '970'), { recursive: true });
+    // a percent-encoded file URL and a path through a symlink elsewhere both reach the root
+    const link = path.join(value.root, 'link-to-helpers');
+    fs.symlinkSync(helperDir, link);
+    fs.writeFileSync(path.join(helperDir, 'h.py'), '');
+    const encoded = `file://${helperDir.replace('.gemini', '%2Egemini')}/h.mjs`;
     for (const argv of [
+      ['node', `--import=${encoded}`, 'app.js'],
+      ['python3', path.join(link, 'h.py')],
       ['node', `-r${path.join(helperDir, 'hook.js')}`, 'app.js'],
       ['node', `--import=file://${path.join(helperDir, 'h.mjs')}`, 'app.js'],
       ['node', `--path=/a:${helperDir}`, 'app.js'],
