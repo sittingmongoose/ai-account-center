@@ -113,6 +113,8 @@ function spellings(file: string): string[] | null {
  */
 const NETWORK_FS =
   /^(?:nfs4?|cifs|smb3?|smbfs|ceph|glusterfs|lustre|gpfs|afs|9p|virtiofs|davfs|autofs|beegfs|ocfs2|gfs2|orangefs|pvfs2|vboxsf|fuse.*)$/;
+/** The longest path the kernel opens. */
+const PATH_MAX = 4096;
 /** How many path lookups one process's arguments may cost the census. */
 const LOOKUPS_PER_PROCESS = 4096;
 
@@ -165,27 +167,39 @@ function cachedLstat(file: string, cache: StatCache): fs.Stats | string {
  * null.
  */
 function resolveLocally(file: string, network: readonly string[], cache: StatCache): string | null {
-  let pending = file.split(path.sep).filter(Boolean);
+  // the kernel opens no longer path, so a longer one names no live script
+  if (file.length > PATH_MAX) return null;
+  // components still to walk, last first, so each step is O(1)
+  const stack = file.split(path.sep).filter(Boolean).reverse();
   let current: string = path.sep;
-  for (let hops = 0; pending.length > 0; ) {
-    const [part, ...rest] = pending;
-    if (part === '.') {
-      pending = rest;
-      continue;
-    }
+  let hops = 0;
+  for (let part = stack.pop(); part !== undefined; part = stack.pop()) {
+    if (part === '.') continue;
     if (part === '..') {
       current = path.dirname(current);
-      pending = rest;
       continue;
     }
     const next = path.join(current, part);
-    if (network.some((mount) => within(next, mount))) return path.join(next, ...rest);
+    const mount = network.find((root) => within(next, root));
+    if (mount !== undefined) {
+      // nothing on the mount is touched: the rest is read as written, and if a `..` leaves the mount, walking
+      // resumes from where it lands
+      const lexical = path.resolve(next, ...[...stack].reverse());
+      if (within(lexical, mount)) return lexical;
+      hops += 1;
+      if (hops > 40) return null;
+      stack.length = 0;
+      stack.push(...lexical.split(path.sep).filter(Boolean).reverse());
+      current = path.sep;
+      continue;
+    }
     const stat = cachedLstat(next, cache);
     if (typeof stat === 'string')
-      return stat === 'ENOENT' || stat === 'ENOTDIR' ? path.join(current, ...pending) : null;
+      return stat === 'ENOENT' || stat === 'ENOTDIR'
+        ? path.join(current, part, ...[...stack].reverse())
+        : null;
     if (!stat.isSymbolicLink()) {
       current = next;
-      pending = rest;
       continue;
     }
     hops += 1;
@@ -198,7 +212,7 @@ function resolveLocally(file: string, network: readonly string[], cache: StatCac
     }
     // a relative target is read from the link's own folder
     if (path.isAbsolute(target)) current = path.sep;
-    pending = [...target.split(path.sep).filter(Boolean), ...rest];
+    stack.push(...target.split(path.sep).filter(Boolean).reverse());
   }
   return current;
 }
@@ -306,7 +320,7 @@ function filePath(url: string): string {
  * matches by where it really leads (a missing script by the folder that
  * exists, a dangling link by its target), resolved one component at a time and
  * never on or under a network, FUSE or autofs mount, where nothing is looked
- * up; at most 256 lookups per process, past which an interpreter's script is
+ * up; at most 4096 lookups per process, past which an interpreter's script is
  * unplaced.
  *
  * An interpreter is known by its process name, argv0 or executable (a
@@ -379,8 +393,26 @@ export function censusAntigravityProcesses(options: {
   let overLookups = false;
   const stats: StatCache = new Map();
   const resolved = new Map<string, string | null>();
-  // `lookup: false` for a bare word: it can only lead into the working folder, which is judged on its own (an
-  // interpreter working in a root counts), so it needs no lookup at all and a long inline script costs none.
+  // A bare word leads into the working folder, which is judged on its own (an interpreter working in a root counts),
+  // unless it is a link there: so a bare word is looked up only when the folder holds a link by that name, read once
+  // per folder (never on a network mount), and a long inline script costs no lookups.
+  const linksIn = new Map<string, Set<string>>();
+  const isLinkIn = (folder: string, name: string): boolean => {
+    let links = linksIn.get(folder);
+    if (links === undefined) {
+      links = new Set();
+      if (!network.some((root) => within(folder, root))) {
+        try {
+          for (const entry of fs.readdirSync(folder, { withFileTypes: true }))
+            if (entry.isSymbolicLink()) links.add(entry.name);
+        } catch {
+          /* an unreadable folder holds no links we can follow */
+        }
+      }
+      linksIn.set(folder, links);
+    }
+    return links.has(name);
+  };
   const reachesRoot = (value: string, lookup = true): boolean => {
     if (isAntigravityPath(value)) return true;
     if (!lookup) return false;
@@ -472,7 +504,12 @@ export function censusAntigravityProcesses(options: {
           args.some((argument) => resolveArgument(argument).some((file) => reachesRoot(file))) ||
           operands.some((argument) =>
             resolveArgument(argument, true).some((file) =>
-              reachesRoot(file, path.isAbsolute(argument) || argument.includes(path.sep))
+              reachesRoot(
+                file,
+                path.isAbsolute(argument) ||
+                  argument.includes(path.sep) ||
+                  isLinkIn(path.dirname(file), path.basename(file))
+              )
             )
           ) ||
           // a shell needs arguments (an interactive one parked in a root folder is no helper); another interpreter

@@ -681,6 +681,68 @@ describe('runtime-free Antigravity process census', () => {
     ).toEqual({ complete: true, running: 1 });
   });
 
+  test('a bare word that is a link in the working folder still reaches a root', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(helperDir, { recursive: true });
+    const work = path.join(value.root, 'work');
+    fs.mkdirSync(work);
+    for (const name of ['h.py', 'h.sh']) {
+      fs.writeFileSync(path.join(helperDir, name), '');
+      fs.symlinkSync(path.join(helperDir, name), path.join(work, name));
+    }
+    fs.symlinkSync(helperDir, path.join(work, 'pkg'));
+    fs.writeFileSync(path.join(work, 'app.js'), '');
+    for (const argv of [
+      ['python3', 'h.py'],
+      ['python3', '-I', '-u', 'h.py'],
+      ['bash', 'h.sh'],
+      ['node', 'pkg'],
+      ['node', '--require=h.py', 'app.js'],
+      ['node', '--import=file:h.py', 'app.js'],
+    ]) {
+      value.add(991, argv[0], `/usr/bin/${argv[0]}`, argv, work);
+      expect([argv, value.census()]).toEqual([argv, { complete: true, running: 1 }]);
+      fs.rmSync(path.join(value.proc, '991'), { recursive: true });
+    }
+    // a plain file there (not a link) is no helper
+    value.add(992, 'node', '/usr/bin/node', ['node', 'app.js'], work);
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+  });
+
+  test('a .. that leaves a network mount resumes link resolution, and a long ./ path stays fast', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(helperDir, { recursive: true });
+    const nfs = path.join(value.root, 'nfs');
+    fs.mkdirSync(path.join(nfs, 'proj'), { recursive: true });
+    fs.symlinkSync(helperDir, path.join(value.root, 'lnk'));
+    const mountInfo = path.join(value.root, 'mountinfo');
+    fs.writeFileSync(mountInfo, `40 25 0:40 / ${nfs} rw - nfs4 nas:/x rw\n`);
+    const census = () =>
+      censusAntigravityProcesses({
+        home: value.home,
+        nativeBinary: value.native,
+        procRoot: value.proc,
+        selfPid: 7,
+        mountInfo,
+      });
+    for (const [argv, cwd] of [
+      [['python3', '../../lnk/h.py'], path.join(nfs, 'proj')],
+      [['python3', `${nfs}/../lnk/h.py`], value.root],
+    ] as const) {
+      value.add(993, 'python3', '/usr/bin/python3', [...argv], cwd);
+      expect([argv, census()]).toEqual([argv, { complete: true, running: 1 }]);
+      fs.rmSync(path.join(value.proc, '993'), { recursive: true });
+    }
+    const dots = `${'./'.repeat(32_000)}x`;
+    for (let pid = 994; pid < 999; pid += 1)
+      value.add(pid, 'python3', '/usr/bin/python3', ['python3', dots], value.root);
+    const started = performance.now();
+    census();
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {
     // Read-only; any native path works. systemd --user, ssh-agent and sshd-session
     // deny their exe link, which must not make the census incomplete forever.
