@@ -219,12 +219,14 @@ fn note_refused(txn: &WriteTransaction, day: u32, fingerprints: &[String]) -> Re
         let Some(value) = get(txn, db::SUMMARY_UNMARKED, &key)? else {
             continue;
         };
-        if value.len() >= 8 {
-            let (a, w) = (db::be_u32(&value, 0), db::be_u32(&value, 4));
-            let rollup = Key::new().u32(a).u32(w).u32(day);
-            txn.open_table(db::ROLLUP_HOURS)?.remove(rollup.as_slice())?;
-            txn.open_table(db::ROLLUP_DAY)?.remove(rollup.as_slice())?;
-            for at in (8..value.len()).step_by(8) {
+        if value.len() >= 9 {
+            let (rollups, a, w) = (value[0] & 1 != 0, db::be_u32(&value, 1), db::be_u32(&value, 5));
+            if rollups {
+                let rollup = Key::new().u32(a).u32(w).u32(day);
+                txn.open_table(db::ROLLUP_HOURS)?.remove(rollup.as_slice())?;
+                txn.open_table(db::ROLLUP_DAY)?.remove(rollup.as_slice())?;
+            }
+            for at in (9..value.len()).step_by(8) {
                 if at + 8 <= value.len() {
                     let start = db::be_u64(&value, at);
                     txn.open_table(db::PERIOD)?
@@ -236,6 +238,51 @@ fn note_refused(txn: &WriteTransaction, day: u32, fingerprints: &[String]) -> Re
         withdrawn.push(fp.clone());
     }
     Ok(withdrawn)
+}
+
+/// Notes what an unmarked summary wrote for a series on `day` (its rollups, a period starting at
+/// `period`), merged with what other summaries wrote there.
+fn remember_unmarked(
+    txn: &WriteTransaction,
+    key: &[u8],
+    (a, w): (u32, u32),
+    rollups: bool,
+    period: Option<u64>,
+) -> Result<()> {
+    let mut value = get(txn, db::SUMMARY_UNMARKED, key)?
+        .filter(|v| v.len() >= 9)
+        .unwrap_or_else(|| {
+            let mut v = vec![0u8];
+            v.extend_from_slice(&a.to_be_bytes());
+            v.extend_from_slice(&w.to_be_bytes());
+            v
+        });
+    if rollups {
+        value[0] |= 1;
+    }
+    if let Some(start) = period {
+        let known = (9..value.len())
+            .step_by(8)
+            .any(|at| at + 8 <= value.len() && db::be_u64(&value, at) == start);
+        if !known {
+            value.extend_from_slice(&start.to_be_bytes());
+        }
+    }
+    put(txn, db::SUMMARY_UNMARKED, key, &value)
+}
+
+/// The UTC days a reset period depends on: the days it covers, and before its start the
+/// reading that ended the previous period, which can lie up to one window length earlier (a
+/// longer silence resets the window whatever that reading was). An unknown length counts as 31
+/// days. At most a year of days.
+fn period_days(start_ms: u64, end_ms: i64, window_minutes: Option<f64>) -> std::ops::RangeInclusive<u32> {
+    let lookback_days = match window_minutes {
+        Some(m) if m.is_finite() && m > 0.0 => ((m * 60_000.0) / DAY_MS as f64).ceil().clamp(1.0, 366.0) as u32,
+        _ => 31,
+    };
+    let first = day_of(start_ms).saturating_sub(lookback_days);
+    let last = day_of(end_ms.max(start_ms as i64) as u64).min(first.saturating_add(366 + lookback_days));
+    first..=last
 }
 
 fn summary_finding(event: &Event, why: &str) -> Finding {
@@ -753,8 +800,9 @@ pub struct UsageProjector;
 
 /// Bump when projection rules change: the usage tables are then rebuilt from the logs.
 /// Version 3: observations refused by today's checks are set aside, and closed-day summaries
-/// built from them are not trusted; earlier projections are rebuilt from the logs.
-pub const USAGE_PROJECTOR_VERSION: u32 = 3;
+/// built from them are not trusted; earlier projections are rebuilt from the logs. Version 4: an
+/// older summary's reset periods are checked against every day they cover.
+pub const USAGE_PROJECTOR_VERSION: u32 = 4;
 
 impl Projector for UsageProjector {
     fn name(&self) -> &'static str {
@@ -1357,12 +1405,56 @@ fn project_day_closed(txn: &WriteTransaction, event: &Event, payload: &Json) -> 
             continue;
         }
         let fingerprint = series_fingerprint(&account.identity, &window.identity);
-        let refused_at = refused_key(day, &fingerprint);
-        if !marked
-            && let Some(key) = &refused_at
-            && has_index(txn, db::REFUSED, key)?
-        {
+        let refused_on = |d: u32| -> Result<bool> {
+            Ok(match refused_key(d, &fingerprint) {
+                Some(key) => has_index(txn, db::REFUSED, &key)?,
+                None => false,
+            })
+        };
+        // The day's rollups are trusted unless an older build computed them over a refused
+        // observation of this series that day.
+        let rollups_ok = marked || !refused_on(day)?;
+        // Each reset period separately, against every day it covers.
+        let mut periods: Vec<(u64, Period)> = Vec::new();
+        let mut periods_refused = false;
+        for period in series["periods"].as_array().into_iter().flatten() {
+            let start = period["start_ms"].as_u64().unwrap_or(0);
+            let mut value: Period = serde_json::from_value(period["period"].clone())?;
+            if !marked {
+                let mut touched = false;
+                for d in period_days(start, value.end_ms, window.window_minutes) {
+                    touched |= refused_on(d)?;
+                }
+                if touched {
+                    periods_refused = true;
+                    continue;
+                }
+            }
+            value.is_final = true;
+            value.emitted = true;
+            periods.push((start, value));
+        }
+        if !rollups_ok {
             set_aside.push(summary_finding(event, "was built from an observation refused since"));
+            // When the clean readings still give that day, a close from this build will say so.
+            let rev = txn.open_table(db::DICT_REV)?;
+            let ids = (
+                db::lookup_id(&rev, db::KIND_ACCOUNT, &account.identity)?,
+                db::lookup_id(&rev, db::KIND_WINDOW, &window.identity)?,
+            );
+            drop(rev);
+            if let (Some(a), Some(w)) = ids
+                && get(txn, db::ROLLUP_DAY, Key::new().u32(a).u32(w).u32(day).as_slice())?.is_some()
+            {
+                put_index(txn, db::RECLOSE, Key::new().u32(day).u32(a).u32(w).as_slice())?;
+            }
+        } else if periods_refused {
+            set_aside.push(summary_finding(
+                event,
+                "holds a reset period over an observation refused since",
+            ));
+        }
+        if !rollups_ok && periods.is_empty() {
             continue;
         }
         let a = db::intern(txn, db::KIND_ACCOUNT, &account.identity)?;
@@ -1374,41 +1466,48 @@ fn project_day_closed(txn: &WriteTransaction, event: &Event, payload: &Json) -> 
         if get(txn, db::SERIES, Key::new().u32(a).u32(w).as_slice())?.is_none() {
             put_series(txn, a, w, &meta)?;
         }
-        // The close replaces the whole day: an hour it does not list has no rollup, even if a
-        // late reading reached it during a rebuild.
-        let mut hours = Vec::new();
-        for hour in series["hours"].as_array().into_iter().flatten() {
-            let h = hour["hour"].as_u64().unwrap_or(u64::MAX);
-            if h / 24 != day as u64 {
-                fail!("corrupt", "day_closed hour outside its day");
+        if marked {
+            txn.open_table(db::RECLOSE)?
+                .remove(Key::new().u32(day).u32(a).u32(w).as_slice())?;
+        }
+        if rollups_ok {
+            // The close replaces the whole day: an hour it does not list has no rollup, even if
+            // a late reading reached it during a rebuild.
+            let mut hours = Vec::new();
+            for hour in series["hours"].as_array().into_iter().flatten() {
+                let h = hour["hour"].as_u64().unwrap_or(u64::MAX);
+                if h / 24 != day as u64 {
+                    fail!("corrupt", "day_closed hour outside its day");
+                }
+                hours.push(((h % 24) as u8, rollup_from_json(&hour["rollup"])?));
             }
-            hours.push(((h % 24) as u8, rollup_from_json(&hour["rollup"])?));
+            hours.sort_by_key(|(h, _)| *h);
+            let key = Key::new().u32(a).u32(w).u32(day);
+            if hours.is_empty() {
+                txn.open_table(db::ROLLUP_HOURS)?.remove(key.as_slice())?;
+            } else {
+                put(txn, db::ROLLUP_HOURS, key.as_slice(), &pack::encode_hours(&hours))?;
+            }
+            put(
+                txn,
+                db::ROLLUP_DAY,
+                key.as_slice(),
+                &rollup_from_json(&series["day_rollup"])?.encode(),
+            )?;
+            if !marked && let Some(key) = refused_key(day, &fingerprint) {
+                remember_unmarked(txn, &key, (a, w), true, None)?;
+            }
         }
-        hours.sort_by_key(|(h, _)| *h);
-        let key = Key::new().u32(a).u32(w).u32(day);
-        if hours.is_empty() {
-            txn.open_table(db::ROLLUP_HOURS)?.remove(key.as_slice())?;
-        } else {
-            put(txn, db::ROLLUP_HOURS, key.as_slice(), &pack::encode_hours(&hours))?;
-        }
-        put(
-            txn,
-            db::ROLLUP_DAY,
-            Key::new().u32(a).u32(w).u32(day).as_slice(),
-            &rollup_from_json(&series["day_rollup"])?.encode(),
-        )?;
-        let mut provenance = Key::new().u32(a).u32(w);
-        for period in series["periods"].as_array().into_iter().flatten() {
-            let start = period["start_ms"].as_u64().unwrap_or(0);
-            let mut value: Period = serde_json::from_value(period["period"].clone())?;
-            value.is_final = true;
-            value.emitted = true;
-            write_period(txn, a, w, start, &value)?;
-            provenance = provenance.u64(start);
-        }
-        // An unmarked summary may still meet a refusal later in the ledger: remember what it wrote.
-        if !marked && let Some(key) = &refused_at {
-            put(txn, db::SUMMARY_UNMARKED, key, provenance.as_slice())?;
+        for (start, value) in &periods {
+            write_period(txn, a, w, *start, value)?;
+            // An unmarked period may still meet a refusal later in the ledger, on any day it covers.
+            if !marked {
+                for d in period_days(*start, value.end_ms, window.window_minutes) {
+                    if let Some(key) = refused_key(d, &fingerprint) {
+                        remember_unmarked(txn, &key, (a, w), false, Some(*start))?;
+                    }
+                }
+            }
         }
     }
     put_index(txn, db::DAY_CLOSED, Key::new().u32(day).as_slice())?;
@@ -1609,59 +1708,137 @@ pub fn close_days(engine: &Engine, now: u64) -> Result<Json> {
 }
 
 fn day_series(txn: &WriteTransaction, day: u32) -> Result<Vec<Json>> {
-    let mut out = Vec::new();
-    let mut series_keys = Vec::new();
+    let mut keys = Vec::new();
     {
         let table = txn.open_table(db::SERIES)?;
         for item in table.iter()? {
-            let (k, v) = item?;
-            series_keys.push((k.value().to_vec(), v.value().to_vec()));
+            let (k, _) = item?;
+            keys.push((db::be_u32(k.value(), 0), db::be_u32(k.value(), 4)));
         }
     }
-    for (key, value) in series_keys {
-        let (a, w) = (db::be_u32(&key, 0), db::be_u32(&key, 4));
-        let Some(day_rollup) = get(txn, db::ROLLUP_DAY, Key::new().u32(a).u32(w).u32(day).as_slice())? else {
-            continue;
-        };
-        let series: SeriesMeta = db::unpack(&value)?;
-        let account: AccountMeta =
-            db::unpack(&get(txn, db::ACCOUNT, Key::new().u32(a).as_slice())?.unwrap_or_default())?;
-        let window: WindowMeta = db::unpack(&get(txn, db::WINDOW, Key::new().u32(w).as_slice())?.unwrap_or_default())?;
-        let mut hours = Vec::new();
-        if let Some(b) = get(txn, db::ROLLUP_HOURS, Key::new().u32(a).u32(w).u32(day).as_slice())? {
-            for (hour, rollup) in pack::decode_hours(&b)? {
-                hours.push(json!({ "hour": day * 24 + hour as u32, "rollup": rollup_to_json(&rollup) }));
-            }
+    let mut out = Vec::new();
+    for (a, w) in keys {
+        if let Some(entry) = series_close(txn, (a, w), day, |p| p.is_final && !p.emitted)? {
+            out.push(entry);
         }
-        let mut periods = Vec::new();
-        {
-            let table = txn.open_table(db::PERIOD)?;
-            let prefix = Key::new().u32(a).u32(w);
-            let end = db::prefix_end(prefix.as_slice());
-            for item in table.range(prefix.as_slice()..end.as_slice())? {
-                let (k, v) = item?;
-                let period: Period = db::unpack(v.value())?;
-                if period.is_final && !period.emitted {
-                    periods.push(json!({ "start_ms": db::be_u64(k.value(), 8), "period": period }));
-                }
-            }
-        }
-        out.push(json!({
-            "account": AccountObs {
-                identity: account.identity, provider: account.provider, account_id: account.account_id,
-                plan: account.plan, platform: account.platform, source: String::new(), status: String::new(), is_active: false,
-            },
-            "window": WindowObs {
-                identity: window.identity, key: window.key, label: series.label, kind: window.kind, unit: window.unit,
-                window_minutes: series.window_minutes, pool_id: window.pool_id, pool_id_source: series.pool_id_source,
-                pool_label: series.pool_label, model_ids: series.model_ids, ..Default::default()
-            },
-            "hours": hours,
-            "day_rollup": rollup_to_json(&Rollup::decode(&day_rollup)?),
-            "periods": periods,
-        }));
     }
     Ok(out)
+}
+
+/// One series' entry in a day's close: its metadata, hourly and day rollups, and the reset
+/// periods `include` selects. `None` when the series has no rollup that day.
+fn series_close(
+    txn: &WriteTransaction,
+    (a, w): (u32, u32),
+    day: u32,
+    include: impl Fn(&Period) -> bool,
+) -> Result<Option<Json>> {
+    let Some(day_rollup) = get(txn, db::ROLLUP_DAY, Key::new().u32(a).u32(w).u32(day).as_slice())? else {
+        return Ok(None);
+    };
+    let Some(value) = get(txn, db::SERIES, Key::new().u32(a).u32(w).as_slice())? else {
+        return Ok(None);
+    };
+    let series: SeriesMeta = db::unpack(&value)?;
+    let account: AccountMeta = db::unpack(&get(txn, db::ACCOUNT, Key::new().u32(a).as_slice())?.unwrap_or_default())?;
+    let window: WindowMeta = db::unpack(&get(txn, db::WINDOW, Key::new().u32(w).as_slice())?.unwrap_or_default())?;
+    let mut hours = Vec::new();
+    if let Some(b) = get(txn, db::ROLLUP_HOURS, Key::new().u32(a).u32(w).u32(day).as_slice())? {
+        for (hour, rollup) in pack::decode_hours(&b)? {
+            hours.push(json!({ "hour": day * 24 + hour as u32, "rollup": rollup_to_json(&rollup) }));
+        }
+    }
+    let mut periods = Vec::new();
+    {
+        let table = txn.open_table(db::PERIOD)?;
+        let prefix = Key::new().u32(a).u32(w);
+        let end = db::prefix_end(prefix.as_slice());
+        for item in table.range(prefix.as_slice()..end.as_slice())? {
+            let (k, v) = item?;
+            let period: Period = db::unpack(v.value())?;
+            if include(&period) {
+                periods.push(json!({ "start_ms": db::be_u64(k.value(), 8), "period": period }));
+            }
+        }
+    }
+    Ok(Some(json!({
+        "account": AccountObs {
+            identity: account.identity, provider: account.provider, account_id: account.account_id,
+            plan: account.plan, platform: account.platform, source: String::new(), status: String::new(), is_active: false,
+        },
+        "window": WindowObs {
+            identity: window.identity, key: window.key, label: series.label, kind: window.kind, unit: window.unit,
+            window_minutes: series.window_minutes, pool_id: window.pool_id, pool_id_source: series.pool_id_source,
+            pool_label: series.pool_label, model_ids: series.model_ids, ..Default::default()
+        },
+        "hours": hours,
+        "day_rollup": rollup_to_json(&Rollup::decode(&day_rollup)?),
+        "periods": periods,
+    })))
+}
+
+/// Appends a close from this build for every series and day whose older summary was set aside
+/// while its clean readings still gave the day (`reclose`), with the final reset periods that
+/// overlap that day. A later rebuild then finds the clean day in the ledger, as a reopen finds
+/// it in redb, after the readings retire.
+pub fn write_replacement_closes(engine: &Engine) -> Result<usize> {
+    let pending: Vec<(u32, u32, u32)> = engine.with_db(|db| {
+        let read = db.begin_read()?;
+        let mut out = Vec::new();
+        for item in read.open_table(db::RECLOSE)?.iter()? {
+            let (k, _) = item?;
+            out.push((
+                db::be_u32(k.value(), 0),
+                db::be_u32(k.value(), 4),
+                db::be_u32(k.value(), 8),
+            ));
+        }
+        Ok(out)
+    })?;
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    engine.commit(LogId::Ledger, |batch| {
+        let mut written = 0;
+        let mut days: Vec<u32> = pending.iter().map(|(d, _, _)| *d).collect();
+        days.dedup();
+        for day in days {
+            let (start, end) = (day as i64 * DAY_MS as i64, (day as i64 + 1) * DAY_MS as i64);
+            let mut series = Vec::new();
+            for (_, a, w) in pending.iter().filter(|(d, _, _)| *d == day) {
+                if let Some(entry) = series_close(batch.txn, (*a, *w), day, |p| p.is_final)? {
+                    series.push(filter_periods_to_day(entry, start, end));
+                }
+            }
+            let parts = series.len().div_ceil(DAY_CLOSED_SERIES_PER_EVENT);
+            for (i, chunk) in series.chunks(DAY_CLOSED_SERIES_PER_EVENT).enumerate() {
+                let payload = json!({ "day": day, "part": i, "parts": parts, "series": chunk, "refused_excluded": true, "replaces_set_aside": true });
+                let mut event = Event::new("usage.day_closed", now_ms(), msgpack::from_json(&payload)?);
+                event.idempotency_key = Some(format!("{day}:replacement:{i}"));
+                batch.push(event)?;
+                written += 1;
+            }
+        }
+        // A series whose day no longer has a rollup needs no replacement.
+        let mut table = batch.txn.open_table(db::RECLOSE)?;
+        for (day, a, w) in &pending {
+            table.remove(Key::new().u32(*day).u32(*a).u32(*w).as_slice())?;
+        }
+        Ok(written)
+    })
+}
+
+/// Keeps the periods of a close entry that overlap `[start, end)`: they start before its end and
+/// end at or after its start.
+fn filter_periods_to_day(mut entry: Json, start: i64, end: i64) -> Json {
+    if let Some(periods) = entry["periods"].as_array_mut() {
+        periods.retain(|p| {
+            let begins = p["start_ms"].as_i64().unwrap_or(i64::MAX);
+            let ends = p["period"]["end_ms"].as_i64().unwrap_or(i64::MIN);
+            begins < end && ends >= start
+        });
+    }
+    entry
 }
 
 /// Deletes readings and account states older than the retention (docs/store.md 5). Rollups,
@@ -1902,17 +2079,34 @@ fn accounts_named(read: &redb::ReadTransaction, identities: &[String]) -> Result
     Ok(ids)
 }
 
+/// The windows with this key: the window table is read (one small row per window), no series.
+fn windows_keyed(read: &redb::ReadTransaction, key: &str) -> Result<Vec<u32>> {
+    let mut ids = Vec::new();
+    for item in read.open_table(db::WINDOW)?.iter()? {
+        let (k, v) = item?;
+        let meta: WindowMeta = db::unpack(v.value())?;
+        if meta.key == key {
+            ids.push(db::be_u32(k.value(), 0));
+        }
+    }
+    Ok(ids)
+}
+
 /// The series a filtered query reads, in key order, with their `series` rows, chosen through the
 /// indexes (docs/store.md 3.2): identities through `dict_rev` and an account prefix, a provider
-/// through `series_by_provider`. Only an `account_ids` filter reads account rows (accounts are
-/// few, and `account_id` is not interned). Without filters, every series.
+/// through `series_by_provider`, a window key through the window table and then the keys of
+/// `series_by_provider`. Only an `account_ids` filter reads account rows (accounts are few, and
+/// `account_id` is not interned). Without filters, every series.
 fn select_series(
     read: &redb::ReadTransaction,
     identities: Option<&[String]>,
     account_ids: Option<&[String]>,
     provider: Option<&str>,
+    window_key: Option<&str>,
 ) -> Result<Vec<((u32, u32), Vec<u8>)>> {
     let series_table = read.open_table(db::SERIES)?;
+    let windows: Option<Vec<u32>> = window_key.map(|k| windows_keyed(read, k)).transpose()?;
+    let window_ok = |w: u32| windows.as_ref().is_none_or(|ids| ids.contains(&w));
     let mut accounts: Option<Vec<u32>> = identities.map(|ids| accounts_named(read, ids)).transpose()?;
     if let Some(wanted) = account_ids {
         let table = read.open_table(db::ACCOUNT)?;
@@ -1940,7 +2134,7 @@ fn select_series(
             for item in index.range(prefix.as_slice()..end.as_slice())? {
                 let (k, _) = item?;
                 let (a, w) = (db::be_u32(k.value(), 4), db::be_u32(k.value(), 8));
-                if accounts.as_ref().is_none_or(|ids| ids.contains(&a)) {
+                if accounts.as_ref().is_none_or(|ids| ids.contains(&a)) && window_ok(w) {
                     keys.push((a, w));
                 }
             }
@@ -1951,7 +2145,19 @@ fn select_series(
             let end = db::prefix_end(prefix.as_slice());
             for item in series_table.range(prefix.as_slice()..end.as_slice())? {
                 let (k, _) = item?;
-                keys.push((a, db::be_u32(k.value(), 4)));
+                let w = db::be_u32(k.value(), 4);
+                if window_ok(w) {
+                    keys.push((a, w));
+                }
+            }
+        }
+    } else if windows.is_some() {
+        // Every series of these windows, from the provider index's keys alone.
+        for item in read.open_table(db::SERIES_BY_PROVIDER)?.iter()? {
+            let (k, _) = item?;
+            let (a, w) = (db::be_u32(k.value(), 4), db::be_u32(k.value(), 8));
+            if window_ok(w) {
+                keys.push((a, w));
             }
         }
     } else {
@@ -2417,6 +2623,7 @@ pub fn series_points(engine: &Engine, query: &SeriesQuery) -> Result<Json> {
             query.identities.as_deref(),
             query.account_ids.as_deref(),
             query.provider.as_deref(),
+            query.window_key.as_deref(),
         )?;
         let open = open_spans_for(&read.open_table(db::LATEST)?, selected.iter().map(|(key, _)| *key))?;
         let mut out = Vec::new();
@@ -2518,6 +2725,7 @@ pub fn series_list(engine: &Engine, query: &SeriesListQuery) -> Result<Json> {
             query.identities.as_deref(),
             query.account_ids.as_deref(),
             query.provider.as_deref(),
+            query.window_key.as_deref(),
         )?;
         for ((a, w), value) in selected {
             let smeta: SeriesMeta = db::unpack(&value)?;

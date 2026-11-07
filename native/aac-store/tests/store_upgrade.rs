@@ -230,3 +230,246 @@ fn a_close_from_this_build_keeps_a_refused_series_clean_summary() {
     fs::remove_dir_all(&dir).unwrap();
     fs::remove_dir_all(&backups).unwrap();
 }
+
+const MIN: i64 = 60_000;
+const HOUR: i64 = 3_600_000;
+
+/// The fixtures' observation shape (the 000a0ac7 writer's), for the clean reference stores.
+fn reading(account: char, t: i64, window: &str, used: f64, reset_at: i64) -> Json {
+    json!({ "account": { "identity": account.to_string().repeat(64), "provider": "codex", "account_id": format!("codex:{account}"),
+            "platform": "ubuntu", "source": "probe", "status": "ok", "is_active": true },
+            "sampled_at_ms": t, "observed_at_ms": t,
+            "windows": [{ "identity": window, "key": window, "label": if window == "seven" { "weekly" } else { "5 hour" },
+                          "used_pct": used, "reset_at_ms": reset_at }] })
+}
+
+fn periods_of(engine: &Engine, account: char, window: &str) -> Json {
+    let answer = call(
+        engine,
+        "periods",
+        json!({ "series": [{ "identity": account.to_string().repeat(64), "window": window }], "fromMs": 0, "toMs": T0 + 30 * DAY }),
+    );
+    answer[0]["periods"].clone()
+}
+
+/// A store this build writes from the clean readings alone, with the same maintenance.
+fn clean_store(name: &str, steps: Vec<(Vec<Json>, Option<i64>)>) -> (PathBuf, Engine) {
+    let dir = temp_dir(name);
+    let engine = open(&dir);
+    for (observations, maintain) in steps {
+        if !observations.is_empty() {
+            call(&engine, "record", json!({ "observations": observations }));
+        }
+        if let Some(now) = maintain {
+            call(&engine, "maintain", json!({ "nowMs": now }));
+        }
+    }
+    (dir, engine)
+}
+
+/// No live row of any table holds the refused text.
+fn assert_no_refused_text(engine: &Engine) {
+    engine
+        .with_db(|database| {
+            use redb::{ReadableDatabase, ReadableTable};
+            let read = database.begin_read()?;
+            let bytes = SECRET.as_bytes();
+            let holds = |b: &[u8]| b.windows(bytes.len()).any(|w| w == bytes);
+            for def in [
+                aac_store::db::DICT,
+                aac_store::db::ACCOUNT,
+                aac_store::db::WINDOW,
+                aac_store::db::SERIES,
+                aac_store::db::READING_DAY,
+                aac_store::db::LATEST,
+                aac_store::db::ACCOUNT_LATEST,
+                aac_store::db::ACCOUNT_STATE,
+                aac_store::db::PERIOD,
+                aac_store::db::ROLLUP_HOURS,
+                aac_store::db::ROLLUP_DAY,
+                aac_store::db::SUMMARY_UNMARKED,
+            ] {
+                for item in read.open_table(def)?.iter()? {
+                    let (k, v) = item?;
+                    assert!(
+                        !holds(k.value()) && !holds(v.value()),
+                        "a live row holds the refused text"
+                    );
+                }
+            }
+            for item in read.open_table(aac_store::db::DICT_REV)?.iter()? {
+                let (k, _) = item?;
+                assert!(!holds(k.value()), "dict_rev holds the refused text");
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// The multi-day fixture: day 1's series a/five holds a refused 100 between 30 and 55; the close
+/// of day 0 (computed by 000a0ac7 in one maintenance pass) carries day 1's reset periods, built
+/// over it. Account c's window identity itself is credential-shaped.
+#[test]
+fn old_periods_over_a_refused_reading_on_another_day_are_not_served() {
+    let dir = unpack("multi");
+    let d1 = T0 + DAY;
+    let d2 = T0 + 2 * DAY;
+    let day_reset = |t: i64| t - t.rem_euclid(DAY) + DAY;
+    let r = |acct: char, t: i64, used: f64| reading(acct, t, "five", used, day_reset(t));
+    let (reference_dir, reference) = clean_store(
+        "upgrade-multi-clean",
+        vec![(
+            vec![
+                r('a', T0, 10.0),
+                r('a', T0 + 5 * MIN, 20.0),
+                r('b', T0, 10.0),
+                r('b', T0 + 5 * MIN, 20.0),
+                r('a', d1, 30.0),
+                r('a', d1 + 10 * MIN, 55.0),
+                r('a', d1 + 15 * MIN, 60.0),
+                r('b', d1, 10.0),
+                r('b', d1 + 5 * MIN, 25.0),
+                r('a', d2, 70.0),
+                r('a', d2 + 5 * MIN, 75.0),
+                r('b', d2, 5.0),
+                r('b', d2 + 5 * MIN, 6.0),
+            ],
+            Some(T0 + 6 * DAY),
+        )],
+    );
+    let expected_a = periods_of(&reference, 'a', "five");
+    let expected_b = periods_of(&reference, 'b', "five");
+    assert!(expected_a.as_array().unwrap().iter().all(|p| p["hitLimitAt"].is_null()));
+    reference.close().unwrap();
+    drop(reference);
+    fs::remove_dir_all(&reference_dir).unwrap();
+    for pass in ["upgrade", "reopen", "rebuild", "rebuild-reopen"] {
+        if pass == "rebuild" {
+            fs::remove_file(dir.join("aac.redb")).unwrap();
+        }
+        let engine = open(&dir);
+        assert_eq!(periods_of(&engine, 'a', "five"), expected_a, "{pass}: a/five periods");
+        assert_eq!(periods_of(&engine, 'b', "five"), expected_b, "{pass}: b/five periods");
+        assert!(!answers(&engine).to_string().contains(SECRET), "{pass}");
+        assert_no_refused_text(&engine);
+        engine.close().unwrap();
+        drop(engine);
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The weekly fixture: one reading a day, maintenance after each midnight; day 2 is refused (100),
+/// so 000a0ac7 saw 100 then 40 as a reset and closed that invented period on day 6.
+#[test]
+fn an_old_weekly_period_with_an_invented_reset_is_not_served() {
+    let dir = unpack("weekly");
+    let start = T0 - T0.rem_euclid(DAY) + 6 * HOUR;
+    let reset = start + 7 * DAY - HOUR;
+    let mut steps = Vec::new();
+    for d in 0..9i64 {
+        let t = start + d * DAY;
+        let (used, r) = if d < 7 {
+            (10.0 * (d as f64 + 1.0), reset)
+        } else {
+            ((d - 6) as f64, reset + 7 * DAY)
+        };
+        let observations = if d == 2 {
+            Vec::new()
+        } else {
+            vec![reading('a', t, "seven", used, r)]
+        };
+        steps.push((observations, Some(start - 6 * HOUR + (d + 1) * DAY + HOUR)));
+    }
+    let (reference_dir, reference) = clean_store("upgrade-weekly-clean", steps);
+    let expected = periods_of(&reference, 'a', "seven");
+    reference.close().unwrap();
+    drop(reference);
+    fs::remove_dir_all(&reference_dir).unwrap();
+    for pass in ["upgrade", "reopen", "rebuild"] {
+        if pass == "rebuild" {
+            fs::remove_file(dir.join("aac.redb")).unwrap();
+        }
+        let engine = open(&dir);
+        let got = periods_of(&engine, 'a', "seven");
+        assert_eq!(got, expected, "{pass}");
+        // No two periods overlap, and none starts at the invented reset (40%).
+        let list = got.as_array().unwrap();
+        assert!(
+            list.windows(2).all(|p| p[0]["end"].as_i64() < p[1]["start"].as_i64()),
+            "{pass}: {got}"
+        );
+        assert!(list.iter().all(|p| p["startUsed"] != 40.0), "{pass}: {got}");
+        engine.close().unwrap();
+        drop(engine);
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// After this build retires the readings, a reopen and a rebuild from the logs serve the same
+/// closed days: the clean day of a series whose older close was set aside reaches the ledger.
+#[test]
+fn reopen_and_log_only_rebuild_agree_after_retirement() {
+    let dir = unpack("multi");
+    let backups = temp_dir("upgrade-retire-backups");
+    let engine = open(&dir);
+    let far = aac_store::engine::now_ms() + 200 * DAY as u64;
+    for _ in 0..3 {
+        call(
+            &engine,
+            "backup",
+            json!({ "roots": [backups.to_str().unwrap()], "withRedb": false }),
+        );
+        call(&engine, "maintain", json!({ "nowMs": far }));
+    }
+    assert!(
+        common::find(&dir.join("log").join("readings"), ".zst").is_empty()
+            && common::find(&dir.join("log").join("readings"), ".seglog").is_empty(),
+        "the readings retired"
+    );
+    engine.close().unwrap();
+    drop(engine);
+    // Closed days only: an open span and an unfinished period live in redb alone (a separate,
+    // known limit), so they are not compared.
+    let closed = |engine: &Engine| {
+        let range = json!({ "fromMs": T0 - DAY, "toMs": T0 + 3 * DAY });
+        let mut out = serde_json::Map::new();
+        for resolution in ["hour", "day"] {
+            let mut args = range.clone();
+            args["resolution"] = json!(resolution);
+            out.insert(resolution.into(), call(engine, "seriesPoints", args));
+        }
+        for (account, window) in [('a', "five"), ('b', "five")] {
+            let finals: Vec<Json> = periods_of(engine, account, window)
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["final"] == true)
+                .cloned()
+                .collect();
+            out.insert(format!("{account}/{window}"), json!(finals));
+        }
+        Json::Object(out)
+    };
+    let engine = open(&dir);
+    let reopened = closed(&engine);
+    assert!(
+        reopened["day"]["series"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["accountId"] == "codex:a")
+    );
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let engine = open(&dir);
+    assert_eq!(
+        closed(&engine),
+        reopened,
+        "a rebuild from the logs serves what the reopen served"
+    );
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+    fs::remove_dir_all(&backups).unwrap();
+}

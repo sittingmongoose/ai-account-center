@@ -31,10 +31,14 @@ pub const ROLLUP_DAY: Bytes = TableDefinition::new("rollup_day");
 pub const DAY_CLOSED: Index = TableDefinition::new("day_closed");
 /// Series and days a refused observation touched: `day u32 | fingerprint (16 bytes)`.
 pub const REFUSED: Index = TableDefinition::new("refused");
-/// Closed-day summaries applied without this build's exclusion of refused observations:
-/// `day u32 | fingerprint` to `a u32 | w u32 | period starts u64...`, so a refusal that arrives
-/// later withdraws them.
+/// What closed-day summaries applied without this build's exclusion of refused observations wrote
+/// for a series on a day: `day u32 | fingerprint` to `flags u8 (1: the day's rollups) | a u32 |
+/// w u32 | period starts u64...`, under every day a period covers, so a refusal that arrives later
+/// withdraws them.
 pub const SUMMARY_UNMARKED: Bytes = TableDefinition::new("summary_unmarked");
+/// Series and days whose older summary was set aside while the clean readings still gave the
+/// day: `day u32 | a u32 | w u32`. A replacement close from this build is appended for each.
+pub const RECLOSE: Index = TableDefinition::new("reclose");
 /// Disclosed findings (loss, set-aside events), kept across opens: `kind:start:end` to a
 /// MessagePack `{finding, ledgered}`.
 pub const FINDING: TableDefinition<'static, &'static str, &'static [u8]> = TableDefinition::new("finding");
@@ -76,7 +80,7 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
     ] {
         txn.open_table(def)?;
     }
-    for def in [SERIES_BY_PROVIDER, DAY_CLOSED, REFUSED] {
+    for def in [SERIES_BY_PROVIDER, DAY_CLOSED, REFUSED, RECLOSE] {
         txn.open_table(def)?;
     }
     Ok(())

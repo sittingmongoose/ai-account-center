@@ -6,7 +6,7 @@ mod common;
 use aac_store::engine::{Engine, now_ms};
 use aac_store::ops;
 use common::{copy_dir, find, temp_dir};
-use redb::ReadableTable;
+use redb::{ReadableTable, TableHandle};
 use serde_json::{Value as Json, json};
 use std::fs;
 use std::path::Path;
@@ -689,6 +689,19 @@ fn burn_over_lost_history_is_null_and_a_measured_zero_is_zero() {
         );
         let measured = burn(&engine);
         assert_eq!(measured[0]["spans"][0]["consumed"], 0.0, "{measured}");
+        // Known, but no reading in the span: ten days on, the last hour and day are unknown.
+        let later = call(
+            &engine,
+            "burnLong",
+            json!({ "series": [series(1)], "spansMs": [HOUR, DAY], "nowMs": T0 + 10 * DAY }),
+        );
+        for span in later[0]["spans"].as_array().unwrap() {
+            assert!(
+                span["consumed"].is_null(),
+                "known series, no reading in the span: {later}"
+            );
+            assert!(span["rate"].is_null());
+        }
         assert!(
             measured[1]["spans"][0]["consumed"].is_null(),
             "unknown series: {measured}"
@@ -784,6 +797,9 @@ fn filtered_queries_read_only_the_selected_rows() {
                 .unwrap()
                 .unwrap()
         };
+        // A `latest` value long enough to be decoded as a span, with a bad row version.
+        let mut bad_latest = vec![0u8; 16];
+        bad_latest.extend_from_slice(&[105u8; 16]);
         for def in [aac_store::db::SERIES, aac_store::db::LATEST] {
             let keys: Vec<Vec<u8>> = {
                 let table = txn.open_table(def).unwrap();
@@ -797,8 +813,9 @@ fn filtered_queries_read_only_the_selected_rows() {
             };
             assert!(!keys.is_empty());
             let mut table = txn.open_table(def).unwrap();
+            let value: &[u8] = if def.name() == "latest" { &bad_latest } else { bad };
             for key in keys {
-                table.insert(key.as_slice(), bad).unwrap();
+                table.insert(key.as_slice(), value).unwrap();
             }
         }
         txn.open_table(aac_store::db::ACCOUNT)
@@ -823,6 +840,81 @@ fn filtered_queries_read_only_the_selected_rows() {
         txn.open_table(aac_store::db::ACCOUNT_STATE)
             .unwrap()
             .insert(first_state.as_slice(), bad)
+            .unwrap();
+        txn.commit().unwrap();
+    }
+    let engine = open(&dir);
+    for ((method, args), want) in queries.iter().zip(&expected) {
+        let got = ops::call(&engine, method, &args.to_string());
+        assert_eq!(got.as_ref().ok(), Some(want), "{method} {args}: {got:?}");
+    }
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A window filter reads only that window's series: another window's metadata and open spans
+/// are unreadable here.
+#[test]
+fn a_window_filter_reads_only_that_windows_series() {
+    let dir = temp_dir("review-window");
+    let engine = open(&dir);
+    let two = |t: i64, used: f64| {
+        obs_with(t, used, |o| {
+            let mut week = o["windows"][0].clone();
+            week["identity"] = json!("[\"seven_day\",\"rate_limit\",null]");
+            week["key"] = json!("seven_day");
+            o["windows"].as_array_mut().unwrap().push(week);
+        })
+    };
+    record(&engine, vec![two(T0, 10.0), two(T0 + 5 * MIN, 20.0)]);
+    let id1 = format!("{:064x}", 1);
+    let queries = [
+        (
+            "seriesPoints",
+            json!({ "windowKey": "five_hour", "fromMs": T0, "toMs": T0 + HOUR, "resolution": "raw" }),
+        ),
+        (
+            "seriesList",
+            json!({ "windowKey": "five_hour", "fromMs": T0, "toMs": T0 + HOUR }),
+        ),
+        (
+            "seriesPoints",
+            json!({ "identities": [id1], "windowKey": "five_hour", "fromMs": T0, "toMs": T0 + HOUR, "resolution": "hour" }),
+        ),
+        (
+            "seriesList",
+            json!({ "provider": "claude", "windowKey": "five_hour", "fromMs": T0, "toMs": T0 + HOUR }),
+        ),
+    ];
+    let expected: Vec<Json> = queries.iter().map(|(m, a)| call(&engine, m, a.clone())).collect();
+    assert_eq!(expected[1].as_array().unwrap().len(), 1);
+    engine.close().unwrap();
+    drop(engine);
+    {
+        let database = redb::Database::create(dir.join("aac.redb")).unwrap();
+        let txn = database.begin_write().unwrap();
+        let (a1, week) = {
+            let rev = txn.open_table(aac_store::db::DICT_REV).unwrap();
+            (
+                aac_store::db::lookup_id(&rev, aac_store::db::KIND_ACCOUNT, &id1)
+                    .unwrap()
+                    .unwrap(),
+                aac_store::db::lookup_id(&rev, aac_store::db::KIND_WINDOW, "[\"seven_day\",\"rate_limit\",null]")
+                    .unwrap()
+                    .unwrap(),
+            )
+        };
+        let key = aac_store::db::Key::new().u32(a1).u32(week);
+        let mut bad_latest = vec![0u8; 16];
+        bad_latest.extend_from_slice(&[105u8; 16]);
+        txn.open_table(aac_store::db::SERIES)
+            .unwrap()
+            .insert(key.as_slice(), [105u8, 0, 0].as_slice())
+            .unwrap();
+        txn.open_table(aac_store::db::LATEST)
+            .unwrap()
+            .insert(key.as_slice(), bad_latest.as_slice())
             .unwrap();
         txn.commit().unwrap();
     }
