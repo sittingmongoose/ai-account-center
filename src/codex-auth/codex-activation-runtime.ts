@@ -126,8 +126,17 @@ function isCodex(process: CodexProcessSnapshot): boolean {
 }
 
 /** Electron and its zygotes rewrite argv into one space-joined string. */
+/**
+ * A process's arguments, each one whole. The NUL-separated cmdline already gives whole arguments, so a
+ * data folder such as `/home/me/Work One` stays one. Only a cmdline Electron rewrote into a single
+ * space-joined string is split, and then only before each flag, so a value keeps its own spaces.
+ */
 function argWords(process: CodexProcessSnapshot): string[] {
-  return process.args.flatMap((arg) => arg.split(/\s+/)).filter(Boolean);
+  const [only] = process.args;
+  if (process.args.length === 1 && /\s--/.test(only)) {
+    return only.split(/\s+(?=--)/).filter(Boolean);
+  }
+  return process.args.filter(Boolean);
 }
 
 /**
@@ -627,6 +636,9 @@ function restartPlan(launchers: CodexProcessSnapshot[]): CodexRestartPlan {
 function userDataArgument(args: string[]): string {
   const inline = args.find((arg) => arg.startsWith('--user-data-dir='));
   if (inline) return inline.slice('--user-data-dir='.length);
+  // A rewritten cmdline keeps a separate value with its flag: `--user-data-dir /home/me/Work One`.
+  const joined = args.find((arg) => arg.startsWith('--user-data-dir '));
+  if (joined) return joined.slice('--user-data-dir '.length).trim();
   const index = args.indexOf('--user-data-dir');
   const value = index >= 0 ? args[index + 1] : undefined;
   return value && !value.startsWith('--') ? value : '';
@@ -668,8 +680,15 @@ function desktopLauncher(
       'Cannot recover the VM Codex desktop display; no account was changed.'
     );
   }
-  const args = argWords(desktop);
-  if (!args.some((arg) => arg === '--user-data-dir' || arg.startsWith('--user-data-dir='))) {
+  const args = [...argWords(desktop)];
+  if (
+    !args.some(
+      (arg) =>
+        arg === '--user-data-dir' ||
+        arg.startsWith('--user-data-dir=') ||
+        arg.startsWith('--user-data-dir ')
+    )
+  ) {
     const userData = desktopUserData(desktop, processes);
     args.push(`--user-data-dir=${userData || path.join(os.homedir(), '.config', 'Codex')}`);
   }
