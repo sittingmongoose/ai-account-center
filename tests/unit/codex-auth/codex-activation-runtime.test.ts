@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
 import {
   isDesktop,
   CodexActivationRuntimeError,
@@ -718,6 +719,38 @@ describe('What the runtime reports for a retry', () => {
     expect(await failing.verifyRunningDaemon()).toBe(false);
   });
 
+  it('hands its plan to beforeStop under the lock, before anything is signalled', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    const plans: unknown[] = [];
+    const runtime = createCodexActivationRuntime(home, {
+      ...fake.deps,
+      beforeStop: async (plan) => {
+        plans.push(plan);
+        fake.events.push('intent');
+      },
+    });
+    await runtime.stop();
+    expect(plans).toEqual([
+      { daemon: true, desktops: [codexDesktopInstance('/fixture/.config/Codex')] },
+    ]);
+    const intent = fake.events.indexOf('intent');
+    expect(intent).toBeGreaterThan(fake.events.indexOf('lock'));
+    expect(intent).toBeLessThan(fake.events.findIndex((event) => event.startsWith('SIGTERM')));
+  });
+
+  it('closes nothing when its plan cannot be handed over', async () => {
+    const fake = harness([daemon]);
+    const runtime = createCodexActivationRuntime(home, {
+      ...fake.deps,
+      beforeStop: async () => {
+        throw new Error('marker write failed');
+      },
+    });
+    await expect(runtime.stop()).rejects.toThrow();
+    expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
+    expect(fake.current()).toHaveLength(1);
+  });
+
   it('reports no plan when stop() refused before closing anything', async () => {
     const fake = harness([daemon]);
     const runtime = createCodexActivationRuntime(home, {
@@ -728,6 +761,77 @@ describe('What the runtime reports for a retry', () => {
     });
     await expect(runtime.stop()).rejects.toThrow('working');
     expect(runtime.stopPlan()).toEqual({ daemon: false, desktops: [] });
+  });
+});
+
+describe("A helper killed during stop()'s own recovery", () => {
+  const repo = path.resolve(import.meta.dir, '../../..');
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  });
+  const isolated = (root: string) => ({
+    PATH: process.env.PATH ?? '',
+    HOME: root,
+    USERPROFILE: root,
+    CCS_HOME: path.join(root, 'ccs'),
+    XDG_CONFIG_HOME: path.join(root, '.config'),
+    XDG_DATA_HOME: path.join(root, '.local/share'),
+    XDG_STATE_HOME: path.join(root, '.local/state'),
+    XDG_CACHE_HOME: path.join(root, '.cache'),
+    CODEX_HOME: path.join(root, '.codex'),
+    CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
+    PYTHONDONTWRITEBYTECODE: '1',
+  });
+
+  it('leaves a marker that sends the next click to the bridge, not to current', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-recovery-'));
+    roots.push(root);
+    const child = spawnSync(
+      process.execPath,
+      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/killed-recovery.ts')],
+      { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
+    );
+    expect(child.signal).toBe('SIGKILL');
+    const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual({
+      version: '2.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
+
+    // The next updater call, once the failed replacement has exited: the real Python routing.
+    const next = spawnSync(
+      'python3',
+      [
+        '-c',
+        [
+          'import json, pathlib, sys, time',
+          'from unittest import mock',
+          "sys.path.insert(0, 'scripts/app-updates')",
+          'import app_update_common as common, app_updates as updater',
+          'root = pathlib.Path(sys.argv[1])',
+          "(root / '.local/bin').mkdir(parents=True, exist_ok=True)",
+          "(root / '.local/bin/codex').write_text('')",
+          "install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), '2.0.0', 'native')",
+          "answer = {'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'restart_failed', 'previousVersion': '2.0.0', 'version': '2.0.0', 'manager': 'native', 'messageCode': 'restart_not_running', 'updateAttempted': True, 'restartedProcesses': 0, 'forcedStops': 0}",
+          "patches = [mock.patch.object(pathlib.Path, 'home', return_value=root), mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'family', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'cli_instances', return_value=([], [], [])), mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'detect_cli', return_value=install)]",
+          '[patch.start() for patch in patches]',
+          "with mock.patch.object(updater, 'command', return_value=json.dumps(answer)) as run:",
+          '    value = updater.update_cli(install, time.monotonic() + 600)',
+          "bridged = any('app_update_codex.cjs' in ' '.join(str(arg) for arg in call.args[0]) for call in run.call_args_list)",
+          "print(json.dumps({'bridged': bridged, 'status': value['status'], 'marker': (root / '.ccs/app-updates/codex-cli-pending-restart.json').exists()}))",
+        ].join('\n'),
+        root,
+      ],
+      { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
+    );
+    expect(next.status).toBe(0);
+    const routed = JSON.parse(next.stdout.trim());
+    expect(routed.bridged).toBe(true);
+    expect(routed.status).not.toBe('current');
+    expect(routed.marker).toBe(true);
   });
 });
 

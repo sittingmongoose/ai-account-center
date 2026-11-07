@@ -95,6 +95,12 @@ export interface CodexActivationRuntimeDependencies {
   removeControlSocket(): void;
   sleep(milliseconds: number): Promise<void>;
   now(): number;
+  /**
+   * Called under the startup lock with what stop() is about to close, before anything is signalled
+   * or any recovery waits. A caller that must not lose that record writes it here; an error closes
+   * nothing.
+   */
+  beforeStop?(plan: CodexRestartPlan): Promise<void> | void;
 }
 
 const STOP_TIMEOUT = 10000;
@@ -512,6 +518,7 @@ export function createCodexActivationRuntime(
             ...desktops.map((desktop) => desktopLauncher(desktop, processes)),
           ];
         }
+        await dependencies.beforeStop?.(restartPlan(launchers));
         mutationStarted = true;
         await retire(desktops, processes);
         await retire(daemons, processes);

@@ -723,7 +723,9 @@ That is the same exposure as the running app's `/proc/<pid>/environ`, and the ow
 Account activation used to put the values on argv, and no longer does.
 
 A pending-marker retry restarts only what it finds running, since the launch snapshot of the failed
-run is gone. Once `stop()` has succeeded, the marker records what the runtime's own stop plan closed:
+run is gone. The runtime hands its stop plan to the bridge under the startup lock, before it signals
+anything or waits on a recovery, and the bridge writes it to the marker then. A helper killed anywhere
+inside `stop()` still leaves it. The marker records what that plan closes:
 the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder keyed with a random
 0600 salt beside the marker (`codex-desktop-instance.salt`), never the path. The salt is checked before
 anything stops, and an unusable one is replaced. A

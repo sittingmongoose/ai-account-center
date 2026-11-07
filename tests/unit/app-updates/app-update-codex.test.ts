@@ -1151,6 +1151,71 @@ describe('Pending-marker retry', () => {
     throw new Error('Codex inventory failed.');
   };
 
+  /** A runtime that hands over its plan the way the real one does, then fails during recovery. */
+  const handsOver =
+    (value: ReturnType<typeof fixture>, planned: Plan, after: Live, seen: unknown[]) =>
+    (hooks: { beforeStop?: (plan: unknown) => unknown } = {}) => ({
+      ...failingStop(planned, after),
+      stop: async () => {
+        await hooks.beforeStop?.(plan(planned));
+        // What a helper killed from here on would leave on disk.
+        seen.push(value.deps.marked());
+        throw new Error('private');
+      },
+    });
+
+  it('records the stop plan before stop() closes anything', async () => {
+    const value = fixture();
+    const seen: unknown[] = [];
+    await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: handsOver(value, { daemon: true, desktops: [A] }, {}, seen),
+    });
+    expect(seen).toEqual([{ version: '1.0.0', desktop: true, daemon: true, desktops: [A] }]);
+  });
+
+  it('records the desktop install target with the stop plan', async () => {
+    const value = fixture();
+    const seen: unknown[] = [];
+    await bridge.execute({
+      ...value.deps,
+      expectedCandidate: '2.0.0',
+      operation: 'desktop',
+      runtime: handsOver(value, { desktops: [A] }, {}, seen),
+    });
+    expect(seen).toEqual([
+      { version: '1.0.0', desktop: true, daemon: false, desktops: [A], target: '2.0.0' },
+    ]);
+  });
+
+  it('puts the earlier marker back once recovery from a failed stop() is verified', async () => {
+    const value = fixture();
+    const seen: unknown[] = [];
+    const earlier = JSON.stringify({ version: '0.5.0', target: '0.9.0' });
+    await bridge.execute({
+      ...value.deps,
+      // As the real one reads: what is on disk now, which the stop plan has overwritten by the end.
+      markerSnapshot: () => (value.marks.length ? JSON.stringify(value.deps.marked()) : earlier),
+      pending: (expected: string) => value.deps.marked()?.version === expected,
+      expectedCandidate: '2.0.0',
+      operation: 'desktop',
+      runtime: handsOver(value, { desktops: [A] }, { desktops: [A] }, seen),
+    });
+    expect(value.restored).toEqual([earlier]);
+  });
+
+  it('writes nothing ahead of a stop plan that names nothing', async () => {
+    const value = fixture();
+    const seen: unknown[] = [];
+    await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: handsOver(value, {}, {}, seen),
+    });
+    expect(seen).toEqual([{ version: '1.0.0' }]);
+  });
+
   it('falls back to the plan when a scan fails after a failed stop()', async () => {
     for (const broken of ['retiredPlan', 'restartState', 'verifyRunningDaemon']) {
       const value = fixture();
@@ -1284,6 +1349,10 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     restartState: async () => ({ ...(await read()), proxy: false }),
     stop: async () => {
       if (process.env.FIXTURE_AT_STOP) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_STOP);
+      if (process.env.FIXTURE_KILL) {
+        await overrides.beforeStop?.(await read());
+        process.kill(process.pid, 'SIGKILL');
+      }
       fs.writeFileSync(process.env.FIXTURE_RECORD + '.salt', String(fs.lstatSync(require('path').join(require('path').dirname(process.env.FIXTURE_MARKER), 'codex-desktop-instance.salt')).isFile()));
       plan = await read();
       if (process.env.FIXTURE_STOP === 'fail-scan') fs.readdirSync = () => { throw Object.assign(new Error('scan'), { code: 'EIO' }); };
@@ -1310,6 +1379,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       plantSalt?: (file: string) => void;
       keep?: boolean;
       verify?: string;
+      kill?: boolean;
       procs?: (root: string) => object[];
     } = {}
   ) {
@@ -1339,22 +1409,30 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     const record = path.join(root, 'launched.json');
     const atStop = path.join(root, 'marker-at-stop.json');
     const atVerify = path.join(root, 'marker-at-verify.json');
-    const stdout = execFileSync('node', [script, '--operation', 'cli'], {
-      env: {
-        PATH: process.env.PATH,
-        HOME: root,
-        FIXTURE_RECORD: record,
-        FIXTURE_START: start,
-        FIXTURE_STOP: options.stop ?? '',
-        FIXTURE_KEEP: options.keep ? '1' : '',
-        FIXTURE_VERIFY: options.verify ?? '',
-        FIXTURE_AT_VERIFY: atVerify,
-        FIXTURE_MARKER: marker,
-        FIXTURE_AT_STOP: atStop,
-        FIXTURE_PROCS: JSON.stringify(options.procs?.(root) ?? []),
-      },
-      encoding: 'utf8',
-    });
+    const invoke = () =>
+      execFileSync('node', [script, '--operation', 'cli'], {
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          FIXTURE_RECORD: record,
+          FIXTURE_START: start,
+          FIXTURE_STOP: options.stop ?? '',
+          FIXTURE_KEEP: options.keep ? '1' : '',
+          FIXTURE_KILL: options.kill ? '1' : '',
+          FIXTURE_VERIFY: options.verify ?? '',
+          FIXTURE_AT_VERIFY: atVerify,
+          FIXTURE_MARKER: marker,
+          FIXTURE_AT_STOP: atStop,
+          FIXTURE_PROCS: JSON.stringify(options.procs?.(root) ?? []),
+        },
+        encoding: 'utf8',
+      });
+    let stdout = '{}';
+    try {
+      stdout = invoke();
+    } catch (error) {
+      if (!options.kill) throw error;
+    }
     return { result: JSON.parse(stdout), record, marker, codex, atStop, atVerify, salt };
   }
   const running = (root: string) => [
@@ -1553,6 +1631,21 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       procs: running,
     });
     expect(result.status).toBe('restart_failed');
+    expect(read(marker)).toEqual({
+      version: '3.0.0',
+      desktop: true,
+      daemon: true,
+      desktops: [keyedBy(salt)],
+    });
+  });
+
+  it('has the stop plan on the real marker when the helper is killed inside stop()', () => {
+    const { marker, salt } = run('idle', {
+      marker: null,
+      next: '3.0.0',
+      kill: true,
+      procs: running,
+    });
     expect(read(marker)).toEqual({
       version: '3.0.0',
       desktop: true,

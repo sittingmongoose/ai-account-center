@@ -55,9 +55,9 @@ async function relaunch(target, desktop, outside, deps = {}) {
   output.restartedProcesses++;
 }
 /** The update bridge's process runtime: its launches stay outside the dashboard cgroup. */
-function createUpdateRuntime(createRuntime, deps = {}) {
+function createUpdateRuntime(createRuntime, deps = {}, hooks = {}) {
   return createRuntime(path.join(home, '.codex'), { scan: async () => privateScan(),
-    launch: (target, desktop, outside) => relaunch(target, desktop, outside, deps) });
+    launch: (target, desktop, outside) => relaunch(target, desktop, outside, deps), ...hooks });
 }
 /** What a marker's fields say an earlier run closed. Bad entries are dropped. */
 function markerObligations(marker, legacyDesktop) {
@@ -179,6 +179,7 @@ async function execute(deps) {
   const expected = deps.expectedCandidate ?? flags['--expected-version'];
   const restartOnly = deps.restartOnly ?? flags['--restart-only'] === 'true';
   let runtime, prior, closed, retried = false, stopped = false, installed = false, updating = false, nothingOwed = false, busy = false, stopFailed = false;
+  let earlierAtStop, intentWritten = false;
   try {
     output.previousVersion = output.version = version(await deps.readVersion());
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
@@ -210,7 +211,16 @@ async function execute(deps) {
     }
     // A salt problem must not cost a close and reopen: it is met here, before anything stops.
     deps.prepareSeal?.();
-    runtime = deps.runtime();
+    const target = mode === 'desktop' && !restartOnly ? version(expected) : null;
+    // The runtime hands over its plan under the startup lock, before it signals anything or waits on a
+    // recovery. Writing it there means a helper killed anywhere inside stop() still leaves what is owed.
+    // The marker as it was is kept, to put back once a failed stop() is shown to have recovered.
+    const beforeStop = (plan) => {
+      if (!intentWritten) { earlierAtStop = deps.markerSnapshot(); intentWritten = true; }
+      const owed = addObligations(prior, sealedPlan(deps, plan));
+      if (stillOwed(owed, { daemon: false, desktops: [] })) deps.mark({ ...markerFields(owed), ...(target ? { target } : {}) });
+    };
+    runtime = deps.runtime({ beforeStop });
     while (true) {
       try { await runtime.stop(); stopped = true; break; }
       catch (error) {
@@ -223,7 +233,6 @@ async function execute(deps) {
     // is closed with the rest, so an earlier scan here could miss it. It goes in the marker at once, so
     // a failed install or a killed helper still leaves a record of what is closed.
     closed = addObligations(prior, runtimePlan(runtime, deps));
-    const target = mode === 'desktop' && !restartOnly ? version(expected) : null;
     deps.mark({ ...markerFields(closed), ...(target ? { target } : {}) });
     if (mode === 'desktop') {
       output.updateAttempted = !restartOnly;
@@ -298,7 +307,7 @@ async function execute(deps) {
       const nothing = { daemon: false, desktops: [] };
       try {
         const retired = await runtimeRetired(runtime, deps);
-        const earlier = deps.markerSnapshot();
+        const earlier = intentWritten ? earlierAtStop : deps.markerSnapshot();
         // The readiness check can take about 40 seconds and a parent timeout can kill this helper
         // during it, so what is owed goes in the marker first, and comes out if the daemon passes.
         if (retired.daemon) deps.mark(markerFields(addObligations(prior, retired)));
@@ -310,7 +319,7 @@ async function execute(deps) {
           anyDesktop: retired.anyDesktop === true && live.desktops.length === 0,
         };
         if (stillOwed(lost, nothing)) deps.mark(markerFields(addObligations(prior, lost)));
-        else if (retired.daemon) {
+        else if (retired.daemon || intentWritten) {
           // Exactly as it was: its own version and target, so it applies where it did before.
           if (earlier === null) deps.clear();
           else deps.restoreMarker(earlier);
@@ -392,7 +401,7 @@ function bridgeDeps(createCodexActivationRuntime) {
       } while (Date.now() < limit);
       return true;
     },
-    runtime: () => createUpdateRuntime(createCodexActivationRuntime),
+    runtime: (hooks) => createUpdateRuntime(createCodexActivationRuntime, {}, hooks),
     marked: readMarker,
     markerSnapshot: () => markerSnapshot(),
     restoreMarker: (text) => restoreMarker(text),
