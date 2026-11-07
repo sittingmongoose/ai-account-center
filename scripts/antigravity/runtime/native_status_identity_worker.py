@@ -102,6 +102,8 @@ class OwnedIdentityWorker:
             if not finished:
                 result = guard.stop_reviewed([self.identity], self.allowed, timeout_seconds=1)
                 if not result['complete']: fail('profile-worker-owned-cleanup-incomplete')
+                # Reap only after exact-pidfd exit/stop confirmation. A fast
+                # successful callback may have exited during guard admission.
                 os.waitpid(self.pid, 0)
             return True
         finally:

@@ -175,6 +175,7 @@ export function createManagedNativeUpdate(
   if (!path.isAbsolute(binary) || !path.isAbsolute(ccs))
     throw new AntigravityError('update-native-unsafe');
   const run = options.runCommand ?? command;
+  let selected: ReturnType<typeof nativeBytes> | undefined;
   let original: ReturnType<typeof nativeBytes> | undefined;
   let afterUpdate: ReturnType<typeof nativeBytes> | undefined;
   const invoke = async (args: string[], capture = false): Promise<string> => {
@@ -190,6 +191,7 @@ export function createManagedNativeUpdate(
   };
   return {
     version: async () => {
+      selected ??= nativeBytes(binary);
       const value = (await invoke(['--version'], true)).match(
         /\b(\d+\.\d+\.\d+(?:-[\w.-]+)?)\b/
       )?.[1];
@@ -198,6 +200,8 @@ export function createManagedNativeUpdate(
     },
     backup: async () => {
       original = nativeBytes(binary);
+      if (selected && !unchangedNative(selected, original))
+        throw new AntigravityError('update-native-changed');
       const directory = privateBackupDirectory(ccs);
       const backup = path.join(directory, original.sha);
       if (fs.existsSync(backup)) {
@@ -220,6 +224,10 @@ export function createManagedNativeUpdate(
           fs.closeSync(fd);
         }
       }
+    },
+    unchangedSinceBackup: () => {
+      if (!original) return false;
+      return unchangedNative(original, nativeBytes(binary));
     },
     update: async () => {
       try {

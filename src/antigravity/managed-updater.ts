@@ -8,6 +8,8 @@ export interface ManagedNativeUpdate {
   version(): Promise<string>;
   backup(): Promise<void>;
   update(): Promise<void>;
+  /** Synchronously compares the selected/backed-up native identity and digest. */
+  unchangedSinceBackup?(): boolean;
   /** Refuses every native executable replacement not owned by this update. */
   rollback(): Promise<boolean>;
 }
@@ -239,7 +241,8 @@ export async function updatePausedAntigravity(deps: {
       try {
         await native.backup();
         // Recheck last: nothing is awaited between this and the native update.
-        if (!(await deps.stillPaused())) return failed;
+        if (native.unchangedSinceBackup && !native.unchangedSinceBackup()) return failed;
+        if (!(await deps.stillPaused()) || registry.hasRecovery()) return failed;
         attempted = true;
         await native.update();
         const after = await native.version();
@@ -282,7 +285,13 @@ export async function routeManagedAntigravityUpdate(deps: {
     return updatePausedAntigravity({
       registry: deps.registry,
       native: deps.native,
-      stillPaused: paused,
+      stillPaused: async () => {
+        if (!(await paused())) return false;
+        if (deps.native.unchangedSinceBackup && !deps.native.unchangedSinceBackup()) return false;
+        // Hashing can outlast runtime startup. Probe again after every slow
+        // native check; the caller then checks recovery synchronously.
+        return (await deps.runtimeSocket()) === 'stopped';
+      },
     });
   return updateManagedAntigravity({
     registry: deps.registry,

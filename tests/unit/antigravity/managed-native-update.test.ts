@@ -185,7 +185,13 @@ describe('managed Antigravity native updater: public files and injected commands
         return '';
       },
     });
-    expect(Object.keys(native)).toEqual(['version', 'backup', 'update', 'rollback']);
+    expect(Object.keys(native)).toEqual([
+      'version',
+      'backup',
+      'unchangedSinceBackup',
+      'update',
+      'rollback',
+    ]);
     expect(fs.readdirSync(root)).toEqual([]);
     expect(calls).toEqual([]);
   });

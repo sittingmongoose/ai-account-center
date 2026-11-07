@@ -96,6 +96,64 @@ while True:time.sleep(.1)
         self.parent.wait(timeout=2)
         self.assertFalse(Path('/proc',str(self.child)).exists())
 
+    def test_owned_worker_exit_at_first_admission_is_reaped_and_result_retained(self):
+        sys.path.insert(0, str(GUARD.parent))
+        from native_status_identity_worker import OwnedIdentityWorker
+        from runtime_continuity import guard
+        for boundary in ('before-inspect', 'during-inspect'):
+            with self.subTest(boundary=boundary):
+                def callback():
+                    time.sleep(.05)
+                    return {'email':'fixture@example.com','subject':'123','source':'Google OAuth2 userinfo',
+                            'verifiedAt':'2026-11-07T00:00:00+00:00','credentialFingerprint':'a'*64,
+                            'credentialCurrent':True,'nativeSnapshotIdentity':(1,2,3,'a'*64)}
+                worker = OwnedIdentityWorker(callback)
+                real_open = os.pidfd_open
+                real_inspect = guard._inspect
+                real_select = select.select
+                admitted = False
+                def admission_select(readers, writers, errors, timeout=0):
+                    nonlocal admitted
+                    if boundary == 'during-inspect' and not admitted and timeout == 0:
+                        admitted = True
+                        return ([], [], [])
+                    return real_select(readers, writers, errors, timeout)
+                def exited(fd):
+                    self.assertTrue(select.select([fd], [], [], 3)[0])
+                def opened(pid, flags):
+                    fd = real_open(pid, flags)
+                    if boundary == 'before-inspect': exited(fd)
+                    return fd
+                def inspected(pid, allowed):
+                    fd = real_open(pid, 0)
+                    try: exited(fd)
+                    finally: os.close(fd)
+                    return real_inspect(pid, allowed)
+                try:
+                    with patch.object(guard.os, 'pidfd_open', side_effect=opened), \
+                            patch.object(guard, '_inspect', side_effect=inspected), \
+                            patch.object(guard.select, 'select', side_effect=admission_select):
+                        # A result has reached EOF, but waitpid's preceding observation
+                        # was live. Keep that real admission gap deterministic.
+                        real_wait = os.waitpid
+                        def waited(pid, flags):
+                            if flags == os.WNOHANG: return (0, 0)
+                            return real_wait(pid, flags)
+                        profile = None
+                        deadline = time.monotonic() + 3
+                        while profile is None and time.monotonic() < deadline:
+                            profile = worker.poll()
+                            if profile is None: time.sleep(.01)
+                        self.assertIsNotNone(profile)
+                        with patch.object(os, 'waitpid', side_effect=waited):
+                            self.assertTrue(worker.close())
+                        self.assertEqual(profile['subject'], '123')
+                        with self.assertRaises(ChildProcessError): real_wait(worker.pid, os.WNOHANG)
+                finally:
+                    try: os.waitpid(worker.pid, 0)
+                    except ChildProcessError: pass
+                    if not worker.closed: worker.close()
+
     def test_missing_metadata_with_live_pidfd_still_refuses(self):
         guard=load(GUARD,'candidate_guard_live')
         pid=12345;identity={'pid':pid,'startTime':'invented:1','ownerId':'1000','fingerprint':'a'*64}
@@ -116,7 +174,7 @@ while True:time.sleep(.1)
         changed=dict(identity,startTime='invented:2')
         with patch.object(guard,'_allowed_executables',return_value=set()),patch.object(guard,'_inspect',return_value=changed),\
                 patch.object(guard.os,'pidfd_open',return_value=99),patch.object(guard.os,'close'),\
-                patch.object(guard.signal,'pidfd_send_signal') as sent:
+                patch.object(guard.select,'select',return_value=([],[],[])),patch.object(guard.signal,'pidfd_send_signal') as sent:
             with self.assertRaisesRegex(guard.GuardError,'stale-process'):guard.stop_reviewed([identity],['/invented'],timeout_seconds=1)
             sent.assert_not_called()
 

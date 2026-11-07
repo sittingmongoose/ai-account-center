@@ -347,6 +347,95 @@ describe('managed Antigravity update while switching is paused', () => {
 });
 
 describe('managed update routing', () => {
+  test('a real listener bound during the final native hash blocks the update', async () => {
+    const value = fixture();
+    const { driver } = recordingDriver();
+    const socket = path.join(value.root, 'control.sock');
+    const release = path.join(value.root, 'release.json');
+    fs.writeFileSync(
+      release,
+      JSON.stringify({
+        reviewedNatives: [{ nativeVersion: '9.9.9', nativeSha256: sha(REPLACEMENT) }],
+      })
+    );
+    const server = net.createServer((client) => client.destroy());
+    let hashes = 0;
+    try {
+      const result = await routeManagedAntigravityUpdate({
+        registry: value.registry,
+        native: value.native,
+        driver,
+        nativeReview: () => {
+          if (++hashes === 2) server.listen(socket);
+          return nativeReviewState(value.nativeBinary, release);
+        },
+        runtimeSocket: () => probeRuntimeSocket(socket),
+      });
+      expect(result).toMatchObject({
+        status: 'failed',
+        runtimePaused: true,
+        updateAttempted: false,
+      });
+      expect(value.calls).toEqual([['--version']]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  for (const variant of [
+    'native-replaced',
+    'same-bytes-replaced',
+    'socket-during-hash',
+    'unclear-during-hash',
+    'recovery-during-probe',
+  ] as const)
+    test(`final boundary refuses ${variant}`, async () => {
+      const value = fixture();
+      const { driver, actions } = recordingDriver();
+      let hashes = 0;
+      let socketState: 'stopped' | 'listening' | 'unknown' = 'stopped';
+      let recovery = false;
+      let probes = 0;
+      value.registry.hasRecovery = () => recovery;
+      const result = await routeManagedAntigravityUpdate({
+        registry: value.registry,
+        driver,
+        native: {
+          ...value.native,
+          backup: async () => {
+            await value.native.backup();
+            if (variant.endsWith('replaced')) {
+              const incoming = path.join(value.root, 'incoming');
+              fs.writeFileSync(
+                incoming,
+                variant === 'same-bytes-replaced' ? ORIGINAL : REPLACEMENT,
+                { mode: 0o700 }
+              );
+              fs.renameSync(incoming, value.nativeBinary);
+            }
+          },
+        },
+        nativeReview: () => {
+          hashes++;
+          if (hashes === 2 && variant === 'socket-during-hash') socketState = 'listening';
+          if (hashes === 2 && variant === 'unclear-during-hash') socketState = 'unknown';
+          return 'unreviewed';
+        },
+        runtimeSocket: async () => {
+          probes++;
+          if (probes === 3 && variant === 'recovery-during-probe') recovery = true;
+          return socketState;
+        },
+      });
+      expect(result).toMatchObject({
+        status: 'failed',
+        runtimePaused: true,
+        updateAttempted: false,
+      });
+      expect(value.calls).toEqual([['--version']]);
+      expect(actions).toEqual([]);
+    });
+
   test('unreviewed build with a stopped runtime takes the paused path and never asks the driver', async () => {
     const value = fixture();
     value.installNewBuild();

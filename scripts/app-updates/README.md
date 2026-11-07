@@ -325,8 +325,10 @@ Owner decision (Jared, 2026-11-07): "No check, like Antigravity's own updater".
 
 Under the account lock, a pending managed recovery record stops the paused
 update. Otherwise AAC backs up the native to
-`antigravity-switching/native-backups/<sha256>`, then rechecks that the runtime
-is still stopped and the build still unreviewed. This slow recheck runs last,
+`antigravity-switching/native-backups/<sha256>`, then rechecks that the selected
+native identity and digest still match the backup and the build is still
+unreviewed. After hashing, it probes the runtime socket again and synchronously
+checks pending recovery before granting permission. This slow recheck runs last,
 with nothing awaited between it and `agy update`.
 
 The paused path does not look for running Antigravity processes and stops

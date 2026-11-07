@@ -112,8 +112,15 @@ def stop_reviewed(identities, executable_paths, timeout_seconds=8.0):
                 gone.append(identity)
                 continue
             try:
-                if _inspect(pid, allowed) != identity:
-                    raise GuardError("stale-process")
+                # An exact opened pidfd can already be exited before the first
+                # metadata read, or become exited while /proc is being read.
+                if not select.select([fd], [], [], 0)[0]:
+                    try:
+                        if _inspect(pid, allowed) != identity:
+                            raise GuardError("stale-process")
+                    except (FileNotFoundError, ProcessLookupError):
+                        if not select.select([fd], [], [], 0)[0]:
+                            raise
             except BaseException:
                 os.close(fd)
                 raise
@@ -123,8 +130,12 @@ def stop_reviewed(identities, executable_paths, timeout_seconds=8.0):
         for fd, identity in handles:
             if select.select([fd], [], [], 0)[0]:
                 continue
-            if _inspect(identity["pid"], allowed) != identity:
-                raise GuardError("stale-process")
+            try:
+                if _inspect(identity["pid"], allowed) != identity:
+                    raise GuardError("stale-process")
+            except (FileNotFoundError, ProcessLookupError):
+                if not select.select([fd], [], [], 0)[0]:
+                    raise
         for fd, _identity in handles:
             try:
                 if select.select([fd], [], [], 0)[0]:
