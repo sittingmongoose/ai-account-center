@@ -137,17 +137,23 @@ pub fn CardsPanel() -> impl IntoView {
     let base = StoredValue::new(drafts.get_untracked());
     Effect::new(move |_| {
         let current = drafts.get();
-        let merged = drafts::save_merged(&base.get_value(), &current);
-        base.set_value(merged.clone());
-        if merged != current {
-            drafts.set(merged);
+        // a refused read or write stores nothing: the base and this tab's drafts stay as they are, so the next save
+        // still knows what is this tab's own (nothing is mistaken for another tab's deletion)
+        if let Some(merged) = drafts::save_merged(&base.get_value(), &current) {
+            base.set_value(merged.clone());
+            if merged != current {
+                drafts.set(merged);
+            }
         }
     });
     // Another tab (or the installed app beside a browser tab) changed the drafts: take storage's copy as the new base.
     // Storage events reach only the other tabs, and an unchanged value fires none, so this can't echo.
     let other_tab = window_event_listener(leptos::ev::storage, move |e| {
         if e.key().as_deref() == Some(drafts::STORAGE_KEY) {
-            let theirs = drafts::load();
+            // a refused read is not "no drafts": leave this tab alone until storage answers
+            let Some(theirs) = drafts::load_checked() else {
+                return;
+            };
             let stored = drafts::merge(&theirs, &base.get_value(), &drafts.get_untracked());
             base.set_value(theirs);
             if drafts.with_untracked(|d| *d != stored) {

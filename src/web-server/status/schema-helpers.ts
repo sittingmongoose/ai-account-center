@@ -150,17 +150,50 @@ export function jsonFromBytes(bytes: Buffer, capBytes: number): Parsed<unknown> 
   } catch {
     return { ok: false, reason: 'not valid JSON' };
   }
-  const secret = findSecretIn(source, value);
+  let secret: string | null;
+  try {
+    secret = findSecretIn(source, value);
+  } catch {
+    // never let one file's shape stop a scan: it is refused and named instead
+    return { ok: false, reason: 'could not be checked for secrets' };
+  }
   if (secret) return { ok: false, reason: `refused: it contains what looks like ${secret}` };
   return { ok: true, value };
 }
 
+/** A key that names a credential, whose string value is refused (decoded, so `"pass\u0077ord"` counts). */
+const CREDENTIAL_KEY =
+  /^(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)$/i;
+
 /**
- * The secret check for a parsed JSON file: over the text as written and over the parsed value written back out, where
- * every `\uXXXX` escape in a key or string is decoded (`"\u0073k-..."` is `"sk-..."`). Either hit refuses the file.
+ * The secret check for a parsed JSON file: over the text as written, then over every decoded key and string of the
+ * parsed value, so an escape (`"\u0073k-..."`), a newline or tab before a token (`"key:\nsk-..."`, which stays `\n`
+ * when written back out) or JSON text inside a string is seen as the reader would see it. The walk is iterative: a
+ * file nested thousands of levels deep (which `JSON.parse` takes and `JSON.stringify` throws on) is walked, not a
+ * crash of the scan. Any hit refuses the file.
  */
 export function findSecretIn(source: string, value: unknown): string | null {
-  return findSecret(source) ?? findSecret(JSON.stringify(value) ?? '');
+  const raw = findSecret(source);
+  if (raw) return raw;
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (typeof node === 'string') {
+      const found = findSecret(node);
+      if (found) return found;
+    } else if (Array.isArray(node)) {
+      for (const item of node) stack.push(item);
+    } else if (node && typeof node === 'object') {
+      for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
+        const found = findSecret(key);
+        if (found) return found;
+        if (CREDENTIAL_KEY.test(key) && typeof item === 'string' && item.length >= 6)
+          return 'a credential field';
+        stack.push(item);
+      }
+    }
+  }
+  return null;
 }
 
 /** Thrown inside the projection; becomes `{ ok: false, reason }`. */

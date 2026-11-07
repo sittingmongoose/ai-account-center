@@ -23,7 +23,10 @@ import {
   type AnswerTiming,
   type Doorbell,
 } from '../../../../src/web-server/status/answers';
-import { QuotaReportReader } from '../../../../src/web-server/status/quota-report';
+import {
+  QuotaReportReader,
+  parseQuotaReport,
+} from '../../../../src/web-server/status/quota-report';
 import {
   findSecret,
   isCardId,
@@ -200,6 +203,49 @@ describe('secret search', () => {
     }
     // the same file without the secret still reads
     expect(jsonFromBytes(Buffer.from('{"note":"\\u0073ome words"}'), 64 * 1024).ok).toBe(true);
+  });
+
+  it('sees a token after a newline or tab, JSON text inside a string, and a quoted password', () => {
+    const token = `sk-${'A1b2C3d4'.repeat(4)}`;
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.abcdefghijklmnop';
+    for (const value of [
+      { title: `Here is the key:\n${token}` },
+      { title: `tab\t${token}` },
+      { title: `line\n${jwt}` },
+      { title: `Bearer\t${'x'.repeat(24)}` },
+      { title: `line\nAKIA${'A'.repeat(16)}` },
+      { note: JSON.stringify({ password: 'hunter2-hunter2' }) },
+      { password: '"quoted-secret"' },
+    ]) {
+      const parsed = jsonFromBytes(Buffer.from(JSON.stringify(value)), 64 * 1024);
+      expect([value, parsed.ok]).toEqual([value, false]);
+    }
+  });
+
+  it('a deep card file is named as a problem and the other cards still read', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    writeReport(
+      root,
+      'vm.lead',
+      'cards/vm.lead--Q2.json',
+      Buffer.from(`${'['.repeat(5000)}${']'.repeat(5000)}`)
+    );
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    const snap = reader.snapshot();
+    expect(snap.state).not.toBe('error');
+    expect(snap.cards.map((c) => c.doc.id)).toEqual(['vm.lead--Q1']);
+    expect(snap.problems.map((p) => p.file)).toEqual(['writers/vm.lead/cards/vm.lead--Q2.json']);
+  });
+
+  it('a file nested thousands of levels deep is refused or read, never a crash of the scan', () => {
+    for (const depth of [1_000, 5_000, 100_000]) {
+      const deep = Buffer.from(`${'['.repeat(depth)}${']'.repeat(depth)}`);
+      expect(() => jsonFromBytes(deep, 512 * 1024)).not.toThrow();
+      const quota = parseQuotaReport(deep);
+      expect(quota.ok).toBe(false);
+    }
   });
 
   it('still finds real emails and tokens, and only those', () => {

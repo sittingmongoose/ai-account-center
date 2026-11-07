@@ -236,7 +236,12 @@ export function parseQuotaReport(bytes: Buffer): QuotaParse {
   } catch {
     return { ok: false, reason: 'not valid JSON' };
   }
-  const secret = findSecretIn(source, raw);
+  let secret: string | null;
+  try {
+    secret = findSecretIn(source, raw);
+  } catch {
+    return { ok: false, reason: 'could not be checked for secrets' };
+  }
   if (secret) return { ok: false, reason: `refused: it contains what looks like ${secret}` };
   try {
     return {

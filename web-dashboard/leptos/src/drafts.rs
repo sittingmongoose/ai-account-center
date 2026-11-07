@@ -278,16 +278,32 @@ fn parse(text: &str) -> Drafts {
 
 /// Merge this tab's changes into what storage holds now. Each card this tab changed since `base` (its last read of
 /// storage) takes this tab's draft, or goes if this tab dropped it; every other card keeps what storage holds, so two
-/// tabs editing different cards both keep their work, and a send or a prune in one tab removes only its own cards.
+/// tabs editing different cards both keep their work, and a send or a prune in one tab removes only its own cards. A
+/// drop never removes a card another tab changed meanwhile (storage's copy differs from `base`): that newer edit stays.
+/// When both keep the same draft (same nonce), the entry ids each has recorded are joined.
 pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
     let mut out = stored.clone();
     for id in base.keys().chain(current.keys()) {
-        if base.get(id) != current.get(id) {
-            match current.get(id) {
-                Some(d) => {
-                    out.insert(id.clone(), d.clone());
+        if base.get(id) == current.get(id) {
+            continue;
+        }
+        match current.get(id) {
+            Some(d) => {
+                let mut mine = d.clone();
+                if let Some(theirs) = stored.get(id).filter(|t| t.nonce == mine.nonce) {
+                    for r in &theirs.recorded {
+                        if !mine.recorded.contains(r) {
+                            mine.recorded.push(r.clone());
+                        }
+                    }
+                    while mine.recorded.len() > 8 {
+                        mine.recorded.remove(0);
+                    }
                 }
-                None => {
+                out.insert(id.clone(), mine);
+            }
+            None => {
+                if stored.get(id) == base.get(id) {
                     out.remove(id);
                 }
             }
@@ -296,23 +312,29 @@ pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
     out
 }
 
-/// Save this tab's drafts merged with storage's (read and written in one go, so no other tab's write lands between);
-/// returns what storage now holds. Without storage the drafts stay this tab's own.
-pub fn save_merged(base: &Drafts, current: &Drafts) -> Drafts {
-    let Some(s) = storage() else {
-        return current.clone();
-    };
+/// What storage holds, or `None` when storage is missing or refuses the read (never read as "no drafts").
+pub fn load_checked() -> Option<Drafts> {
+    match storage()?.get_item(STORAGE_KEY) {
+        Ok(Some(text)) => Some(parse(&text)),
+        Ok(None) => Some(Drafts::new()),
+        Err(_) => None,
+    }
+}
+
+/// Save this tab's drafts merged with storage's (read and written in one go, so no other tab's write lands between).
+/// `Some(what storage now holds)` once written; `None` when storage is missing or refused the read or the write, and
+/// then nothing is assumed stored: the caller keeps its drafts and its base as they were.
+pub fn save_merged(base: &Drafts, current: &Drafts) -> Option<Drafts> {
+    let s = storage()?;
     let stored = match s.get_item(STORAGE_KEY) {
         Ok(Some(text)) => parse(&text),
         Ok(None) => Drafts::new(),
-        // storage refused the read: keep this tab's drafts and don't overwrite what we couldn't see
-        Err(_) => return current.clone(),
+        Err(_) => return None,
     };
     let merged = merge(&stored, base, current);
-    if let Ok(text) = serde_json::to_string(&merged) {
-        let _ = s.set_item(STORAGE_KEY, &text);
-    }
-    merged
+    let text = serde_json::to_string(&merged).ok()?;
+    s.set_item(STORAGE_KEY, &text).ok()?;
+    Some(merged)
 }
 
 #[cfg(test)]
@@ -451,6 +473,30 @@ mod tests {
         sent.remove("b");
         let stored = merge(&later, &base_two, &sent);
         assert_eq!(stored.keys().cloned().collect::<Vec<_>>(), vec!["a", "c"]);
+    }
+
+    #[test]
+    fn a_drop_keeps_another_tabs_newer_edit_and_recorded_ids_join() {
+        let x = card("x", 1, None);
+        let mut base = Drafts::new();
+        set_note(&mut base, &x, "first".into());
+        // another tab edited x; this tab, not yet told, sends it and drops its draft
+        let mut stored = base.clone();
+        set_note(&mut stored, &x, "their newer words".into());
+        let mut current = base.clone();
+        current.remove("x");
+        assert_eq!(
+            merge(&stored, &base, &current)["x"].note,
+            "their newer words"
+        );
+        // both keep x with the same nonce: their recorded ids and mine are joined
+        let mut theirs = base.clone();
+        theirs.get_mut("x").unwrap().recorded = vec!["r1".into()];
+        let mut mine = base.clone();
+        mine.get_mut("x").unwrap().note = "mine".into();
+        mine.get_mut("x").unwrap().recorded = vec!["r2".into()];
+        let joined = merge(&theirs, &base, &mine);
+        assert_eq!(joined["x"].recorded, vec!["r2", "r1"]);
     }
 
     #[test]

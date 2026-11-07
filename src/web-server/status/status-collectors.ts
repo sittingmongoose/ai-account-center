@@ -18,6 +18,7 @@ import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
 import { isSafeUsageSshAlias } from '../services/additional-usage-transport';
 import { findSecret, MACHINES, type MachineId } from './report-schema';
 import { readRegularFile } from './share-read';
+import { realTimestamp } from './schema-helpers';
 
 // ---------------------------------------------------------------------------------------------
 // Commands
@@ -179,8 +180,9 @@ export function parseRegistryEntry(raw: unknown): RegistryThread | null {
   const rec = raw as Record<string, unknown>;
   if (typeof rec.name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(rec.name))
     return null;
+  // pm-mail writes `YYYY-MM-DDTHH:MM:SSZ`; a value that isn't a real calendar moment (Feb 30 would roll over) is unknown
   const lastSeen =
-    typeof rec.last_seen === 'string' && Number.isFinite(Date.parse(rec.last_seen))
+    typeof rec.last_seen === 'string' && realTimestamp(rec.last_seen)
       ? new Date(Date.parse(rec.last_seen)).toISOString()
       : null;
   return {
