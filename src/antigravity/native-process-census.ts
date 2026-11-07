@@ -118,356 +118,6 @@ function networkMounts(file: string): string[] | null {
   });
 }
 
-/** A file an interpreter runs, by its extension: never prose, wherever it sits on a command line. */
-const SCRIPT_FILE =
-  /\.(?:[cm]?[jt]sx?|py[cwz]?|pl|pm|rb|php\d?|phar|lua|r|jl|sh|bash|zsh|ksh|fish|tcl|ps1)$/i;
-
-/**
- * Interpreter options known to take no separate value, by family (an option whose value is optional and only ever
- * attached, such as perl's `-i[ext]`, is one when alone) (short ones also inside a cluster, `-uOO`); with
- * `--no-...` and, for deno, `--allow-...`, `--deny-...` and `--unstable...`. Any other option without `=` may take the
- * next argument as its value, so the script is looked for after it: a list that misses a flag only makes the census
- * more careful, and none needs to know every option that takes a value (`python3 -uW ignore`, `bash -eo pipefail`,
- * `node --watch-path ./src`).
- */
-const FLAG_OPTIONS: Readonly<Record<string, readonly string[]>> = {
-  python: [
-    '-b',
-    '-B',
-    '-d',
-    '-E',
-    '-h',
-    '-i',
-    '-I',
-    '-O',
-    '-P',
-    '-q',
-    '-R',
-    '-s',
-    '-S',
-    '-u',
-    '-v',
-    '-V',
-    '-x',
-    '--version',
-    '--help',
-    '--help-env',
-    '--help-xoptions',
-    '--help-all',
-  ],
-  node: [
-    '-i',
-    '--interactive',
-    '-c',
-    '--check',
-    '-v',
-    '--version',
-    '-h',
-    '--help',
-    '--inspect',
-    '--inspect-brk',
-    '--inspect-wait',
-    '--watch',
-    '--watch-preserve-output',
-    '--test',
-    '--test-only',
-    '--enable-source-maps',
-    '--expose-gc',
-    '--trace-warnings',
-    '--trace-deprecation',
-    '--trace-uncaught',
-    '--trace-exit',
-    '--throw-deprecation',
-    '--pending-deprecation',
-    '--preserve-symlinks',
-    '--preserve-symlinks-main',
-    '--abort-on-uncaught-exception',
-    '--jitless',
-    '--prof',
-    '--use-strict',
-    '--frozen-intrinsics',
-    '--harmony',
-    '--experimental-vm-modules',
-    '--experimental-strip-types',
-    '--experimental-transform-types',
-    '--experimental-require-module',
-    '--experimental-detect-module',
-    '--experimental-wasm-modules',
-    '--experimental-import-meta-resolve',
-    '--experimental-sqlite',
-    '--experimental-websocket',
-    '--permission',
-    '--report-on-fatalerror',
-    '--report-uncaught-exception',
-    '--zero-fill-buffers',
-    '--trace-gc',
-    '--trace-sigint',
-    '--trace-sync-io',
-    '--trace-tls',
-    '--expose-internals',
-  ],
-  bun: [
-    '--watch',
-    '--hot',
-    '--smol',
-    '--bun',
-    '-b',
-    '--silent',
-    '--revision',
-    '-v',
-    '--version',
-    '-h',
-    '--help',
-    '--inspect',
-    '--inspect-brk',
-    '--inspect-wait',
-    '--if-present',
-    '--only',
-    '--todo',
-    '--coverage',
-    '--prefer-offline',
-    '--prefer-latest',
-  ],
-  deno: [
-    '-A',
-    '-q',
-    '--quiet',
-    '--check',
-    '--watch',
-    '--reload',
-    '-r',
-    '--cached-only',
-    '--frozen',
-    '--allow-*',
-    '--deny-*',
-    '--unstable*',
-  ],
-  perl: [
-    '-w',
-    '-W',
-    '-X',
-    '-T',
-    '-t',
-    '-n',
-    '-p',
-    '-a',
-    '-s',
-    '-c',
-    '-U',
-    '-S',
-    '-v',
-    '-h',
-    '-l',
-    '-0',
-    '-u',
-    '-i',
-    '-x',
-    '-d',
-    '-D',
-    '-f',
-    '-V',
-  ],
-  ruby: [
-    '-w',
-    '-W',
-    '-v',
-    '-d',
-    '-n',
-    '-p',
-    '-a',
-    '-l',
-    '-s',
-    '-c',
-    '-y',
-    '-h',
-    '-i',
-    '-x',
-    '-0',
-    '-K',
-    '--verbose',
-    '--version',
-    '--help',
-    '--jit',
-    '--yjit',
-  ],
-  php: ['-a', '-e', '-h', '-H', '-i', '-l', '-m', '-n', '-q', '-s', '-v', '-w'],
-  lua: ['-i', '-v', '-E', '-W'],
-  shell: [
-    '-e',
-    '-u',
-    '-x',
-    '-v',
-    '-n',
-    '-l',
-    '-i',
-    '-s',
-    '-a',
-    '-b',
-    '-h',
-    '-m',
-    '-t',
-    '-E',
-    '-B',
-    '-H',
-    '-P',
-    '-k',
-    '-r',
-    '--login',
-    '--noprofile',
-    '--norc',
-    '--noediting',
-    '--posix',
-    '--verbose',
-    '--restricted',
-    '--debugger',
-    '--version',
-    '--help',
-  ],
-  Rscript: ['--vanilla', '--verbose', '--save', '--slave', '--quiet', '--version', '--help'],
-  julia: ['-q', '--quiet', '-i', '-v', '--version', '-h', '--help'],
-  tclsh: [],
-};
-const SHELL_NAME = /^(?:sh|bash|dash|zsh|ksh|mksh|fish)$/;
-
-function interpreterFamily(name: string): string {
-  if (SHELL_NAME.test(name)) return 'shell';
-  const base = name.replace(/[\d.]+$/, '');
-  return base === 'pypy' ? 'python' : base === 'nodejs' ? 'node' : base === 'luajit' ? 'lua' : base;
-}
-
-/**
- * Whether an option certainly takes no separate value (see FLAG_OPTIONS). Short options are read as getopt does
- * (`-uW ignore`: `u` a flag, `W` takes the next argument; `-Wignore`: `W` holds a glued value), except for tclsh,
- * whose single-dash options are whole words (`-encoding utf-8`).
- */
-function takesNoValue(option: string, flags: ReadonlySet<string>, clusters: boolean): boolean {
-  if (option.includes('=')) return true;
-  if (option.startsWith('--'))
-    return (
-      flags.has(option) ||
-      option.startsWith('--no-') ||
-      [...flags].some((flag) => flag.endsWith('*') && option.startsWith(flag.slice(0, -1)))
-    );
-  if (flags.has(option)) return true;
-  if (!clusters || !/^[-+][A-Za-z0-9]/.test(option)) return false;
-  for (let at = 1; at < option.length; at += 1) {
-    if (/[A-Za-z0-9]/.test(option[at]) && flags.has(`-${option[at]}`)) continue;
-    // the first letter that is no flag holds the rest as its value, or takes the next argument when it is last
-    return at < option.length - 1;
-  }
-  return true;
-}
-
-/** Runner subcommands: after `run`-like ones the next word is the script or task; after `x`/`exec`, a package. */
-const RUN_SUBCOMMANDS = new Set([
-  'run',
-  'task',
-  'test',
-  'serve',
-  'bench',
-  'eval',
-  'compile',
-  'watch',
-]);
-const PACKAGE_SUBCOMMANDS = new Set(['x', 'exec']);
-/** A package folder under node_modules, its scope dropped (`node_modules/@scope/name/`). */
-const NODE_MODULES_PACKAGE = /(?:^|[\\/])node_modules[\\/](?:@[^\\/]+[\\/])?([^\\/]+)(?=[\\/])/g;
-/** Runners followed through a chain (`node tsx nodemon helper.ts`); past that the next argument is the script. */
-const MAX_RUNNERS = 8;
-/** Scripts that run a script of their own, named next (`node node_modules/.bin/tsx helper.ts`). */
-const SCRIPT_RUNNERS = new Set([
-  'tsx',
-  'ts-node',
-  'ts-node-esm',
-  'esno',
-  'esr',
-  'nodemon',
-  'vite-node',
-  'jiti',
-  'babel-node',
-  'swc-node',
-  'coffee',
-]);
-
-/**
- * The program, and for an interpreter every argument up to its script: code, so never prose. Any option that may
- * take a value takes the next argument; the script is the first argument after that (`node server`, `python3 app`,
- * `node .`). For bun and deno, a subcommand comes first (`bun run dev`, `deno task dev`, `bun x tsx helper.ts`), and a
- * script that runs another under a JavaScript runtime (`tsx`, `ts-node`, `nodemon`, a chain of them) has that
- * one after it, code too. Each is kept with its
- * candidate spellings.
- */
-function codeArguments(all: readonly string[], families: readonly string[]): Set<string> {
-  const code = new Set<string>([all[0] ?? '']);
-  const add = (argument: string) => {
-    code.add(argument);
-    for (const candidate of candidateScripts(argument)) code.add(candidate);
-  };
-  if (families.length === 0) return code;
-  const flags = new Set(families.flatMap((family) => FLAG_OPTIONS[family] ?? []));
-  const clusters = !families.includes('tclsh');
-  const runner = families.includes('bun') || families.includes('deno');
-  let optionValue = false;
-  let subcommand = !runner;
-  let packageNext = false;
-  // JavaScript runners (tsx, nodemon) only under a JavaScript runtime, and at most a few in a chain
-  const javascript = families.some(
-    (family) => family === 'node' || family === 'bun' || family === 'deno'
-  );
-  let runners = 0;
-  // `--` ends the options before the next argument only; a runner after it still has its script read
-  let optionsEnded = false;
-  for (let at = 1; at < all.length; at += 1) {
-    const argument = all[at];
-    if (!optionsEnded && argument === '--') {
-      optionsEnded = true;
-      optionValue = false;
-      continue;
-    }
-    if (!optionsEnded && /^[-+]./.test(argument)) {
-      optionValue = !takesNoValue(argument, flags, clusters);
-      continue;
-    }
-    add(argument);
-    optionsEnded = false;
-    if (optionValue) {
-      optionValue = false;
-      continue;
-    }
-    if (!subcommand) {
-      subcommand = true;
-      if (RUN_SUBCOMMANDS.has(argument)) continue;
-      if (PACKAGE_SUBCOMMANDS.has(argument)) {
-        packageNext = true;
-        continue;
-      }
-    }
-    if (packageNext) {
-      packageNext = false;
-      continue;
-    }
-    // a runner by its name (`npm:tsx@4.19.2`, `@esbuild-kit/esr@1`) or its package's entry (`node_modules/tsx/...`)
-    const name = path
-      .basename(argument.replace(/^(?:npm|jsr):/, ''))
-      .replace(/@[^@/]*$/, '')
-      .replace(/\.[^.]+$/, '');
-    // every package on the way counts (pnpm nests them: `node_modules/.pnpm/tsx@4/node_modules/tsx/...`)
-    const entries = [...argument.matchAll(NODE_MODULES_PACKAGE)].map((match) =>
-      match[1].replace(/@[^@/\\]*$/, '')
-    );
-    if (
-      javascript &&
-      runners < MAX_RUNNERS &&
-      (SCRIPT_RUNNERS.has(name) || entries.some((entry) => SCRIPT_RUNNERS.has(entry)))
-    ) {
-      runners += 1;
-      continue;
-    }
-    break;
-  }
-  return code;
-}
-
 /** lstat results shared by one census's lookups, so repeated parent folders cost one call. */
 type StatCache = Map<string, fs.Stats | string>;
 
@@ -489,25 +139,20 @@ function cachedLstat(file: string, cache: StatCache): fs.Stats | string {
  * reached so far, after links (`/tmp/l/../h.py` with `/tmp/l -> root/sub` is `root/h.py`). Nothing on or under a mount
  * in `network` is touched: the path from there on is kept as written. A missing tail is kept (`/tmp/link/gone.py`
  * through `/tmp/link -> root` is `root/gone.py`), and so is a dangling link's target. What the kernel couldn't open
- * either (a missing name, one too long, a NUL byte, a chain past 40 links) is kept as written. A denied folder is
- * kept as written only for prose: `prose` is the argument as written when it may be prose (never a script), and the
- * walk is prose when, with no link followed, the part that couldn't be looked up and the rest after it come from that
- * argument and hold a space (`/root/notes are here`), and the argument doesn't end in a script's extension. A script
- * path the owner's own processes can't reach may still be a helper's under other credentials, whatever spaces its
- * folders, its own name or its working folder have. Any other failure is UNRESOLVED.
+ * either (a missing name, one too long, a NUL byte, a chain past 40 links) is kept as written. Any other failure is
+ * UNRESOLVED, a denied folder too, even in a prompt that only mentions one (`node app.js "see /root/x and y"`): a path
+ * the owner's own processes can't reach may still be a helper's script under other credentials, and no reading of a
+ * command line can tell a prompt from a script whose name has spaces. That prompt holds the update while its process
+ * runs, which fails safe.
  */
 function resolveLocally(
   file: string,
   network: readonly string[],
   cache: StatCache,
-  budget: { steps: number },
-  prose: string | null = null
+  budget: { steps: number }
 ): string | typeof UNRESOLVED | typeof OVER_BUDGET {
   // a NUL can't be in a path the kernel opens: nothing runs from it
   if (file.includes('\0')) return file;
-  const proseParts =
-    prose !== null && /\s/.test(prose) ? prose.split(path.sep).filter(Boolean).length : 0;
-  let linked = false;
   // components still to walk, last first, so each step is O(1)
   const stack = file.split(path.sep).filter(Boolean).reverse();
   let current: string = path.sep;
@@ -547,25 +192,17 @@ function resolveLocally(
       continue;
     }
     const stat = cachedLstat(next, cache);
-    if (typeof stat === 'string') {
+    if (typeof stat === 'string')
       // missing, not a folder, or a name the kernel can't open either (a long prompt's "and/or" reads as a path):
       // the rest is kept as written
-      const rest = [part, ...[...stack].reverse()];
-      const inProse =
-        !linked &&
-        rest.length <= proseParts &&
-        /\s/.test(rest.join(path.sep)) &&
-        !SCRIPT_FILE.test(rest[rest.length - 1]);
-      return KERNEL_CANT_OPEN.has(stat) || (inProse && (stat === 'EACCES' || stat === 'EPERM'))
-        ? path.join(current, ...rest)
+      return KERNEL_CANT_OPEN.has(stat)
+        ? path.join(current, part, ...[...stack].reverse())
         : UNRESOLVED;
-    }
     if (!stat.isSymbolicLink()) {
       current = next;
       continue;
     }
     hops += 1;
-    linked = true;
     // past the kernel's own limit (ELOOP): nothing can be opened through this path
     if (hops > 40) return path.join(next, ...[...stack].reverse());
     let target: string;
@@ -689,18 +326,9 @@ function filePath(url: string): string {
  * up (a link that leads onto such a mount is read as written from there: a link
  * on the share pointing back into a root is a known limit, since following it
  * would block on a hung share and `~/.local/bin` links into the share are
- * common); a denied folder or an unreadable link leaves an interpreter unplaced,
- * except a denied folder in prose: an argument after an interpreter's script
- * (the first argument no option may be taking as its value, after a bun or
- * deno subcommand and past a runner such as tsx; every argument before it is
- * code, and any option not known as a flag may take the next one), whose
- * space comes at or after the part that can't be looked up, with no link on the
- * way, and which doesn't end in a script's extension
- * (`node app.js "/root/notes are here"`); a script is never prose, whatever
- * spaces its folders, its name or its working folder have. Failing safe, the
- * argument after `-c CODE` or `-e CODE` is read as a script, and so is a prompt
- * ending in a file name (`... fix main.py`); one limit is known: an unknown
- * `--opt=<path>` after the script, with a space and no extension, is prose; at most 4096 lookups per process, past which an interpreter's script is
+ * common); a denied folder or an unreadable link leaves an interpreter
+ * unplaced, even when only a prompt names the folder (that process holds the
+ * update while it runs, which fails safe); at most 4096 lookups per process, past which an interpreter's script is
  * unplaced.
  *
  * An interpreter is known by its process name, argv0 or executable (a
@@ -806,25 +434,23 @@ export function censusAntigravityProcesses(options: {
     }
     return links === null || links.has(name);
   };
-  /** `prose`: the argument as written when it may be prose (see resolveLocally); a script never is. */
-  const reachesRoot = (value: string, lookup = true, prose: string | null = null): boolean => {
+  const reachesRoot = (value: string, lookup = true): boolean => {
     if (isAntigravityPath(value)) return true;
     if (!lookup) return false;
-    const key = prose === null ? value : `${value}\0${prose}`;
-    let real = resolved.get(key);
+    let real = resolved.get(value);
     if (real === undefined) {
       if (lookups >= LOOKUPS_PER_PROCESS) {
         overLookups = true;
         return false;
       }
       lookups += 1;
-      const found = resolveLocally(value, network, stats, steps, prose);
+      const found = resolveLocally(value, network, stats, steps);
       if (found === OVER_BUDGET) {
         overLookups = true;
         return false;
       }
       real = found;
-      resolved.set(key, real);
+      resolved.set(value, real);
     }
     // where it leads is unknown (a denied folder, a link loop): an interpreter's script can't be placed
     if (real === UNRESOLVED) {
@@ -876,20 +502,12 @@ export function censusAntigravityProcesses(options: {
         // against the working folder like a relative path.
         // By process name, argv0 or the executable itself (a rewritten title still runs /usr/bin/python3).
         const named = (word: string) => INTERPRETER.test(word);
-        const names = [
-          comm,
-          path.basename(all[0] ?? ''),
-          ...(exe === null ? [] : [path.basename(exe)]),
-        ];
-        const interpreter = names.some(named);
+        const interpreter =
+          named(comm) ||
+          named(path.basename(all[0] ?? '')) ||
+          (exe !== null && named(path.basename(exe)));
         const shell = SHELL.test(comm) || SHELL.test(path.basename(all[0] ?? ''));
         const operands = interpreter ? [...new Set(all.slice(1).flatMap(candidateScripts))] : [];
-        // The program, and an interpreter's options' values and its script, are never prose.
-        const code = codeArguments(
-          all,
-          interpreter ? [...new Set(names.filter(named).map(interpreterFamily))] : []
-        );
-        const proseOf = (argument: string) => (code.has(argument) ? null : argument);
         let cwds: string[] | undefined;
         let cwdDenied = false;
         const resolveArgument = (argument: string, bare = false): string[] => {
@@ -916,17 +534,14 @@ export function censusAntigravityProcesses(options: {
           return (cwds ?? []).some((cwd) => reachesRoot(cwd));
         };
         if (
-          args.some((argument) =>
-            resolveArgument(argument).some((file) => reachesRoot(file, true, proseOf(argument)))
-          ) ||
+          args.some((argument) => resolveArgument(argument).some((file) => reachesRoot(file))) ||
           operands.some((argument) =>
             resolveArgument(argument, true).some((file) =>
               reachesRoot(
                 file,
                 path.isAbsolute(argument) ||
                   argument.includes(path.sep) ||
-                  isLinkIn(path.dirname(file), path.basename(file)),
-                proseOf(argument)
+                  isLinkIn(path.dirname(file), path.basename(file))
               )
             )
           ) ||
