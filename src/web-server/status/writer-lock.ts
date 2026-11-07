@@ -14,12 +14,11 @@
  * - from another host (a replaced container on the same volume), whose processes can't be seen from here, when no one
  *   has refreshed it for UNREFRESHED_MS;
  * - with no readable holder, after STALE_UNREADABLE_MS (a writer stopped between creating and filling it).
- * A take-over moves the stale lock aside and checks it moved the one it judged; a live lock moved by mistake is put
- * back. Every write checks the lock still names this process. Known limits: outside Linux, a crashed holder's pid
+ * Take-overs happen one at a time, under `<lock>.taking` (see takeOver), and a process that gains the lock reloads
+ * the store before it judges anything. Every write checks the lock still names this process. Known limits: outside Linux, a crashed holder's pid
  * reused by a long-lived process keeps the lock until that process ends (deleting `answers.lock` frees it at once);
- * three processes racing on one stale lock can, for a moment, leave two that each believe they hold it.
+ * two processes clearing the same ended taker's `.taking` at one moment can let two take-overs overlap.
  */
-import { randomBytes } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -126,32 +125,81 @@ function stale(holder: Holder | null, mtimeMs: number): boolean {
   return start !== null && holder.start !== null && start !== holder.start;
 }
 
-/** Moves a stale lock aside, and puts it back if what moved was not the lock judged stale. */
-function takeOver(file: string, judged: string): void {
-  const aside = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.stale`;
+/** Creates `file` holding `text`, only if nothing has that name; false when something does. */
+function createExclusive(file: string, text: string): boolean {
+  let fd: number;
   try {
-    fs.renameSync(file, aside);
+    fd = fs.openSync(file, 'wx', 0o600);
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') return;
+    if (errorCode(error) === 'EEXIST') return false;
     throw error;
   }
-  if (readText(aside) !== judged) {
-    try {
-      fs.linkSync(aside, file);
-    } catch (error) {
-      // EEXIST: another process took the name meanwhile and holds the lock now. Without hard links, the moved lock
-      // goes back by name while the name is still free.
-      if (errorCode(error) !== 'EEXIST' && !fs.existsSync(file)) {
-        try {
-          fs.renameSync(aside, file);
-          return;
-        } catch {
-          /* its holder takes it again on its next write */
-        }
-      }
-    }
+  try {
+    fs.writeFileSync(fd, text);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
   }
-  fs.rmSync(aside, { force: true });
+  return true;
+}
+
+/** This process as a lock names it: pid, host, Linux boot id and start time. */
+function selfText(): string {
+  return JSON.stringify({
+    pid: process.pid,
+    host: os.hostname(),
+    boot: bootId(),
+    start: processStart(process.pid),
+    at: Date.now(),
+  });
+}
+
+/** Whether a holder is this very process: its pid on this host, in this boot, started when this one did. */
+function isSelf(holder: Holder | null): boolean {
+  return (
+    holder !== null &&
+    holder.pid === process.pid &&
+    holder.host === os.hostname() &&
+    (holder.boot === null || holder.boot === bootId()) &&
+    (holder.start === null || holder.start === processStart(process.pid))
+  );
+}
+
+/** The text and time of `file`, or null when it is gone. */
+function readLock(file: string): { text: string; mtimeMs: number } | null {
+  try {
+    const text = readText(file);
+    return text === null ? null : { text, mtimeMs: fs.statSync(file).mtimeMs };
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/**
+ * Removes the stale lock `judged`, one take-over at a time: under `<lock>.taking`, created exclusively, no other
+ * process removes or replaces the lock, and plain acquisition only fills an empty name, so the lock is removed only
+ * if it is still the one judged. A taker that ended mid-way leaves its `.taking` behind, which is judged like a lock.
+ * Returns false when another live process is taking over (the store is busy for now).
+ */
+function takeOver(file: string, judged: string): boolean {
+  const taking = `${file}.taking`;
+  const mine = selfText();
+  if (!createExclusive(taking, mine)) {
+    const other = readLock(taking);
+    if (other === null) return true;
+    if (!stale(parseHolder(other.text), other.mtimeMs)) return false;
+    // a taker that ended mid-way: its marker goes, if it is still the one judged (a known limit: two processes
+    // clearing the same ended taker at the same moment)
+    if (readText(taking) === other.text) fs.rmSync(taking, { force: true });
+    return true;
+  }
+  try {
+    if (readText(file) === judged) fs.rmSync(file, { force: true });
+  } finally {
+    if (readText(taking) === mine) fs.rmSync(taking, { force: true });
+  }
+  return true;
 }
 
 function releaseAtExit(): void {
@@ -169,10 +217,11 @@ function releaseAtExit(): void {
 }
 
 /**
- * Makes sure this process holds the answer store's writer lock in `dir`, taking it if it is free or stale. Throws
- * WriterBusyError when another live process holds it.
+ * Makes sure this process holds the answer store's writer lock in `dir`, taking it if it is free or stale. Returns
+ * true when it was not held a moment ago (whatever this process remembered of the store may be stale), false when it
+ * still was. Throws WriterBusyError when another live process holds it or is taking it over.
  */
-export function holdWriterLock(dir: string): void {
+export function holdWriterLock(dir: string): boolean {
   const file = path.join(dir, WRITER_LOCK_FILE);
   const mine = held.get(file);
   if (mine !== undefined && readText(file) === mine) {
@@ -183,52 +232,28 @@ export function holdWriterLock(dir: string): void {
     } catch {
       /* best effort */
     }
-    return;
+    return false;
   }
   held.delete(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const text = JSON.stringify({
-      pid: process.pid,
-      host: os.hostname(),
-      boot: bootId(),
-      start: processStart(process.pid),
-      at: Date.now(),
-    });
-    try {
-      const fd = fs.openSync(file, 'wx', 0o600);
-      try {
-        fs.writeFileSync(fd, text);
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const text = selfText();
+    if (createExclusive(file, text)) {
       held.set(file, text);
       releaseAtExit();
-      return;
-    } catch (error) {
-      if (errorCode(error) !== 'EEXIST') throw error;
+      return true;
     }
-    let found: string | null;
-    let mtimeMs: number;
-    try {
-      found = readText(file);
-      mtimeMs = fs.statSync(file).mtimeMs;
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') continue;
-      throw error;
-    }
+    const found = readLock(file);
     if (found === null) continue;
-    const holder = parseHolder(found);
-    // another instance in this process wrote it (a restart within one process, or tests): it is ours
-    if (holder && holder.pid === process.pid && holder.host === os.hostname()) {
-      held.set(file, found);
+    const holder = parseHolder(found.text);
+    // another instance in this very process wrote it (a restart within one process, or tests): it is ours
+    if (isSelf(holder)) {
+      held.set(file, found.text);
       releaseAtExit();
-      return;
+      return true;
     }
-    if (!stale(holder, mtimeMs))
+    if (!stale(holder, found.mtimeMs) || !takeOver(file, found.text))
       throw new WriterBusyError(holder ? `pid ${holder.pid} on ${holder.host}` : 'a process');
-    takeOver(file, found);
   }
   throw new WriterBusyError('a process');
 }

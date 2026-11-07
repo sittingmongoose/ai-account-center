@@ -347,6 +347,8 @@ export class StatusAnswers {
   private queue: Promise<unknown> = Promise.resolve();
   private key: AnswerKey | null = null;
   private retrying = false;
+  /** Whether this instance holds the store's writer lock (see writer()). */
+  private owner = false;
   /**
    * Records a retry must not ring: from the moment a send creates them until its own ring is over
    * (the send rings them itself, whole), and while any ring of them is running.
@@ -518,7 +520,22 @@ export class StatusAnswers {
 
   /** Takes or confirms the store's writer lock: no other process may append to the store or touch the key. */
   private writer(): void {
-    holdWriterLock(this.storeDir());
+    let gained: boolean;
+    try {
+      gained = holdWriterLock(this.storeDir());
+    } catch (error) {
+      this.owner = false;
+      throw error;
+    }
+    if (gained || !this.owner) {
+      // newly the store's writer: another process may have written meanwhile, so what this one remembered (history,
+      // sends, replays, drafts) is read again from the store before anything is judged against it
+      this.owner = true;
+      this.entries = null;
+      this.sends.clear();
+      this.replays.clear();
+      this.drafts.clear();
+    }
   }
 
   private answerKey(): AnswerKey {
@@ -989,6 +1006,17 @@ export class StatusAnswers {
     const entriesHash = clientSendId ? contentHash(entries) : null;
     try {
       return await this.serial(async () => {
+        // the store first: a second dashboard records nothing, and a newly gained store is read again before any
+        // replay or answer is judged against it
+        try {
+          this.writer();
+        } catch (error) {
+          const code = error instanceof WriterBusyError ? 'store_busy' : 'answer_not_saved';
+          return entries.map((raw) => {
+            const named = (raw as { cardId?: unknown } | null)?.cardId;
+            return refused(isCardId(named) ? named : null, code);
+          });
+        }
         const replay =
           clientSendId && entriesHash ? this.replayOf(clientSendId, entriesHash) : null;
         if (replay) return replay;

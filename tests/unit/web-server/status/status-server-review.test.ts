@@ -2560,6 +2560,100 @@ describe('round three', () => {
     }
   });
 
+  it('the answer store has one writer: gaining the store reloads what another process wrote meanwhile', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    fs.mkdirSync(store, { recursive: true });
+    const lock = path.join(store, 'answers.lock');
+    // B starts while another dashboard holds the store, and reads the (empty) history
+    fs.writeFileSync(
+      lock,
+      JSON.stringify({ pid: process.ppid, host: os.hostname(), at: Date.now() })
+    );
+    const b = make();
+    expect(b.list()).toEqual([]);
+    expect((await b.submitSet([entry(CARD, q1)], 'Mac'))[0].code).toBe('store_busy');
+    // that dashboard answers the card and closes; then B gains the store
+    fs.rmSync(lock);
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    await settle();
+    const again = await b.submitSet([entry(CARD, q1)], 'Mac');
+    expect(again[0].outcome).not.toBe('recorded');
+    const answers = fs
+      .readFileSync(path.join(store, 'answers.jsonl'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((line) => line.type === 'answer');
+    expect(answers).toHaveLength(1);
+  });
+
+  it('the answer store has one writer: a lock naming this pid from another incarnation is not adopted', async () => {
+    if (!fs.existsSync('/proc/sys/kernel/random/boot_id')) return;
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    fs.mkdirSync(store, { recursive: true });
+    const lock = path.join(store, 'answers.lock');
+    // this pid, but from an earlier boot (or an earlier process with the same number): stale, so it is rewritten
+    fs.writeFileSync(
+      lock,
+      JSON.stringify({
+        pid: process.pid,
+        host: os.hostname(),
+        boot: 'an-earlier-boot',
+        start: '1',
+        at: 0,
+      })
+    );
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    const now = JSON.parse(fs.readFileSync(lock, 'utf8'));
+    expect(now.boot).toBe(fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim());
+  });
+
+  it('the answer store has one writer: take-overs are one at a time, and never move a lock replaced meanwhile', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    fs.mkdirSync(store, { recursive: true });
+    const lock = path.join(store, 'answers.lock');
+    const taking = `${lock}.taking`;
+    const gone = spawnSync(process.execPath, ['-e', '0']).pid;
+    const stale = JSON.stringify({ pid: gone, host: os.hostname(), at: 0 });
+    // another live process is taking over this stale lock: wait for it, touch nothing
+    fs.writeFileSync(lock, stale);
+    fs.writeFileSync(
+      taking,
+      JSON.stringify({ pid: process.ppid, host: os.hostname(), at: Date.now() })
+    );
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].code).toBe('store_busy');
+    expect(fs.readFileSync(lock, 'utf8')).toBe(stale);
+    // a taker that ended mid-way is gone too
+    fs.writeFileSync(taking, JSON.stringify({ pid: gone, host: os.hostname(), at: 0 }));
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    expect(fs.existsSync(taking)).toBe(false);
+    // between judging a lock stale and taking over, another process replaced it with its own live lock: kept
+    const live = JSON.stringify({ pid: process.ppid, host: os.hostname(), at: Date.now() });
+    fs.writeFileSync(lock, stale);
+    const realOpen = fs.openSync;
+    const open = spyOn(fs, 'openSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === taking && fs.readFileSync(lock, 'utf8') === stale)
+        fs.writeFileSync(lock, live);
+      return (realOpen as (...a: unknown[]) => number)(file, ...rest);
+    }) as typeof fs.openSync);
+    let result;
+    try {
+      [result] = await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac');
+    } finally {
+      open.mockRestore();
+    }
+    // the replaced lock is the live holder's, untouched, and this process stops
+    expect(fs.readFileSync(lock, 'utf8')).toBe(live);
+    expect(result?.code).toBe('store_busy');
+  });
+
   it('the answer store has one writer: a lock no one has refreshed for ten minutes is taken over', async () => {
     const { root, store, make } = setup();
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
