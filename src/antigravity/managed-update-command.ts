@@ -225,9 +225,27 @@ export function createManagedNativeUpdate(
         }
       }
     },
-    unchangedSinceBackup: () => {
+    unchangedSinceBackup: (quick = false) => {
       if (!original) return false;
-      return unchangedNative(original, nativeBytes(binary));
+      if (!quick) return unchangedNative(original, nativeBytes(binary));
+      // One stat, no read or hash: the digest was bound by the full check.
+      try {
+        const now = fs.lstatSync(binary);
+        const then = original.stat;
+        return (
+          now.isFile() &&
+          now.dev === then.dev &&
+          now.ino === then.ino &&
+          now.size === then.size &&
+          now.mtimeMs === then.mtimeMs &&
+          now.ctimeMs === then.ctimeMs &&
+          now.mode === then.mode &&
+          now.uid === then.uid &&
+          now.nlink === then.nlink
+        );
+      } catch {
+        return false;
+      }
     },
     update: async () => {
       try {

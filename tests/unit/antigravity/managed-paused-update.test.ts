@@ -326,6 +326,34 @@ describe('managed Antigravity update while switching is paused', () => {
     });
   });
 
+  test('a native without the identity check is refused before any backup or update', async () => {
+    const value = fixture();
+    const { unchangedSinceBackup: _omitted, ...native } = value.native;
+    let updates = 0;
+    const result = await updatePausedAntigravity({
+      registry: value.registry,
+      native: {
+        ...native,
+        update: async () => {
+          updates++;
+          await value.native.update();
+        },
+      },
+      stillPaused: async () => true,
+    });
+    expect(result).toEqual({
+      status: 'failed',
+      previousVersion: '1.4.12',
+      version: '1.4.12',
+      restartedProcesses: 0,
+      updateAttempted: false,
+      runtimePaused: true,
+    });
+    expect(updates).toBe(0);
+    expect(value.calls).toEqual([['--version']]);
+    expect(fs.existsSync(value.backup)).toBe(false);
+  });
+
   test('an unreadable version on the paused path still names the paused runtime', async () => {
     const value = fixture();
     const result = await runManagedAntigravityUpdateCommand({
@@ -388,6 +416,8 @@ describe('managed update routing', () => {
     'socket-during-hash',
     'unclear-during-hash',
     'recovery-during-probe',
+    'replaced-during-final-probe',
+    'same-bytes-replaced-during-final-probe',
   ] as const)
     test(`final boundary refuses ${variant}`, async () => {
       const value = fixture();
@@ -424,6 +454,15 @@ describe('managed update routing', () => {
         runtimeSocket: async () => {
           probes++;
           if (probes === 3 && variant === 'recovery-during-probe') recovery = true;
+          if (probes === 3 && variant.endsWith('during-final-probe')) {
+            // The rename lands while the final probe is pending, after the last hash.
+            await Promise.resolve();
+            const incoming = path.join(value.root, 'incoming');
+            fs.writeFileSync(incoming, variant.startsWith('same-bytes') ? ORIGINAL : REPLACEMENT, {
+              mode: 0o700,
+            });
+            fs.renameSync(incoming, value.nativeBinary);
+          }
           return socketState;
         },
       });

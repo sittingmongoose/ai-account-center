@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -194,6 +194,28 @@ describe('managed Antigravity native updater: public files and injected commands
     ]);
     expect(fs.readdirSync(root)).toEqual([]);
     expect(calls).toEqual([]);
+  });
+
+  test('the quick identity check compares one stat and never reads the native', async () => {
+    for (const change of ['none', 'same-bytes-rename', 'append', 'removed'] as const) {
+      const value = fixture();
+      expect(value.native.unchangedSinceBackup?.(true)).toBe(false);
+      await value.native.backup();
+      const reads = spyOn(fs, 'readFileSync');
+      try {
+        if (change === 'same-bytes-rename') {
+          const incoming = path.join(value.binDirectory, 'incoming');
+          fs.writeFileSync(incoming, ORIGINAL, { mode: 0o700 });
+          fs.renameSync(incoming, value.nativeBinary);
+        }
+        if (change === 'append') fs.appendFileSync(value.nativeBinary, REPLACEMENT);
+        if (change === 'removed') fs.rmSync(value.nativeBinary);
+        expect(value.native.unchangedSinceBackup?.(true)).toBe(change === 'none');
+        expect(reads).not.toHaveBeenCalled();
+      } finally {
+        reads.mockRestore();
+      }
+    }
   });
 
   for (const relative of ['nativeBinary', 'ccsDirectory'] as const) {

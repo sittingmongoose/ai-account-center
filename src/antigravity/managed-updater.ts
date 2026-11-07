@@ -8,8 +8,12 @@ export interface ManagedNativeUpdate {
   version(): Promise<string>;
   backup(): Promise<void>;
   update(): Promise<void>;
-  /** Synchronously compares the selected/backed-up native identity and digest. */
-  unchangedSinceBackup?(): boolean;
+  /**
+   * Synchronously compares the selected/backed-up native identity and digest.
+   * quick compares one stat of the native file only (no hash), for the last
+   * check before update. The paused path refuses a native without this method.
+   */
+  unchangedSinceBackup?(quick?: boolean): boolean;
   /** Refuses every native executable replacement not owned by this update. */
   rollback(): Promise<boolean>;
 }
@@ -233,6 +237,9 @@ export async function updatePausedAntigravity(deps: {
     updateAttempted: false,
   };
   const failed = { ...unchanged, status: 'failed' as const, runtimePaused: true as const };
+  const unchangedSinceBackup = native.unchangedSinceBackup?.bind(native);
+  // Without an identity check the backup cannot be bound to the updated native.
+  if (!unchangedSinceBackup) return failed;
   try {
     return await registry.withLock(async () => {
       // A pending managed recovery record needs the runtime; never replace its native.
@@ -240,9 +247,12 @@ export async function updatePausedAntigravity(deps: {
       let attempted = false;
       try {
         await native.backup();
-        // Recheck last: nothing is awaited between this and the native update.
-        if (native.unchangedSinceBackup && !native.unchangedSinceBackup()) return failed;
+        if (!unchangedSinceBackup()) return failed;
         if (!(await deps.stillPaused()) || registry.hasRecovery()) return failed;
+        // Recheck last: nothing is awaited between these checks and the native
+        // update. The stat-only check catches a native renamed over during the
+        // final socket probe; a re-hash here would reopen the probe window.
+        if (!unchangedSinceBackup(true)) return failed;
         attempted = true;
         await native.update();
         const after = await native.version();
@@ -287,7 +297,7 @@ export async function routeManagedAntigravityUpdate(deps: {
       native: deps.native,
       stillPaused: async () => {
         if (!(await paused())) return false;
-        if (deps.native.unchangedSinceBackup && !deps.native.unchangedSinceBackup()) return false;
+        if (!deps.native.unchangedSinceBackup?.()) return false;
         // Hashing can outlast runtime startup. Probe again after every slow
         // native check; the caller then checks recovery synchronously.
         return (await deps.runtimeSocket()) === 'stopped';
