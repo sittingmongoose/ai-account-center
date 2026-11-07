@@ -636,7 +636,7 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 | Device token reaches only the new GET routes | pass (`tests/unit/store/store-routes.test.ts`) |
 | Dashboard without the module, and with `AAC_STORE=off` | pass (JSON path) |
 | Memory: a store-only process over 10 days (16 accounts, minute samples, daily maintenance) | 36 MiB peak working set: pass |
-| Bytes per reading below today's, on the 30-day busy run | **pass: 216 B against 277 B**; not at every point of the curve and not with non-round percentages: see 11.4 |
+| Bytes per reading below today's, on the 30-day busy run | **pass: 216 B against 277 B** (176 B with a one-day raw tail); per reading also with the snapshot's 5/32 fractional mix (65 B against 279 B), but that mix's total is 31.81 MB against 18.06 MB: see 11.4 |
 | `.node` built on the dashboard VM | not done: Rust builds are not allowed on the VM now; see 11.5 |
 
 ### 11.4 Measured size and query cost (Windows, synthetic busy workload)
@@ -664,20 +664,41 @@ free page and redb doubles the file (22.3 MB became 30.5 MB in the old layout). 
 when the file is over twice its used pages, so here it does nothing. If it were forced, this run would end
 at 7.50 MB of redb, 16.85 MB in total, 249 B.
 
-**Where the pass does not hold.** The 30-day figure is one point on a saw-tooth, and these are measured:
+**Variants and the steady-state tail.** `STEADY=1` closes and reopens the store before the last day, so every
+earlier segment is sealed and compressed and the raw tail is one real day, the most a store sealing at midnight
+carries just before it seals. Without it the replay's segments seal on the wall clock, so up to 8 MiB stays raw.
+`MIX=1` makes 10 of the 64 series (5/32, the share of fractional windows in the published snapshot) report
+4-decimal percentages that rise every minute; the rest are as in the round run. 30 days each. The two tail modes'
+answers differ only in the last day's hourly and daily rollups, because the replay records in 100-minute
+batches and the reopen moves where a batch ends, so a different number of samples arrives after the last
+day closed:
 
-| Run | Result against the JSON history |
-|---|---|
-| Same 30 days with non-round percentages (`FRACTION=1`) | **fails**: 22.19 MB, 313 B, against 18.87 MB, 300 B. redb's used pages (5.47 MB) just crossed the 5.28 MB file, which doubled to 10.75 MB; the raw tail is 8.57 MB |
-| The round-number run, by day | days 2 to 20: 1,965 B falling to 316 B (a small store carrying the raw tail). Days 20 to 30 move between 216 B and 329 B with the raw tail. Over 277 B after day 30 only on days 35 to 37 (305 B at the doubling to 10.6 MB) |
-| 90 days of every change | 27.28 MB (redb 15.83 MB, log 7.46 MB compressed and 3.98 MB raw), 134 B per reading; the old layout took 103.56 MB, 510 B |
+| Run | Raw tail | Store | Per reading | JSON history | JSON per reading | Result |
+|---|---|---:|---:|---:|---:|---|
+| Round | replay leftover, 7.00 MB | 14.64 MB | 216 B | 17.45 MB | 277 B | pass |
+| Round | one day, 4.17 MB | 11.90 MB | 176 B | 17.45 MB | 277 B | pass |
+| Mixed, 5/32 fractional | replay leftover, 6.11 MB | 32.35 MB | 66 B | 18.06 MB | 279 B | per reading pass, **total fails** |
+| Mixed, 5/32 fractional | one day, 5.49 MB | 31.81 MB | 65 B | 18.06 MB | 279 B | per reading pass, **total fails** |
+| All fractional (known worst case) | replay leftover, 8.57 MB | 22.18 MB | 313 B | 18.87 MB | 300 B | fails |
+| All fractional (known worst case) | one day, 4.23 MB | 17.99 MB | 254 B | 18.87 MB | 300 B | pass |
 
-The raw tail is mostly this replay's doing: segments seal on the wall clock's day, and a replay's month
-passes in minutes, so up to 8 MiB stays raw. A real store seals at midnight, keeping at most about a day raw
-(about 3.9 MB at this busy rate) until the next maintenance compresses it; not measured here. The doubling is
-real: redb's region size is not configurable outside its own tests, so the file steps at about 1.3, 2.6,
-5.3 and 10.6 MB. The largest tables left in msgpack with field names are `account_state` (0.44 MB stored) and
-`period` (0.42 MB); packing them would move each step later and is the next size lever, not done here.
+**Why the mixed run's total fails.** A fractional series changes every sample, so the store keeps 490,493 spans
+against 67,691 in the round run, and its account's tick is a `usage.sampled` event every minute instead of a
+`usage.seen` every five. The JSON history keeps those series thinned to one record an hour beyond the last day.
+The store's 31.81 MB is redb 16.84 MB (13.82 MB of pages, of which `reading_day` 7.29 MB stored, about 15 B per
+span: a 4-decimal value takes a marker and 8 raw bytes) and the log 9.46 MB compressed plus 5.49 MB raw. Each
+reading costs a quarter of the JSON history's, but the store keeps seven times as many. Packing `account_state`
+(0.44 MB stored) and `period` (0.42 MB) would save at most about 1.5 MB of the 13.7 MB gap, so it was not done;
+closing the gap needs a decision on what to keep (for example thinning a series' minute-by-minute changes
+after a day, as the JSON history does) or a smaller log, not denser tables.
+
+**The doubling.** It is real: redb's region size is not configurable outside its own tests, so in these runs the
+file stepped at about 1.3, 2.6, 5.3, 10.6 and 15.8 MB. The round run by day: days 2 to 20 fall from 1,965 B to 316 B (a small store
+carrying the replay's raw tail); days 20 to 30 move between 216 B and 329 B with that tail; after day 30 it is
+over 277 B only on days 35 to 37 (305 B at the step to 10.6 MB). Over 90 days of every change the round run
+takes 27.28 MB (redb 15.83 MB, log 7.46 MB compressed and 3.98 MB raw), 134 B per reading; the old layout took
+103.56 MB, 510 B. The all-fractional run's leftover-tail failure is this step (5.47 MB of pages just past the
+5.28 MB file) plus the 8.57 MB leftover tail.
 
 **Queries after the change.**
 

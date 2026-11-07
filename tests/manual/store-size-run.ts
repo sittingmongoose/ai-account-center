@@ -7,8 +7,12 @@
  *   bun run store:build
  *   bun tests/manual/store-size-run.ts
  *
- * Environment: DAYS (30), FRACTION=1 (non-round percentages), WORST_ONLY=1 (only the worst-case
- * query), MODULE (a .node file; default dist/native), OUT (a folder for results.json and answers).
+ * Environment: DAYS (30); FRACTION=1 (every percentage non-round) or MIX=1 (10 of the 64 series, 5/32
+ * as in the published snapshot, with 4-decimal percentages that change every sample); STEADY=1 (seal
+ * and compress the log before the last day, so the raw tail is one real day, as a store sealing at
+ * midnight carries; without it the replay's wall-clock segments leave up to 8 MiB raw); WORST_ONLY=1
+ * (only the worst-case query); MODULE (a .node file; default dist/native); OUT (a folder for
+ * results.json and answers).
  */
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -22,6 +26,11 @@ import { appendAccountAnalyticsSnapshot } from '../../src/web-server/services/ac
 const DAYS = Number(process.env.DAYS ?? 30);
 const OUT = process.env.OUT;
 const FRACTION = process.env.FRACTION === '1';
+const MIX = process.env.MIX === '1';
+const STEADY = process.env.STEADY === '1';
+/** MIX: series i * 4 + window whose index mod 32 is listed are fractional (10 of 64, no credits). */
+const MIXED = new Set([1, 6, 13, 20, 26]);
+const round4 = (v: number) => Math.round(v * 10_000) / 10_000;
 const ACCOUNTS = 16;
 const MIN = 60_000;
 const HOUR = 3_600_000;
@@ -96,6 +105,21 @@ function account(i: number, t: number): any {
       unit: 'credits',
     },
   ];
+  if (MIX) {
+    // Rising a little every minute through each window, as metered percentages do.
+    const rising = [
+      (minute - fiveStart) * 0.0731 * (1 + (i % 3)),
+      (minute - weekStart) * 0.00217 * (1 + (i % 3)),
+      (minute - weekStart) * 0.00131 * (1 + (i % 3)),
+    ];
+    windows.forEach((w, k) => {
+      if (k < 3 && MIXED.has((i * 4 + k) % 32)) {
+        const used = round4(Math.min(100, rising[k]));
+        w.usedPercent = used;
+        w.remainingPercent = round4(100 - used);
+      }
+    });
+  }
   return {
     id: `claude:acct${i}`,
     provider: 'claude',
@@ -229,6 +253,15 @@ for (let minute = 0; minute < DAYS * 1440; minute++) {
   if (batch.length >= 1600) {
     await store.record(batch as never);
     batch = [];
+  }
+  if (STEADY && minute === (DAYS - 1) * 1440) {
+    // A real store seals its segment at midnight and compresses it at the next maintenance.
+    if (batch.length) await store.record(batch as never);
+    batch = [];
+    await store.close();
+    handle = await open();
+    store = new AacStore(handle, dir);
+    await store.maintain({ nowMs: t });
   }
   if (minute % 1440 === 1439) {
     await store.maintain({ nowMs: t + 3 * HOUR });
@@ -448,6 +481,8 @@ const results = {
   curve,
   days: DAYS,
   fraction: FRACTION,
+  mix: MIX,
+  steady: STEADY,
   accounts: ACCOUNTS,
   windowsPerAccount: 4,
   seconds,
