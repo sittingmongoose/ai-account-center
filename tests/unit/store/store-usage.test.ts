@@ -11,6 +11,7 @@ import * as zlib from 'zlib';
 import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
 import { backfillUsageHistory } from '../../../src/store/usage-backfill';
+import { storeObservationFromAccount } from '../../../src/store/usage-observations';
 import {
   AccountAnalyticsService,
   type AccountAnalyticsSampleEvent,
@@ -246,6 +247,64 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       // Reset periods and consumption across the reset.
       const status = await store.status();
       expect(status.state).toBe('ready');
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('answers ranges across UTC days from the packed day values, and after a rebuild', async () => {
+    const dir = path.join(fs.mkdtempSync(path.join(sandbox, 'days-')), 'store');
+    let store = await openStore(dir);
+    const END = START + 20 * HOUR; // from 10:00 to 06:00 the next day
+    const observations = [];
+    for (let t = START; t <= END; t += MIN)
+      for (const account of accountsAt(t)) {
+        const observation = storeObservationFromAccount(account, t, 90 * 24 * HOUR);
+        if (observation) observations.push(observation);
+      }
+    await store.record(observations as never);
+    const raw = async (fromMs: number, toMs: number) => {
+      const answer = await store.seriesPoints({
+        identities: undefined,
+        windowKey: 'five_hour',
+        fromMs,
+        toMs,
+        resolution: 'raw',
+      } as never);
+      return answer.series.flatMap((series) => series.points) as number[][];
+    };
+    const midnight = Date.parse('2026-10-02T00:00:00Z');
+    const all = await raw(START, END);
+    expect(all[0][0]).toBe(START);
+    expect(all.at(-1)?.[0]).toBeGreaterThan(midnight);
+    // One hour across midnight is exactly the matching part of the whole list.
+    const across = await raw(midnight - 30 * MIN, midnight + 30 * MIN);
+    expect(across.length).toBeGreaterThan(2);
+    expect(across).toEqual(
+      all.filter((p) => p[0] >= midnight - 30 * MIN && p[0] <= midnight + 30 * MIN)
+    );
+    // Every reading is counted, with the open span of each series among them.
+    const counts = await store.counts();
+    expect(counts.series).toBe(3);
+    expect(counts.reading).toBeGreaterThanOrEqual(all.length);
+    expect(counts.reading_by_time).toBeUndefined();
+    const hours = await store.seriesPoints({
+      windowKey: 'five_hour',
+      fromMs: START,
+      toMs: END,
+      resolution: 'hour',
+    } as never);
+    // 10:00 through 05:00: the 06:00 sample changes nothing, so its hour has no rollup yet.
+    expect(hours.series[0].points.length).toBe(20);
+    // Redb is only a projection: the same answers from the logs alone.
+    const at = await store.usageAt(midnight);
+    await store.close();
+    fs.rmSync(path.join(dir, 'aac.redb'));
+    store = await openStore(dir);
+    try {
+      expect(await raw(START, END)).toEqual(all);
+      expect(await store.usageAt(midnight)).toEqual(at);
+      expect((await store.counts()).reading).toBe(counts.reading);
     } finally {
       await store.close();
     }

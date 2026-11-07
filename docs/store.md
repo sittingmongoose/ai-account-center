@@ -201,18 +201,27 @@ recovered.
 | Field codes | `a` account u32, `w` window u32, `p` provider u32, `t` time ms u64, `h` hour index u32 (`ms / 3,600,000`), `d` UTC day index u32, `m` model u32, `e` effort u32 (0 = unknown), `s` session u32, `st` stream u32 (0 = none), `r` run u32, `tt` task type u32, `wr` writer u32, `c` card u32 |
 | Strings | interned in `dict` per kind; ids are local to one redb file and are never written to the log or exported |
 | Index values | `()`: index tables are keys only |
-| Values | hot tables (`reading`, `latest`, rollups) use the fixed binary layouts below; other values are positional MessagePack arrays with a leading version byte |
+| Values | hot tables (`reading_day`, `latest`, rollups) use the binary layouts below; other values are MessagePack with a leading version byte |
 | Transactions | each projector commits its rows and its checkpoint in one write transaction (at most 4,096 events or 1 s per commit) |
 
-`Reading` value (v1): `u8 version`, `u8 status`, `u8 flags` (active, cached window, unlimited, enabled
-known, enabled), `u16 present mask`, `u64 last_seen_ms`, then only the present fields: `f32 used_pct`,
-`f32 remaining_pct`, `f64 used`, `f64 limit`, `f64 remaining`, `u64 reset_at_ms`, `u64 expires_at_ms`,
-`u32 window_minutes`, `u32 source`, `u8 platform`, `u64 seq`. A row covers `[t_first, last_seen_ms]` with
-the same values: a repeated reading moves `last_seen_ms`, a change starts a new row.
+`Row` (v1, the open span in `latest`): `u8 version`, `u8 flags` (cached, unlimited known, unlimited,
+enabled known, enabled), `u16 present mask`, `u64 last_seen_ms`, then only the present fields, 8 bytes
+each: `used_pct`, `remaining_pct`, `used`, `limit`, `remaining`, `reset_at_ms`, `expires_at_ms`,
+`window_minutes`, `cached_sampled_at_ms`. A span covers `[t_first, last_seen_ms]` with the same values: a
+repeated reading moves `last_seen_ms`, a change closes the span and starts a new one.
 
-`Rollup` value (v1): `f32 consumed_pts`, `f64 credits_spent`, `f64 credits_added`, `f32 first_used`,
-`f32 last_used`, `f32 min_used`, `f32 max_used`, `u16 covered_min`, `u16 rows`, `u8 resets`,
-`u64 last_reset_ms`, `u8 late_rows`.
+`reading_day` value (v1, `src/pack.rs`): one series' closed spans of one UTC day (the day `t_first` falls
+in), oldest first. `u8 version`, varint count, then for each span: varint distance from the span before
+(the first from midnight), varint length (`last_seen - t_first`), varint mask of the fields that differ
+from the span before, then only those fields. A number is one varint when absent, whole or a hundredth
+(`remaining_pct` also when it is `100 - used_pct`), otherwise a marker and 8 raw bytes. A time is a marker
+and a zigzag varint distance from its previous value. Every field round-trips bit for bit.
+
+`Rollup` value (v2): varint presence mask, then only the present fields: `consumed`, `credits_spent`,
+`credits_added`, the four used percentages (`first`, `last`, `min`, `max`), `covered_ms`, `rows`, `resets`,
+`late_rows`, `last_reset_ms`. Percentages and `consumed` keep f32 precision (one varint when whole), credits
+keep f64 precision, counts are varints. `rollup_hours` value (v1): `u8 version`, a 24-bit mask of the hours
+present, then their rollups in order.
 
 ### 3.2 Tables
 
@@ -234,12 +243,11 @@ the same values: a repeated reading moves `last_seen_ms`, a change starts a new 
 | `window` | `w` | `{identity, key, label, kind, unit, window_minutes, pool_id, pool_label, model_ids}` | |
 | `series` | `a, w` | `{first_ms, last_ms, rows}` | list of series; "all accounts at time T" |
 | `series_by_provider` | `p, a, w` | `()` | **by provider** |
-| `reading` | `a, w, t_first` | `Reading` | **an account and window over a time range**; with `series`, **all accounts at time T** (one reverse seek per series) |
-| `reading_by_time` | `t_first, a, w` | `()` | **every change between t1 and t2, all accounts**; age-based pruning |
-| `latest` | `a, w` | `t_first` + `Reading` | **the latest reading per account** (prefix `a`) |
+| `reading_day` | `a, w, d` | packed closed spans | **an account and window over a time range** (one value per day in the range); with `series`, **all accounts at time T** (one reverse seek per series); pruning |
+| `latest` | `a, w` | `t_first`, `period_start`, `Row` | **the latest reading per account** (prefix `a`); each series' open span, which is only here |
 | `account_latest` | `a` | `{status, sampled_ms, observed_ms, is_active, source, platform}` | account status now |
 | `period` | `a, w, t_start` | `{reset_at_ms, end_ms, start_used, end_used, max_used, consumed_pts, hit_limit_ms, rows}` | reset periods: how each window was used up |
-| `rollup_hour` | `a, w, h` | `Rollup` | burn over any period, hourly charts |
+| `rollup_hours` | `a, w, d` | packed `Rollup` per hour of the day | burn over any period, hourly charts |
 | `rollup_day` | `a, w, d` | `Rollup` | long-range charts |
 
 **Attribution and activity (phase 2)**
@@ -289,7 +297,7 @@ the same values: a repeated reading moves `last_seen_ms`, a change starts a new 
 
 | Projector | Reads | Maintains |
 |---|---|---|
-| `usage` | `usage.sampled`, `usage.seen`, `usage.day_closed` | `account` to `rollup_day`. A reading updates its hour and day rollup and its period at once. At 02:00 UTC it appends `usage.day_closed` for the previous day; readings for a closed day still enter `reading` but leave its rollups alone (counted in `late_rows`). Replaying a `day_closed` rewrites that day's rollups with identical values, so rollups survive the readings' expiry |
+| `usage` | `usage.sampled`, `usage.seen`, `usage.day_closed` | `account` to `rollup_day`. A reading updates its hour and day rollup and its period at once. At 02:00 UTC it appends `usage.day_closed` for the previous day; readings for a closed day still enter `reading_day` but leave its rollups alone (counted in `late_rows`). Replaying a `day_closed` replaces that day's hourly value and day rollup for each listed series, so rollups survive the readings' expiry and a rebuild answers as the live store did |
 | `attribution` | `attribution.*`, `activity.hour` | session, token, share and model-effort tables; appends `attribution.day_closed` the same way |
 | `runs` | `run.recorded`, plus `attribution` checkpoints | run tables; recomputes `run_cost` for runs whose time overlaps newly projected account-hours (found through `run_by_time`) |
 | `answers`, `ops` | their events | their tables |
@@ -310,7 +318,7 @@ its checkpoint at zero; that is the migration path (4.8).
 | 4.7 Backups | daily: copy newly sealed segments (immutable, so incremental) and both manifests to `store/backups/<id>/` with a backup manifest (relative files, SHA-256, sizes, store version, durable boundary per log); weekly: a redb snapshot (projector paused, final commit, file copy, reopen; under a second). Keep 7 daily and 4 weekly. Off-machine copy: decision D3 | logs alone can rebuild everything; the redb snapshot only shortens a restore |
 | Restore | `ai-account-center dashboard store restore <backup-dir>` with the dashboard stopped: verify every hash, stage under `tmp/`, move current files to `quarantine/`, promote, then replay from the snapshot's checkpoints. An interrupted restore finishes or rolls back from its intent | |
 | 4.8 Versions and migrations | `store_schema_version` u32 in `meta`; frame version 2 and header version 1; each event type has its own `schema_version`; each projector has a version in its checkpoint. A projector change bumps its version and rebuilds its tables from the logs. An event change adds a reader for the new version; old events are read by their own reader, never rewritten. Newer than the code: `blocked_newer_store` | redb tables are all derived, so there are no in-place data migrations |
-| 4.9 Compaction | readings: whole-segment expiry (section 5). redb: janitor every 6 hours deletes expired rows in batches of at most 10,000 keys per transaction (PM's numbers), then `compact()` weekly when free pages exceed 25% of the file | |
+| 4.9 Compaction | readings: whole-segment expiry (section 5). redb: janitor every 6 hours deletes expired rows in batches of at most 10,000 keys per transaction (PM's numbers), then a weekly `compact()` only when the file is over twice its used pages: a trimmed file has no free pages, and below one 4 GiB region redb doubles the file at the next commit | |
 | 4.10 No native module | the loader catches the failed `require`, and the dashboard keeps the JSON history file path it had before the store; `/api/usage/*` answers 503 `store_unavailable` and `/api/store/status` says why | a machine without the module (the VM until its Linux build) keeps its history |
 | 4.11 Bounded memory | redb cache 32 MiB; one open group at most 1 MiB; projector batches at most 4,096 events; query responses at most 20,000 points per page; import caps: a run 32 KB, a quota report 512 KB, a quota ledger file 4 MiB. The 32 MB history file is no longer parsed or rewritten whole on each sample | target: under 64 MiB resident for the module (phase 1 check) |
 | Kill switch | `AAC_STORE=off` disables the store: the dashboard behaves as 4.10 | rollback during phase 1 (section 10) |
@@ -319,7 +327,7 @@ its checkpoint at zero; that is the migration path (4.8).
 
 | Data | Kept | How it goes |
 |---|---|---|
-| Readings (`reading`, readings log `usage.*`) | 90 days | whole sealed readings segments, then redb rows by `reading_by_time` |
+| Readings (`reading_day`, readings log `usage.*`) | 90 days | whole sealed readings segments; redb spans by scanning each series' `reading_day` values through the cutoff's day: a value whose spans have all ended before the cutoff goes, one that straddles it is rewritten, the open span stays |
 | Hourly and daily rollups, reset periods | for good | (ledger `usage.day_closed`) |
 | Per-session tokens and shares (`attribution.tokens`, `attribution.share`, `tokens`, `share`) | 365 days | as readings |
 | Model and effort rollups | for good | (ledger `attribution.day_closed`) |
@@ -335,13 +343,13 @@ a verified backup. Deletion: intent, unlink, folder fsync, manifest update, inte
 `store.segment_retired` in the ledger. The gap below the oldest retained sequence is a legal
 `retention_compaction` gap. `idem` rows whose sequence is below that point go with it.
 
-**Size estimate** (estimates for 16 accounts and 59 windows, about 5,000 changed window readings and
-4,600 "seen" marks a day; phase 1 measures the real figures):
+**Size estimate** (the design's estimates for 16 accounts and 59 windows, about 5,000 changed window
+readings and 4,600 "seen" marks a day, before the packed layout; 11.4 has the measured figures):
 
 | Part | Per day | 90 days | Per year |
 |---|---:|---:|---:|
 | Readings log, sealed and compressed (about 3.3 MB raw a day) | 0.35 MB | 32 MB | (expires) |
-| `reading` and `reading_by_time` rows (about 125 B per reading) | 0.6 MB | 56 MB | (expires) |
+| Reading rows (design: about 125 B per reading; 11.4 measures about 11 B stored in day values) | 0.6 MB | 56 MB | (expires) |
 | Rollups (hourly, daily, periods) | 0.1 MB | 9 MB | 37 MB |
 | Ledger `day_closed` events, compressed | 0.01 MB | 1 MB | 4 MB |
 | Attribution (about 2,800 rows a day): per-session rows, log and redb | 0.12 MB | 11 MB | 45 MB |
@@ -376,10 +384,10 @@ Every import is idempotent (its keys hit `idem`), resumable, and records `store.
 
 | Quantity | Formula | Tables |
 |---|---|---|
-| Points | percentage points of one usage window on one account (a meter). Credit meters use credits instead | `reading` |
-| Consumed points `P(meter, [t0, t1])` | sum over consecutive readings in the same reset period of `max(0, used_b - used_a)`; across a detected reset (the rules of `agent-usage-history.ts`) add the first reading's `used` (use since the reset). Credits: sum of decreases, rises counted as added | `reading`, `period`, `rollup_hour` |
+| Points | percentage points of one usage window on one account (a meter). Credit meters use credits instead | `reading_day` |
+| Consumed points `P(meter, [t0, t1])` | sum over consecutive readings in the same reset period of `max(0, used_b - used_a)`; across a detected reset (the rules of `agent-usage-history.ts`) add the first reading's `used` (use since the reset). Credits: sum of decreases, rises counted as added | `reading_day`, `period`, `rollup_hours` |
 | Coverage | minutes of the interval covered by readings no more than 10 minutes apart, over the interval's minutes | `Rollup.covered_min` |
-| Burn rate `B(meter, span)` | `P / hours`, for any span: today's 5 m to 24 h within the period, plus 7 d, 30 d, 90 d (raw) and any span (hourly rollups); reported with coverage | `rollup_hour`, `rollup_day` |
+| Burn rate `B(meter, span)` | `P / hours`, for any span: today's 5 m to 24 h within the period, plus 7 d, 30 d, 90 d (raw) and any span (hourly rollups); reported with coverage | `rollup_hours`, `rollup_day` |
 | Per-period use | consumed points per reset period, time to 100%, how early it hit the limit | `period` |
 | List-price weight `W` | `sum over class c of tokens_c * price_c(model) / 1e6`, classes input, cache read, cache write, output (reasoning is inside output); prices from the models.dev registry AAC already caches | `tokens.list_usd` |
 | Solo account-hour | an account-hour whose tokens all come from one (model, effort), with every machine scanned and coverage at least 0.9 | `account_hour_mix` |
@@ -541,7 +549,7 @@ need a C compiler (checked in phase 0; the pure-Rust `ruzstd` is the fallback).
 | Crash cuts | for a recorded segment, truncate at every byte offset and at every intent step of seal, compress, expiry and restore; recovery yields exactly the longest valid prefix, never a reused sequence, and a correct disclosure |
 | Corruption | flip bits in active and sealed segments and in `aac.redb`; check 2.6's actions and that projections equal a clean rebuild of the survivors |
 | Replay | build redb from the logs twice and from a mid-way checkpoint; table dumps are identical |
-| Indexes | each index answers the same as a full scan of the primary table on random data (property tests) |
+| Indexes | each index answers the same as a full scan of the primary table on random data (property tests); day values answer ranges, "at time T" and limits as a filter of every span |
 | Cost | fixed fixtures with known solo and shared hours; `k`, shares and per-task values equal hand-computed results; minimums suppress values |
 | TypeScript | loader fallback with the module absent; route auth and fixed errors; `/api/accounts/analytics` equal before and after on fixtures; burn rates equal today's `burnRate` on the same readings |
 | Budgets | a 90-day synthetic replay (16 accounts, 59 windows): bytes per reading below today's, module resident memory under 64 MiB |
@@ -582,8 +590,10 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 | Usage dedupe (2.2) | the projector's per-account rule (sample time never goes back, an unchanged sample in the same 5-minute bucket is skipped); `idem` is kept for ledger events from phase 2 | an `idem` row per reading would cost more than the reading |
 | Event id (2.3) | `<log>-<sequence hex>` (`r-000000000000002a`) | unique for the store's life because sequences are never reused; no random source needed |
 | Intents (2.4, 2.6) | crash steps are reconciled from file presence, names and hashes at open (seal, compress, retire); restore keeps an intent file | each step is provable from the files, so no separate intent is needed |
-| Spans (3.1) | a reading row is a span; an unchanged sighting more than 10 minutes after the last one starts a new span, so gaps stay visible; the open span lives in `latest` and its `reading` row is rewritten when it closes | no copy-on-write churn of the readings tree every 5 minutes |
-| Row and rollup values (3.1) | `Row`: version, flags, presence mask, `last_seen`, then the present fields; `Rollup`: presence mask, percentages as f32, credits f64 | fewer bytes per row; rollups are summaries shown to two decimals |
+| Spans (3.1) | a reading row is a span; an unchanged sighting more than 10 minutes after the last one starts a new span, so gaps stay visible; the open span lives only in `latest` and enters its `reading_day` value when it closes | no copy-on-write churn of the readings tree every 5 minutes |
+| Packed day values (3.1, 11.4) | `reading_day` and `rollup_hours` hold one value per series and UTC day; `reading` and `rollup_hour` are gone; usage projector version 2 rebuilds an older store from its logs and drops the old tables | full pages instead of half-full ones: the size acceptance |
+| No time index (3.2) | `reading_by_time` is gone; every series is scanned instead (see 11.4) | the index cost 1.7 MB of pages and served only pruning, the oldest reading and the first day to close |
+| Rollup values (3.1) | percentages and `consumed` as f32, credits f64, whole values in a varint | rollups are summaries shown to two decimals |
 | Tables (3.2) | added `account_state` (account status spans) and `day_closed` (closed days) | the history reconstruction and day closing need them |
 | Reconstruction | `historyRecords` rebuilds the JSON history's account records from the spans, adding readings on its grid (every 5 minutes within a day, hourly beyond) inside observed spans | the analytics route, burn rates and `history.json` keep their exact inputs |
 | zstd (2.4) | level 9 | 50.7x on real segments against 54x at level 19, at 1/75 of the time and far less memory |
@@ -613,9 +623,11 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 
 | Check | Result |
 |---|---|
-| Frame, crash-cut (a cut at every byte offset of a torn tail and of the acknowledged region), corruption (bit flips in sealed segments, a damaged redb, a damaged manifest) | pass (`bun run store:test`: 23 Rust tests) |
+| Frame, crash-cut (a cut at every byte offset of a torn tail and of the acknowledged region), corruption (bit flips in sealed segments, a damaged redb, a damaged manifest) | pass (`bun run store:test`: 34 Rust tests) |
+| A cut at every byte of a tick over the projection: exactly the surviving frames' day values, with redb kept and rebuilt | pass (`tests/store_packed.rs`) |
+| Packed values round-trip bit for bit; day values answer as a filter of every span; retention splits a day value; an old store rebuilds from its logs | pass (`src/pack.rs`, `tests/store_packed.rs`) |
 | Sequences never reused; a newer store left byte-for-byte untouched; a second writer refused | pass |
-| Replay from nothing and from a mid-way checkpoint gives identical tables | pass |
+| Replay from nothing and from a mid-way checkpoint gives identical tables | pass, and now also when samples arrive after their day closed |
 | Analytics output and burn rates equal to the JSON history on the same samples | pass (`tests/unit/store/store-usage.test.ts`) |
 | Backfill of the JSON file and a mixed archive folder; re-run imports nothing | pass |
 | Closed days keep rollups and final periods after their readings retire and redb is rebuilt | pass |
@@ -623,27 +635,107 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 | Kill during sampling loses no acknowledged reading | pass (`tests/unit/store/store-kill.test.ts`, 5 of 5 runs) |
 | Device token reaches only the new GET routes | pass (`tests/unit/store/store-routes.test.ts`) |
 | Dashboard without the module, and with `AAC_STORE=off` | pass (JSON path) |
-| Memory: a store-only process over 10 days (16 accounts, minute samples, daily maintenance) | 43 MiB peak working set: pass |
-| Bytes per reading below today's | **fails**: see 11.4 |
+| Memory: a store-only process over 10 days (16 accounts, minute samples, daily maintenance) | 36 MiB peak working set: pass |
+| Bytes per reading below today's, on the 30-day busy run | **pass: 216 B against 277 B**; not at every point of the curve and not with non-round percentages: see 11.4 |
 | `.node` built on the dashboard VM | not done: Rust builds are not allowed on the VM now; see 11.5 |
 
-### 11.4 Measured size (Windows, synthetic busy workload)
+### 11.4 Measured size and query cost (Windows, synthetic busy workload)
 
-16 accounts with 4 windows each, a sample every minute for 30 days, daily maintenance and a final
-compaction:
+Run it with `bun run store:size` (`tests/manual/store-size-run.ts`, a temporary folder only): 16 accounts
+with 4 windows each, a sample every minute for 30 days, daily maintenance and a final compaction request.
+"Before" is the layout with `reading`, `reading_by_time` and `rollup_hour`, on the same workload.
 
-| | JSON history (today) | Store |
+| 30 days | JSON history (today) | Store before | Store now |
+|---|---:|---:|---:|
+| Kept | thinned (hourly beyond a day): 15,780 records, 62,952 window readings | every change: 67,691 reading spans, 45,312 hourly rollups, 2,848 periods | the same |
+| redb | | 30.49 MB (7.14 MB stored) | 5.28 MB (2.05 MB stored, 3.78 MB of pages) |
+| Log, sealed and compressed | | 2.36 MB | 2.36 MB |
+| Log, raw tail | | 7.00 MB | 7.00 MB |
+| Total | **17.45 MB** | 39.85 MB | **14.64 MB** |
+| Per stored reading | **277 B** | 589 B | **216 B** |
+
+The reading and hourly-rollup tables went from 3.71 MB and 1.37 MB stored to 0.71 MB (about 10.5 B per
+span) and 0.40 MB. A store and a JSON "reading" are not the same thing (a span can cover many samples), so
+the totals are the plainer comparison; the store passes on both.
+
+**Why the file is smaller.** Day values fill pages, the time index is gone, and only changed fields are
+stored. The other cause was compaction itself: it trims the file to its pages, then the next commit finds no
+free page and redb doubles the file (22.3 MB became 30.5 MB in the old layout). Compaction now runs only
+when the file is over twice its used pages, so here it does nothing. If it were forced, this run would end
+at 7.50 MB of redb, 16.85 MB in total, 249 B.
+
+**Where the pass does not hold.** The 30-day figure is one point on a saw-tooth, and these are measured:
+
+| Run | Result against the JSON history |
+|---|---|
+| Same 30 days with non-round percentages (`FRACTION=1`) | **fails**: 22.19 MB, 313 B, against 18.87 MB, 300 B. redb's used pages (5.47 MB) just crossed the 5.28 MB file, which doubled to 10.75 MB; the raw tail is 8.57 MB |
+| The round-number run, by day | days 2 to 20: 1,965 B falling to 316 B (a small store carrying the raw tail). Days 20 to 30 move between 216 B and 329 B with the raw tail. Over 277 B after day 30 only on days 35 to 37 (305 B at the doubling to 10.6 MB) |
+| 90 days of every change | 27.28 MB (redb 15.83 MB, log 7.46 MB compressed and 3.98 MB raw), 134 B per reading; the old layout took 103.56 MB, 510 B |
+
+The raw tail is mostly this replay's doing: segments seal on the wall clock's day, and a replay's month
+passes in minutes, so up to 8 MiB stays raw. A real store seals at midnight, keeping at most about a day raw
+(about 3.9 MB at this busy rate) until the next maintenance compresses it; not measured here. The doubling is
+real: redb's region size is not configurable outside its own tests, so the file steps at about 1.3, 2.6,
+5.3 and 10.6 MB. The largest tables left in msgpack with field names are `account_state` (0.44 MB stored) and
+`period` (0.42 MB); packing them would move each step later and is the next size lever, not done here.
+
+**Queries after the change.**
+
+| Query | Table and key | Cost |
+|---|---|---|
+| A series over a time range (`/api/usage/history`, raw) | `reading_day` range `a, w, day(from)..=day(to)`, then filter; open span from `latest` | one value per day in the range is decoded whole |
+| A span before the range, and every series at time T (`/api/usage/at`) | `latest`, then a reverse seek on `reading_day` `a, w, ..=day(t)` | one seek per series, one value decoded |
+| Rebuilt history records (analytics, burn rates, `history.json`) | `account_state` by `a, t`; `reading_day` and `latest` as above | per account and window |
+| Hourly charts, burn over a span | `rollup_hours` range `a, w, day..=day`, then filter by hour | one value per day |
+| Daily charts | `rollup_day` `a, w, d` | unchanged |
+| Reset periods | `period` `a, w, t` | unchanged |
+| By provider, list of series | `series_by_provider`, `series` | unchanged |
+| Every change between two times, all accounts | no index: one range per series | scans `series`; no route asks this of all accounts except unfiltered raw history, which already walked every series |
+| Oldest reading, first day to close | one forward seek per series on `reading_day`, or its `latest` | was one index read |
+| Pruning | `reading_day` range `a, w, ..=day(cutoff)` per series | was an index range |
+
+Medians on the 30-day store, same workload and machine, one run each, so differences under about 10% are
+noise (the cold first call was not reliably different either):
+
+| Query | Before | Now |
 |---|---:|---:|
-| Kept | 30 days, thinned (hourly beyond a day): 15,780 records, 62,952 window readings | every change for 90 days: 67,691 reading spans, 46,080 hourly rollups, 2,848 periods |
-| Bytes | 17.5 MB | redb 30.6 MB (7.2 MB of rows in 15.3 MB of pages) and the readings log about 6 MB (117 MB raw, 50x smaller sealed, plus at most a day raw) |
-| Per stored reading | 277 B | about 585 B |
+| Raw, 1 hour, 1 series | 0.53 ms | 0.47 ms |
+| Raw, 1 hour, 1 account | 0.49 ms | 0.46 ms |
+| Raw, 1 hour, all series | 1.03 ms | 1.06 ms |
+| Raw, 1 day, 1 series | 0.52 ms | 0.48 ms |
+| Raw, 30 days, 1 series | 2.73 ms | 2.31 ms |
+| Raw, 30 days, all series (20,000 cap) | 27.1 ms | 23.1 ms |
+| Hourly, 1 day, 1 series | 0.49 ms | 0.52 ms |
+| Hourly, 30 days, all series | 26.4 ms | 25.1 ms |
+| Daily, 30 days, all series | 3.42 ms | 2.96 ms |
+| All series at time T | 0.98 ms | 1.06 ms |
+| History 24 h, analytics thinning | 140 ms | 139 ms |
+| History 31 days, analytics thinning | 2,033 ms | 2,185 ms |
+| Burn 7, 30, 90 days, all series | 6.97 ms | 4.35 ms |
+| Periods, all series | 14.3 ms | 13.2 ms |
+| Oldest reading | 0.03 ms | 0.15 ms |
+| One sampling tick written (16 accounts) | 11.0 ms | 9.5 ms |
+| Reopen / rebuild redb from the logs | 104 ms / 27.3 s | 32 ms / 26.7 s |
 
-The store holds more (every change, rollups kept for good), but it does not yet meet "less space than
-today's files". Two causes: redb leaves B-tree leaves half full, and while a database fits in its
-first allocation region redb doubles the file to grow it (its region size is not configurable outside
-redb's own tests). Proposed follow-up, estimated to bring the same 30 days near 15 MB: pack each
-series' readings and its hourly rollups into one value per series and day (fewer, fuller pages), and
-serve "changes between two times" by per-series scans instead of the `reading_by_time` index.
+**What packing costs.** A one-hour range does read a whole day's value, but here that is lost in the rest of
+the call. The worst case built for it, a series changing every minute with non-round values (1,440 spans in
+the value), answers a one-hour raw query in 0.19 to 0.25 ms across four runs, against 0.15 to 0.24 ms before;
+no difference this measurement can separate. The clear slowdown is the oldest reading, five times slower and
+still under a millisecond, because it lost its index. At 90 days the slowest results moved no more than at
+30 (hourly all series 20.0 to 23.4 ms, 31-day history 2,145 to 2,044 ms).
+
+**Same answers.** Each of the 16 queries' answer bytes are identical before and after, on the 30-day, the
+non-round and the 90-day runs. A rebuild from the logs now gives the same answers too, except as below;
+before, hourly rollups and long burn differed when samples arrived after their day closed, because a rebuild
+kept hours the close had not listed. The close now replaces the day's whole hourly value.
+
+**Known limits.**
+
+- A rebuild restores readings past retention while their log segments still exist, until the next maintenance
+  prunes them (the one 90-day difference, raw history at the cutoff; the old layout does the same).
+- `late_rows` in a closed day's rollup returns to the closed value after a rebuild. A series whose readings on a
+  day were all late has no entry in that day's close, so a rebuild keeps rollups for it. Neither case changed here.
+- All of these are synthetic runs; the share of non-round percentages in real history was not measured.
 
 ### 11.5 Linux
 

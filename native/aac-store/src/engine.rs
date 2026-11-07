@@ -580,13 +580,25 @@ impl Engine {
         Ok(json!({ "findings": found }))
     }
 
-    /// redb `compact()`, with readers and the writer held off.
+    /// redb `compact()`, with readers and the writer held off, when it can save space: a trimmed
+    /// file has no free pages, and below one 4 GiB region redb doubles the file at the next
+    /// commit that needs one, so a file up to twice its used pages is left alone.
     pub fn compact(&self) -> Result<bool> {
         let _logs = self.lock_logs();
         let mut guard = self.db.write().unwrap_or_else(|p| p.into_inner());
         let Some(db) = guard.as_mut() else {
             fail!("closed", "the store is closed")
         };
+        let used = {
+            let txn = db.begin_write()?;
+            let stats = txn.stats()?;
+            let bytes = stats.allocated_pages() * stats.page_size() as u64;
+            txn.abort()?;
+            bytes
+        };
+        if fs::metadata(self.dir.join(REDB_FILE))?.len() <= used * 2 {
+            return Ok(false);
+        }
         // Each pass moves pages toward the start; repeat until nothing more moves.
         let mut done = false;
         for _ in 0..16 {

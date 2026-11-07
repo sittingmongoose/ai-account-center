@@ -8,6 +8,7 @@ use crate::error::Result;
 use crate::event::Event;
 use crate::fail;
 use crate::msgpack;
+use crate::pack;
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, WriteTransaction};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -217,9 +218,9 @@ impl Vals {
     }
 }
 
-/// A reading span: the same values observed from its key time through `last_seen`. The open
-/// span of each series lives in `latest`; its `reading` row is rewritten when the span closes,
-/// so an unchanged sighting rewrites one small row instead of the readings B-tree.
+/// A reading span: the same values observed from its start time through `last_seen`. The open
+/// span of each series lives only in `latest`; it enters its `reading_day` value when it closes,
+/// so an unchanged sighting rewrites one small row and a change rewrites one day value.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Row {
     pub vals: Vals,
@@ -356,12 +357,11 @@ pub struct Rollup {
 }
 
 impl Rollup {
-    /// Version 1: a presence mask, then only the present fields. Percentages are f32 (rollups
-    /// are summaries shown to two decimals); credits stay f64.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(48);
-        out.push(1);
-        let mut mask = 0u16;
+    /// Version 2: a presence mask, then only the present fields. Percentages keep f32 precision
+    /// (rollups are summaries shown to two decimals), whole ones in a byte or two; credits keep
+    /// f64 precision. Self-delimiting, so a day's hours follow each other in one value.
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        let mut mask = 0u64;
         let bits = [
             self.consumed != 0.0,
             self.credits_spent != 0.0,
@@ -378,83 +378,92 @@ impl Rollup {
                 mask |= 1 << i;
             }
         }
-        out.extend_from_slice(&mask.to_be_bytes());
+        pack::put_varint(out, mask);
         if bits[0] {
-            out.extend_from_slice(&(self.consumed as f32).to_be_bytes());
+            pack::put_small_f32(out, self.consumed);
         }
         if bits[1] {
-            out.extend_from_slice(&self.credits_spent.to_be_bytes());
+            pack::put_plain_float(out, self.credits_spent);
         }
         if bits[2] {
-            out.extend_from_slice(&self.credits_added.to_be_bytes());
+            pack::put_plain_float(out, self.credits_added);
         }
         if bits[3] {
             for f in [self.first_used, self.last_used, self.min_used, self.max_used] {
-                out.extend_from_slice(&(f.unwrap_or(0.0) as f32).to_be_bytes());
+                pack::put_small_f32(out, f.unwrap_or(0.0));
             }
         }
         if bits[4] {
-            out.extend_from_slice(&(self.covered_ms.min(u32::MAX as u64) as u32).to_be_bytes());
+            pack::put_varint(out, self.covered_ms.min(u32::MAX as u64));
         }
         for (on, n) in [(bits[5], self.rows), (bits[6], self.resets), (bits[7], self.late_rows)] {
             if on {
-                out.extend_from_slice(&n.to_be_bytes());
+                pack::put_varint(out, n as u64);
             }
         }
         if let Some(t) = self.last_reset_ms {
-            out.extend_from_slice(&t.to_be_bytes());
+            pack::put_svarint(out, t);
         }
+    }
+
+    pub fn decode_from(c: &mut pack::Cursor<'_>) -> Result<Rollup> {
+        let mask = c.varint()?;
+        if mask >> 9 != 0 {
+            fail!("corrupt", "rollup value");
+        }
+        let on = |i: u64| mask & (1 << i) != 0;
+        let count = |c: &mut pack::Cursor<'_>| -> Result<u32> {
+            match u32::try_from(c.varint()?) {
+                Ok(n) => Ok(n),
+                Err(_) => fail!("corrupt", "rollup count"),
+            }
+        };
+        let mut r = Rollup::default();
+        if on(0) {
+            r.consumed = pack::read_small_f32(c)?;
+        }
+        if on(1) {
+            r.credits_spent = pack::read_plain_float(c)?;
+        }
+        if on(2) {
+            r.credits_added = pack::read_plain_float(c)?;
+        }
+        if on(3) {
+            r.first_used = Some(pack::read_small_f32(c)?);
+            r.last_used = Some(pack::read_small_f32(c)?);
+            r.min_used = Some(pack::read_small_f32(c)?);
+            r.max_used = Some(pack::read_small_f32(c)?);
+        }
+        if on(4) {
+            r.covered_ms = c.varint()?;
+        }
+        if on(5) {
+            r.rows = count(c)?;
+        }
+        if on(6) {
+            r.resets = count(c)?;
+        }
+        if on(7) {
+            r.late_rows = count(c)?;
+        }
+        if on(8) {
+            r.last_reset_ms = Some(c.svarint()?);
+        }
+        Ok(r)
+    }
+
+    /// One `rollup_day` value.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32);
+        self.encode_into(&mut out);
         out
     }
 
     pub fn decode(b: &[u8]) -> Result<Rollup> {
-        if b.len() < 3 || b[0] != 1 {
-            fail!("corrupt", "rollup value");
-        }
-        let mask = u16::from_be_bytes([b[1], b[2]]);
-        let mut at = 3;
-        let mut take = |n: usize| -> Result<&[u8]> {
-            if at + n > b.len() {
-                fail!("corrupt", "rollup value is short");
-            }
-            let slice = &b[at..at + n];
-            at += n;
-            Ok(slice)
-        };
-        let on = |i: u16| mask & (1 << i) != 0;
-        let f32_at = |s: &[u8]| f32::from_be_bytes(s.try_into().unwrap()) as f64;
-        let mut r = Rollup::default();
-        if on(0) {
-            r.consumed = f32_at(take(4)?);
-        }
-        if on(1) {
-            r.credits_spent = f64::from_be_bytes(take(8)?.try_into().unwrap());
-        }
-        if on(2) {
-            r.credits_added = f64::from_be_bytes(take(8)?.try_into().unwrap());
-        }
-        if on(3) {
-            r.first_used = Some(f32_at(take(4)?));
-            r.last_used = Some(f32_at(take(4)?));
-            r.min_used = Some(f32_at(take(4)?));
-            r.max_used = Some(f32_at(take(4)?));
-        }
-        if on(4) {
-            r.covered_ms = u32::from_be_bytes(take(4)?.try_into().unwrap()) as u64;
-        }
-        if on(5) {
-            r.rows = u32::from_be_bytes(take(4)?.try_into().unwrap());
-        }
-        if on(6) {
-            r.resets = u32::from_be_bytes(take(4)?.try_into().unwrap());
-        }
-        if on(7) {
-            r.late_rows = u32::from_be_bytes(take(4)?.try_into().unwrap());
-        }
-        if on(8) {
-            r.last_reset_ms = Some(i64::from_be_bytes(take(8)?.try_into().unwrap()));
-        }
-        Ok(r)
+        let mut c = pack::Cursor::new(b);
+        let rollup = Rollup::decode_from(&mut c)?;
+        c.finish()?;
+        Ok(rollup)
     }
 
     fn note_used(&mut self, used: f64) {
@@ -579,15 +588,27 @@ fn with_rollups(txn: &WriteTransaction, a: u32, w: u32, t: u64, f: impl Fn(&mut 
     if day_closed(txn, t)? {
         return Ok(false);
     }
-    for (def, bucket) in [(db::ROLLUP_HOUR, hour_of(t)), (db::ROLLUP_DAY, day_of(t))] {
-        let key = Key::new().u32(a).u32(w).u32(bucket);
-        let mut rollup = match get(txn, def, key.as_slice())? {
-            Some(b) => Rollup::decode(&b)?,
-            None => Rollup::default(),
-        };
-        f(&mut rollup);
-        put(txn, def, key.as_slice(), &rollup.encode())?;
-    }
+    let key = Key::new().u32(a).u32(w).u32(day_of(t));
+    let mut hours = match get(txn, db::ROLLUP_HOURS, key.as_slice())? {
+        Some(b) => pack::decode_hours(&b)?,
+        None => Vec::new(),
+    };
+    let hour = (hour_of(t) % 24) as u8;
+    let slot = match hours.binary_search_by_key(&hour, |(h, _)| *h) {
+        Ok(i) => i,
+        Err(i) => {
+            hours.insert(i, (hour, Rollup::default()));
+            i
+        }
+    };
+    f(&mut hours[slot].1);
+    put(txn, db::ROLLUP_HOURS, key.as_slice(), &pack::encode_hours(&hours))?;
+    let mut rollup = match get(txn, db::ROLLUP_DAY, key.as_slice())? {
+        Some(b) => Rollup::decode(&b)?,
+        None => Rollup::default(),
+    };
+    f(&mut rollup);
+    put(txn, db::ROLLUP_DAY, key.as_slice(), &rollup.encode())?;
     Ok(true)
 }
 
@@ -648,7 +669,7 @@ pub fn is_reset(prev_t: i64, prev: &Vals, t: i64, now: &Vals) -> bool {
 pub struct UsageProjector;
 
 /// Bump when projection rules change: the usage tables are then rebuilt from the logs.
-pub const USAGE_PROJECTOR_VERSION: u32 = 1;
+pub const USAGE_PROJECTOR_VERSION: u32 = 2;
 
 impl Projector for UsageProjector {
     fn name(&self) -> &'static str {
@@ -685,17 +706,19 @@ impl Projector for UsageProjector {
             db::ACCOUNT,
             db::WINDOW,
             db::SERIES,
-            db::READING,
+            db::READING_DAY,
             db::LATEST,
             db::ACCOUNT_LATEST,
             db::ACCOUNT_STATE,
             db::PERIOD,
-            db::ROLLUP_HOUR,
+            db::ROLLUP_HOURS,
             db::ROLLUP_DAY,
+            db::LEGACY_READING,
+            db::LEGACY_ROLLUP_HOUR,
         ] {
             txn.delete_table(def)?;
         }
-        for def in [db::SERIES_BY_PROVIDER, db::READING_BY_TIME, db::DAY_CLOSED] {
+        for def in [db::SERIES_BY_PROVIDER, db::LEGACY_READING_BY_TIME, db::DAY_CLOSED] {
             txn.delete_table(def)?;
         }
         db::set_meta(txn, "closed_through_day", "")?;
@@ -796,27 +819,28 @@ fn read_latest(txn: &WriteTransaction, a: u32, w: u32) -> Result<Option<Latest>>
     })
 }
 
-/// Writes the series' open span to `latest`; with `row_too`, also its `reading` row (a new span,
-/// or a span that just closed).
-fn write_latest(txn: &WriteTransaction, a: u32, w: u32, latest: &Latest, row_too: bool) -> Result<()> {
+/// Writes the series' open span to `latest`.
+fn write_latest(txn: &WriteTransaction, a: u32, w: u32, latest: &Latest) -> Result<()> {
     let mut b = Vec::with_capacity(80);
     b.extend_from_slice(&latest.t_first.to_be_bytes());
     b.extend_from_slice(&latest.period_start.to_be_bytes());
     b.extend_from_slice(&latest.row.encode());
-    put(txn, db::LATEST, Key::new().u32(a).u32(w).as_slice(), &b)?;
-    if row_too {
-        put_reading(txn, a, w, latest.t_first, &latest.row)?;
-    }
-    Ok(())
+    put(txn, db::LATEST, Key::new().u32(a).u32(w).as_slice(), &b)
 }
 
-fn put_reading(txn: &WriteTransaction, a: u32, w: u32, t_first: u64, row: &Row) -> Result<()> {
-    put(
-        txn,
-        db::READING,
-        Key::new().u32(a).u32(w).u64(t_first).as_slice(),
-        &row.encode(),
-    )
+/// Adds a closed span to its day value (a span starting at the same time is replaced).
+fn close_span(txn: &WriteTransaction, a: u32, w: u32, t_first: u64, row: &Row) -> Result<()> {
+    let day = day_of(t_first);
+    let key = Key::new().u32(a).u32(w).u32(day);
+    let mut spans = match get(txn, db::READING_DAY, key.as_slice())? {
+        Some(b) => pack::decode_spans(day, &b)?,
+        None => Vec::new(),
+    };
+    match spans.binary_search_by_key(&t_first, |(t, _)| *t) {
+        Ok(i) => spans[i].1 = row.clone(),
+        Err(i) => spans.insert(i, (t_first, row.clone())),
+    }
+    put(txn, db::READING_DAY, key.as_slice(), &pack::encode_spans(day, &spans)?)
 }
 
 fn read_period(txn: &WriteTransaction, a: u32, w: u32, start: u64) -> Result<Option<Period>> {
@@ -903,7 +927,7 @@ fn project_sampled(txn: &WriteTransaction, s: &Sampled) -> Result<()> {
             {
                 cover(txn, a, w, l.row.last_seen, t)?;
                 l.row.last_seen = l.row.last_seen.max(t);
-                write_latest(txn, a, w, &l, false)?;
+                write_latest(txn, a, w, &l)?;
             }
             prev => {
                 let mut period_start = prev.as_ref().map(|l| l.period_start).unwrap_or(0);
@@ -1023,12 +1047,11 @@ fn project_sampled(txn: &WriteTransaction, s: &Sampled) -> Result<()> {
                 }
                 let row = Row { vals, last_seen: t };
                 if let Some(l) = prev.as_ref().filter(|l| l.t_first != t) {
-                    // The previous span closes: its row gets its final sighting.
-                    put_reading(txn, a, w, l.t_first, &l.row)?;
+                    // The previous span closes, with its final sighting.
+                    close_span(txn, a, w, l.t_first, &l.row)?;
                 }
                 if prev.as_ref().map(|l| l.t_first != t).unwrap_or(true) {
                     series.rows += 1;
-                    put_index(txn, db::READING_BY_TIME, Key::new().u64(t).u32(a).u32(w).as_slice())?;
                 }
                 write_latest(
                     txn,
@@ -1039,7 +1062,6 @@ fn project_sampled(txn: &WriteTransaction, s: &Sampled) -> Result<()> {
                         period_start,
                         row,
                     },
-                    true,
                 )?;
             }
         }
@@ -1096,14 +1118,13 @@ fn project_seen(txn: &WriteTransaction, seen: &Seen) -> Result<()> {
             if t.saturating_sub(l.row.last_seen) <= COVER_GAP_MS {
                 cover(txn, a, w, l.row.last_seen, t)?;
                 l.row.last_seen = l.row.last_seen.max(t);
-                write_latest(txn, a, w, &l, false)?;
+                write_latest(txn, a, w, &l)?;
             } else if t > l.t_first {
                 let row = Row {
                     vals: l.row.vals.clone(),
                     last_seen: t,
                 };
-                put_reading(txn, a, w, l.t_first, &l.row)?;
-                put_index(txn, db::READING_BY_TIME, Key::new().u64(t).u32(a).u32(w).as_slice())?;
+                close_span(txn, a, w, l.t_first, &l.row)?;
                 write_latest(
                     txn,
                     a,
@@ -1113,7 +1134,6 @@ fn project_seen(txn: &WriteTransaction, seen: &Seen) -> Result<()> {
                         period_start: l.period_start,
                         row,
                     },
-                    true,
                 )?;
                 if closed {
                     note_late(txn, a, w, t)?;
@@ -1198,14 +1218,22 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
         if get(txn, db::SERIES, Key::new().u32(a).u32(w).as_slice())?.is_none() {
             put_series(txn, a, w, &meta)?;
         }
+        // The close replaces the whole day: an hour it does not list has no rollup, even if a
+        // late reading reached it during a rebuild.
+        let mut hours = Vec::new();
         for hour in series["hours"].as_array().into_iter().flatten() {
-            let h = hour["hour"].as_u64().unwrap_or(0) as u32;
-            put(
-                txn,
-                db::ROLLUP_HOUR,
-                Key::new().u32(a).u32(w).u32(h).as_slice(),
-                &rollup_from_json(&hour["rollup"])?.encode(),
-            )?;
+            let h = hour["hour"].as_u64().unwrap_or(u64::MAX);
+            if h / 24 != day as u64 {
+                fail!("corrupt", "day_closed hour outside its day");
+            }
+            hours.push(((h % 24) as u8, rollup_from_json(&hour["rollup"])?));
+        }
+        hours.sort_by_key(|(h, _)| *h);
+        let key = Key::new().u32(a).u32(w).u32(day);
+        if hours.is_empty() {
+            txn.open_table(db::ROLLUP_HOURS)?.remove(key.as_slice())?;
+        } else {
+            put(txn, db::ROLLUP_HOURS, key.as_slice(), &pack::encode_hours(&hours))?;
         }
         put(
             txn,
@@ -1382,11 +1410,9 @@ pub fn close_days(engine: &Engine, now: u64) -> Result<Json> {
             let next = match through {
                 Some(d) => d + 1,
                 None => {
-                    let first = txn
-                        .open_table(db::READING_BY_TIME)?
-                        .first()?
-                        .map(|(k, _)| db::be_u64(k.value(), 0));
-                    match first {
+                    let readings = txn.open_table(db::READING_DAY)?;
+                    let latest = txn.open_table(db::LATEST)?;
+                    match oldest_reading(&readings, &latest)? {
                         Some(t) => day_of(t),
                         None => return Ok(None),
                     }
@@ -1429,7 +1455,6 @@ fn day_series(txn: &WriteTransaction, day: u32) -> Result<Vec<Json>> {
             series_keys.push((k.value().to_vec(), v.value().to_vec()));
         }
     }
-    let (h0, h1) = (day * 24, day * 24 + 24);
     for (key, value) in series_keys {
         let (a, w) = (db::be_u32(&key, 0), db::be_u32(&key, 4));
         let Some(day_rollup) = get(txn, db::ROLLUP_DAY, Key::new().u32(a).u32(w).u32(day).as_slice())? else {
@@ -1440,15 +1465,9 @@ fn day_series(txn: &WriteTransaction, day: u32) -> Result<Vec<Json>> {
             db::unpack(&get(txn, db::ACCOUNT, Key::new().u32(a).as_slice())?.unwrap_or_default())?;
         let window: WindowMeta = db::unpack(&get(txn, db::WINDOW, Key::new().u32(w).as_slice())?.unwrap_or_default())?;
         let mut hours = Vec::new();
-        {
-            let table = txn.open_table(db::ROLLUP_HOUR)?;
-            let start = Key::new().u32(a).u32(w).u32(h0);
-            let end = Key::new().u32(a).u32(w).u32(h1);
-            for item in table.range(start.as_slice()..end.as_slice())? {
-                let (k, v) = item?;
-                hours.push(
-                    json!({ "hour": db::be_u32(k.value(), 8), "rollup": rollup_to_json(&Rollup::decode(v.value())?) }),
-                );
+        if let Some(b) = get(txn, db::ROLLUP_HOURS, Key::new().u32(a).u32(w).u32(day).as_slice())? {
+            for (hour, rollup) in pack::decode_hours(&b)? {
+                hours.push(json!({ "hour": day * 24 + hour as u32, "rollup": rollup_to_json(&rollup) }));
             }
         }
         let mut periods = Vec::new();
@@ -1483,7 +1502,7 @@ fn day_series(txn: &WriteTransaction, day: u32) -> Result<Vec<Json>> {
 }
 
 /// Deletes readings and account states older than the retention (docs/store.md 5). Rollups,
-/// periods and each series' latest reading stay. Returns how many rows went.
+/// periods and each series' open span stay. Returns how many spans and states went.
 pub fn prune(engine: &Engine, now: u64) -> Result<Json> {
     let cutoff = now.saturating_sub(engine.config.retention_days * DAY_MS);
     let mut removed = 0usize;
@@ -1491,35 +1510,48 @@ pub fn prune(engine: &Engine, now: u64) -> Result<Json> {
         let _logs = engine.lock_logs();
         let n = engine.with_db(|db| {
             let txn = begin(db)?;
-            let mut victims = Vec::new();
+            // Day values that can hold an expired span: per series, every day through the
+            // cutoff's. A span still seen after the cutoff stays, so a day value is rewritten or
+            // left as it is unless all its spans have expired.
+            let mut victims: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
+            let mut deleted = 0;
             {
-                let index = txn.open_table(db::READING_BY_TIME)?;
-                let end = Key::new().u64(cutoff);
-                for item in index.range(..end.as_slice())? {
+                let series = txn.open_table(db::SERIES)?;
+                let readings = txn.open_table(db::READING_DAY)?;
+                'scan: for item in series.iter()? {
                     let (k, _) = item?;
-                    victims.push(k.value().to_vec());
-                    if victims.len() >= PRUNE_BATCH {
-                        break;
+                    let base = Key::new().bytes(k.value());
+                    let last = base.clone().u32(day_key(cutoff));
+                    for item in readings.range(base.as_slice()..=last.as_slice())? {
+                        let (key, value) = item?;
+                        let day = db::be_u32(key.value(), 8);
+                        let spans = pack::decode_spans(day, value.value())?;
+                        let before = spans.len();
+                        let kept: Vec<(u64, Row)> = spans.into_iter().filter(|(_, r)| r.last_seen >= cutoff).collect();
+                        if kept.len() == before {
+                            continue;
+                        }
+                        deleted += before - kept.len();
+                        let rewritten = if kept.is_empty() {
+                            None
+                        } else {
+                            Some(pack::encode_spans(day, &kept)?)
+                        };
+                        victims.push((key.value().to_vec(), rewritten));
+                        if victims.len() >= PRUNE_BATCH {
+                            break 'scan;
+                        }
                     }
                 }
             }
-            let mut deleted = 0;
-            for key in &victims {
-                let (t, a, w) = (db::be_u64(key, 0), db::be_u32(key, 8), db::be_u32(key, 12));
-                let row_key = Key::new().u32(a).u32(w).u64(t);
-                let keep = match read_latest(&txn, a, w)? {
-                    Some(l) => l.t_first == t,
-                    None => false,
-                };
-                let row = get(&txn, db::READING, row_key.as_slice())?
-                    .map(|b| Row::decode(&b))
-                    .transpose()?;
-                if keep || row.as_ref().map(|r| r.last_seen >= cutoff).unwrap_or(false) {
-                    continue;
+            {
+                let mut readings = txn.open_table(db::READING_DAY)?;
+                for (key, rewritten) in &victims {
+                    match rewritten {
+                        Some(value) => readings.insert(key.as_slice(), value.as_slice())?.is_some(),
+                        None => readings.remove(key.as_slice())?.is_some(),
+                    };
                 }
-                txn.open_table(db::READING)?.remove(row_key.as_slice())?;
-                txn.open_table(db::READING_BY_TIME)?.remove(key.as_slice())?;
-                deleted += 1;
             }
             // Account states: every row that ended before the cutoff, except the current one.
             let mut states = Vec::new();
@@ -1657,9 +1689,12 @@ fn window_json(window: &WindowMeta, series: &SeriesMeta, row: &Row) -> Json {
     Json::Object(out)
 }
 
-/// Each series' open span (its `latest` row), which is fresher than its `reading` row.
-fn open_spans(read: &redb::ReadTransaction) -> Result<std::collections::HashMap<(u32, u32), (u64, Row)>> {
-    let mut out = std::collections::HashMap::new();
+type OpenSpans = std::collections::HashMap<(u32, u32), (u64, Row)>;
+
+/// Each series' open span, from `latest`. An open span is newer than every span of its series
+/// in `reading_day`.
+fn open_spans(read: &redb::ReadTransaction) -> Result<OpenSpans> {
+    let mut out = OpenSpans::new();
     for item in read.open_table(db::LATEST)?.iter()? {
         let (k, v) = item?;
         let b = v.value();
@@ -1673,12 +1708,118 @@ fn open_spans(read: &redb::ReadTransaction) -> Result<std::collections::HashMap<
     Ok(out)
 }
 
-/// A `reading` row, replaced by the open span when it is that span.
-fn fresh(open: &std::collections::HashMap<(u32, u32), (u64, Row)>, a: u32, w: u32, t: u64, row: Row) -> Row {
-    match open.get(&(a, w)) {
-        Some((t_first, latest)) if *t_first == t => latest.clone(),
-        _ => row,
+/// A time's UTC day as a key field; times past the last key day clamp to it.
+fn day_key(t: u64) -> u32 {
+    (t / DAY_MS).min(u32::MAX as u64) as u32
+}
+
+/// Visits a series' spans starting in `[from, to]`, oldest first, until `visit` says stop. Reads
+/// one `reading_day` value per day in the range (a seek per day, then the whole day's value).
+fn visit_spans<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    readings: &T,
+    open: &OpenSpans,
+    (a, w): (u32, u32),
+    (from, to): (u64, u64),
+    mut visit: impl FnMut(u64, Row) -> Result<bool>,
+) -> Result<()> {
+    let base = Key::new().u32(a).u32(w);
+    let lo = base.clone().u32(day_key(from));
+    let hi = base.clone().u32(day_key(to));
+    for item in readings.range(lo.as_slice()..=hi.as_slice())? {
+        let (k, v) = item?;
+        for (t, row) in pack::decode_spans(db::be_u32(k.value(), 8), v.value())? {
+            if t > to {
+                return Ok(());
+            }
+            if t >= from && !visit(t, row)? {
+                return Ok(());
+            }
+        }
     }
+    if let Some((t, row)) = open.get(&(a, w))
+        && *t >= from
+        && *t <= to
+    {
+        visit(*t, row.clone())?;
+    }
+    Ok(())
+}
+
+/// The series' last span starting at or before `t`: a reverse seek by day.
+fn span_at<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    readings: &T,
+    open: &OpenSpans,
+    (a, w): (u32, u32),
+    t: u64,
+) -> Result<Option<(u64, Row)>> {
+    if let Some((first, row)) = open.get(&(a, w))
+        && *first <= t
+    {
+        return Ok(Some((*first, row.clone())));
+    }
+    let base = Key::new().u32(a).u32(w);
+    let hi = base.clone().u32(day_key(t));
+    for item in readings.range(base.as_slice()..=hi.as_slice())?.rev() {
+        let (k, v) = item?;
+        let spans = pack::decode_spans(db::be_u32(k.value(), 8), v.value())?;
+        if let Some(span) = spans.into_iter().rev().find(|(first, _)| *first <= t) {
+            return Ok(Some(span));
+        }
+    }
+    Ok(None)
+}
+
+/// The oldest reading's start time: one seek per series (every series has a `latest` row).
+fn oldest_reading<R, L>(readings: &R, latest: &L) -> Result<Option<u64>>
+where
+    R: ReadableTable<&'static [u8], &'static [u8]>,
+    L: ReadableTable<&'static [u8], &'static [u8]>,
+{
+    let mut oldest: Option<u64> = None;
+    for item in latest.iter()? {
+        let (k, v) = item?;
+        let end = db::prefix_end(k.value());
+        let first = match readings.range(k.value()..end.as_slice())?.next() {
+            Some(item) => {
+                let (key, value) = item?;
+                pack::decode_spans(db::be_u32(key.value(), 8), value.value())?
+                    .first()
+                    .map(|(t, _)| *t)
+            }
+            None => None,
+        };
+        let open = (v.value().len() >= 8).then(|| db::be_u64(v.value(), 0));
+        if let Some(t) = first.or(open) {
+            oldest = Some(oldest.map_or(t, |o| o.min(t)));
+        }
+    }
+    Ok(oldest)
+}
+
+/// Visits a series' hourly rollups for hours in `[from, to]` (hour indexes): one value per day.
+fn visit_hours<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    hours: &T,
+    (a, w): (u32, u32),
+    (from, to): (u64, u64),
+    mut visit: impl FnMut(u64, Rollup) -> Result<bool>,
+) -> Result<()> {
+    let base = Key::new().u32(a).u32(w);
+    let lo = base.clone().u32((from / 24).min(u32::MAX as u64) as u32);
+    let hi = base.clone().u32((to / 24).min(u32::MAX as u64) as u32);
+    for item in hours.range(lo.as_slice()..=hi.as_slice())? {
+        let (k, v) = item?;
+        let day = db::be_u32(k.value(), 8) as u64;
+        for (hour, rollup) in pack::decode_hours(v.value())? {
+            let index = day * 24 + hour as u64;
+            if index > to {
+                return Ok(());
+            }
+            if index >= from && !visit(index, rollup)? {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// How `history_records` thins: the last record per account and bucket, or the JSON history's
@@ -1712,7 +1853,7 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
         let accounts = read.open_table(db::ACCOUNT)?;
         let windows = read.open_table(db::WINDOW)?;
         let series_table = read.open_table(db::SERIES)?;
-        let readings = read.open_table(db::READING)?;
+        let readings = read.open_table(db::READING_DAY)?;
         let states = read.open_table(db::ACCOUNT_STATE)?;
         let latest_table = read.open_table(db::ACCOUNT_LATEST)?;
         let open = open_spans(&read)?;
@@ -1767,22 +1908,16 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
                     None => continue,
                 };
                 let mut rows = Vec::new();
-                let base = Key::new().u32(a).u32(w);
-                let lo = base.clone().u64(from);
-                if let Some(item) = readings.range(base.as_slice()..lo.as_slice())?.next_back() {
-                    let (k, v) = item?;
-                    let t = db::be_u64(k.value(), 8);
-                    let row = fresh(&open, a, w, t, Row::decode(v.value())?);
-                    if row.last_seen >= from {
-                        rows.push((t, row));
-                    }
+                if let Some(before) = from.checked_sub(1)
+                    && let Some((t, row)) = span_at(&readings, &open, (a, w), before)?
+                    && row.last_seen >= from
+                {
+                    rows.push((t, row));
                 }
-                let hi = base.clone().u64(to.saturating_add(1));
-                for item in readings.range(lo.as_slice()..hi.as_slice())? {
-                    let (k, v) = item?;
-                    let t = db::be_u64(k.value(), 8);
-                    rows.push((t, fresh(&open, a, w, t, Row::decode(v.value())?)));
-                }
+                visit_spans(&readings, &open, (a, w), (from, to), |t, row| {
+                    rows.push((t, row));
+                    Ok(true)
+                })?;
                 if !rows.is_empty() {
                     window_rows.push((w, wmeta, smeta.clone(), rows));
                 }
@@ -1893,9 +2028,10 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
 pub fn oldest(engine: &Engine) -> Result<Json> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
-        let index = read.open_table(db::READING_BY_TIME)?;
-        Ok(match index.first()? {
-            Some((k, _)) => json!(db::be_u64(k.value(), 0)),
+        let readings = read.open_table(db::READING_DAY)?;
+        let latest = read.open_table(db::LATEST)?;
+        Ok(match oldest_reading(&readings, &latest)? {
+            Some(t) => json!(t),
             None => Json::Null,
         })
     })
@@ -1913,7 +2049,7 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
     engine.with_db(|db| {
         let read = db.begin_read()?;
         let rev = read.open_table(db::DICT_REV)?;
-        let hours = read.open_table(db::ROLLUP_HOUR)?;
+        let hours = read.open_table(db::ROLLUP_HOURS)?;
         let mut out = Vec::new();
         for s in series {
             let ids = (
@@ -1927,16 +2063,13 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
                     continue;
                 };
                 let from = now.saturating_sub(span);
-                let lo = Key::new().u32(a).u32(w).u32(hour_of(from));
-                let hi = Key::new().u32(a).u32(w).u32(hour_of(now) + 1);
                 let (mut consumed, mut covered, mut any) = (0.0, 0u64, false);
-                for item in hours.range(lo.as_slice()..hi.as_slice())? {
-                    let (_, v) = item?;
-                    let r = Rollup::decode(v.value())?;
+                visit_hours(&hours, (a, w), (from / HOUR_MS, now / HOUR_MS), |_, r| {
                     consumed += r.consumed;
                     covered += r.covered_ms;
                     any |= r.first_used.is_some();
-                }
+                    Ok(true)
+                })?;
                 let coverage = (covered as f64 / span.max(1) as f64).min(1.0);
                 let rate = if any {
                     Some(round2(consumed / (span as f64 / HOUR_MS as f64)))
@@ -1979,8 +2112,8 @@ pub fn series_points(engine: &Engine, query: &SeriesQuery) -> Result<Json> {
         let accounts = read.open_table(db::ACCOUNT)?;
         let windows = read.open_table(db::WINDOW)?;
         let series_table = read.open_table(db::SERIES)?;
-        let readings = read.open_table(db::READING)?;
-        let hours = read.open_table(db::ROLLUP_HOUR)?;
+        let readings = read.open_table(db::READING_DAY)?;
+        let hours = read.open_table(db::ROLLUP_HOURS)?;
         let days = read.open_table(db::ROLLUP_DAY)?;
         let open = open_spans(&read)?;
         let mut out = Vec::new();
@@ -2002,37 +2135,45 @@ pub fn series_points(engine: &Engine, query: &SeriesQuery) -> Result<Json> {
                 continue;
             }
             let mut points = Vec::new();
-            let base = Key::new().u32(a).u32(w);
+            let rollup_point = |start: u64, r: &Rollup| {
+                json!([start, round2(r.consumed), r.last_used, r.max_used, r.covered_ms / 60_000, r.rows, r.resets, round2(r.credits_spent), round2(r.credits_added)])
+            };
             match query.resolution.as_str() {
                 "raw" => {
-                    let lo = base.clone().u64(query.from_ms);
-                    let hi = base.clone().u64(query.to_ms.saturating_add(1));
-                    for item in readings.range(lo.as_slice()..hi.as_slice())? {
+                    visit_spans(&readings, &open, (a, w), (query.from_ms, query.to_ms), |t, r| {
+                        if total >= limit {
+                            truncated = true;
+                            return Ok(false);
+                        }
+                        points.push(json!([t, r.last_seen, r.vals.used_pct, r.vals.remaining_pct, r.vals.used, r.vals.limit, r.vals.remaining, r.vals.reset_at, r.vals.cached]));
+                        total += 1;
+                        Ok(true)
+                    })?;
+                }
+                "day" => {
+                    let base = Key::new().u32(a).u32(w);
+                    let lo = base.clone().u32((query.from_ms / DAY_MS) as u32);
+                    let hi = base.clone().u32((query.to_ms / DAY_MS) as u32 + 1);
+                    for item in days.range(lo.as_slice()..hi.as_slice())? {
                         if total >= limit {
                             truncated = true;
                             break;
                         }
                         let (k, v) = item?;
-                        let t = db::be_u64(k.value(), 8);
-                        let r = fresh(&open, a, w, t, Row::decode(v.value())?);
-                        points.push(json!([t, r.last_seen, r.vals.used_pct, r.vals.remaining_pct, r.vals.used, r.vals.limit, r.vals.remaining, r.vals.reset_at, r.vals.cached]));
+                        points.push(rollup_point(db::be_u32(k.value(), 8) as u64 * DAY_MS, &Rollup::decode(v.value())?));
                         total += 1;
                     }
                 }
-                res => {
-                    let (table, size) = if res == "day" { (&days, DAY_MS) } else { (&hours, HOUR_MS) };
-                    let lo = base.clone().u32((query.from_ms / size) as u32);
-                    let hi = base.clone().u32((query.to_ms / size) as u32 + 1);
-                    for item in table.range(lo.as_slice()..hi.as_slice())? {
+                _ => {
+                    visit_hours(&hours, (a, w), (query.from_ms / HOUR_MS, query.to_ms / HOUR_MS), |h, r| {
                         if total >= limit {
                             truncated = true;
-                            break;
+                            return Ok(false);
                         }
-                        let (k, v) = item?;
-                        let r = Rollup::decode(v.value())?;
-                        points.push(json!([db::be_u32(k.value(), 8) as u64 * size, round2(r.consumed), r.last_used, r.max_used, r.covered_ms / 60_000, r.rows, r.resets, round2(r.credits_spent), round2(r.credits_added)]));
+                        points.push(rollup_point(h * HOUR_MS, &r));
                         total += 1;
-                    }
+                        Ok(true)
+                    })?;
                 }
             }
             if points.is_empty() {
@@ -2060,7 +2201,7 @@ pub fn usage_at(engine: &Engine, t: u64) -> Result<Json> {
         let accounts = read.open_table(db::ACCOUNT)?;
         let windows = read.open_table(db::WINDOW)?;
         let series_table = read.open_table(db::SERIES)?;
-        let readings = read.open_table(db::READING)?;
+        let readings = read.open_table(db::READING_DAY)?;
         let open = open_spans(&read)?;
         let mut out = Vec::new();
         for item in series_table.iter()? {
@@ -2071,17 +2212,7 @@ pub fn usage_at(engine: &Engine, t: u64) -> Result<Json> {
             let ameta: AccountMeta = db::unpack(av.value())?;
             let Some(wv) = windows.get(Key::new().u32(w).as_slice())? else { continue };
             let wmeta: WindowMeta = db::unpack(wv.value())?;
-            let base = Key::new().u32(a).u32(w);
-            let hi = base.clone().u64(t.saturating_add(1));
-            let reading = match readings.range(base.as_slice()..hi.as_slice())?.next_back() {
-                Some(item) => {
-                    let (k, v) = item?;
-                    let from = db::be_u64(k.value(), 8);
-                    let r = fresh(&open, a, w, from, Row::decode(v.value())?);
-                    if t <= r.last_seen + COVER_GAP_MS { Some((from, r)) } else { None }
-                }
-                None => None,
-            };
+            let reading = span_at(&readings, &open, (a, w), t)?.filter(|(_, r)| t <= r.last_seen + COVER_GAP_MS);
             out.push(json!({
                 "identity": ameta.identity, "accountId": ameta.account_id, "provider": ameta.provider,
                 "window": { "key": wmeta.key, "label": smeta.label, "kind": wmeta.kind, "unit": wmeta.unit, "poolId": wmeta.pool_id },
@@ -2129,27 +2260,37 @@ pub fn counts(engine: &Engine) -> Result<Json> {
         let read = db.begin_read()?;
         let mut out = serde_json::Map::new();
         for (name, def) in [
-            ("reading", db::READING),
             ("account_state", db::ACCOUNT_STATE),
             ("period", db::PERIOD),
-            ("rollup_hour", db::ROLLUP_HOUR),
             ("rollup_day", db::ROLLUP_DAY),
             ("series", db::SERIES),
         ] {
             out.insert(name.into(), json!(read.open_table(def)?.len()?));
         }
-        out.insert(
-            "reading_by_time".into(),
-            json!(read.open_table(db::READING_BY_TIME)?.len()?),
-        );
+        // Spans and hourly rollups are counted inside their day values; every open span is one
+        // reading too.
+        let days = read.open_table(db::READING_DAY)?;
+        let mut spans = read.open_table(db::LATEST)?.len()?;
+        for item in days.iter()? {
+            spans += pack::span_count(item?.1.value())?;
+        }
+        out.insert("reading".into(), json!(spans));
+        out.insert("reading_days".into(), json!(days.len()?));
+        let hours = read.open_table(db::ROLLUP_HOURS)?;
+        let mut hour_rows = 0u64;
+        for item in hours.iter()? {
+            hour_rows += pack::hour_count(item?.1.value())? as u64;
+        }
+        out.insert("rollup_hour".into(), json!(hour_rows));
+        out.insert("rollup_hour_days".into(), json!(hours.len()?));
         // Where the file's bytes go: stored row bytes, B-tree metadata, unused space in pages.
         let mut tables = serde_json::Map::new();
         for (name, def) in [
-            ("reading", db::READING),
+            ("reading_day", db::READING_DAY),
             ("latest", db::LATEST),
             ("account_state", db::ACCOUNT_STATE),
             ("period", db::PERIOD),
-            ("rollup_hour", db::ROLLUP_HOUR),
+            ("rollup_hours", db::ROLLUP_HOURS),
             ("rollup_day", db::ROLLUP_DAY),
         ] {
             let stats = read.open_table(def)?.stats()?;
@@ -2163,16 +2304,6 @@ pub fn counts(engine: &Engine) -> Result<Json> {
                 ]),
             );
         }
-        let stats = read.open_table(db::READING_BY_TIME)?.stats()?;
-        tables.insert(
-            "reading_by_time".into(),
-            json!([
-                stats.stored_bytes(),
-                stats.metadata_bytes(),
-                stats.fragmented_bytes(),
-                stats.leaf_pages()
-            ]),
-        );
         out.insert("tableBytes".into(), Json::Object(tables));
         Ok(Json::Object(out))
     })

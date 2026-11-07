@@ -65,12 +65,12 @@ fn dump(engine: &Engine, tables: &[&str]) -> Vec<(String, Vec<u8>, Vec<u8>)> {
                 ("account", db::ACCOUNT),
                 ("window", db::WINDOW),
                 ("series", db::SERIES),
-                ("reading", db::READING),
+                ("reading_day", db::READING_DAY),
                 ("latest", db::LATEST),
                 ("account_latest", db::ACCOUNT_LATEST),
                 ("account_state", db::ACCOUNT_STATE),
                 ("period", db::PERIOD),
-                ("rollup_hour", db::ROLLUP_HOUR),
+                ("rollup_hours", db::ROLLUP_HOURS),
                 ("rollup_day", db::ROLLUP_DAY),
             ] {
                 if !tables.contains(&name) {
@@ -83,7 +83,6 @@ fn dump(engine: &Engine, tables: &[&str]) -> Vec<(String, Vec<u8>, Vec<u8>)> {
             }
             for (name, def) in [
                 ("series_by_provider", db::SERIES_BY_PROVIDER),
-                ("reading_by_time", db::READING_BY_TIME),
                 ("day_closed", db::DAY_CLOSED),
             ] {
                 if !tables.contains(&name) {
@@ -103,15 +102,14 @@ const ALL: &[&str] = &[
     "account",
     "window",
     "series",
-    "reading",
+    "reading_day",
     "latest",
     "account_latest",
     "account_state",
     "period",
-    "rollup_hour",
+    "rollup_hours",
     "rollup_day",
     "series_by_provider",
-    "reading_by_time",
     "day_closed",
 ];
 
@@ -374,7 +372,7 @@ fn closed_days_keep_rollups_after_their_readings_retire() {
     let first = call(&engine, "maintain", json!({ "nowMs": later }));
     assert!(first["closed"]["closed"].as_array().unwrap().len() >= 2, "{first:#}");
     assert_eq!(first["retired"]["retired"], 0);
-    let rollups = dump(&engine, &["rollup_hour", "rollup_day", "day_closed"]);
+    let rollups = dump(&engine, &["rollup_hours", "rollup_day", "day_closed"]);
     let finals: Vec<_> = dump(&engine, &["period"]);
     call(
         &engine,
@@ -391,7 +389,7 @@ fn closed_days_keep_rollups_after_their_readings_retire() {
     // A rebuild from the logs alone restores every closed day's rollups and final periods.
     fs::remove_file(dir.join("aac.redb")).unwrap();
     let engine = open(&dir);
-    assert_eq!(dump(&engine, &["rollup_hour", "rollup_day", "day_closed"]), rollups);
+    assert_eq!(dump(&engine, &["rollup_hours", "rollup_day", "day_closed"]), rollups);
     let rebuilt_periods = dump(&engine, &["period"]);
     for row in &rebuilt_periods {
         let original = finals.iter().find(|r| r.1 == row.1).expect("period kept");

@@ -21,15 +21,19 @@ pub const ACCOUNT: Bytes = TableDefinition::new("account");
 pub const WINDOW: Bytes = TableDefinition::new("window");
 pub const SERIES: Bytes = TableDefinition::new("series");
 pub const SERIES_BY_PROVIDER: Index = TableDefinition::new("series_by_provider");
-pub const READING: Bytes = TableDefinition::new("reading");
-pub const READING_BY_TIME: Index = TableDefinition::new("reading_by_time");
+pub const READING_DAY: Bytes = TableDefinition::new("reading_day");
 pub const LATEST: Bytes = TableDefinition::new("latest");
 pub const ACCOUNT_LATEST: Bytes = TableDefinition::new("account_latest");
 pub const ACCOUNT_STATE: Bytes = TableDefinition::new("account_state");
 pub const PERIOD: Bytes = TableDefinition::new("period");
-pub const ROLLUP_HOUR: Bytes = TableDefinition::new("rollup_hour");
+pub const ROLLUP_HOURS: Bytes = TableDefinition::new("rollup_hours");
 pub const ROLLUP_DAY: Bytes = TableDefinition::new("rollup_day");
 pub const DAY_CLOSED: Index = TableDefinition::new("day_closed");
+
+// Usage projector version 1's tables, dropped by the rebuild to version 2.
+pub const LEGACY_READING: Bytes = TableDefinition::new("reading");
+pub const LEGACY_READING_BY_TIME: Index = TableDefinition::new("reading_by_time");
+pub const LEGACY_ROLLUP_HOUR: Bytes = TableDefinition::new("rollup_hour");
 
 pub const STORE_SCHEMA_VERSION: u64 = 1;
 
@@ -51,17 +55,17 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
         ACCOUNT,
         WINDOW,
         SERIES,
-        READING,
+        READING_DAY,
         LATEST,
         ACCOUNT_LATEST,
         ACCOUNT_STATE,
         PERIOD,
-        ROLLUP_HOUR,
+        ROLLUP_HOURS,
         ROLLUP_DAY,
     ] {
         txn.open_table(def)?;
     }
-    for def in [SERIES_BY_PROVIDER, READING_BY_TIME, DAY_CLOSED] {
+    for def in [SERIES_BY_PROVIDER, DAY_CLOSED] {
         txn.open_table(def)?;
     }
     Ok(())
