@@ -1963,6 +1963,47 @@ process.exit(0);
 describe('round three', () => {
   const ID = 'd'.repeat(32);
 
+  it('a store that takes part of a write still records the whole answer, and a note with a secret is refused', async () => {
+    const { root, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    // every write takes at most 7 bytes (a file-size limit or a slow disk): the line is still completed
+    const realWrite = fs.writeSync;
+    const write = spyOn(fs, 'writeSync').mockImplementation(((
+      fd: number,
+      data: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (Buffer.isBuffer(data)) {
+        const offset = (rest[0] as number | undefined) ?? 0;
+        const length = Math.min((rest[1] as number | undefined) ?? data.length - offset, 7);
+        return realWrite(fd, data, offset, length);
+      }
+      return (realWrite as (...a: unknown[]) => number)(fd, data, ...rest);
+    }) as typeof fs.writeSync);
+    try {
+      expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    } finally {
+      write.mockRestore();
+    }
+    await settle();
+    expect(
+      make()
+        .list()
+        .map((r) => r.card.id)
+    ).toEqual([CARD]);
+    // a note holding a token is refused before anything is stored, signed, written or rung
+    const token = `sk-${'A1b2C3d4'.repeat(4)}`;
+    const answers = make();
+    const [result] = await answers.submitSet(
+      [entry('vm.lead--Q2', q2, { choice: [], note: `here is the key ${token}` })],
+      'Mac'
+    );
+    expect(result).toMatchObject({ outcome: 'refused', code: 'note_secret' });
+    expect(result.error).not.toContain(token);
+    expect(make().list()).toHaveLength(1);
+  });
+
   it('a torn last store line does not swallow the next record after a restart', async () => {
     const { root, store, make } = setup();
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));

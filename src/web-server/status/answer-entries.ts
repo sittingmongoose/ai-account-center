@@ -14,6 +14,8 @@ const REFUSALS = {
   invalid_choice: 'The choice does not match this card’s options.',
   empty_entry: 'Choose an option or write a note.',
   invalid_note: `The note must be at most ${ANSWER_NOTE_MAX} characters of plain text.`,
+  note_secret:
+    'The note looks like it holds a secret or personal detail (a key, token, password or email address). Notes are written to the shared folder; take it out and send again.',
   invalid_via: 'Only an unchanged recommendation can be sent as recommended.',
   invalid_kind: 'This kind of answer does not fit this card.',
   words_required: 'An objection needs your words in the note.',
