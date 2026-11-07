@@ -51,8 +51,12 @@ import {
 import { openCardFile, sendFileBytes } from '../../../../src/web-server/status/status-files';
 import { openedFileIsUnder } from '../../../../src/web-server/status/share-read';
 import {
+  canonicalJson,
   loadOrCreateAnswerKey,
   signAnswer,
+  signDocument,
+  verifySignedAnswer,
+  verifySignedDocument,
   type UnsignedAnswer,
 } from '../../../../src/web-server/status/answer-signing';
 import { StatusService } from '../../../../src/web-server/status/status-service';
@@ -4113,5 +4117,171 @@ describe('real-process journal and publication fences', () => {
     } finally {
       await Promise.all([a.kill(), c.kill()]);
     }
+  });
+});
+
+describe('a send summary keeps its signed identity across restart', () => {
+  // Two real processes on one store with the real clock: A records a note while its send line fails to be
+  // stored, publishes the batch and dies; B, restarted, rebuilds the send from the answer line and retries.
+  const worker = path.resolve('tests/unit/web-server/status/status-batch-identity-worker.ts');
+  const run = (root: string, ...args: string[]) =>
+    new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+      const child = spawn(process.execPath, [worker, root, ...args], {
+        env: process.env,
+        stdio: ['ignore', 'ignore', 'inherit'],
+      });
+      child.on('error', reject);
+      child.on('exit', (code, signal) => resolve({ code, signal }));
+    });
+  const fixture = (name: string) => {
+    const root = dirs.make('ccs-status-batch-' + name + '-');
+    fs.mkdirSync(path.join(root, 'reports', 'v1'), { recursive: true });
+    writeCard(path.join(root, 'reports'), cardDoc('vm.first', 'Q1'));
+    return root;
+  };
+  const batchFile = (root: string) => {
+    const dir = path.join(root, 'reports', 'v1', 'answers', 'batches');
+    const names = fs.readdirSync(dir).filter((name) => name.endsWith('.json'));
+    assert.equal(names.length, 1);
+    return path.join(dir, names[0]);
+  };
+  const journal = (root: string) =>
+    fs
+      .readFileSync(path.join(root, 'store', 'answers.jsonl'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  const liveSends = (root: string) => {
+    const rows = journal(root);
+    const voided = new Set(rows.filter((x) => x.type === 'void').map((x) => x.line));
+    return rows.filter((x) => x.type === 'send' && !voided.has(x.line)).length;
+  };
+  const publicKey = (root: string, keyId: string) =>
+    fs.readFileSync(path.join(root, 'reports', 'v1', 'keys', keyId + '.pub'), 'utf8');
+
+  for (const fault of ['send-write', 'send-fsync', 'ring-loss']) {
+    it('republishes byte-identical batch bytes after ' + fault + ' and a crash', async () => {
+      const root = fixture(fault);
+      const a = await run(root, 'a', fault);
+      assert.equal(a.signal, 'SIGKILL');
+      assert.equal(liveSends(root), 0);
+      const file = batchFile(root);
+      const before = fs.readFileSync(file, 'utf8');
+      const b = await run(root, 'b');
+      assert.equal(b.code, 0);
+      const after = fs.readFileSync(file, 'utf8');
+      const signed = JSON.parse(after);
+      assert.ok(
+        verifySignedDocument(after, publicKey(root, signed.signature.keyId), 'agent-reports/send@1')
+          .ok
+      );
+      // the time it carries is the durable record's own, whatever was lost
+      const note = journal(root).find((x) => x.type === 'answer');
+      assert.equal(signed.at, note.answer.answeredAt);
+      assert.equal(after, before);
+      const rings = fs
+        .readFileSync(path.join(root, 'rings.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      assert.equal(rings.length, fault === 'ring-loss' ? 2 : 1);
+      const identities = new Set(rings.map((r) => r.file + '/' + r.keyId + '/' + r.signature));
+      assert.equal(identities.size, 1);
+      assert.equal(
+        [...identities][0],
+        path.basename(file) + '/' + signed.signature.keyId + '/' + signed.signature.value
+      );
+      assert.equal(
+        journal(root).filter(
+          (x) => x.type === 'delivery' && x.step === 'summary' && x.state === 'done'
+        ).length,
+        1
+      );
+    });
+  }
+
+  it('keeps a valid published summary an earlier version signed at another time', async () => {
+    const root = fixture('legacy');
+    assert.equal((await run(root, 'a', 'send-write')).signal, 'SIGKILL');
+    const file = batchFile(root);
+    // An earlier version stamped the batch when the send ended: re-sign it so, with the same key.
+    const key = loadOrCreateAnswerKey(path.join(root, 'store'));
+    const { signature: _drop, ...doc } = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const later = new Date(Date.parse(doc.at) + 1500).toISOString();
+    const legacy = JSON.stringify(signDocument({ ...doc, at: later }, key), null, 2) + '\n';
+    fs.writeFileSync(file, legacy);
+    assert.equal((await run(root, 'b')).code, 0);
+    assert.equal(fs.readFileSync(file, 'utf8'), legacy);
+    assert.equal(
+      journal(root).filter(
+        (x) => x.type === 'delivery' && x.step === 'summary' && x.state === 'done'
+      ).length,
+      1
+    );
+  });
+
+  for (const change of ['entries', 'signature', 'key']) {
+    it('replaces a published summary that does not match by its ' + change, async () => {
+      const root = fixture('legacy-' + change);
+      assert.equal((await run(root, 'a', 'send-write')).signal, 'SIGKILL');
+      const file = batchFile(root);
+      const good = fs.readFileSync(file, 'utf8');
+      const key = loadOrCreateAnswerKey(path.join(root, 'store'));
+      const { signature, ...doc } = JSON.parse(good);
+      const other =
+        change === 'key' ? loadOrCreateAnswerKey(dirs.make('ccs-status-other-key-')) : key;
+      const body =
+        change === 'entries'
+          ? { ...doc, entries: [{ ...doc.entries[0], note: 'Changed.' }] }
+          : { ...doc, at: new Date(Date.parse(doc.at) + 1500).toISOString() };
+      const signed = signDocument(body, other);
+      const text =
+        JSON.stringify(
+          change === 'signature' ? { ...signed, signature: { ...signature } } : signed,
+          null,
+          2
+        ) + '\n';
+      fs.writeFileSync(file, text);
+      assert.equal((await run(root, 'b')).code, 0);
+      assert.equal(fs.readFileSync(file, 'utf8'), good);
+    });
+  }
+
+  it('republishes a stored answer from before kinds exactly as it was signed', async () => {
+    const { root, store, make } = setup();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const key = loadOrCreateAnswerKey(store);
+    const { kind: _none, ...unsigned } = {
+      schema: 'agent-reports/answer@1',
+      cardId: CARD,
+      cardSeq: 1,
+      cardSha256: 'a'.repeat(64),
+      kind: 'answer',
+      choice: ['A'],
+      note: '',
+      via: 'deck',
+      answeredAt: new Date(NOW).toISOString(),
+      answeredBy: 'owner',
+      device: 'Linux',
+    } as const;
+    const legacy = signAnswer(unsigned as unknown as UnsignedAnswer, key);
+    fs.appendFileSync(
+      path.join(store, 'answers.jsonl'),
+      JSON.stringify({
+        type: 'answer',
+        id: 'legacy-1',
+        at: legacy.answeredAt,
+        answer: legacy,
+        card: cardDoc('vm.lead', 'Q1'),
+        line: 'f'.repeat(16),
+      }) + '\n'
+    );
+    const answers = make();
+    expect(answers.list()[0].answer.kind).toBe('answer');
+    await answers.retryPending();
+    const text = fs.readFileSync(path.join(root, 'v1', 'answers', CARD + '.json'), 'utf8');
+    expect(text).toBe(JSON.stringify(legacy, null, 2) + '\n');
+    expect(verifySignedAnswer(text, key.publicKeyPem).ok).toBe(true);
+    expect(canonicalJson(JSON.parse(text))).toBe(canonicalJson(legacy));
   });
 });

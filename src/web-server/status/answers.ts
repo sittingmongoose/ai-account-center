@@ -25,6 +25,7 @@ import {
   pmMailDoorbell,
   ringBody,
   ringSubject,
+  SEND_SCHEMA,
   sendSummary,
   type Doorbell,
   type RingResult,
@@ -52,6 +53,7 @@ import {
   type UnsignedAnswer,
   canonicalJson,
   verifySignedAnswer,
+  verifySignedDocument,
 } from './answer-signing';
 import {
   ANSWER_SCHEMA,
@@ -136,6 +138,8 @@ class ShareUnavailableError extends Error {}
 class ShareWriteDroppedError extends Error {}
 /** The share already holds this card's signed answer to a higher version. */
 class ShareHasNewerError extends Error {}
+/** The share already holds this send's summary, signed by this key with the same content. */
+class SummaryPublishedError extends Error {}
 /**
  * A record was refused and the disk refused its `void` line too: the line may be in the journal, uncancelled.
  * The store holds `line` as voided and keeps writing its void line (see StatusAnswers.unvoided).
@@ -283,6 +287,32 @@ async function writeAtomic(
     await fs.promises.rm(temp, { force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * Throws SummaryPublishedError when `file` already holds this send's summary: valid under this key, with the same
+ * content apart from `at`. An earlier version stamped a send's summary when the send ended, and a send rebuilt
+ * without its send line cannot know that time; the file a ring named keeps its name and signature, never re-signed
+ * with other bytes. Anything else there (missing, unreadable, another key, other entries) is replaced.
+ */
+async function keepPublishedSummary(
+  file: string,
+  body: string,
+  unsigned: object,
+  publicKeyPem: string
+): Promise<void> {
+  let bytes: Buffer;
+  try {
+    bytes = await readRegularFile(file, Buffer.byteLength(body) + 64 * 1024);
+  } catch {
+    return;
+  }
+  if (bytes.toString('utf8') === body) throw new SummaryPublishedError();
+  const held = verifySignedDocument(bytes, publicKeyPem, SEND_SCHEMA);
+  if (!held.ok || typeof held.answer.at !== 'string') return;
+  const { signature: _signature, at: _heldAt, ...heldRest } = held.answer;
+  const { at: _at, ...ours } = unsigned as Record<string, unknown>;
+  if (canonicalJson(heldRest) === canonicalJson(ours)) throw new SummaryPublishedError();
 }
 
 /**
@@ -456,6 +486,11 @@ export class StatusAnswers {
   /** Send ids this process created, or whose summary it is writing. */
   private readonly ownSends = new Set<string>();
   private readonly summarizing = new Set<string>();
+  /**
+   * Stored answers from before kinds existed, by record id, exactly as they were signed: their copy on the share is
+   * written from these bytes, never from the history object, which reads them as `kind: "answer"`.
+   */
+  private readonly signedAsStored = new Map<string, SignedAnswer>();
   /** Record ids the last journal fold found cancelled by a void line. */
   private voidedIds = new Set<string>();
   /**
@@ -657,6 +692,7 @@ export class StatusAnswers {
         record.card
       ) {
         const answer = record.answer as SignedAnswer;
+        if (!answer.kind) this.signedAsStored.set(record.id, answer);
         const entry: AnswerHistoryEntry = {
           id: record.id,
           sendId: typeof record.sendId === 'string' ? record.sendId : null,
@@ -669,13 +705,14 @@ export class StatusAnswers {
         byId.set(entry.id, entry);
         // A crash between a record and its send line left a send with no summary, which the ring
         // names. Rebuilt from its records, the retry writes it; a send line further on replaces this.
+        // Its time is its first record's signed answeredAt, as the send line and first summary use.
         if (entry.sendId) {
           const send = this.sends.get(entry.sendId);
           if (send) send.entryIds.push(entry.id);
           else
             this.sends.set(entry.sendId, {
               sendId: entry.sendId,
-              at: typeof record.at === 'string' ? record.at : entry.answer.answeredAt,
+              at: entry.answer.answeredAt,
               device: entry.answer.device,
               entryIds: [entry.id],
               summary: { ...PENDING },
@@ -1139,7 +1176,8 @@ export class StatusAnswers {
     if (
       held.ok &&
       held.answer.cardId === entry.answer.cardId &&
-      CLOSING_KINDS.has(held.answer.kind) &&
+      // an answer signed before kinds existed is an answer
+      CLOSING_KINDS.has(held.answer.kind ?? 'answer') &&
       held.answer.cardSeq > entry.answer.cardSeq
     )
       throw new ShareHasNewerError();
@@ -1171,7 +1209,7 @@ export class StatusAnswers {
     try {
       await this.writeShareFile(
         shareFileName(entry.answer, entry.id),
-        `${JSON.stringify(entry.answer, null, 2)}\n`,
+        `${JSON.stringify(this.signedAsStored.get(entry.id) ?? entry.answer, null, 2)}\n`,
         limitMs,
         () => !this.superseded(entry),
         CLOSING_KINDS.has(entry.answer.kind)
@@ -1220,18 +1258,17 @@ export class StatusAnswers {
     let state: StepState['state'] = 'done';
     let detail = 'Signed send summary written to the share.';
     try {
-      const signed = signDocument(
-        sendSummary(send.sendId, send.at, send.device, answers),
-        this.answerKey()
+      const unsigned = sendSummary(send.sendId, send.at, send.device, answers);
+      const key = this.answerKey();
+      const body = `${JSON.stringify(signDocument(unsigned, key), null, 2)}\n`;
+      await this.writeShareFile(`batches/${send.sendId}.json`, body, limitMs, undefined, (file) =>
+        keepPublishedSummary(file, body, unsigned, key.publicKeyPem)
       );
-      await this.writeShareFile(
-        `batches/${send.sendId}.json`,
-        `${JSON.stringify(signed, null, 2)}\n`,
-        limitMs
-      );
-    } catch {
-      state = 'failed';
-      detail = 'The signed send summary could not be written to the share.';
+    } catch (error) {
+      if (!(error instanceof SummaryPublishedError)) {
+        state = 'failed';
+        detail = 'The signed send summary could not be written to the share.';
+      }
     }
     this.gainQuietly();
     if (
@@ -1571,7 +1608,9 @@ export class StatusAnswers {
         if (recorded.length > 0) {
           const send: SendRecord = {
             sendId,
-            at: new Date(this.now()).toISOString(),
+            // One durable time for the send line, its first summary and a rebuild without the send line: the
+            // first record's signed answeredAt. So the batch file is the same bytes whatever is lost.
+            at: recorded[0].answer.answeredAt,
             device,
             entryIds: recorded.map((entry) => entry.id),
             summary: { ...PENDING },

@@ -485,6 +485,11 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   signed to `<reports>/v1/answers/batches/<sendId>.json`: `{ schema: "agent-reports/send@1", sendId, at, answeredBy:
   "owner", device, entries: [ { cardId, seq, cardSha256, kind, choice, note } ], signature }`, entries in the order
   sent, signed exactly like an answer (`verifySignedDocument(fileText, publicKeyPem, "agent-reports/send@1")`).
+  Its `at` is the first record's signed `answeredAt`, the same in the send line, the first summary and a summary
+  rebuilt without the send line, so a retry after a lost send line and a restart writes the same bytes. A
+  summary already on the share that this key signed with the same content but another `at` (from an earlier
+  version, which stamped the send's end) is kept, not re-signed. A record stored before kinds existed is shared
+  exactly as it was signed, without `kind`.
 - The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind: "answer" | "note" |
   "object" | "done", choice, note, via,
   answeredAt, answeredBy: "owner", device, signature }`. `device` is a word from the browser (`iPhone`, `iPad`,
