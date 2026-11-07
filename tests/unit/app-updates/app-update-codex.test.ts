@@ -33,6 +33,7 @@ function fixture() {
   const events: string[] = [];
   const marks: unknown[] = [];
   let stored: Record<string, unknown> | null = null;
+  const restored: string[] = [];
   let busy = 2;
   return {
     events,
@@ -64,6 +65,11 @@ function fixture() {
       },
       hasOldProxies: async () => false,
       marked: (): Record<string, unknown> | null => stored,
+      markerSnapshot: (): string | null => (stored ? JSON.stringify(stored) : null),
+      restoreMarker: (text: string) => {
+        stored = JSON.parse(text);
+        restored.push(text);
+      },
       runtime: () => ({
         stopPlan: () => ({ daemon: false, desktops: [] }),
         retiredPlan: async () => ({ daemon: false, desktops: [] }),
@@ -82,6 +88,7 @@ function fixture() {
       }),
     },
     marks,
+    restored,
     pending: () => pending,
   };
 }
@@ -846,6 +853,18 @@ describe('Pending-marker retry', () => {
     expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [] }]);
   });
 
+  it('takes a runtime that cannot be created to mean a daemon after a partial first CLI update', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...partialCli(value, false),
+      runtime: () => {
+        throw new Error('private');
+      },
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [] }]);
+  });
+
   it('takes an older runtime to have a daemon after a partial first CLI update', async () => {
     const value = fixture();
     await bridge.execute({
@@ -1084,7 +1103,7 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => failingStop({ daemon: true }, { daemon: true }),
     });
-    expect(value.marks[value.marks.length - 1]).toBeUndefined();
+    expect(value.restored).toEqual([JSON.stringify({ version: '1.0.0' })]);
     expect(value.deps.marked()).toEqual({ version: '1.0.0' });
   });
 
@@ -1100,6 +1119,22 @@ describe('Pending-marker retry', () => {
     expect(result.status).toBe('failed');
   });
 
+  it('puts an earlier marker back exactly as it was stored', async () => {
+    const value = fixture();
+    const earlier = JSON.stringify({ version: '0.5.0', target: '0.9.0' }, null, 2);
+    const result = await bridge.execute({
+      ...value.deps,
+      markerSnapshot: () => earlier,
+      // As the real one reads: the restored marker is for another version.
+      pending: (expected: string) => value.deps.marked()?.version === expected,
+      expectedCandidate: '2.0.0',
+      operation: 'desktop',
+      runtime: () => failingStop({ daemon: true }, { daemon: true }),
+    });
+    expect(value.restored).toEqual([earlier]);
+    expect(result.status).toBe('failed');
+  });
+
   it('puts back what an earlier run owed when the retired daemon passes', async () => {
     const { value, deps } = retry(
       { desktop: true, desktops: [A] },
@@ -1107,11 +1142,9 @@ describe('Pending-marker retry', () => {
     );
     deps.runtime = () => failingStop({ daemon: true }, { daemon: true, desktops: [A] });
     await bridge.execute(deps);
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: true,
-      daemon: false,
-      desktops: [A],
-    });
+    expect(value.restored.map((text) => JSON.parse(text))).toEqual([
+      { version: '1.0.0', desktop: true, daemon: false, desktops: [A] },
+    ]);
   });
 
   const scanFails = async () => {
@@ -1173,7 +1206,7 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => failingStop({ daemon: true, desktops: [A] }, { daemon: true, desktops: [A] }),
     });
-    expect(value.marks[value.marks.length - 1]).toBeUndefined();
+    expect(value.restored).toEqual([JSON.stringify({ version: '1.0.0' })]);
     expect(value.deps.marked()).toEqual({ version: '1.0.0' });
   });
 
@@ -1588,5 +1621,30 @@ describe('The per-home desktop salt', () => {
       expect(fs.lstatSync(file(root)).isSymbolicLink()).toBe(false);
       expect(fs.statSync(file(root)).mode & 0o777).toBe(0o600);
     }
+  });
+});
+
+describe('Putting a marker back', () => {
+  it('writes the stored bytes back exactly, privately and in one step', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-marker-'));
+    directories.push(root);
+    const file = path.join(root, 'state', 'codex-desktop-pending-restart.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // As the Python path writes one: its own spacing, a prerelease version and a target.
+    const earlier = '{\n  "version": "0.50.0-alpha.1",\n  "target": "0.51.0"\n}\n';
+    fs.writeFileSync(file, earlier, { mode: 0o600 });
+    const snapshot = bridge.markerSnapshot(file);
+    expect(snapshot).toBe(earlier);
+    fs.writeFileSync(file, JSON.stringify({ version: '2.0.0', daemon: true }));
+    bridge.restoreMarker(snapshot, file);
+    expect(fs.readFileSync(file, 'utf8')).toBe(earlier);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(path.dirname(file))).toEqual(['codex-desktop-pending-restart.json']);
+  });
+
+  it('reads no snapshot from a missing marker', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-marker-'));
+    directories.push(root);
+    expect(bridge.markerSnapshot(path.join(root, 'none.json'))).toBeNull();
   });
 });

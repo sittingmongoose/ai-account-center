@@ -165,6 +165,10 @@ describe('Codex Desktop update retry on the real runtime', () => {
       },
       pending: (expected: string) => marker?.version === expected,
       marked: () => marker,
+      markerSnapshot: () => (marker ? JSON.stringify(marker) : null),
+      restoreMarker: (text: string) => {
+        marker = JSON.parse(text);
+      },
       mark: (closed: Record<string, unknown> = {}) => {
         // As the real marker does: the version the bridge holds now.
         marker = { version: bridge.output.version, ...closed };

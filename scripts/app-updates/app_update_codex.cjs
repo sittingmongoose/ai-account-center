@@ -120,12 +120,18 @@ function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'u
  * when it was written, and `target` the version a desktop install was about to put in place.
  */
 const markerMatches = (marker, installed) => Boolean(installed) && [marker?.version, marker?.target].some((item) => version(item) === installed);
-function markPending(closed = {}) {
-  fs.mkdirSync(path.dirname(markerFile()), { recursive: true, mode: 0o700 });
-  const temporary = markerFile() + '.' + process.pid + '.tmp';
-  fs.writeFileSync(temporary, JSON.stringify({ version: output.version, ...closed }), { mode: 0o600 });
-  fs.renameSync(temporary, markerFile());
+function writeMarker(text, file = markerFile()) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = file + '.' + process.pid + '.tmp';
+  fs.writeFileSync(temporary, text, { mode: 0o600 });
+  fs.renameSync(temporary, file);
 }
+function markPending(closed = {}) { writeMarker(JSON.stringify({ version: output.version, ...closed })); }
+/** The marker exactly as stored, to put back later byte for byte; null when there is none. */
+function markerSnapshot(file = markerFile()) {
+  try { return fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function restoreMarker(text, file = markerFile()) { writeMarker(text, file); }
 /**
  * A random salt for this home, 0600 beside the marker. A desktop's instance hash goes in the marker
  * only keyed with it, so a guessed data folder path can't be tested against a marker. A missing or
@@ -261,10 +267,13 @@ async function execute(deps) {
         if (now && now !== output.version) {
           output.version = now;
           if (mode === 'cli') {
-            const probe = deps.runtime();
-            // An older runtime or a failed scan can't say, so there is taken to be one.
+            // An older runtime, one that can't be created, or a failed scan can't say, so there is
+            // taken to be one.
             let running = true;
-            try { if (probe.restartState) running = (await probe.restartState()).daemon; } catch { /* Stays true. */ }
+            try {
+              const probe = deps.runtime();
+              if (probe.restartState) running = (await probe.restartState()).daemon;
+            } catch { /* Stays true. */ }
             const owed = { ...prior, daemon: prior.daemon || running };
             if (stillOwed(owed, { daemon: false, desktops: [] })) deps.mark(markerFields(owed));
             else nothingOwed = true;
@@ -289,7 +298,7 @@ async function execute(deps) {
       const nothing = { daemon: false, desktops: [] };
       try {
         const retired = await runtimeRetired(runtime, deps);
-        const earlier = deps.marked();
+        const earlier = deps.markerSnapshot();
         // The readiness check can take about 40 seconds and a parent timeout can kill this helper
         // during it, so what is owed goes in the marker first, and comes out if the daemon passes.
         if (retired.daemon) deps.mark(markerFields(addObligations(prior, retired)));
@@ -302,8 +311,9 @@ async function execute(deps) {
         };
         if (stillOwed(lost, nothing)) deps.mark(markerFields(addObligations(prior, lost)));
         else if (retired.daemon) {
-          if (!earlier) deps.clear();
-          else deps.mark(stillOwed(prior, nothing) ? markerFields(prior) : undefined);
+          // Exactly as it was: its own version and target, so it applies where it did before.
+          if (earlier === null) deps.clear();
+          else deps.restoreMarker(earlier);
         }
       } catch {
         // A scan that fails can't say what came back. The plan is in memory, and the worst it costs is
@@ -384,6 +394,8 @@ function bridgeDeps(createCodexActivationRuntime) {
     },
     runtime: () => createUpdateRuntime(createCodexActivationRuntime),
     marked: readMarker,
+    markerSnapshot: () => markerSnapshot(),
+    restoreMarker: (text) => restoreMarker(text),
     sealInstance,
     prepareSeal: () => desktopSalt(),
     };
@@ -405,5 +417,5 @@ async function main() {
     return await execute(bridgeDeps(createCodexActivationRuntime));
   } finally { await release(); }
 }
-module.exports = { bridgeDeps, createUpdateRuntime, desktopSalt, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, sealInstance, version };
+module.exports = { bridgeDeps, createUpdateRuntime, desktopSalt, execute, markerSnapshot, restoreMarker, insideServiceCgroup, loadRuntime, modules, output, relaunch, sealInstance, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));
