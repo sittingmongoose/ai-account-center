@@ -576,11 +576,18 @@ export function censusAntigravityProcesses(options: {
     // a process that execs while it is read is read again, twice at most, before it is called unplaced
     const queue = [...entries];
     const reread = new Map<string, number>();
+    // processes read again are read in rounds after the first pass; each round waits once first (10 ms, then 20 ms)
+    // so an exec or an exit settles, whatever the number of processes in it
+    let roundEnd = entries.length;
+    let round = 0;
     for (let index = 0; index < queue.length; index += 1) {
       const name = queue[index];
+      if (index === roundEnd) {
+        round += 1;
+        settle(Math.min(10 * round, 20));
+        roundEnd = queue.length;
+      }
       if (!/^\d{1,10}$/.test(name)) continue;
-      // a process read again waits a moment first (10 ms, then 20 ms): an exec or an exit settles in that time
-      if (index >= entries.length) settle(10 * (reread.get(name) ?? 1));
       const pid = Number(name);
       if (pid <= 1 || pid === self) continue;
       const directory = path.join(procRoot, name);

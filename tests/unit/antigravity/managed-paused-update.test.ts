@@ -1276,6 +1276,37 @@ describe('runtime-free Antigravity process census', () => {
     }
   });
 
+  test('processes read again wait once per round, not each on its own', () => {
+    const value = procFixture();
+    // forty processes whose name changes on every read: each is read three times, then unplaced
+    const pids = Array.from({ length: 40 }, (_, i) => 1200 + i);
+    for (const pid of pids)
+      value.add(pid, 'launcher', '/usr/bin/launcher', ['launcher'], value.root);
+    const comms = new Set(pids.map((pid) => path.join(value.proc, String(pid), 'comm')));
+    const reads = new Map<string, number>();
+    const realRead = fs.readFileSync;
+    const flapping = spyOn(fs, 'readFileSync').mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      ...rest: unknown[]
+    ) => {
+      const name = String(file);
+      if (comms.has(name)) {
+        const count = (reads.get(name) ?? 0) + 1;
+        reads.set(name, count);
+        return count % 2 === 0 ? 'launcher\n' : 'worker\n';
+      }
+      return (realRead as (...a: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.readFileSync);
+    try {
+      const started = performance.now();
+      expect(value.census()).toEqual({ complete: false, running: 0 });
+      // two rounds of re-reading wait 10 ms and 20 ms once each, not 30 ms for each of the forty
+      expect(performance.now() - started).toBeLessThan(400);
+    } finally {
+      flapping.mockRestore();
+    }
+  });
+
   test('a removed working folder spelled onto a mount is never listed', () => {
     const value = procFixture();
     const mount = path.join(value.root, 'share');
