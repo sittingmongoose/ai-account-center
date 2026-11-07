@@ -26,6 +26,9 @@ pub struct Draft {
     /// Random, made with the draft and kept until it is recorded: with the content it makes the entry's `entryId`, so a
     /// retry of this draft is recorded once and a new draft with the same words is a new entry.
     pub nonce: String,
+    /// Entry ids already recorded from this nonce while the draft was kept (another tab changed it mid-send). An edit
+    /// that would make one of them again takes a fresh nonce, so the same words are a new answer, not a dropped retry.
+    pub recorded: Vec<String>,
 }
 
 /// A new draft's nonce: 128 random bits from the browser (a counter in native tests).
@@ -142,6 +145,7 @@ pub fn toggle(drafts: &mut Drafts, card: &Card, key: &str) {
     }
     d.via = "deck".into();
     d.version = card.version_key();
+    refresh_nonce(drafts, card);
 }
 
 pub fn set_note(drafts: &mut Drafts, card: &Card, note: String) {
@@ -151,6 +155,7 @@ pub fn set_note(drafts: &mut Drafts, card: &Card, note: String) {
     if d.via.is_empty() {
         d.via = "deck".into();
     }
+    refresh_nonce(drafts, card);
 }
 
 /// Fill every card that has no choice yet with its recommendation (notes are kept).
@@ -184,9 +189,25 @@ pub fn forget_sent(drafts: &mut Drafts, cards: &[Card], sent: &AnswerEntry) {
     if unchanged {
         drafts.remove(&sent.card_id);
     } else if let Some(kept) = drafts.get_mut(&sent.card_id) {
-        // The kept draft is a new one: the recorded entry's nonce must not come back if the owner later types the
-        // recorded words again (that would read as a retry and be dropped).
-        kept.nonce = fresh_nonce();
+        // Keep the nonce (another tab's send of this very draft must still match its own result), but remember the
+        // recorded id: an edit that would make it again takes a fresh nonce.
+        if !kept.recorded.contains(&sent.entry_id) {
+            kept.recorded.push(sent.entry_id.clone());
+            if kept.recorded.len() > 8 {
+                kept.recorded.remove(0);
+            }
+        }
+    }
+}
+
+/// After an edit: if the draft would now make an entry already recorded from its nonce, start a new nonce.
+fn refresh_nonce(drafts: &mut Drafts, card: &Card) {
+    let Some(d) = drafts.get_mut(&card.id) else {
+        return;
+    };
+    if !d.recorded.is_empty() && d.recorded.contains(&entry_from(card, d).entry_id) {
+        d.nonce = fresh_nonce();
+        d.recorded.clear();
     }
 }
 
@@ -200,31 +221,33 @@ pub fn entries(drafts: &Drafts, cards: &[Card]) -> Vec<AnswerEntry> {
     cards
         .iter()
         .filter(|c| c.can_answer() && standing(drafts, c) == Standing::Ready)
-        .map(|c| {
-            let d = &drafts[&c.id];
-            let kind = entry_kind(c, d);
-            let mut entry = AnswerEntry {
-                entry_id: String::new(),
-                kind: kind.to_string(),
-                card_id: c.id.clone(),
-                card_seq: c.seq,
-                card_sha256: c.card_sha256.clone(),
-                choice: if kind == "answer" {
-                    d.choice.clone()
-                } else {
-                    Vec::new()
-                },
-                note: d.note.trim().to_string(),
-                via: if d.via == "recommended" {
-                    "recommended".into()
-                } else {
-                    "deck".into()
-                },
-            };
-            entry.entry_id = crate::api::entry_id(&d.nonce, &entry);
-            entry
-        })
+        .map(|c| entry_from(c, &drafts[&c.id]))
         .collect()
+}
+
+/// The entry a draft makes for its card, with its id.
+fn entry_from(c: &Card, d: &Draft) -> AnswerEntry {
+    let kind = entry_kind(c, d);
+    let mut entry = AnswerEntry {
+        entry_id: String::new(),
+        kind: kind.to_string(),
+        card_id: c.id.clone(),
+        card_seq: c.seq,
+        card_sha256: c.card_sha256.clone(),
+        choice: if kind == "answer" {
+            d.choice.clone()
+        } else {
+            Vec::new()
+        },
+        note: d.note.trim().to_string(),
+        via: if d.via == "recommended" {
+            "recommended".into()
+        } else {
+            "deck".into()
+        },
+    };
+    entry.entry_id = crate::api::entry_id(&d.nonce, &entry);
+    entry
 }
 
 fn storage() -> Option<web_sys::Storage> {
@@ -363,8 +386,13 @@ mod tests {
         forget_sent(&mut d, &[n.clone()], &sent);
         assert_eq!(d["n"].note, "second thoughts");
         // the owner later types the recorded words again: a new entry, not a retry of the recorded one
-        set_note(&mut d, &n, "first words".into());
-        assert_ne!(entries(&d, &[n])[0].entry_id, sent.entry_id);
+        let mut retyped = d.clone();
+        set_note(&mut retyped, &n, "first words".into());
+        assert_ne!(entries(&retyped, &[n.clone()])[0].entry_id, sent.entry_id);
+        // the other tab sent its words before this tab's reply came back: its own reply still matches and clears it
+        let theirs = entries(&d, &[n.clone()]).remove(0);
+        forget_sent(&mut d, &[n], &theirs);
+        assert!(d.is_empty(), "the other tab's recorded draft goes too");
     }
 
     #[test]
