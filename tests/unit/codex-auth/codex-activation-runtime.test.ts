@@ -405,6 +405,39 @@ describe('Codex Desktop update retry on the real runtime', () => {
     });
   });
 
+  it('owes a daemon a failed stop() retired when its relaunch fails the readiness check', async () => {
+    const fake = harness([daemon]);
+    let checks = 0;
+    const { deps, marker } = click(fake);
+    const result = {
+      ...(await bridge.execute({
+        ...deps,
+        operation: 'cli',
+        expectedCandidate: '2.0.0',
+        runtime: () =>
+          createCodexActivationRuntime(home, {
+            ...fake.deps,
+            signal: async (target, signal) => {
+              await fake.deps.signal(target, signal);
+              // A new writer appears once the daemon is gone, so stop() must recover.
+              fake.inject(processFixture(30, ['/fixture/bin/codex', 'exec'], {}));
+            },
+            launch: (target, isDesktop) =>
+              bridge.relaunch(target, isDesktop, fake.deps.launch, { inside: () => true }),
+            verifyDaemon: async () => {
+              checks++;
+              throw new CodexActivationRuntimeError('socket not bound');
+            },
+          }),
+      })),
+    };
+    expect(result.status).toBe('restart_failed');
+    // Recovery relaunched it, so a daemon is running, but it never passed the check.
+    expect(fake.current().some((entry) => entry.args.includes('--listen'))).toBe(true);
+    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: [] });
+    expect(checks).toBeGreaterThan(1);
+  });
+
   it('does not owe a proxy-only desktop a failed stop() never retired', async () => {
     const fake = harness([desktop, proxyChild]);
     const refuse = async () => {

@@ -287,7 +287,8 @@ async function execute(deps) {
     if (stopFailed) {
       try {
         const retired = await runtimeRetired(runtime, deps);
-        const live = await runtimeState(runtime, deps);
+        // A replacement that fails the readiness check is not back, or the marker would name nothing.
+        const live = await verifiedState(runtime, deps, retired);
         const lost = {
           daemon: retired.daemon && !live.daemon,
           desktops: retired.desktops.filter((item) => !live.desktops.includes(item)),

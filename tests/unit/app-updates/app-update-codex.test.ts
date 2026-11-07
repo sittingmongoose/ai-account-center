@@ -1020,6 +1020,38 @@ describe('Pending-marker retry', () => {
     expect(value.marks).toEqual([undefined]);
   });
 
+  it('owes a daemon a failed stop() retired when its replacement fails the readiness check', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: () => ({
+        ...failingStop({ daemon: true }, { daemon: true }),
+        verifyRunningDaemon: async () => false,
+      }),
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(value.marks).toEqual([undefined, { desktop: false, daemon: true, desktops: [] }]);
+  });
+
+  it('does not run the readiness check when a failed stop() retired no daemon', async () => {
+    const value = fixture();
+    let checks = 0;
+    await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: () => ({
+        ...failingStop({ daemon: true }, { daemon: true }, {}),
+        verifyRunningDaemon: async () => {
+          checks++;
+          return false;
+        },
+      }),
+    });
+    expect(checks).toBe(0);
+    expect(value.marks).toEqual([undefined]);
+  });
+
   it('adds nothing when a failed stop() recovered what it closed', async () => {
     const value = fixture();
     await bridge.execute({
