@@ -911,6 +911,24 @@ describe('runtime-free Antigravity process census', () => {
           [['node', '--', 'node_modules/tsx/dist/cli.mjs', path.join(locked, 'in', 'my helper')]],
           [['node', '--', 'node_modules/.bin/jiti', path.join(locked, 'in', 'my helper')]],
           [['python3', '--', path.join(locked, 'in', 'my helper')]],
+          // a runner that runs another runner
+          [
+            [
+              'node',
+              '--',
+              'a/node_modules/jiti/lib/jiti-cli.mjs',
+              'b/node_modules/jiti/lib/jiti-cli.mjs',
+              path.join(locked, 'in', 'my helper'),
+            ],
+          ],
+          [
+            [
+              'node',
+              'node_modules/.bin/tsx',
+              'node_modules/.bin/nodemon',
+              path.join(locked, 'in', 'my helper'),
+            ],
+          ],
           [
             [
               'node',
@@ -938,6 +956,9 @@ describe('runtime-free Antigravity process census', () => {
           ['bun', 'run', 'app.ts', `${locked}/in and/or later`],
           ['python3', '-OO', 'app.py', `${locked}/in and/or later`],
           ['node', '--', 'app.js', `${locked}/in and/or later`],
+          // runner names are JavaScript's: a Python script named tsx.py is just the script
+          ['python3', '--', 'tsx.py', `${locked}/in and/or later`],
+          ['python3', 'nodemon.py', `${locked}/in and/or later`],
           ['node', '--enable-source-maps', '--no-warnings', 'cli.js', `${locked}/in and/or later`],
           ['deno', 'run', '--no-lock', 'app.ts', `${locked}/in and/or later`],
           ['deno', 'run', '--lock=deno.lock', 'app.ts', `${locked}/in and/or later`],

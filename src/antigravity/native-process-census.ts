@@ -372,6 +372,8 @@ const RUN_SUBCOMMANDS = new Set([
 const PACKAGE_SUBCOMMANDS = new Set(['x', 'exec']);
 /** A package folder under node_modules, its scope dropped (`node_modules/@scope/name/`). */
 const NODE_MODULES_PACKAGE = /(?:^|[\\/])node_modules[\\/](?:@[^\\/]+[\\/])?([^\\/]+)(?=[\\/])/g;
+/** Runners followed through a chain (`node tsx nodemon helper.ts`); past that the next argument is the script. */
+const MAX_RUNNERS = 8;
 /** Scripts that run a script of their own, named next (`node node_modules/.bin/tsx helper.ts`). */
 const SCRIPT_RUNNERS = new Set([
   'tsx',
@@ -391,7 +393,8 @@ const SCRIPT_RUNNERS = new Set([
  * The program, and for an interpreter every argument up to its script: code, so never prose. Any option that may
  * take a value takes the next argument; the script is the first argument after that (`node server`, `python3 app`,
  * `node .`). For bun and deno, a subcommand comes first (`bun run dev`, `deno task dev`, `bun x tsx helper.ts`), and a
- * script that runs another (`tsx`, `ts-node`, `nodemon`) has that one after it, code too. Each is kept with its
+ * script that runs another under a JavaScript runtime (`tsx`, `ts-node`, `nodemon`, a chain of them) has that
+ * one after it, code too. Each is kept with its
  * candidate spellings.
  */
 function codeArguments(all: readonly string[], families: readonly string[]): Set<string> {
@@ -407,7 +410,11 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
   let optionValue = false;
   let subcommand = !runner;
   let packageNext = false;
-  let ranBy = false;
+  // JavaScript runners (tsx, nodemon) only under a JavaScript runtime, and at most a few in a chain
+  const javascript = families.some(
+    (family) => family === 'node' || family === 'bun' || family === 'deno'
+  );
+  let runners = 0;
   // `--` ends the options before the next argument only; a runner after it still has its script read
   let optionsEnded = false;
   for (let at = 1; at < all.length; at += 1) {
@@ -449,10 +456,11 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
       match[1].replace(/@[^@/\\]*$/, '')
     );
     if (
-      !ranBy &&
+      javascript &&
+      runners < MAX_RUNNERS &&
       (SCRIPT_RUNNERS.has(name) || entries.some((entry) => SCRIPT_RUNNERS.has(entry)))
     ) {
-      ranBy = true;
+      runners += 1;
       continue;
     }
     break;
