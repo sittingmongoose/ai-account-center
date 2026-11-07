@@ -276,10 +276,43 @@ fn parse(text: &str) -> Drafts {
     drafts
 }
 
-pub fn save(drafts: &Drafts) {
-    if let (Some(s), Ok(text)) = (storage(), serde_json::to_string(drafts)) {
+/// Merge this tab's changes into what storage holds now. Each card this tab changed since `base` (its last read of
+/// storage) takes this tab's draft, or goes if this tab dropped it; every other card keeps what storage holds, so two
+/// tabs editing different cards both keep their work, and a send or a prune in one tab removes only its own cards.
+pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
+    let mut out = stored.clone();
+    for id in base.keys().chain(current.keys()) {
+        if base.get(id) != current.get(id) {
+            match current.get(id) {
+                Some(d) => {
+                    out.insert(id.clone(), d.clone());
+                }
+                None => {
+                    out.remove(id);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Save this tab's drafts merged with storage's (read and written in one go, so no other tab's write lands between);
+/// returns what storage now holds. Without storage the drafts stay this tab's own.
+pub fn save_merged(base: &Drafts, current: &Drafts) -> Drafts {
+    let Some(s) = storage() else {
+        return current.clone();
+    };
+    let stored = match s.get_item(STORAGE_KEY) {
+        Ok(Some(text)) => parse(&text),
+        Ok(None) => Drafts::new(),
+        // storage refused the read: keep this tab's drafts and don't overwrite what we couldn't see
+        Err(_) => return current.clone(),
+    };
+    let merged = merge(&stored, base, current);
+    if let Ok(text) = serde_json::to_string(&merged) {
         let _ = s.set_item(STORAGE_KEY, &text);
     }
+    merged
 }
 
 #[cfg(test)]
@@ -393,6 +426,31 @@ mod tests {
         let theirs = entries(&d, &[n.clone()]).remove(0);
         forget_sent(&mut d, &[n], &theirs);
         assert!(d.is_empty(), "the other tab's recorded draft goes too");
+    }
+
+    #[test]
+    fn two_tabs_editing_different_cards_both_keep_their_drafts() {
+        let a = card("a", 1, None);
+        let b = card("b", 1, None);
+        let c = card("c", 1, None);
+        let base = Drafts::new();
+        // tab 1 writes a; tab 2, which read storage before that, writes b
+        let mut one = base.clone();
+        set_note(&mut one, &a, "from tab one".into());
+        let stored = merge(&Drafts::new(), &base, &one);
+        let mut two = base.clone();
+        set_note(&mut two, &b, "from tab two".into());
+        let stored = merge(&stored, &base, &two);
+        assert_eq!(stored["a"].note, "from tab one");
+        assert_eq!(stored["b"].note, "from tab two");
+        // a send in tab 2 removes only its own card; a third card another tab added meanwhile stays
+        let mut later = stored.clone();
+        set_note(&mut later, &c, "from tab three".into());
+        let base_two = stored.clone();
+        let mut sent = base_two.clone();
+        sent.remove("b");
+        let stored = merge(&later, &base_two, &sent);
+        assert_eq!(stored.keys().cloned().collect::<Vec<_>>(), vec!["a", "c"]);
     }
 
     #[test]

@@ -16,7 +16,7 @@ import { isTransientShareError, MISSING_GRACE_MS } from './agent-reports-reader'
 import {
   count,
   fail,
-  findSecret,
+  findSecretIn,
   Invalid,
   isWriterName,
   iso,
@@ -230,14 +230,14 @@ export function parseQuotaReport(bytes: Buffer): QuotaParse {
   } catch {
     return { ok: false, reason: 'not UTF-8 text' };
   }
-  const secret = findSecret(source);
-  if (secret) return { ok: false, reason: `refused: it contains what looks like ${secret}` };
   let raw: unknown;
   try {
     raw = JSON.parse(source);
   } catch {
     return { ok: false, reason: 'not valid JSON' };
   }
+  const secret = findSecretIn(source, raw);
+  if (secret) return { ok: false, reason: `refused: it contains what looks like ${secret}` };
   try {
     return {
       ok: true,

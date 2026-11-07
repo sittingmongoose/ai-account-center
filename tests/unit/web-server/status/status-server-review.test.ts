@@ -150,6 +150,22 @@ describe('secret search', () => {
       }
     });
 
+  it('sees through JSON escapes in strings and keys', () => {
+    const token = `sk-${'A1b2C3d4'.repeat(4)}`;
+    for (const json of [
+      `{"note":"\\u0073${token.slice(1)}"}`,
+      `{"note":"${token.slice(0, 3)}\\u0041${token.slice(4)}"}`,
+      `{"pass\\u0077ord":"hunter2-hunter2"}`,
+      `{"x":"jared\\u0040mail.example.com"}`,
+    ]) {
+      expect(findSecret(json)).toBeNull();
+      const parsed = jsonFromBytes(Buffer.from(json), 64 * 1024);
+      expect([json, parsed.ok]).toEqual([json, false]);
+    }
+    // the same file without the secret still reads
+    expect(jsonFromBytes(Buffer.from('{"note":"\\u0073ome words"}'), 64 * 1024).ok).toBe(true);
+  });
+
   it('still finds real emails and tokens, and only those', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.abcdefghijklmnop';
     for (const [text, kind] of [

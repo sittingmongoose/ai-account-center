@@ -131,14 +131,25 @@ pub fn CardsPanel() -> impl IntoView {
         }
     });
 
-    // Keep drafts on this device; drop drafts of cards that closed (see the prune below).
-    Effect::new(move |_| drafts.with(drafts::save));
-    // Another tab (or the installed app beside a browser tab) changed the drafts: take its copy, so this tab's next
-    // save starts from it instead of overwriting it. Storage events reach only the other tabs, and an unchanged value
-    // fires none, so this can't echo.
+    // Keep drafts on this device; drop drafts of cards that closed (see the prune below). Each save merges this tab's
+    // changes since its last read of storage into what storage holds now, card by card, so another tab's work on
+    // other cards survives even when both write before either hears the other.
+    let base = StoredValue::new(drafts.get_untracked());
+    Effect::new(move |_| {
+        let current = drafts.get();
+        let merged = drafts::save_merged(&base.get_value(), &current);
+        base.set_value(merged.clone());
+        if merged != current {
+            drafts.set(merged);
+        }
+    });
+    // Another tab (or the installed app beside a browser tab) changed the drafts: take storage's copy as the new base.
+    // Storage events reach only the other tabs, and an unchanged value fires none, so this can't echo.
     let other_tab = window_event_listener(leptos::ev::storage, move |e| {
         if e.key().as_deref() == Some(drafts::STORAGE_KEY) {
-            let stored = drafts::load();
+            let theirs = drafts::load();
+            let stored = drafts::merge(&theirs, &base.get_value(), &drafts.get_untracked());
+            base.set_value(theirs);
             if drafts.with_untracked(|d| *d != stored) {
                 drafts.set(stored);
             }

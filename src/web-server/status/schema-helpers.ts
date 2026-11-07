@@ -144,13 +144,23 @@ export function jsonFromBytes(bytes: Buffer, capBytes: number): Parsed<unknown> 
   } catch {
     return { ok: false, reason: 'not UTF-8 text' };
   }
-  const secret = findSecret(source);
-  if (secret) return { ok: false, reason: `refused: it contains what looks like ${secret}` };
+  let value: unknown;
   try {
-    return { ok: true, value: JSON.parse(source) };
+    value = JSON.parse(source);
   } catch {
     return { ok: false, reason: 'not valid JSON' };
   }
+  const secret = findSecretIn(source, value);
+  if (secret) return { ok: false, reason: `refused: it contains what looks like ${secret}` };
+  return { ok: true, value };
+}
+
+/**
+ * The secret check for a parsed JSON file: over the text as written and over the parsed value written back out, where
+ * every `\uXXXX` escape in a key or string is decoded (`"\u0073k-..."` is `"sk-..."`). Either hit refuses the file.
+ */
+export function findSecretIn(source: string, value: unknown): string | null {
+  return findSecret(source) ?? findSecret(JSON.stringify(value) ?? '');
 }
 
 /** Thrown inside the projection; becomes `{ ok: false, reason }`. */
