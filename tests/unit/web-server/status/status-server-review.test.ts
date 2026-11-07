@@ -33,11 +33,11 @@ import {
   isCardId,
   isPmMailName,
   isWriterName,
-  findTypedSecret,
   jsonFromBytes,
   realTimestamp,
   REPORT_SIZE_CAPS,
 } from '../../../../src/web-server/status/report-schema';
+import { findTypedSecret } from '../../../../src/web-server/status/typed-secrets';
 import {
   DEFAULT_PM_MAIL_REGISTRY,
   localMachineId,

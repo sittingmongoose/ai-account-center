@@ -61,7 +61,8 @@ import {
   type ParsedReport,
 } from './report-schema';
 import { readRegularFile } from './share-read';
-import { findSecretIn, findTypedSecret } from './schema-helpers';
+import { findSecretIn } from './schema-helpers';
+import { findTypedSecret } from './typed-secrets';
 import { ConfigError } from '../../errors/error-types';
 
 export * from './answer-entries';
