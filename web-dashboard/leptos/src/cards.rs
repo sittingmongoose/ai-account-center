@@ -727,6 +727,7 @@ fn Review(
 
     let send = move || {
         let cards = open.get_untracked();
+        drafts.update(|d| drafts::refresh_recorded(d, &cards));
         let entries = drafts.with_untracked(|d| drafts::entries(d, &cards));
         if entries.is_empty() || sending.get_untracked() {
             return;

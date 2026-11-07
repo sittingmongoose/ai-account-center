@@ -216,6 +216,14 @@ pub fn prune(drafts: &mut Drafts, cards: &[Card]) {
     drafts.retain(|id, _| cards.iter().any(|c| &c.id == id));
 }
 
+/// Before a send: a draft whose entry would remake an id already recorded from its nonce (an edit back to recorded
+/// words, or ids joined from another tab) takes a fresh nonce, so it goes as the new answer it is.
+pub fn refresh_recorded(drafts: &mut Drafts, cards: &[Card]) {
+    for card in cards {
+        refresh_nonce(drafts, card);
+    }
+}
+
 /// What the review screen sends: every card whose draft is ready for this exact version, in deck order.
 pub fn entries(drafts: &Drafts, cards: &[Card]) -> Vec<AnswerEntry> {
     cards
@@ -286,6 +294,26 @@ pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
     for id in base.keys().chain(current.keys()) {
         if base.get(id) == current.get(id) {
             continue;
+        }
+        // A change of recorded ids alone (a send's result) is not an edit: keep storage's words and join the ids.
+        if let (Some(b), Some(c), Some(theirs)) = (base.get(id), current.get(id), stored.get(id)) {
+            let words = |d: &Draft| Draft {
+                recorded: Vec::new(),
+                ..d.clone()
+            };
+            if words(b) == words(c) {
+                let mut kept = theirs.clone();
+                for r in &c.recorded {
+                    if !kept.recorded.contains(r) {
+                        kept.recorded.push(r.clone());
+                    }
+                }
+                while kept.recorded.len() > 8 {
+                    kept.recorded.remove(0);
+                }
+                out.insert(id.clone(), kept);
+                continue;
+            }
         }
         match current.get(id) {
             Some(d) => {
@@ -497,6 +525,28 @@ mod tests {
         mine.get_mut("x").unwrap().recorded = vec!["r2".into()];
         let joined = merge(&theirs, &base, &mine);
         assert_eq!(joined["x"].recorded, vec!["r2", "r1"]);
+    }
+
+    #[test]
+    fn a_result_alone_keeps_another_tabs_words_and_a_resend_never_remakes_a_recorded_id() {
+        let x = card("x", 1, None);
+        let mut base = Drafts::new();
+        set_note(&mut base, &x, "W1".into());
+        // tab A wrote W2; tab B, not yet told, only notes a recorded id on its W1
+        let mut stored = base.clone();
+        set_note(&mut stored, &x, "W2".into());
+        let mut current = base.clone();
+        current.get_mut("x").unwrap().recorded = vec!["r0".into()];
+        let merged = merge(&stored, &base, &current);
+        assert_eq!(merged["x"].note, "W2");
+        assert_eq!(merged["x"].recorded, vec!["r0"]);
+        // ids joined onto a draft that already makes one of them: the send takes a fresh nonce
+        let mut d = Drafts::new();
+        set_note(&mut d, &x, "W0".into());
+        let made = entries(&d, &[x.clone()]).remove(0).entry_id;
+        d.get_mut("x").unwrap().recorded = vec![made.clone()];
+        refresh_recorded(&mut d, &[x.clone()]);
+        assert_ne!(entries(&d, &[x])[0].entry_id, made);
     }
 
     #[test]

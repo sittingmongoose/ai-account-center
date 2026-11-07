@@ -216,6 +216,13 @@ describe('secret search', () => {
       { title: `line\nAKIA${'A'.repeat(16)}` },
       { note: JSON.stringify({ password: 'hunter2-hunter2' }) },
       { password: '"quoted-secret"' },
+      // nested JSON text, one or two levels down
+      { note: JSON.stringify({ a: `x\n${token}` }) },
+      { note: JSON.stringify(JSON.stringify({ password: 'hunter2-hunter2' })) },
+      // anything long enough under a credential key
+      { password: ['hunter2hunter2'] },
+      { password: { value: 'hunter2hunter2' } },
+      { api_key: 123456789 },
     ]) {
       const parsed = jsonFromBytes(Buffer.from(JSON.stringify(value)), 64 * 1024);
       expect([value, parsed.ok]).toEqual([value, false]);

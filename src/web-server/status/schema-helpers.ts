@@ -175,25 +175,39 @@ const CREDENTIAL_KEY =
 export function findSecretIn(source: string, value: unknown): string | null {
   const raw = findSecret(source);
   if (raw) return raw;
-  const stack: unknown[] = [value];
-  while (stack.length > 0) {
-    const node = stack.pop();
+  // Each entry: a value, and whether it sits under a credential key (anything long enough under one is refused).
+  const stack: Array<[unknown, boolean]> = [[value, false]];
+  for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
+    const [node, credential] = entry;
     if (typeof node === 'string') {
-      const found = findSecret(node);
+      if (credential && node.length >= 6) return 'a credential field';
+      const found =
+        findSecret(node) ?? (node.includes('\\') ? findSecret(unescapeText(node)) : null);
       if (found) return found;
+    } else if (typeof node === 'number') {
+      if (credential && String(Math.abs(Math.trunc(node))).length >= 6) return 'a credential field';
     } else if (Array.isArray(node)) {
-      for (const item of node) stack.push(item);
+      for (const item of node) stack.push([item, credential]);
     } else if (node && typeof node === 'object') {
       for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
         const found = findSecret(key);
         if (found) return found;
-        if (CREDENTIAL_KEY.test(key) && typeof item === 'string' && item.length >= 6)
-          return 'a credential field';
-        stack.push(item);
+        stack.push([item, credential || CREDENTIAL_KEY.test(key)]);
       }
     }
   }
   return null;
+}
+
+/**
+ * JSON text inside a string, read one level down without parsing it: escapes of any depth (`\\n`, `\\\\n`, `\\"`) become
+ * what they stand for, so a token after an escaped newline or a quoted credential key inside nested JSON is seen.
+ */
+function unescapeText(text: string): string {
+  return text
+    .replace(/\\+[nrtbf]/g, ' ')
+    .replace(/\\+"/g, '"')
+    .replace(/\\+\//g, '/');
 }
 
 /** Thrown inside the projection; becomes `{ ok: false, reason }`. */
