@@ -50,6 +50,8 @@ const CODES: Record<string, string> = {
   lock_held: 'The dashboard is running and holds the store. Stop it first.',
   newer_store:
     'The store was written by a newer AI Account Center. Update, or restore an older backup.',
+  unreleased_store:
+    'This store was written by an unreleased test build; move it aside and AAC will start a new one.',
   backup_unverified: 'The backup does not match its own hashes. Nothing was changed.',
   invalid: 'That is not an AI Account Center store backup folder.',
 };

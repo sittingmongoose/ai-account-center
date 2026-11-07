@@ -8,7 +8,7 @@ use aac_store::db;
 use aac_store::engine::Engine;
 use aac_store::ops;
 use common::{copy_dir, find, temp_dir};
-use redb::{ReadableDatabase, ReadableTable, TableHandle};
+use redb::{ReadableDatabase, ReadableTable};
 use serde_json::{Value as Json, json};
 use std::fs;
 use std::path::Path;
@@ -374,76 +374,6 @@ fn a_rebuild_matches_when_samples_arrive_after_their_day_closed() {
     let engine = open(&dir);
     assert_eq!(call(&engine, "seriesPoints", args), hours);
     assert_eq!(raw(&engine, "five_hour", MIDNIGHT, MIDNIGHT + 2 * DAY), spans);
-    engine.close().unwrap();
-    drop(engine);
-    fs::remove_dir_all(&dir).unwrap();
-}
-
-/// A store written by projector version 1 rebuilds from its logs and loses its old tables.
-#[test]
-fn version_one_tables_are_dropped_by_the_rebuild() {
-    let dir = temp_dir("packed-upgrade");
-    let start = MIDNIGHT + 9 * HOUR;
-    let expected = {
-        let engine = open(&dir);
-        record(&engine, varied(start));
-        let d = dump(&engine);
-        engine.close().unwrap();
-        d
-    };
-    {
-        // Version 1's file: its tables, a version 1 checkpoint, and none of the new tables' rows.
-        let database = redb::Database::create(dir.join("aac.redb")).unwrap();
-        let txn = database.begin_write().unwrap();
-        txn.open_table(db::LEGACY_READING)
-            .unwrap()
-            .insert([1u8; 16].as_slice(), [1u8].as_slice())
-            .unwrap();
-        txn.open_table(db::LEGACY_READING_BY_TIME)
-            .unwrap()
-            .insert([1u8; 16].as_slice(), ())
-            .unwrap();
-        txn.open_table(db::LEGACY_ROLLUP_HOUR)
-            .unwrap()
-            .insert([1u8; 12].as_slice(), [1u8].as_slice())
-            .unwrap();
-        txn.delete_table(db::READING_DAY).unwrap();
-        txn.delete_table(db::ROLLUP_HOURS).unwrap();
-        for name in ["usage/readings", "usage/ledger"] {
-            let bytes = {
-                let table = txn.open_table(db::CHECKPOINT).unwrap();
-                let mut checkpoint = db::read_checkpoint(&table, name).unwrap().unwrap();
-                checkpoint.projector_schema_version = 1;
-                aac_store::msgpack::to_bytes(&checkpoint).unwrap()
-            };
-            txn.open_table(db::CHECKPOINT)
-                .unwrap()
-                .insert(name, bytes.as_slice())
-                .unwrap();
-        }
-        txn.commit().unwrap();
-    }
-    let engine = open(&dir);
-    let status = engine.status().unwrap();
-    assert!(
-        status["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|f| f["kind"] == "projector_rebuilt"),
-        "{status:#}"
-    );
-    assert!(dump(&engine) == expected);
-    engine
-        .with_db(|database| {
-            let read = database.begin_read()?;
-            let names: Vec<String> = read.list_tables()?.map(|t| t.name().to_string()).collect();
-            for gone in ["reading", "reading_by_time", "rollup_hour"] {
-                assert!(!names.iter().any(|n| n == gone), "{gone} in {names:?}");
-            }
-            Ok(())
-        })
-        .unwrap();
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(&dir).unwrap();

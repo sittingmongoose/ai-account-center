@@ -29,31 +29,9 @@ pub const PERIOD: Bytes = TableDefinition::new("period");
 pub const ROLLUP_HOURS: Bytes = TableDefinition::new("rollup_hours");
 pub const ROLLUP_DAY: Bytes = TableDefinition::new("rollup_day");
 pub const DAY_CLOSED: Index = TableDefinition::new("day_closed");
-/// Series and days a refused observation touched: `day u32 | fingerprint (16 bytes)`.
-pub const REFUSED: Index = TableDefinition::new("refused");
-/// The same rows by series: `fingerprint | day u32`, so "any refusal of this series up to a day"
-/// is one seek.
-pub const REFUSED_BY_SERIES: Index = TableDefinition::new("refused_by_series");
-/// What closed-day summaries applied without this build's exclusion of refused observations wrote
-/// for a series, under every day those numbers depend on: `day u32 | fingerprint` to `a u32 |
-/// w u32 | entries`, each entry `1 | rollup day u64` or `2 | period start u64`. A refusal on that
-/// day later withdraws them.
-pub const SUMMARY_UNMARKED: Bytes = TableDefinition::new("summary_unmarked");
-/// The same for numbers whose dependence reaches back without a bound (a window of unknown
-/// length with no earlier surviving reading): `fingerprint | last day u32`, withdrawn by a refusal
-/// on any day up to that last day.
-pub const SUMMARY_UNBOUNDED: Bytes = TableDefinition::new("summary_unbounded");
-/// Series and days whose older summary was set aside while the clean readings still gave the
-/// day: `day u32 | a u32 | w u32`. A replacement close from this build is appended for each.
-pub const RECLOSE: Index = TableDefinition::new("reclose");
-/// Disclosed findings (loss, set-aside events), kept across opens: `kind:start:end` to a
-/// MessagePack `{finding, ledgered}`.
+/// Disclosed loss findings, kept across opens: `kind:start:end` to a MessagePack
+/// `{finding, ledgered}`.
 pub const FINDING: TableDefinition<'static, &'static str, &'static [u8]> = TableDefinition::new("finding");
-
-// Usage projector version 1's tables, dropped by the rebuild to version 2.
-pub const LEGACY_READING: Bytes = TableDefinition::new("reading");
-pub const LEGACY_READING_BY_TIME: Index = TableDefinition::new("reading_by_time");
-pub const LEGACY_ROLLUP_HOUR: Bytes = TableDefinition::new("rollup_hour");
 
 pub const STORE_SCHEMA_VERSION: u64 = 1;
 
@@ -83,12 +61,10 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
         PERIOD,
         ROLLUP_HOURS,
         ROLLUP_DAY,
-        SUMMARY_UNMARKED,
-        SUMMARY_UNBOUNDED,
     ] {
         txn.open_table(def)?;
     }
-    for def in [SERIES_BY_PROVIDER, DAY_CLOSED, REFUSED, REFUSED_BY_SERIES, RECLOSE] {
+    for def in [SERIES_BY_PROVIDER, DAY_CLOSED] {
         txn.open_table(def)?;
     }
     Ok(())

@@ -16,6 +16,36 @@ use std::sync::{Mutex, MutexGuard, RwLock};
 pub const PROJECTOR_BATCH: usize = 4096;
 pub const DAY_MS: u64 = 86_400_000;
 const REDB_FILE: &str = "aac.redb";
+/// The store's release, written when this build creates a store: `1`. Stores written by the
+/// branch's unreleased test builds have logs or a redb file but no marker.
+const RELEASE_FILE: &str = "release";
+pub const STORE_RELEASE: u32 = 1;
+const UNRELEASED: &str =
+    "This store was written by an unreleased test build; move it aside and AAC will start a new one.";
+
+/// Admits a store of this release, or creates the marker for a new one; refuses anything else
+/// before it is changed.
+fn admit_release(dir: &Path) -> Result<()> {
+    let marker = dir.join(RELEASE_FILE);
+    match fs::read_to_string(&marker) {
+        Ok(text) => match text.trim().parse::<u32>() {
+            Ok(STORE_RELEASE) => Ok(()),
+            Ok(n) if n > STORE_RELEASE => fail!(
+                "newer_store",
+                "store release {n} is newer than this build ({STORE_RELEASE})"
+            ),
+            _ => fail!("unreleased_store", "{UNRELEASED}"),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let has_data = dir.join("log").exists() || dir.join(REDB_FILE).exists();
+            if has_data {
+                fail!("unreleased_store", "{UNRELEASED}");
+            }
+            fsx::write_atomic(&marker, STORE_RELEASE.to_string().as_bytes())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
 const RESTORE_INTENT: &str = "restore.intent.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +162,7 @@ impl Engine {
         fsx::private_dir(dir)?;
         let lock = fsx::lock_store(dir)?;
         finish_restore(dir)?;
+        admit_release(dir)?;
         for sub in ["log", "quarantine", "tmp"] {
             fsx::private_dir(&dir.join(sub))?;
         }
@@ -401,7 +432,6 @@ impl Engine {
                     detail,
                     start_seq: Some(start.clamp(lower, end)),
                     end_seq: Some(end),
-                    refused: None,
                 });
                 if !stale.contains(i) {
                     stale.push(*i);
@@ -840,6 +870,7 @@ impl Engine {
             "createdAt": now_ms(),
             "instanceId": self.instance_id,
             "storeSchemaVersion": db::STORE_SCHEMA_VERSION,
+            "storeRelease": STORE_RELEASE,
             "withRedb": with_redb,
             "logs": logs_json,
             "files": files,
@@ -943,10 +974,10 @@ impl Batch<'_> {
     }
 }
 
-/// A finding that means history is missing or set aside: disclosed in the ledger, and the store
+/// A finding that means history is missing: disclosed in the ledger, and the store
 /// reports itself degraded.
 pub fn is_loss(kind: &str) -> bool {
-    kind.contains("degraded") || kind.contains("missing") || kind.contains("quarantined")
+    kind.contains("degraded") || kind.contains("missing")
 }
 
 pub fn finding(kind: &str, detail: &str) -> Finding {
@@ -955,7 +986,6 @@ pub fn finding(kind: &str, detail: &str) -> Finding {
         detail: detail.into(),
         start_seq: None,
         end_seq: None,
-        refused: None,
     }
 }
 
@@ -1001,7 +1031,6 @@ pub fn finding_from_json(v: &Json) -> Finding {
         detail: v["detail"].as_str().unwrap_or_default().to_string(),
         start_seq: v["start_seq"].as_u64(),
         end_seq: v["end_seq"].as_u64(),
-        refused: v.get("refused").filter(|r| !r.is_null()).cloned(),
     }
 }
 
@@ -1223,6 +1252,11 @@ fn plan_restore(backup_dir: &Path) -> Result<RestorePlan> {
     if manifest["storeSchemaVersion"].as_u64().unwrap_or(u64::MAX) > db::STORE_SCHEMA_VERSION {
         fail!("newer_store", "the backup is from a newer store");
     }
+    match manifest["storeRelease"].as_u64() {
+        Some(n) if n == STORE_RELEASE as u64 => {}
+        Some(n) if n > STORE_RELEASE as u64 => fail!("newer_store", "the backup is from a newer store"),
+        _ => fail!("unreleased_store", "{UNRELEASED}"),
+    }
     let Some(id) = manifest["id"].as_str().filter(|id| backup_name_ok(id)) else {
         return refuse("has an invalid id");
     };
@@ -1327,6 +1361,8 @@ pub fn restore(dir: &Path, backup_dir: &Path) -> Result<Json> {
     fsx::private_dir(dir)?;
     let _lock = fsx::lock_store(dir)?;
     finish_restore(dir)?;
+    // A store of this release, or a new one, receives the restore; a dev-build store is refused.
+    admit_release(dir)?;
     // A fresh staging folder, named here and never from the manifest.
     fsx::private_dir(&dir.join("tmp"))?;
     let staging = dir.join("tmp").join(format!("restore-{}", fsx::random_hex(8)));

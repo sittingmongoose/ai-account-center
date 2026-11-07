@@ -65,10 +65,7 @@ pub fn open_engine(dir: &str, cache_bytes: Option<usize>, retention_days: Option
     if let Some(days) = retention_days {
         config.retention_days = days.clamp(7, 3650);
     }
-    let engine = Engine::open(&PathBuf::from(dir), config, vec![Box::new(usage::UsageProjector)])?;
-    // A rebuild that set aside older closes leaves clean days only in redb: put them in the ledger.
-    usage::write_replacement_closes(&engine)?;
-    Ok(engine)
+    Engine::open(&PathBuf::from(dir), config, vec![Box::new(usage::UsageProjector)])
 }
 
 pub fn dispatch(slot: &Slot, method: &str, args: &str) -> Result<String> {

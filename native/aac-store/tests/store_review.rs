@@ -231,7 +231,7 @@ fn restore_refuses_manifests_that_reach_outside() {
         "ledger": { "manifest": "ledger.manifest.v1.msgpack", "segments": [], "active": null },
     });
     let manifest = |id: &str, files: Json, logs: Json| {
-        json!({ "schema": "aac-store-backup@1", "id": id, "storeSchemaVersion": 1, "withRedb": false,
+        json!({ "schema": "aac-store-backup@1", "id": id, "storeSchemaVersion": 1, "storeRelease": 1, "withRedb": false,
                 "instanceId": "0".repeat(32), "logs": logs, "files": files })
     };
     // (what, the backup's folder, the guard's words, manifest): each folder matches its id unless
@@ -435,91 +435,6 @@ fn credentials_are_refused_before_the_log() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Writes events straight into the readings log in the log format, as an older build did.
-fn append_raw(dir: &Path, events: Vec<(&str, Json)>) -> Vec<u64> {
-    append_to(dir, "readings", events)
-}
-
-fn append_to(dir: &Path, name: &str, events: Vec<(&str, Json)>) -> Vec<u64> {
-    let short = if name == "readings" { "r" } else { "l" };
-    let (mut log, _) = aac_store::log::Log::open(&dir.join("log").join(name), name, short).unwrap();
-    let mut seqs = Vec::new();
-    for (event_type, payload) in events {
-        let mut event =
-            aac_store::event::Event::new(event_type, now_ms(), aac_store::msgpack::from_json(&payload).unwrap());
-        log.assign(&mut event).unwrap();
-        seqs.push(event.sequence_id);
-        log.write(&[event]).unwrap();
-    }
-    seqs
-}
-
-/// An event an older build accepted, which today's checks refuse, is set aside and disclosed;
-/// the rest of the history is still served, and new appends are still refused.
-#[test]
-fn an_old_event_refused_today_is_set_aside_not_fatal() {
-    let dir = temp_dir("review-old-event");
-    let bad = obs_with(T0, 10.0, |o| {
-        o["windows"][0]["label"] = json!("sk-ant-SYNTHETIC_SECRET_abcdefgh")
-    });
-    let other = obs_with(T0, 30.0, |o| {
-        o["account"]["identity"] = json!(format!("{:064x}", 2));
-        o["account"]["account_id"] = json!("claude:a2");
-    });
-    let seqs = append_raw(
-        &dir,
-        vec![
-            ("usage.sampled", json!({ "observations": [bad] })),
-            ("usage.sampled", json!({ "observations": [obs(T0 + 5 * MIN, 20.0)] })),
-            ("usage.sampled", json!({ "observations": [other] })),
-        ],
-    );
-    let engine = open(&dir);
-    let starts = raw_starts(&engine);
-    assert_eq!(
-        starts,
-        vec![T0 + 5 * MIN, T0],
-        "every event but the refused one is served"
-    );
-    let findings = engine.status().unwrap()["findings"].clone();
-    let set_aside: Vec<&Json> = findings
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|f| f["kind"] == "event_quarantined")
-        .collect();
-    assert_eq!(set_aside.len(), 1, "{findings:#}");
-    assert_eq!(set_aside[0]["start_seq"], seqs[0]);
-    assert_eq!(set_aside[0]["end_seq"], seqs[0]);
-    assert!(
-        !set_aside[0]["detail"].as_str().unwrap().contains("SYNTHETIC"),
-        "the finding never repeats it"
-    );
-    assert_eq!(engine.status().unwrap()["state"], "degraded");
-    // New appends with the same text are still refused.
-    let again = obs_with(T0 + 10 * MIN, 40.0, |o| {
-        o["windows"][0]["label"] = json!("sk-ant-SYNTHETIC_SECRET_abcdefgh")
-    });
-    assert_eq!(record(&engine, vec![again])["rejected"], 1);
-    engine.close().unwrap();
-    drop(engine);
-    // A plain reopen still discloses it.
-    let engine = open(&dir);
-    let reopened: Vec<String> = kinds(&engine);
-    assert!(reopened.iter().any(|k| k == "event_quarantined"), "{reopened:?}");
-    assert_eq!(engine.status().unwrap()["state"], "degraded");
-    assert_eq!(raw_starts(&engine), starts);
-    engine.close().unwrap();
-    drop(engine);
-    // A rebuild sets it aside the same way.
-    fs::remove_file(dir.join("aac.redb")).unwrap();
-    let engine = open(&dir);
-    assert_eq!(raw_starts(&engine), starts);
-    engine.close().unwrap();
-    drop(engine);
-    fs::remove_dir_all(&dir).unwrap();
-}
-
 /// A lost frame at the start of a segment is reported with ordered bounds that hold it.
 #[test]
 fn loss_bounds_are_ordered_and_hold_the_lost_event() {
@@ -553,119 +468,6 @@ fn loss_bounds_are_ordered_and_hold_the_lost_event() {
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(&dir).unwrap();
-}
-
-/// A rollup in a `usage.day_closed` payload (usage.rs rollup_to_json).
-fn rollup(consumed: f64, used: f64, rows: u32) -> Json {
-    json!([consumed, 0.0, 0.0, used, used, used, used, 300_000, rows, 0, 0, null])
-}
-
-/// A day close as a build before refused-observation checks wrote it (no exclusion mark).
-fn old_close(day: i64, label: &str, consumed: f64) -> Json {
-    json!({
-        "day": day, "part": 0, "parts": 1,
-        "series": [{
-            "account": { "identity": format!("{:064x}", 1), "provider": "claude", "account_id": "claude:a1",
-                         "plan": "max", "platform": "ubuntu", "source": "", "status": "", "is_active": false },
-            "window": { "identity": "[\"five_hour\",\"rate_limit\",null]", "key": "five_hour", "label": label,
-                        "kind": "rate_limit", "window_minutes": 300.0 },
-            "hours": [{ "hour": day * 24 + 9, "rollup": rollup(consumed, 60.0, 2) }],
-            "day_rollup": rollup(consumed, 60.0, 2),
-            "periods": [],
-        }],
-    })
-}
-
-fn hourly(engine: &Engine) -> Vec<Json> {
-    call(
-        engine,
-        "seriesPoints",
-        json!({ "fromMs": T0 - DAY, "toMs": T0 + DAY, "resolution": "hour" }),
-    )["series"]
-        .as_array()
-        .unwrap()
-        .clone()
-}
-
-/// A summary an older build computed from an observation this build refuses is not trusted, even
-/// when its own text is clean (the refusal was in a field the summary does not carry).
-#[test]
-fn a_summary_of_refused_observations_is_not_trusted() {
-    let dir = temp_dir("review-summary");
-    let refused = obs_with(T0, 99.0, |o| {
-        o["account"]["source"] = json!("Bearer SYNTHETIC0123456789abcdef")
-    });
-    append_raw(&dir, vec![("usage.sampled", json!({ "observations": [refused] }))]);
-    let day = T0 / DAY;
-    append_to(
-        &dir,
-        "ledger",
-        vec![("usage.day_closed", old_close(day, "5 hour", 7.0))],
-    );
-    for pass in ["open", "reopen", "rebuild"] {
-        if pass == "rebuild" {
-            fs::remove_file(dir.join("aac.redb")).unwrap();
-        }
-        let engine = open(&dir);
-        assert!(
-            hourly(&engine).is_empty(),
-            "{pass}: the summary's numbers are not served"
-        );
-        let found = kinds(&engine);
-        assert!(found.iter().any(|k| k == "summary_quarantined"), "{pass}: {found:?}");
-        assert_eq!(engine.status().unwrap()["state"], "degraded");
-        engine.close().unwrap();
-        drop(engine);
-    }
-    fs::remove_dir_all(&dir).unwrap();
-}
-
-/// Once the refused observation's segment has retired, the ledger still carries the refusal, so
-/// an older summary replayed before it is withdrawn; a summary's own text is checked too.
-#[test]
-fn a_refusal_recorded_in_the_ledger_withdraws_an_older_summary() {
-    let dir = temp_dir("review-summary-ledger");
-    let day = T0 / DAY;
-    // What a store looks like after the refused event's segment retired: only the ledger.
-    let fp = aac_store::usage::series_fingerprint(&format!("{:064x}", 1), "[\"five_hour\",\"rate_limit\",null]");
-    append_to(
-        &dir,
-        "ledger",
-        vec![
-            ("usage.day_closed", old_close(day, "5 hour", 7.0)),
-            (
-                "store.integrity_detected",
-                json!({ "kind": "event_quarantined", "detail": "set aside", "start_seq": 1, "end_seq": 1,
-                        "refused": { "day": day, "series": [fp] } }),
-            ),
-        ],
-    );
-    let engine = open(&dir);
-    assert!(hourly(&engine).is_empty(), "the older summary is withdrawn");
-    engine.close().unwrap();
-    drop(engine);
-    // A summary whose own text is refused is never applied.
-    let other = temp_dir("review-summary-text");
-    append_to(
-        &other,
-        "ledger",
-        vec![(
-            "usage.day_closed",
-            old_close(day, "sk-ant-SYNTHETIC_SECRET_abcdefgh", 7.0),
-        )],
-    );
-    let engine = open(&other);
-    assert!(hourly(&engine).is_empty());
-    assert!(
-        !call(&engine, "seriesList", json!({ "fromMs": 0, "toMs": T0 + DAY }))
-            .to_string()
-            .contains("SYNTHETIC")
-    );
-    assert!(kinds(&engine).iter().any(|k| k == "summary_quarantined"));
-    engine.close().unwrap();
-    drop(engine);
-    fs::remove_dir_all(&dir).unwrap();
-    fs::remove_dir_all(&other).unwrap();
 }
 
 /// Burn over lost history is unknown, not zero; a measured zero stays zero (docs/store.md 7.2).
@@ -928,74 +730,6 @@ fn a_window_filter_reads_only_that_windows_series() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
-const MANY: usize = 20_000;
-
-/// A readings log holding `MANY` observations an older build accepted and this build refuses,
-/// written in the log format in large groups.
-fn many_refused(dir: &Path) {
-    let (mut log, _) = aac_store::log::Log::open(&dir.join("log").join("readings"), "readings", "r").unwrap();
-    let mut group = Vec::new();
-    for i in 0..MANY {
-        let t = T0 + i as i64 * MIN;
-        let o = obs_with(t, (i % 90) as f64, |o| {
-            o["windows"][0]["label"] = json!("sk-ant-SYNTHETIC_SECRET_abcdefgh")
-        });
-        let mut event = aac_store::event::Event::new(
-            "usage.sampled",
-            now_ms(),
-            aac_store::msgpack::from_json(&json!({ "observations": [o] })).unwrap(),
-        );
-        log.assign(&mut event).unwrap();
-        group.push(event);
-        if group.len() == 1000 {
-            log.write(&group).unwrap();
-            group.clear();
-        }
-    }
-    log.write(&group).unwrap();
-}
-
-/// The ledger's `store.integrity_detected` events for refused events, by sequence.
-fn ledgered_refusals(dir: &Path) -> Vec<u64> {
-    let (log, _) = aac_store::log::Log::open(&dir.join("log").join("ledger"), "ledger", "l").unwrap();
-    let mut out = Vec::new();
-    log.read_after(None, |e| {
-        if e.event_type == "store.integrity_detected" {
-            let payload = aac_store::msgpack::to_json(&e.payload);
-            if payload["kind"] == "event_quarantined" {
-                out.push(payload["start_seq"].as_u64().unwrap());
-            }
-        }
-        Ok(())
-    })
-    .unwrap();
-    out
-}
-
-fn quarantined(engine: &Engine) -> usize {
-    kinds(engine).iter().filter(|k| *k == "event_quarantined").count()
-}
-
-/// More refused events than one batch holds: the store still opens, discloses each once, and a
-/// reopen adds nothing to the ledger.
-#[test]
-fn a_store_with_twenty_thousand_refused_events_opens() {
-    let dir = temp_dir("review-many");
-    many_refused(&dir);
-    let engine = open(&dir);
-    assert_eq!(quarantined(&engine), MANY);
-    assert_eq!(engine.status().unwrap()["state"], "degraded");
-    engine.close().unwrap();
-    drop(engine);
-    assert_eq!(ledgered_refusals(&dir).len(), MANY);
-    let engine = open(&dir);
-    assert_eq!(quarantined(&engine), MANY);
-    engine.close().unwrap();
-    drop(engine);
-    assert_eq!(ledgered_refusals(&dir).len(), MANY, "a reopen ledgers nothing again");
-    fs::remove_dir_all(&dir).unwrap();
-}
-
 /// Opens the store named by `AAC_CHILD_DIR` and closes it: run in a child process that the kill
 /// test stops part way.
 #[test]
@@ -1007,15 +741,92 @@ fn child_opens_the_store() {
     }
 }
 
+const MANY: usize = 20_000;
+
+/// A version-1 store whose redb keeps `MANY` loss findings not yet in the ledger: what a kill
+/// after the projection committed them, and before the open ledgered them, leaves behind.
+fn many_unledgered(dir: &Path) {
+    {
+        let engine = open(dir);
+        record(&engine, vec![obs(T0, 10.0)]);
+        engine.close().unwrap();
+    }
+    let database = redb::Database::create(dir.join("aac.redb")).unwrap();
+    let txn = database.begin_write().unwrap();
+    {
+        let mut table = txn.open_table(aac_store::db::FINDING).unwrap();
+        for i in 0..MANY as u64 {
+            let finding =
+                json!({ "kind": "segment_missing", "detail": "skipped", "start_seq": 1000 + i, "end_seq": 1000 + i });
+            let value = json!({ "finding": finding, "ledgered": false });
+            let bytes = aac_store::msgpack::encode(&aac_store::msgpack::from_json(&value).unwrap()).unwrap();
+            table
+                .insert(
+                    format!("segment_missing:{}:{}", 1000 + i, 1000 + i).as_str(),
+                    bytes.as_slice(),
+                )
+                .unwrap();
+        }
+    }
+    txn.commit().unwrap();
+}
+
+/// The ledger's `store.integrity_detected` events for those findings, by sequence.
+fn ledgered_findings(dir: &Path) -> Vec<u64> {
+    let (log, _) = aac_store::log::Log::open(&dir.join("log").join("ledger"), "ledger", "l").unwrap();
+    let mut out = Vec::new();
+    log.read_after(None, |e| {
+        if e.event_type == "store.integrity_detected" {
+            let payload = aac_store::msgpack::to_json(&e.payload);
+            if payload["kind"] == "segment_missing" {
+                out.push(payload["start_seq"].as_u64().unwrap());
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    out
+}
+
+fn missing(engine: &Engine) -> usize {
+    kinds(engine).iter().filter(|k| *k == "segment_missing").count()
+}
+
+/// More findings than one batch holds: the store opens, ledgers each once, and a reopen adds
+/// nothing to the ledger.
+#[test]
+fn a_store_with_twenty_thousand_unledgered_findings_opens() {
+    let dir = temp_dir("review-many");
+    many_unledgered(&dir);
+    let engine = open(&dir);
+    assert_eq!(missing(&engine), MANY);
+    assert_eq!(engine.status().unwrap()["state"], "degraded");
+    engine.close().unwrap();
+    drop(engine);
+    assert_eq!(ledgered_findings(&dir).len(), MANY);
+    let engine = open(&dir);
+    assert_eq!(missing(&engine), MANY);
+    engine.close().unwrap();
+    drop(engine);
+    assert_eq!(ledgered_findings(&dir).len(), MANY, "a reopen ledgers nothing again");
+    // A rebuild from the logs restores them all from the ledger.
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let engine = open(&dir);
+    assert_eq!(missing(&engine), MANY);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 /// A kill while the open ledgers its findings leaves nothing half written: the next open
-/// discloses every refused event exactly once.
+/// discloses every finding, each ledgered exactly once.
 #[test]
 fn a_kill_while_ledgering_many_findings_recovers() {
     let dir = temp_dir("review-many-kill");
-    many_refused(&dir);
+    many_unledgered(&dir);
     let exe = std::env::current_exe().unwrap();
     let mut stopped = 0;
-    for wait_ms in [1_500u64, 4_000, 8_000, 12_000, 16_000] {
+    for wait_ms in [300u64, 800, 1_500, 2_500, 4_000] {
         let mut child = std::process::Command::new(&exe)
             .args([
                 "--ignored",
@@ -1035,25 +846,106 @@ fn a_kill_while_ledgering_many_findings_recovers() {
             stopped += 1;
         }
         child.wait().unwrap();
-        let mut seen = ledgered_refusals(&dir);
+        let mut seen = ledgered_findings(&dir);
         let all = seen.len();
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(
             seen.len(),
             all,
-            "after a kill at {wait_ms} ms: no refusal is ledgered twice"
+            "after a kill at {wait_ms} ms: no finding is ledgered twice"
         );
     }
     assert!(stopped > 0, "at least one open was killed part way");
     let engine = open(&dir);
-    assert_eq!(quarantined(&engine), MANY, "every refused event is disclosed");
+    assert_eq!(missing(&engine), MANY, "every finding is disclosed");
     engine.close().unwrap();
     drop(engine);
-    let mut seen = ledgered_refusals(&dir);
+    let mut seen = ledgered_findings(&dir);
     assert_eq!(seen.len(), MANY);
     seen.sort_unstable();
     seen.dedup();
     assert_eq!(seen.len(), MANY, "each exactly once");
     fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A store written by one of the branch's unreleased test builds (logs or a redb file, but no
+/// release marker), or one marked with another release, is refused with the owner's message and
+/// left exactly as it was; nothing is deleted. A new folder starts a version-1 store.
+#[test]
+fn a_store_from_an_unreleased_test_build_is_refused_untouched() {
+    let base = temp_dir("review-unreleased");
+    // A version-1 store, then the same files as a test build left them: no marker.
+    let dev = base.join("dev");
+    {
+        let engine = open(&dev);
+        record(&engine, vec![obs(T0, 10.0)]);
+        engine.close().unwrap();
+    }
+    assert_eq!(fs::read_to_string(dev.join("release")).unwrap(), "1");
+    fs::remove_file(dev.join("release")).unwrap();
+    let only_log = base.join("only-log");
+    common::copy_dir(&dev.join("log"), &only_log.join("log"));
+    let other = base.join("other");
+    common::copy_dir(&dev, &other);
+    fs::write(other.join("release"), "0").unwrap();
+    for store in [&dev, &only_log, &other] {
+        let before = walk(store);
+        let refused = ops::open_engine(store.to_str().unwrap(), None, None);
+        let error = refused.err().expect("a test-build store is refused");
+        assert_eq!(error.code, "unreleased_store");
+        assert_eq!(
+            error.message,
+            "This store was written by an unreleased test build; move it aside and AAC will start a new one."
+        );
+        assert_eq!(walk(store), before, "{}: left untouched", store.display());
+    }
+    // A newer release is reported as newer, not unreleased.
+    let newer = base.join("newer");
+    common::copy_dir(&dev, &newer);
+    fs::write(newer.join("release"), "2").unwrap();
+    let error = ops::open_engine(newer.to_str().unwrap(), None, None).err().unwrap();
+    assert_eq!(error.code, "newer_store");
+    // Moved aside, a new store starts in its place.
+    let fresh = base.join("fresh");
+    let engine = open(&fresh);
+    assert_eq!(fs::read_to_string(fresh.join("release")).unwrap(), "1");
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&base).unwrap();
+}
+
+/// A backup that does not say it holds a version-1 store is refused before anything changes.
+#[test]
+fn a_backup_from_an_unreleased_test_build_is_refused() {
+    let base = temp_dir("review-unreleased-backup");
+    let store = base.join("store");
+    let backups = base.join("backups");
+    {
+        let engine = open(&store);
+        record(&engine, vec![obs(T0, 10.0)]);
+        call(&engine, "maintain", json!({ "nowMs": now_ms() + 2 * DAY as u64 }));
+        let made = call(
+            &engine,
+            "backup",
+            json!({ "roots": [backups.to_str().unwrap()], "withRedb": true }),
+        );
+        assert!(made["id"].is_string());
+        engine.close().unwrap();
+    }
+    let set = fs::read_dir(backups.join("sets"))
+        .unwrap()
+        .flatten()
+        .next()
+        .unwrap()
+        .path();
+    let mut manifest: Json = serde_json::from_str(&fs::read_to_string(set.join("backup.json")).unwrap()).unwrap();
+    assert_eq!(manifest["storeRelease"], 1);
+    manifest.as_object_mut().unwrap().remove("storeRelease");
+    fs::write(set.join("backup.json"), manifest.to_string()).unwrap();
+    let before = walk(&store);
+    let error = restore(&store, &set).expect_err("a backup without its release is refused");
+    assert!(error.starts_with("unreleased_store: "), "{error}");
+    assert_eq!(walk(&store), before);
+    fs::remove_dir_all(&base).unwrap();
 }

@@ -29,6 +29,7 @@ import { usageHistory } from '../../../src/web-server/agent-usage/agent-usage-hi
 import { projectAgentUsage } from '../../../src/web-server/agent-usage/agent-usage-projection';
 import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
 import { createUsageRouter } from '../../../src/web-server/routes/store-routes';
+import { handleStoreCommand } from '../../../src/commands/store-command';
 import type {
   AccountDashboard,
   DashboardAccount,
@@ -566,6 +567,41 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       expect(fs.readFileSync(path.join(base, 'quota-history-v1.json'))).toEqual(before);
     } finally {
       await store.close();
+    }
+  });
+});
+
+describe.skipIf(!haveModule)('a store from an unreleased test build', () => {
+  it('is refused with a clear message, left as it is, and the CLI says so', async () => {
+    // The CLI opens <CCS_HOME>/.ccs/store: give it a test build's files (logs, no release marker).
+    const home = fs.mkdtempSync(path.join(sandbox, 'unreleased-'));
+    const previous = process.env.CCS_HOME;
+    process.env.CCS_HOME = home;
+    const dir = path.join(home, '.ccs', 'store');
+    fs.mkdirSync(path.join(dir, 'log', 'readings'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'log', 'instance-id'), '0'.repeat(32));
+    try {
+      if (!loaded.module) throw new Error('no module');
+      const handle = new loaded.module.NativeStore();
+      await expect(handle.call('open', JSON.stringify({ dir }))).rejects.toThrow(
+        'unreleased_store: This store was written by an unreleased test build; move it aside and AAC will start a new one.'
+      );
+      const err: string[] = [];
+      const code = await handleStoreCommand(['status'], {
+        out: () => undefined,
+        err: (t: string) => err.push(t),
+        env: { AAC_STORE_MODULE: MODULE },
+      });
+      expect(code).toBe(1);
+      expect(err.join('')).toContain(
+        'This store was written by an unreleased test build; move it aside and AAC will start a new one.'
+      );
+      // Nothing was deleted or marked.
+      expect(fs.existsSync(path.join(dir, 'release'))).toBe(false);
+      expect(fs.readFileSync(path.join(dir, 'log', 'instance-id'), 'utf8')).toBe('0'.repeat(32));
+    } finally {
+      if (previous === undefined) delete process.env.CCS_HOME;
+      else process.env.CCS_HOME = previous;
     }
   });
 });
