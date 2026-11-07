@@ -6,6 +6,7 @@ mod common;
 use aac_store::engine::{Engine, now_ms};
 use aac_store::ops;
 use common::{copy_dir, find, temp_dir};
+use redb::ReadableTable;
 use serde_json::{Value as Json, json};
 use std::fs;
 use std::path::Path;
@@ -109,16 +110,22 @@ fn projections_follow_the_log_when_acknowledged_frames_are_lost() {
     assert!(found.iter().any(|k| k == "segment_degraded"), "{found:?}");
     assert!(found.iter().any(|k| k == "projection_missing_events"), "{found:?}");
     assert_eq!(engine.status().unwrap()["state"], "degraded");
-    // The loss is recorded in the ledger, and the next open does not rebuild again.
+    // The loss is recorded in the ledger: a plain reopen still discloses it, without rebuilding
+    // again, and so does a rebuild.
     engine.close().unwrap();
     drop(engine);
     let engine = open(&dir);
     assert_eq!(raw_starts(&engine), rebuilt);
-    assert!(
-        !kinds(&engine)
-            .iter()
-            .any(|k| k == "projection_missing_events" || k == "projector_rebuilt")
-    );
+    let found = kinds(&engine);
+    assert!(found.iter().any(|k| k == "projection_missing_events"), "{found:?}");
+    assert!(!found.iter().any(|k| k == "projector_rebuilt"), "{found:?}");
+    assert_eq!(engine.status().unwrap()["state"], "degraded");
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let engine = open(&dir);
+    assert!(kinds(&engine).iter().any(|k| k == "projection_missing_events"));
+    assert_eq!(engine.status().unwrap()["state"], "degraded");
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(&dir).unwrap();
@@ -430,7 +437,12 @@ fn credentials_are_refused_before_the_log() {
 
 /// Writes events straight into the readings log in the log format, as an older build did.
 fn append_raw(dir: &Path, events: Vec<(&str, Json)>) -> Vec<u64> {
-    let (mut log, _) = aac_store::log::Log::open(&dir.join("log").join("readings"), "readings", "r").unwrap();
+    append_to(dir, "readings", events)
+}
+
+fn append_to(dir: &Path, name: &str, events: Vec<(&str, Json)>) -> Vec<u64> {
+    let short = if name == "readings" { "r" } else { "l" };
+    let (mut log, _) = aac_store::log::Log::open(&dir.join("log").join(name), name, short).unwrap();
     let mut seqs = Vec::new();
     for (event_type, payload) in events {
         let mut event =
@@ -491,6 +503,14 @@ fn an_old_event_refused_today_is_set_aside_not_fatal() {
     assert_eq!(record(&engine, vec![again])["rejected"], 1);
     engine.close().unwrap();
     drop(engine);
+    // A plain reopen still discloses it.
+    let engine = open(&dir);
+    let reopened: Vec<String> = kinds(&engine);
+    assert!(reopened.iter().any(|k| k == "event_quarantined"), "{reopened:?}");
+    assert_eq!(engine.status().unwrap()["state"], "degraded");
+    assert_eq!(raw_starts(&engine), starts);
+    engine.close().unwrap();
+    drop(engine);
     // A rebuild sets it aside the same way.
     fs::remove_file(dir.join("aac.redb")).unwrap();
     let engine = open(&dir);
@@ -530,6 +550,287 @@ fn loss_bounds_are_ordered_and_hold_the_lost_event() {
     let (start, end) = (loss["start_seq"].as_u64().unwrap(), loss["end_seq"].as_u64().unwrap());
     assert!(start <= end, "{loss}");
     assert!(start <= 1 && 1 <= end, "the lost event 1 is inside {start}..={end}");
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A rollup in a `usage.day_closed` payload (usage.rs rollup_to_json).
+fn rollup(consumed: f64, used: f64, rows: u32) -> Json {
+    json!([consumed, 0.0, 0.0, used, used, used, used, 300_000, rows, 0, 0, null])
+}
+
+/// A day close as a build before refused-observation checks wrote it (no exclusion mark).
+fn old_close(day: i64, label: &str, consumed: f64) -> Json {
+    json!({
+        "day": day, "part": 0, "parts": 1,
+        "series": [{
+            "account": { "identity": format!("{:064x}", 1), "provider": "claude", "account_id": "claude:a1",
+                         "plan": "max", "platform": "ubuntu", "source": "", "status": "", "is_active": false },
+            "window": { "identity": "[\"five_hour\",\"rate_limit\",null]", "key": "five_hour", "label": label,
+                        "kind": "rate_limit", "window_minutes": 300.0 },
+            "hours": [{ "hour": day * 24 + 9, "rollup": rollup(consumed, 60.0, 2) }],
+            "day_rollup": rollup(consumed, 60.0, 2),
+            "periods": [],
+        }],
+    })
+}
+
+fn hourly(engine: &Engine) -> Vec<Json> {
+    call(
+        engine,
+        "seriesPoints",
+        json!({ "fromMs": T0 - DAY, "toMs": T0 + DAY, "resolution": "hour" }),
+    )["series"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// A summary an older build computed from an observation this build refuses is not trusted, even
+/// when its own text is clean (the refusal was in a field the summary does not carry).
+#[test]
+fn a_summary_of_refused_observations_is_not_trusted() {
+    let dir = temp_dir("review-summary");
+    let refused = obs_with(T0, 99.0, |o| {
+        o["account"]["source"] = json!("Bearer SYNTHETIC0123456789abcdef")
+    });
+    append_raw(&dir, vec![("usage.sampled", json!({ "observations": [refused] }))]);
+    let day = T0 / DAY;
+    append_to(
+        &dir,
+        "ledger",
+        vec![("usage.day_closed", old_close(day, "5 hour", 7.0))],
+    );
+    for pass in ["open", "reopen", "rebuild"] {
+        if pass == "rebuild" {
+            fs::remove_file(dir.join("aac.redb")).unwrap();
+        }
+        let engine = open(&dir);
+        assert!(
+            hourly(&engine).is_empty(),
+            "{pass}: the summary's numbers are not served"
+        );
+        let found = kinds(&engine);
+        assert!(found.iter().any(|k| k == "summary_quarantined"), "{pass}: {found:?}");
+        assert_eq!(engine.status().unwrap()["state"], "degraded");
+        engine.close().unwrap();
+        drop(engine);
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Once the refused observation's segment has retired, the ledger still carries the refusal, so
+/// an older summary replayed before it is withdrawn; a summary's own text is checked too.
+#[test]
+fn a_refusal_recorded_in_the_ledger_withdraws_an_older_summary() {
+    let dir = temp_dir("review-summary-ledger");
+    let day = T0 / DAY;
+    // What a store looks like after the refused event's segment retired: only the ledger.
+    let fp = aac_store::usage::series_fingerprint(&format!("{:064x}", 1), "[\"five_hour\",\"rate_limit\",null]");
+    append_to(
+        &dir,
+        "ledger",
+        vec![
+            ("usage.day_closed", old_close(day, "5 hour", 7.0)),
+            (
+                "store.integrity_detected",
+                json!({ "kind": "event_quarantined", "detail": "set aside", "start_seq": 1, "end_seq": 1,
+                        "refused": { "day": day, "series": [fp] } }),
+            ),
+        ],
+    );
+    let engine = open(&dir);
+    assert!(hourly(&engine).is_empty(), "the older summary is withdrawn");
+    engine.close().unwrap();
+    drop(engine);
+    // A summary whose own text is refused is never applied.
+    let other = temp_dir("review-summary-text");
+    append_to(
+        &other,
+        "ledger",
+        vec![(
+            "usage.day_closed",
+            old_close(day, "sk-ant-SYNTHETIC_SECRET_abcdefgh", 7.0),
+        )],
+    );
+    let engine = open(&other);
+    assert!(hourly(&engine).is_empty());
+    assert!(
+        !call(&engine, "seriesList", json!({ "fromMs": 0, "toMs": T0 + DAY }))
+            .to_string()
+            .contains("SYNTHETIC")
+    );
+    assert!(kinds(&engine).iter().any(|k| k == "summary_quarantined"));
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+    fs::remove_dir_all(&other).unwrap();
+}
+
+/// Burn over lost history is unknown, not zero; a measured zero stays zero (docs/store.md 7.2).
+#[test]
+fn burn_over_lost_history_is_null_and_a_measured_zero_is_zero() {
+    let dir = temp_dir("review-burn");
+    let series = |n: u32| json!({ "identity": format!("{n:064x}"), "window": "[\"five_hour\",\"rate_limit\",null]" });
+    let burn = |engine: &Engine| {
+        call(
+            engine,
+            "burnLong",
+            json!({ "series": [series(1), series(9)], "spansMs": [HOUR, DAY], "nowMs": T0 + HOUR }),
+        )
+    };
+    {
+        let engine = open(&dir);
+        // Flat at 30%: a measured zero.
+        record(
+            &engine,
+            vec![obs(T0, 30.0), obs(T0 + 5 * MIN, 30.0), obs(T0 + 10 * MIN, 30.0)],
+        );
+        let measured = burn(&engine);
+        assert_eq!(measured[0]["spans"][0]["consumed"], 0.0, "{measured}");
+        assert!(
+            measured[1]["spans"][0]["consumed"].is_null(),
+            "unknown series: {measured}"
+        );
+        engine.close().unwrap();
+    }
+    // Lose the only readings segment.
+    for segment in find(&dir.join("log").join("readings"), ".seglog") {
+        fs::remove_file(segment).unwrap();
+    }
+    let engine = open(&dir);
+    let lost = burn(&engine);
+    for span in lost[0]["spans"].as_array().unwrap() {
+        assert!(span["consumed"].is_null(), "known but lost: {lost}");
+        assert!(span["rate"].is_null());
+    }
+    assert!(lost[1]["spans"][0]["consumed"].is_null());
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Filtered queries read only the selected series' rows: with unrelated metadata, open spans and
+/// old account states made unreadable, they still answer.
+#[test]
+fn filtered_queries_read_only_the_selected_rows() {
+    let dir = temp_dir("review-index");
+    let other = |t: i64, used: f64| {
+        obs_with(t, used, |o| {
+            o["account"]["identity"] = json!(format!("{:064x}", 2));
+            o["account"]["account_id"] = json!("codex:b");
+            o["account"]["provider"] = json!("codex");
+        })
+    };
+    let engine = open(&dir);
+    // Account 1 has an old error state, then readings; account 2 is another provider.
+    let failing = obs_with(T0 - 2 * DAY, 10.0, |o| {
+        o["account"]["status"] = json!("error");
+        o["windows"] = json!([]);
+    });
+    record(&engine, vec![obs(T0 - 3 * DAY, 5.0), failing]);
+    record(
+        &engine,
+        vec![
+            obs(T0, 10.0),
+            other(T0, 50.0),
+            obs(T0 + 5 * MIN, 20.0),
+            other(T0 + 5 * MIN, 60.0),
+        ],
+    );
+    let id1 = format!("{:064x}", 1);
+    let queries = [
+        (
+            "seriesPoints",
+            json!({ "identities": [id1], "fromMs": T0, "toMs": T0 + HOUR, "resolution": "raw" }),
+        ),
+        (
+            "seriesPoints",
+            json!({ "provider": "claude", "fromMs": T0, "toMs": T0 + HOUR, "resolution": "hour" }),
+        ),
+        (
+            "seriesList",
+            json!({ "identities": [id1], "fromMs": T0, "toMs": T0 + HOUR }),
+        ),
+        (
+            "seriesList",
+            json!({ "provider": "claude", "fromMs": T0, "toMs": T0 + HOUR }),
+        ),
+        (
+            "historyRecords",
+            json!({ "identities": [id1], "fromMs": T0, "toMs": T0 + HOUR, "nowMs": T0 + HOUR, "thinning": { "kind": "none" } }),
+        ),
+    ];
+    let expected: Vec<Json> = queries.iter().map(|(m, a)| call(&engine, m, a.clone())).collect();
+    assert!(expected[0]["series"].as_array().unwrap().len() == 1);
+    engine.close().unwrap();
+    drop(engine);
+    // Unrelated rows a filtered query has no reason to read: account 2's series, open span and
+    // account; account 1's state from three days before the range.
+    {
+        let database = redb::Database::create(dir.join("aac.redb")).unwrap();
+        let txn = database.begin_write().unwrap();
+        let bad: &[u8] = &[105, 0, 0];
+        let a2 = {
+            let rev = txn.open_table(aac_store::db::DICT_REV).unwrap();
+            aac_store::db::lookup_id(&rev, aac_store::db::KIND_ACCOUNT, &format!("{:064x}", 2))
+                .unwrap()
+                .unwrap()
+        };
+        let a1 = {
+            let rev = txn.open_table(aac_store::db::DICT_REV).unwrap();
+            aac_store::db::lookup_id(&rev, aac_store::db::KIND_ACCOUNT, &id1)
+                .unwrap()
+                .unwrap()
+        };
+        for def in [aac_store::db::SERIES, aac_store::db::LATEST] {
+            let keys: Vec<Vec<u8>> = {
+                let table = txn.open_table(def).unwrap();
+                let prefix = a2.to_be_bytes();
+                table
+                    .range(prefix.as_slice()..)
+                    .unwrap()
+                    .map(|i| i.unwrap().0.value().to_vec())
+                    .filter(|k| k.starts_with(&prefix))
+                    .collect()
+            };
+            assert!(!keys.is_empty());
+            let mut table = txn.open_table(def).unwrap();
+            for key in keys {
+                table.insert(key.as_slice(), bad).unwrap();
+            }
+        }
+        txn.open_table(aac_store::db::ACCOUNT)
+            .unwrap()
+            .insert(a2.to_be_bytes().as_slice(), bad)
+            .unwrap();
+        let first_state: Vec<u8> = {
+            let table = txn.open_table(aac_store::db::ACCOUNT_STATE).unwrap();
+            let prefix = a1.to_be_bytes();
+            let key = table
+                .range(prefix.as_slice()..)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .0
+                .value()
+                .to_vec();
+            assert!(key.starts_with(&prefix));
+            key
+        };
+        txn.open_table(aac_store::db::ACCOUNT_STATE)
+            .unwrap()
+            .insert(first_state.as_slice(), bad)
+            .unwrap();
+        txn.commit().unwrap();
+    }
+    let engine = open(&dir);
+    for ((method, args), want) in queries.iter().zip(&expected) {
+        let got = ops::call(&engine, method, &args.to_string());
+        assert_eq!(got.as_ref().ok(), Some(want), "{method} {args}: {got:?}");
+    }
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(&dir).unwrap();

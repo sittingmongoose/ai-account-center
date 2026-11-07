@@ -29,6 +29,15 @@ pub const PERIOD: Bytes = TableDefinition::new("period");
 pub const ROLLUP_HOURS: Bytes = TableDefinition::new("rollup_hours");
 pub const ROLLUP_DAY: Bytes = TableDefinition::new("rollup_day");
 pub const DAY_CLOSED: Index = TableDefinition::new("day_closed");
+/// Series and days a refused observation touched: `day u32 | fingerprint (16 bytes)`.
+pub const REFUSED: Index = TableDefinition::new("refused");
+/// Closed-day summaries applied without this build's exclusion of refused observations:
+/// `day u32 | fingerprint` to `a u32 | w u32 | period starts u64...`, so a refusal that arrives
+/// later withdraws them.
+pub const SUMMARY_UNMARKED: Bytes = TableDefinition::new("summary_unmarked");
+/// Disclosed findings (loss, set-aside events), kept across opens: `kind:start:end` to a
+/// MessagePack `{finding, ledgered}`.
+pub const FINDING: TableDefinition<'static, &'static str, &'static [u8]> = TableDefinition::new("finding");
 
 // Usage projector version 1's tables, dropped by the rebuild to version 2.
 pub const LEGACY_READING: Bytes = TableDefinition::new("reading");
@@ -51,6 +60,7 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
     txn.open_table(DICT_REV)?;
     txn.open_table(CHECKPOINT)?;
     txn.open_table(IDEM)?;
+    txn.open_table(FINDING)?;
     for def in [
         ACCOUNT,
         WINDOW,
@@ -62,10 +72,11 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
         PERIOD,
         ROLLUP_HOURS,
         ROLLUP_DAY,
+        SUMMARY_UNMARKED,
     ] {
         txn.open_table(def)?;
     }
-    for def in [SERIES_BY_PROVIDER, DAY_CLOSED] {
+    for def in [SERIES_BY_PROVIDER, DAY_CLOSED, REFUSED] {
         txn.open_table(def)?;
     }
     Ok(())

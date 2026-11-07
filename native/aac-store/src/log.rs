@@ -65,6 +65,11 @@ pub struct Finding {
     pub detail: String,
     pub start_seq: Option<u64>,
     pub end_seq: Option<u64>,
+    /// For a refused observation: its UTC day and the fingerprints of its series
+    /// (`usage::series_fingerprint`), never its text. Carried into the ledger, so the refusal
+    /// outlives the readings segment that held it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<serde_json::Value>,
 }
 
 impl Finding {
@@ -74,6 +79,7 @@ impl Finding {
             detail: detail.into(),
             start_seq: range.map(|r| r.0),
             end_seq: range.map(|r| r.1),
+            refused: None,
         }
     }
 }

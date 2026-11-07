@@ -172,7 +172,9 @@ recovered.
 | Manifest missing or unreadable, segments present | rebuild the manifest by validating every frame; the watermark becomes the last valid frame | `store.integrity_detected` |
 | `aac.redb` fails to open or `check_integrity()` fails | move it to `quarantine/`, create a new file, replay both logs from the start | rebuild in progress |
 | A projector checkpoint that does not match the surviving events: an acknowledged event it was built from is gone or no longer validates (for example a bit flip in a sealed segment that is already projected), or the chain over retired events is not recorded | rebuild that projector's tables from the surviving events, then record the loss in the ledger | `projection_missing_events` (or `projection_unverifiable_missing`) with ordered bounds that hold the loss: from the first damaged or missing segment, or past the last surviving event, through the checkpoint (the whole covered range when neither is known); `projector_rebuilt`; the store is `degraded` |
-| A logged observation that today's checks refuse (an older build accepted it, for example a credential-shaped label written before the check existed) | leave that observation out of the usage tables and go on replaying; the log keeps the event | `event_quarantined` with the event's sequence, never its text; the store is `degraded` |
+| A logged observation that today's checks refuse (an older build accepted it, for example a credential-shaped label written before the check existed) | leave that observation out of the usage tables and go on replaying; the log keeps the event. Its day and the fingerprints of its series (`sha256(account identity, 0, window identity)`, first 16 bytes) go into `refused` and, with the finding, into the ledger, so the refusal outlives the readings segment | `event_quarantined` with the event's sequence, never its text; the store is `degraded` |
+| A `usage.day_closed` summary whose text today's checks refuse, or that an older build computed for a series and day with a refused observation (closes from this build carry `refused_excluded`) | leave that summary out; the day's rollups are what the surviving readings give, or none: an honest gap. A refusal that reaches the ledger after an older summary was applied withdraws it | `summary_quarantined` with the close's sequence; the store is `degraded` |
+| Any disclosed loss or set-aside event, on a later open | kept in the `finding` table in the same transaction as the rows it explains, restored from the ledger's `store.integrity_detected` after a rebuild; each is written to the ledger once | the same finding, until it is resolved (`accept-loss`, later) |
 | Store newer than the code (`store_schema_version` or an unknown frame/header version) | open nothing, change nothing | `blocked_newer_store`: the dashboard runs without history |
 
 ### 2.7 Mirrored from Puppet Master, and left out
@@ -236,6 +238,7 @@ present, then their rollups in order.
 | `dict_rev` | `kind u8, text bytes` (`&[u8]`) | `id u32` |
 | `checkpoint` | `&str` `<projector>/<log>`, such as `usage/readings` | checkpoint (2.7) |
 | `idem` | `log u8, event_type u32 (dict), sha256(key)[0..16]` | `seq u64` |
+| `finding` | `&str` `kind:start:end` | `{finding, ledgered}`: a disclosed finding kept across opens (2.6) |
 
 **Usage (phase 1)**
 
@@ -251,6 +254,8 @@ present, then their rollups in order.
 | `period` | `a, w, t_start` | `{reset_at_ms, end_ms, start_used, end_used, max_used, consumed_pts, hit_limit_ms, rows}` | reset periods: how each window was used up |
 | `rollup_hours` | `a, w, d` | packed `Rollup` per hour of the day | burn over any period, hourly charts |
 | `rollup_day` | `a, w, d` | `Rollup` | long-range charts |
+| `refused` | `d, series fingerprint (16 bytes)` | `()` | which series and days a refused observation touched (2.6) |
+| `summary_unmarked` | `d, series fingerprint` | `a, w`, period starts | summaries applied without the exclusion mark, withdrawn if a refusal arrives later |
 
 **Attribution and activity (phase 2)**
 
@@ -389,7 +394,7 @@ Every import is idempotent (its keys hit `idem`), resumable, and records `store.
 | Points | percentage points of one usage window on one account (a meter). Credit meters use credits instead | `reading_day` |
 | Consumed points `P(meter, [t0, t1])` | sum over consecutive readings in the same reset period of `max(0, used_b - used_a)`; across a detected reset (the rules of `agent-usage-history.ts`) add the first reading's `used` (use since the reset). Credits: sum of decreases, rises counted as added | `reading_day`, `period`, `rollup_hours` |
 | Coverage | minutes of the interval covered by readings no more than 10 minutes apart, over the interval's minutes | `Rollup.covered_min` |
-| Burn rate `B(meter, span)` | `P / hours`, for any span: today's 5 m to 24 h within the period, plus 7 d, 30 d, 90 d (raw) and any span (hourly rollups); reported with coverage | `rollup_hours`, `rollup_day` |
+| Burn rate `B(meter, span)` | `P / hours`, for any span: today's 5 m to 24 h within the period, plus 7 d, 30 d, 90 d (raw) and any span (hourly rollups); reported with coverage. With no reading in the span (unknown or lost history), `P` and the rate are null; a series that was read and did not move is 0 | `rollup_hours`, `rollup_day` |
 | Per-period use | consumed points per reset period, time to 100%, how early it hit the limit | `period` |
 | List-price weight `W` | `sum over class c of tokens_c * price_c(model) / 1e6`, classes input, cache read, cache write, output (reasoning is inside output); prices from the models.dev registry AAC already caches | `tokens.list_usd` |
 | Solo account-hour | an account-hour whose tokens all come from one (model, effort), with every machine scanned and coverage at least 0.9 | `account_hour_mix` |
@@ -600,6 +605,8 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 | Reconstruction | `historyRecords` rebuilds the JSON history's account records from the spans, adding readings on its grid (every 5 minutes within a day, hourly beyond) inside observed spans; a grid reading's `observedAt` is its time plus the span's first observation offset, kept between the span's first and last observation | the analytics route, burn rates and `history.json` keep their inputs: the same analytics buckets, values and gaps; times inside a bucket are the grid's, not each sample's minute |
 | Credentials (2.2) | every persisted string of an observation (account, window, pool, model ids, import reference) is refused, before the log append, when it matches the dashboard's log-redaction patterns (`sk-ant-`, `sk-`, `aacd_`, `xox?-`, `gh?_`, `github_pat_`, `glpat-`, `AIza`, `AKIA`, JSON web tokens, `api_key=`-style values, private key blocks), narrowed for stored text: a prefix counts only at the start of a token (`sk-` inside `task-` does not), and `Bearer`/`Basic`/`Token` only before a credential-shaped value (16 or more token characters with a digit or both cases), so `Token requests` is stored. Replay sets aside an older event that fails the check instead of stopping (2.6); `src/secret.rs` | the log is kept for good and copied to backups |
 | Burn route (8.1) | `/api/usage/burn` finds its series with `seriesList` (series metadata seen in the span), not from a point query | a capped point query left series out |
+| Filtered queries (3.2) | `seriesPoints`, `seriesList` and `historyRecords` choose their series through the indexes: identities through `dict_rev` and the account prefix, a provider through `series_by_provider`; they read only the selected series' `latest` rows, and the account state open at the range start by one reverse seek. Only an `account_ids` filter reads account rows (few, and `account_id` is not interned) | no metadata row of an unrelated series is read |
+| Usage projector version 3 (4.8) | observations refused since are set aside on replay and closed-day summaries built from them are not trusted; a version 2 projection rebuilds from the logs, and the rebuild also restarts the string dictionaries, so nothing an older projection interned survives it | `tests/fixtures/store-v2-000a0ac7` is a store written by that build |
 | zstd (2.4) | level 9 | 50.7x on real segments against 54x at level 19, at 1/75 of the time and far less memory |
 | redb integrity (4.6) | `set_check_integrity_on_open` below 512 MiB (every page checksum at open); a read-only version probe first, guarded against redb panics on damaged pages | redb may panic on a damaged file opened without the check |
 | No module (4.10) | the JSON history file path keeps running (as before the store) | a machine without the module, such as the VM until its Linux build, keeps its history |
@@ -627,7 +634,7 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 
 | Check | Result |
 |---|---|
-| Frame, crash-cut (a cut at every byte offset of a torn tail and of the acknowledged region), corruption (bit flips in sealed segments, a damaged redb, a damaged manifest) | pass (`bun run store:test`: 42 Rust tests) |
+| Frame, crash-cut (a cut at every byte offset of a torn tail and of the acknowledged region), corruption (bit flips in sealed segments, a damaged redb, a damaged manifest) | pass (`bun run store:test`: 49 Rust tests) |
 | A cut at every byte of a tick over the projection: exactly the surviving frames' day values, with redb kept and rebuilt | pass (`tests/store_packed.rs`) |
 | Packed values round-trip bit for bit; day values answer as a filter of every span; retention splits a day value; an old store rebuilds from its logs | pass (`src/pack.rs`, `tests/store_packed.rs`) |
 | Sequences never reused; a newer store left byte-for-byte untouched; a second writer refused | pass |
@@ -643,6 +650,11 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 | Credential-shaped strings in every persisted field are refused and never reach the log; ordinary labels such as `Token requests` and `task-0123…cdef` are stored | pass (`tests/store_review.rs`, `src/secret.rs`, synthetic values only) |
 | An older log holding an observation today's checks refuse still opens and rebuilds: that observation is set aside and disclosed, the others are served, new appends are still refused | pass (`tests/store_review.rs`, the event written in the log format) |
 | Loss bounds are ordered and hold the lost event (a lost first frame) | pass (`tests/store_review.rs`) |
+| A store written by `000a0ac7` with a refused observation (its own redb and version 2 checkpoints) answers every route exactly as a replay of its logs alone, is `degraded`, and stays so on a plain reopen | pass (`tests/store_upgrade.rs`) |
+| Closed-day summaries built from refused observations are not served after the upgrade, a reopen or a rebuild (an honest gap); a refusal in the ledger withdraws an older summary after its readings retired; summary text is checked; a close from this build keeps a refused series' clean summary after retirement | pass (`tests/store_upgrade.rs`, `tests/store_review.rs`) |
+| Loss and set-aside findings survive a plain reopen and a rebuild | pass (`tests/store_review.rs`, `tests/store_upgrade.rs`) |
+| Burn over lost or unknown history is null, a measured flat series is 0 | pass (`tests/store_review.rs`) |
+| Filtered queries answer with unrelated series, open spans, accounts and earlier account states unreadable | pass (`tests/store_review.rs`) |
 | Each restore refusal is made by the guard its case names (asserted by message; each case fails with its guard removed) | pass (`tests/store_review.rs`) |
 | Burn finds every series past the 20,000-point cap (11 series, 90 days hourly) | pass (`tests/unit/store/store-usage.test.ts`) |
 | Analytics route from the store equals the JSON history: every account, window and point, by analytics bucket, over 28 hours with resets, an error hour, a cached window, a 40-minute gap and a credit balance, for the 24-hour and 7-day ranges | pass (`tests/unit/store/store-usage.test.ts`) |

@@ -133,26 +133,18 @@ impl Sampled {
         {
             fail!("invalid", "observation fails validation");
         }
-        for w in &self.windows {
-            let models_ok = w
-                .model_ids
-                .as_ref()
-                .map(|m| m.len() <= 64 && m.iter().all(|x| text_ok(x, 160)))
-                .unwrap_or(true);
-            if !text_ok(&w.identity, 512)
-                || !text_ok(&w.key, 64)
-                || !text_ok(&w.label, 80)
-                || !opt_text_ok(&w.kind, 32)
-                || !opt_text_ok(&w.unit, 40)
-                || !opt_text_ok(&w.pool_id, 160)
-                || !opt_text_ok(&w.pool_id_source, 64)
-                || !opt_text_ok(&w.pool_label, 80)
-                || !models_ok
-            {
-                fail!("invalid", "window fails validation");
-            }
+        if !self.windows.iter().all(window_ok) {
+            fail!("invalid", "window fails validation");
         }
         Ok(())
+    }
+
+    /// The fingerprints of this observation's series.
+    fn fingerprints(&self) -> Vec<String> {
+        self.windows
+            .iter()
+            .map(|w| series_fingerprint(&self.account.identity, &w.identity))
+            .collect()
     }
 
     /// What decides "unchanged": the windows (every field, in order) and the account's source,
@@ -165,6 +157,94 @@ impl Sampled {
             "active": self.account.is_active,
         });
         Ok(crate::fsx::sha256_hex(&msgpack::encode(&msgpack::from_json(&basis)?)?))
+    }
+}
+
+/// A series named without its text: the first 16 bytes of `sha256(account identity, 0, window
+/// identity)` as hex. Refusal records carry this, never the refused strings.
+pub fn series_fingerprint(account_identity: &str, window_identity: &str) -> String {
+    let mut basis = account_identity.as_bytes().to_vec();
+    basis.push(0);
+    basis.extend_from_slice(window_identity.as_bytes());
+    crate::fsx::sha256_hex(&basis)[..32].to_string()
+}
+
+/// Every persisted string of a window passes the text checks.
+fn window_ok(w: &WindowObs) -> bool {
+    let models_ok = w
+        .model_ids
+        .as_ref()
+        .map(|m| m.len() <= 64 && m.iter().all(|x| text_ok(x, 160)))
+        .unwrap_or(true);
+    text_ok(&w.identity, 512)
+        && text_ok(&w.key, 64)
+        && text_ok(&w.label, 80)
+        && opt_text_ok(&w.kind, 32)
+        && opt_text_ok(&w.unit, 40)
+        && opt_text_ok(&w.pool_id, 160)
+        && opt_text_ok(&w.pool_id_source, 64)
+        && opt_text_ok(&w.pool_label, 80)
+        && models_ok
+}
+
+/// The account and window text a closed-day summary would persist passes the same checks as an
+/// observation's (a summary carries no source or status).
+fn summary_text_ok(a: &AccountObs, w: &WindowObs) -> bool {
+    a.identity.len() == 64
+        && a.identity
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        && text_ok(&a.provider, 64)
+        && text_ok(&a.account_id, 128)
+        && opt_text_ok(&a.plan, 80)
+        && PLATFORMS.contains(&a.platform.as_str())
+        && window_ok(w)
+}
+
+fn refused_key(day: u32, fingerprint: &str) -> Option<Vec<u8>> {
+    let bytes: Vec<u8> = (0..fingerprint.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(fingerprint.get(i..i + 2)?, 16).ok())
+        .collect();
+    (bytes.len() == 16).then(|| Key::new().u32(day).bytes(&bytes).0)
+}
+
+/// Records that a refused observation touched these series on `day`, and withdraws any closed-day
+/// summary for them that was applied without excluding refused observations.
+fn note_refused(txn: &WriteTransaction, day: u32, fingerprints: &[String]) -> Result<Vec<String>> {
+    let mut withdrawn = Vec::new();
+    for fp in fingerprints {
+        let Some(key) = refused_key(day, fp) else { continue };
+        put_index(txn, db::REFUSED, &key)?;
+        let Some(value) = get(txn, db::SUMMARY_UNMARKED, &key)? else {
+            continue;
+        };
+        if value.len() >= 8 {
+            let (a, w) = (db::be_u32(&value, 0), db::be_u32(&value, 4));
+            let rollup = Key::new().u32(a).u32(w).u32(day);
+            txn.open_table(db::ROLLUP_HOURS)?.remove(rollup.as_slice())?;
+            txn.open_table(db::ROLLUP_DAY)?.remove(rollup.as_slice())?;
+            for at in (8..value.len()).step_by(8) {
+                if at + 8 <= value.len() {
+                    let start = db::be_u64(&value, at);
+                    txn.open_table(db::PERIOD)?
+                        .remove(Key::new().u32(a).u32(w).u64(start).as_slice())?;
+                }
+            }
+        }
+        txn.open_table(db::SUMMARY_UNMARKED)?.remove(key.as_slice())?;
+        withdrawn.push(fp.clone());
+    }
+    Ok(withdrawn)
+}
+
+fn summary_finding(event: &Event, why: &str) -> Finding {
+    Finding {
+        kind: "summary_quarantined".into(),
+        detail: format!("a closed-day summary in this event {why}; its rollups were left out of the usage tables"),
+        start_seq: Some(event.sequence_id),
+        end_seq: Some(event.sequence_id),
+        refused: None,
     }
 }
 
@@ -672,7 +752,9 @@ pub fn is_reset(prev_t: i64, prev: &Vals, t: i64, now: &Vals) -> bool {
 pub struct UsageProjector;
 
 /// Bump when projection rules change: the usage tables are then rebuilt from the logs.
-pub const USAGE_PROJECTOR_VERSION: u32 = 2;
+/// Version 3: observations refused by today's checks are set aside, and closed-day summaries
+/// built from them are not trusted; earlier projections are rebuilt from the logs.
+pub const USAGE_PROJECTOR_VERSION: u32 = 3;
 
 impl Projector for UsageProjector {
     fn name(&self) -> &'static str {
@@ -694,6 +776,9 @@ impl Projector for UsageProjector {
                     // build accepted is set aside here, so the rest of the history still opens.
                     // The finding names the event, never the refused text.
                     if let Err(e) = sampled.validate() {
+                        let day = day_of(sampled.sampled_at_ms.max(0) as u64);
+                        let series = sampled.fingerprints();
+                        note_refused(txn, day, &series)?;
                         set_aside.push(Finding {
                             kind: "event_quarantined".into(),
                             detail: format!(
@@ -702,6 +787,7 @@ impl Projector for UsageProjector {
                             ),
                             start_seq: Some(event.sequence_id),
                             end_seq: Some(event.sequence_id),
+                            refused: Some(json!({ "day": day, "series": series })),
                         });
                         continue;
                     }
@@ -714,7 +800,24 @@ impl Projector for UsageProjector {
                     project_seen(txn, seen)?;
                 }
             }
-            "usage.day_closed" => project_day_closed(txn, &msgpack::to_json(&event.payload))?,
+            "usage.day_closed" => set_aside = project_day_closed(txn, event, &msgpack::to_json(&event.payload))?,
+            // Disclosed findings come back with a rebuild; a refusal withdraws older summaries.
+            "store.integrity_detected" => {
+                let found = crate::engine::finding_from_json(&msgpack::to_json(&event.payload));
+                if let Some(refused) = &found.refused {
+                    let day = refused["day"].as_u64().unwrap_or(u64::MAX).min(u32::MAX as u64) as u32;
+                    let series: Vec<String> = refused["series"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    if !note_refused(txn, day, &series)?.is_empty() {
+                        set_aside.push(summary_finding(event, "was built from an observation refused since"));
+                    }
+                }
+                set_aside.push(found);
+            }
             _ => {}
         }
         Ok(set_aside)
@@ -731,15 +834,34 @@ impl Projector for UsageProjector {
             db::PERIOD,
             db::ROLLUP_HOURS,
             db::ROLLUP_DAY,
+            db::SUMMARY_UNMARKED,
             db::LEGACY_READING,
             db::LEGACY_ROLLUP_HOUR,
         ] {
             txn.delete_table(def)?;
         }
-        for def in [db::SERIES_BY_PROVIDER, db::LEGACY_READING_BY_TIME, db::DAY_CLOSED] {
+        for def in [
+            db::SERIES_BY_PROVIDER,
+            db::LEGACY_READING_BY_TIME,
+            db::DAY_CLOSED,
+            db::REFUSED,
+        ] {
             txn.delete_table(def)?;
         }
         db::set_meta(txn, "closed_through_day", "")?;
+        // The dictionaries hold only this projector's strings: a rebuild starts them again, so
+        // nothing an older projection interned (a refused string included) outlives it.
+        txn.delete_table(db::DICT)?;
+        txn.delete_table(db::DICT_REV)?;
+        for kind in [
+            db::KIND_ACCOUNT,
+            db::KIND_WINDOW,
+            db::KIND_PROVIDER,
+            db::KIND_SOURCE,
+            db::KIND_EVENT_TYPE,
+        ] {
+            txn.open_table(db::META)?.remove(format!("dict_next:{kind}").as_str())?;
+        }
         Ok(())
     }
 }
@@ -1219,14 +1341,30 @@ fn rollup_from_json(v: &Json) -> Result<Rollup> {
     })
 }
 
-fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
+fn project_day_closed(txn: &WriteTransaction, event: &Event, payload: &Json) -> Result<Vec<Finding>> {
     let day = payload["day"].as_u64().unwrap_or(u64::MAX) as u32;
     if day == u32::MAX {
         fail!("corrupt", "day_closed without a day");
     }
+    // Closes from this build were computed with refused observations already left out.
+    let marked = payload["refused_excluded"] == true;
+    let mut set_aside = Vec::new();
     for series in payload["series"].as_array().into_iter().flatten() {
         let account: AccountObs = serde_json::from_value(series["account"].clone())?;
         let window: WindowObs = serde_json::from_value(series["window"].clone())?;
+        if !summary_text_ok(&account, &window) {
+            set_aside.push(summary_finding(event, "holds text that today's checks refuse"));
+            continue;
+        }
+        let fingerprint = series_fingerprint(&account.identity, &window.identity);
+        let refused_at = refused_key(day, &fingerprint);
+        if !marked
+            && let Some(key) = &refused_at
+            && has_index(txn, db::REFUSED, key)?
+        {
+            set_aside.push(summary_finding(event, "was built from an observation refused since"));
+            continue;
+        }
         let a = db::intern(txn, db::KIND_ACCOUNT, &account.identity)?;
         let p = db::intern(txn, db::KIND_PROVIDER, &account.provider)?;
         let w = db::intern(txn, db::KIND_WINDOW, &window.identity)?;
@@ -1259,12 +1397,18 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
             Key::new().u32(a).u32(w).u32(day).as_slice(),
             &rollup_from_json(&series["day_rollup"])?.encode(),
         )?;
+        let mut provenance = Key::new().u32(a).u32(w);
         for period in series["periods"].as_array().into_iter().flatten() {
             let start = period["start_ms"].as_u64().unwrap_or(0);
             let mut value: Period = serde_json::from_value(period["period"].clone())?;
             value.is_final = true;
             value.emitted = true;
             write_period(txn, a, w, start, &value)?;
+            provenance = provenance.u64(start);
+        }
+        // An unmarked summary may still meet a refusal later in the ledger: remember what it wrote.
+        if !marked && let Some(key) = &refused_at {
+            put(txn, db::SUMMARY_UNMARKED, key, provenance.as_slice())?;
         }
     }
     put_index(txn, db::DAY_CLOSED, Key::new().u32(day).as_slice())?;
@@ -1272,7 +1416,7 @@ fn project_day_closed(txn: &WriteTransaction, payload: &Json) -> Result<()> {
     if through.map(|d| day > d).unwrap_or(true) {
         db::set_meta(txn, "closed_through_day", &day.to_string())?;
     }
-    Ok(())
+    Ok(set_aside)
 }
 
 // ----------------------------------------------------------------------------- engine operations
@@ -1448,7 +1592,8 @@ pub fn close_days(engine: &Engine, now: u64) -> Result<Json> {
             };
             let parts = chunks.len();
             for (i, chunk) in chunks.into_iter().enumerate() {
-                let payload = json!({ "day": next, "part": i, "parts": parts, "series": chunk });
+                let payload =
+                    json!({ "day": next, "part": i, "parts": parts, "series": chunk, "refused_excluded": true });
                 let mut event = Event::new("usage.day_closed", now_ms(), msgpack::from_json(&payload)?);
                 event.idempotency_key = Some(format!("{next}:{i}"));
                 batch.push(event)?;
@@ -1726,6 +1871,108 @@ fn open_spans(read: &redb::ReadTransaction) -> Result<OpenSpans> {
     Ok(out)
 }
 
+/// The open spans of the given series only: one `latest` read each.
+fn open_spans_for<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    latest: &T,
+    series: impl IntoIterator<Item = (u32, u32)>,
+) -> Result<OpenSpans> {
+    let mut out = OpenSpans::new();
+    for (a, w) in series {
+        if let Some(v) = latest.get(Key::new().u32(a).u32(w).as_slice())? {
+            let b = v.value();
+            if b.len() >= 16 {
+                out.insert((a, w), (db::be_u64(b, 0), Row::decode(&b[16..])?));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The accounts a query names by identity, through `dict_rev`: no account row is read.
+fn accounts_named(read: &redb::ReadTransaction, identities: &[String]) -> Result<Vec<u32>> {
+    let rev = read.open_table(db::DICT_REV)?;
+    let mut ids = Vec::new();
+    for identity in identities {
+        if let Some(a) = db::lookup_id(&rev, db::KIND_ACCOUNT, identity)? {
+            ids.push(a);
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// The series a filtered query reads, in key order, with their `series` rows, chosen through the
+/// indexes (docs/store.md 3.2): identities through `dict_rev` and an account prefix, a provider
+/// through `series_by_provider`. Only an `account_ids` filter reads account rows (accounts are
+/// few, and `account_id` is not interned). Without filters, every series.
+fn select_series(
+    read: &redb::ReadTransaction,
+    identities: Option<&[String]>,
+    account_ids: Option<&[String]>,
+    provider: Option<&str>,
+) -> Result<Vec<((u32, u32), Vec<u8>)>> {
+    let series_table = read.open_table(db::SERIES)?;
+    let mut accounts: Option<Vec<u32>> = identities.map(|ids| accounts_named(read, ids)).transpose()?;
+    if let Some(wanted) = account_ids {
+        let table = read.open_table(db::ACCOUNT)?;
+        let mut matched = Vec::new();
+        for item in table.iter()? {
+            let (k, v) = item?;
+            let a = db::be_u32(k.value(), 0);
+            if accounts.as_ref().is_some_and(|ids| !ids.contains(&a)) {
+                continue;
+            }
+            let meta: AccountMeta = db::unpack(v.value())?;
+            if wanted.contains(&meta.account_id) {
+                matched.push(a);
+            }
+        }
+        accounts = Some(matched);
+    }
+    let mut keys: Vec<(u32, u32)> = Vec::new();
+    if let Some(provider) = provider {
+        let rev = read.open_table(db::DICT_REV)?;
+        if let Some(p) = db::lookup_id(&rev, db::KIND_PROVIDER, provider)? {
+            let index = read.open_table(db::SERIES_BY_PROVIDER)?;
+            let prefix = Key::new().u32(p);
+            let end = db::prefix_end(prefix.as_slice());
+            for item in index.range(prefix.as_slice()..end.as_slice())? {
+                let (k, _) = item?;
+                let (a, w) = (db::be_u32(k.value(), 4), db::be_u32(k.value(), 8));
+                if accounts.as_ref().is_none_or(|ids| ids.contains(&a)) {
+                    keys.push((a, w));
+                }
+            }
+        }
+    } else if let Some(ids) = &accounts {
+        for &a in ids {
+            let prefix = Key::new().u32(a);
+            let end = db::prefix_end(prefix.as_slice());
+            for item in series_table.range(prefix.as_slice()..end.as_slice())? {
+                let (k, _) = item?;
+                keys.push((a, db::be_u32(k.value(), 4)));
+            }
+        }
+    } else {
+        let mut out = Vec::new();
+        for item in series_table.iter()? {
+            let (k, v) = item?;
+            out.push(((db::be_u32(k.value(), 0), db::be_u32(k.value(), 4)), v.value().to_vec()));
+        }
+        return Ok(out);
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    let mut out = Vec::new();
+    for (a, w) in keys {
+        if let Some(v) = series_table.get(Key::new().u32(a).u32(w).as_slice())? {
+            out.push(((a, w), v.value().to_vec()));
+        }
+    }
+    Ok(out)
+}
+
 /// A time's UTC day as a key field; times past the last key day clamp to it.
 fn day_key(t: u64) -> u32 {
     (t / DAY_MS).min(u32::MAX as u64) as u32
@@ -1874,27 +2121,48 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
         let readings = read.open_table(db::READING_DAY)?;
         let states = read.open_table(db::ACCOUNT_STATE)?;
         let latest_table = read.open_table(db::ACCOUNT_LATEST)?;
-        let open = open_spans(&read)?;
+        let latest_rows = read.open_table(db::LATEST)?;
         let (from, to) = (query.from_ms, query.to_ms);
         let mut records: Vec<(i64, Json)> = Vec::new();
-        for item in accounts.iter()? {
-            let (k, v) = item?;
-            let a = db::be_u32(k.value(), 0);
-            let meta: AccountMeta = db::unpack(v.value())?;
-            if let Some(ids) = &query.identities
-                && !ids.contains(&meta.identity)
-            {
-                continue;
+        // Named accounts through `dict_rev`; otherwise every account.
+        let selected: Vec<(u32, AccountMeta)> = match &query.identities {
+            Some(ids) => {
+                let mut out = Vec::new();
+                for a in accounts_named(&read, ids)? {
+                    if let Some(v) = accounts.get(Key::new().u32(a).as_slice())? {
+                        out.push((a, db::unpack(v.value())?));
+                    }
+                }
+                out
             }
-            // Account state spans overlapping the range.
+            None => {
+                let mut out = Vec::new();
+                for item in accounts.iter()? {
+                    let (k, v) = item?;
+                    out.push((db::be_u32(k.value(), 0), db::unpack(v.value())?));
+                }
+                out
+            }
+        };
+        for (a, meta) in selected {
+            // Account state spans overlapping the range: the span open at `from` (one reverse
+            // seek; spans do not overlap, so no earlier one reaches it), then those starting in it.
             let mut spans: Vec<(u64, AccountState)> = Vec::new();
             let prefix = Key::new().u32(a);
-            let end = Key::new().u32(a).u64(to.saturating_add(1));
-            for item in states.range(prefix.as_slice()..end.as_slice())? {
+            let at_from = Key::new().u32(a).u64(from);
+            if let Some(item) = states.range(prefix.as_slice()..=at_from.as_slice())?.next_back() {
                 let (k, v) = item?;
                 let state: AccountState = db::unpack(v.value())?;
                 if state.last_seen as u64 >= from {
                     spans.push((db::be_u64(k.value(), 4), state));
+                }
+            }
+            let after = Key::new().u32(a).u64(from.saturating_add(1));
+            let end = Key::new().u32(a).u64(to.saturating_add(1));
+            if from < u64::MAX && after.as_slice() < end.as_slice() {
+                for item in states.range(after.as_slice()..end.as_slice())? {
+                    let (k, v) = item?;
+                    spans.push((db::be_u64(k.value(), 4), db::unpack(v.value())?));
                 }
             }
             if spans.is_empty() {
@@ -1916,6 +2184,7 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
                 }
                 series_meta.push((w, db::unpack::<SeriesMeta>(v.value())?));
             }
+            let open = open_spans_for(&latest_rows, series_meta.iter().map(|(w, _)| (a, *w)))?;
             let mut window_rows: Vec<(u32, WindowMeta, SeriesMeta, Vec<(u64, Row)>)> = Vec::new();
             for w in order {
                 let Some((_, smeta)) = series_meta.iter().find(|(id, _)| *id == w) else {
@@ -2086,7 +2355,7 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
             let mut spans = Vec::new();
             for &span in spans_ms {
                 let (Some(a), Some(w)) = ids else {
-                    spans.push(json!({ "spanMs": span, "consumed": null, "rate": null, "coverage": 0 }));
+                    spans.push(json!({ "spanMs": span, "consumed": null, "rate": null, "coverage": 0.0 }));
                     continue;
                 };
                 let from = now.saturating_sub(span);
@@ -2098,14 +2367,16 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
                     Ok(true)
                 })?;
                 let coverage = (covered as f64 / span.max(1) as f64).min(1.0);
-                let rate = if any {
-                    Some(round2(consumed / (span as f64 / HOUR_MS as f64)))
+                // Without a reading in the span, consumption is unknown, not zero (7.2).
+                let (consumed, rate) = if any {
+                    (
+                        Some(round2(consumed)),
+                        Some(round2(consumed / (span as f64 / HOUR_MS as f64))),
+                    )
                 } else {
-                    None
+                    (None, None)
                 };
-                spans.push(
-                    json!({ "spanMs": span, "consumed": round2(consumed), "rate": rate, "coverage": round2(coverage) }),
-                );
+                spans.push(json!({ "spanMs": span, "consumed": consumed, "rate": rate, "coverage": round2(coverage) }));
             }
             out.push(json!({ "identity": s.identity, "window": s.window, "spans": spans }));
         }
@@ -2138,18 +2409,21 @@ pub fn series_points(engine: &Engine, query: &SeriesQuery) -> Result<Json> {
         let read = db.begin_read()?;
         let accounts = read.open_table(db::ACCOUNT)?;
         let windows = read.open_table(db::WINDOW)?;
-        let series_table = read.open_table(db::SERIES)?;
         let readings = read.open_table(db::READING_DAY)?;
         let hours = read.open_table(db::ROLLUP_HOURS)?;
         let days = read.open_table(db::ROLLUP_DAY)?;
-        let open = open_spans(&read)?;
+        let selected = select_series(
+            &read,
+            query.identities.as_deref(),
+            query.account_ids.as_deref(),
+            query.provider.as_deref(),
+        )?;
+        let open = open_spans_for(&read.open_table(db::LATEST)?, selected.iter().map(|(key, _)| *key))?;
         let mut out = Vec::new();
         let mut total = 0usize;
         let mut truncated = false;
-        for item in series_table.iter()? {
-            let (k, v) = item?;
-            let (a, w) = (db::be_u32(k.value(), 0), db::be_u32(k.value(), 4));
-            let smeta: SeriesMeta = db::unpack(v.value())?;
+        for ((a, w), value) in selected {
+            let smeta: SeriesMeta = db::unpack(&value)?;
             let Some(av) = accounts.get(Key::new().u32(a).as_slice())? else { continue };
             let ameta: AccountMeta = db::unpack(av.value())?;
             let Some(wv) = windows.get(Key::new().u32(w).as_slice())? else { continue };
@@ -2238,12 +2512,15 @@ pub fn series_list(engine: &Engine, query: &SeriesListQuery) -> Result<Json> {
         let read = db.begin_read()?;
         let accounts = read.open_table(db::ACCOUNT)?;
         let windows = read.open_table(db::WINDOW)?;
-        let series_table = read.open_table(db::SERIES)?;
         let mut out = Vec::new();
-        for item in series_table.iter()? {
-            let (k, v) = item?;
-            let (a, w) = (db::be_u32(k.value(), 0), db::be_u32(k.value(), 4));
-            let smeta: SeriesMeta = db::unpack(v.value())?;
+        let selected = select_series(
+            &read,
+            query.identities.as_deref(),
+            query.account_ids.as_deref(),
+            query.provider.as_deref(),
+        )?;
+        for ((a, w), value) in selected {
+            let smeta: SeriesMeta = db::unpack(&value)?;
             if (smeta.last_ms as u64) < query.from_ms || (smeta.first_ms.max(0) as u64) > query.to_ms {
                 continue;
             }

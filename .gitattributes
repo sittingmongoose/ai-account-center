@@ -4,3 +4,5 @@
 * text=auto eol=lf
 # Windows command wrappers keep CRLF.
 *.cmd text eol=crlf
+# Store test fixtures: logs and redb files written by older builds, byte for byte.
+native/aac-store/tests/fixtures/** binary

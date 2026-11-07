@@ -238,9 +238,18 @@ impl Engine {
             opened_ms: now_ms(),
             integrity: Mutex::new(integrity),
         };
-        let mut replay_findings = engine.replay()?;
-        findings.append(&mut replay_findings);
-        let loss: Vec<_> = findings.iter().filter(|f| is_loss(&f.kind)).cloned().collect();
+        let replay_findings = engine.replay()?;
+        merge_findings(&mut findings, replay_findings);
+        // What earlier opens disclosed stays disclosed until it is resolved (2.6), whatever the
+        // checkpoint: kept in redb, and rebuilt from the ledger's `store.integrity_detected`.
+        let kept = engine.with_db(kept_findings)?;
+        let ledgered: Vec<String> = kept.iter().filter(|(_, l)| *l).map(|(f, _)| finding_key(f)).collect();
+        merge_findings(&mut findings, kept.into_iter().map(|(f, _)| f));
+        let loss: Vec<_> = findings
+            .iter()
+            .filter(|f| is_loss(&f.kind) && !ledgered.contains(&finding_key(f)))
+            .cloned()
+            .collect();
         *engine.findings.lock().unwrap() = findings;
         let mut opened = Event::new(
             "store.opened",
@@ -386,6 +395,7 @@ impl Engine {
                     detail,
                     start_seq: Some(start.clamp(lower, end)),
                     end_seq: Some(end),
+                    refused: None,
                 });
                 if !stale.contains(i) {
                     stale.push(*i);
@@ -463,7 +473,11 @@ impl Engine {
                     for event in pending.iter() {
                         for (i, cp) in checkpoints.iter_mut() {
                             if event.sequence_id > cp.last_sequence_id {
-                                found.append(&mut self.projectors[*i].apply(&txn, log_id, event)?);
+                                let ledgered = event.event_type == "store.integrity_detected";
+                                for f in self.projectors[*i].apply(&txn, log_id, event)? {
+                                    keep_finding(&txn, &f, ledgered)?;
+                                    found.push(f);
+                                }
                                 cp.advance(event.sequence_id, &event.event_id);
                             }
                         }
@@ -895,8 +909,12 @@ impl Batch<'_> {
         self.log.assign(&mut event)?;
         for (i, cp) in self.checkpoints.iter_mut() {
             let set_aside = self.engine.projectors[*i].apply(self.txn, self.log_id, &event)?;
+            let ledgered = event.event_type == "store.integrity_detected";
+            for f in &set_aside {
+                keep_finding(self.txn, f, ledgered)?;
+            }
             if !set_aside.is_empty() {
-                self.engine.findings.lock().unwrap().extend(set_aside);
+                merge_findings(&mut self.engine.findings.lock().unwrap(), set_aside);
             }
             cp.advance(event.sequence_id, &event.event_id);
         }
@@ -926,6 +944,63 @@ pub fn finding(kind: &str, detail: &str) -> Finding {
         detail: detail.into(),
         start_seq: None,
         end_seq: None,
+        refused: None,
+    }
+}
+
+/// The key a finding is kept under: one entry per kind and range.
+fn finding_key(f: &Finding) -> String {
+    format!("{}:{}:{}", f.kind, f.start_seq.unwrap_or(0), f.end_seq.unwrap_or(0))
+}
+
+/// Keeps a disclosed finding in redb, in the projection's own transaction. `ledgered` says the
+/// ledger already holds it as `store.integrity_detected`.
+fn keep_finding(txn: &WriteTransaction, f: &Finding, ledgered: bool) -> Result<()> {
+    let key = finding_key(f);
+    let mut table = txn.open_table(db::FINDING)?;
+    let already = table
+        .get(key.as_str())?
+        .and_then(|v| crate::msgpack::from_bytes::<Json>(v.value()).ok())
+        .is_some_and(|v| v["ledgered"] == true);
+    let value = json!({ "finding": serde_json::to_value(f)?, "ledgered": ledgered || already });
+    table.insert(
+        key.as_str(),
+        crate::msgpack::encode(&crate::msgpack::from_json(&value)?)?.as_slice(),
+    )?;
+    Ok(())
+}
+
+/// The findings kept by earlier opens, with whether the ledger holds each.
+fn kept_findings(db: &Database) -> Result<Vec<(Finding, bool)>> {
+    let read = db.begin_read()?;
+    let table = read.open_table(db::FINDING)?;
+    let mut out = Vec::new();
+    for item in table.iter()? {
+        let (_, v) = item?;
+        let value: Json = crate::msgpack::from_bytes(v.value())?;
+        out.push((finding_from_json(&value["finding"]), value["ledgered"] == true));
+    }
+    Ok(out)
+}
+
+/// A finding read back from the ledger or from redb.
+pub fn finding_from_json(v: &Json) -> Finding {
+    Finding {
+        kind: v["kind"].as_str().unwrap_or_default().to_string(),
+        detail: v["detail"].as_str().unwrap_or_default().to_string(),
+        start_seq: v["start_seq"].as_u64(),
+        end_seq: v["end_seq"].as_u64(),
+        refused: v.get("refused").filter(|r| !r.is_null()).cloned(),
+    }
+}
+
+/// Adds findings not already listed (by kind and range).
+fn merge_findings(into: &mut Vec<Finding>, more: impl IntoIterator<Item = Finding>) {
+    for f in more {
+        let key = finding_key(&f);
+        if !into.iter().any(|g| finding_key(g) == key) {
+            into.push(f);
+        }
     }
 }
 
