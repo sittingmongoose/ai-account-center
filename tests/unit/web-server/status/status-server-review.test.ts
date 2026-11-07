@@ -2102,6 +2102,19 @@ describe('round three', () => {
       // -p with a separate value after a login or sshpass
       'docker login -u jared -p Summer_2026',
       'sshpass -p Summer_2026 ssh host',
+      'az acr login -n reg -u jared -p Summer_2026',
+      // values holding = are still judged; only a comma list of settings is read part by part
+      'password: Summer=2026',
+      'password=Passw0rd=1',
+      'DB_PASSWORD=Hello=World2026',
+      'pw=jared=Summer2026',
+      'pass: Summer=2026!',
+      'API_KEY=abc=AbCd1234EfGh5678',
+      'token=key=AbCd1234EfGh5678',
+      'secret=id=x,src=AbCd1234EfGh5678',
+      // a short password after "is" that ends the clause
+      'password is hunter2',
+      'the password is s3cr3t.',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, 'a password or key']);
   });
@@ -2159,6 +2172,15 @@ describe('round three', () => {
       'docker build --secret id=npmrc,src=$HOME/.npmrc .',
       'the password was wrong3 times',
       'docker run -p 8080:80 img && ssh -p 2222 host',
+      // test and step names after a bare pass
+      'pass: TestAuth_2',
+      'pass: TestCase_12',
+      'pass: Step_2_Done',
+      'pass=round_16_ok',
+      // -p for other commands after a login
+      'After login: nix-shell -p python311Packages',
+      'login then cargo test -p crate2026',
+      'login and pnpm -p @scope/pkg2026',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, null]);
   });
@@ -2180,6 +2202,9 @@ describe('round three', () => {
       'a is ',
       'login ',
       'sshpass -x ',
+      'docker login -x ',
+      'a=b,',
+      'password is a ',
     ])
       for (const text of [filler.repeat(4000 / filler.length), `${filler.repeat(1000)}x`]) {
         const started = performance.now();
