@@ -419,8 +419,9 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
 - The note is stored exactly as typed (trimmed of surrounding whitespace only), at most 4,000 characters, no control
   characters other than tab and newlines.
 - Stored in `<ccsDir>/status/answers.jsonl` (append, local disk, this server only: the process that records answers
-  holds `<ccsDir>/status/answers.lock` while it runs, and a second dashboard on the same folder is refused with
-  `store_busy`, writing nothing), then written signed to the share
+  holds `<ccsDir>/status/answers.lock` while it runs, refreshing it each minute, and a second dashboard on the same
+  folder is refused with `store_busy`, writing nothing; a lock whose holder has ended, or that no one has refreshed for
+  10 minutes, is taken over, and deleting the file frees it at once), then written signed to the share
   (temporary file and rename), then a signed send summary, then the askers are rung through pm-mail. An answer or a
   done goes to `<reports>/v1/answers/<card>.json` (a later answer to a newer version of the card replaces it); each
   note gets its own file `<card>.note-<12 hex>.json` and each objection `<card>.object-<12 hex>.json`, so none

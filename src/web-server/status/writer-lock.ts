@@ -4,11 +4,13 @@
  * process had just acknowledged) or creates or repairs the answer key at the same time. Within the process every
  * write is synchronous, so its own instances never interleave.
  *
- * The lock names its holder (pid, host, time). A lock is taken over when its holder is gone: a process on this host
- * that no longer runs, a lock written before this computer last started, or one with no readable holder after
- * STALE_UNREADABLE_MS (a writer stopped between creating and filling it). A holder on another host is never judged
- * gone, since its processes can't be seen from here. A take-over moves the stale lock aside and checks it moved the
- * one it judged; a live lock moved by mistake is put back.
+ * The lock names its holder (pid, host, time), and the holder refreshes its time stamp on every write and every retry
+ * pass (each minute). A lock is taken over when its holder is gone: one not refreshed for UNREFRESHED_MS, whoever
+ * wrote it (another host, such as a replaced container, a pid since reused, or a lock from before a restart); at once,
+ * one whose holder on this host no longer runs; or one with no readable holder after
+ * STALE_UNREADABLE_MS (a writer stopped between creating and filling it). A take-over moves the stale lock aside and
+ * checks it moved the one it judged; a live lock moved by mistake is put back. Known limit: three processes racing on
+ * one stale lock can, for microseconds, leave two that each believe they hold it.
  */
 import { randomBytes } from 'crypto';
 import fs from 'fs';
@@ -18,8 +20,8 @@ import { ConfigError } from '../../errors/error-types';
 
 export const WRITER_LOCK_FILE = 'answers.lock';
 const STALE_UNREADABLE_MS = 10_000;
-/** Clock slack when comparing a lock's time with this computer's start. */
-const BOOT_SLACK_MS = 60_000;
+/** A lock its holder has not refreshed for this long is gone (the holder refreshes it at least every minute). */
+const UNREFRESHED_MS = 10 * 60 * 1000;
 
 export class WriterBusyError extends ConfigError {
   constructor(readonly holder: string) {
@@ -73,9 +75,9 @@ function running(pid: number): boolean {
 
 function stale(holder: Holder | null, mtimeMs: number): boolean {
   if (holder === null) return Date.now() - mtimeMs > STALE_UNREADABLE_MS;
+  if (Date.now() - mtimeMs > UNREFRESHED_MS) return true;
   if (holder.host !== os.hostname()) return false;
-  const bootedAt = Date.now() - os.uptime() * 1000;
-  return mtimeMs < bootedAt - BOOT_SLACK_MS || !running(holder.pid);
+  return !running(holder.pid);
 }
 
 /** Moves a stale lock aside, and puts it back if what moved was not the lock judged stale. */
@@ -87,17 +89,23 @@ function takeOver(file: string, judged: string): void {
     if (errorCode(error) === 'ENOENT') return;
     throw error;
   }
-  try {
-    if (readText(aside) !== judged) {
-      try {
-        fs.linkSync(aside, file);
-      } catch {
-        /* another process took the name meanwhile; it holds the lock now */
+  if (readText(aside) !== judged) {
+    try {
+      fs.linkSync(aside, file);
+    } catch (error) {
+      // EEXIST: another process took the name meanwhile and holds the lock now. Without hard links, the moved lock
+      // goes back by name while the name is still free.
+      if (errorCode(error) !== 'EEXIST' && !fs.existsSync(file)) {
+        try {
+          fs.renameSync(aside, file);
+          return;
+        } catch {
+          /* its holder takes it again on its next write */
+        }
       }
     }
-  } finally {
-    fs.rmSync(aside, { force: true });
   }
+  fs.rmSync(aside, { force: true });
 }
 
 function releaseAtExit(): void {
@@ -121,7 +129,16 @@ function releaseAtExit(): void {
 export function holdWriterLock(dir: string): void {
   const file = path.join(dir, WRITER_LOCK_FILE);
   const mine = held.get(file);
-  if (mine !== undefined && readText(file) === mine) return;
+  if (mine !== undefined && readText(file) === mine) {
+    // still ours: refresh its time stamp, so it never reads as left behind
+    try {
+      const now = new Date();
+      fs.utimesSync(file, now, now);
+    } catch {
+      /* best effort */
+    }
+    return;
+  }
   held.delete(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 4; attempt += 1) {

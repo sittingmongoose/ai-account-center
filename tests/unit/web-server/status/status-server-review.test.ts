@@ -2419,12 +2419,38 @@ describe('round three', () => {
     fs.writeFileSync(lock, JSON.stringify({ pid: gone, host: os.hostname(), at: 0 }));
     expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
     expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
-    // a live pid's lock written before this computer last started is stale too
+    // a live pid's lock from before this computer last started has not been refreshed since: stale too
     fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, host: os.hostname(), at: 0 }));
     const beforeBoot = new Date(Date.now() - os.uptime() * 1000 - 60 * 60 * 1000);
     fs.utimesSync(lock, beforeBoot, beforeBoot);
     expect((await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].outcome).toBe('recorded');
     expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
+  });
+
+  it('the answer store has one writer: a lock no one has refreshed for ten minutes is taken over', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    fs.mkdirSync(store, { recursive: true });
+    const lock = path.join(store, 'answers.lock');
+    const age = (minutes: number) => {
+      const at = new Date(Date.now() - minutes * 60 * 1000);
+      fs.utimesSync(lock, at, at);
+    };
+    // another host's lock (a container that was replaced) cannot be checked by pid: fresh, it holds the store
+    fs.writeFileSync(lock, JSON.stringify({ pid: 7, host: 'old-container-3f2a9c1b', at: 0 }));
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].code).toBe('store_busy');
+    // ten minutes without a refresh, it is gone
+    age(11);
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    // the same for a live pid on this host that only reuses a dead holder's number
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, host: os.hostname(), at: 0 }));
+    age(11);
+    expect((await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].outcome).toBe('recorded');
+    // the holder refreshes its lock on each write and each retry pass
+    age(9);
+    await make().retryPending();
+    expect(Date.now() - fs.statSync(lock).mtimeMs).toBeLessThan(60 * 1000);
   });
 
   it('a torn last store line does not swallow the next record after a restart', async () => {

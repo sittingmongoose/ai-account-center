@@ -24,7 +24,7 @@ const REFUSALS = {
     'This judgement card carries a recommendation, so it cannot be answered until the agent removes it.',
   answer_not_saved: 'The answer could not be saved. Nothing was sent.',
   store_busy:
-    'Another AI Account Center dashboard on this computer is recording answers. Nothing was sent. Close it, then send again.',
+    'Another AI Account Center dashboard is recording answers from this folder. Nothing was sent. Close it, then send again; one that stopped without closing frees it within 10 minutes.',
   share_unavailable:
     'The reports share did not answer in time, so this card could not be checked. Nothing was recorded for it; try again.',
 } as const;
