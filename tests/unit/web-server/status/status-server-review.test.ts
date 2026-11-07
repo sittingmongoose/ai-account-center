@@ -3467,6 +3467,92 @@ describe('real-process journal and publication fences', () => {
     };
     return { root, doc, entry };
   };
+  for (const code of ['EIO', 'EACCES']) {
+    it('warm history routes refuse a failed authoritative reload: ' + code, async () => {
+      const { root, entry } = fixture('warm-' + code);
+      const a = new Worker(root),
+        b = new Worker(root);
+      try {
+        await Promise.all([a.next('ready'), b.next('ready')]);
+        a.send({ cmd: 'submit', entries: [entry] });
+        assert.equal((await a.next('submitted')).result[0].outcome, 'recorded');
+        fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
+        b.send({ cmd: 'submit', entries: [{ ...entry, choice: ['B'], entryId: 'b'.repeat(32) }] });
+        assert.equal((await b.next('submitted')).result[0].code, 'card_changed');
+        await b.exit();
+        a.send({ cmd: 'arm', n: 100, code });
+        await a.next('armed');
+        a.send({ cmd: 'retry' });
+        await a.next('retried');
+        a.send({ cmd: 'routes' });
+        const bad = await a.next('routes');
+        assert.equal(bad.historyStatus, 503);
+        assert.equal(bad.history.code, 'answers_unavailable');
+        assert.equal(bad.viewStatus, 200);
+        assert.equal(bad.view.cards.answered, null);
+        assert.equal(bad.view.cards.complete, false);
+        assert.ok(bad.view.cards.answerHistoryProblem);
+        assert.ok(bad.view.threads);
+        assert.ok(bad.view.machines);
+        a.send({ cmd: 'arm', n: 0 });
+        await a.next('armed');
+        a.send({ cmd: 'routes' });
+        const good = await a.next('routes');
+        assert.equal(good.historyStatus, 200);
+        assert.equal(good.history.answers.length, 1);
+        assert.equal(good.view.cards.answerHistoryProblem, null);
+      } finally {
+        await Promise.all([a.kill(), b.kill()]);
+      }
+    });
+    it('three reload errors persist a completed ring before restart: ' + code, async () => {
+      const { root, entry } = fixture('restart-' + code);
+      const a = new Worker(root);
+      let b: Worker | undefined;
+      try {
+        await a.next('ready');
+        a.send({ cmd: 'ring-gate' });
+        await a.next('gated');
+        a.send({ cmd: 'submit', entries: [entry] });
+        await a.next('ring-wait');
+        await a.next('submitted');
+        fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
+        a.send({ cmd: 'arm', n: 3, code });
+        await a.next('armed');
+        a.send({ cmd: 'retry' });
+        await a.next('retried');
+        // No successful read between the failed gain and the completion.
+        a.send({ cmd: 'release-ring' });
+        assert.equal((await a.next('ring-released')).faultCount, 3);
+        assert.equal(
+          records(root).filter(
+            (x) => x.type === 'delivery' && x.step === 'doorbell' && x.state === 'done'
+          ).length,
+          0
+        );
+        a.send({ cmd: 'retry' });
+        await a.next('retried');
+        await a.exit();
+        b = new Worker(root);
+        await b.next('ready');
+        b.send({ cmd: 'retry' });
+        await b.next('retried');
+        assert.equal(
+          fs.readFileSync(path.join(root, 'rings.jsonl'), 'utf8').trim().split('\n').length,
+          1
+        );
+        assert.equal(
+          records(root).filter(
+            (x) => x.type === 'delivery' && x.step === 'doorbell' && x.state === 'done'
+          ).length,
+          1
+        );
+      } finally {
+        await a.kill();
+        await b?.kill();
+      }
+    });
+  }
   it('a failed reload during an in-flight ring preserves the held record across a page poll', async () => {
     const { root, entry } = fixture('reload-ring-eio');
     const a = new Worker(root),

@@ -428,7 +428,7 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   each record starts on a line of its own and is written in one piece or refused; a record that fails to be written
   whole is cancelled by a `void` line naming it, never cut, so no writer can remove another's record. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
   each minute. Only ENOENT means an empty journal; other journal read errors refuse store-dependent decisions
-  (answers return `answer_not_saved`) and leave history unloaded so a later good read recovers. A second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
+  (answers return `answer_not_saved`) and mark history unavailable even after a warm cache; a later good authoritative read recovers. A second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
   over when its holder on this computer has ended, or on Linux was written in an earlier boot or names a pid since
   reused, or, written by another
   host such as a replaced container, when no one has refreshed it for 10 minutes; nothing is judged by the clock for
@@ -441,7 +441,12 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   one for that card exists. Each share attempt checks its writer ownership generation after asynchronous work
   and synchronously immediately before rename. Losing or regaining the lock drops that attempt; reacquisition
   reloads and reconciles history before a later retry decides what still needs delivery. A failed reload keeps the held records and sends attached to in-flight deliveries, leaves ownership unconfirmed,
-  and retries reconciliation by id on the next gain; completed steps stay done. Nothing is written when `<reports>/v1` is not
+  and retries reconciliation by id on the next gain. Held objects are kept separately from readable history:
+  list and history refuse after a read error until ownership and a good authoritative read are confirmed.
+  Successful delivery effects whose completion lines could not be appended remain pending persistence work,
+  separate from journal-confirmed done steps. With confirmed ownership, the next good read/retry appends those
+  completion lines before considering the steps done; persistence repair never rings again. Durable done steps
+  stay done, and persistence retries continue even after the delivery attempt limit. Nothing is written when `<reports>/v1` is not
   there: only folders below it are created, so an unmounted share grows no local folder, and the step reads
   "The reports share is not available."
 - **Send summary:** every POST that records at least one entry is a send with its own server-made `sendId` (a UUID, not

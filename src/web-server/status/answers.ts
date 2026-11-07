@@ -360,6 +360,19 @@ const RECORD_KINDS: readonly string[] = ['answer', 'note', 'object', 'done'];
 
 export class StatusAnswers {
   private entries: AnswerHistoryEntry[] | null = null;
+  /** Delivery objects survive failed reads, but are never served as authoritative history. */
+  private readonly heldEntries = new Map<string, AnswerHistoryEntry>();
+  private historyUnavailable = false;
+  /** Successful effects awaiting a durable completion line; repair persistence without repeating them. */
+  private readonly pendingCompletions = new Map<
+    string,
+    {
+      line: Record<string, unknown>;
+      target: AnswerHistoryEntry | SendRecord;
+      step: StepName | 'summary';
+      value: StepState;
+    }
+  >();
   private readonly sends = new Map<string, SendRecord>();
   private queue: Promise<unknown> = Promise.resolve();
   private key: AnswerKey | null = null;
@@ -422,13 +435,20 @@ export class StatusAnswers {
 
   /** Every record in the private store, oldest first (folded with its delivery steps). */
   list(): AnswerHistoryEntry[] {
+    if (this.historyUnavailable) {
+      this.writer();
+      return this.list();
+    }
     if (this.entries) return this.entries;
     let text = '';
     try {
       text = fs.readFileSync(this.storeFile(), 'utf8');
     } catch (error) {
       // Only absence is an empty journal. Failed reads leave the cache unloaded for a later retry.
-      if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
+        this.historyUnavailable = true;
+        throw error;
+      }
     }
     return this.load(text);
   }
@@ -565,10 +585,16 @@ export class StatusAnswers {
         text = fs.readFileSync(this.storeFile(), 'utf8');
       } catch (error) {
         this.owner = false;
-        if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
+        if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') {
+          for (const held of this.entries ?? []) this.heldEntries.set(held.id, held);
+          this.entries = null;
+          this.historyUnavailable = true;
+          throw error;
+        }
         text = '';
       }
-      const heldEntries = new Map((this.entries ?? []).map((held) => [held.id, held]));
+      const heldEntries = new Map(this.heldEntries);
+      for (const held of this.entries ?? []) heldEntries.set(held.id, held);
       const heldSends = new Map(this.sends);
       this.entries = null;
       this.sends.clear();
@@ -592,11 +618,29 @@ export class StatusAnswers {
         }
         this.sends.set(sendId, held);
       }
+      this.heldEntries.clear();
+      this.historyUnavailable = false;
       this.owner = true;
       this.epoch += 1;
     }
     // Even an empty in-memory store must load successfully before replay, recording or ringing.
     this.list();
+    // Ownership and an authoritative read are prerequisites for repairing a completion.
+    // Failure leaves this work queued and refuses delivery; it never requires another ring.
+    for (const [key, pending] of this.pendingCompletions) {
+      const current =
+        pending.step === 'summary'
+          ? (pending.target as SendRecord).summary
+          : (pending.target as AnswerHistoryEntry)[pending.step];
+      if (current.state === 'done') {
+        this.pendingCompletions.delete(key);
+        continue;
+      }
+      appendLine(this.storeFile(), pending.line);
+      if (pending.step === 'summary') (pending.target as SendRecord).summary = pending.value;
+      else (pending.target as AnswerHistoryEntry)[pending.step] = pending.value;
+      this.pendingCompletions.delete(key);
+    }
   }
 
   private answerKey(): AnswerKey {
@@ -607,12 +651,13 @@ export class StatusAnswers {
     return this.key;
   }
 
-  private record(line: Record<string, unknown>): void {
+  private record(line: Record<string, unknown>): boolean {
     try {
       this.writer();
       appendLine(this.storeFile(), line);
+      return true;
     } catch {
-      /* The in-memory history still shows it; the next retry records again. */
+      return false;
     }
   }
 
@@ -625,10 +670,19 @@ export class StatusAnswers {
     // The store first (gaining it reads what other writers did): a step another writer finished stays done, so a
     // late failure here neither overwrites it nor sends the retry to ring again.
     this.gainQuietly();
-    if (entry[step].state === 'done' && state !== 'done') return;
+    if (
+      state !== 'done' &&
+      (entry[step].state === 'done' || this.pendingCompletions.has(entry.id + ':' + step))
+    )
+      return;
     const at = new Date(this.now()).toISOString();
-    this.record({ type: 'delivery', id: entry.id, step, state, at, detail });
-    entry[step] = { state, at, detail, attempts: entry[step].attempts + 1 };
+    const line = { type: 'delivery', id: entry.id, step, state, at, detail };
+    const value = { state, at, detail, attempts: entry[step].attempts + 1 };
+    const key = entry.id + ':' + step;
+    if (this.record(line)) entry[step] = value;
+    else if (state === 'done')
+      this.pendingCompletions.set(key, { line, target: entry, step, value });
+    else if (!this.pendingCompletions.has(key)) entry[step] = value;
     this.notifyChange();
   }
 
@@ -848,9 +902,22 @@ export class StatusAnswers {
       detail = 'The signed send summary could not be written to the share.';
     }
     this.gainQuietly();
-    if (send.summary.state === 'done' && state !== 'done') return true;
-    this.record({ type: 'delivery', id: send.sendId, step: 'summary', state, at, detail });
-    send.summary = { state, at, detail, attempts: send.summary.attempts + 1 };
+    if (
+      state !== 'done' &&
+      (send.summary.state === 'done' || this.pendingCompletions.has(send.sendId + ':summary'))
+    )
+      return true;
+    const line = { type: 'delivery', id: send.sendId, step: 'summary', state, at, detail };
+    const value = { state, at, detail, attempts: send.summary.attempts + 1 };
+    if (this.record(line)) send.summary = value;
+    else if (state === 'done')
+      this.pendingCompletions.set(send.sendId + ':summary', {
+        line,
+        target: send,
+        step: 'summary',
+        value,
+      });
+    else if (!this.pendingCompletions.has(send.sendId + ':summary')) send.summary = value;
     return state === 'done';
   }
 

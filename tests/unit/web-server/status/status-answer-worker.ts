@@ -1,4 +1,8 @@
 import fs from 'node:fs';
+import express from 'express';
+import { StatusService } from '../../../../src/web-server/status/status-service';
+import { PmMailRegistryReader } from '../../../../src/web-server/status/status-collectors';
+import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { StatusAnswers } from '../../../../src/web-server/status/answers';
@@ -11,6 +15,7 @@ const store = path.join(root, 'store');
 const reports = path.join(root, 'reports');
 let faultCount = 0;
 let faults = 0;
+let faultCode = 'EIO';
 let ringResume: (() => void) | null = null;
 let gateRing = false;
 const realRead = fs.readFileSync;
@@ -18,7 +23,7 @@ fs.readFileSync = ((file: any, ...args: any[]) => {
   if (String(file) === path.join(store, 'answers.jsonl') && faults > 0) {
     faults--;
     faultCount++;
-    throw Object.assign(Error('Injected journal EIO'), { code: 'EIO' });
+    throw Object.assign(Error('Injected journal EIO'), { code: faultCode });
   }
   return (realRead as any)(file, ...args);
 }) as typeof fs.readFileSync;
@@ -74,11 +79,52 @@ const answers = new StatusAnswers({
     return { ok: true, detail: 'Local stub rang.' };
   },
 });
+const service = new StatusService({
+  reader,
+  answers,
+  now: () => NOW,
+  notify: () => undefined,
+  timeZone: () => 'UTC',
+  registryReader: new PmMailRegistryReader(() => path.join(root, 'registry')),
+  run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+  readLocalMachine: async () => {
+    throw Error('offline fixture');
+  },
+  readRemoteMachine: async () => {
+    throw Error('offline fixture');
+  },
+});
+const app = express();
+app.use((req, _res, next) => {
+  Object.assign(req, { session: { authenticated: true } });
+  next();
+});
+app.use(
+  '/api/status',
+  createStatusRouter(() => service)
+);
+const server = app.listen(0, '127.0.0.1');
+await new Promise<void>((resolve) => server.once('listening', resolve));
+await reader.scan();
 createInterface({ input: process.stdin }).on('line', async (line) => {
   const cmd = JSON.parse(line);
   try {
+    if (cmd.cmd === 'routes') {
+      const base = 'http://127.0.0.1:' + (server.address() as { port: number }).port;
+      const view = await fetch(base + '/api/status');
+      const history = await fetch(base + '/api/status/answers');
+      emit({
+        event: 'routes',
+        viewStatus: view.status,
+        view: await view.json(),
+        historyStatus: history.status,
+        history: await history.json(),
+      });
+      return;
+    }
     if (cmd.cmd === 'arm') {
-      faults = 1;
+      faults = cmd.n ?? 1;
+      faultCode = cmd.code ?? 'EIO';
       emit({ event: 'armed' });
       return;
     }
@@ -89,6 +135,8 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     }
     if (cmd.cmd === 'release-ring') {
       ringResume?.();
+      await pause(30);
+      emit({ event: 'ring-released', faultCount });
       return;
     }
     if (cmd.cmd === 'exit') process.exit(0);
