@@ -587,10 +587,23 @@ export class StatusAnswers {
     state: StepState['state'],
     detail: string
   ) {
+    // The store first (gaining it reads what other writers did): a step another writer finished stays done, so a
+    // late failure here neither overwrites it nor sends the retry to ring again.
+    this.gainQuietly();
+    if (entry[step].state === 'done' && state !== 'done') return;
     const at = new Date(this.now()).toISOString();
     this.record({ type: 'delivery', id: entry.id, step, state, at, detail });
     entry[step] = { state, at, detail, attempts: entry[step].attempts + 1 };
     this.notifyChange();
+  }
+
+  /** writer(), where a refusal is not this caller's to report (record() refuses the write anyway). */
+  private gainQuietly(): void {
+    try {
+      this.writer();
+    } catch {
+      /* another process holds the store */
+    }
   }
 
   private rememberDraft(entryId: string, at: number, hash: string): void {
@@ -782,6 +795,8 @@ export class StatusAnswers {
       state = 'failed';
       detail = 'The signed send summary could not be written to the share.';
     }
+    this.gainQuietly();
+    if (send.summary.state === 'done' && state !== 'done') return true;
     this.record({ type: 'delivery', id: send.sendId, step: 'summary', state, at, detail });
     send.summary = { state, at, detail, attempts: send.summary.attempts + 1 };
     return state === 'done';

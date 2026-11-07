@@ -2629,6 +2629,45 @@ describe('round three', () => {
     expect(rings.length).toBe(rung);
   });
 
+  it('the answer store has one writer: a step another writer finished stays done when this one fails it late', async () => {
+    let calls = 0;
+    let finishedElsewhere: (() => void) | null = null;
+    const { root, store, make } = setup({
+      doorbell: async () => {
+        calls += 1;
+        // while this ring is out, the lock goes and another writer rings and records the doorbell done
+        finishedElsewhere?.();
+        return { ok: false, detail: 'pm-mail timed out.' };
+      },
+    });
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const answers = make();
+    const storeFile = path.join(store, 'answers.jsonl');
+    finishedElsewhere = () => {
+      finishedElsewhere = null;
+      const recorded = fs
+        .readFileSync(storeFile, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .find((line) => line.type === 'answer');
+      fs.rmSync(path.join(store, 'answers.lock'));
+      fs.appendFileSync(
+        storeFile,
+        `\n${JSON.stringify({ type: 'delivery', id: recorded.id, step: 'doorbell', state: 'done', at: '2026-11-07T12:00:00.000Z', detail: 'Rang.', line: 'elsewhere' })}\n`
+      );
+    };
+    expect((await answers.submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    await settle();
+    const rung = calls;
+    expect(rung).toBe(1);
+    // the doorbell is done: the retry rings no one again, and the history says done
+    await answers.retryPending();
+    await settle();
+    expect(calls).toBe(rung);
+    expect(make().list()[0].doorbell.state).toBe('done');
+  });
+
   it('the answer store has one writer: a lock naming this pid from another incarnation is not adopted', async () => {
     if (!fs.existsSync('/proc/sys/kernel/random/boot_id')) return;
     const { root, store, make } = setup();
