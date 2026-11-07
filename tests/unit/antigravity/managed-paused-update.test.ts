@@ -1122,6 +1122,53 @@ describe('runtime-free Antigravity process census', () => {
     }
   });
 
+  test('a leader that exited with live threads, a deleted interpreter, a comma in a file: URL, a long cluster', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(helperDir, { recursive: true });
+    const helperExe = path.join(helperDir, 'helper-bin');
+    fs.writeFileSync(helperExe, '');
+    // the main thread called pthread_exit: the leader's exe reads ENOENT, but a worker thread still runs the helper
+    value.add(1070, 'helper-bin', helperExe, ['helper-bin'], value.root);
+    const leader = path.join(value.proc, '1070');
+    fs.rmSync(path.join(leader, 'exe'));
+    fs.mkdirSync(path.join(leader, 'task', '1071'), { recursive: true });
+    fs.symlinkSync(helperExe, path.join(leader, 'task', '1071', 'exe'));
+    fs.writeFileSync(
+      path.join(leader, 'task', '1071', 'stat'),
+      '1071 (helper-bin) S 1 1071 1071 0'
+    );
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+    // a worker thread that is not a helper's still leaves the process unplaced: its leader's command line is gone
+    fs.rmSync(path.join(leader, 'task', '1071', 'exe'));
+    fs.symlinkSync('/usr/bin/other', path.join(leader, 'task', '1071', 'exe'));
+    expect(value.census()).toEqual({ complete: false, running: 0 });
+    // a zombie leader whose threads have all ended is gone
+    fs.writeFileSync(
+      path.join(leader, 'task', '1071', 'stat'),
+      '1071 (helper-bin) Z 1 1071 1071 0'
+    );
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+    fs.rmSync(leader, { recursive: true });
+    for (const [argv, exe] of [
+      // an interpreter whose executable was replaced on disk reads "python3 (deleted)"
+      [['worker', '-I', '-u', '-B', path.join(helperDir, 'h.py')], '/usr/bin/python3 (deleted)'],
+      // a file: URL whose path holds a comma
+      [
+        ['node', `--import=file://${path.join(value.root, 'alias,one', 'hook.mjs')}`, 'app.js'],
+        '/usr/bin/node',
+      ],
+      // a long cluster of flags before a glued path
+      [['perl', `-${'w'.repeat(20)}I${helperDir}`, '-MFixture', '-e', 'sleep 60'], '/usr/bin/perl'],
+    ] as [string[], string][]) {
+      if (!fs.existsSync(path.join(value.root, 'alias,one')))
+        fs.symlinkSync(helperDir, path.join(value.root, 'alias,one'));
+      value.add(1072, argv[0] === 'worker' ? 'worker' : argv[0], exe, argv, value.root);
+      expect([argv, value.census()]).toEqual([argv, { complete: true, running: 1 }]);
+      fs.rmSync(path.join(value.proc, '1072'), { recursive: true });
+    }
+  });
+
   test('a removed working folder spelled onto a mount is never listed', () => {
     const value = procFixture();
     const mount = path.join(value.root, 'share');

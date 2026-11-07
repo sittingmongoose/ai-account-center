@@ -251,7 +251,7 @@ function candidateScripts(argument: string, operand = false): string[] {
       // possibly after a cluster of flags (`perl -wI/x/lib`): each place a value could start, up to the first
       // character that is no letter
       const starts: string[] = [];
-      for (let at = 2; at < argument.length && at <= 18; at += 1) {
+      for (let at = 2; at < argument.length; at += 1) {
         starts.push(argument.slice(at));
         if (!/[A-Za-z]/.test(argument[at])) break;
       }
@@ -276,9 +276,9 @@ function candidateScripts(argument: string, operand = false): string[] {
  * beside them by the caller, since a path may itself hold a comma or a colon.
  */
 function listParts(value: string): string[] {
-  return value
-    .split(',')
-    .flatMap((item) => [...item.split(':'), ...fileUrlPaths(item)])
+  // a file: URL whose path holds a comma is read whole too, before the list is split
+  return [...fileUrlPaths(value), ...value.split(',')]
+    .flatMap((item) => [item, ...item.split(':'), ...fileUrlPaths(item)])
     .filter(Boolean);
 }
 
@@ -369,7 +369,10 @@ function filePath(url: string): string {
  * for links only where it really is, never on a mount.
  *
  * An interpreter is known by its process name, argv0 or executable (a
- * rewritten title still runs /usr/bin/python3). For one, every non-option
+ * rewritten title still runs /usr/bin/python3, and one replaced on disk reads
+ * "python3 (deleted)"). A process whose leader thread exited while others run
+ * is judged by those threads: a helper's executable counts, anything else is
+ * unplaced. For one, every non-option
  * argument and every option or assignment value in the part of the command
  * line read is a candidate script, and after `--` every argument as written
  * (`python3 helper.py`, `-r/x/hook.js`, `python3 -- --x/h.py`,
@@ -500,6 +503,34 @@ export function censusAntigravityProcesses(options: {
     return isAntigravityPath(real);
   };
   const deniedExe = new Set(['EACCES', 'EPERM']);
+  /**
+   * For a process whose leader reads as gone: 'gone' when no other thread lives, 'running' when one runs a helper's
+   * executable, else 'unplaced' (its command line and working folder went with the leader).
+   */
+  const survivingThreads = (directory: string, pid: number): 'gone' | 'running' | 'unplaced' => {
+    let tids: string[];
+    try {
+      tids = fs.readdirSync(path.join(directory, 'task')).filter((tid) => tid !== String(pid));
+    } catch (error) {
+      return GONE.has(code(error)) ? 'gone' : 'unplaced';
+    }
+    let live = false;
+    for (const tid of tids) {
+      const task = path.join(directory, 'task', tid);
+      try {
+        const stat = fs.readFileSync(path.join(task, 'stat'), 'utf8');
+        const state = stat.charAt(stat.lastIndexOf(')') + 2);
+        if (state === 'Z' || state === 'X') continue;
+        live = true;
+        const exe = fs.readlinkSync(path.join(task, 'exe'));
+        if (isAntigravityPath(exe)) return 'running';
+      } catch (error) {
+        if (GONE.has(code(error))) continue;
+        live = true;
+      }
+    }
+    return live ? 'unplaced' : 'gone';
+  };
   // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A
   // non-dumpable one denies that link, and then the script can't be placed: such a process may be a live helper, so
   // the census can't call the host idle. Only interpreters count here: other non-dumpable processes (systemd --user,
@@ -549,7 +580,8 @@ export function censusAntigravityProcesses(options: {
         const interpreter =
           named(comm) ||
           named(path.basename(all[0] ?? '')) ||
-          (exe !== null && named(path.basename(exe)));
+          // an executable replaced on disk reads "python3 (deleted)"
+          (exe !== null && pathSpellings(exe).some((spelling) => named(path.basename(spelling))));
         const shell = SHELL.test(comm) || SHELL.test(path.basename(all[0] ?? ''));
         const operands = interpreter ? commandLineCandidates(all.slice(1)) : [];
         let cwds: string[] | undefined;
@@ -616,7 +648,13 @@ export function censusAntigravityProcesses(options: {
           } else unplaced = true;
         } else if (interpreter && (cwdDenied || truncated || unresolvedSeen)) unplaced = true;
       } catch (error) {
-        if (error instanceof ProcessGone) continue;
+        if (error instanceof ProcessGone) {
+          // A leader that exited (pthread_exit) while its other threads run reads as gone: judge by those threads.
+          const threads = survivingThreads(directory, Number(name));
+          if (threads === 'running') running += 1;
+          else if (threads === 'unplaced') unplaced = true;
+          continue;
+        }
         throw error;
       }
     }
