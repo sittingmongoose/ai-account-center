@@ -907,6 +907,10 @@ describe('runtime-free Antigravity process census', () => {
           [['deno', 'run', 'npm:ts-node@10', path.join(locked, 'in', 'my helper')]],
           [['bun', 'x', '@esbuild-kit/esr@1', path.join(locked, 'in', 'my helper')]],
           [['node', 'node_modules/tsx/dist/cli.mjs', path.join(locked, 'in', 'my helper')]],
+          // `--` ends the interpreter's options, not the search for the script a runner runs
+          [['node', '--', 'node_modules/tsx/dist/cli.mjs', path.join(locked, 'in', 'my helper')]],
+          [['node', '--', 'node_modules/.bin/jiti', path.join(locked, 'in', 'my helper')]],
+          [['python3', '--', path.join(locked, 'in', 'my helper')]],
           [
             [
               'node',
@@ -933,6 +937,7 @@ describe('runtime-free Antigravity process census', () => {
           ['python3', '-W', 'ignore', 'app.py', `${locked}/in and/or later`],
           ['bun', 'run', 'app.ts', `${locked}/in and/or later`],
           ['python3', '-OO', 'app.py', `${locked}/in and/or later`],
+          ['node', '--', 'app.js', `${locked}/in and/or later`],
           ['node', '--enable-source-maps', '--no-warnings', 'cli.js', `${locked}/in and/or later`],
           ['deno', 'run', '--no-lock', 'app.ts', `${locked}/in and/or later`],
           ['deno', 'run', '--lock=deno.lock', 'app.ts', `${locked}/in and/or later`],

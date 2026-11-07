@@ -408,17 +408,21 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
   let subcommand = !runner;
   let packageNext = false;
   let ranBy = false;
+  // `--` ends the options before the next argument only; a runner after it still has its script read
+  let optionsEnded = false;
   for (let at = 1; at < all.length; at += 1) {
     const argument = all[at];
-    if (argument === '--') {
-      if (at + 1 < all.length) add(all[at + 1]);
-      break;
+    if (!optionsEnded && argument === '--') {
+      optionsEnded = true;
+      optionValue = false;
+      continue;
     }
-    if (/^[-+]./.test(argument)) {
+    if (!optionsEnded && /^[-+]./.test(argument)) {
       optionValue = !takesNoValue(argument, flags, clusters);
       continue;
     }
     add(argument);
+    optionsEnded = false;
     if (optionValue) {
       optionValue = false;
       continue;
