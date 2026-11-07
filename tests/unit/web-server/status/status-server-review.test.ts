@@ -29,6 +29,7 @@ import {
 } from '../../../../src/web-server/status/quota-report';
 import {
   findSecret,
+  findSecretIn,
   isCardId,
   isPmMailName,
   isWriterName,
@@ -189,6 +190,18 @@ describe('secret search', () => {
       }
     });
 
+  for (const [name, bytes] of sizes)
+    it(`the whole scan takes well under a second on hostile strings at the ${name} cap (${bytes / 1024} KB)`, () => {
+      // inside a parsed value: runs of backslashes, escapes that make escapes, JSON-ish text that never parses
+      for (const unit of ['\\', '\\u', '\\u005c', '\\\\n', '{"a":"', '["', '"\\"', 'a\\']) {
+        const value = { note: unit.repeat(Math.ceil(bytes / 2 / unit.length)).slice(0, bytes / 2) };
+        const source = JSON.stringify(value);
+        const started = performance.now();
+        findSecretIn(source, value);
+        expect([unit, performance.now() - started < 1000]).toEqual([unit, true]);
+      }
+    });
+
   it('sees through JSON escapes in strings and keys', () => {
     const token = `sk-${'A1b2C3d4'.repeat(4)}`;
     for (const json of [
@@ -227,6 +240,10 @@ describe('secret search', () => {
       { note: '{"pass\\u0077ord":"hunter2-hunter2"}' },
       { note: `{"x":"\\u0073${token.slice(1)}"}` },
       { note: JSON.stringify({ inner: '{"pass\\u0077ord":"hunter2-hunter2"}' }) },
+      // double-encoded text, a backslash made by an escape, and JSON nested deeper than is checked
+      { note: JSON.stringify(JSON.stringify({ password: ['hunter2222'] })) },
+      { note: `x \\u005cu0073${token.slice(1)}` },
+      { note: JSON.stringify(JSON.stringify(JSON.stringify(JSON.stringify({ a: 1 })))) },
     ]) {
       const parsed = jsonFromBytes(Buffer.from(JSON.stringify(value)), 64 * 1024);
       expect([value, parsed.ok]).toEqual([value, false]);

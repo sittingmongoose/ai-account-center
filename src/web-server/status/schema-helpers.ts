@@ -187,6 +187,7 @@ export function findSecretIn(source: string, value: unknown): string | null {
         findSecret(node) ?? (node.includes('\\') ? findSecret(unescapeText(node)) : null);
       if (found) return found;
       const inner = embeddedJson(node, level, embedded);
+      if (inner === TOO_DEEP) return 'JSON text nested too deep to check';
       if (inner !== undefined) {
         embedded += node.length;
         stack.push([inner, credential, level + 1]);
@@ -208,30 +209,72 @@ export function findSecretIn(source: string, value: unknown): string | null {
 
 /** How deep JSON text inside strings is parsed, and how many characters of it in all (bounded work per file). */
 const EMBEDDED_LEVELS = 3;
-const EMBEDDED_BUDGET = 1024 * 1024;
+const EMBEDDED_BUDGET = 4 * 1024 * 1024;
+/** JSON text that would need more than the levels or budget to check: the file is refused, not read unchecked. */
+const TOO_DEEP = Symbol('too deep');
 
-/** A string that is itself JSON (an object or array), parsed, within the level and size budget; else undefined. */
+/**
+ * A string that is itself JSON (an object, an array or a string, as double-encoded text is), parsed; `TOO_DEEP` when
+ * the level or size budget would be passed; undefined for text that isn't JSON.
+ */
 function embeddedJson(text: string, level: number, used: number): unknown {
-  if (level >= EMBEDDED_LEVELS || used + text.length > EMBEDDED_BUDGET) return undefined;
   const start = text.trimStart()[0];
-  if (start !== '{' && start !== '[') return undefined;
+  if (start !== '{' && start !== '[' && start !== '"') return undefined;
+  let parsed: unknown;
   try {
-    return JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch {
     return undefined;
   }
+  if (level >= EMBEDDED_LEVELS || used + text.length > EMBEDDED_BUDGET) return TOO_DEEP;
+  return parsed;
 }
 
 /**
  * JSON text inside a string that doesn't parse, read without parsing: escapes of any depth (`\\n`, `\\\\n`, `\\"`,
- * `\\u0073`) become what they stand for, so a token after an escaped newline or a credential key inside it is seen.
+ * `\\u0073`, a `\\u005c` that makes another escape) become what they stand for, so a token after an escaped newline or
+ * a credential key inside it is seen. Linear: one scan per pass and at most three passes (a regex starting with a
+ * repeat was quadratic on a long run of backslashes).
  */
 function unescapeText(text: string): string {
-  return text
-    .replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/\\+[nrtbf]/g, ' ')
-    .replace(/\\+"/g, '"')
-    .replace(/\\+\//g, '/');
+  let out = text;
+  for (let pass = 0; pass < 3 && out.includes('\\'); pass += 1) {
+    const next = unescapeOnce(out);
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function unescapeOnce(text: string): string {
+  const parts: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const slash = text.indexOf('\\', i);
+    if (slash === -1) {
+      parts.push(text.slice(i));
+      break;
+    }
+    parts.push(text.slice(i, slash));
+    let j = slash;
+    while (j < text.length && text[j] === '\\') j += 1;
+    const next = text[j];
+    const hex = text.slice(j + 1, j + 5);
+    if (next !== undefined && 'nrtbf'.includes(next)) {
+      parts.push(' ');
+      i = j + 1;
+    } else if (next === '"' || next === '/') {
+      parts.push(next);
+      i = j + 1;
+    } else if (next === 'u' && /^[0-9a-fA-F]{4}$/.test(hex)) {
+      parts.push(String.fromCharCode(parseInt(hex, 16)));
+      i = j + 5;
+    } else {
+      parts.push(text.slice(slash, j));
+      i = j;
+    }
+  }
+  return parts.join('');
 }
 
 /** Thrown inside the projection; becomes `{ ok: false, reason }`. */

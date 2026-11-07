@@ -198,11 +198,23 @@ pub fn forget_sent(drafts: &mut Drafts, cards: &[Card], sent: &AnswerEntry) {
     }
     // Keep the nonce (another tab's send of this very draft must still match its own result), and remember the
     // recorded id: an edit that would make it again takes a fresh nonce.
-    if !d.recorded.contains(&sent.entry_id) {
-        d.recorded.push(sent.entry_id.clone());
-        if d.recorded.len() > 8 {
-            d.recorded.remove(0);
+    join_recorded(d, std::slice::from_ref(&sent.entry_id));
+}
+
+/// How many recorded ids a draft keeps for its nonce.
+const RECORDED_KEPT: usize = 8;
+
+/// Add recorded ids to a draft. Past the limit it starts a fresh nonce with none, rather than forget the oldest: a
+/// forgotten id could be made again and dropped as a retry.
+fn join_recorded(d: &mut Draft, ids: &[String]) {
+    for id in ids {
+        if !d.recorded.contains(id) {
+            d.recorded.push(id.clone());
         }
+    }
+    if d.recorded.len() > RECORDED_KEPT {
+        d.nonce = fresh_nonce();
+        d.recorded.clear();
     }
 }
 
@@ -308,16 +320,14 @@ pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
                 recorded: Vec::new(),
                 ..d.clone()
             };
-            let emptied_under_newer = !c.has_answer() && theirs != b && theirs.nonce == c.nonce;
-            if words(b) == words(c) || emptied_under_newer {
+            // emptied by a send's result (its ids grew), not cleared by the owner, while another tab wrote newer
+            // words: those words stay, whatever their nonce
+            let emptied_by_send = !c.has_answer() && c.recorded != b.recorded && theirs != b;
+            if words(b) == words(c) || emptied_by_send {
                 let mut kept = theirs.clone();
-                for r in &c.recorded {
-                    if !kept.recorded.contains(r) {
-                        kept.recorded.push(r.clone());
-                    }
-                }
-                while kept.recorded.len() > 8 {
-                    kept.recorded.remove(0);
+                // ids only mean something to the nonce they were made from
+                if kept.nonce == c.nonce {
+                    join_recorded(&mut kept, &c.recorded);
                 }
                 out.insert(id.clone(), kept);
                 continue;
@@ -327,14 +337,7 @@ pub fn merge(stored: &Drafts, base: &Drafts, current: &Drafts) -> Drafts {
             Some(d) => {
                 let mut mine = d.clone();
                 if let Some(theirs) = stored.get(id).filter(|t| t.nonce == mine.nonce) {
-                    for r in &theirs.recorded {
-                        if !mine.recorded.contains(r) {
-                            mine.recorded.push(r.clone());
-                        }
-                    }
-                    while mine.recorded.len() > 8 {
-                        mine.recorded.remove(0);
-                    }
+                    join_recorded(&mut mine, &theirs.recorded);
                 }
                 out.insert(id.clone(), mine);
             }
@@ -579,6 +582,44 @@ mod tests {
         let mut b = merged.clone();
         set_note(&mut b, &x, "W0".into());
         assert_ne!(entries(&b, &[x])[0].entry_id, sent.entry_id);
+    }
+
+    #[test]
+    fn a_send_result_never_wipes_another_tabs_words_and_old_ids_never_return() {
+        let x = card("x", 1, None);
+        // F2: A's send of W1 is in flight; B retypes the recorded W0 and takes a fresh nonce; A's result lands
+        let mut base = Drafts::new();
+        set_note(&mut base, &x, "W1".into());
+        let sent = entries(&base, &[x.clone()]).remove(0);
+        let mut stored = base.clone();
+        set_note(&mut stored, &x, "W0".into());
+        stored.get_mut("x").unwrap().nonce = "other".into();
+        let mut a = base.clone();
+        forget_sent(&mut a, &[x.clone()], &sent);
+        let merged = merge(&stored, &base, &a);
+        assert_eq!(merged["x"].note, "W0", "B's unsent words stay");
+        assert!(
+            merged["x"].recorded.is_empty(),
+            "A's id means nothing to B's nonce"
+        );
+        // F4: the owner clears a note while another tab only noted a recorded id: the clear stands
+        let mut cleared = base.clone();
+        set_note(&mut cleared, &x, String::new());
+        let mut theirs = base.clone();
+        theirs.get_mut("x").unwrap().recorded = vec!["r".into()];
+        assert_eq!(merge(&theirs, &base, &cleared)["x"].note, "");
+        // F3: past the limit a draft starts a fresh nonce instead of forgetting its oldest id
+        let mut d = Drafts::new();
+        set_note(&mut d, &x, "first".into());
+        let first = entries(&d, &[x.clone()]).remove(0);
+        forget_sent(&mut d, &[x.clone()], &first);
+        for i in 0..RECORDED_KEPT {
+            set_note(&mut d, &x, format!("note {i}"));
+            let e = entries(&d, &[x.clone()]).remove(0);
+            forget_sent(&mut d, &[x.clone()], &e);
+        }
+        set_note(&mut d, &x, "first".into());
+        assert_ne!(entries(&d, &[x])[0].entry_id, first.entry_id);
     }
 
     #[test]
