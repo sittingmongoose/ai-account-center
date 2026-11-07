@@ -270,11 +270,13 @@ after 20 attempts, a doorbell turned off on a test server (`skipped`), or an ans
 before its signed copy reached the share (both steps `skipped`, `state: "failed"`, never written or rung, so the older
 answer cannot land over the newer one); `detail` says which. A card with no
 pm-mail name is delivered once its signed file is on the share: `state: "rang"` with `detail` "No mail name; the agent
-reads its answers file." (doorbell step `skipped`).
+reads its answers file." (doorbell step `skipped`). While a share write or ring is retried, `detail` gives its attempt
+("attempt N of 20"); once it gives up it says "no more retries".
 `summary` is the step of the record's send summary (null for a record from before sends), shown beside `state`
 without changing it: `summaryWarning` is null once it is written, else says it is not on the share yet, is being
 retried ("attempt N of 20"), or gave up after 20 attempts. The same `delivery` is on each `notes` entry and in
-`GET /api/status/answers`.
+`GET /api/status/answers`; the page shows a note's or objection's own failed `detail` on its open card, beside any
+`summaryWarning`, since those records never appear in `answered`.
 
 **Batch**: `{ id, label, cardIds: [...] }`: open cards that share `batch`, kept together in the deck.
 

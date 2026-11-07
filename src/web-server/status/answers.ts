@@ -414,6 +414,11 @@ export function summaryWarning(summary: StepState | null): string | null {
     : `The signed send summary could not be written to the share yet (attempt ${summary.attempts} of ${MAX_DELIVERY_ATTEMPTS}); retrying.`;
 }
 
+/** " (attempt N of 20)" for a step that has been tried, so a retrying row says how far it is. */
+function attemptOf(step: StepState): string {
+  return step.attempts > 0 ? ` (attempt ${step.attempts} of ${MAX_DELIVERY_ATTEMPTS})` : '';
+}
+
 /** Each send's summary step by send id, for deliveryView. */
 export function summarySteps(sends: readonly SendRecord[]): ReadonlyMap<string, StepState> {
   return new Map(sends.map((send) => [send.sendId, send.summary]));
@@ -439,10 +444,10 @@ export function deliveryView(
       at: share.at,
       detail:
         share.attempts >= MAX_DELIVERY_ATTEMPTS
-          ? `The signed copy could not be written to the share after ${share.attempts} attempts.`
+          ? `The signed copy could not be written to the share after ${share.attempts} attempts; no more retries.`
           : share.detail === SHARE_UNAVAILABLE_DETAIL
-            ? 'The reports share is not available, so the signed copy is not written yet; retrying.'
-            : 'The signed copy could not be written to the share yet; retrying.',
+            ? `The reports share is not available, so the signed copy is not written yet${attemptOf(share)}; retrying.`
+            : `The signed copy could not be written to the share yet${attemptOf(share)}; retrying.`,
     };
   if (doorbell.state === 'failed')
     return {
@@ -451,8 +456,8 @@ export function deliveryView(
       at: doorbell.at,
       detail:
         doorbell.attempts >= MAX_DELIVERY_ATTEMPTS
-          ? `The asker could not be rung after ${doorbell.attempts} attempts; the signed answer is on the share.`
-          : 'The asker could not be rung yet; retrying. The signed answer is on the share.',
+          ? `The asker could not be rung after ${doorbell.attempts} attempts; no more retries. The signed answer is on the share.`
+          : `The asker could not be rung yet${attemptOf(doorbell)}; retrying. The signed answer is on the share.`,
     };
   // No mail name: the signed file is on the share and the agent reads it; nothing more to do.
   if (share.state === 'done' && doorbell.state === 'skipped' && doorbell.detail === NO_MAIL_DETAIL)

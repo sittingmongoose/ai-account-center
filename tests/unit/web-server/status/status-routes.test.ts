@@ -20,7 +20,7 @@ afterEach(async () => {
   dirs.cleanup();
 });
 
-async function start() {
+async function start(options: { ringOk?: boolean } = {}) {
   const root = dirs.make('ccs-status-reports-');
   const store = path.join(dirs.make('ccs-status-store-'), 'status');
   const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
@@ -31,7 +31,9 @@ async function start() {
     reportsRoot: () => root,
     doorbell: async (to) => {
       rings.push(to);
-      return { ok: true, detail: 'Rang.' };
+      return options.ringOk === false
+        ? { ok: false, detail: 'pm-mail refused.' }
+        : { ok: true, detail: 'Rang.' };
     },
   });
   const service = new StatusService({
@@ -182,6 +184,112 @@ describe('status routes', () => {
     // Retries have stopped: it stays shown, never hidden.
     const after = await (await fetch(`${base}/api/status`, { headers: session })).json();
     expect(after.cards.answered[0].answer.delivery.summary.state).toBe('failed');
+  });
+
+  // A note or objection never reaches `cards.answered`, so its own failed share write or ring must be on its
+  // `notes` entry even while its send summary is written.
+  async function noteAndObjection(root: string, service: StatusService) {
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const none = { options: [], recommendation: null };
+    const o1 = writeCard(root, cardDoc('vm.lead', 'O1', { kind: 'objection', ...none }));
+    await service.scanReports();
+    const results = await service.answers.submitSet(
+      [
+        {
+          cardId: 'vm.lead--Q1',
+          cardSeq: 1,
+          cardSha256: q1,
+          choice: [],
+          note: 'A note.',
+          via: 'deck',
+        },
+        {
+          cardId: 'vm.lead--O1',
+          cardSeq: 1,
+          cardSha256: o1,
+          choice: [],
+          kind: 'object',
+          note: 'Keep the old layout.',
+          via: 'deck',
+        },
+      ],
+      'Linux'
+    );
+    expect(results.map((r) => r.outcome)).toEqual(['recorded', 'recorded']);
+  }
+  async function noteDeliveries(base: string) {
+    const view = await (await fetch(`${base}/api/status`, { headers: session })).json();
+    expect(view.cards.answered).toEqual([]);
+    const notes = ['vm.lead--Q1', 'vm.lead--O1'].map(
+      (id) => view.cards.open.find((c: any) => c.id === id).notes
+    );
+    expect(notes.map((n: any[]) => n.map((x) => x.kind))).toEqual([['note'], ['object']]);
+    const history = await (await fetch(`${base}/api/status/answers`, { headers: session })).json();
+    expect(history.answers).toHaveLength(2);
+    return [
+      ...notes.map((n: any[]) => n[0].delivery),
+      ...history.answers.map((a: any) => a.answer.delivery),
+    ];
+  }
+
+  it("shows a note's and an objection's failed share write on the open card while their summary is written", async () => {
+    const { root, base, service, rings } = await start();
+    // Real permissions: the batches folder takes the summary, its parent refuses the signed note files.
+    const answersDir = path.join(root, 'v1', 'answers');
+    fs.mkdirSync(path.join(answersDir, 'batches'), { recursive: true });
+    fs.chmodSync(answersDir, 0o555);
+    try {
+      await noteAndObjection(root, service);
+      let seen = await noteDeliveries(base);
+      for (const delivery of seen) {
+        expect(delivery.state).toBe('failed');
+        expect(delivery.share).toMatchObject({ state: 'failed', attempts: 1 });
+        expect(delivery.detail).toBe(
+          'The signed copy could not be written to the share yet (attempt 1 of 20); retrying.'
+        );
+        expect(delivery.summary).toMatchObject({ state: 'done' });
+        expect(delivery.summaryWarning).toBeNull();
+      }
+      for (let i = 0; i < 25; i += 1) await service.answers.retryPending();
+      seen = await noteDeliveries(base);
+      for (const delivery of seen) {
+        expect(delivery.state).toBe('failed');
+        expect(delivery.share).toMatchObject({ state: 'failed', attempts: 20 });
+        expect(delivery.detail).toBe(
+          'The signed copy could not be written to the share after 20 attempts; no more retries.'
+        );
+        expect(delivery.summaryWarning).toBeNull();
+      }
+      expect(rings).toHaveLength(0);
+    } finally {
+      fs.chmodSync(answersDir, 0o755);
+    }
+  });
+
+  it("shows a note's and an objection's failed ring on the open card while their summary is written", async () => {
+    const { root, base, service, rings } = await start({ ringOk: false });
+    await noteAndObjection(root, service);
+    let seen = await noteDeliveries(base);
+    for (const delivery of seen) {
+      expect(delivery.state).toBe('failed');
+      expect(delivery.share).toMatchObject({ state: 'done' });
+      expect(delivery.doorbell).toMatchObject({ state: 'failed', attempts: 1 });
+      expect(delivery.detail).toBe(
+        'The asker could not be rung yet (attempt 1 of 20); retrying. The signed answer is on the share.'
+      );
+      expect(delivery.summary).toMatchObject({ state: 'done' });
+      expect(delivery.summaryWarning).toBeNull();
+    }
+    for (let i = 0; i < 25; i += 1) await service.answers.retryPending();
+    seen = await noteDeliveries(base);
+    for (const delivery of seen) {
+      expect(delivery.doorbell).toMatchObject({ state: 'failed', attempts: 20 });
+      expect(delivery.detail).toBe(
+        'The asker could not be rung after 20 attempts; no more retries. The signed answer is on the share.'
+      );
+      expect(delivery.summaryWarning).toBeNull();
+    }
+    expect(rings.length).toBeGreaterThanOrEqual(20);
   });
 
   it('says nothing about a send summary once it is written', async () => {
