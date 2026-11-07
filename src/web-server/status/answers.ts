@@ -234,6 +234,45 @@ async function writeAtomic(
   }
 }
 
+/** Most bytes searched for a refused record that other bytes followed. */
+const TAKE_BACK_WINDOW = 4 * 1024 * 1024;
+
+/**
+ * Takes a refused record's bytes back out of the store without touching anyone else's: cut back to where it began
+ * when nothing follows it, otherwise blank its own bytes in place (a blank line is skipped on load). A descriptor
+ * opened for append may refuse to truncate (Windows), so the path is truncated instead.
+ */
+function takeBack(fd: number, file: string, size: number, ours: Buffer): void {
+  if (ours.length === 0) return;
+  try {
+    const end = fs.fstatSync(fd).size;
+    if (end === size + ours.length) {
+      try {
+        fs.ftruncateSync(fd, size);
+      } catch {
+        fs.truncateSync(file, size);
+      }
+      return;
+    }
+    // another writer appended after it (a lock taken by mistake): find these bytes and blank them where they are
+    const length = Math.min(end - size, TAKE_BACK_WINDOW);
+    const region = Buffer.alloc(length);
+    fs.readSync(fd, region, 0, length, size);
+    const at = region.indexOf(ours);
+    if (at === -1) return;
+    const blank = Buffer.from(ours.map((byte) => (byte === 0x0a ? 0x0a : 0x20)));
+    const writer = fs.openSync(file, 'r+');
+    try {
+      fs.writeSync(writer, blank, 0, blank.length, size + at);
+      fs.fsyncSync(writer);
+    } finally {
+      fs.closeSync(writer);
+    }
+  } catch {
+    /* the store can't be taken back: the record may come back after a restart; the error still refuses it */
+  }
+}
+
 function appendLine(file: string, record: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const fd = fs.openSync(file, 'a+', 0o600);
@@ -250,25 +289,17 @@ function appendLine(file: string, record: unknown): void {
     // A write may take fewer bytes than asked (a file-size limit, a full disk): loop until all are written, so a
     // record is never acknowledged half-stored; a failure throws and the caller refuses the entry.
     const data = Buffer.from(`${lead}${JSON.stringify(record)}\n`);
+    let written = 0;
     try {
-      for (let offset = 0; offset < data.length; ) {
-        const written = fs.writeSync(fd, data, offset, data.length - offset);
-        if (written <= 0) throw new ConfigError('The answer store took no bytes.', file);
-        offset += written;
+      while (written < data.length) {
+        const taken = fs.writeSync(fd, data, written, data.length - written);
+        if (taken <= 0) throw new ConfigError('The answer store took no bytes.', file);
+        written += taken;
       }
       fs.fsyncSync(fd);
     } catch (error) {
-      // A refused record must not be left in the store (a restart would ring it): cut back to where it began. A
-      // descriptor opened for append may refuse to truncate (Windows), so the path is truncated instead.
-      try {
-        fs.ftruncateSync(fd, size);
-      } catch {
-        try {
-          fs.truncateSync(file, size);
-        } catch {
-          /* the store can't be cut back: the record may come back after a restart; the error still refuses it */
-        }
-      }
+      // A refused record must not be left in the store (a restart would ring it).
+      takeBack(fd, file, size, data.subarray(0, written));
       throw error;
     }
   } finally {

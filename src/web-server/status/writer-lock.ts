@@ -5,12 +5,19 @@
  * write is synchronous, so its own instances never interleave.
  *
  * The lock names its holder (pid, host, time), and the holder refreshes its time stamp on every write and every retry
- * pass (each minute). A lock is taken over when its holder is gone: one not refreshed for UNREFRESHED_MS, whoever
- * wrote it (another host, such as a replaced container, a pid since reused, or a lock from before a restart); at once,
- * one whose holder on this host no longer runs; or one with no readable holder after
- * STALE_UNREADABLE_MS (a writer stopped between creating and filling it). A take-over moves the stale lock aside and
- * checks it moved the one it judged; a live lock moved by mistake is put back. Known limit: three processes racing on
- * one stale lock can, for microseconds, leave two that each believe they hold it.
+ * pass (each minute). A lock is taken over only when its holder is gone:
+ * - on this host, when its pid no longer runs, or the lock was last refreshed before this computer started (its pid
+ *   belongs to another process now). A running pid is never judged gone by age: a stalled holder, or a jump of the
+ *   clock, would otherwise let two processes write;
+ * - from another host (a replaced container on the same volume), whose processes can't be seen from here, when no one
+ *   has refreshed it for UNREFRESHED_MS;
+ * - with no readable holder, after STALE_UNREADABLE_MS (a writer stopped between creating and filling it).
+ * A take-over moves the stale lock aside and checks it moved the one it judged; a live lock moved by mistake is put
+ * back. Every write checks the lock still names this process, and a failed write never cuts away bytes another
+ * process appended after it (answers.ts), so a lock taken by mistake costs a duplicate delivery at most, never a
+ * record. Known limits: a crashed holder's pid reused by a long-lived process on this host keeps the lock until that
+ * process ends or the computer restarts (deleting `answers.lock` frees it at once); three processes racing on one
+ * stale lock can, for a moment, leave two that each believe they hold it.
  */
 import { randomBytes } from 'crypto';
 import fs from 'fs';
@@ -20,7 +27,9 @@ import { ConfigError } from '../../errors/error-types';
 
 export const WRITER_LOCK_FILE = 'answers.lock';
 const STALE_UNREADABLE_MS = 10_000;
-/** A lock its holder has not refreshed for this long is gone (the holder refreshes it at least every minute). */
+/** Clock slack when comparing a lock's time with this computer's start (clocks are often set just after boot). */
+const BOOT_SLACK_MS = 10 * 60 * 1000;
+/** Another host's lock its holder has not refreshed for this long is gone (it refreshes it each minute). */
 const UNREFRESHED_MS = 10 * 60 * 1000;
 
 export class WriterBusyError extends ConfigError {
@@ -75,9 +84,9 @@ function running(pid: number): boolean {
 
 function stale(holder: Holder | null, mtimeMs: number): boolean {
   if (holder === null) return Date.now() - mtimeMs > STALE_UNREADABLE_MS;
-  if (Date.now() - mtimeMs > UNREFRESHED_MS) return true;
-  if (holder.host !== os.hostname()) return false;
-  return !running(holder.pid);
+  if (holder.host !== os.hostname()) return Date.now() - mtimeMs > UNREFRESHED_MS;
+  const bootedAt = Date.now() - os.uptime() * 1000;
+  return mtimeMs < bootedAt - BOOT_SLACK_MS || !running(holder.pid);
 }
 
 /** Moves a stale lock aside, and puts it back if what moved was not the lock judged stale. */

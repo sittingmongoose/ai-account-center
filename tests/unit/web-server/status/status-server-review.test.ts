@@ -2284,6 +2284,42 @@ describe('round three', () => {
     ).toEqual([CARD]);
   });
 
+  it('a failed record never removes bytes another writer appended after it: it is blanked in place', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    await settle();
+    const storeFile = path.join(store, 'answers.jsonl');
+    const storeIno = fs.statSync(storeFile).ino;
+    // another writer (a lock taken over by mistake) appends after our record, then our fsync fails
+    const theirs = JSON.stringify({ type: 'delivery', id: 'theirs', step: 'share', state: 'done' });
+    const realFsync = fs.fsyncSync;
+    const fsync = spyOn(fs, 'fsyncSync').mockImplementation(((fd: number) => {
+      if (fs.fstatSync(fd).ino === storeIno) {
+        fs.appendFileSync(storeFile, `${theirs}\n`);
+        throw Object.assign(new Error('disk gone'), { code: 'EIO' });
+      }
+      return realFsync(fd);
+    }) as typeof fs.fsyncSync);
+    let result;
+    try {
+      [result] = await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac');
+    } finally {
+      fsync.mockRestore();
+    }
+    expect(result?.outcome).toBe('refused');
+    const lines = fs.readFileSync(storeFile, 'utf8').split('\n');
+    // their line is whole; ours is blank, so a restart neither lists nor rings it
+    expect(lines).toContain(theirs);
+    expect(lines.filter((line) => line.includes('vm.lead--Q2'))).toEqual([]);
+    expect(
+      make()
+        .list()
+        .map((r) => r.card.id)
+    ).toEqual([CARD]);
+  });
+
   it('the answer key: a key another process links first wins the race, and no temp file is left', () => {
     const dir = path.join(dirs.make('ccs-status-key-'), 'status');
     const otherDir = path.join(dirs.make('ccs-status-key-other-'), 'status');
@@ -2419,7 +2455,7 @@ describe('round three', () => {
     fs.writeFileSync(lock, JSON.stringify({ pid: gone, host: os.hostname(), at: 0 }));
     expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
     expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
-    // a live pid's lock from before this computer last started has not been refreshed since: stale too
+    // a live pid's lock from before this computer last started: that pid is another process now
     fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, host: os.hostname(), at: 0 }));
     const beforeBoot = new Date(Date.now() - os.uptime() * 1000 - 60 * 60 * 1000);
     fs.utimesSync(lock, beforeBoot, beforeBoot);
@@ -2443,9 +2479,13 @@ describe('round three', () => {
     // ten minutes without a refresh, it is gone
     age(11);
     expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
-    // the same for a live pid on this host that only reuses a dead holder's number
+    // a live process on this host is never judged gone by age: it may only be stalled (or the clock jumped), and
+    // taking its lock would let two processes write
     fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, host: os.hostname(), at: 0 }));
     age(11);
+    expect((await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].code).toBe('store_busy');
+    // ours again for the refresh check below
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, host: os.hostname(), at: 0 }));
     expect((await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].outcome).toBe('recorded');
     // the holder refreshes its lock on each write and each retry pass
     age(9);
