@@ -583,6 +583,67 @@ describe('runtime-free Antigravity process census', () => {
     expect(value.census()).toEqual({ complete: false, running: 0 });
   });
 
+  test('lookups never touch a network or automount, and links, chained URLs and the lookup cap hold', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(helperDir, { recursive: true });
+    // a fixture mount table: one folder is an automount (autofs) whose name has a space (\040)
+    const share = path.join(value.root, 'auto share');
+    fs.mkdirSync(share);
+    fs.symlinkSync(helperDir, path.join(share, 'to-root'));
+    const mountInfo = path.join(value.root, 'mountinfo');
+    fs.writeFileSync(
+      mountInfo,
+      `36 25 0:32 / ${share.replace(/ /g, '\\040')} rw,relatime shared:1 - autofs systemd-1 rw,fd=1\n`
+    );
+    const census = () =>
+      censusAntigravityProcesses({
+        home: value.home,
+        nativeBinary: value.native,
+        procRoot: value.proc,
+        selfPid: 7,
+        mountInfo,
+      });
+    // a local link into the automount is not followed (it would mount a share that may be down)
+    const viaShare = path.join(value.root, 'via-share');
+    fs.symlinkSync(path.join(share, 'to-root'), viaShare);
+    value.add(
+      980,
+      'python3',
+      '/usr/bin/python3',
+      ['python3', path.join(viaShare, 'h.py')],
+      value.root
+    );
+    expect(census()).toEqual({ complete: true, running: 0 });
+    fs.rmSync(path.join(value.proc, '980'), { recursive: true });
+    // a dangling link into a root still reaches it, by its target
+    const dangling = path.join(value.root, 'dangling');
+    fs.symlinkSync(path.join(helperDir, 'removed-dir'), dangling);
+    value.add(
+      981,
+      'python3',
+      '/usr/bin/python3',
+      ['python3', path.join(dangling, 'x.py')],
+      value.root
+    );
+    expect(census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '981'), { recursive: true });
+    // two URLs in one list item, and a URL followed by :more
+    const url = `file://${helperDir.replace('.gemini', '%2Egemini')}`;
+    for (const argv of [
+      ['node', `--path=file:///a:${url}/h.mjs`, 'app.js'],
+      ['node', `--path=${url}:/b`, 'app.js'],
+    ]) {
+      value.add(982, 'node', '/usr/bin/node', argv, value.root);
+      expect([argv, census()]).toEqual([argv, { complete: true, running: 1 }]);
+      fs.rmSync(path.join(value.proc, '982'), { recursive: true });
+    }
+    // past the lookup cap an interpreter's script is unplaced, not idle
+    const many = Array.from({ length: 400 }, (_, i) => path.join(value.root, `x${i}`, 'y.py'));
+    value.add(983, 'python3', '/usr/bin/python3', ['python3', ...many], value.root);
+    expect(census()).toEqual({ complete: false, running: 0 });
+  });
+
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {
     // Read-only; any native path works. systemd --user, ssh-agent and sshd-session
     // deny their exe link, which must not make the census incomplete forever.

@@ -107,14 +107,20 @@ function spellings(file: string): string[] | null {
   }
 }
 
+/**
+ * Filesystems where a lookup can block with no timeout: network ones, every FUSE one (most are), and autofs, whose
+ * mount point mounts its share on first touch (a systemd automount like /mnt/Cursor reads as autofs until then).
+ */
 const NETWORK_FS =
-  /^(?:nfs4?|cifs|smb3?|smbfs|ceph|glusterfs|9p|davfs|fuse\.(?:sshfs|rclone|s3fs|gcsfuse))$/;
+  /^(?:nfs4?|cifs|smb3?|smbfs|ceph|glusterfs|lustre|gpfs|afs|9p|virtiofs|davfs|autofs|fuse(?:\..*)?)$/;
+/** How many path lookups one process's arguments may cost the census. */
+const LOOKUPS_PER_PROCESS = 256;
 
-/** Mount points of network filesystems, from this process's mount table; none when it can't be read. */
-function networkMounts(): string[] {
+/** Mount points of such filesystems, from a mount table (`/proc/self/mountinfo`); none when it can't be read. */
+function networkMounts(file: string): string[] {
   let text: string;
   try {
-    text = fs.readFileSync('/proc/self/mountinfo', 'utf8');
+    text = fs.readFileSync(file, 'utf8');
   } catch {
     return [];
   }
@@ -131,6 +137,44 @@ function networkMounts(): string[] {
         ]
       : [];
   });
+}
+
+/**
+ * Where a path really leads, resolved one component at a time like realpath, but never touching anything on or under
+ * a mount in `network` (that path counts as unresolved: null). A missing tail is kept (`/tmp/link/gone.py` through
+ * `/tmp/link -> root` is `root/gone.py`), and so is a dangling link's target. Any other failure is null.
+ */
+function resolveLocally(file: string, network: readonly string[]): string | null {
+  let pending = path.resolve(file).split(path.sep).filter(Boolean);
+  let current: string = path.sep;
+  for (let hops = 0; pending.length > 0; ) {
+    const next = path.join(current, pending[0]);
+    if (network.some((mount) => within(next, mount))) return null;
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(next);
+    } catch (error) {
+      return code(error) === 'ENOENT' || code(error) === 'ENOTDIR'
+        ? path.join(current, ...pending)
+        : null;
+    }
+    pending = pending.slice(1);
+    if (!stat.isSymbolicLink()) {
+      current = next;
+      continue;
+    }
+    hops += 1;
+    if (hops > 40) return null;
+    let target: string;
+    try {
+      target = fs.readlinkSync(next);
+    } catch {
+      return null;
+    }
+    pending = [...path.resolve(current, target).split(path.sep).filter(Boolean), ...pending];
+    current = path.sep;
+  }
+  return current;
 }
 
 function readCmdline(file: string): { text: string; bytes: number } {
@@ -172,14 +216,31 @@ function candidateScripts(argument: string): string[] {
   // (`FILE:///x/%2Egemini/h.mjs` is `/x/.gemini/h.mjs`; `/a:file:///b` gives `/a` and `/b`).
   const parts = value
     .split(',')
-    .flatMap((item) => [
-      ...item.split(':'),
-      ...[...item.matchAll(/file:[^,]*/gi)].map((match) => filePath(match[0])),
-    ])
+    .flatMap((item) => [...item.split(':'), ...fileUrlPaths(item)])
     .filter(Boolean);
   return argument.startsWith('-')
     ? parts
     : [argument, ...parts.filter((part) => part !== argument)];
+}
+
+/**
+ * Every `file:` URL in a list item as a decoded path. Several URLs may share an item (`file:///a:file:///b`), and a URL
+ * may be followed by `:more` (`file:///x/root:/b`), so each URL is also read up to each of its first colons.
+ */
+function fileUrlPaths(item: string): string[] {
+  return item
+    .split(/(?=file:)/i)
+    .filter((segment) => /^file:/i.test(segment))
+    .flatMap((segment) => {
+      const cuts = [segment];
+      for (
+        let at = segment.indexOf(':', 5);
+        at !== -1 && cuts.length < 16;
+        at = segment.indexOf(':', at + 1)
+      )
+        cuts.push(segment.slice(0, at));
+      return cuts.map(filePath);
+    });
 }
 
 /** A `file:` URL as its path, percent-escapes decoded; a URL that doesn't parse keeps its text after the scheme. */
@@ -217,7 +278,10 @@ function filePath(url: string): string {
  * against its new folder (it still matches by name or executable when those
  * are Antigravity's). A path that reaches a root through a symlink elsewhere
  * matches by where it really leads (a missing script by the folder that
- * exists), except on a network mount, where no path is looked up.
+ * exists, a dangling link by its target), resolved one component at a time and
+ * never on or under a network, FUSE or autofs mount, where nothing is looked
+ * up; at most 256 lookups per process, past which an interpreter's script is
+ * unplaced.
  *
  * An interpreter is known by its process name, argv0 or executable (a
  * rewritten title still runs /usr/bin/python3). For one, every non-option
@@ -242,6 +306,8 @@ export function censusAntigravityProcesses(options: {
   nativeBinary: string;
   /** Owned fixture injection only; production reads /proc. */
   procRoot?: string;
+  /** Owned fixture injection only; production reads /proc/self/mountinfo. */
+  mountInfo?: string;
   uid?: number;
   selfPid?: number;
 }): NativeProcessCensus {
@@ -280,12 +346,20 @@ export function censusAntigravityProcesses(options: {
   // /tmp/link -> a root) is a root's script. A path that doesn't exist or can't be resolved counts as written only.
   // Lookups never touch a network mount (a hung NFS share would block an lstat with no timeout); a deleted script
   // reached through a symlinked folder still resolves, by the folder that exists.
-  const network = networkMounts();
+  const network = networkMounts(options.mountInfo ?? '/proc/self/mountinfo');
+  // A process's paths are looked up at most LOOKUPS_PER_PROCESS times (a hostile command line can name thousands);
+  // past that an interpreter's script is unplaced.
+  let lookups = 0;
+  let overLookups = false;
   const reachesRoot = (value: string): boolean => {
     if (isAntigravityPath(value)) return true;
-    const resolved = path.resolve(value);
-    if (network.some((mount) => within(resolved, mount))) return false;
-    return (spellings(resolved) ?? []).some(isAntigravityPath);
+    if (lookups >= LOOKUPS_PER_PROCESS) {
+      overLookups = true;
+      return false;
+    }
+    lookups += 1;
+    const real = resolveLocally(value, network);
+    return real !== null && isAntigravityPath(real);
   };
   const deniedExe = new Set(['EACCES', 'EPERM']);
   // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A
@@ -316,6 +390,8 @@ export function censusAntigravityProcesses(options: {
           running += 1;
           continue;
         }
+        lookups = 0;
+        overLookups = false;
         const read = readField(() => readCmdline(path.join(directory, 'cmdline')));
         const cmdline = read.text;
         const all = cmdline.split('\0').filter(Boolean);
@@ -331,7 +407,7 @@ export function censusAntigravityProcesses(options: {
           named(path.basename(all[0] ?? '')) ||
           (exe !== null && named(path.basename(exe)));
         const shell = SHELL.test(comm) || SHELL.test(path.basename(all[0] ?? ''));
-        const operands = interpreter ? all.slice(1).flatMap(candidateScripts) : [];
+        const operands = interpreter ? [...new Set(all.slice(1).flatMap(candidateScripts))] : [];
         let cwds: string[] | undefined;
         let cwdDenied = false;
         const resolveArgument = (argument: string, bare = false): string[] => {
@@ -368,7 +444,7 @@ export function censusAntigravityProcesses(options: {
         }
         // Idle stays unproven for an interpreter whose script couldn't be placed: its working folder is hidden while it
         // has a candidate script, or the command line was cut at the read limit with no candidate found.
-        const truncated = read.bytes >= CMDLINE_BYTES;
+        const truncated = read.bytes >= CMDLINE_BYTES || overLookups;
         if (interpreter && ((cwdDenied && operands.length > 0) || truncated)) unplaced = true;
       } catch (error) {
         if (error instanceof ProcessGone) continue;
