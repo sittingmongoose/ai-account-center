@@ -729,7 +729,9 @@ inside `stop()` still leaves it. The marker records what that plan closes:
 the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder keyed with a random
 0600 salt beside the marker (`codex-desktop-instance.salt`), never the path. Each desktop is one entry:
 two whose folders read alike, as a cmdline Electron rewrote into one string can make them, are the same
-hash twice, and both must be back. Every run reads `desktops` as that total, so a failed `stop()` that
+hash twice, and both must be back. A relative `--user-data-dir` is resolved against that desktop
+process's own working directory, never the updater's; with that directory unknown, the desktop is
+named by its process alone, so it stays owed. Every run reads `desktops` as that total, so a failed `stop()` that
 lost one of two writes both, and a twin it never closed can't stand in for the one it did. The salt is
 checked before
 anything stops, and an unusable one is replaced. A

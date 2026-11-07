@@ -373,6 +373,41 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(second.messageCode).toBe('restart_not_running');
   });
 
+  it.each([
+    { form: 'relative', a: 'profile', b: 'profile' },
+    { form: 'absolute', a: '/fixture/project-a/profile', b: '/fixture/project-b/profile' },
+  ])(
+    'owes a closed desktop by its own data folder when another runs elsewhere ($form)',
+    async ({ a, b }) => {
+      // The same `--user-data-dir=profile` in two working directories is two folders.
+      const inDirectory = (pid: number, data: string, cwd: string) =>
+        processFixture(pid, ['/usr/lib/chatgpt/ChatGPT', `--user-data-dir=${data}`], {
+          cwd,
+          env: { HOME: '/fixture', DISPLAY: ':8' },
+        });
+      const fake = harness([inDirectory(40, a, '/fixture/project-a'), childOf(41, 40)]);
+      let fail = true;
+      const { run, marker } = click(fake, async (target, isDesktop) => {
+        if (fail && isDesktop) throw new CodexActivationRuntimeError('fixture launch failed');
+        await fake.deps.launch(target, isDesktop);
+      });
+      expect((await run({})).status).toBe('restart_failed');
+      expect((marker() as { desktops: string[] }).desktops).toEqual([
+        codexDesktopInstance('/fixture/project-a/profile'),
+      ]);
+
+      // Before the retry, a desktop in project-b starts; the one in project-a stays closed.
+      fail = false;
+      fake.inject(inDirectory(60, b, '/fixture/project-b'));
+      fake.inject(childOf(61, 60));
+      const second = await run({ restartOnly: true, launchOnly: true });
+      expect([second.status, second.messageCode]).toEqual([
+        'restart_failed',
+        'restart_not_running',
+      ]);
+    }
+  );
+
   it('owes and relaunches two rewritten desktops that read as the same folder', async () => {
     // Electron rewrote each main cmdline into one string, so `/x/a --b` and `/x/a --c` can't be told
     // from a folder `/x/a` and a flag. Both read as `/x/a`, and each is still its own desktop.
@@ -1797,6 +1832,52 @@ describe('desktop main process detection', () => {
       '/usr/lib/chatgpt/ChatGPT',
       `--user-data-dir=${path.join(os.homedir(), '.config', 'Codex')}`,
     ]);
+  });
+
+  it('reads a relative data folder in the desktop process own working directory', async () => {
+    const at = (pid: number, cwd: string, args: string[]) =>
+      processFixture(pid, args, { cwd, env: { DISPLAY: ':8' }, exe: '/usr/lib/chatgpt/ChatGPT' });
+    for (const args of [
+      ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=profile'],
+      ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir', 'profile'],
+      ['/usr/lib/chatgpt/ChatGPT --user-data-dir profile --class Codex'],
+    ]) {
+      const fake = harness([daemon, at(20, '/fixture/project-a', args), bundled]);
+      const runtime = createCodexActivationRuntime(home, fake.deps);
+      expect((await runtime.restartState()).desktops).toEqual([
+        codexDesktopInstance('/fixture/project-a/profile'),
+      ]);
+    }
+    // A folder a child names is resolved in that child's directory, not the main process's.
+    const child = processFixture(
+      21,
+      ['/usr/lib/chatgpt/resources/codex', 'app-server', '--user-data-dir=profile'],
+      {
+        ppid: 20,
+        cwd: '/fixture/child',
+        exe: '/usr/lib/chatgpt/resources/codex',
+        env: { ...bundled.env },
+      }
+    );
+    const viaChild = harness([
+      daemon,
+      at(20, '/fixture/main', ['/usr/lib/chatgpt/ChatGPT']),
+      child,
+    ]);
+    expect(
+      (await createCodexActivationRuntime(home, viaChild.deps).restartState()).desktops
+    ).toEqual([codexDesktopInstance('/fixture/child/profile')]);
+    // A working directory that can't be read leaves the folder unknown: it names only that
+    // process, never the folder of the same name where this updater happens to run.
+    const unknown = harness([
+      daemon,
+      at(20, '', ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=profile']),
+      bundled,
+    ]);
+    const [named] = (await createCodexActivationRuntime(home, unknown.deps).restartState())
+      .desktops;
+    expect(named).not.toBe(codexDesktopInstance(path.resolve('profile')));
+    expect(named).not.toBe(codexDesktopInstance('profile'));
   });
 
   it('reads a spaced data folder whole, from real argv and from a rewritten cmdline', async () => {

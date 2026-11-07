@@ -770,18 +770,32 @@ def sys_platform_linux():
 
 
 def desktop_arguments(context, platform):
-    """Only existing data-directory flags are reapplied; never replay work arguments."""
+    """Only existing data-directory flags are reapplied; never replay work arguments.
+
+    A relative folder is the app's own: it is resolved against the app's working directory, never
+    this helper's, and dropped when that directory is unknown.
+    """
     args = context.args[1:]
+    cwd = getattr(context, "cwd", None)
     found = []
+
+    def absolute(value):
+        if not value:
+            return None
+        if pathlib.Path(value).is_absolute():
+            return value
+        if isinstance(cwd, str) and cwd and pathlib.Path(cwd).is_absolute():
+            return str(pathlib.Path(cwd) / value)
+        return None
+
     for index, arg in enumerate(args):
+        value = None
         if arg.startswith("--user-data-dir="):
-            value = arg[len("--user-data-dir="):]
-            if value and pathlib.Path(value).is_absolute():
-                found = ["--user-data-dir=" + value]
+            value = absolute(arg[len("--user-data-dir="):])
         elif arg == "--user-data-dir" and index + 1 < len(args):
-            value = args[index + 1]
-            if pathlib.Path(value).is_absolute():
-                found = ["--user-data-dir=" + value]
+            value = absolute(args[index + 1])
+        if value:
+            found = ["--user-data-dir=" + value]
     # Chromium on Linux may rewrite argv0 to just its executable. Its existing
     # data directory is still supplied by the preserved process environment.
     return found

@@ -57,11 +57,13 @@ export interface CodexRestartState extends CodexRestartPlan {
 /**
  * Names one Codex Desktop by its data folder, without keeping the path. The update bridge keys this
  * with a per-home salt before it goes in a marker file.
- * A desktop started with no folder uses the default one, which a relaunch names explicitly.
+ * A desktop started with no folder uses the default one, which a relaunch names explicitly. Folders
+ * come here absolute; anything else is named as it is, never resolved in this process's directory.
  */
 export function codexDesktopInstance(userData: string): string {
+  const folder = userData || path.join(os.homedir(), '.config', 'Codex');
   return createHash('sha256')
-    .update(path.resolve(userData || path.join(os.homedir(), '.config', 'Codex')))
+    .update(path.isAbsolute(folder) ? path.resolve(folder) : folder)
     .digest('hex')
     .slice(0, 32);
 }
@@ -684,16 +686,35 @@ function userDataArgument(args: string[]): string {
   return value && !value.startsWith('--') ? value : '';
 }
 
+/**
+ * The `--user-data-dir` a desktop runs with, as written, and the process it was read from. Each
+ * process's own argv is read, so a missing split value can't take an argument from another child.
+ * The main process's override wins.
+ */
+function desktopFolderArgument(
+  desktop: CodexProcessSnapshot,
+  processes: CodexProcessSnapshot[]
+): { value: string; owner: CodexProcessSnapshot } | null {
+  for (const owner of [desktop, ...descendants(desktop, processes)]) {
+    const value = userDataArgument(argWords(owner));
+    if (value) return { value, owner };
+  }
+  return null;
+}
+
+/**
+ * A desktop's data folder, absolute. Chromium resolves a relative `--user-data-dir` against the
+ * working directory the app runs in, so it is resolved here against that process's own, never this
+ * updater's. With that directory unknown the folder is too: it is named by that one process, so it
+ * stays owed and matches no other desktop.
+ */
 function desktopUserData(desktop: CodexProcessSnapshot, processes: CodexProcessSnapshot[]): string {
-  // Recover each process's own argv; a missing split value cannot consume the
-  // first argument from a different child. The main process's override wins.
-  return (
-    userDataArgument(argWords(desktop)) ||
-    descendants(desktop, processes)
-      .map((child) => userDataArgument(argWords(child)))
-      .find(Boolean) ||
-    ''
-  );
+  const found = desktopFolderArgument(desktop, processes);
+  if (!found) return '';
+  const { value, owner } = found;
+  if (path.isAbsolute(value)) return value;
+  if (owner.cwd && path.isAbsolute(owner.cwd)) return path.resolve(owner.cwd, value);
+  return `\0unresolved:${owner.pid}:${owner.startTime}:${value}`;
 }
 
 function desktopLauncher(
@@ -729,8 +750,12 @@ function desktopLauncher(
         arg.startsWith('--user-data-dir ')
     )
   ) {
+    // The folder a child names, absolute when its directory is known: the relaunch runs in the
+    // main process's directory, which need not be the child's.
+    const found = desktopFolderArgument(desktop, processes);
     const userData = desktopUserData(desktop, processes);
-    args.push(`--user-data-dir=${userData || path.join(os.homedir(), '.config', 'Codex')}`);
+    const folder = path.isAbsolute(userData) ? userData : found?.value;
+    args.push(`--user-data-dir=${folder || path.join(os.homedir(), '.config', 'Codex')}`);
   }
   return { ...desktop, args, env };
 }

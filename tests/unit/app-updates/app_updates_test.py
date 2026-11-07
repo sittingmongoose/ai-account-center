@@ -438,6 +438,14 @@ class UpdaterTests(unittest.TestCase):
             with self.assertRaises(common.UpdateFailure):
                 terminal.check_terminal('ubuntu', [mock.Mock()])
 
+    def test_desktop_arguments_resolve_a_relative_data_folder_in_the_app_working_directory(self):
+        from app_update_processes import desktop_arguments
+        for args in (['/fixture/app', '--user-data-dir=profile'], ['/fixture/app', '--user-data-dir', 'profile']):
+            item = mock.Mock(args=args, cwd='/fixture/project-a')
+            self.assertEqual(desktop_arguments(item, 'linux'), ['--user-data-dir=/fixture/project-a/profile'])
+        # With no working directory known, a relative folder is not guessed.
+        self.assertEqual(desktop_arguments(mock.Mock(args=['/fixture/app', '--user-data-dir=profile'], cwd=None), 'linux'), [])
+
     def _restart_ubuntu_desktop(self, in_service):
         install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
         item = mock.Mock(args=['/fixture/claude-desktop', '--user-data-dir=/fixture/data'], cwd='/fixture', env={'KEEP': 'yes', 'CCS_SESSION_SECRET': 'hidden'}, pid=1, ppid=0)
