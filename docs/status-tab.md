@@ -194,6 +194,16 @@ word, never 0. Times are ISO UTC; the page shows them as relative ages ("2m ago"
 A panel whose source is not `ok` draws its last good data greyed with the source's `detail` on top, or only the
 detail when there is no data. Nothing is ever shown as live when its source is stale.
 
+A partial read is never a clean success. When the folder listing or the command worked but named parts of it failed,
+the source is not `ok` and its `detail` names each part with its reason and since when, then "The rest read <time>.":
+a pm-mail registry file that can't be read, isn't JSON, is over 64 KB or isn't a regular file makes the registry
+`unreadable` ("1 registry file unreadable since 10:01 AM: registry-worker.json (could not be read). ..."); a host
+`browser-check slots --json` answers with `state: { error }` (exit 0) makes `browsers` `error` ("Nas1: session list
+failed: ... (since 10:01 AM)."); a Simlock gateway worker that is `disconnected` or `incompatible` makes `simlock`
+`error`. Each failed part is tried again on the next read and the problem clears on its first good one. A Simlock that
+answers `daemon.health: "starting"` (no devices, leases or capacity yet) or `"failed"` is a failed read, so its last
+good reading stays, shown cached, never an empty fleet.
+
 **`cards.complete`**: whether a card missing from this view is known to be gone. The page prunes the owner's local
 drafts of closed cards only while it is true. True only when the latest scan listed `v1/writers` and every writer and
 `cards/` folder, read every file it tried and reached no scan limit. A file refused for its content (bad JSON, NUL
@@ -305,7 +315,11 @@ when `state` is `waiting`, `idle`, `done` or `paused` (a thread that ended its t
 shows its age and is never stale for lack of a heartbeat (null with `working` or `blocked` makes the file unreadable). pm-mail rows (registry threads
 with no report, seen in the last day) have `state: null`, `doing` = their about line, and are stale after 30 minutes.
 Their `registrySource` is the pm-mail registry's `SourceRef` (null on report rows): while the registry fails, its rows
-are the last good scan, shown as cached with the registry's problem.
+are the last good scan, shown as cached with the registry's problem. While only some registry files fail, each row
+carries its own file's state: a row whose file fails keeps its last good reading with `registrySource.state:
+"unreadable"`, `asOf` = when that file last read well, `stale: true` and `problem` naming the file ("registry-worker.json:
+could not be read (since 10:01 AM). Showing its reading from 10:00 AM."); the other rows are `ok` at this scan. A file
+with no good reading yet has no row; the registry's `detail` names it.
 `blockedOn.kind` is any short slug (documented: `owner`, `agent`, `review`, `lock`, `resource`, `quota`).
 
 **Machine**: `{ id: "vm" | "mac" | "windows" | "nas1", label, state: "ok" | "stale" | "unreachable", asOf, ageSeconds,
@@ -317,16 +331,22 @@ time in `detail`. Windows has no load average (`load1: null`). Session URLs are 
 path); query strings and fragments are never shown. `browsers`, `recordings`, `gpuPct` and `sessions` come from
 `browser-check` (null or empty when it has no row for that machine); `slotsSource` is that source's `SourceRef`, apart
 from the machine's own `state`, so a failed `browser-check` shows its cached readings with their age and problem while
-CPU, memory and disk stay current.
+CPU, memory and disk stay current. While `browser-check` answers, each machine's `slotsSource` is that host's own:
+`ok` with its read time; `error` when its host failed, keeping the last good counts with `asOf` = their read time and
+the host's reason ("Nas1: ... (since 10:01 AM). Showing its reading from 10:00 AM."), or with unknown (null) counts and
+"No reading yet." when it never answered; `missing` (`asOf: null`) when `browser-check` has no row for it.
 
 **Capacity** (Simlock): `{ platform, running, max, reserved, overLimit }` (one row per platform Simlock lists,
-including `global`). **Lease**: `{ device, deviceLabel, platform, holder, since, expiresAt }`. Device ids and holders
+including `global`). **Lease**: `{ device, deviceLabel, platform, holder, since, expiresAt, lastKnown }`
+(`lastKnown`: the lease is on a gateway worker that is not connected, so it is the last known, not a current lease). Device ids and holders
 are shown as Simlock reports them (`holder` is the worker label, else the requester id); lease ids, owner ids and tokens
 never.
 
 **UsageAccount**: `{ id, provider, label, host, active, window, kind, usedPct, remaining, limit, unit, resetsAt,
 projectedFullAt, runsOutBeforeReset, atLimit, stale, resetPassed }`, one row per rate-limit window and per balance (Codex credits:
-`kind: "balance"` with `remaining`/`unit`), from AAC's own dashboard samples and the same pace math as
+`kind: "balance"` with `remaining`/`unit`; the page shows a balance as its amount left with that unit, "12 credits
+left", or "12 of 50 credits left" only when `limit` is given, and "-" while `remaining` is null; it never turns a
+balance into a percent), from AAC's own dashboard samples and the same pace math as
 `aac-usage` (no extra provider refresh). Accounts hidden on the dashboard are left out. Every view rechecks each
 reading against its reset with the dashboard's rule (the reset is due and the reading predates it, or its time is
 unknown), not only when the sample was taken: such a row has `resetPassed: true` and `stale: true`, keeps its measured

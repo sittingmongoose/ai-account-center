@@ -1,8 +1,9 @@
 /** The machines and usage panels of the Status tab view. */
 import { MACHINES, type MachineId } from './report-schema';
-import type { MachineSample } from './status-collectors';
+import type { MachineSample, ReadProblem } from './status-collectors';
 import { readingPredatesReset } from '../agent-usage/agent-usage-projection';
 import type {
+  Collected,
   MachineView,
   Source,
   SourceRef,
@@ -53,6 +54,54 @@ export function machineWarnings(sample: MachineSample | null): string[] {
 export function sourceRef(source: Source): SourceRef {
   const { id, label, state, asOf, ageSeconds, detail } = source;
   return { id, label, state, asOf, ageSeconds, detail };
+}
+
+/** One failed part in words: "Nas1: backend unavailable (since 10:01 AM)." */
+export function partProblemText(problem: ReadProblem, timeZone: string): string {
+  return `${problem.item}: ${problem.reason.replace(/\.$/, '')} (since ${clockText(problem.since, timeZone)}).`;
+}
+
+/**
+ * The SourceRef one row carries for the readings it got from a source that names failed parts: the
+ * source's own ref while the whole source is failing or stale; else this part's own state and read
+ * time (its problem, or `ok` at its own read).
+ */
+export function partRef(
+  source: Source,
+  collected: Collected<unknown>,
+  part: { readAt?: number | null; problem?: ReadProblem | null } | null,
+  now: number,
+  timeZone: string,
+  absent: string
+): SourceRef {
+  const whole = sourceRef(source);
+  if (collected.error || collected.asOf === null || source.state === 'stale') return whole;
+  const { id, label } = source;
+  if (!part) return { id, label, state: 'missing', asOf: null, ageSeconds: null, detail: absent };
+  const readAt = part.readAt ?? null;
+  if (part.problem) {
+    const shown =
+      readAt !== null
+        ? ` Showing its reading from ${clockText(readAt, timeZone)}.`
+        : ' No reading yet.';
+    return {
+      id,
+      label,
+      state: source.state === 'unreadable' ? 'unreadable' : 'error',
+      asOf: iso(readAt),
+      ageSeconds: ageSeconds(now, readAt),
+      detail: `${partProblemText(part.problem, timeZone)}${shown}`,
+    };
+  }
+  const at = readAt ?? collected.asOf;
+  return {
+    id,
+    label,
+    state: 'ok',
+    asOf: iso(at),
+    ageSeconds: ageSeconds(now, at),
+    detail: `Read ${clockText(at, timeZone)}.`,
+  };
 }
 
 /**
@@ -106,7 +155,15 @@ export function machineView(inputs: StatusInputs, id: MachineId, browsers: Sourc
     recordings: browser ? browser.recordings : null,
     gpuPct: browser?.gpuPct ?? null,
     sessions: browser?.sessions ?? [],
-    slotsSource: sourceRef(browsers),
+    // Each host's slots carry that host's own state and read time: one failed host is not the fleet.
+    slotsSource: partRef(
+      browsers,
+      inputs.browsers,
+      browser,
+      now,
+      timeZone,
+      'browser-check has no row for this machine.'
+    ),
     warnings: machineWarnings(sample),
   };
 }

@@ -21,6 +21,7 @@ import type {
   BrowserMachine,
   BrowserSession,
   MachineSample,
+  ReadProblem,
   RegistryThread,
   SimlockCapacity,
   SimlockLease,
@@ -39,6 +40,11 @@ export interface Collected<T> {
   error: { reason: string; since: number } | null;
   /** The tool or folder does not exist here (shown as `missing`, not `error`). */
   missing?: boolean;
+  /**
+   * Named parts that failed while the rest was read (registry files, browser-check hosts, Simlock
+   * workers). Any makes the source not `ok`, though `asOf` is the latest read.
+   */
+  problems?: ReadProblem[];
 }
 
 export interface UsageInput {

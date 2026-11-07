@@ -34,6 +34,8 @@ import {
   commandFailure,
   findExecutable,
   localMachineId,
+  mergeBrowserRows,
+  nextProblem,
   parseBrowserSlots,
   parseSimlockStatus,
   PmMailRegistryReader,
@@ -43,6 +45,7 @@ import {
   type BrowserMachine,
   type CommandRunner,
   type MachineSample,
+  type ReadProblem,
   type RegistryThread,
   type SimlockStatus,
 } from './status-collectors';
@@ -75,6 +78,7 @@ function failed<T>(
     asOf: before.asOf,
     error: { reason, since: before.error?.reason === reason ? before.error.since : now },
     missing,
+    problems: before.problems,
   };
 }
 
@@ -184,8 +188,10 @@ export class StatusService {
 
   async scanRegistry(): Promise<void> {
     try {
-      const { threads, changed } = await this.registryReader.scan();
-      this.registry = succeeded(threads, this.now());
+      const now = this.now();
+      const { threads, problems, changed } = await this.registryReader.scan(now);
+      // A failed file is a named problem: the scan is partial, never a clean success.
+      this.registry = { ...succeeded(threads, now), problems: problems ?? [] };
       if (changed) this.changed();
     } catch (error) {
       const missing = /missing/.test(errorReason(error, ''));
@@ -218,7 +224,15 @@ export class StatusService {
       );
     } else {
       try {
-        this.browsers = succeeded(parseBrowserSlots(JSON.parse(result.stdout)), now);
+        const rows = mergeBrowserRows(
+          this.browsers.data,
+          parseBrowserSlots(JSON.parse(result.stdout)),
+          now
+        );
+        this.browsers = {
+          ...succeeded(rows, now),
+          problems: rows.flatMap((row) => (row.problem ? [row.problem] : [])),
+        };
       } catch (error) {
         this.browsers = failed(
           this.browsers,
@@ -243,9 +257,24 @@ export class StatusService {
       this.simlock = failed(this.simlock, commandFailure('simlock', result), now, result.missing);
     } else {
       try {
-        this.simlock = succeeded(parseSimlockStatus(JSON.parse(result.stdout)), now);
-      } catch {
-        this.simlock = failed(this.simlock, 'simlock answered in an unknown shape.', now);
+        const status = parseSimlockStatus(JSON.parse(result.stdout));
+        const before = this.simlock.problems ?? [];
+        const problems: ReadProblem[] = status.problems.map((p) => {
+          const seen = p.lastSeenAt ? Date.parse(p.lastSeenAt) : NaN;
+          const last = before.find((b) => b.item === p.item);
+          return Number.isFinite(seen)
+            ? { item: p.item, reason: p.reason, since: seen }
+            : nextProblem(last, p.item, p.reason, now);
+        });
+        this.simlock = { ...succeeded(status, now), problems };
+      } catch (error) {
+        this.simlock = failed(
+          this.simlock,
+          error instanceof SyntaxError
+            ? 'simlock answered in an unknown shape.'
+            : errorReason(error, 'simlock answered in an unknown shape.'),
+          now
+        );
       }
     }
     this.changed();

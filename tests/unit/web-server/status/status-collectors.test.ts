@@ -94,9 +94,90 @@ describe('status collectors', () => {
         holder: 'agent-7',
         since: '2026-11-06T16:00:00.000Z',
         expiresAt: '2026-11-06T17:00:00.000Z',
+        lastKnown: false,
       },
     ]);
+    expect(status.problems).toEqual([]);
     expect(JSON.stringify(status)).not.toContain('lease-secret-id');
+  });
+
+  it('keeps a host browser-check could not read as an error with unknown counts', () => {
+    const rows = parseBrowserSlots({
+      rows: [
+        {
+          machine: { name: 'nas1', label: 'Nas1' },
+          state: { error: 'session list failed: exit 1: backend unavailable' },
+          free: null,
+        },
+        {
+          machine: { name: 'mac', label: 'Mac' },
+          state: { error: 'token=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' },
+        },
+      ],
+    });
+    expect(rows[0]).toMatchObject({
+      machine: 'nas1',
+      browsers: { running: null, max: null },
+      recordings: { running: null, max: null },
+      gpuPct: null,
+      sessions: [],
+      error: 'session list failed: exit 1: backend unavailable',
+    });
+    // A tool text that looks like a secret is never shown; the failure still is.
+    expect(rows[1].error).toBe('browser-check could not read this machine');
+  });
+
+  it('refuses a Simlock answer that has not read its devices yet, or whose daemon failed', () => {
+    expect(() =>
+      parseSimlockStatus({ daemon: { health: 'starting', mode: 'worker' }, host: {} })
+    ).toThrow('starting');
+    expect(() =>
+      parseSimlockStatus({
+        daemon: { health: 'failed', mode: 'worker' },
+        capacity: {},
+        devices: [],
+        leases: [],
+      })
+    ).toThrow('failed');
+    expect(() => parseSimlockStatus({ daemon: { health: 'running' }, host: {} })).toThrow(
+      'without'
+    );
+  });
+
+  it('names a disconnected Simlock worker and marks its leases as last known', () => {
+    const status = parseSimlockStatus({
+      daemon: { health: 'running', mode: 'gateway' },
+      capacity: { ios: { running: 0, maxRunning: 1, reserved: 0, overLimit: false } },
+      devices: [
+        { id: 'dev_1', workerId: 'mac', spec: { platform: 'ios', model: 'iPhone Duo' } },
+        { id: 'dev_2', workerId: 'vm', spec: { platform: 'android', model: 'Pixel' } },
+      ],
+      leases: [
+        { deviceId: 'dev_1', workerId: 'mac', requesterId: 'agent-1', grantedAt: 1 },
+        { deviceId: 'dev_2', workerId: 'vm', requesterId: 'agent-2', grantedAt: 1 },
+      ],
+      workers: [
+        {
+          id: 'mac',
+          label: 'Mac',
+          connection: 'disconnected',
+          drained: false,
+          lastSeenAt: Date.parse('2026-11-06T16:00:00Z'),
+        },
+        { id: 'vm', label: 'VM', connection: 'connected', drained: false, lastSeenAt: 2 },
+      ],
+    });
+    expect(status.problems).toEqual([
+      {
+        item: 'Mac',
+        reason: 'disconnected; its devices and leases are the last known',
+        lastSeenAt: '2026-11-06T16:00:00.000Z',
+      },
+    ]);
+    expect(status.leases.map((l) => [l.device, l.lastKnown])).toEqual([
+      ['dev_1', true],
+      ['dev_2', false],
+    ]);
   });
 
   it('parses each host probe and works out the busy percent between readings', () => {
@@ -171,7 +252,7 @@ describe('status collectors', () => {
     );
     fs.writeFileSync(path.join(dir, 'broken.json'), '{');
     const reader = new PmMailRegistryReader(() => dir);
-    const first = await reader.scan();
+    const first = await reader.scan(1_000);
     expect(first.threads).toEqual([
       {
         name: 'lead',
@@ -179,9 +260,17 @@ describe('status collectors', () => {
         machine: 'vm',
         about: 'Working',
         lastSeen: '2026-11-06T16:00:00.000Z',
+        readAt: 1_000,
+        problem: null,
       },
     ]);
-    expect((await reader.scan()).changed).toBe(false);
+    // The broken file is named, not silently dropped, and tried again each scan.
+    expect(first.problems).toEqual([
+      { item: 'broken.json', reason: 'is not valid JSON', since: 1_000 },
+    ]);
+    const second = await reader.scan(2_000);
+    expect(second.changed).toBe(false);
+    expect(second.problems[0].since).toBe(1_000);
     expect(fs.readdirSync(dir).sort()).toEqual(['broken.json', 'lead.json']);
     await expect(new PmMailRegistryReader(() => path.join(dir, 'nope')).scan()).rejects.toThrow(
       'missing'

@@ -155,6 +155,29 @@ export interface RegistryThread {
   about: string | null;
   /** ISO time the thread last used pm-mail. */
   lastSeen: string | null;
+  /** When AAC last read this row from its file (epoch ms); set by the reader. */
+  readAt?: number;
+  /** The file's current problem: while set, this row is the last good reading (from `readAt`). */
+  problem?: ReadProblem | null;
+}
+
+/** One named part of a source (a file, a host, a worker) that failed while the rest was read. */
+export interface ReadProblem {
+  /** The file name, host label or worker label, as shown. */
+  item: string;
+  /** Fixed words, or the tool's own short text with secrets refused. */
+  reason: string;
+  since: number;
+}
+
+/** The next problem for an item, keeping `since` while the reason stays the same. */
+export function nextProblem(
+  before: ReadProblem | null | undefined,
+  item: string,
+  reason: string,
+  now: number
+): ReadProblem {
+  return { item, reason, since: before?.reason === reason ? before.since : now };
 }
 
 /** A registry host name or working folder -> one of the four machines, or null. */
@@ -194,14 +217,33 @@ export function parseRegistryEntry(raw: unknown): RegistryThread | null {
   };
 }
 
-/** Rescans the registry folder: stats every file, reads only changed ones. Never writes. */
+export interface RegistryScan {
+  /** One row per file read well at least once; a row whose file now fails carries its `problem`. */
+  threads: RegistryThread[];
+  /** Every file that failed this scan, named (with or without an earlier good row). */
+  problems: ReadProblem[];
+  changed: boolean;
+}
+
+const REGISTRY_FILE_CAP = 64 * 1024;
+
+/**
+ * Rescans the registry folder: stats every file, reads only changed ones. Never writes. A file that
+ * fails (unreadable, not JSON, too large, not a regular file) is a named problem: its last good row
+ * is kept with its own read time and the problem, and the file is tried again next scan.
+ */
 export class PmMailRegistryReader {
-  private readonly files = new Map<string, { key: string; thread: RegistryThread | null }>();
+  private readonly files = new Map<
+    string,
+    { key: string; thread: RegistryThread | null; readAt: number; problem: ReadProblem | null }
+  >();
+  /** Files with no good reading yet, by name. */
+  private readonly failing = new Map<string, ReadProblem>();
 
   constructor(private readonly dir: () => string = pmMailRegistryDir) {}
 
   /** Resolves the thread rows, or throws a fixed-word Error when the folder cannot be listed. */
-  async scan(): Promise<{ threads: RegistryThread[]; changed: boolean }> {
+  async scan(now: number = Date.now()): Promise<RegistryScan> {
     const dir = this.dir();
     let names: string[];
     try {
@@ -215,40 +257,87 @@ export class PmMailRegistryReader {
     }
     let changed = false;
     const seen = new Set<string>();
+    const fail = (name: string, reason: string) => {
+      const entry = this.files.get(name);
+      if (entry) {
+        const problem = nextProblem(entry.problem, name, reason, now);
+        if (entry.problem?.reason !== reason) changed = true;
+        entry.problem = problem;
+        // Read again next scan, whatever the file's stat says then.
+        entry.key = '';
+        return;
+      }
+      const before = this.failing.get(name);
+      if (before?.reason !== reason) changed = true;
+      this.failing.set(name, nextProblem(before, name, reason, now));
+    };
     for (const name of names) {
       if (name.startsWith('.') || !name.endsWith('.json')) continue;
-      seen.add(name);
       const file = path.join(dir, name);
       let stat: fs.Stats;
       try {
         stat = await fs.promises.stat(file);
-      } catch {
+      } catch (error) {
+        // Gone between the listing and the stat: as if it was not listed.
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
+        seen.add(name);
+        fail(name, 'could not be read');
         continue;
       }
-      if (!stat.isFile() || stat.size > 64 * 1024) continue;
-      const key = `${stat.size}:${stat.mtimeMs}:${stat.ino}`;
-      if (this.files.get(name)?.key === key) continue;
-      let thread: RegistryThread | null = null;
-      try {
-        const bytes = await readRegularFile(file, 64 * 1024);
-        thread = parseRegistryEntry(JSON.parse(bytes.toString('utf8')));
-      } catch {
-        // A file mid-rewrite: keep the last good row and look again next time.
-        const before = this.files.get(name);
-        if (before) continue;
+      seen.add(name);
+      if (!stat.isFile()) {
+        fail(name, 'is not a regular file');
+        continue;
       }
-      this.files.set(name, { key, thread });
-      changed = true;
+      if (stat.size > REGISTRY_FILE_CAP) {
+        fail(name, 'is larger than the 64 KB cap');
+        continue;
+      }
+      const key = `${stat.size}:${stat.mtimeMs}:${stat.ino}:${stat.ctimeMs}`;
+      const entry = this.files.get(name);
+      if (entry?.key === key && entry.problem === null) continue;
+      let raw: unknown;
+      try {
+        const bytes = await readRegularFile(file, REGISTRY_FILE_CAP);
+        try {
+          raw = JSON.parse(bytes.toString('utf8'));
+        } catch {
+          fail(name, 'is not valid JSON');
+          continue;
+        }
+      } catch {
+        fail(name, 'could not be read');
+        continue;
+      }
+      // A file that is JSON but no thread entry is not a problem: pm-mail keeps other files here.
+      const thread = parseRegistryEntry(raw);
+      if (
+        !entry ||
+        entry.problem !== null ||
+        JSON.stringify(entry.thread) !== JSON.stringify(thread)
+      )
+        changed = true;
+      this.files.set(name, { key, thread, readAt: now, problem: null });
+      this.failing.delete(name);
     }
     for (const name of [...this.files.keys()])
       if (!seen.has(name)) {
         this.files.delete(name);
         changed = true;
       }
+    for (const name of [...this.failing.keys()])
+      if (!seen.has(name)) {
+        this.failing.delete(name);
+        changed = true;
+      }
     const threads = [...this.files.values()].flatMap((entry) =>
-      entry.thread ? [entry.thread] : []
+      entry.thread ? [{ ...entry.thread, readAt: entry.readAt, problem: entry.problem }] : []
     );
-    return { threads, changed };
+    const problems = [
+      ...[...this.files.values()].flatMap((entry) => (entry.problem ? [entry.problem] : [])),
+      ...this.failing.values(),
+    ].sort((x, y) => x.item.localeCompare(y.item));
+    return { threads, problems, changed };
   }
 }
 
@@ -272,6 +361,12 @@ export interface BrowserMachine {
   gpuPct: number | null;
   memGb: number | null;
   sessions: BrowserSession[];
+  /** browser-check could not read this host (`state.error`): the counts above are unknown. */
+  error: string | null;
+  /** Set by the service: when these counts were read (epoch ms), null before the first good reading. */
+  readAt?: number | null;
+  /** Set by the service: this host's current failure; while set the counts are the last good ones. */
+  problem?: ReadProblem | null;
 }
 
 /** A session URL as host and path only. */
@@ -299,6 +394,20 @@ export function parseBrowserSlots(raw: unknown): BrowserMachine[] {
     const name = machine.name;
     if (typeof name !== 'string' || !(MACHINES as readonly string[]).includes(name)) continue;
     const state = (rec.state ?? {}) as Record<string, unknown>;
+    // browser-check answers a host it could not read with `state: { error }` (and `free: null`), exit 0.
+    if (state.error !== undefined && state.error !== null) {
+      result.push({
+        machine: name as MachineId,
+        label: shortText(machine.label, 80),
+        browsers: { running: null, max: null },
+        recordings: { running: null, max: null },
+        gpuPct: null,
+        memGb: null,
+        sessions: [],
+        error: shortText(state.error, 160) ?? 'browser-check could not read this machine',
+      });
+      continue;
+    }
     const caps = (state.caps ?? {}) as Record<string, unknown>;
     const sessions = Array.isArray(state.sessions) ? state.sessions : [];
     result.push({
@@ -318,9 +427,30 @@ export function parseBrowserSlots(raw: unknown): BrowserMachine[] {
           ageSeconds: int(s.age_s),
         };
       }),
+      error: null,
     });
   }
   return result;
+}
+
+/**
+ * One browser-check answer merged with the last: a host that answered keeps its new counts and read
+ * time; a host that failed keeps its last good counts with their read time and the failure, or has
+ * unknown counts and no read time when it never answered.
+ */
+export function mergeBrowserRows(
+  before: BrowserMachine[] | null,
+  rows: BrowserMachine[],
+  now: number
+): BrowserMachine[] {
+  return rows.map((row) => {
+    if (row.error === null) return { ...row, readAt: now, problem: null };
+    const last = before?.find((b) => b.machine === row.machine) ?? null;
+    const problem = nextProblem(last?.problem, row.label ?? row.machine, row.error, now);
+    if (last && typeof last.readAt === 'number')
+      return { ...last, label: row.label ?? last.label, error: row.error, problem };
+    return { ...row, readAt: null, problem };
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -341,11 +471,21 @@ export interface SimlockLease {
   holder: string | null;
   since: string | null;
   expiresAt: string | null;
+  /** The lease is on a worker the gateway cannot reach: what it last knew, not a current lease. */
+  lastKnown: boolean;
+}
+
+/** A gateway worker that is not connected: its capacity is left out, its devices and leases are its last known. */
+export interface SimlockWorkerProblem {
+  item: string;
+  reason: string;
+  lastSeenAt: string | null;
 }
 
 export interface SimlockStatus {
   capacity: SimlockCapacity[];
   leases: SimlockLease[];
+  problems: SimlockWorkerProblem[];
 }
 
 function isoFromMs(value: unknown): string | null {
@@ -358,9 +498,31 @@ export function parseSimlockStatus(raw: unknown): SimlockStatus {
   if (!raw || typeof raw !== 'object')
     throw new ValidationError('simlock answered in an unknown shape.');
   const rec = raw as Record<string, unknown>;
+  // Simlock leaves out devices, leases and capacity while it starts: that is no reading, not an empty fleet.
+  const health = ((rec.daemon ?? {}) as Record<string, unknown>).health;
+  if (health === 'starting')
+    throw new NetworkError('Simlock is starting and has not read its devices yet.');
+  if (health === 'failed') throw new NetworkError('The Simlock daemon reports that it failed.');
+  if (rec.daemon !== undefined && (rec.capacity === undefined || !Array.isArray(rec.leases)))
+    throw new ValidationError('simlock answered without its capacity and leases.');
   const capacityRaw = (rec.capacity ?? {}) as Record<string, unknown>;
   if (typeof capacityRaw !== 'object')
     throw new ValidationError('simlock answered in an unknown shape.');
+  const offline = new Set<string>();
+  const problems: SimlockWorkerProblem[] = [];
+  for (const worker of Array.isArray(rec.workers) ? rec.workers : []) {
+    const w = (worker ?? {}) as Record<string, unknown>;
+    if (typeof w.id !== 'string' || w.connection === 'connected') continue;
+    offline.add(w.id);
+    problems.push({
+      item: shortText(w.label, 80) ?? shortText(w.id, 80) ?? 'A worker',
+      reason:
+        w.connection === 'incompatible'
+          ? 'incompatible with the gateway; its devices and leases are the last known'
+          : 'disconnected; its devices and leases are the last known',
+      lastSeenAt: isoFromMs(w.lastSeenAt),
+    });
+  }
   const capacity: SimlockCapacity[] = [];
   for (const [platform, value] of Object.entries(capacityRaw)) {
     if (!/^[a-z0-9-]{1,20}$/.test(platform) || !value || typeof value !== 'object') continue;
@@ -396,9 +558,10 @@ export function parseSimlockStatus(raw: unknown): SimlockStatus {
       holder: shortText(worker.label, 80) ?? shortText(l.requesterId, 80),
       since: isoFromMs(l.grantedAt),
       expiresAt: isoFromMs(l.ttlDeadline),
+      lastKnown: typeof l.workerId === 'string' && offline.has(l.workerId),
     });
   }
-  return { capacity, leases };
+  return { capacity, leases, problems };
 }
 
 // ---------------------------------------------------------------------------------------------

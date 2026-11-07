@@ -17,7 +17,14 @@ import {
   type TasksDoc,
   type ThreadDoc,
 } from './report-schema';
-import { buildUsage, machinesSource, machineView, sourceRef } from './status-view-panels';
+import {
+  buildUsage,
+  machinesSource,
+  machineView,
+  partProblemText,
+  partRef,
+} from './status-view-panels';
+import type { ReadProblem } from './status-collectors';
 import { buildSpend, quotaSource } from './status-view-quota';
 import type {
   BatchView,
@@ -66,13 +73,38 @@ export {
 // ---------------------------------------------------------------------------------------------
 // Sources
 
+/** How a source words the named parts that failed while the rest was read. */
+export interface PartialWords {
+  state: 'unreadable' | 'error';
+  /** The whole sentence for these problems (without the trailing reading time). */
+  text: (problems: ReadProblem[], timeZone: string) => string;
+}
+
+const REGISTRY_PARTIAL: PartialWords = {
+  state: 'unreadable',
+  text: (problems, timeZone) =>
+    `${plural(problems.length, 'registry file')} unreadable since ${clockText(Math.min(...problems.map((p) => p.since)), timeZone)}: ${problems
+      .slice(0, 5)
+      .map((p) => `${p.item} (${p.reason})`)
+      .join(
+        ', '
+      )}${problems.length > 5 ? `, and ${problems.length - 5} more` : ''}. Their threads show the last good reading.`,
+};
+
+/** Hosts or workers: each named with its own reason and since when. */
+const ITEMS_PARTIAL: PartialWords = {
+  state: 'error',
+  text: (problems, timeZone) => problems.map((p) => partProblemText(p, timeZone)).join(' '),
+};
+
 function collectedSource<T>(
   id: SourceId,
   label: string,
   collected: Collected<T>,
   staleAfterSeconds: number,
   now: number,
-  timeZone: string
+  timeZone: string,
+  partial: PartialWords = ITEMS_PARTIAL
 ): Source {
   const base = {
     id,
@@ -100,6 +132,13 @@ function collectedSource<T>(
       ...base,
       state: 'stale',
       detail: `No new reading since ${clockText(collected.asOf, timeZone)}.`,
+    };
+  const problems = collected.problems ?? [];
+  if (problems.length > 0)
+    return {
+      ...base,
+      state: partial.state,
+      detail: `${partial.text(problems, timeZone)} The rest read ${clockText(collected.asOf, timeZone)}.`,
     };
   return { ...base, state: 'ok', detail: `Read ${clockText(collected.asOf, timeZone)}.` };
 }
@@ -247,6 +286,18 @@ function buildThreads(inputs: StatusInputs, registry: Source): ThreadView[] {
     if (reporting.has(thread.name) || hidden.has(thread.name)) continue;
     const at = thread.lastSeen ? Date.parse(thread.lastSeen) : NaN;
     if (!Number.isFinite(at) || now - at > QUIET_DAY_MS) continue;
+    const ref = partRef(
+      registry,
+      inputs.registry,
+      thread,
+      now,
+      inputs.timeZone,
+      'Not in the pm-mail registry.'
+    );
+    // A row whose file now fails is its last good reading: stale, with the file's own problem.
+    const fileProblem = thread.problem
+      ? `${partProblemText(thread.problem, inputs.timeZone)}${thread.readAt ? ` Showing its reading from ${clockText(thread.readAt, inputs.timeZone)}.` : ''}`
+      : null;
     rows.push({
       name: thread.name,
       writer: null,
@@ -263,10 +314,10 @@ function buildThreads(inputs: StatusInputs, registry: Source): ThreadView[] {
       source: 'pm-mail',
       lastSeen: thread.lastSeen,
       ageSeconds: ageSeconds(now, at),
-      stale: now - at > PM_MAIL_STALE_MS,
+      stale: fileProblem !== null || now - at > PM_MAIL_STALE_MS,
       clockAheadSeconds: null,
-      problem: null,
-      registrySource: sourceRef(registry),
+      problem: fileProblem,
+      registrySource: ref,
     });
   }
   return rows.sort(
@@ -574,7 +625,8 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     inputs.registry,
     STALE_AFTER_SECONDS['pm-mail'],
     now,
-    timeZone
+    timeZone,
+    REGISTRY_PARTIAL
   );
   const browsersSrc = collectedSource(
     'browsers',
