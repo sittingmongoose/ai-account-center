@@ -111,6 +111,16 @@ pub fn CardsPanel() -> impl IntoView {
     let at = RwSignal::new(0usize);
     let deck_view = RwSignal::new(DeckView::Cards);
     let show_answered = RwSignal::new(false);
+    // While answers are on their way the deck stays on its review screen: no second send, no moving away. Both live
+    // here, above the deck, so a read that empties the cards mid-send can't take the result with it.
+    let sending = RwSignal::new(false);
+    let problem = RwSignal::new(None::<String>);
+    // a send's failure belongs to the review it came from
+    Effect::new(move |_| {
+        if deck_view.get() != DeckView::Review && problem.with_untracked(|p| p.is_some()) {
+            problem.set(None);
+        }
+    });
 
     // Keep drafts on this device; drop drafts of cards that closed (see the prune below).
     Effect::new(move |_| drafts.with(drafts::save));
@@ -141,12 +151,17 @@ pub fn CardsPanel() -> impl IntoView {
     view! {
         <Panel title="Questions for you" source=source id="cards">
             <Show
-                // the review and sent screens stay while the cards empty under them, so a send's result (or its
-                // failure) is still shown when a read lands mid-send
-                when=move || !open.with(|o| o.is_empty()) || !matches!(deck_view.get(), DeckView::Cards)
+                // A send's result outlives the cards: while a send runs, after it fails and on the sent screen the deck
+                // stays even when a read empties the cards under it. An idle review with no cards gives way.
+                when=move || {
+                    !open.with(|o| o.is_empty())
+                        || matches!(deck_view.get(), DeckView::Sent(_))
+                        || sending.get()
+                        || problem.with(|p| p.is_some())
+                }
                 fallback=|| view! { <p class="empty">"No questions waiting."</p> }
             >
-                <Deck open=open drafts=drafts at=at deck_view=deck_view/>
+                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem/>
             </Show>
             <Show when=move || !answered().is_empty()>
                 <button class="link" aria-expanded=move || show_answered.get().to_string() on:click=move |_| show_answered.update(|s| *s = !*s)>
@@ -168,6 +183,8 @@ fn Deck(
     drafts: RwSignal<Drafts>,
     at: RwSignal<usize>,
     deck_view: RwSignal<DeckView>,
+    sending: RwSignal<bool>,
+    problem: RwSignal<Option<String>>,
 ) -> impl IntoView {
     // After the new card or the review screen is in place, bring the deck's top back into view when the owner had
     // scrolled past it (a long card). A deck already in view does not move. A plain browser timer on purpose:
@@ -215,8 +232,6 @@ fn Deck(
                 .collect::<Vec<_>>()
         })
     });
-    // While answers are on their way the deck stays on its review screen: no second send, no moving away.
-    let sending = RwSignal::new(false);
     // The deck follows a card, not a position: when cards close or a filter changes, the owner stays on the same
     // card if it is still shown, else the nearest one.
     let current_id = RwSignal::new(None::<String>);
@@ -386,7 +401,7 @@ fn Deck(
                         </button>
                     </div>
                 }.into_any(),
-                DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open sending=sending/> }.into_any(),
+                DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open sending=sending problem=problem/> }.into_any(),
                 DeckView::Sent(summary) => view! { <Sent summary=summary back=move || go_card(0)/> }.into_any(),
             }}
         </div>
@@ -679,9 +694,9 @@ fn Review(
     deck_view: RwSignal<DeckView>,
     go_card: impl Fn(usize) + Copy + Send + Sync + 'static,
     sending: RwSignal<bool>,
+    problem: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let live = expect_context::<Live>();
-    let problem = RwSignal::new(None::<String>);
     let count = move || open.with(|cards| drafts.with(|d| drafts::entries(d, cards).len()));
 
     let send = move || {

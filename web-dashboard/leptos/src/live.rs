@@ -1,7 +1,7 @@
 //! Keeping the view live: read /api/status on start, on a /ws "status-changed" hint while the page is on screen,
 //! when it comes back on screen (the shell's `aac-visible`, or the document's own visibility) or back online, and
-//! every `pollSeconds` while it is on screen. A hidden page reads nothing, so the server's collectors can idle. A failed read keeps the last good view on screen,
-//! marked as old; nothing is ever shown as live after a failure.
+//! every `pollSeconds` while it is on screen. A hidden page reads nothing, so the server's collectors can idle. A
+//! failed read keeps the last good view on screen, marked as old; nothing is ever shown as live after a failure.
 
 use crate::api::{FetchError, StatusView, fetch_status};
 use leptos::prelude::*;

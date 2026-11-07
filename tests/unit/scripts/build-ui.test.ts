@@ -383,6 +383,14 @@ describe('Slint browser build integration', () => {
     expect(() => validateUi({ repoRoot: root, run: pinnedRun })).not.toThrow();
   });
 
+  it('refuses a dangling link where the Leptos crate should be instead of skipping the pages', () => {
+    const root = fixture();
+    build({ repoRoot: root, run: runner([]) });
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
+    fs.symlinkSync(path.join(root, 'nowhere'), path.join(root, 'web-dashboard', 'leptos'));
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow();
+  });
+
   it('invalidates packaged output when Wasm compiler features change', () => {
     const root = fixture();
     const config = path.join(root, 'web-dashboard', '.cargo', 'config.toml');

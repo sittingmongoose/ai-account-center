@@ -23,6 +23,12 @@ async function stubStatus(t, view) {
 		const results = (body.answers || []).map((a) => ({ cardId: a.cardId, outcome: 'recorded' }));
 		await r.fulfill({ json: { results } });
 	});
+	await stubMedia(t);
+	return sent;
+}
+
+// Card files from the fixture's media folder (with byte ranges for video).
+async function stubMedia(t) {
 	// Card files: the fixture's media by file name (option-a.jpg, option-b.mp4, ...), with byte ranges for video. A
 	// file the fixture folder doesn't have (the server view's writer images) gets a stand-in of the same kind.
 	await t.page.route((u) => new URL(u).pathname.startsWith('/api/status/files/'), async (r) => {
@@ -41,7 +47,6 @@ async function stubStatus(t, view) {
 			headers: { 'content-type': type, 'accept-ranges': 'bytes', 'content-range': `bytes ${start}-${end}/${body.length}` },
 		});
 	});
-	return sent;
 }
 
 async function openStatus(t, view) {
@@ -235,5 +240,64 @@ export const tests = {
 		await t.equal('kinds sent', entries.map((a) => a.kind).sort().join(','), 'answer,done,object');
 		await t.check('every entry names the exact card version', entries.every((a) => a.cardId && a.cardSha256 && Number.isInteger(a.cardSeq)));
 		await t.check('the objection carries its words', entries.some((a) => a.kind === 'object' && /audit folder/.test(a.note)));
+	},
+
+	// The note box follows the draft without moving the cursor on a re-read, and a send's result outlives a read that
+	// empties the cards while it is on its way (the review stays; "No questions waiting" waits for the result).
+	async 'status typing and a send that outlives the cards'(t) {
+		await t.viewport(1440, 900);
+		await t.app.signIn();
+		const full = fixture('status-view.json');
+		let current = full;
+		let gets = 0;
+		let release;
+		const held = new Promise((resolve) => (release = resolve));
+		await t.page.route((u) => new URL(u).pathname === '/api/status', (r) => {
+			gets += 1;
+			return r.fulfill({ json: current });
+		});
+		await t.page.route((u) => new URL(u).pathname === '/api/status/answers', async (r) => {
+			const body = JSON.parse(r.request().postData() || '{}');
+			await held;
+			await r.fulfill({ json: { results: (body.answers || []).map((a) => ({ cardId: a.cardId, outcome: 'recorded' })) } });
+		});
+		await stubMedia(t);
+		await t.goto('/app/status', { settleMs: 300 });
+		await t.page.waitForSelector('.deck .card .note textarea');
+		const reread = async () => {
+			const before = gets;
+			await t.page.evaluate(() => window.dispatchEvent(new Event('online')));
+			for (let i = 0; i < 50 && gets === before; i++) await t.page.waitForTimeout(100);
+			await t.page.waitForTimeout(300);
+			return gets > before;
+		};
+		await t.page.fill('.note textarea', 'abc def');
+		await t.page.evaluate(() => document.querySelector('.note textarea').setSelectionRange(3, 3));
+		await t.page.keyboard.type('X');
+		await t.check('a re-read happened while typing', await reread());
+		await t.check('typing survives a re-read: same words, cursor where it was', async () =>
+			t.page.evaluate(() => {
+				const a = document.querySelector('.note textarea');
+				return a.value === 'abcX def' && a.selectionStart === 4 && document.activeElement === a;
+			})
+		);
+		await t.page.keyboard.type('Y');
+		await t.check('the next keystroke lands at the cursor', async () =>
+			t.page.evaluate(() => document.querySelector('.note textarea').value === 'abcXY def')
+		);
+		// Send that note; while the POST is held, a read finds no cards.
+		await t.page.click('button[role="tab"] >> text=Review');
+		await t.page.waitForSelector('.review-actions .primary');
+		await t.page.click('.review-actions .primary');
+		current = { ...full, cards: { ...full.cards, open: [], batches: [] } };
+		await t.check('a re-read happened mid-send', await reread());
+		await t.check('the review stays while the send is on its way', async () =>
+			t.page.evaluate(() => !!document.querySelector('.review') && !/No questions waiting/.test(document.querySelector('#cards')?.textContent || ''))
+		);
+		release();
+		await t.page.waitForSelector('.sent', { timeout: 10000 });
+		await t.text('.sent .ok', /Sent 1 at/);
+		await t.page.click('.sent button >> text=Back to the questions');
+		await t.text('#cards .empty', /No questions waiting/);
 	},
 };

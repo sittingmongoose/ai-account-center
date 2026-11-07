@@ -28,8 +28,9 @@ server). Each note says what happened, why, and what to do.
 - **Truth on the server, drawing in Leptos:** the server sends a view with every word and number decided; the page
   only lays it out. Rust types with `#[serde(default)]` keep the page tolerant of added fields.
 - **Keep typing safe across refreshes:** a 30 s refresh must not rebuild the card being typed in. Memoize the visible
-  card without volatile fields (ages), key lists by id + version, and set a textarea's value once (`prop:value` with a
-  plain string), never reactively while the owner types.
+  card without volatile fields (ages) and key lists by id + version. A textarea's `prop:value` may follow the draft
+  reactively (so another tab's change shows): typing writes the draft, which sets the same text back, and setting a
+  textarea to its own value keeps the cursor and selection (checked in Chrome, with IME, and in iOS 27.3 Safari).
 - **Drafts in browser storage** (`localStorage`, wrapped so a refusal only loses persistence) let the owner leave the
   page mid-deck.
 - **`default` is not enough for `null`:** serde's `default` fills a missing field, but a `null` sent for a `String` or

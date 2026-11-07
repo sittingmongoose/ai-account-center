@@ -52,8 +52,8 @@ function validateUi(options = {}) {
   }
   // The Leptos pages (Status, Scoreboard) are checked the same way when the crate is present.
   const leptosCrate = path.join(crate, 'leptos');
-  // lstat, not existsSync: a dangling link where the crate or its manifest should be is checked (and refused), never
-  // taken for "no pages here"
+  // lstat, not existsSync: a dangling link where the crate should be is checked (and refused), never taken for "no
+  // pages here"; inside a real crate folder the fingerprint walk refuses a linked or dangling manifest
   const present = (file) => {
     try {
       fs.lstatSync(file);
@@ -62,7 +62,7 @@ function validateUi(options = {}) {
       return false;
     }
   };
-  if (present(leptosCrate) || present(path.join(leptosCrate, 'Cargo.toml'))) {
+  if (present(leptosCrate)) {
     run(
       toolPath('cargo', cargoBin),
       ['fmt', '--manifest-path', path.join(leptosCrate, 'Cargo.toml'), '--check'],
