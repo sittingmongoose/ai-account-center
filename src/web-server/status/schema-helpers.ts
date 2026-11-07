@@ -169,24 +169,88 @@ const CREDENTIAL_KEY =
   /^(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)$/i;
 
 /**
- * A secret written the way a person types one in prose or a shell (`password: hunter2isbad`, `DB_PASSWORD=...`,
- * `OPENAI_API_KEY=abc123def456`): the patterns above are shaped for JSON files. The name may be part of a longer one
- * (`AWS_SECRET_ACCESS_KEY`); the value must be 8 or more characters with a digit and not look like a path, URL,
- * date or grouped number, so "token: refresh it" and "pwd: /home/me/src/v2" are left alone. For the owner's notes,
- * which go to the share.
+ * A secret written the way a person types one in prose, a shell or code (the patterns above are shaped for files),
+ * for the owner's notes, which go to the share. Found by its name, then judged by its value:
+ * - names: an identifier (`DB_PASSWORD`, `PGPASSWORD`, `API_KEY_2`, `clientSecret`, `x-api-key`), a short phrase
+ *   (`the api key`, `my password`), or a flag (`--password`, `--token`), followed by `=`, `:`, `=>`, `:=` (a flag
+ *   also by a space, a phrase also by "is"); then `Bearer`/`Basic`, and the password in a URL (`scheme://user:pw@`).
+ *   A bare `pass` or `pw` counts only before `=` (never `PASS:`, a test result), and a bare `pwd` never (the shell's
+ *   folder). A name ending in a word like file, path, count or limit names something else.
+ * - values: a reference or placeholder (`$VAR`, `%VAR%`, `<your-key>`), a URL or a date is not a secret. The rest is
+ *   split into runs at `-` `.` `_` `:` (and at slashes when it starts like a path); a secret has a run mixing letters
+ *   with digits or symbols, at least 6 long after a password's name, 8 after a key's. Model names, versions, test
+ *   names, paths and numbers have no such run (`claude-opus-5-5`, `v1.2.3.4-rc1`, `./src/v2-beta`, `1200/1200`).
+ * Each pattern is bounded and matches only the name, reading the value by lookahead, so a value is searched for
+ * names in its turn, and the search stays linear.
  */
-const TYPED_SECRET = new RegExp(
-  '(?<![A-Za-z0-9])' +
-    '(?:password|passwd|passphrase|pwd|pass|pw|secret(?:[_ -]?(?:access[_ -]?)?key)?|api[_ -]?key|' +
-    '(?:access|auth|refresh|session|id|bearer)[_ -]?token|token)' +
-    '\\s*[:=]\\s*["\']?' +
-    '(?![/~]|https?:|\\d{4}-\\d{2}-\\d{2}|\\d{1,3}(?:,\\d{3})+\\b)' +
-    '(?=\\S*\\d)\\S{8,}',
-  'i'
+type SecretKind = 'password' | 'key';
+const NAMED_VALUE =
+  /(?<![A-Za-z0-9_-])((?:[A-Za-z][A-Za-z0-9]{0,23} )?\$?[A-Za-z_][A-Za-z0-9_-]{0,63})['"]?(?:\s{0,4}(=>|:=|[:=])\s{0,4}|\s{1,4}(?:is|was)\s{1,4})(?=['"`]?([^\s'"`]{1,256}))/g;
+const FLAG_VALUE =
+  /(?<![A-Za-z0-9-])--([A-Za-z][A-Za-z0-9-]{0,47})(?:=|\s{1,4})(?=['"`]?([^\s'"`]{1,256}))/g;
+const AUTH_VALUE = /(?<![A-Za-z0-9])(?:bearer|basic)\s{1,4}(?=([^\s'"`]{1,256}))/gi;
+const URL_PASSWORD =
+  /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@]{1,64}:(?=([^\s/@]{1,256})@)/g;
+const NOT_A_SECRET_NAME = new Set(
+  'file files path dir url uri name names count limit length len size ttl type kind mode policy budget usage id ids at expires expiry env'.split(
+    ' '
+  )
+);
+const KEY_PAIR = new Set(
+  'api access private secret signing encryption master deploy ssh gpg'.split(' ')
 );
 
+function secretKind(name: string, separator: string | undefined, flag: boolean): SecretKind | null {
+  const phrase = name.includes(' ');
+  const words = name
+    .replace(/^\$/, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[\s_-]+/)
+    .filter(Boolean);
+  if (words.length === 0 || NOT_A_SECRET_NAME.has(words[words.length - 1])) return null;
+  if (words.some((word) => /(?:password|passwd|passphrase)$/.test(word))) return 'password';
+  if (!phrase) {
+    const bare = words.some((word) => word === 'pass' || word === 'pw' || word === 'pwd');
+    if (bare && (flag || words.length > 1)) return 'password';
+    if (words.length === 1 && (words[0] === 'pass' || words[0] === 'pw') && separator === '=')
+      return 'password';
+  }
+  const glued = phrase
+    ? /^(?:secret|token|credentials?)$/
+    : /(?:secret|token|credentials?|apikey|accesskey|privatekey|signingkey|secretkey)$/;
+  if (words.some((word) => glued.test(word))) return 'key';
+  for (let at = 1; at < words.length; at += 1)
+    if (words[at] === 'key' && (!phrase || KEY_PAIR.has(words[at - 1]))) return 'key';
+  return null;
+}
+
+/** Whether a value after a secret's name looks like one (see above). */
+function secretValue(kind: SecretKind, raw: string): boolean {
+  if (/^(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|%[A-Za-z_][A-Za-z0-9_]*%|<[^>]*>?|\{\{.*)$/.test(raw))
+    return false;
+  const value = raw.replace(/^[([]+/, '').replace(/[)\]}>.,;:!?]+$/, '');
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value) || /^\d{4}-\d{2}-\d{2}/.test(value)) return false;
+  const path = /^(?:[\\/]|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])/.test(value);
+  let longest = 0;
+  for (const run of value.split(path ? /[-._:\\/]+/ : /[-._:]+/))
+    if (/[A-Za-z]/.test(run) && /[0-9!@#$%^&*+=?~|]/.test(run))
+      longest = Math.max(longest, run.length);
+  return longest >= (kind === 'password' ? 6 : 8);
+}
+
 export function findTypedSecret(text: string): string | null {
-  return TYPED_SECRET.test(text) ? 'a password or key' : null;
+  const found = (kind: SecretKind | null, value: string | undefined) =>
+    kind !== null && value !== undefined && secretValue(kind, value);
+  for (const match of text.matchAll(NAMED_VALUE))
+    if (found(secretKind(match[1], match[2], false), match[3])) return 'a password or key';
+  for (const match of text.matchAll(FLAG_VALUE))
+    if (found(secretKind(match[1], undefined, true), match[2])) return 'a password or key';
+  for (const match of text.matchAll(AUTH_VALUE))
+    if (found('key', match[1])) return 'a password or key';
+  for (const match of text.matchAll(URL_PASSWORD))
+    if (found('password', match[1])) return 'a password or key';
+  return null;
 }
 
 /**

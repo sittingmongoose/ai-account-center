@@ -78,9 +78,81 @@ export interface AnswerKey {
   keyId: string;
 }
 
+/** A key file another process is still writing (or a crash left half of) is read again for this long. */
+const KEY_READ_RETRIES = 5;
+const KEY_READ_PAUSE_MS = 20;
+/** A key file that is still empty or unreadable this long after its last write is broken: it is replaced. */
+const BROKEN_KEY_AGE_MS = 60 * 1000;
+
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** The key in `file`, `null` when the file holds no readable key, or `undefined` when there is no file. */
+function readKey(file: string): KeyObject | null | undefined {
+  let pem: string;
+  try {
+    pem = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  try {
+    return createPrivateKey(pem);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * `<dir>/answer-key.pem` (PKCS#8, 0600), created on first use. A second process racing the creation
- * reads the file the first one wrote.
+ * Creates the key file without ever showing another process half a key: the key is written whole to a private temp
+ * file, synced, then linked into place. If another process got there first, its key is the one used. Where hard
+ * links fail (some network and Windows file systems), the file is created in place, exclusively.
+ */
+function createKeyFile(dir: string, file: string): void {
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const created = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const temp = path.join(dir, `.answer-key.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  try {
+    const fd = fs.openSync(temp, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, created);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    try {
+      fs.linkSync(temp, file);
+    } catch (linkError) {
+      if ((linkError as NodeJS.ErrnoException).code === 'EEXIST') return;
+      try {
+        fs.writeFileSync(file, created, { mode: 0o600, flag: 'wx' });
+      } catch (writeError) {
+        if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
+      }
+    }
+    // the new name is durable only once its folder is
+    try {
+      const folder = fs.openSync(dir, 'r');
+      try {
+        fs.fsyncSync(folder);
+      } finally {
+        fs.closeSync(folder);
+      }
+    } catch {
+      /* not every platform syncs a folder */
+    }
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+}
+
+/**
+ * `<dir>/answer-key.pem` (PKCS#8, 0600), created on first use; a second process racing the creation uses the key
+ * the first one wrote. A key file that is empty or unreadable is read again a few times (another process may be
+ * writing it in place); one still broken a minute after its last write is moved aside and a new key made.
+ * Limit: two processes that both find the same broken file can, in a window of microseconds, each move aside the
+ * other's new key; the next start of either then reads one key again.
  */
 export function loadOrCreateAnswerKey(dir: string): AnswerKey {
   const file = path.join(dir, 'answer-key.pem');
@@ -96,57 +168,34 @@ export function loadOrCreateAnswerKey(dir: string): AnswerKey {
   } catch {
     /* best effort */
   }
-  let pem: string;
-  try {
-    pem = fs.readFileSync(file, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    const { privateKey } = generateKeyPairSync('ed25519');
-    const created = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
-    // Written whole to a private temp file, synced, then linked into place: a crash or a second process never sees
-    // half a key, and if another process got there first its key is the one used.
-    const temp = path.join(dir, `.answer-key.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
-    try {
-      const fd = fs.openSync(temp, 'wx', 0o600);
+  let privateKey: KeyObject | null | undefined;
+  for (let attempt = 0; ; attempt += 1) {
+    // creating and moving aside each take a turn: a file that keeps vanishing or breaking is an error, not a loop
+    if (attempt > KEY_READ_RETRIES + 4)
+      throw new ValidationError('The answer key file cannot be created or read.');
+    privateKey = readKey(file);
+    if (privateKey === undefined) {
+      createKeyFile(dir, file);
+      continue;
+    }
+    if (privateKey !== null) break;
+    if (attempt < KEY_READ_RETRIES) {
+      pause(KEY_READ_PAUSE_MS);
+      continue;
+    }
+    const broken = fs.statSync(file);
+    if (Date.now() - broken.mtimeMs < BROKEN_KEY_AGE_MS)
+      throw new ValidationError('The answer key is being written. Try again in a minute.');
+    // moved aside (removed with the stale temp files), only while it is still the same broken file
+    if (fs.statSync(file).ino === broken.ino) {
       try {
-        fs.writeFileSync(fd, created);
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
+        fs.renameSync(
+          file,
+          path.join(dir, `.answer-key.broken.${process.pid}.${randomBytes(6).toString('hex')}.tmp`)
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
-      try {
-        fs.linkSync(temp, file);
-        pem = created;
-      } catch (linkError) {
-        const linkCode = (linkError as NodeJS.ErrnoException).code;
-        if (linkCode === 'EEXIST') {
-          pem = fs.readFileSync(file, 'utf8');
-        } else if (linkCode === 'EPERM' || linkCode === 'ENOTSUP' || linkCode === 'EXDEV') {
-          // no hard links here: create in place, exclusively, as before
-          try {
-            fs.writeFileSync(file, created, { mode: 0o600, flag: 'wx' });
-            pem = created;
-          } catch (writeError) {
-            if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
-            pem = fs.readFileSync(file, 'utf8');
-          }
-        } else {
-          throw linkError;
-        }
-      }
-      // the new name is durable only once its folder is
-      try {
-        const folder = fs.openSync(dir, 'r');
-        try {
-          fs.fsyncSync(folder);
-        } finally {
-          fs.closeSync(folder);
-        }
-      } catch {
-        /* not every platform syncs a folder */
-      }
-    } finally {
-      fs.rmSync(temp, { force: true });
     }
   }
   try {
@@ -154,7 +203,6 @@ export function loadOrCreateAnswerKey(dir: string): AnswerKey {
   } catch {
     /* Best effort on file systems without modes. */
   }
-  const privateKey = createPrivateKey(pem);
   if (privateKey.asymmetricKeyType !== 'ed25519')
     throw new ValidationError('The answer key is not an Ed25519 key.');
   const publicKey = createPublicKey(privateKey);

@@ -2013,7 +2013,8 @@ describe('round three', () => {
       'client_secret=abcd1234efgh',
       'refresh_token=xyz12345678',
       'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI1K7MDENG',
-      'pass: hunter2isbad',
+      'DB_PASS=hunter2isbad',
+      'pass=hunter2isbad',
       'token: "abc123def456"',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, 'a password or key']);
@@ -2027,6 +2028,84 @@ describe('round three', () => {
       'passing: 12345678 tests',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, null]);
+  });
+
+  it('typed secrets: glued, suffixed, code, flag, bearer and URL forms are caught', () => {
+    for (const text of [
+      // environment names with the secret word glued on or followed by a suffix
+      'PGPASSWORD=s3cretpass1 psql -h db',
+      'DB_PASSWORD_PROD=hunter2isbad',
+      'API_KEY_2=abc123def456',
+      'PRIVATE_KEY=abc123def456ghi',
+      'ACCESS_KEY=abc123def456ghi',
+      'SIGNING_KEY=abc123def456ghi',
+      'MYSQL_PWD=hunter2isbad',
+      'export PASSWORD="hunter2isbad"',
+      '$env:DB_PASSWORD = "hunter2isbad"',
+      // code: Ruby arrows, Python dicts, camelCase, Go assignment, HTTP headers
+      "password => 'hunter2isbad'",
+      "{'password': 'hunter2isbad'}",
+      'clientSecret: "abcd1234efgh5678"',
+      'apiToken := "abcd1234efgh5678"',
+      'x-api-key: abcd1234efgh5678',
+      'spring.datasource.password=hunter2isbad',
+      // prose
+      'the api key: abc123def456',
+      'my password is hunter2isbad',
+      'password: hunter2',
+      'note: password=hunter2isbad',
+      'Password:\n  hunter2isbad',
+      // flags
+      'run it with --password hunter2isbad',
+      'run it with --token=abcd1234efgh5678',
+      // a bearer token too short for the bearer pattern, a URL's password, a value that starts with a slash
+      'Authorization: Bearer abc123def456',
+      'postgres://admin:hunter2isbad@db:5432/app',
+      'secret: /K7MDENGbPxRfiCY2EXAMPLEKEY',
+      // a strong value with slashes that is not a path
+      'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    ])
+      expect([text, findTypedSecret(text)]).toEqual([text, 'a password or key']);
+  });
+
+  it('typed secrets: test results, paths, numbers, versions and model names are not refused', () => {
+    for (const text of [
+      'PASS: test_auth_2',
+      'PASS: tests/unit/foo2bar.test.ts',
+      'pass: 1200/1200',
+      'pwd: ./src/v2-beta',
+      'PWD=/home/me/src/v2',
+      'token: 128000000',
+      'token: claude-opus-5-5',
+      'token: claude-sonnet-4-5[1m]',
+      'model token: gpt-6.1-sol',
+      'secret: rotated-2026',
+      'token: v1.2.3.4-rc1',
+      'token: 2026-11-07T10:00:00Z',
+      'pwd: C:\\Users\\me\\v2',
+      'secret: ~/keys/v2/id_ed25519',
+      'TOKEN_LIMIT=200k',
+      'PASSWORD_FILE=/run/secrets/db2',
+      'PASSWORD_FILE=secrets/db2-prod.json',
+      '--password-file ~/x/db2.txt',
+      'max_tokens: 4096',
+      'password: $DB_PASSWORD',
+      'api_key: <your-key-here>',
+      'cache_key: user_123',
+      'the token is claude-opus-5-5',
+      'password: see the vault entry',
+      'OLDPWD=/home/me/x2',
+    ])
+      expect([text, findTypedSecret(text)]).toEqual([text, null]);
+  });
+
+  it('typed secrets: a long note is searched in linear time', () => {
+    for (const filler of ['a', 'a ', 'password ', 'token: ', 'A_', '--token ', 'x://'])
+      for (const text of [filler.repeat(4000 / filler.length), `${filler.repeat(1000)}x`]) {
+        const started = performance.now();
+        findTypedSecret(text);
+        expect([filler, performance.now() - started < 200]).toEqual([filler, true]);
+      }
   });
 
   it('notes: typed secrets and token prefixes are refused by kind; ordinary prose is not', async () => {
@@ -2114,6 +2193,63 @@ describe('round three', () => {
     }
     expect(mine.keyId).toBe(other.keyId);
     expect(fs.readdirSync(dir).filter((f) => f.startsWith('.answer-key'))).toEqual([]);
+  });
+
+  it('the answer key: a link that fails for any other reason falls back to an exclusive write', () => {
+    const dir = path.join(dirs.make('ccs-status-key-eacces-'), 'status');
+    const link = spyOn(fs, 'linkSync').mockImplementation((() => {
+      throw Object.assign(new Error('no links here'), { code: 'EACCES' });
+    }) as typeof fs.linkSync);
+    let key;
+    try {
+      key = loadOrCreateAnswerKey(dir);
+    } finally {
+      link.mockRestore();
+    }
+    expect(loadOrCreateAnswerKey(dir).keyId).toBe(key.keyId);
+    expect(fs.readdirSync(dir).filter((f) => f.startsWith('.answer-key'))).toEqual([]);
+  });
+
+  it('the answer key: an empty key file another process is still writing is read again', () => {
+    const dir = path.join(dirs.make('ccs-status-key-empty-'), 'status');
+    const otherDir = path.join(dirs.make('ccs-status-key-writer-'), 'status');
+    const other = loadOrCreateAnswerKey(otherDir);
+    const otherPem = fs.readFileSync(path.join(otherDir, 'answer-key.pem'), 'utf8');
+    const target = path.join(dir, 'answer-key.pem');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(target, '', { mode: 0o600 });
+    // the other process finishes its in-place write after our first read
+    let reads = 0;
+    const realRead = fs.readFileSync;
+    const read = spyOn(fs, 'readFileSync').mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      options?: unknown
+    ) => {
+      if (String(file) === target && ++reads === 2) fs.writeFileSync(target, otherPem);
+      return realRead(file, options as BufferEncoding);
+    }) as typeof fs.readFileSync);
+    let mine;
+    try {
+      mine = loadOrCreateAnswerKey(dir);
+    } finally {
+      read.mockRestore();
+    }
+    expect(mine.keyId).toBe(other.keyId);
+  });
+
+  it('the answer key: a key file still broken a minute after its last write is replaced', () => {
+    const dir = path.join(dirs.make('ccs-status-key-broken-'), 'status');
+    const target = path.join(dir, 'answer-key.pem');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(target, '-----BEGIN PRIVATE KEY-----\nMC4CAQ', { mode: 0o600 });
+    // a fresh broken file may still be being written: refused for now, left in place
+    expect(() => loadOrCreateAnswerKey(dir)).toThrow(/being written/);
+    expect(fs.readFileSync(target, 'utf8')).toContain('MC4CAQ');
+    const old = new Date(Date.now() - 2 * 60 * 1000);
+    fs.utimesSync(target, old, old);
+    const key = loadOrCreateAnswerKey(dir);
+    expect(loadOrCreateAnswerKey(dir).keyId).toBe(key.keyId);
+    expect(fs.readFileSync(target, 'utf8')).not.toContain('MC4CAQ\n');
   });
 
   it('a torn last store line does not swallow the next record after a restart', async () => {
