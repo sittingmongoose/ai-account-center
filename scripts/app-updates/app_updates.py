@@ -21,7 +21,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from app_update_common import (
     APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
-    marker_names_version, powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
+    marker_applies_to, powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, cli_instances, family, scan, terminate_cli
@@ -650,7 +650,7 @@ def update_cli(install, deadline, restart_managed=False):
         marker = pending_marker(pending)
         if (install.app_id == "codex-cli" and install.platform == "ubuntu" and install.manager != "npm" and
                 (any("app-server" in item.args for item in family(install, processes)) or
-                 (marker_names_version(marker.get("version"), before) and
+                 (marker_applies_to(marker, before) and
                   (marker.get("desktop") is True or marker.get("daemon") is True) and
                   (pathlib.Path.home() / ".local/bin/codex").exists()))):
             contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])

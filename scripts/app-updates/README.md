@@ -728,13 +728,15 @@ the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder 
 0600 salt beside the marker (`codex-desktop-instance.salt`), never the path. The salt is checked before
 anything stops, and an unusable one is replaced. A
 `stop()` that failed partway records what it really retired and did not bring back to ready. A desktop
-install that fails clears that record once everything is back. An older runtime that can't report a
+install records the version it was about to install as `target`, so an installer that replaced the app
+and then failed, or a helper killed partway, still finds its record on the next click. A
+desktop install that fails clears that record once everything is back. An older runtime that can't report a
 plan is taken to have closed everything. A marker naming nothing
 is not a retry. `update_cli` routes a marker that names something, for the installed version, to the
 bridge even with no daemon running. A retry that leaves any of them closed is `restart_failed` with
 `restart_not_running`: each desktop must have a live app server on this Codex home under it, as
-`start()` requires. While a live proxy could bring the daemon back, the retry waits up to 10 seconds
-for it. The marker is then cleared, so the next click reports the row as it stands.
+`start()` requires, and an owed daemon must pass `start()`'s own bounded readiness check. While a live
+proxy could bring the daemon back, the retry waits up to 10 seconds for it. The marker is then cleared, so the next click reports the row as it stands.
 
 ## Deployment and setup
 

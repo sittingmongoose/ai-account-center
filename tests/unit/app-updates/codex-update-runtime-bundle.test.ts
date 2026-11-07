@@ -44,6 +44,7 @@ describe('Codex update runtime bundle', () => {
       'start',
       'stop',
       'stopPlan',
+      'verifyRunningDaemon',
     ]);
   });
 

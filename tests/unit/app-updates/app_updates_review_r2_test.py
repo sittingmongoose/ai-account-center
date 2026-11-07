@@ -237,6 +237,34 @@ class ReviewTests(unittest.TestCase):
             bridge = calls[-1]
             self.assertEqual(bridge[bridge.index("--restart-only") + 1], "true")
 
+    def _desktop_click(self, marker, installed):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)):
+            pending = pathlib.Path(folder) / ".ccs/app-updates/codex-desktop-pending-restart.json"
+            common.write_private_json(pending, marker)
+            install = common.Install("codex-desktop", "ubuntu", pathlib.Path("/fixture"), installed, "apt", "chatgpt")
+            calls = []
+            def command(argv, **kwargs):
+                calls.append(argv)
+                if "policy" in argv:
+                    return "Candidate: %s\n 500 https://persistent.oaistatic.com/codex-app-prod/linux/deb stable/main amd64 Packages" % installed
+                if "madison" in argv:
+                    return "chatgpt | %s | https://persistent.oaistatic.com/codex-app-prod/linux/deb stable/main amd64 Packages" % installed
+                return '{"status":"restart_failed","messageCode":"restart_not_running"}'
+            with mock.patch.object(desktop, "command", side_effect=command):
+                return desktop.update_linux(install), calls
+
+    def test_a_marker_interrupted_on_its_way_to_this_version_reaches_the_bridge(self):
+        marker = {"version": "1.0.0", "target": "2.0.0", "desktop": False, "daemon": True, "desktops": []}
+        value, calls = self._desktop_click(marker, "2.0.0")
+        self.assertEqual(value["messageCode"], "restart_not_running")
+        bridge = calls[-1]
+        self.assertEqual(bridge[bridge.index("--restart-only") + 1], "true")
+        self.assertEqual(bridge[bridge.index("--expected-version") + 1], "2.0.0")
+
+    def test_a_marker_for_neither_this_version_nor_its_target_stays_current(self):
+        value, _ = self._desktop_click({"version": "1.0.0", "target": "1.5.0", "daemon": True}, "2.0.0")
+        self.assertEqual(value["status"], "current")
+
     def test_pending_desktop_restart_uses_installed_version_when_candidate_is_older(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(folder)):
             pending = pathlib.Path(folder) / ".ccs/app-updates/codex-desktop-pending-restart.json"

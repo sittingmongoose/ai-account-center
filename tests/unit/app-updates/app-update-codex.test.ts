@@ -65,6 +65,7 @@ function fixture() {
         stopPlan: () => ({ daemon: false, desktops: [] }),
         retiredPlan: async () => ({ daemon: false, desktops: [] }),
         restartState: async () => ({ daemon: false, desktops: [], proxy: false }),
+        verifyRunningDaemon: async () => true,
         stop: async () => {
           events.push('stop');
           if (busy-- > 0) throw Object.assign(new Error('private'), { code: 'busy' });
@@ -450,6 +451,7 @@ describe('Pending-marker retry', () => {
     stopPlan: () => plan(planned),
     retiredPlan: async () => plan(planned),
     restartState: async () => state(after),
+    verifyRunningDaemon: async () => true,
   });
   function retry(marker: Record<string, unknown> | null, after: Live = {}, planned: Plan = {}) {
     const value = fixture();
@@ -668,6 +670,154 @@ describe('Pending-marker retry', () => {
     });
   });
 
+  /** An installer that puts 2.0.0 in place and then exits unsuccessfully. */
+  function partialInstall(_value: ReturnType<typeof fixture>) {
+    let installed = '1.0.0';
+    return {
+      readVersion: async () => installed,
+      update: async () => {
+        installed = '2.0.0';
+        throw new Error('private');
+      },
+      expectedCandidate: '2.0.0',
+      operation: 'desktop',
+    };
+  }
+
+  it('records the install it is about to attempt before attempting it', async () => {
+    const value = fixture();
+    let atUpdate: unknown[] = [];
+    await bridge.execute({
+      ...value.deps,
+      update: async () => {
+        atUpdate = [...value.marks];
+        throw new Error('private');
+      },
+      expectedCandidate: '2.0.0',
+      operation: 'desktop',
+      runtime: () => runtime({ daemon: true }),
+    });
+    expect(atUpdate).toEqual([{ desktop: false, daemon: true, desktops: [], target: '2.0.0' }]);
+  });
+
+  it('moves the record to what an installer that failed really left installed', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      ...partialInstall(value),
+      runtime: () => runtime({ daemon: true }),
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(result.version).toBe('2.0.0');
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
+    expect(value.pending()).toBe(true);
+  });
+
+  it('reports a failed install, not a failed restart, when it replaced the app and all came back', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      ...partialInstall(value),
+      runtime: () => runtime({ daemon: true }, { daemon: true }),
+    });
+    expect(result.status).toBe('failed');
+    expect(result.messageCode).toBe('update_failed');
+    expect(value.pending()).toBe(false);
+  });
+
+  it('reads a marker by the target it was interrupted on the way to', async () => {
+    const { deps } = retry({ version: '0.5.0', target: '1.0.0', daemon: true });
+    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
+    const other = retry({ version: '0.5.0', target: '0.9.0', daemon: true });
+    expect((await bridge.execute(other.deps)).status).toBe('updated');
+  });
+
+  it('carries a CLI retry to the version an updater that failed left installed', async () => {
+    const value = fixture();
+    let installed = '1.0.0';
+    const result = await bridge.execute({
+      ...value.deps,
+      readVersion: async () => installed,
+      update: async () => {
+        installed = '2.0.0';
+        throw new Error('private');
+      },
+      pending: () => true,
+      marked: () => ({ version: '1.0.0', daemon: true }),
+      operation: 'cli',
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(result.version).toBe('2.0.0');
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
+  });
+
+  it('leaves a first CLI update that failed as a failed update', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      update: async () => {
+        throw new Error('private');
+      },
+      operation: 'cli',
+    });
+    expect(result.status).toBe('failed');
+    expect(value.marks).toEqual([]);
+  });
+
+  it('holds an owed daemon to the readiness check, not its arguments', async () => {
+    const { value, deps } = retry({ daemon: true }, { daemon: true });
+    deps.runtime = () => ({
+      ...runtime({}, { daemon: true }),
+      verifyRunningDaemon: async () => false,
+    });
+    const result = await bridge.execute(deps);
+    expect(result.messageCode).toBe('restart_not_running');
+    expect(value.pending()).toBe(false);
+  });
+
+  it('does not run the readiness check when no daemon is owed', async () => {
+    const { deps } = retry({ desktop: true, desktops: [A] }, { desktops: [A], daemon: true });
+    let checks = 0;
+    deps.runtime = () => ({
+      ...runtime({}, { desktops: [A], daemon: true }),
+      verifyRunningDaemon: async () => {
+        checks++;
+        return false;
+      },
+    });
+    expect((await bridge.execute(deps)).status).toBe('updated');
+    expect(checks).toBe(0);
+  });
+
+  it('does not clear a failed install over a daemon that fails the readiness check', async () => {
+    const value = fixture();
+    await bridge.execute({
+      ...failedInstall(value, { daemon: true }, { daemon: true }),
+      runtime: () => ({
+        ...runtime({ daemon: true }, { daemon: true }),
+        verifyRunningDaemon: async () => false,
+      }),
+    });
+    expect(value.pending()).toBe(true);
+  });
+
+  it('fails closed when a runtime has no readiness check', async () => {
+    const { deps } = retry({ daemon: true }, { daemon: true });
+    deps.runtime = () => {
+      const { verifyRunningDaemon: _dropped, ...older } = runtime({}, { daemon: true });
+      return older as ReturnType<typeof runtime>;
+    };
+    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
+  });
+
   const olderRuntime = () => ({
     stop: async () => {},
     start: async () => {
@@ -863,6 +1013,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
   return {
     stopPlan: () => plan,
     retiredPlan: async () => (procs.length ? { daemon: false, desktops: [] } : plan),
+    verifyRunningDaemon: async () => true,
     restartState: async () => ({ ...(await read()), proxy: false }),
     stop: async () => {
       if (process.env.FIXTURE_AT_STOP) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_STOP);
@@ -1082,6 +1233,14 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     expect(result.status).toBe('restart_failed');
     expect(fs.statSync(salt).isFile()).toBe(true);
     expect(read(marker).desktops).toEqual([keyedBy(salt)]);
+  });
+
+  it('finds a real marker by its target after an interrupted install', () => {
+    const { result, marker } = run('idle', {
+      marker: { version: '1.0.0', target: '2.0.0', daemon: true },
+    });
+    expect(result.messageCode).toBe('restart_not_running');
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it('does not turn a marker that names nothing into a red row', () => {

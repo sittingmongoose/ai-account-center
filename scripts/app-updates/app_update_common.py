@@ -263,6 +263,12 @@ def marker_names_version(marker_version, installed):
     return numeric(marker_version) is not None and numeric(marker_version) == numeric(installed)
 
 
+def marker_applies_to(marker, installed):
+    """Whether a pending-restart marker is for this install: the version it records, or the version a
+    desktop install was about to put in place when it was interrupted."""
+    return isinstance(marker, dict) and any(marker_names_version(marker.get(key), installed) for key in ("version", "target"))
+
+
 def version_tuple(value):
     return tuple(int(part) for part in re.findall(r"\d+", (value or "").split("-")[0]))
 

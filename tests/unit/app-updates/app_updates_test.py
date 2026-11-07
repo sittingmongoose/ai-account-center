@@ -552,6 +552,11 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(value['status'], 'restart_failed')
         self.assertEqual(value['messageCode'], 'restart_not_running')
 
+    def test_a_cli_retry_reaches_the_bridge_by_the_markers_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker={'version': '1.0.0', 'target': '2.0.0', 'daemon': True})
+        self.assertTrue(bridged)
+
     def test_a_cli_retry_reaches_the_bridge_for_a_prerelease(self):
         # The bridge writes the numeric part; version_text keeps the prerelease.
         self.assertEqual(common.version_text('codex-cli 0.50.0-alpha.1'), '0.50.0-alpha.1')

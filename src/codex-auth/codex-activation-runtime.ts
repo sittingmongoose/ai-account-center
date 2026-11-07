@@ -20,6 +20,11 @@ export interface CodexActivationRuntime {
   retiredPlan(): Promise<CodexRestartPlan>;
   /** What runs now, by the same rules stop() and start() use. */
   restartState(): Promise<CodexRestartState>;
+  /**
+   * start()'s bounded readiness check, on a daemon running now. A retry's own plan may name no daemon
+   * when a proxy respawned it, and a daemon's arguments say nothing about its socket being bound.
+   */
+  verifyRunningDaemon(): Promise<boolean>;
 }
 
 export interface CodexRestartPlan {
@@ -553,6 +558,18 @@ export function createCodexActivationRuntime(
       return restartPlan(
         launchers.filter((launcher) => !processes.some((process) => sameProcess(launcher, process)))
       );
+    },
+    verifyRunningDaemon: async () => {
+      const daemon = (await scan()).find(
+        (entry) => isDaemon(entry) && !isProxy(entry) && usesHome(entry, codexHome)
+      );
+      if (!daemon) return false;
+      try {
+        await dependencies.verifyDaemon(daemon);
+        return true;
+      } catch {
+        return false;
+      }
     },
     restartState: async () => {
       const processes = await scan();

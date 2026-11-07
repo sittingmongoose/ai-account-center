@@ -116,8 +116,11 @@ function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'u
 /**
  * `closed`: what a run's stop() has closed, which a retry must see running again: the `daemon`, and
  * each desktop in `desktops` by a salted hash of its data folder (`desktop` says whether any). A marker
- * without them, written before stop(), says only that a restart is owed.
+ * without them, written before stop(), says only that a restart is owed. `version` is the install it
+ * applies to; `target` is the version a desktop install was about to put in place, so a helper killed
+ * partway, or an installer that replaced the app and then failed, still leaves the record findable.
  */
+const markerMatches = (marker, installed) => [marker?.version, marker?.target].some((item) => version(item) === installed);
 function markPending(closed = {}) {
   fs.mkdirSync(path.dirname(markerFile()), { recursive: true, mode: 0o700 });
   const temporary = markerFile() + '.' + process.pid + '.tmp';
@@ -158,13 +161,19 @@ const runtimeState = async (runtime, deps) => {
   const live = (await runtime.restartState?.()) ?? { daemon: false, desktops: [], proxy: false };
   return { ...live, desktops: sealed(deps, live.desktops) };
 };
+/** What runs now, with a daemon that owes readiness held to start()'s own bounded check. */
+const verifiedState = async (runtime, deps, owed) => {
+  const live = await runtimeState(runtime, deps);
+  if (!owed.daemon || !live.daemon) return live;
+  return (await runtime.verifyRunningDaemon?.()) === true ? live : { ...live, daemon: false };
+};
 async function execute(deps) {
   const idle = Math.max(1, Math.min(seconds, deps.idleSeconds ?? IDLE_WAIT_SECONDS));
   const deadline = deps.now() + idle * 1000;
   const mode = deps.operation ?? operation;
   const expected = deps.expectedCandidate ?? flags['--expected-version'];
   const restartOnly = deps.restartOnly ?? flags['--restart-only'] === 'true';
-  let runtime, prior, closed, retried = false, stopped = false, installed = false, busy = false, stopFailed = false;
+  let runtime, prior, closed, retried = false, stopped = false, installed = false, updating = false, nothingOwed = false, busy = false, stopFailed = false;
   try {
     output.previousVersion = output.version = version(await deps.readVersion());
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
@@ -176,13 +185,15 @@ async function execute(deps) {
     // daemon can see one false restart_not_running before the marker clears. Versions compare on
     // their numeric part, since the Python path writes a prerelease in full.
     const marker = deps.marked();
-    const current = restartOnly || version(marker?.version) === output.previousVersion;
+    const current = restartOnly || markerMatches(marker, output.previousVersion);
     const unnamed = marker && marker.desktop === undefined && marker.daemon === undefined;
     prior = markerObligations(marker, current, mode === 'desktop' && Boolean(unnamed));
     retried = stillOwed(prior, { daemon: false, desktops: [] });
     if (mode === 'cli') {
       output.updateAttempted = true;
+      updating = true;
       await deps.update();
+      updating = false;
       output.version = version(await deps.readVersion());
       if (!output.version) { output.messageCode = 'version_unknown'; return output; }
       if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
@@ -206,10 +217,13 @@ async function execute(deps) {
     // is closed with the rest, so an earlier scan here could miss it. It goes in the marker at once, so
     // a failed install or a killed helper still leaves a record of what is closed.
     closed = addObligations(prior, runtimePlan(runtime, deps));
-    deps.mark(markerFields(closed));
+    const target = mode === 'desktop' && !restartOnly ? version(expected) : null;
+    deps.mark({ ...markerFields(closed), ...(target ? { target } : {}) });
     if (mode === 'desktop') {
       output.updateAttempted = !restartOnly;
+      updating = true;
       if (!restartOnly) await deps.update();
+      updating = false;
       output.version = version(await deps.readVersion());
       if (!output.version || (!restartOnly && output.version === output.previousVersion) || (expected && output.version !== version(expected))) throw new Error('Candidate not installed.');
       installed = true;
@@ -228,7 +242,7 @@ async function execute(deps) {
         await deps.sleep(250);
         live = await runtimeState(runtime, deps);
       }
-      if (stillOwed(closed, live)) {
+      if (stillOwed(closed, await verifiedState(runtime, deps, closed))) {
         deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running';
         return output;
       }
@@ -238,15 +252,23 @@ async function execute(deps) {
     // start() does nothing once it has released the lock, so a launch that failed there is not
     // retried here. The marker stays, and the next click reports what it finds (restart_not_running):
     // the updaters send a matching marker here even with no daemon running.
+    // An installer that failed may still have replaced the app: what is installed now decides which
+    // version the marker applies to.
+    if (updating) {
+      try {
+        const now = version(await deps.readVersion());
+        if (now && (mode === 'desktop' || retried)) output.version = now;
+        if (mode === 'cli' && retried && output.version !== output.previousVersion) deps.mark(markerFields(prior));
+      } catch { /* The version stays as it was read before the install. */ }
+    }
     if (stopped) {
       try { await runtime.start(); } catch { /* Reported below as restart_failed. */ }
-      // A desktop install that failed changed nothing. With everything back, this run owes nothing
-      // more than it did before it stopped; otherwise the marker keeps what is still closed.
+      // With everything back, a failed install owes no restart. Otherwise the marker keeps what is
+      // still closed, against whichever version is installed now.
       if (mode === 'desktop' && !installed && closed) {
         try {
-          if (!stillOwed(closed, await runtimeState(runtime, deps))) {
-            if (retried) deps.mark(markerFields(prior)); else deps.clear();
-          }
+          if (!stillOwed(closed, await verifiedState(runtime, deps, closed))) { deps.clear(); nothingOwed = true; }
+          else if (output.version !== output.previousVersion) deps.mark(markerFields(closed));
         } catch { /* The marker stays: the next click checks again. */ }
       }
     }
@@ -270,7 +292,7 @@ async function execute(deps) {
       // the desktop package was not touched.
       output.status = 'action_required'; output.messageCode = 'codex_busy';
     } else {
-      output.status = output.version !== output.previousVersion || deps.pending(output.version) ? 'restart_failed' : 'failed';
+      output.status = !nothingOwed && (output.version !== output.previousVersion || deps.pending(output.version)) ? 'restart_failed' : 'failed';
       output.messageCode = output.status === 'restart_failed' ? 'restart_failed' : 'update_failed';
     }
   } finally { await runtime?.dispose?.(); }
@@ -305,7 +327,7 @@ function bridgeDeps(createCodexActivationRuntime) {
   return { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     readVersion: () => operation === 'desktop' ? run('/usr/bin/dpkg-query', ['-W', '-f=${Version}', 'chatgpt']) : run(executable, ['--version']),
     update: () => operation === 'desktop' ? run('/usr/bin/sudo', ['-n', '/usr/bin/apt-get', 'install', '--only-upgrade', '-y', 'chatgpt'], 180000) : run(executable, ['update'], 180000),
-    pending: (expected) => version(readMarker()?.version) === expected,
+    pending: (expected) => markerMatches(readMarker(), expected),
     mark: markPending, clear: () => { try { fs.unlinkSync(markerFile()); } catch {} },
     restartProxies: async () => {
       if (operation !== 'cli') return;

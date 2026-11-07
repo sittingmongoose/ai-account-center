@@ -166,7 +166,8 @@ describe('Codex Desktop update retry on the real runtime', () => {
       pending: (expected: string) => marker?.version === expected,
       marked: () => marker,
       mark: (closed: Record<string, unknown> = {}) => {
-        marker = { version: installed, ...closed };
+        // As the real marker does: the version the bridge holds now.
+        marker = { version: bridge.output.version, ...closed };
       },
       clear: () => {
         marker = null;
@@ -433,12 +434,90 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(first.status).toBe('restart_failed');
     expect(marker()).toEqual({
       version: '1.0.0',
+      target: '2.0.0',
       desktop: true,
       daemon: true,
       desktops: [codexDesktopInstance('/fixture/.config/Codex')],
     });
     const second = await run({ ...failed, expectedCandidate: '1.0.0', restartOnly: true });
     expect(second.messageCode).toBe('restart_not_running');
+  });
+
+  it('keeps the record when an installer replaces the app, fails, and the relaunch fails', async () => {
+    const fake = harness([daemon]);
+    let installedNow = '1.0.0';
+    const { run, marker } = click(fake, async () => {
+      throw new CodexActivationRuntimeError('fixture launch failed');
+    });
+    const partial = {
+      readVersion: async () => installedNow,
+      update: async () => {
+        installedNow = '2.0.0';
+        throw new Error('fixture installer failed');
+      },
+    };
+    const first = await run(partial);
+    expect(first.status).toBe('restart_failed');
+    expect(first.version).toBe('2.0.0');
+    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: [] });
+    // Both installed and candidate are now 2.0.0: the record still applies, and is still owed.
+    const second = await run({ ...partial, restartOnly: true });
+    expect(second.messageCode).toBe('restart_not_running');
+  });
+
+  /** A retry owing a daemon, whose stop() finds only a proxy that respawns it as the lock is released. */
+  function respawnedDaemon(verifyDaemon: CodexActivationRuntimeDependencies['verifyDaemon']) {
+    const proxy = processFixture(70, ['/fixture/bin/codex', 'app-server', 'proxy'], {
+      env: { HOME: '/fixture', CODEX_HOME: home },
+    });
+    const fake = harness([proxy]);
+    let unlocked = 0;
+    const { deps } = click(fake);
+    return {
+      fake,
+      run: async () => {
+        bridge.output.restartedProcesses = 0;
+        return {
+          ...(await bridge.execute({
+            ...deps,
+            operation: 'cli',
+            update: async () => {},
+            readVersion: async () => '2.0.0',
+            pending: () => true,
+            marked: () => ({ version: '2.0.0', desktop: false, daemon: true, desktops: [] }),
+            runtime: () =>
+              createCodexActivationRuntime(home, {
+                ...fake.deps,
+                verifyDaemon,
+                releaseNativeStartupLock: async () => {
+                  await fake.deps.releaseNativeStartupLock();
+                  if (++unlocked === 1) fake.inject(daemon);
+                },
+              }),
+          })),
+        };
+      },
+    };
+  }
+
+  it('does not take a respawned daemon for ready without the readiness check', async () => {
+    let checks = 0;
+    const { run } = respawnedDaemon(async () => {
+      checks++;
+      throw new CodexActivationRuntimeError('socket not bound');
+    });
+    const result = await run();
+    expect(checks).toBe(1);
+    expect(result.messageCode).toBe('restart_not_running');
+  });
+
+  it('accepts a respawned daemon once the readiness check passes', async () => {
+    let checks = 0;
+    const { run } = respawnedDaemon(async () => {
+      checks++;
+    });
+    expect((await run()).status).toBe('updated');
+    expect(checks).toBe(1);
   });
 
   it('does not call a desktop whose app server never started a restart', async () => {
@@ -550,6 +629,28 @@ describe('What the runtime reports for a retry', () => {
     expect(retired.daemon).toBe(false);
     // Recovery relaunched the desktop under a new pid; the planned one is still gone.
     expect(retired.desktops).toEqual([codexDesktopInstance('/fixture/.config/Codex')]);
+  });
+
+  it('runs the readiness check on a running daemon, and refuses with none', async () => {
+    const checked: number[] = [];
+    const fake = harness([daemon]);
+    const runtime = createCodexActivationRuntime(home, {
+      ...fake.deps,
+      verifyDaemon: async (target) => {
+        checked.push(target.pid);
+      },
+    });
+    expect(await runtime.verifyRunningDaemon()).toBe(true);
+    expect(checked).toEqual([daemon.pid]);
+    const none = createCodexActivationRuntime(home, harness([]).deps);
+    expect(await none.verifyRunningDaemon()).toBe(false);
+    const failing = createCodexActivationRuntime(home, {
+      ...fake.deps,
+      verifyDaemon: async () => {
+        throw new CodexActivationRuntimeError('socket not bound');
+      },
+    });
+    expect(await failing.verifyRunningDaemon()).toBe(false);
   });
 
   it('reports no plan when stop() refused before closing anything', async () => {
