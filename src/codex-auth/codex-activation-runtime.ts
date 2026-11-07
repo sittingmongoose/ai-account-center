@@ -17,7 +17,7 @@ export interface CodexActivationRuntime {
   /** What stop() planned to close, captured under its lock. Holds no launch context. */
   stopPlan(): CodexRestartPlan;
   /** The planned processes stop() really retired, by pid and start time, after a partial failure. */
-  retiredPlan(): Promise<CodexRestartPlan>;
+  retiredPlan(): Promise<CodexRetiredPlan>;
   /** What runs now, by the same rules stop() and start() use. */
   restartState(): Promise<CodexRestartState>;
   /**
@@ -31,6 +31,15 @@ export interface CodexRestartPlan {
   daemon: boolean;
   /** One codexDesktopInstance per Codex Desktop. */
   desktops: string[];
+}
+
+/**
+ * What a stop() that failed partway really retired. `standing` names the planned desktops it never
+ * reached that still run, by the same pid and start time: one of those can't stand in for a retired
+ * desktop whose data folder reads the same.
+ */
+export interface CodexRetiredPlan extends CodexRestartPlan {
+  standing: string[];
 }
 
 /** Which process a readiness check vouched for: a later scan must find this same one. */
@@ -379,13 +388,19 @@ export function createCodexActivationRuntime(
       }
       // Each desktop closed is one main process back. Two whose data folders read alike, as a
       // rewritten cmdline can make them, are still two: a main counted for one is not counted again.
-      const counted = new Set<number>();
-      for (const launcher of launchers.filter(isDesktop)) {
+      // A desktop a failed stop() never closed counts only for itself, never for a twin it did close.
+      const desktopLaunchers = launchers.filter(isDesktop);
+      const before = await scan();
+      const own = (launcher: CodexProcessSnapshot): number | undefined =>
+        before.find((entry) => sameProcess(launcher, entry))?.pid;
+      const counted = new Set(desktopLaunchers.map(own).filter((pid) => pid !== undefined));
+      for (const launcher of desktopLaunchers) {
+        const ownPid = own(launcher);
         const matchesDesktop = (
           main: CodexProcessSnapshot,
           processes: CodexProcessSnapshot[]
         ): boolean =>
-          !counted.has(main.pid) &&
+          (main.pid === ownPid || !counted.has(main.pid)) &&
           isDesktop(main) &&
           desktopUserData(main, processes) === desktopUserData(launcher, [launcher]);
         const existing = await scan();
@@ -601,9 +616,12 @@ export function createCodexActivationRuntime(
     stopPlan: () => restartPlan(launchers),
     retiredPlan: async () => {
       const processes = await dependencies.scan();
-      return restartPlan(
-        launchers.filter((launcher) => !processes.some((process) => sameProcess(launcher, process)))
-      );
+      const running = (launcher: CodexProcessSnapshot): boolean =>
+        processes.some((process) => sameProcess(launcher, process));
+      return {
+        ...restartPlan(launchers.filter((launcher) => !running(launcher))),
+        standing: restartPlan(launchers.filter(running)).desktops,
+      };
     },
     verifyRunningDaemon: async () => {
       const daemon = (await scan()).find(

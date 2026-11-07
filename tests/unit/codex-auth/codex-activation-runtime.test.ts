@@ -381,7 +381,12 @@ describe('Codex Desktop update retry on the real runtime', () => {
         env: { HOME: '/fixture', DISPLAY: ':8' },
         exe: '/usr/lib/chatgpt/ChatGPT',
       });
-    const pair = () => [rewritten(40, '--b'), childOf(41, 40), rewritten(50, '--c'), childOf(51, 50)];
+    const pair = () => [
+      rewritten(40, '--b'),
+      childOf(41, 40),
+      rewritten(50, '--c'),
+      childOf(51, 50),
+    ];
 
     const both = harness(pair());
     const first = click(both);
@@ -410,6 +415,135 @@ describe('Codex Desktop update retry on the real runtime', () => {
     const second = await run({ restartOnly: true, launchOnly: true });
     expect(second.status).toBe('restart_failed');
     expect(second.messageCode).toBe('restart_not_running');
+  });
+
+  describe('a failed stop() over two desktops that read as one folder', () => {
+    // Sealed as on a real host, so the bridge compares keyed hashes throughout.
+    const sealInstance = (instance: string) => bridge.sealInstance(instance, 'fixture-salt');
+    const profile = sealInstance(codexDesktopInstance('/fixture/Profile'));
+    const rewritten = (pid: number, tail: string) =>
+      processFixture(pid, [`/usr/lib/chatgpt/ChatGPT --user-data-dir=/fixture/Profile ${tail}`], {
+        env: { HOME: '/fixture', DISPLAY: ':8' },
+        exe: '/usr/lib/chatgpt/ChatGPT',
+      });
+    const pair = () => [
+      rewritten(40, '--one'),
+      childOf(41, 40),
+      rewritten(50, '--two'),
+      childOf(51, 50),
+    ];
+    /** A runtime whose desktop relaunches fail for the flag in `failing`, while it is set. */
+    const runtimeFor =
+      (
+        fake: ReturnType<typeof harness>,
+        failing: { flag: string | null },
+        overrides: Partial<CodexActivationRuntimeDependencies> = {}
+      ) =>
+      (hooks = {}) =>
+        createCodexActivationRuntime(home, {
+          ...fake.deps,
+          launch: (target, isDesktop) =>
+            bridge.relaunch(
+              target,
+              isDesktop,
+              async (entry, desktop) => {
+                if (failing.flag && entry.args.includes(failing.flag)) {
+                  throw new CodexActivationRuntimeError('fixture launch failed');
+                }
+                await fake.deps.launch(entry, desktop);
+              },
+              { inside: () => true }
+            ),
+          ...overrides,
+          ...hooks,
+        });
+
+    it('owes both when stop() retired both and recovered one', async () => {
+      const fake = harness(pair());
+      const failing = { flag: '--two' as string | null };
+      let scanFails = false;
+      let faulted = false;
+      const runtime = runtimeFor(fake, failing, {
+        scan: async () => {
+          if (scanFails) {
+            scanFails = false;
+            throw new CodexActivationRuntimeError('fixture inventory failed');
+          }
+          return fake.deps.scan();
+        },
+        signal: async (target, signal) => {
+          await fake.deps.signal(target, signal);
+          // Once both are gone, one inventory scan fails, so stop() fails and recovers.
+          if (!faulted && !fake.current().some(isDesktop)) faulted = scanFails = true;
+        },
+      });
+      const { run, marker } = click(fake);
+      expect((await run({ runtime, sealInstance })).status).toBe('restart_failed');
+      expect(fake.current().filter(isDesktop)).toHaveLength(1);
+      // A total, as every later run reads it: two must be back, not the one still missing.
+      expect((marker() as { desktops: string[] }).desktops).toEqual([profile, profile]);
+
+      // The next update finds only the recovered desktop, and one is still closed.
+      failing.flag = null;
+      const second = await run({ runtime, sealInstance });
+      expect([second.status, second.messageCode]).toEqual([
+        'restart_failed',
+        'restart_not_running',
+      ]);
+    });
+
+    it('recovers the desktop stop() closed, never its running twin', async () => {
+      const fake = harness(pair());
+      const runtime = runtimeFor(
+        fake,
+        { flag: null },
+        {
+          signal: async (target, signal) => {
+            if (target.pid === 50) throw new CodexActivationRuntimeError('fixture signal failed');
+            await fake.deps.signal(target, signal);
+          },
+        }
+      );
+      const { run } = click(fake);
+      await run({ runtime, sealInstance });
+      expect(fake.launches.filter(isDesktop).map((entry) => entry.args)).toEqual([
+        ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/fixture/Profile', '--one'],
+      ]);
+      expect(fake.current().filter(isDesktop)).toHaveLength(2);
+    });
+
+    it('owes both when stop() retired one and never reached its twin', async () => {
+      const fake = harness(pair());
+      const failing = { flag: '--one' as string | null };
+      let refuse = true;
+      const runtime = runtimeFor(fake, failing, {
+        signal: async (target, signal) => {
+          // The second desktop refuses its signal, so stop() fails with it still running.
+          if (refuse && target.pid === 50) {
+            throw new CodexActivationRuntimeError('fixture signal failed');
+          }
+          await fake.deps.signal(target, signal);
+        },
+      });
+      const { run, marker } = click(fake);
+      expect((await run({ runtime, sealInstance })).status).toBe('restart_failed');
+      expect(
+        fake
+          .current()
+          .filter(isDesktop)
+          .map((entry) => entry.pid)
+      ).toEqual([50]);
+      // The twin never closed, so it can't stand in for the one that did.
+      expect((marker() as { desktops: string[] }).desktops).toEqual([profile, profile]);
+
+      refuse = false;
+      failing.flag = null;
+      const second = await run({ runtime, sealInstance });
+      expect([second.status, second.messageCode]).toEqual([
+        'restart_failed',
+        'restart_not_running',
+      ]);
+    });
   });
 
   it('is updated once every desktop it closed is back', async () => {
@@ -929,7 +1063,7 @@ describe('What the runtime reports for a retry', () => {
         await fake.deps.signal(target, signal);
       },
     });
-    expect(await runtime.retiredPlan()).toEqual({ daemon: false, desktops: [] });
+    expect(await runtime.retiredPlan()).toEqual({ daemon: false, desktops: [], standing: [] });
     await expect(runtime.stop()).rejects.toThrow();
     const retired = await runtime.retiredPlan();
     expect(retired.daemon).toBe(false);
@@ -1693,7 +1827,9 @@ describe('desktop main process detection', () => {
   it('relaunches each rewritten flag and its separate value as their own arguments', async () => {
     const rewritten = processFixture(
       20,
-      ['/usr/lib/chatgpt/ChatGPT --user-data-dir /fixture/Work One --class Codex --enable-features=X'],
+      [
+        '/usr/lib/chatgpt/ChatGPT --user-data-dir /fixture/Work One --class Codex --enable-features=X',
+      ],
       { env: {}, exe: '/usr/lib/chatgpt/ChatGPT' }
     );
     const fake = harness([daemon, rewritten, bundled]);

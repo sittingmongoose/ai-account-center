@@ -729,7 +729,9 @@ inside `stop()` still leaves it. The marker records what that plan closes:
 the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder keyed with a random
 0600 salt beside the marker (`codex-desktop-instance.salt`), never the path. Each desktop is one entry:
 two whose folders read alike, as a cmdline Electron rewrote into one string can make them, are the same
-hash twice, and both must be back. The salt is checked before
+hash twice, and both must be back. Every run reads `desktops` as that total, so a failed `stop()` that
+lost one of two writes both, and a twin it never closed can't stand in for the one it did. The salt is
+checked before
 anything stops, and an unusable one is replaced. A
 `stop()` that failed partway records what it really retired and did not bring back to ready. A desktop
 install records the version it was about to install as `target`. An installer that fails is checked

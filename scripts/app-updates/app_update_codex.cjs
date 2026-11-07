@@ -173,7 +173,7 @@ const sealInstance = (instance, salt = desktopSalt()) => crypto.createHmac('sha2
 // closed everything, and with nothing shown running a retry reads as restart_not_running.
 const sealed = (deps, instances) => instances.map((item) => (deps.sealInstance ? deps.sealInstance(item) : item));
 const UNKNOWN_PLAN = { daemon: true, desktops: [], anyDesktop: true };
-const sealedPlan = (deps, plan) => ({ ...plan, desktops: sealed(deps, plan.desktops) });
+const sealedPlan = (deps, plan) => ({ ...plan, desktops: sealed(deps, plan.desktops), standing: sealed(deps, plan.standing ?? []) });
 const runtimePlan = (runtime, deps) => sealedPlan(deps, runtime.stopPlan?.() ?? UNKNOWN_PLAN);
 const runtimeRetired = async (runtime, deps) => sealedPlan(deps, (await runtime.retiredPlan?.()) ?? UNKNOWN_PLAN);
 const runtimeState = async (runtime, deps) => {
@@ -374,9 +374,15 @@ async function execute(deps) {
         if (retired.daemon) deps.mark(markerFields(addObligations(prior, retired)));
         // A replacement that fails the readiness check is not back, or the marker would name nothing.
         const live = await verifiedState(runtime, deps, retired);
+        // Every later run reads the marker's desktops as a total that must be running. So a planned
+        // twin stop() never reached counts toward what must be running, and can't stand in for a
+        // retired desktop that reads the same, and a hash that lost any is written with every entry
+        // it needs, never the remainder. A planned desktop that was never reached is still not owed.
+        const needed = [...retired.desktops, ...retired.standing.filter((item) => retired.desktops.includes(item))];
+        const missing = missingDesktops(needed, live.desktops);
         const lost = {
           daemon: retired.daemon && !live.daemon,
-          desktops: missingDesktops(retired.desktops, live.desktops),
+          desktops: needed.filter((item) => missing.includes(item)),
           anyDesktop: retired.anyDesktop === true && live.desktops.length === 0,
         };
         if (stillOwed(lost, nothing)) deps.mark(markerFields(addObligations(prior, lost)));
