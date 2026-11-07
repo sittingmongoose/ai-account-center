@@ -437,7 +437,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   answered `answer_save_unclear` instead: the process holds the record as cancelled, never lists, shares or rings it,
   and writes the `void` line again on each gain, retry pass and send and on close and exit until it lands. Limit: if
   the process ends before any of those `void` lines lands (killed, or the disk still refusing at exit), a restart
-  counts the record and may share and ring it once. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
+  counts the record and may share and ring it once; if that send's line was lost too, its summary is rebuilt with that record
+  and re-signed with other contents (the one exception to the stable summary below). The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
   each minute. Only ENOENT means an empty journal; other journal read errors refuse store-dependent decisions
   (answers return `answer_not_saved`) and mark history unavailable even after a warm cache; a later good authoritative read recovers. A second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
   over when its holder on this computer has ended, or on Linux was written in an earlier boot or names a pid since
@@ -471,8 +472,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   attached and are retried when it can own the store again.
   **Delivery is at least once.** A crash or kill between a ring and its done line can ring again after restart;
   receivers dedupe because the ring is only a doorbell. Every ring points at signed files whose names and
-  signatures (`signature.keyId` + `signature.value`) are stable across retries, so reading them twice changes
-  nothing. There is one answer file per card; each note or objection has its own `<card>.note-<12 hex>.json`
+  signatures (`signature.keyId` + `signature.value`) are stable across retries (except in the void-failure limit above), so reading them
+  twice changes nothing. There is one answer file per card; each note or objection has its own `<card>.note-<12 hex>.json`
   or `<card>.object-<12 hex>.json` file. Receivers verify the pinned signing key before accepting the file.
   Persistence repair never rings again. Durable done steps
   stay done, and persistence retries continue even after the delivery attempt limit. Nothing is written when `<reports>/v1` is not
@@ -486,7 +487,7 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   "owner", device, entries: [ { cardId, seq, cardSha256, kind, choice, note } ], signature }`, entries in the order
   sent, signed exactly like an answer (`verifySignedDocument(fileText, publicKeyPem, "agent-reports/send@1")`).
   Its `at` is the first record's signed `answeredAt`, the same in the send line, the first summary and a summary
-  rebuilt without the send line, so a retry after a lost send line and a restart writes the same bytes. A
+  rebuilt without the send line, so a retry after a lost send line and a restart writes the same bytes (except in the void-failure limit above). A
   summary already on the share that this key signed with the same content but another `at` (from an earlier
   version, which stamped the send's end) is kept, not re-signed. A record stored before kinds existed is shared
   exactly as it was signed, without `kind`.
