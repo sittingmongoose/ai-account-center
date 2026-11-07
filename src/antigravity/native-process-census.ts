@@ -70,43 +70,6 @@ function readTolerant<T>(read: () => T, tolerated: ReadonlySet<string>): T | nul
   }
 }
 
-/** A missing path component, as opposed to one that could not be resolved. */
-function missing(file: string): boolean {
-  try {
-    // A dangling symlink is not missing: where it pointed is unknown.
-    fs.lstatSync(file);
-    return false;
-  } catch (error) {
-    return code(error) === 'ENOENT' || code(error) === 'ENOTDIR';
-  }
-}
-
-/**
- * A path as named and as resolved, so either spelling matches. A missing tail
- * (a root folder that was removed) is rejoined onto its deepest existing
- * ancestor's real path, so a symlink above it still resolves. Null when the
- * path cannot be resolved for any other reason (a dangling symlink, a folder
- * that refuses access): its real spelling is unknown, so the census is incomplete.
- */
-function spellings(file: string): string[] | null {
-  const resolved = path.resolve(file);
-  let existing = resolved;
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      const real = path.join(fs.realpathSync(existing), ...tail);
-      return real === resolved ? [resolved] : [resolved, real];
-    } catch (error) {
-      if ((code(error) !== 'ENOENT' && code(error) !== 'ENOTDIR') || !missing(existing))
-        return null;
-      const parent = path.dirname(existing);
-      if (parent === existing) return [resolved];
-      tail.unshift(path.basename(existing));
-      existing = parent;
-    }
-  }
-}
-
 /**
  * Filesystems where a lookup can block with no timeout: network ones, every FUSE one (most are), and autofs, whose
  * mount point mounts its share on first touch (a systemd automount like /mnt/Cursor reads as autofs until then).
@@ -117,6 +80,8 @@ const NETWORK_FS =
 const STEPS_PER_PROCESS = 65_536;
 /** A lookup that ran out of the process's step budget. */
 const OVER_BUDGET = Symbol('over budget');
+/** A lookup that couldn't be finished (a denied folder, a link loop): where the path leads is unknown. */
+const UNRESOLVED = Symbol('unresolved');
 /** How many path lookups one process's arguments may cost the census. */
 const LOOKUPS_PER_PROCESS = 4096;
 
@@ -173,7 +138,7 @@ function resolveLocally(
   network: readonly string[],
   cache: StatCache,
   budget: { steps: number }
-): string | null | typeof OVER_BUDGET {
+): string | typeof UNRESOLVED | typeof OVER_BUDGET {
   // components still to walk, last first, so each step is O(1)
   const stack = file.split(path.sep).filter(Boolean).reverse();
   let current: string = path.sep;
@@ -216,18 +181,18 @@ function resolveLocally(
     if (typeof stat === 'string')
       return stat === 'ENOENT' || stat === 'ENOTDIR'
         ? path.join(current, part, ...[...stack].reverse())
-        : null;
+        : UNRESOLVED;
     if (!stat.isSymbolicLink()) {
       current = next;
       continue;
     }
     hops += 1;
-    if (hops > 40) return null;
+    if (hops > 40) return UNRESOLVED;
     let target: string;
     try {
       target = fs.readlinkSync(next);
     } catch {
-      return null;
+      return UNRESOLVED;
     }
     // a relative target is read from the link's own folder
     if (path.isAbsolute(target)) current = path.sep;
@@ -341,7 +306,10 @@ function filePath(url: string): string {
  * matches by where it really leads (a missing script by the folder that
  * exists, a dangling link by its target), resolved one component at a time and
  * never on or under a network, FUSE or autofs mount, where nothing is looked
- * up; at most 4096 lookups per process, past which an interpreter's script is
+ * up (a link that leads onto such a mount is read as written from there: a link
+ * on the share pointing back into a root is a known limit, since following it
+ * would block on a hung share and `~/.local/bin` links into the share are
+ * common); a denied folder or a link loop leaves an interpreter unplaced; at most 4096 lookups per process, past which an interpreter's script is
  * unplaced.
  *
  * An interpreter is known by its process name, argv0 or executable (a
@@ -378,6 +346,16 @@ export function censusAntigravityProcesses(options: {
   const self = options.selfPid ?? process.pid;
   if (typeof uid !== 'number' || !Number.isSafeInteger(uid)) return incomplete;
   const home = path.resolve(options.home);
+  // read first: resolving the home, the roots and the native never touches a network or automount either
+  const network = networkMounts(options.mountInfo ?? '/proc/self/mountinfo');
+  const stats: StatCache = new Map();
+  /** A path as written and where it really leads (a missing tail kept); null when that can't be known. */
+  const spellings = (file: string): string[] | null => {
+    const resolved = path.resolve(file);
+    const real = resolveLocally(resolved, network, stats, { steps: STEPS_PER_PROCESS });
+    if (typeof real !== 'string') return null;
+    return real === resolved ? [resolved] : [resolved, real];
+  };
   const natives = spellings(options.nativeBinary);
   // Each root is joined onto every spelling of the home and then resolved itself,
   // so a symlinked home, a symlinked ~/.gemini or ~/.local, and a removed root
@@ -407,14 +385,13 @@ export function censusAntigravityProcesses(options: {
   // /tmp/link -> a root) is a root's script. A path that doesn't exist or can't be resolved counts as written only.
   // Lookups never touch a network mount (a hung NFS share would block an lstat with no timeout); a deleted script
   // reached through a symlinked folder still resolves, by the folder that exists.
-  const network = networkMounts(options.mountInfo ?? '/proc/self/mountinfo');
   // A process's paths are looked up at most LOOKUPS_PER_PROCESS times (a hostile command line can name thousands);
   // past that an interpreter's script is unplaced.
   let lookups = 0;
   let overLookups = false;
+  let unresolvedSeen = false;
   const steps = { steps: STEPS_PER_PROCESS };
-  const stats: StatCache = new Map();
-  const resolved = new Map<string, string | null>();
+  const resolved = new Map<string, string | typeof UNRESOLVED>();
   // A bare word leads into the working folder, which is judged on its own (an interpreter working in a root counts),
   // unless it is a link there: so a bare word is looked up only when the folder holds a link by that name, read once
   // per folder (never on a network mount), and a long inline script costs no lookups.
@@ -454,7 +431,12 @@ export function censusAntigravityProcesses(options: {
       real = found;
       resolved.set(value, real);
     }
-    return real !== null && isAntigravityPath(real);
+    // where it leads is unknown (a denied folder, a link loop): an interpreter's script can't be placed
+    if (real === UNRESOLVED) {
+      unresolvedSeen = true;
+      return false;
+    }
+    return isAntigravityPath(real);
   };
   const deniedExe = new Set(['EACCES', 'EPERM']);
   // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A
@@ -487,6 +469,7 @@ export function censusAntigravityProcesses(options: {
         }
         lookups = 0;
         overLookups = false;
+        unresolvedSeen = false;
         steps.steps = STEPS_PER_PROCESS;
         const read = readField(() => readCmdline(path.join(directory, 'cmdline')));
         const cmdline = read.text;
@@ -551,7 +534,8 @@ export function censusAntigravityProcesses(options: {
         // Idle stays unproven for an interpreter whose script couldn't be placed: its working folder is hidden while it
         // has a candidate script, or the command line was cut at the read limit with no candidate found.
         const truncated = read.bytes >= CMDLINE_BYTES || overLookups;
-        if (interpreter && ((cwdDenied && operands.length > 0) || truncated)) unplaced = true;
+        if (interpreter && ((cwdDenied && operands.length > 0) || truncated || unresolvedSeen))
+          unplaced = true;
       } catch (error) {
         if (error instanceof ProcessGone) continue;
         throw error;

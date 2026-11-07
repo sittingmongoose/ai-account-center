@@ -222,13 +222,14 @@ describe('runtime-free Antigravity process census', () => {
     expect(value.census({ home: linked })).toEqual({ complete: true, running: 1 });
   });
 
-  test('a dangling ~/.gemini symlink or an unreadable target parent makes the census incomplete', () => {
+  test('a dangling ~/.gemini symlink resolves by its target; an unreadable target parent is incomplete', () => {
+    // the link's target is known (readlink), so a helper still running from where it pointed is counted
     const dangling = procFixture();
     fs.symlinkSync(path.join(dangling.root, 'gone-gemini'), path.join(dangling.home, '.gemini'));
     dangling.add(840, 'helper', path.join(dangling.root, 'gone-gemini/antigravity-cli/bin/x'), [
       'x',
     ]);
-    expect(dangling.census()).toEqual({ complete: false, running: 0 });
+    expect(dangling.census()).toEqual({ complete: true, running: 1 });
     if (process.getuid?.() === 0) return; // root reads mode-000 folders
     const locked = procFixture();
     const parent = path.join(locked.root, 'locked-parent');
@@ -807,6 +808,65 @@ describe('runtime-free Antigravity process census', () => {
     const started = performance.now();
     expect(census()).toEqual({ complete: false, running: 0 });
     expect(performance.now() - started).toBeLessThan(3000);
+  });
+
+  test('a denied or looping lookup leaves an interpreter unplaced, and start-up never touches a mount', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(helperDir, { recursive: true });
+    // a link loop in the script's path: where it leads is unknown, so idle can't be proven
+    fs.symlinkSync(path.join(value.root, 'loop-b'), path.join(value.root, 'loop-a'));
+    fs.symlinkSync(path.join(value.root, 'loop-a'), path.join(value.root, 'loop-b'));
+    value.add(
+      1010,
+      'python3',
+      '/usr/bin/python3',
+      ['python3', path.join(value.root, 'loop-a', 'h.py')],
+      value.root
+    );
+    expect(value.census()).toEqual({ complete: false, running: 0 });
+    fs.rmSync(path.join(value.proc, '1010'), { recursive: true });
+    // a denied folder on the way (not root, which reads mode-000 folders)
+    if (process.getuid?.() !== 0) {
+      const locked = path.join(value.root, 'locked');
+      fs.mkdirSync(path.join(locked, 'in'), { recursive: true });
+      fs.chmodSync(locked, 0o000);
+      try {
+        value.add(
+          1011,
+          'python3',
+          '/usr/bin/python3',
+          ['python3', path.join(locked, 'in', 'h.py')],
+          value.root
+        );
+        expect(value.census()).toEqual({ complete: false, running: 0 });
+        fs.rmSync(path.join(value.proc, '1011'), { recursive: true });
+      } finally {
+        fs.chmodSync(locked, 0o755);
+      }
+    }
+    // start-up: a home whose .gemini is an automount resolves by spelling, with no lookup under it
+    const mountInfo = path.join(value.root, 'mountinfo');
+    fs.writeFileSync(
+      mountInfo,
+      `50 25 0:50 / ${path.join(value.home, '.gemini')} rw - autofs systemd-1 rw\n`
+    );
+    const lstat = spyOn(fs, 'lstatSync');
+    try {
+      censusAntigravityProcesses({
+        home: value.home,
+        nativeBinary: value.native,
+        procRoot: value.proc,
+        selfPid: 7,
+        mountInfo,
+      });
+      const underMount = lstat.mock.calls.filter(([file]) =>
+        String(file).startsWith(path.join(value.home, '.gemini') + path.sep)
+      );
+      expect(underMount).toEqual([]);
+    } finally {
+      lstat.mockRestore();
+    }
   });
 
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {
