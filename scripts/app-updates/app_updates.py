@@ -21,7 +21,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from app_update_common import (
     APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
-    powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
+    marker_names_version, powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, cli_instances, family, scan, terminate_cli
@@ -644,11 +644,15 @@ def update_cli(install, deadline, restart_managed=False):
         # protocol, not an idle TUI/PTY restart. It is handled by the fixed bridge.
         # An npm-global Codex (Nas1) has no AAC shared daemon and is not covered by the
         # bridge's fixed ~/.local/bin/codex runtime: it takes the ordinary CLI path below.
-        # A marker for the installed version comes here even with no daemon running: a daemon relaunch
-        # that failed leaves exactly that, and only the bridge can say nothing is left to restart.
+        # A marker for the installed version that names something an earlier run closed comes here
+        # even with no daemon running: a daemon relaunch that failed leaves exactly that, and only
+        # the bridge can say it is still closed. A marker naming nothing owes no restart.
+        marker = pending_marker(pending)
         if (install.app_id == "codex-cli" and install.platform == "ubuntu" and install.manager != "npm" and
                 (any("app-server" in item.args for item in family(install, processes)) or
-                 (pending_version(pending) == before and (pathlib.Path.home() / ".local/bin/codex").exists()))):
+                 (marker_names_version(marker.get("version"), before) and
+                  (marker.get("desktop") is True or marker.get("daemon") is True) and
+                  (pathlib.Path.home() / ".local/bin/codex").exists()))):
             contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])
             check_terminal(install.platform, contexts)
             bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
@@ -732,7 +736,7 @@ def update_cli(install, deadline, restart_managed=False):
             raise UpdateFailure("version_unknown")
         if newest and npm_version_key(refreshed.version) < npm_version_key(newest):
             raise UpdateFailure("version_unknown")
-        marker_version = pending_version(pending)
+        marker_version = pending_marker(pending).get("version")
         needs_restart = marker_version == refreshed.version and marker_version != before
         if refreshed.version == before and not needs_restart:
             if install.app_id == "muse-code" and muse_update_busy(install.path.parent):
@@ -786,12 +790,13 @@ def update_cli(install, deadline, restart_managed=False):
         return outcome(result(install.app_id, install.platform, "failed", before, before, install.manager, "update_failed", attempted))
 
 
-def pending_version(pending):
-    """The version a pending-restart marker names, or None without a readable one."""
+def pending_marker(pending):
+    """A pending-restart marker's fields, or none without a readable one."""
     try:
-        return json.loads(pending.read_text(encoding="utf-8")).get("version")
-    except (AttributeError, OSError, ValueError):
-        return None
+        value = json.loads(pending.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def relaunch_after_failed_install(install, contexts, pending):

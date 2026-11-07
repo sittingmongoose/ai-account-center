@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 
 from app_update_common import (
     Install, RangeReader, UpdateFailure, command, download, powershell, private_temporary,
-    ps_quote, remote_fingerprint, result, version_text, version_tuple, write_private_json,
+    marker_names_version, ps_quote, remote_fingerprint, result, version_text, version_tuple, write_private_json,
 )
 from app_update_processes import (
     desktop_arguments, family, live_contexts, main_contexts, restart_desktops, scan, terminate_desktops,
@@ -768,8 +768,8 @@ def update_linux(install, deadline=None):
         pending = pathlib.Path.home() / ".ccs/app-updates/codex-desktop-pending-restart.json"
         retry_restart = False
         try:
-            retry_restart = json.loads(pending.read_text(encoding="utf-8")).get("version") == before
-        except (OSError, ValueError):
+            retry_restart = marker_names_version(json.loads(pending.read_text(encoding="utf-8")).get("version"), before)
+        except (AttributeError, OSError, ValueError):
             pass
         if version_tuple(candidate) <= version_tuple(before) and not retry_restart:
             return result(install.app_id, "ubuntu", "current", before, before, "apt")

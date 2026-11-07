@@ -154,6 +154,34 @@ describe('app-launcher', () => {
     expect(seen.trim()).toBe('/nonexistent/lib||yes');
   });
 
+  it('escapes every $ in the command so systemd hands it over literally', () => {
+    const argv = buildSystemdRunArgs(
+      {
+        app: 'app',
+        exe: '/opt/$HOME/app',
+        args: ['--user-data-dir=/d$HOME/x', '$$', '${X}', 'plain'],
+      },
+      'unit'
+    );
+    const command = argv.slice(argv.indexOf('--') + 1);
+    for (const word of command) expect(word).not.toMatch(/(^|[^$])\$([^$]|$)/);
+    expect(command.map((word) => word.replaceAll('$$', '$'))).toEqual([
+      '/opt/$HOME/app',
+      '--user-data-dir=/d$HOME/x',
+      '$$',
+      '${X}',
+      'plain',
+    ]);
+  });
+
+  it('escapes the replayed command behind the loader step too', () => {
+    const argv = buildSystemdRunArgs(
+      { app: 'app', exe: '/opt/app', args: ['$HOME'], env: { LD_PRELOAD: '/p.so' } },
+      'unit'
+    );
+    expect(argv.slice(-3)).toEqual(['sh', '/opt/app', '$$HOME']);
+  });
+
   it('runs the app directly when no loader setting was captured', () => {
     const argv = buildSystemdRunArgs(
       { app: 'app', exe: '/opt/app', args: [], env: { KEEP: 'yes' } },

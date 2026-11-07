@@ -140,7 +140,8 @@ def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple", prope
     wrapped.append("--")
     if any(key.startswith(LOADER_ENV_PREFIX) for key in names):
         wrapped.extend(["/bin/sh", "-c", LOADER_TRAMPOLINE, "sh"])
-    wrapped.extend(argv)
+    # systemd expands $NAME in a command line, and a relaunch replays whatever the app was given.
+    wrapped.extend(str(word).replace("$", "$$") for word in argv)
     return wrapped
 
 
@@ -243,6 +244,15 @@ def version_text(value):
         return None
     match = re.search(r"(?<!\d)(\d+\.\d+(?:\.[0-9]+){0,3}(?:-[A-Za-z0-9.]+)?)(?![0-9])", value)
     return match.group(1) if match else None
+
+
+def marker_names_version(marker_version, installed):
+    """Whether a pending-restart marker is for this install. The Codex bridge writes the numeric
+    part alone (0.50.0), where version_text keeps a prerelease (0.50.0-alpha.1)."""
+    def numeric(value):
+        match = re.search(r"\d+\.\d+(?:\.\d+){0,3}", value) if isinstance(value, str) else None
+        return match.group(0) if match else None
+    return numeric(marker_version) is not None and numeric(marker_version) == numeric(installed)
 
 
 def version_tuple(value):

@@ -46,9 +46,9 @@ function fixture() {
         events.push('update');
       },
       pending: () => pending,
-      mark: (desktop?: boolean) => {
+      mark: (closed?: Record<string, boolean>) => {
         pending = true;
-        marks.push(desktop);
+        marks.push(closed);
         events.push('mark');
       },
       clear: () => {
@@ -59,9 +59,8 @@ function fixture() {
         events.push('proxy-reconnect');
       },
       hasOldProxies: async () => false,
-      markedDesktop: (): boolean | undefined => undefined,
-      desktopRunning: async () => false,
-      serverRunning: async () => true,
+      marked: (): Record<string, unknown> | null => null,
+      running: async () => ({ desktop: false, daemon: false }),
       runtime: () => ({
         stop: async () => {
           events.push('stop');
@@ -92,6 +91,7 @@ describe('Codex update idle and restart coordinator', () => {
       'stop',
       'wait',
       'stop',
+      'mark',
       'proxy-reconnect',
       'start',
       'clear',
@@ -263,7 +263,8 @@ describe('Codex desktop version verification', () => {
     value.deps.mark();
     const result = await bridge.execute({
       ...value.deps,
-      desktopRunning: async () => true,
+      marked: () => ({ version: '1.0.0', desktop: true }),
+      running: async () => ({ desktop: true, daemon: false }),
       operation: 'desktop',
       expectedCandidate: '1.0.0',
       restartOnly: true,
@@ -423,7 +424,7 @@ describe('Codex relaunch after an update', () => {
   });
 });
 
-describe('Pending-marker retry that finds nothing to restart', () => {
+describe('Pending-marker retry', () => {
   beforeEach(() => {
     bridge.output.restartedProcesses = 0;
   });
@@ -432,176 +433,261 @@ describe('Pending-marker retry that finds nothing to restart', () => {
     start: async () => {},
     dispose: async () => {},
   });
-  function retry(server: boolean, desktop = false, marked?: boolean) {
+  type Live = { desktop: boolean; daemon: boolean };
+  const nothing: Live = { desktop: false, daemon: false };
+  /** A second click: the marker as given, and what is running before stop() and after start(). */
+  function retry(marker: Record<string, unknown> | null, after: Live, before: Live = nothing) {
     const value = fixture();
-    value.deps.mark();
+    if (marker) value.deps.mark();
     value.marks.length = 0;
+    let stopped = false;
     return {
       value,
       deps: {
         ...value.deps,
         update: async () => {},
-        serverRunning: async () => server,
-        desktopRunning: async () => desktop,
-        markedDesktop: () => marked,
+        marked: () => (marker ? { version: '1.0.0', ...marker } : null),
+        running: async () => (stopped ? after : before),
         operation: 'cli',
-        runtime: idleRuntime,
+        runtime: () => ({
+          ...idleRuntime(),
+          stop: async () => {},
+          start: async () => {
+            stopped = true;
+          },
+        }),
       },
     };
   }
+  const desktopRetry = (deps: object) => ({
+    ...deps,
+    operation: 'desktop',
+    expectedCandidate: '1.0.0',
+    restartOnly: true,
+  });
 
-  it('does not report a restart when it stopped and started nothing', async () => {
-    const { value, deps } = retry(false);
+  it('reports restart_not_running when the daemon it closed stays closed', async () => {
+    const { value, deps } = retry({ daemon: true }, nothing);
     const result = await bridge.execute(deps);
     expect(result.status).toBe('restart_failed');
     expect(result.messageCode).toBe('restart_not_running');
     expect(value.pending()).toBe(false);
   });
 
-  it('stays updated when a retry really restarted something', async () => {
-    const { value, deps } = retry(false);
-    deps.runtime = () => ({
-      ...idleRuntime(),
-      start: async () => {
-        bridge.output.restartedProcesses++;
-      },
-    });
+  it('stays updated once what the marker names is running again', async () => {
+    const { value, deps } = retry({ daemon: true }, { desktop: false, daemon: true });
     expect((await bridge.execute(deps)).status).toBe('updated');
     expect(value.pending()).toBe(false);
   });
 
-  it('stays updated when the daemon is already running on the new version', async () => {
-    const { deps } = retry(true);
-    expect((await bridge.execute(deps)).status).toBe('updated');
+  it('never applies to a first update, where no marker existed', async () => {
+    const value = fixture();
+    const result = await bridge.execute({ ...value.deps, operation: 'cli', runtime: idleRuntime });
+    expect(result.status).toBe('updated');
   });
 
-  it('never applies to a first update, where no marker existed', async () => {
+  it('requires the daemon and the desktop when a run closed both', async () => {
+    const both = { desktop: true, daemon: true };
+    for (const [after, status] of [
+      [{ desktop: true, daemon: false }, 'restart_failed'],
+      [{ desktop: false, daemon: true }, 'restart_failed'],
+      [both, 'updated'],
+    ] as Array<[Live, string]>) {
+      expect((await bridge.execute(retry(both, after).deps)).status).toBe(status);
+    }
+  });
+
+  it('holds a user-reopened desktop to the daemon the marker also names', async () => {
+    const { deps } = retry(
+      { daemon: true },
+      { desktop: true, daemon: false },
+      { desktop: true, daemon: false }
+    );
+    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
+  });
+
+  it('holds a desktop retry to the desktop, even with the daemon back', async () => {
+    const { deps } = retry({ desktop: true, daemon: true }, { desktop: false, daemon: true });
+    expect((await bridge.execute(desktopRetry(deps))).messageCode).toBe('restart_not_running');
+  });
+
+  it('counts a desktop marker from before these fields as a closed desktop', async () => {
+    const { deps } = retry({}, { desktop: false, daemon: true });
+    expect((await bridge.execute(desktopRetry(deps))).messageCode).toBe('restart_not_running');
+  });
+
+  it('does not count a CLI marker that names nothing as a retry', async () => {
+    const { value, deps } = retry({}, nothing);
+    const result = await bridge.execute(deps);
+    expect(result.status).toBe('updated');
+    expect(value.pending()).toBe(false);
+  });
+
+  it('does not demand what the marker says nothing closed', async () => {
+    const { deps } = retry({ desktop: false, daemon: false }, nothing);
+    expect((await bridge.execute(desktopRetry(deps))).status).toBe('updated');
+  });
+
+  it('keeps a real upgrade with a stale marker clean', async () => {
     const value = fixture();
     const result = await bridge.execute({
       ...value.deps,
-      serverRunning: async () => false,
+      marked: () => ({ version: '0.9.0', desktop: true, daemon: true }),
       operation: 'cli',
       runtime: idleRuntime,
     });
     expect(result.status).toBe('updated');
   });
 
-  it('holds a CLI retry to a desktop its marker says was closed', async () => {
-    const { deps } = retry(true, false, true);
-    deps.runtime = () => ({
-      ...idleRuntime(),
-      start: async () => {
-        bridge.output.restartedProcesses++;
-      },
-    });
-    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
-  });
-
-  it('does not hold a CLI retry to a desktop when the marker names none', async () => {
-    const { deps } = retry(true, false, undefined);
-    expect((await bridge.execute(deps)).status).toBe('updated');
-  });
-
-  it('holds a desktop retry to the desktop, even after restarting the daemon', async () => {
-    for (const marked of [true, undefined]) {
-      const { deps } = retry(true, false, marked);
-      bridge.output.restartedProcesses = 0;
-      deps.runtime = () => ({
-        ...idleRuntime(),
-        start: async () => {
-          bridge.output.restartedProcesses++;
-        },
-      });
-      const result = await bridge.execute({
-        ...deps,
-        operation: 'desktop',
-        expectedCandidate: '1.0.0',
-        restartOnly: true,
-      });
-      expect(result.messageCode).toBe('restart_not_running');
-    }
-  });
-
-  it('does not demand a desktop the marker says was never open', async () => {
-    const { deps } = retry(true, false, false);
-    const result = await bridge.execute({
-      ...deps,
-      operation: 'desktop',
-      expectedCandidate: '1.0.0',
-      restartOnly: true,
-    });
-    expect(result.status).toBe('updated');
-  });
-
-  it('records in the marker whether a desktop was open, and keeps it across a retry', async () => {
+  it('writes what was closed only after stop(), and keeps it across a retry', async () => {
     const first = fixture();
-    await bridge.execute({ ...first.deps, desktopRunning: async () => true, operation: 'cli' });
-    expect(first.marks).toEqual([true]);
-    const { value, deps } = retry(false, false, true);
+    let atStop: unknown[] = [];
     await bridge.execute({
-      ...deps,
-      operation: 'desktop',
-      expectedCandidate: '1.0.0',
-      restartOnly: true,
+      ...first.deps,
+      running: async () => ({ desktop: true, daemon: true }),
+      operation: 'cli',
+      runtime: () => ({
+        ...idleRuntime(),
+        stop: async () => {
+          atStop = [...first.marks];
+        },
+      }),
     });
-    expect(value.marks).toEqual([true]);
+    expect(atStop).toEqual([undefined]);
+    expect(first.marks).toEqual([undefined, { desktop: true, daemon: true }]);
+
+    const { value, deps } = retry({ desktop: true }, nothing, { desktop: false, daemon: true });
+    await bridge.execute(deps);
+    expect(value.marks).toEqual([
+      { desktop: true, daemon: false },
+      { desktop: true, daemon: true },
+    ]);
+  });
+
+  it('leaves a busy run with a marker that names nothing', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      idleSeconds: 1,
+      running: async () => ({ desktop: true, daemon: true }),
+      operation: 'cli',
+      runtime: () => ({
+        ...idleRuntime(),
+        stop: async () => {
+          throw Object.assign(new Error('private'), { code: 'busy' });
+        },
+      }),
+    });
+    expect(result.messageCode).toBe('codex_busy');
+    expect(value.marks).toEqual([undefined]);
   });
 });
 
 describe('What counts as running', () => {
   const home = os.homedir();
-  const item = (exe: string, args: string[], env: Record<string, string> = {}) => ({
-    exe,
-    args,
-    env,
-  });
-  it('counts only a Codex Desktop main process as the desktop', () => {
-    const desktop = '/usr/lib/chatgpt/ChatGPT';
-    expect(bridge.desktopRunning([item(desktop, [desktop])])).toBe(true);
-    expect(bridge.desktopRunning([item(desktop, [desktop, '--type=renderer'])])).toBe(false);
-    expect(bridge.desktopRunning([item(desktop, [`${desktop} --type=zygote`])])).toBe(false);
-    expect(bridge.desktopRunning([item('/fixture/bin/codex', ['codex', 'app-server'])])).toBe(
-      false
-    );
-  });
-  it('counts only an app server on this Codex home', () => {
-    const codexHome = path.join(home, '.codex');
-    const server = (args: string[], env: Record<string, string>) =>
-      bridge.serverRunning([item('/fixture/bin/codex', args, env)], codexHome);
-    expect(server(['codex', 'app-server', '--listen', 'unix://'], { HOME: home })).toBe(true);
-    expect(server(['codex', 'app-server'], { CODEX_HOME: codexHome })).toBe(true);
-    expect(server(['codex', 'app-server', 'proxy'], { HOME: home })).toBe(false);
-    expect(server(['codex', 'app-server'], { CODEX_HOME: '/t3/shadow/.codex' })).toBe(false);
-    expect(server(['codex', 'exec'], { HOME: home })).toBe(false);
+  const codexHome = path.join(home, '.codex');
+  const desktop = '/usr/lib/chatgpt/ChatGPT';
+  const item = (
+    pid: number,
+    ppid: number,
+    exe: string,
+    args: string[],
+    env: Record<string, string> = {}
+  ) => ({ pid, ppid, exe, args, env });
+  const server = (ppid: number, env: Record<string, string> = { HOME: home }) =>
+    item(11, ppid, '/usr/lib/chatgpt/resources/codex', ['codex', 'app-server'], env);
+
+  it('counts a desktop only with a live app server on this home under it', () => {
+    const main = item(10, 1, desktop, [desktop]);
+    const ready = (...rest: object[]) => bridge.desktopReady([main, ...rest], codexHome);
+    expect(ready(server(10))).toBe(true);
+    // A helper between them still counts as under the main process.
+    expect(ready(item(12, 10, desktop, [desktop, '--type=utility']), server(12))).toBe(true);
+    expect(ready()).toBe(false);
+    expect(ready(server(99))).toBe(false);
+    expect(ready(server(10, { CODEX_HOME: '/t3/shadow/.codex' }))).toBe(false);
     expect(
-      bridge.serverRunning(
-        [item('/usr/bin/node', ['node', 'app-server'], { HOME: home })],
-        codexHome
+      ready(
+        item(11, 10, '/usr/lib/chatgpt/resources/codex', ['codex', 'app-server', 'proxy'], {
+          HOME: home,
+        })
       )
     ).toBe(false);
+  });
+
+  it('does not take a renderer for the main process', () => {
+    const renderer = item(10, 1, desktop, [`${desktop} --type=zygote`]);
+    expect(bridge.desktopReady([renderer, server(10)], codexHome)).toBe(false);
+  });
+
+  it('counts only the shared daemon on this home as the daemon', () => {
+    const daemon = (args: string[], env: Record<string, string>) =>
+      bridge.daemonRunning([item(20, 1, '/fixture/bin/codex', args, env)], codexHome);
+    const listen = ['codex', 'app-server', '--listen', 'unix://'];
+    expect(daemon(listen, { HOME: home })).toBe(true);
+    expect(daemon(listen, { CODEX_HOME: codexHome })).toBe(true);
+    expect(daemon(listen, { CODEX_HOME: '/t3/shadow/.codex' })).toBe(false);
+    expect(daemon(['codex', 'app-server'], { HOME: home })).toBe(false);
+    expect(daemon(['codex', 'app-server', 'proxy', '--listen', 'unix://'], { HOME: home })).toBe(
+      false
+    );
+    expect(daemon(['codex', 'exec'], { HOME: home })).toBe(false);
+    expect(bridge.daemonRunning([server(10)], codexHome)).toBe(false);
   });
 });
 
 describe('The bridge run as a program, with a stand-in runtime and codex', () => {
+  // A stand-in /proc: never reads this machine's processes, and reads as inside the dashboard.
   const RUNTIME = `
 const fs = require('fs');
-const realDir = fs.readdirSync, realRead = fs.readFileSync;
-// Never scans this machine's processes, and reads as running inside the dashboard's service.
-fs.readdirSync = (dir, ...rest) => dir === '/proc' ? [] : realDir(dir, ...rest);
-fs.readFileSync = (file, ...rest) => file === '/proc/self/cgroup'
-  ? '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service\\n'
-  : realRead(file, ...rest);
+const real = { readdirSync: fs.readdirSync, readFileSync: fs.readFileSync, statSync: fs.statSync, readlinkSync: fs.readlinkSync };
+let procs = JSON.parse(process.env.FIXTURE_PROCS || '[]');
+const proc = (file) => {
+  const match = /^\\/proc\\/(\\d+)(?:\\/(\\w+))?$/.exec(String(file));
+  return match ? { item: procs.find((row) => String(row.pid) === match[1]), part: match[2] } : null;
+};
+const gone = () => Object.assign(new Error('gone'), { code: 'ENOENT' });
+fs.readdirSync = (dir, ...rest) => dir === '/proc' ? procs.map((row) => String(row.pid)) : real.readdirSync(dir, ...rest);
+fs.statSync = (file, ...rest) => {
+  const found = proc(file);
+  if (!found) return real.statSync(file, ...rest);
+  if (!found.item) throw gone();
+  return { uid: process.getuid() };
+};
+fs.readlinkSync = (file, ...rest) => {
+  const found = proc(file);
+  if (!found) return real.readlinkSync(file, ...rest);
+  if (!found.item) throw gone();
+  return found.part === 'exe' ? found.item.exe : '/';
+};
+fs.readFileSync = (file, ...rest) => {
+  if (file === '/proc/self/cgroup') return '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service\\n';
+  const found = proc(file);
+  if (!found) return real.readFileSync(file, ...rest);
+  if (!found.item) throw gone();
+  const { pid, ppid, args, env } = found.item;
+  if (found.part === 'stat') return pid + ' (x) S ' + ppid + ' ' + Array(20).fill('1').join(' ');
+  if (found.part === 'cmdline') return args.join('\\0') + '\\0';
+  return Object.entries(env).map(([key, value]) => key + '=' + value).join('\\0');
+};
 exports.lockfile = { lock: async () => async () => {} };
 exports.createCodexActivationRuntime = (home, overrides) => ({
-  stop: async () => {},
+  stop: async () => {
+    if (process.env.FIXTURE_AT_STOP) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_STOP);
+    procs = [];
+  },
   start: async () => {
-    if (process.env.FIXTURE_LAUNCH !== '1') return;
+    if (process.env.FIXTURE_START === 'fail') throw new Error('private');
+    if (process.env.FIXTURE_START !== 'launch') return;
     await overrides.launch({ exe: '/old/codex', args: ['codex', 'app-server'], cwd: '/', env: { KEEP: 'yes' } }, false,
       async (target) => { fs.writeFileSync(process.env.FIXTURE_RECORD, JSON.stringify(target)); });
   },
 });
 `;
-  function run(launch: boolean) {
+  function run(
+    start: 'launch' | 'fail' | 'idle',
+    options: { marker?: object | null; next?: string; procs?: (root: string) => object[] } = {}
+  ) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-bridge-'));
     directories.push(root);
     const script = path.join(root, 'bridge', 'app_update_codex.cjs');
@@ -610,39 +696,98 @@ exports.createCodexActivationRuntime = (home, overrides) => ({
     fs.writeFileSync(path.join(root, 'bridge', 'app_update_codex_runtime.cjs'), RUNTIME);
     const codex = path.join(root, '.local/bin/codex');
     fs.mkdirSync(path.dirname(codex), { recursive: true });
-    fs.writeFileSync(codex, '#!/bin/sh\necho codex-cli 2.0.0\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(root, 'version'), '2.0.0\n');
+    const update = options.next ? `echo ${options.next} > "$HOME/version"` : ':';
+    fs.writeFileSync(
+      codex,
+      `#!/bin/sh\nif [ "$1" = update ]; then ${update}; exit 0; fi\necho "codex-cli $(cat "$HOME/version")"\n`,
+      { mode: 0o755 }
+    );
     fs.mkdirSync(path.join(root, '.codex'));
     const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
     fs.mkdirSync(path.dirname(marker), { recursive: true });
-    fs.writeFileSync(marker, JSON.stringify({ version: '2.0.0' }));
+    if (options.marker !== null)
+      fs.writeFileSync(marker, JSON.stringify(options.marker ?? { version: '2.0.0' }));
     const record = path.join(root, 'launched.json');
+    const atStop = path.join(root, 'marker-at-stop.json');
     const stdout = execFileSync('node', [script, '--operation', 'cli'], {
       env: {
         PATH: process.env.PATH,
         HOME: root,
         FIXTURE_RECORD: record,
-        FIXTURE_LAUNCH: launch ? '1' : '0',
+        FIXTURE_START: start,
+        FIXTURE_MARKER: marker,
+        FIXTURE_AT_STOP: atStop,
+        FIXTURE_PROCS: JSON.stringify(options.procs?.(root) ?? []),
       },
       encoding: 'utf8',
     });
-    return { result: JSON.parse(stdout), record, marker, codex };
+    return { result: JSON.parse(stdout), record, marker, codex, atStop };
   }
+  const running = (root: string) => [
+    {
+      pid: 101,
+      ppid: 1,
+      exe: path.join(root, '.local/bin/codex'),
+      args: ['codex', 'app-server', '--listen', 'unix://'],
+      env: { HOME: root },
+    },
+    { pid: 102, ppid: 1, exe: '/usr/lib/chatgpt/ChatGPT', args: ['ChatGPT'], env: { HOME: root } },
+    {
+      pid: 103,
+      ppid: 102,
+      exe: '/usr/lib/chatgpt/resources/codex',
+      args: ['codex', 'app-server'],
+      env: { HOME: root },
+    },
+  ];
+  const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
   it('starts the updated executable through the runtime launcher', () => {
-    const { result, record, marker, codex } = run(true);
-    expect(result.status).toBe('updated');
+    const { result, record, marker, codex } = run('launch', {
+      marker: { version: '2.0.0', daemon: true },
+      procs: running,
+    });
+    expect(result.status).toBe('restart_failed');
     expect(result.restartedProcesses).toBe(1);
-    const target = JSON.parse(fs.readFileSync(record, 'utf8'));
+    const target = read(record);
     expect(target.exe).toBe(codex);
     expect(target.env).toEqual({ KEEP: 'yes' });
     expect(fs.existsSync(marker)).toBe(false);
   });
 
   it('asks the real process check before calling a retry a restart', () => {
-    const { result, record, marker } = run(false);
+    const { result, record, marker } = run('idle', { marker: { version: '2.0.0', daemon: true } });
     expect(result.status).toBe('restart_failed');
     expect(result.messageCode).toBe('restart_not_running');
     expect(fs.existsSync(record)).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('writes what stop() closed to the real marker, and nothing before stop()', () => {
+    const { result, marker, atStop } = run('fail', {
+      marker: null,
+      next: '3.0.0',
+      procs: running,
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(read(atStop)).toEqual({ version: '3.0.0' });
+    expect(read(marker)).toEqual({ version: '3.0.0', desktop: true, daemon: true });
+  });
+
+  it('records only what was running on the real marker', () => {
+    const { marker } = run('fail', { marker: null, next: '3.0.0' });
+    expect(read(marker)).toEqual({ version: '3.0.0', desktop: false, daemon: false });
+  });
+
+  it('keeps what an earlier run closed on the real marker across a failed retry', () => {
+    const { marker } = run('fail', { marker: { version: '2.0.0', desktop: true } });
+    expect(read(marker)).toEqual({ version: '2.0.0', desktop: true, daemon: false });
+  });
+
+  it('does not turn a marker that names nothing into a red row', () => {
+    const { result, marker } = run('idle', { marker: { version: '2.0.0' } });
+    expect(result.status).toBe('updated');
     expect(fs.existsSync(marker)).toBe(false);
   });
 });

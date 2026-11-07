@@ -152,7 +152,8 @@ export function buildSystemdRunArgs(spec: AppLaunchSpec, unit: string): string[]
   if (names.some((key) => key.startsWith(LOADER_ENV_PREFIX))) {
     argv.push('/bin/sh', '-c', LOADER_TRAMPOLINE, 'sh');
   }
-  argv.push(spec.exe, ...spec.args);
+  // systemd expands $NAME in a command line, and a relaunch replays whatever the app was given.
+  argv.push(...[spec.exe, ...spec.args].map((word) => word.replace(/\$/g, '$$$$')));
   return argv;
 }
 

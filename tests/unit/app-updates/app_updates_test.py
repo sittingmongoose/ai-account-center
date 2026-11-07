@@ -39,6 +39,13 @@ APT_POLICY_NAS1 = ('chatgpt:\n  Installed: 26.1007.21434\n  Candidate: 26.1007.2
                    '        100 /var/lib/dpkg/status\n')
 
 
+# A test that starts a real transient unit runs only when asked, and only with a user manager to
+# reach: the suite is otherwise offline and leaves the machine's units alone.
+REAL_UNITS_REASON = 'starts a real user unit: set AAC_REAL_UNIT_TESTS=1, with a reachable user manager'
+REAL_UNITS_REACHABLE = os.environ.get('AAC_REAL_UNIT_TESTS') == '1' and shutil.which('systemctl') is not None and \
+    subprocess.run(['systemctl', '--user', 'show-environment'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
 class UpdaterTests(unittest.TestCase):
     def test_inventory_has_no_update_side_effect(self):
         installations = {key: None for key in common.APP_LABELS}
@@ -519,7 +526,7 @@ class UpdaterTests(unittest.TestCase):
         state = root / '.ccs/app-updates'
         state.mkdir(parents=True, exist_ok=True)
         if marker is not None:
-            (state / 'codex-cli-pending-restart.json').write_text(json.dumps({'version': marker}), encoding='utf-8')
+            (state / 'codex-cli-pending-restart.json').write_text(json.dumps(marker), encoding='utf-8')
         if binary:
             (root / '.local/bin').mkdir(parents=True, exist_ok=True)
             (root / '.local/bin/codex').write_text('', encoding='utf-8')
@@ -540,17 +547,60 @@ class UpdaterTests(unittest.TestCase):
 
     def test_a_cli_retry_with_no_daemon_goes_to_the_bridge_not_current(self):
         with tempfile.TemporaryDirectory() as directory:
-            value, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker='2.0.0')
+            value, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker={'version': '2.0.0', 'daemon': True})
         self.assertTrue(bridged)
         self.assertEqual(value['status'], 'restart_failed')
         self.assertEqual(value['messageCode'], 'restart_not_running')
 
+    def test_a_cli_retry_reaches_the_bridge_for_a_prerelease(self):
+        # The bridge writes the numeric part; version_text keeps the prerelease.
+        self.assertEqual(common.version_text('codex-cli 0.50.0-alpha.1'), '0.50.0-alpha.1')
+        with tempfile.TemporaryDirectory() as directory:
+            _, bridged = self._click_codex_cli(pathlib.Path(directory), '0.50.0-alpha.1', marker={'version': '0.50.0', 'desktop': True})
+        self.assertTrue(bridged)
+
+    def test_marker_version_match_ignores_only_the_prerelease(self):
+        self.assertTrue(common.marker_names_version('0.50.0', '0.50.0-alpha.1'))
+        self.assertTrue(common.marker_names_version('26.930.51102', '26.930.51102-1'))
+        self.assertFalse(common.marker_names_version('0.50.1', '0.50.0'))
+        self.assertFalse(common.marker_names_version(None, '0.50.0'))
+        self.assertFalse(common.marker_names_version('', ''))
+
     def test_a_cli_click_with_no_daemon_and_no_matching_marker_stays_on_the_ordinary_path(self):
-        cases = ({'marker': None}, {'marker': '1.0.0'}, {'marker': '2.0.0', 'manager': 'npm'}, {'marker': '2.0.0', 'binary': False})
+        closed = {'version': '2.0.0', 'daemon': True}
+        cases = ({'marker': None}, {'marker': {'version': '1.0.0', 'daemon': True}}, {'marker': {'version': '2.0.0'}},
+                 {'marker': {'version': '2.0.0', 'desktop': False, 'daemon': False}}, {'marker': closed, 'manager': 'npm'}, {'marker': closed, 'binary': False})
         for case in cases:
             with tempfile.TemporaryDirectory() as directory:
                 _, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', **case)
             self.assertFalse(bridged, case)
+
+    def test_systemd_argv_escapes_every_dollar_in_the_command(self):
+        command = ['/opt/$HOME/app', '--user-data-dir=/d$HOME/x', '$$', '${X}', 'plain']
+        with mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            argv = common.systemd_user_service_argv('unit', '/tmp', {}, command)
+        words = argv[argv.index('--') + 1:]
+        for word in words:
+            self.assertNotRegex(word, r'(^|[^$])\$([^$]|$)')
+        self.assertEqual([word.replace('$$', '$') for word in words], command)
+
+    def test_tmux_relaunch_gives_systemd_run_its_own_environment(self):
+        install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/$HOME/codex'), '0.160.0')
+        context = mock.Mock(cwd='/tmp', args=[], env={'HOME': '/tmp', 'XDG_RUNTIME_DIR': '/run/user/stale', 'LD_LIBRARY_PATH': '/secret/lib'})
+        alive = [mock.Mock(pid=4242, ppid=1, identity='4242')]
+        which = lambda name: {'tmux': '/usr/bin/tmux', 'systemd-run': '/usr/bin/systemd-run'}.get(name)
+        with mock.patch.dict(os.environ, {'XDG_RUNTIME_DIR': '/run/user/dashboard'}), \
+                mock.patch.object(terminal.shutil, 'which', side_effect=which), \
+                mock.patch.object(terminal, 'command') as run, \
+                mock.patch.object(terminal, 'user_family', side_effect=[[], alive]), \
+                mock.patch.object(terminal, 'scan', return_value=[]):
+            terminal.restart_cli(install, [context])
+        argv, env = run.call_args.args[0], run.call_args.kwargs['env']
+        self.assertEqual(env['XDG_RUNTIME_DIR'], '/run/user/dashboard')
+        self.assertNotIn('LD_LIBRARY_PATH', env)
+        self.assertEqual(env['AAC_LOADER_LD_LIBRARY_PATH'], '/secret/lib')
+        self.assertNotIn('/secret', ' '.join(argv))
+        self.assertTrue(any('/fixture/$$HOME/codex' in word for word in argv), argv)
 
     def test_desktop_relaunch_from_a_session_starts_directly(self):
         run, popen = self._restart_ubuntu_desktop(False)
@@ -573,6 +623,7 @@ class UpdaterTests(unittest.TestCase):
         with mock.patch('builtins.open', side_effect=OSError):
             self.assertFalse(common.in_service_cgroup())
 
+    @unittest.skipUnless(REAL_UNITS_REACHABLE, REAL_UNITS_REASON)
     def test_real_standin_cli_restarts_in_new_pty_without_original_prompt(self):
         source = r'''#include <stdio.h>
 #include <stdlib.h>

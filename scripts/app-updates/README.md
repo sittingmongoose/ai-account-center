@@ -712,14 +712,16 @@ GUI output. A failed `systemd-run` fails the relaunch instead of starting the ap
 and so does an older runtime that offers no launcher. Variable values stay off `systemd-run`'s
 argv, and names systemd refuses are left out rather than failing the relaunch. A captured
 `LD_PRELOAD` or `LD_LIBRARY_PATH` reaches the app through a small `sh` step and never loads into
-`systemd-run`. The Codex daemon
+`systemd-run`. A `$` in a replayed command line is escaped so it arrives literally. The Codex daemon
 logs to `app-server-control/app-server.log`, which moves to `.1` at launch once past 5 MB.
 
 A pending-marker retry restarts only what it finds running, since the launch snapshot of the failed
-run is gone. The marker records whether that run closed a Codex Desktop, and `update_cli` routes a
-marker for the installed version to the bridge even with no daemon running. A retry that leaves the
-captured desktop closed, or stops and starts nothing, is `restart_failed` with `restart_not_running`
-rather than `updated`. The marker is then cleared, so the next click reports the row as it stands.
+run is gone. Once `stop()` has succeeded, the marker records the Codex `desktop` and `daemon` that run
+closed; a marker naming neither is not a retry. `update_cli` routes a marker that names something, for
+the installed version, to the bridge even with no daemon running. A retry that leaves one of them
+closed is `restart_failed` with `restart_not_running`: the desktop must have a live app server on this
+Codex home under it, as `start()` requires. The marker is then cleared, so the next click reports the
+row as it stands.
 
 ## Deployment and setup
 

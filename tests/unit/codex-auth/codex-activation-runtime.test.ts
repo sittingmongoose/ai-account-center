@@ -146,11 +146,12 @@ function harness(initial: CodexProcessSnapshot[]) {
 describe('Codex Desktop update retry on the real runtime', () => {
   const bridge = require('../../../scripts/app-updates/app_update_codex.cjs');
 
-  it('reports restart_not_running, never updated, while the desktop stays closed', async () => {
-    const fake = harness([daemon, desktop, bundled, renderer]);
-    fake.failDesktop();
+  function click(
+    fake: ReturnType<typeof harness>,
+    launch?: CodexActivationRuntimeDependencies['launch']
+  ) {
     let installed = '1.0.0';
-    let marker: { version: string; desktop: boolean } | null = null;
+    let marker: { version: string; desktop?: boolean; daemon?: boolean } | null = null;
     const deps = {
       now: () => 0,
       sleep: async () => {},
@@ -159,41 +160,69 @@ describe('Codex Desktop update retry on the real runtime', () => {
         installed = '2.0.0';
       },
       pending: (expected: string) => marker?.version === expected,
-      markedDesktop: () => marker?.desktop,
-      mark: (wanted: boolean) => {
-        marker = { version: installed, desktop: wanted };
+      marked: () => marker,
+      mark: (closed: { desktop?: boolean; daemon?: boolean } = {}) => {
+        marker = { version: installed, ...closed };
       },
       clear: () => {
         marker = null;
       },
       hasOldProxies: async () => false,
-      desktopRunning: async () => bridge.desktopRunning(fake.current()),
-      serverRunning: async () => bridge.serverRunning(fake.current(), home),
+      running: async () => ({
+        desktop: bridge.desktopReady(fake.current(), home),
+        daemon: bridge.daemonRunning(fake.current(), home),
+      }),
       runtime: () =>
         createCodexActivationRuntime(home, {
           ...fake.deps,
           launch: (target, isDesktop) =>
-            bridge.relaunch(target, isDesktop, fake.deps.launch, { inside: () => true }),
+            bridge.relaunch(target, isDesktop, launch ?? fake.deps.launch, { inside: () => true }),
         }),
       operation: 'desktop',
     };
-    bridge.output.restartedProcesses = 0;
-    bridge.output.status = 'failed';
-    const first = { ...(await bridge.execute({ ...deps, expectedCandidate: '2.0.0' })) };
+    return {
+      deps,
+      marker: () => marker,
+      run: async (extra: object) => {
+        bridge.output.restartedProcesses = 0;
+        return { ...(await bridge.execute({ ...deps, expectedCandidate: '2.0.0', ...extra })) };
+      },
+    };
+  }
+
+  it('reports restart_not_running, never updated, while the desktop stays closed', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    fake.failDesktop();
+    const { run, marker } = click(fake);
+    const first = await run({});
     expect(first.status).toBe('restart_failed');
     expect(first.restartedProcesses).toBe(1);
-    expect(marker).toEqual({ version: '2.0.0', desktop: true });
-    expect(bridge.desktopRunning(fake.current())).toBe(false);
+    expect(marker()).toEqual({ version: '2.0.0', desktop: true, daemon: true });
 
-    bridge.output.restartedProcesses = 0;
-    const second = {
-      ...(await bridge.execute({ ...deps, expectedCandidate: '2.0.0', restartOnly: true })),
-    };
+    const second = await run({ restartOnly: true });
     expect(second.restartedProcesses).toBe(1);
     expect(second.status).toBe('restart_failed');
     expect(second.messageCode).toBe('restart_not_running');
-    expect(bridge.desktopRunning(fake.current())).toBe(false);
-    expect(marker).toBeNull();
+    expect(marker()).toBeNull();
+  });
+
+  it('does not call a desktop whose app server never started a restart', async () => {
+    const fake = harness([daemon, desktop, bundled, renderer]);
+    const { run, marker } = click(fake, async (target, isDesktop) => {
+      await fake.deps.launch(target, isDesktop);
+      if (!isDesktop) return;
+      // The app starts, its app server does not: what start() and the retry both wait for.
+      const servers = fake.current().filter((entry) => entry.exe.endsWith('/resources/codex'));
+      for (const server of servers) await fake.deps.signal(server, 'SIGKILL');
+    });
+    const first = await run({});
+    expect(first.status).toBe('restart_failed');
+    expect(fake.current().some(isDesktop)).toBe(true);
+
+    const second = await run({ restartOnly: true });
+    expect(second.status).toBe('restart_failed');
+    expect(second.messageCode).toBe('restart_not_running');
+    expect(marker()).toBeNull();
   });
 });
 
