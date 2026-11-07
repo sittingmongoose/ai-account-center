@@ -810,7 +810,7 @@ describe('runtime-free Antigravity process census', () => {
     expect(performance.now() - started).toBeLessThan(3000);
   });
 
-  test('a denied script path is unknown, a loop or a prose mention is not, and start-up never touches a mount', () => {
+  test('a denied script path is unknown, prompt or not; a loop is not; start-up never touches a mount', () => {
     const value = procFixture();
     const helperDir = path.join(value.home, '.gemini/antigravity-cli');
     fs.mkdirSync(helperDir, { recursive: true });
@@ -845,6 +845,10 @@ describe('runtime-free Antigravity process census', () => {
       const spacedLocked = path.join(spaced, 'locked');
       fs.mkdirSync(path.join(spacedLocked, 'in'), { recursive: true });
       fs.symlinkSync(locked, path.join(value.root, 'to-locked'));
+      fs.symlinkSync(locked, path.join(value.root, '--locked'));
+      fs.symlinkSync(locked, path.join(value.root, '-xlocked'));
+      fs.symlinkSync(helperDir, path.join(value.root, '--helpers'));
+      fs.symlinkSync(path.join(locked, 'in', 'h.py'), path.join(value.root, '-dashlink'));
       fs.chmodSync(locked, 0o000);
       fs.chmodSync(spacedLocked, 0o000);
       const census = (argv: string[], cwd = value.root) => {
@@ -858,15 +862,15 @@ describe('runtime-free Antigravity process census', () => {
       try {
         const unknown = { complete: false, running: 0 };
         expect(census(['python3', path.join(locked, 'in', 'h.py')])).toEqual(unknown);
-        // A script is never prose, whatever spaces its path, its own name or its working folder has; a later
-        // argument is prose only when the space comes at or after the denied part.
+        // A denied folder leaves the interpreter unplaced wherever the path sits: the script, an option's value, a
+        // later argument, with spaces in its folders, its name or its working folder, or past a link.
         for (const [argv, cwd] of [
           [['python3', path.join(spacedLocked, 'in', 'h.py')]],
           [['python3', path.join(locked, 'in', 'my helper.py')]],
           [['python3', '-u', path.join(locked, 'in', 'my helper.py')]],
           [['python3', 'locked/in/h.py'], spaced],
           [['node', 'app.js', path.join(spacedLocked, 'in', 'h.js')]],
-          // past a link, the rest is no longer the argument as written: not prose
+          // past a link
           [['node', 'app.js', path.join(value.root, 'to-locked', 'a b')]],
           // the script after an option's separate value or a subcommand, with or without an extension
           [['python3', '-W', 'ignore', path.join(locked, 'in', 'my helper.py')]],
@@ -910,6 +914,11 @@ describe('runtime-free Antigravity process census', () => {
           [['node', '--', 'node_modules/tsx/dist/cli.mjs', path.join(locked, 'in', 'my helper')]],
           [['node', '--', 'node_modules/.bin/jiti', path.join(locked, 'in', 'my helper')]],
           [['python3', '--', path.join(locked, 'in', 'my helper')]],
+          // a script whose name starts with a dash, after `--` and past the first four arguments
+          [['python3', '-u', '-B', '--', '--locked/in/my helper.py']],
+          [['python3', '-u', '-B', '--', '-xlocked/in/my helper.py']],
+          [['node', '-r', 'x', '--', '--locked/in/h.js']],
+          [['python3', '--', '-dashlink']],
           // a runner that runs another runner
           [
             [
@@ -947,6 +956,11 @@ describe('runtime-free Antigravity process census', () => {
           [['node', 'app.js', `--require=${path.join(locked, 'in', 'my hook.mjs')}`]],
         ] as [string[], string?][])
           expect([argv, census(argv, cwd)]).toEqual([argv, unknown]);
+        // a dash-led script after `--` that reaches a helper is a helper running
+        expect(census(['python3', '-u', '-B', '--', '--helpers/h.py'])).toEqual({
+          complete: true,
+          running: 1,
+        });
         // A prompt that names a denied folder reads unknown too: no reading of a command line tells it from a script
         // whose name has spaces, so that process holds the update while it runs (fails safe).
         for (const argv of [

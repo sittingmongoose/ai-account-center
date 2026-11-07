@@ -240,10 +240,10 @@ function readCmdline(file: string): { text: string; bytes: number } {
  * `-r/abs/x`), an assignment's value (`ROOT=/x`), each part of a `:` or `,` list (`--path=/a:/b`), and a `file://`
  * URL as its path. A plain flag (`-u`, `--inspect`) names none.
  */
-function candidateScripts(argument: string): string[] {
+function candidateScripts(argument: string, operand = false): string[] {
   let value: string;
   const equals = argument.indexOf('=');
-  if (argument.startsWith('-')) {
+  if (!operand && argument.startsWith('-')) {
     if (equals > 0) value = argument.slice(equals + 1);
     else if (/^-[A-Za-z][./~]/.test(argument)) value = argument.slice(2);
     // a short option's glued value (`php -fh.py`, `ruby -rh.py`): a bare name, looked up only if it is a link there
@@ -261,9 +261,25 @@ function candidateScripts(argument: string): string[] {
     .split(',')
     .flatMap((item) => [...item.split(':'), ...fileUrlPaths(item)])
     .filter(Boolean);
-  return argument.startsWith('-')
-    ? parts
-    : [argument, ...parts.filter((part) => part !== argument)];
+  if (operand || !argument.startsWith('-'))
+    return [argument, ...parts.filter((part) => part !== argument)];
+  return parts;
+}
+
+/** Every argument's candidate scripts; after `--` each argument is an operand as written (`python3 -- --x/h.py`). */
+function commandLineCandidates(argv: readonly string[]): string[] {
+  const end = argv.indexOf('--');
+  return [
+    ...new Set(
+      argv.flatMap((argument, at) =>
+        end !== -1 && at > end
+          ? candidateScripts(argument, true)
+          : at === end
+            ? []
+            : candidateScripts(argument)
+      )
+    ),
+  ];
 }
 
 /**
@@ -334,7 +350,8 @@ function filePath(url: string): string {
  * An interpreter is known by its process name, argv0 or executable (a
  * rewritten title still runs /usr/bin/python3). For one, every non-option
  * argument and every option or assignment value in the part of the command
- * line read is a candidate script (`python3 helper.py`, `-r/x/hook.js`,
+ * line read is a candidate script, and after `--` every argument as written
+ * (`python3 helper.py`, `-r/x/hook.js`, `python3 -- --x/h.py`,
  * `--import=file:///x`, `--path=/a:/b`, `ROOT=/x`), resolved against its
  * working folder; an interpreter whose working folder is inside a root counts
  * whatever its arguments (`python3 -m mod`, a script on stdin), except a shell
@@ -507,7 +524,7 @@ export function censusAntigravityProcesses(options: {
           named(path.basename(all[0] ?? '')) ||
           (exe !== null && named(path.basename(exe)));
         const shell = SHELL.test(comm) || SHELL.test(path.basename(all[0] ?? ''));
-        const operands = interpreter ? [...new Set(all.slice(1).flatMap(candidateScripts))] : [];
+        const operands = interpreter ? commandLineCandidates(all.slice(1)) : [];
         let cwds: string[] | undefined;
         let cwdDenied = false;
         const resolveArgument = (argument: string, bare = false): string[] => {
