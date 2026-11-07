@@ -1,6 +1,8 @@
 /** Regressions from the blind server review of the Status API (docs/status-tab.md). */
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { execFileSync, spawn, spawnSync } from 'child_process';
+import assert from 'node:assert/strict';
+import { createInterface } from 'node:readline';
 import express from 'express';
 import fs from 'fs';
 import http, { type Server } from 'http';
@@ -3388,5 +3390,158 @@ process.exit(0);
       });
       expect(JSON.parse(output)).toEqual({ swapped: true, ok: false, reason: 'not_found' });
     }, 25_000);
+  });
+});
+
+describe('real-process journal and publication fences', () => {
+  const records = (root: string) =>
+    fs
+      .readFileSync(path.join(root, 'store', 'answers.jsonl'), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((x) => JSON.parse(x));
+  const answerRecords = (root: string) => records(root).filter((x) => x.type === 'answer');
+  class Worker {
+    child: ReturnType<typeof spawn>;
+    messages: any[] = [];
+    waits: Array<{ name: string; resolve: (v: any) => void }> = [];
+    constructor(root: string, mode = 'normal') {
+      this.child = spawn(
+        process.execPath,
+        [path.resolve('tests/unit/web-server/status/status-answer-worker.ts'), root, mode],
+        { env: process.env, stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+      this.child.stderr!.on('data', (b) => process.stderr.write(b));
+      createInterface({ input: this.child.stdout! }).on('line', (line) => {
+        const v = JSON.parse(line);
+        const i = this.waits.findIndex((w) => w.name === v.event);
+        if (i < 0) this.messages.push(v);
+        else this.waits.splice(i, 1)[0].resolve(v);
+      });
+    }
+    send(v: any) {
+      this.child.stdin!.write(JSON.stringify(v) + '\n');
+    }
+    next(name: string): Promise<any> {
+      const i = this.messages.findIndex((v) => v.event === name);
+      if (i >= 0) return Promise.resolve(this.messages.splice(i, 1)[0]);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(Error('Timed out: ' + name + ': ' + JSON.stringify(this.messages))),
+          8000
+        );
+        this.waits.push({
+          name,
+          resolve: (v) => {
+            clearTimeout(timer);
+            resolve(v);
+          },
+        });
+      });
+    }
+    async exit() {
+      const done = new Promise((r) => this.child.once('exit', r));
+      this.send({ cmd: 'exit' });
+      await done;
+    }
+    async kill() {
+      if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+      const done = new Promise((resolve) => this.child.once('exit', resolve));
+      this.child.kill('SIGKILL');
+      await done;
+    }
+  }
+  const fixture = (name: string) => {
+    const root = dirs.make('ccs-status-' + name + '-');
+    fs.mkdirSync(path.join(root, 'reports', 'v1'), { recursive: true });
+    const doc = cardDoc('vm.first', 'Q1');
+    const hash = writeCard(path.join(root, 'reports'), doc);
+    const entry = {
+      cardId: doc.id,
+      cardSeq: doc.seq,
+      cardSha256: hash,
+      choice: ['A'],
+      note: '',
+      via: 'deck',
+      entryId: 'a'.repeat(32),
+    };
+    return { root, doc, entry };
+  };
+  it('journal-read-error-never-creates-a-conflicting-answer', async () => {
+    const { root, entry } = fixture('journal-eio');
+    const a = new Worker(root),
+      b = new Worker(root, 'load-eio');
+    try {
+      await Promise.all([a.next('ready'), b.next('ready')]);
+      a.send({ cmd: 'submit', entries: [entry] });
+      const first = await a.next('submitted');
+      await a.exit();
+      b.send({ cmd: 'submit', entries: [{ ...entry, choice: ['B'], entryId: 'b'.repeat(32) }] });
+      const second = await b.next('submitted');
+      const all = answerRecords(root);
+      const rings = fs
+        .readFileSync(path.join(root, 'rings.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((x) => JSON.parse(x));
+
+      assert.equal(first.result[0].outcome, 'recorded');
+      assert.ok(second.faultCount > 0);
+      assert.equal(second.result[0].code, 'answer_not_saved');
+      b.send({ cmd: 'submit', entries: [{ ...entry, choice: ['B'], entryId: 'c'.repeat(32) }] });
+      const recovered = await b.next('submitted');
+      assert.equal(recovered.result[0].code, 'card_changed');
+      assert.equal(answerRecords(root).length, 1);
+      assert.equal(rings.length, 1);
+      assert.equal(
+        all.length,
+        1,
+        'A journal read error must not turn existing history into an empty store'
+      );
+    } finally {
+      await Promise.all([a.kill(), b.kill()]);
+    }
+  });
+  it('an-old-share-lookup-never-publishes-over-a-newer-answer-after-handoff', async () => {
+    const { root, doc, entry } = fixture('share-handoff');
+    const a = new Worker(root, 'share-gap'),
+      b = new Worker(root);
+    try {
+      await Promise.all([a.next('ready'), b.next('ready')]);
+      a.send({ cmd: 'submit', entries: [entry] });
+      await a.next('share-wait');
+      fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
+      const hash2 = writeCard(path.join(root, 'reports'), { ...doc, seq: 2 });
+      b.send({
+        cmd: 'submit',
+        entries: [
+          { ...entry, cardSeq: 2, cardSha256: hash2, choice: ['B'], entryId: 'b'.repeat(32) },
+        ],
+      });
+      const second = await b.next('submitted');
+      const file = path.join(root, 'reports', 'v1', 'answers', doc.id + '.json');
+      const before = JSON.parse(fs.readFileSync(file, 'utf8'));
+      await b.exit();
+      a.send({ cmd: 'release' });
+      const first = await a.next('submitted');
+      const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+      a.send({ cmd: 'history' });
+      await a.next('history');
+      a.send({ cmd: 'retry' });
+      await a.next('retried');
+      const afterRetry = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.equal(second.result[0].outcome, 'recorded');
+      assert.equal(before.cardSeq, 2);
+      assert.equal(first.result[0].outcome, 'recorded');
+      assert.equal(afterRetry.cardSeq, 2);
+      assert.deepEqual(afterRetry.choice, ['B']);
+      assert.equal(
+        after.cardSeq,
+        2,
+        'A slow earlier lookup must not replace the signed newer answer'
+      );
+    } finally {
+      await Promise.all([a.kill(), b.kill()]);
+    }
   });
 });

@@ -421,7 +421,8 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
 - Stored in `<ccsDir>/status/answers.jsonl` (append-only, local disk, this server only. Each line carries its own id;
   each record starts on a line of its own and is written in one piece or refused; a record that fails to be written
   whole is cancelled by a `void` line naming it, never cut, so no writer can remove another's record. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
-  each minute; a second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
+  each minute. Only ENOENT means an empty journal; other journal read errors refuse store-dependent decisions
+  (answers return `answer_not_saved`) and leave history unloaded so a later good read recovers. A second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
   over when its holder on this computer has ended, or on Linux was written in an earlier boot or names a pid since
   reused, or, written by another
   host such as a replaced container, when no one has refreshed it for 10 minutes; nothing is judged by the clock for
@@ -431,7 +432,9 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   note gets its own file `<card>.note-<12 hex>.json` and each objection `<card>.object-<12 hex>.json`, so none
   overwrites another or an answer. Each step's result is kept in the history; a failed share write, summary or ring is
   retried every minute (up to 20 times) and shown, never hidden. A retry never writes an answer or a done once a newer
-  one for that card exists, and checks again just before its rename. Nothing is written when `<reports>/v1` is not
+  one for that card exists. Each share attempt checks its writer ownership generation after asynchronous work
+  and synchronously immediately before rename. Losing or regaining the lock drops that attempt; reacquisition
+  reloads and reconciles history before a later retry decides what still needs delivery. Nothing is written when `<reports>/v1` is not
   there: only folders below it are created, so an unmounted share grows no local folder, and the step reads
   "The reports share is not available."
 - **Send summary:** every POST that records at least one entry is a send with its own server-made `sendId` (a UUID, not

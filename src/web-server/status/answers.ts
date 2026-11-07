@@ -190,20 +190,21 @@ export interface AnswerDelivery {
  * Creates the folders from `v1` down to `dir`, one level at a time and never `v1` or its parents, so
  * a share that goes away mid-write cannot grow a local folder where its mount point was.
  */
-async function mkdirBelow(v1: string, dir: string): Promise<void> {
+async function mkdirBelow(v1: string, dir: string, check: () => void): Promise<void> {
   let current = v1;
   for (const segment of path.relative(v1, dir).split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
     await fs.promises.mkdir(current).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'EEXIST') throw error;
     });
+    check();
   }
 }
 
 /**
- * Temporary dot file in the same folder, flushed, then renamed over the target (async: a share can
- * hang). `proceed` is asked again just before the rename: a share that hung for a while may wake up
- * after the caller has given up or a newer record has been written.
+ * Temporary dot file in the same folder, flushed, then renamed over the target. Preparation is async;
+ * the final rename is synchronous so no await separates it from the ownership-generation check.
+ * A share that wakes after the deadline or a lock handoff cannot publish an obsolete attempt.
  */
 async function writeAtomic(
   v1: string,
@@ -212,7 +213,11 @@ async function writeAtomic(
   proceed: () => boolean,
   beforeRename?: () => Promise<void>
 ): Promise<void> {
-  await mkdirBelow(v1, path.dirname(file));
+  const check = () => {
+    if (!proceed()) throw new ShareWriteDroppedError();
+  };
+  await mkdirBelow(v1, path.dirname(file), check);
+  check();
   const temp = path.join(
     path.dirname(file),
     `.${path.basename(file)}.tmp-${randomBytes(6).toString('hex')}`
@@ -220,14 +225,19 @@ async function writeAtomic(
   try {
     const handle = await fs.promises.open(temp, 'wx', 0o644);
     try {
+      check();
       await handle.writeFile(body);
+      check();
       await handle.sync();
+      check();
     } finally {
       await handle.close();
     }
+    check();
     await beforeRename?.();
-    if (!proceed()) throw new ShareWriteDroppedError();
-    await fs.promises.rename(temp, file);
+    // No asynchronous gap between the ownership-generation check and publication.
+    check();
+    fs.renameSync(temp, file);
   } catch (error) {
     await fs.promises.rm(temp, { force: true }).catch(() => undefined);
     throw error;
@@ -418,8 +428,9 @@ export class StatusAnswers {
     let text = '';
     try {
       text = fs.readFileSync(this.storeFile(), 'utf8');
-    } catch {
-      text = '';
+    } catch (error) {
+      // Only absence is an empty journal. Failed reads leave the cache unloaded for a later retry.
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
     }
     const records: Record<string, unknown>[] = [];
     const voided = new Set<string>();
@@ -567,6 +578,8 @@ export class StatusAnswers {
         }
       }
     }
+    // Even an empty in-memory store must load successfully before replay, recording or ringing.
+    this.list();
   }
 
   private answerKey(): AnswerKey {
@@ -659,12 +672,27 @@ export class StatusAnswers {
     wanted: () => boolean = () => true,
     beforeRename?: (file: string) => Promise<void>
   ): Promise<void> {
+    this.writer();
+    const epoch = this.epoch;
     const v1 = path.join(this.reportsRoot(), 'v1');
     let expired = false;
-    const proceed = () => !expired && wanted();
+    const proceed = () => {
+      // Confirm ownership even after a failed lookup. Reacquisition reloads/reconciles history,
+      // but cannot authorize an attempt begun in an earlier ownership generation.
+      try {
+        this.writer();
+      } catch {
+        return false;
+      }
+      return !expired && this.epoch === epoch && wanted();
+    };
+    const check = () => {
+      if (!proceed()) throw new ShareWriteDroppedError();
+    };
     await withDeadline(
       (async () => {
         const stat = await fs.promises.stat(v1).catch(() => null);
+        check();
         if (!stat?.isDirectory()) throw new ShareUnavailableError();
         const key = this.answerKey();
         // Verifiers try keys/<keyId>.pub first, so a rotation keeps old answers checkable.
@@ -675,7 +703,9 @@ export class StatusAnswers {
           const current = await readRegularFile(file, 64 * 1024)
             .then((bytes) => bytes.toString('utf8'))
             .catch(() => '');
+          check();
           if (current !== key.publicKeyPem) await writeAtomic(v1, file, key.publicKeyPem, proceed);
+          check();
         }
         const target = path.join(v1, 'answers', name);
         await writeAtomic(v1, target, body, proceed, () =>
