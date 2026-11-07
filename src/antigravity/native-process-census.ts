@@ -113,8 +113,10 @@ function spellings(file: string): string[] | null {
  */
 const NETWORK_FS =
   /^(?:nfs4?|cifs|smb3?|smbfs|ceph|glusterfs|lustre|gpfs|afs|9p|virtiofs|davfs|autofs|beegfs|ocfs2|gfs2|orangefs|pvfs2|vboxsf|fuse.*)$/;
-/** The longest path the kernel opens. */
-const PATH_MAX = 4096;
+/** How many path components one process's lookups may walk in all; past it the process's script is unplaced. */
+const STEPS_PER_PROCESS = 65_536;
+/** A lookup that ran out of the process's step budget. */
+const OVER_BUDGET = Symbol('over budget');
 /** How many path lookups one process's arguments may cost the census. */
 const LOOKUPS_PER_PROCESS = 4096;
 
@@ -166,14 +168,20 @@ function cachedLstat(file: string, cache: StatCache): fs.Stats | string {
  * through `/tmp/link -> root` is `root/gone.py`), and so is a dangling link's target. A loop or any other failure is
  * null.
  */
-function resolveLocally(file: string, network: readonly string[], cache: StatCache): string | null {
-  // the kernel opens no longer path, so a longer one names no live script
-  if (file.length > PATH_MAX) return null;
+function resolveLocally(
+  file: string,
+  network: readonly string[],
+  cache: StatCache,
+  budget: { steps: number }
+): string | null | typeof OVER_BUDGET {
   // components still to walk, last first, so each step is O(1)
   const stack = file.split(path.sep).filter(Boolean).reverse();
   let current: string = path.sep;
   let hops = 0;
   for (let part = stack.pop(); part !== undefined; part = stack.pop()) {
+    // every step counts against the process's budget, so no command line can stall the census
+    budget.steps -= 1;
+    if (budget.steps < 0) return OVER_BUDGET;
     if (part === '.') continue;
     if (part === '..') {
       current = path.dirname(current);
@@ -182,15 +190,26 @@ function resolveLocally(file: string, network: readonly string[], cache: StatCac
     const next = path.join(current, part);
     const mount = network.find((root) => within(next, root));
     if (mount !== undefined) {
-      // nothing on the mount is touched: the rest is read as written, and if a `..` leaves the mount, walking
-      // resumes from where it lands
-      const lexical = path.resolve(next, ...[...stack].reverse());
-      if (within(lexical, mount)) return lexical;
-      hops += 1;
-      if (hops > 40) return null;
-      stack.length = 0;
-      stack.push(...lexical.split(path.sep).filter(Boolean).reverse());
-      current = path.sep;
+      // Nothing on the mount is touched: the rest is read as written until a `..` leaves the mount, and walking
+      // resumes from there with the components not yet read (a resume is no link, so it costs no hop).
+      let dir = next;
+      let left = false;
+      for (let rest = stack.pop(); rest !== undefined; rest = stack.pop()) {
+        budget.steps -= 1;
+        if (budget.steps < 0) return OVER_BUDGET;
+        if (rest === '.') continue;
+        if (rest === '..') {
+          if (dir === mount) {
+            current = path.dirname(mount);
+            left = true;
+            break;
+          }
+          dir = path.dirname(dir);
+          continue;
+        }
+        dir = path.join(dir, rest);
+      }
+      if (!left) return dir;
       continue;
     }
     const stat = cachedLstat(next, cache);
@@ -245,6 +264,8 @@ function candidateScripts(argument: string): string[] {
   if (argument.startsWith('-')) {
     if (equals > 0) value = argument.slice(equals + 1);
     else if (/^-[A-Za-z][./~]/.test(argument)) value = argument.slice(2);
+    // a short option's glued value (`php -fh.py`, `ruby -rh.py`): a bare name, looked up only if it is a link there
+    else if (/^-[A-Za-z][^-]/.test(argument)) value = argument.slice(2);
     else return [];
   } else {
     value =
@@ -391,12 +412,14 @@ export function censusAntigravityProcesses(options: {
   // past that an interpreter's script is unplaced.
   let lookups = 0;
   let overLookups = false;
+  const steps = { steps: STEPS_PER_PROCESS };
   const stats: StatCache = new Map();
   const resolved = new Map<string, string | null>();
   // A bare word leads into the working folder, which is judged on its own (an interpreter working in a root counts),
   // unless it is a link there: so a bare word is looked up only when the folder holds a link by that name, read once
   // per folder (never on a network mount), and a long inline script costs no lookups.
-  const linksIn = new Map<string, Set<string>>();
+  // null: the folder can't be listed (search-only, `--x`), though its links can still be followed: look every name up
+  const linksIn = new Map<string, Set<string> | null>();
   const isLinkIn = (folder: string, name: string): boolean => {
     let links = linksIn.get(folder);
     if (links === undefined) {
@@ -406,12 +429,12 @@ export function censusAntigravityProcesses(options: {
           for (const entry of fs.readdirSync(folder, { withFileTypes: true }))
             if (entry.isSymbolicLink()) links.add(entry.name);
         } catch {
-          /* an unreadable folder holds no links we can follow */
+          links = null;
         }
       }
       linksIn.set(folder, links);
     }
-    return links.has(name);
+    return links === null || links.has(name);
   };
   const reachesRoot = (value: string, lookup = true): boolean => {
     if (isAntigravityPath(value)) return true;
@@ -423,7 +446,12 @@ export function censusAntigravityProcesses(options: {
         return false;
       }
       lookups += 1;
-      real = resolveLocally(value, network, stats);
+      const found = resolveLocally(value, network, stats, steps);
+      if (found === OVER_BUDGET) {
+        overLookups = true;
+        return false;
+      }
+      real = found;
       resolved.set(value, real);
     }
     return real !== null && isAntigravityPath(real);
@@ -459,6 +487,7 @@ export function censusAntigravityProcesses(options: {
         }
         lookups = 0;
         overLookups = false;
+        steps.steps = STEPS_PER_PROCESS;
         const read = readField(() => readCmdline(path.join(directory, 'cmdline')));
         const cmdline = read.text;
         const all = cmdline.split('\0').filter(Boolean);

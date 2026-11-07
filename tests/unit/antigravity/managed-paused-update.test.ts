@@ -743,6 +743,72 @@ describe('runtime-free Antigravity process census', () => {
     expect(performance.now() - started).toBeLessThan(2000);
   });
 
+  test('a mount resume keeps later links, long arguments and unlistable folders resolve, and work stays bounded', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(path.join(helperDir, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(helperDir, 'h.py'), '');
+    const nfs = path.join(value.root, 'nfs');
+    fs.mkdirSync(nfs);
+    fs.symlinkSync(path.join(helperDir, 'sub'), path.join(value.root, 'lnk'));
+    const mountInfo = path.join(value.root, 'mountinfo');
+    fs.writeFileSync(mountInfo, `40 25 0:40 / ${nfs} rw - nfs4 nas:/x rw\n`);
+    const census = () =>
+      censusAntigravityProcesses({
+        home: value.home,
+        nativeBinary: value.native,
+        procRoot: value.proc,
+        selfPid: 7,
+        mountInfo,
+      });
+    // F1: /nfs/../lnk/../h.py opens root/h.py (lnk -> root/sub): the .. after the link applies to the link's target
+    value.add(
+      1001,
+      'python3',
+      '/usr/bin/python3',
+      ['python3', `${nfs}/../lnk/../h.py`],
+      value.root
+    );
+    expect(census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '1001'), { recursive: true });
+    // F2: a 4090-byte argument (./ repeats, then a link into a root) still resolves
+    const work = path.join(value.root, 'work');
+    fs.mkdirSync(work);
+    fs.symlinkSync(path.join(helperDir, 'h.py'), path.join(work, 'h.py'));
+    value.add(1002, 'python3', '/usr/bin/python3', ['python3', `${'./'.repeat(2043)}h.py`], work);
+    expect(census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '1002'), { recursive: true });
+    // glued short-option values: php -fh.py, ruby -rh.py
+    for (const argv of [
+      ['php', '-fh.py'],
+      ['ruby', '-rh.py'],
+    ]) {
+      value.add(1003, argv[0], `/usr/bin/${argv[0]}`, argv, work);
+      expect([argv, census()]).toEqual([argv, { complete: true, running: 1 }]);
+      fs.rmSync(path.join(value.proc, '1003'), { recursive: true });
+    }
+    // F3: a working folder that can be searched but not listed (--x) still has its links followed
+    if (process.getuid?.() !== 0) {
+      fs.chmodSync(work, 0o311);
+      try {
+        value.add(1004, 'python3', '/usr/bin/python3', ['python3', 'h.py'], work);
+        expect(census()).toEqual({ complete: true, running: 1 });
+        fs.rmSync(path.join(value.proc, '1004'), { recursive: true });
+      } finally {
+        fs.chmodSync(work, 0o755);
+      }
+    }
+    // F4: a very deep working folder with many relative arguments runs out of the step budget quickly: unplaced
+    let deep = value.root;
+    for (let i = 0; i < 300; i += 1) deep = path.join(deep, 'd');
+    fs.mkdirSync(deep, { recursive: true });
+    const args = Array.from({ length: 400 }, (_, i) => `./${i}/x.py`);
+    value.add(1005, 'python3', '/usr/bin/python3', ['python3', ...args], deep);
+    const started = performance.now();
+    expect(census()).toEqual({ complete: false, running: 0 });
+    expect(performance.now() - started).toBeLessThan(3000);
+  });
+
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {
     // Read-only; any native path works. systemd --user, ssh-agent and sshd-session
     // deny their exe link, which must not make the census incomplete forever.
