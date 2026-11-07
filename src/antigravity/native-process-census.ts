@@ -118,6 +118,114 @@ function networkMounts(file: string): string[] | null {
   });
 }
 
+/** A file an interpreter runs, by its extension: never prose, wherever it sits on a command line. */
+const SCRIPT_FILE =
+  /\.(?:[cm]?[jt]sx?|py[cwz]?|pl|pm|rb|php\d?|phar|lua|r|jl|sh|bash|zsh|ksh|fish|tcl|ps1)$/i;
+
+/**
+ * Interpreter options whose value is the next argument (`python3 -W ignore`, `node --require ./hook.js`), by family:
+ * that value and the script after it are code, never prose. Listing an option that takes no value only makes the
+ * census more careful (the script is then read as a value, and the next argument as the script).
+ */
+const VALUE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
+  python: ['-W', '-X', '-m', '-c', '-Q'],
+  node: [
+    '-r',
+    '--require',
+    '--import',
+    '--loader',
+    '--experimental-loader',
+    '-C',
+    '--conditions',
+    '-e',
+    '--eval',
+    '-p',
+    '--print',
+    '--env-file',
+    '--input-type',
+    '--title',
+    '--inspect-port',
+  ],
+  bun: [
+    '-r',
+    '--preload',
+    '--cwd',
+    '-c',
+    '--config',
+    '--env-file',
+    '--tsconfig-override',
+    '-d',
+    '--define',
+    '-l',
+    '--loader',
+    '--conditions',
+    '-e',
+    '--eval',
+    '-p',
+    '--print',
+  ],
+  deno: [
+    '-c',
+    '--config',
+    '--import-map',
+    '--lock',
+    '--cert',
+    '--location',
+    '--seed',
+    '--env-file',
+  ],
+  perl: ['-I', '-M', '-m', '-e', '-E', '-x'],
+  ruby: ['-I', '-r', '-e', '-C', '-E', '-x'],
+  php: ['-c', '-d', '-f', '-r', '-z', '-t', '-B', '-R', '-F', '-E'],
+  lua: ['-e', '-l'],
+  shell: ['-c', '-o', '-O', '+o', '+O'],
+  Rscript: ['-e'],
+  julia: ['-e', '-E', '-L', '-p', '-t', '-C', '-J'],
+  tclsh: [],
+};
+/** Words before the script for these runners (`bun run x.ts`, `deno task dev`). */
+const SUBCOMMANDS = new Set(['run', 'task', 'test', 'x', 'exec', 'eval', 'serve', 'bench']);
+const SHELL_NAME = /^(?:sh|bash|dash|zsh|ksh|mksh|fish)$/;
+
+function interpreterFamily(name: string): string {
+  if (SHELL_NAME.test(name)) return 'shell';
+  const base = name.replace(/[\d.]+$/, '');
+  return base === 'pypy' ? 'python' : base === 'nodejs' ? 'node' : base === 'luajit' ? 'lua' : base;
+}
+
+/**
+ * The program, and for an interpreter its options' separate values and its script (the first operand that is no
+ * option's value, after any subcommand): code, so never prose. Each is kept with its candidate spellings.
+ */
+function codeArguments(all: readonly string[], families: readonly string[]): Set<string> {
+  const code = new Set<string>([all[0] ?? '']);
+  const add = (argument: string) => {
+    code.add(argument);
+    for (const candidate of candidateScripts(argument)) code.add(candidate);
+  };
+  if (families.length === 0) return code;
+  const valued = new Set(families.flatMap((family) => VALUE_OPTIONS[family] ?? []));
+  const runner = families.some((family) => family === 'bun' || family === 'deno');
+  for (let at = 1; at < all.length; at += 1) {
+    const argument = all[at];
+    if (argument === '--') {
+      if (at + 1 < all.length) add(all[at + 1]);
+      break;
+    }
+    if (argument.startsWith('-') || argument.startsWith('+')) {
+      if (valued.has(argument) && at + 1 < all.length) {
+        at += 1;
+        add(all[at]);
+      }
+      continue;
+    }
+    add(argument);
+    if (runner && SUBCOMMANDS.has(argument)) continue;
+    break;
+  }
+  return code;
+}
+
 /** lstat results shared by one census's lookups, so repeated parent folders cost one call. */
 type StatCache = Map<string, fs.Stats | string>;
 
@@ -142,9 +250,9 @@ function cachedLstat(file: string, cache: StatCache): fs.Stats | string {
  * either (a missing name, one too long, a NUL byte, a chain past 40 links) is kept as written. A denied folder is
  * kept as written only for prose: `prose` is the argument as written when it may be prose (never a script), and the
  * walk is prose when, with no link followed, the part that couldn't be looked up and the rest after it come from that
- * argument and hold a space (`/root/notes are here`). A script path the owner's own processes can't reach may still
- * be a helper's under other credentials, whatever spaces its folders, its own name or its working folder have. Any
- * other failure is UNRESOLVED.
+ * argument and hold a space (`/root/notes are here`), and the argument doesn't end in a script's extension. A script
+ * path the owner's own processes can't reach may still be a helper's under other credentials, whatever spaces its
+ * folders, its own name or its working folder have. Any other failure is UNRESOLVED.
  */
 function resolveLocally(
   file: string,
@@ -201,7 +309,11 @@ function resolveLocally(
       // missing, not a folder, or a name the kernel can't open either (a long prompt's "and/or" reads as a path):
       // the rest is kept as written
       const rest = [part, ...[...stack].reverse()];
-      const inProse = !linked && rest.length <= proseParts && /\s/.test(rest.join(path.sep));
+      const inProse =
+        !linked &&
+        rest.length <= proseParts &&
+        /\s/.test(rest.join(path.sep)) &&
+        !SCRIPT_FILE.test(rest[rest.length - 1]);
       return KERNEL_CANT_OPEN.has(stat) || (inProse && (stat === 'EACCES' || stat === 'EPERM'))
         ? path.join(current, ...rest)
         : UNRESOLVED;
@@ -336,9 +448,11 @@ function filePath(url: string): string {
  * on the share pointing back into a root is a known limit, since following it
  * would block on a hung share and `~/.local/bin` links into the share are
  * common); a denied folder or an unreadable link leaves an interpreter unplaced,
- * except a denied folder in prose: an argument other than the script whose
- * space comes at or after the part that can't be looked up, with no link on the
- * way (`node app.js "/root/notes are here"`); a script is never prose, whatever
+ * except a denied folder in prose: an argument other than the program, an
+ * interpreter's options' separate values and its script (after any `run`-style
+ * subcommand), whose space comes at or after the part that can't be looked up,
+ * with no link on the way, and which doesn't end in a script's extension
+ * (`node app.js "/root/notes are here"`); a script is never prose, whatever
  * spaces its folders, its name or its working folder have; at most 4096 lookups per process, past which an interpreter's script is
  * unplaced.
  *
@@ -515,20 +629,19 @@ export function censusAntigravityProcesses(options: {
         // against the working folder like a relative path.
         // By process name, argv0 or the executable itself (a rewritten title still runs /usr/bin/python3).
         const named = (word: string) => INTERPRETER.test(word);
-        const interpreter =
-          named(comm) ||
-          named(path.basename(all[0] ?? '')) ||
-          (exe !== null && named(path.basename(exe)));
+        const names = [
+          comm,
+          path.basename(all[0] ?? ''),
+          ...(exe === null ? [] : [path.basename(exe)]),
+        ];
+        const interpreter = names.some(named);
         const shell = SHELL.test(comm) || SHELL.test(path.basename(all[0] ?? ''));
         const operands = interpreter ? [...new Set(all.slice(1).flatMap(candidateScripts))] : [];
-        // An interpreter's script (its first argument that is no option) and the program itself are never prose.
-        const script = interpreter
-          ? all.slice(1).find((argument) => !argument.startsWith('-'))
-          : undefined;
-        const code = new Set([
-          all[0] ?? '',
-          ...(script === undefined ? [] : candidateScripts(script)),
-        ]);
+        // The program, and an interpreter's options' values and its script, are never prose.
+        const code = codeArguments(
+          all,
+          interpreter ? [...new Set(names.filter(named).map(interpreterFamily))] : []
+        );
         const proseOf = (argument: string) => (code.has(argument) ? null : argument);
         let cwds: string[] | undefined;
         let cwdDenied = false;

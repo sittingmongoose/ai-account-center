@@ -869,11 +869,29 @@ describe('runtime-free Antigravity process census', () => {
           [['node', 'app.js', path.join(spacedLocked, 'in', 'h.js')]],
           // past a link, the rest is no longer the argument as written: not prose
           [['node', 'app.js', path.join(value.root, 'to-locked', 'a b')]],
+          // the script after an option's separate value or a subcommand, with or without an extension
+          [['python3', '-W', 'ignore', path.join(locked, 'in', 'my helper.py')]],
+          [['python3', '-W', 'ignore', path.join(locked, 'in', 'my helper')]],
+          [['node', '--require', './hook.js', path.join(locked, 'in', 'my helper.js')]],
+          [['node', '--require', './hook.js', path.join(locked, 'in', 'my helper')]],
+          [['node', '--import', 'tsx', path.join(spacedLocked, 'in', 'h b.js')]],
+          [['bun', 'run', path.join(locked, 'in', 'my helper.ts')]],
+          [['bun', 'run', path.join(locked, 'in', 'my helper')]],
+          [['deno', 'run', path.join(locked, 'in', 'my helper')]],
+          [['perl', '-I', 'lib', path.join(locked, 'in', 'my helper')]],
+          [['ruby', '-r', 'json', path.join(locked, 'in', 'my helper')]],
+          [['bash', '-o', 'pipefail', path.join(locked, 'in', 'my helper')]],
+          // a file an interpreter runs, by its extension, is never prose wherever it sits
+          [['node', 'launcher.js', path.join(locked, 'in', 'my helper.js')]],
+          [['node', 'app.js', `--require=${path.join(locked, 'in', 'my hook.mjs')}`]],
         ] as [string[], string?][])
           expect([argv, census(argv, cwd)]).toEqual([argv, unknown]);
         // a prose prompt that starts with the denied folder is no script: idle stays provable
         for (const argv of [
           ['node', 'app.js', `${locked}/in and/or later`],
+          ['python3', '-u', 'app.py', `${locked}/in and/or later`],
+          ['python3', '-W', 'ignore', 'app.py', `${locked}/in and/or later`],
+          ['bun', 'run', 'app.ts', `${locked}/in and/or later`],
           ['node', 'app.js', `${spacedLocked}/in/notes are here`],
           ['node', 'app.js', `--prompt=${locked}/in and/or later`],
         ])
