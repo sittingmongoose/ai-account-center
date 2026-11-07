@@ -438,6 +438,34 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(checks).toBeGreaterThan(1);
   });
 
+  it('keeps the plan when every scan fails after stop() retired the daemon', async () => {
+    const fake = harness([daemon]);
+    let broken = false;
+    const { deps, marker } = click(fake);
+    const result = {
+      ...(await bridge.execute({
+        ...deps,
+        operation: 'cli',
+        expectedCandidate: '2.0.0',
+        runtime: () =>
+          createCodexActivationRuntime(home, {
+            ...fake.deps,
+            scan: async () => {
+              if (broken) throw new CodexActivationRuntimeError('Codex inventory failed.');
+              return fake.deps.scan();
+            },
+            signal: async (target, signal) => {
+              await fake.deps.signal(target, signal);
+              broken = true;
+            },
+          }),
+      })),
+    };
+    expect(result.status).toBe('restart_failed');
+    expect(fake.current().some((entry) => entry.args.includes('--listen'))).toBe(false);
+    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: [] });
+  });
+
   it('does not owe a proxy-only desktop a failed stop() never retired', async () => {
     const fake = harness([desktop, proxyChild]);
     const refuse = async () => {

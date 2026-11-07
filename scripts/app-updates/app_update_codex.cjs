@@ -262,8 +262,9 @@ async function execute(deps) {
           output.version = now;
           if (mode === 'cli') {
             const probe = deps.runtime();
-            // An older runtime can't say, so it is taken to have one.
-            const running = probe.restartState ? (await probe.restartState()).daemon : true;
+            // An older runtime or a failed scan can't say, so there is taken to be one.
+            let running = true;
+            try { if (probe.restartState) running = (await probe.restartState()).daemon; } catch { /* Stays true. */ }
             const owed = { ...prior, daemon: prior.daemon || running };
             if (stillOwed(owed, { daemon: false, desktops: [] })) deps.mark(markerFields(owed));
             else nothingOwed = true;
@@ -285,8 +286,13 @@ async function execute(deps) {
     // A stop() that failed partway owes only what it really retired and did not bring back. A planned
     // process it never reached, such as a proxy-only desktop still running, is not owed.
     if (stopFailed) {
+      const nothing = { daemon: false, desktops: [] };
       try {
         const retired = await runtimeRetired(runtime, deps);
+        const earlier = deps.marked();
+        // The readiness check can take about 40 seconds and a parent timeout can kill this helper
+        // during it, so what is owed goes in the marker first, and comes out if the daemon passes.
+        if (retired.daemon) deps.mark(markerFields(addObligations(prior, retired)));
         // A replacement that fails the readiness check is not back, or the marker would name nothing.
         const live = await verifiedState(runtime, deps, retired);
         const lost = {
@@ -294,8 +300,19 @@ async function execute(deps) {
           desktops: retired.desktops.filter((item) => !live.desktops.includes(item)),
           anyDesktop: retired.anyDesktop === true && live.desktops.length === 0,
         };
-        if (stillOwed(lost, { daemon: false, desktops: [] })) deps.mark(markerFields(addObligations(prior, lost)));
-      } catch { /* The row below still says the restart failed. */ }
+        if (stillOwed(lost, nothing)) deps.mark(markerFields(addObligations(prior, lost)));
+        else if (retired.daemon) {
+          if (!earlier) deps.clear();
+          else deps.mark(stillOwed(prior, nothing) ? markerFields(prior) : undefined);
+        }
+      } catch {
+        // A scan that fails can't say what came back. The plan is in memory, and the worst it costs is
+        // one false restart_not_running, where naming nothing would let the next click call it current.
+        try {
+          const planned = addObligations(prior, runtimePlan(runtime, deps));
+          if (stillOwed(planned, nothing)) deps.mark(markerFields(planned));
+        } catch { /* The row below still says the restart failed. */ }
+      }
     }
     if (busy) {
       // Nothing was stopped. The CLI package may already be new (the pending
