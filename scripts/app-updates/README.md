@@ -725,25 +725,21 @@ Account activation used to put the values on argv, and no longer does.
 A pending-marker retry restarts only what it finds running, since the launch snapshot of the failed
 run is gone. The runtime hands its stop plan to the bridge under the startup lock, before it signals
 anything or waits on a recovery, and the bridge writes it to the marker then. A helper killed anywhere
-inside `stop()` still leaves it. The marker records what that plan closes:
-the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder keyed with a random
-0600 salt beside the marker (`codex-desktop-instance.salt`), never the path. Each desktop is one entry:
-two whose folders read alike, as a cmdline Electron rewrote into one string can make them, are the same
-hash twice, and both must be back. Electron started in Node mode (`ELECTRON_RUN_AS_NODE` set and
-not empty) runs a script, never a window: it is never a desktop and never names one, though an app
-server under it still makes its desktop ready. Switches are read by a port of Chromium's `base::CommandLine`
-parsing, which trims each argument of ASCII whitespace first, checked against a reference over
-generated argv lists; a cmdline Electron rewrote into one
-string is split back into argv first, and there an argument that held spaces can't be told from
-two. The folder is the one Chromium takes: the last `--user-data-dir`
-before a `--` terminator, from `--` or `-` (and `/` on Windows), an empty one meaning the default
-folder, as does a bare switch whatever word follows it. A relative `--user-data-dir` is resolved against that desktop
-process's own working directory, never the updater's, and symlinks are followed before `..`, as
-Chromium does; with that directory unknown, the desktop is
-named by its process alone, so it stays owed. Every run reads `desktops` as that total, so a failed `stop()` that
-lost one of two writes both, and a twin it never closed can't stand in for the one it did. The salt is
-checked before
-anything stops, and an unusable one is replaced. A
+inside `stop()` still leaves it. The marker records what that plan closes: the Codex `daemon`, and
+how many `desktops`, with no path or profile.
+
+A desktop restart that is owed is cleared only when AAC itself relaunched that desktop and saw the
+process it started come up (owner decision, 2026-11-07): the pid its launch spawned, or a process in
+the transient unit it made, read from `/proc/<pid>/cgroup`, with a live app server on this Codex home
+under it. AAC never matches other running desktops by profile folder to clear it. So a desktop an
+earlier run closed stays owed on a retry whatever runs then, since that run's launch snapshot is gone,
+and the retry reports `restart_not_running` once and clears it; the worst case is one extra "reopen
+Codex Desktop" prompt. A desktop a failed `stop()` never closed still runs, by pid and start time, and
+is neither relaunched nor owed. Electron started in Node mode (`ELECTRON_RUN_AS_NODE` set and not
+empty) runs a script, never a window, and is never taken for a desktop. Switches are read by a port of
+Chromium's `base::CommandLine` parsing, only to build the relaunch argv and to tell the main process
+from its children: each argument trimmed of ASCII whitespace, the last switch before a `--` winning;
+a cmdline Electron rewrote into one string is split back into argv first. A
 `stop()` that failed partway records what it really retired and did not bring back to ready. A desktop
 install records the version it was about to install as `target`. An installer that fails is checked
 again afterwards, so the row and the marker name what is really installed. A
@@ -754,9 +750,9 @@ and `update_linux` route it to the bridge even with no daemon running. A CLI upd
 and then fails also names a daemon still running the old binary. In fact a running daemon is written to
 the marker before the CLI updater starts, so a helper killed during the install still leaves it; the
 earlier marker comes back exactly if the update changes nothing, including an updater that fails or
-installs the wrong version while the installed version stays put. A retry that leaves any of them closed is `restart_failed` with
-`restart_not_running`: each desktop must have a live app server on this Codex home under it, as
-`start()` requires, and an owed daemon must pass `start()`'s own bounded readiness check. The
+installs the wrong version while the installed version stays put. A retry that leaves anything owed is `restart_failed` with
+`restart_not_running`: any desktop an earlier run closed, and an owed daemon that does not pass
+`start()`'s own bounded readiness check. The
 daemon found afterwards must be the one that passed, by pid and start time, or it is checked itself. A first
 update is checked the same way once `start()` returns: if something it restarted is gone, the row is
 `restart_failed` and the marker stays, so the next click retries. While a live

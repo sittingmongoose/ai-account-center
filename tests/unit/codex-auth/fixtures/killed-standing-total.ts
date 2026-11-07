@@ -1,14 +1,11 @@
 /**
- * A Codex Desktop update over two desktops whose rewritten cmdlines read as one data folder, and a
- * daemon. stop() retires the first desktop, fails on its twin and recovers; the first desktop's
- * relaunch fails. The bridge's readiness check on the daemon then SIGKILLs this process, as a
+ * A Codex Desktop update over two desktops and a daemon. stop() retires the first desktop, fails on
+ * the second and recovers; the first desktop's relaunch fails. The bridge's readiness check on the daemon then SIGKILLs this process, as a
  * parent timeout would. Run as its own process with a temporary HOME: the real bridge and runtime,
  * synthetic processes only, kept in a file so the next click sees what the killed one left.
  *
  *   bun run killed-standing-total.ts kill    the killed update
  *   bun run killed-standing-total.ts retry   the next update, printing its result as JSON
- *
- * With AAC_FIXTURE_PROFILES=distinct the two desktops have different data folders instead.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -26,7 +23,6 @@ const codexHome = path.join(home, '.codex');
 const state = path.join(home, 'fixture-state');
 const markerFile = path.join(home, '.ccs/app-updates/codex-desktop-pending-restart.json');
 const EXE = '/usr/lib/chatgpt/ChatGPT';
-const distinct = process.env.AAC_FIXTURE_PROFILES === 'distinct';
 
 const main = (pid: number, flag: string): CodexProcessSnapshot => ({
   pid,
@@ -34,9 +30,7 @@ const main = (pid: number, flag: string): CodexProcessSnapshot => ({
   startTime: String(pid),
   state: 'S',
   exe: EXE,
-  args: distinct
-    ? [EXE, `--user-data-dir=/fixture/Profile ${flag}`]
-    : [`${EXE} --user-data-dir=/fixture/Profile ${flag}`],
+  args: [EXE, `--user-data-dir=/fixture/Profile${flag}`],
   cwd: '/fixture',
   env: { HOME: home, DISPLAY: ':8' },
 });
@@ -73,6 +67,8 @@ if (mode === 'kill') {
   save('next-pid.json', 100);
 }
 
+// A fake clock that moves only when something waits, so a bounded wait ends.
+let clock = 0;
 let refused = false;
 let checks = 0;
 const dependencies: CodexActivationRuntimeDependencies = {
@@ -85,8 +81,10 @@ const dependencies: CodexActivationRuntimeDependencies = {
   prepareCli: async () => {},
   launchCli: async () => {},
   removeControlSocket: () => {},
-  sleep: async () => {},
-  now: () => 0,
+  sleep: async (ms) => {
+    clock += ms;
+  },
+  now: () => clock,
   signal: async (target) => {
     // The twin refuses its first signal, so stop() fails partway and recovers.
     if (mode === 'kill' && target.pid === 20 && !refused) {
@@ -107,6 +105,7 @@ const dependencies: CodexActivationRuntimeDependencies = {
     save('next-pid.json', pid + 10);
     const fresh = { ...target, pid, ppid: 1, startTime: `fresh-${pid}` };
     save('processes.json', [...processes(), fresh, ...(desktop ? [server(pid)] : [])]);
+    return { pid };
   },
   verifyDaemon: async () => {
     // The first check is stop()'s recovery; the second is the bridge's own, after a failed stop().
@@ -124,14 +123,15 @@ const read = (): Record<string, unknown> | null => {
     return null;
   }
 };
-const salt = bridge.desktopSalt(path.join(path.dirname(markerFile), 'codex-desktop-instance.salt'));
 
 void (async () => {
   const result = await bridge.execute({
     operation: 'desktop',
     expectedCandidate: '2.0.0',
-    now: () => 0,
-    sleep: async () => {},
+    now: () => clock,
+    sleep: async (ms: number) => {
+      clock += ms;
+    },
     readVersion: async () => load('installed.json'),
     update: async () => save('installed.json', '2.0.0'),
     hasOldProxies: async () => false,
@@ -145,7 +145,6 @@ void (async () => {
         JSON.stringify({ version: bridge.output.version, ...fields }),
         markerFile
       ),
-    sealInstance: (item: string) => bridge.sealInstance(item, salt),
     runtime: (hooks: Partial<CodexActivationRuntimeDependencies> = {}) =>
       createCodexActivationRuntime(codexHome, {
         ...dependencies,

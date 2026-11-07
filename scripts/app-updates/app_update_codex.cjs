@@ -2,7 +2,6 @@
 'use strict';
 
 // Fixed Codex family updates. Runtime snapshots/auth environments remain in memory.
-const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -45,51 +44,39 @@ async function relaunch(target, desktop, outside, deps = {}) {
   if ((deps.inside ?? insideServiceCgroup)()) {
     // An older runtime offers no launcher. Starting here would cage the app in the dashboard.
     if (!outside) throw new Error('Launch failed.');
-    await outside({ ...target, exe: actual, env }, desktop);
+    const started = await outside({ ...target, exe: actual, env }, desktop);
+    output.restartedProcesses++;
+    return started;
   } else {
     const child = (deps.spawn ?? spawn)(actual, target.args.slice(1), { cwd: target.cwd, env, detached: true,
       argv0: desktop ? target.args[0] : (deps.executable ?? executable), stdio: ['ignore', 'ignore', 'ignore'] });
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new Error('Launch failed.'))); });
     child.unref();
+    output.restartedProcesses++;
+    // The pid it spawned, so start() can know the process it started from any other.
+    return { pid: child.pid };
   }
-  output.restartedProcesses++;
 }
 /** The update bridge's process runtime: its launches stay outside the dashboard cgroup. */
 function createUpdateRuntime(createRuntime, deps = {}, hooks = {}) {
   return createRuntime(path.join(home, '.codex'), { scan: async () => privateScan(),
     launch: (target, desktop, outside) => relaunch(target, desktop, outside, deps), ...hooks });
 }
-/** What a marker's fields say an earlier run closed. Bad entries are dropped. */
+/**
+ * What a marker says is owed: the daemon, and how many desktops. A desktop an earlier run closed stays
+ * owed whatever runs now: only AAC's own relaunch of it, seen coming up, clears it, and that run's
+ * launch snapshot is gone. An older marker listed desktops one entry each; one that names a desktop but
+ * no count is one desktop.
+ */
 function markerObligations(marker, legacyDesktop) {
-  const desktops = Array.isArray(marker?.desktops)
-    ? marker.desktops.filter((item) => typeof item === 'string' && /^[0-9a-f]{32}$/.test(item)) : [];
-  return {
-    daemon: marker?.daemon === true,
-    desktops,
-    // A marker that names a desktop but no instance: some desktop must come back.
-    anyDesktop: desktops.length === 0 && (marker?.desktop === true || legacyDesktop),
-  };
+  const listed = Array.isArray(marker?.desktops) ? marker.desktops.filter((item) => typeof item === 'string').length
+    : Number.isInteger(marker?.desktops) && marker.desktops > 0 ? marker.desktops : 0;
+  return { daemon: marker?.daemon === true, desktops: listed || (marker?.desktop === true || legacyDesktop ? 1 : 0) };
 }
-// Desktops are owed one entry each. Two whose data folders read alike are the same hash twice, and both
-// must be back: a hash counts as many times as it is listed.
-const tally = (items) => items.reduce((counts, item) => counts.set(item, (counts.get(item) ?? 0) + 1), new Map());
-/** The desktops in `owed` that `live` doesn't account for, each live entry used once. */
-function missingDesktops(owed, live) {
-  const left = tally(live);
-  return owed.filter((item) => {
-    const count = left.get(item) ?? 0;
-    left.set(item, count - 1);
-    return count <= 0;
-  });
-}
-function addObligations(prior, plan) {
-  // An earlier run and this one can name the same desktop, so each hash is owed as often as either says.
-  const desktops = [...prior.desktops, ...missingDesktops(plan.desktops, prior.desktops)];
-  return { daemon: prior.daemon || plan.daemon, desktops, anyDesktop: prior.anyDesktop || plan.anyDesktop === true };
-}
-const markerFields = (owed) => ({ desktop: owed.anyDesktop || owed.desktops.length > 0, daemon: owed.daemon, desktops: owed.desktops });
-const stillOwed = (owed, live) => (owed.daemon && !live.daemon) || (owed.anyDesktop && live.desktops.length === 0) ||
-  missingDesktops(owed.desktops, live.desktops).length > 0;
+const addObligations = (prior, plan) => ({ daemon: prior.daemon || plan.daemon, desktops: prior.desktops + plan.desktops });
+const markerFields = (owed) => ({ desktop: owed.desktops > 0, daemon: owed.daemon, desktops: owed.desktops });
+/** Still owed: a daemon `live` doesn't show ready, or any desktop, since none is cleared by looking. */
+const stillOwed = (owed, live) => (owed.daemon && !live.daemon) || owed.desktops > 0;
 function run(binary, args, timeout = 10000) {
   return new Promise((resolve, reject) => execFile(binary, args, { timeout, maxBuffer: 65536, encoding: 'utf8',
     env: { ...cleanEnvironment(process.env), CODEX_NON_INTERACTIVE: '1', NO_UPDATE_NOTIFIER: '1', DEBIAN_FRONTEND: 'noninteractive' } },
@@ -120,17 +107,26 @@ function privateScan() {
         for (const item of raw.split('\0')) { const split = item.indexOf('='); if (split > 0) env[item.slice(0, split)] = item.slice(split + 1); }
       }
       values.push({ pid: Number(name), ppid: Number(fields[1]), state: fields[0], startTime: fields[19], args, exe,
-        env, cwd: relevant ? fs.readlinkSync(path.join(directory, 'cwd')) : '' });
+        env, cwd: relevant ? fs.readlinkSync(path.join(directory, 'cwd')) : '', ...(relevant ? { unit: processUnit(directory) } : {}) });
     } catch (error) { if (!['ENOENT', 'ESRCH'].includes(error.code)) throw new Error('Codex inventory failed.'); }
   }
   return values;
 }
+/** The systemd service named by a process's cgroup text, so start() can know a desktop it launched there. */
+function cgroupUnit(text) {
+  const line = String(text).split('\n').find((entry) => entry.startsWith('0::'));
+  const last = line?.slice(3).split('/').pop();
+  return last && last.endsWith('.service') ? last : undefined;
+}
+function processUnit(directory) {
+  try { return cgroupUnit(fs.readFileSync(path.join(directory, 'cgroup'), 'utf8')); } catch { return undefined; }
+}
 function markerFile() { return path.join(home, '.ccs/app-updates', output.appId + '-pending-restart.json'); }
 function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'utf8')); } catch { return null; } }
 /**
- * `closed`: what a run's stop() has closed, which a retry must see running again: the `daemon`, and
- * each desktop in `desktops` by a salted hash of its data folder (`desktop` says whether any). A marker
- * without them, written before stop(), says only that a restart is owed. `version` is what was installed
+ * `closed`: what a run's stop() has closed and not seen back: the `daemon`, and how many `desktops`
+ * (`desktop` says whether any). It holds no path or profile. A marker without them, written before
+ * stop(), says only that a restart is owed. `version` is what was installed
  * when it was written, and `target` the version a desktop install was about to put in place.
  */
 const markerMatches = (marker, installed) => Boolean(installed) && [marker?.version, marker?.target].some((item) => version(item) === installed);
@@ -146,44 +142,16 @@ function markerSnapshot(file = markerFile()) {
   try { return fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 function restoreMarker(text, file = markerFile()) { writeMarker(text, file); }
-/**
- * A random salt for this home, 0600 beside the marker. A desktop's instance hash goes in the marker
- * only keyed with it, so a guessed data folder path can't be tested against a marker. A missing or
- * unsafe salt is replaced, and a marker from the old one then reads as a desktop still owed, once.
- */
-function desktopSalt(directory = path.dirname(markerFile())) {
-  const file = path.join(directory, 'codex-desktop-instance.salt');
-  let stat = null;
-  try { stat = fs.lstatSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (stat) {
-    let value = '';
-    // A file this user can't read is as unusable as a directory or a link there.
-    try { if (stat.isFile() && (stat.mode & 0o077) === 0) value = fs.readFileSync(file, 'utf8').trim(); } catch { /* Replaced below. */ }
-    if (/^[0-9a-f]{64}$/.test(value)) return value;
-    fs.rmSync(file, { force: true, recursive: true });
-  }
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const value = crypto.randomBytes(32).toString('hex');
-  fs.writeFileSync(file, value, { flag: 'wx', mode: 0o600 });
-  return value;
-}
-const sealInstance = (instance, salt = desktopSalt()) => crypto.createHmac('sha256', salt).update(instance).digest('hex').slice(0, 32);
-// The runtime names desktops by an unsalted hash, in memory; the bridge keys it before comparing or
-// writing a marker. An older runtime can't say what it closed, so it fails closed: it is taken to have
-// closed everything, and with nothing shown running a retry reads as restart_not_running.
-const sealed = (deps, instances) => instances.map((item) => (deps.sealInstance ? deps.sealInstance(item) : item));
-const UNKNOWN_PLAN = { daemon: true, desktops: [], anyDesktop: true };
-const sealedPlan = (deps, plan) => ({ ...plan, desktops: sealed(deps, plan.desktops), standing: sealed(deps, plan.standing ?? []) });
-const runtimePlan = (runtime, deps) => sealedPlan(deps, runtime.stopPlan?.() ?? UNKNOWN_PLAN);
-const runtimeRetired = async (runtime, deps) => sealedPlan(deps, (await runtime.retiredPlan?.()) ?? UNKNOWN_PLAN);
-const runtimeState = async (runtime, deps) => {
-  const live = (await runtime.restartState?.()) ?? { daemon: false, desktops: [], proxy: false };
-  return { ...live, desktops: sealed(deps, live.desktops) };
-};
+// An older runtime can't say what it closed, so it is taken to have closed a daemon and a desktop.
+const UNKNOWN_PLAN = { daemon: true, desktops: 1 };
+const counted = (plan) => ({ daemon: plan.daemon === true,
+  desktops: Array.isArray(plan.desktops) ? plan.desktops.length : Number.isInteger(plan.desktops) ? plan.desktops : 1 });
+const runtimePlan = (runtime) => counted(runtime.stopPlan?.() ?? UNKNOWN_PLAN);
+const runtimeRetired = async (runtime) => counted((await runtime.retiredPlan?.()) ?? UNKNOWN_PLAN);
+const runtimeState = async (runtime) => (await runtime.restartState?.()) ?? { daemon: false, proxy: false };
 /**
  * What runs now, with a daemon that owes readiness held to start()'s own bounded check. That check can
- * take about 40 seconds, so everything is judged on a scan taken after it: a desktop that exits while
- * it waits is not back. The daemon in that scan must be the very one the check vouched for, by pid and
+ * take about 40 seconds, so the daemon is judged on a scan taken after it. The daemon in that scan must be the very one the check vouched for, by pid and
  * start time. One that replaced it during the check gets a check of its own, once; a daemon that
  * keeps being replaced is not ready.
  */
@@ -199,6 +167,15 @@ const verifiedState = async (runtime, deps, owed) => {
   }
   return { ...after, daemon: false };
 };
+/**
+ * What is owed once start() has run: what earlier runs closed, which only their own relaunches could
+ * have cleared, and what this run closed and did not relaunch and see come up. An older runtime that
+ * can't say rests on start()'s own checks, which fail when a desktop is not back.
+ */
+async function owedAfterStart(runtime, deps, prior, closed) {
+  const left = typeof runtime.retiredPlan === 'function' ? (await runtimeRetired(runtime, deps)).desktops : 0;
+  return { daemon: closed.daemon, desktops: prior.desktops + left };
+}
 async function execute(deps) {
   const idle = Math.max(1, Math.min(seconds, deps.idleSeconds ?? IDLE_WAIT_SECONDS));
   const deadline = deps.now() + idle * 1000;
@@ -224,7 +201,7 @@ async function execute(deps) {
     const marker = deps.marked();
     const unnamed = marker && marker.desktop === undefined && marker.daemon === undefined;
     prior = markerObligations(marker, Boolean(mode === 'desktop' && unnamed && (restartOnly || markerMatches(marker, output.previousVersion))));
-    retried = stillOwed(prior, { daemon: false, desktops: [] });
+    retried = stillOwed(prior, { daemon: false });
     if (mode === 'cli') {
       output.updateAttempted = true;
       // The updater can replace Codex under a daemon still running the old binary, and the helper can
@@ -238,7 +215,7 @@ async function execute(deps) {
         if (probe.restartState) running = (await probe.restartState()).daemon;
       } catch { /* Stays true. */ }
       const intent = { ...prior, daemon: prior.daemon || running };
-      intended = stillOwed(intent, { daemon: false, desktops: [] });
+      intended = stillOwed(intent, { daemon: false });
       earlierAtInstall = intended ? deps.markerSnapshot() : null;
       if (intended) deps.mark(markerFields(intent));
       updating = true;
@@ -254,16 +231,14 @@ async function execute(deps) {
       // Until stop() hands over its plan, the marker keeps naming the daemon on the new version.
       deps.mark(intended ? markerFields(intent) : undefined);
     }
-    // A salt problem must not cost a close and reopen: it is met here, before anything stops.
-    deps.prepareSeal?.();
     const target = mode === 'desktop' && !restartOnly ? version(expected) : null;
     // The runtime hands over its plan under the startup lock, before it signals anything or waits on a
     // recovery. Writing it there means a helper killed anywhere inside stop() still leaves what is owed.
     // The marker as it was is kept, to put back once a failed stop() is shown to have recovered.
     const beforeStop = (plan) => {
       if (!intentWritten) { earlierAtStop = deps.markerSnapshot(); intentWritten = true; }
-      const owed = addObligations(prior, sealedPlan(deps, plan));
-      if (stillOwed(owed, { daemon: false, desktops: [] })) deps.mark({ ...markerFields(owed), ...(target ? { target } : {}) });
+      const owed = addObligations(prior, counted(plan));
+      if (stillOwed(owed, { daemon: false })) deps.mark({ ...markerFields(owed), ...(target ? { target } : {}) });
     };
     runtime = deps.runtime({ beforeStop });
     while (true) {
@@ -292,23 +267,25 @@ async function execute(deps) {
     await deps.restartProxies?.();
     await runtime.start(); stopped = false;
     if (await deps.hasOldProxies()) throw new Error('An old proxy has no verified restart supervisor.');
-    // What this run and any earlier one closed must be back on a scan taken now: an app can exit after
-    // start() verified it, during the proxy check. start() has just retired any daemon a proxy
-    // respawned too early, so while a live proxy could bring the daemon back it gets a short while. A
-    // first update keeps its marker, so the next click retries. A retry leaving closed what an earlier
-    // run closed says so once and clears it, since nothing here could ever finish it. A first update
-    // on an older runtime that can't be scanned rests on start()'s own checks.
-    const nothing = { daemon: false, desktops: [] };
-    if ((retried || typeof runtime.restartState === 'function') && stillOwed(closed, nothing)) {
+    // A desktop is back only once start() relaunched it and saw the process it started come up, so
+    // what an earlier run closed stays owed: its launch snapshot is gone. The daemon must be ready on a
+    // scan taken now. start() has just retired any daemon a proxy respawned too early, so while a live
+    // proxy could bring the daemon back it gets a short while. A first update keeps what it still owes,
+    // so the next click retries. A retry leaving owed what an earlier run closed says so once and clears
+    // it, since nothing here could ever finish it. A first update on an older runtime that can't be
+    // scanned rests on start()'s own checks.
+    const nothing = { daemon: false };
+    const owed = await owedAfterStart(runtime, deps, prior, closed);
+    if ((retried || typeof runtime.restartState === 'function') && stillOwed(owed, nothing)) {
       const settleBy = deps.now() + (deps.settleMs ?? RESTART_SETTLE_MS);
       let live = await runtimeState(runtime, deps);
-      while (closed.daemon && !live.daemon && live.proxy && deps.now() < settleBy) {
+      while (owed.daemon && !live.daemon && live.proxy && deps.now() < settleBy) {
         await deps.sleep(250);
         live = await runtimeState(runtime, deps);
       }
-      if (stillOwed(closed, await verifiedState(runtime, deps, closed))) {
+      if (stillOwed(owed, await verifiedState(runtime, deps, owed))) {
         if (retried) { deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running'; }
-        else { output.status = 'restart_failed'; output.messageCode = 'restart_failed'; }
+        else { deps.mark(markerFields(owed)); output.status = 'restart_failed'; output.messageCode = 'restart_failed'; }
         return output;
       }
     }
@@ -335,7 +312,7 @@ async function execute(deps) {
               if (probe.restartState) running = (await probe.restartState()).daemon;
             } catch { /* Stays true. */ }
             const owed = { ...prior, daemon: prior.daemon || running };
-            if (stillOwed(owed, { daemon: false, desktops: [] })) deps.mark(markerFields(owed));
+            if (stillOwed(owed, { daemon: false })) deps.mark(markerFields(owed));
             else nothingOwed = true;
           }
         }
@@ -357,35 +334,26 @@ async function execute(deps) {
       // still closed, against whichever version is installed now.
       if (mode === 'desktop' && !installed && closed) {
         try {
-          if (!stillOwed(closed, await verifiedState(runtime, deps, closed))) { deps.clear(); nothingOwed = true; }
-          else if (output.version && output.version !== output.previousVersion) deps.mark(markerFields(closed));
+          const owed = await owedAfterStart(runtime, deps, prior, closed);
+          if (!stillOwed(owed, await verifiedState(runtime, deps, owed))) { deps.clear(); nothingOwed = true; }
+          else if (output.version && output.version !== output.previousVersion) deps.mark(markerFields(owed));
         } catch { /* The marker stays: the next click checks again. */ }
       }
     }
     // A stop() that failed partway owes only what it really retired and did not bring back. A planned
     // process it never reached, such as a proxy-only desktop still running, is not owed.
     if (stopFailed) {
-      const nothing = { daemon: false, desktops: [] };
+      const nothing = { daemon: false };
       try {
+        // Each desktop stop() closed and its recovery did not relaunch and see come up stays owed.
         const retired = await runtimeRetired(runtime, deps);
         const earlier = intentWritten ? earlierAtStop : deps.markerSnapshot();
-        // Every later run reads the marker's desktops as a total that must be running. So a planned
-        // twin stop() never reached counts toward what must be running, and can't stand in for a
-        // retired desktop that reads the same, and a hash that lost any is written with every entry
-        // it needs, never the remainder. A planned desktop that was never reached is still not owed.
-        // No write here may name less than that total before an await a helper can be killed in.
-        const needed = [...retired.desktops, ...retired.standing.filter((item) => retired.desktops.includes(item))];
         // The readiness check can take about 40 seconds and a parent timeout can kill this helper
         // during it, so what is owed goes in the marker first, and comes out if the daemon passes.
-        if (retired.daemon) deps.mark(markerFields(addObligations(prior, { ...retired, desktops: needed })));
+        if (retired.daemon) deps.mark(markerFields(addObligations(prior, retired)));
         // A replacement that fails the readiness check is not back, or the marker would name nothing.
         const live = await verifiedState(runtime, deps, retired);
-        const missing = missingDesktops(needed, live.desktops);
-        const lost = {
-          daemon: retired.daemon && !live.daemon,
-          desktops: needed.filter((item) => missing.includes(item)),
-          anyDesktop: retired.anyDesktop === true && live.desktops.length === 0,
-        };
+        const lost = { daemon: retired.daemon && !live.daemon, desktops: retired.desktops };
         if (stillOwed(lost, nothing)) deps.mark(markerFields(addObligations(prior, lost)));
         else if (retired.daemon || intentWritten) {
           // Exactly as it was: its own version and target, so it applies where it did before.
@@ -473,8 +441,6 @@ function bridgeDeps(createCodexActivationRuntime) {
     marked: readMarker,
     markerSnapshot: () => markerSnapshot(),
     restoreMarker: (text) => restoreMarker(text),
-    sealInstance,
-    prepareSeal: () => desktopSalt(),
     };
 }
 async function main() {
@@ -494,5 +460,5 @@ async function main() {
     return await execute(bridgeDeps(createCodexActivationRuntime));
   } finally { await release(); }
 }
-module.exports = { bridgeDeps, createUpdateRuntime, desktopSalt, execute, markerSnapshot, restoreMarker, insideServiceCgroup, loadRuntime, modules, output, relaunch, sealInstance, version };
+module.exports = { bridgeDeps, cgroupUnit, createUpdateRuntime, execute, markerSnapshot, restoreMarker, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));

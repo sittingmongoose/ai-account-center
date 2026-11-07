@@ -43,6 +43,8 @@ export interface AppLaunchResult {
   route: AppLaunchRoute;
   /** Transient unit name (systemd-service route only). */
   unit?: string;
+  /** The spawned process (direct route only). */
+  pid?: number;
 }
 
 export interface AppLauncherDeps {
@@ -210,7 +212,7 @@ export async function launchApp(
       child.once('error', reject);
       child.once('spawn', () => resolve());
     });
-    return { route: 'direct' };
+    return { route: 'direct', ...(child.pid === undefined ? {} : { pid: child.pid }) };
   }
 
   const systemdRun =

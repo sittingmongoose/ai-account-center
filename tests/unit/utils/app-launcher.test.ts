@@ -265,6 +265,20 @@ describe('app-launcher', () => {
     ).rejects.toThrow(/systemd-run exited with code 1/);
   });
 
+  it('reports the pid of a direct spawn, so its caller can know the process it started', async () => {
+    const result = await launchApp(
+      { app: 'codex-desktop', exe: '/Applications/ChatGPT.app/x', args: [], cwd: '/tmp' },
+      {
+        platform: 'darwin',
+        spawn: (() =>
+          Object.assign(fakeChild({}), {
+            pid: 4242,
+          })) as unknown as typeof import('child_process').spawn,
+      }
+    );
+    expect(result).toEqual({ route: 'direct', pid: 4242 });
+  });
+
   it('spawns detached directly on non-linux platforms', async () => {
     const calls: Array<{ file: string; args: string[]; options: Record<string, unknown> }> = [];
     const result = await launchApp(

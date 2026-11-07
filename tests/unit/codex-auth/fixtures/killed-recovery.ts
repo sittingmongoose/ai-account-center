@@ -91,7 +91,6 @@ void bridge.execute({
   restoreMarker: (text: string) => write(text),
   clear: () => fs.rmSync(markerFile, { force: true }),
   hasOldProxies: async () => false,
-  sealInstance: (item: string) => item,
   runtime: (hooks: Partial<CodexActivationRuntimeDependencies> = {}) =>
     createCodexActivationRuntime(codexHome, {
       ...processes,
