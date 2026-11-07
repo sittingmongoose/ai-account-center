@@ -107,6 +107,32 @@ function spellings(file: string): string[] | null {
   }
 }
 
+const NETWORK_FS =
+  /^(?:nfs4?|cifs|smb3?|smbfs|ceph|glusterfs|9p|davfs|fuse\.(?:sshfs|rclone|s3fs|gcsfuse))$/;
+
+/** Mount points of network filesystems, from this process's mount table; none when it can't be read. */
+function networkMounts(): string[] {
+  let text: string;
+  try {
+    text = fs.readFileSync('/proc/self/mountinfo', 'utf8');
+  } catch {
+    return [];
+  }
+  return text.split('\n').flatMap((line) => {
+    const [left, right] = line.split(' - ');
+    if (!right || !NETWORK_FS.test(right.split(' ')[0] ?? '')) return [];
+    const mount = left.split(' ')[4];
+    // the table writes a space and other bytes as octal escapes (\040)
+    return mount
+      ? [
+          mount.replace(/\\([0-7]{3})/g, (_, octal: string) =>
+            String.fromCharCode(parseInt(octal, 8))
+          ),
+        ]
+      : [];
+  });
+}
+
 function readCmdline(file: string): { text: string; bytes: number } {
   const fd = fs.openSync(file, fs.constants.O_RDONLY);
   try {
@@ -142,10 +168,14 @@ function candidateScripts(argument: string): string[] {
         ? argument.slice(equals + 1)
         : argument;
   }
-  // A file URL is one path, decoded (`file:///x/%2Egemini/h.mjs` is `/x/.gemini/h.mjs`); anything else may be a list.
+  // Each part of a `,` or `:` list, and every `file:` URL anywhere in it as its decoded path, any case of the scheme
+  // (`FILE:///x/%2Egemini/h.mjs` is `/x/.gemini/h.mjs`; `/a:file:///b` gives `/a` and `/b`).
   const parts = value
     .split(',')
-    .flatMap((item) => (item.startsWith('file:') ? [filePath(item)] : item.split(':')))
+    .flatMap((item) => [
+      ...item.split(':'),
+      ...[...item.matchAll(/file:[^,]*/gi)].map((match) => filePath(match[0])),
+    ])
     .filter(Boolean);
   return argument.startsWith('-')
     ? parts
@@ -157,7 +187,7 @@ function filePath(url: string): string {
   try {
     return fileURLToPath(url);
   } catch {
-    return url.replace(/^file:(?:\/\/)?/, '');
+    return url.replace(/^file:(?:\/\/)?/i, '');
   }
 }
 
@@ -186,7 +216,8 @@ function filePath(url: string): string {
  * from a root by a process that then changes folder (`chdir("/")`) resolves
  * against its new folder (it still matches by name or executable when those
  * are Antigravity's). A path that reaches a root through a symlink elsewhere
- * matches by where it really leads.
+ * matches by where it really leads (a missing script by the folder that
+ * exists), except on a network mount, where no path is looked up.
  *
  * An interpreter is known by its process name, argv0 or executable (a
  * rewritten title still runs /usr/bin/python3). For one, every non-option
@@ -247,13 +278,14 @@ export function censusAntigravityProcesses(options: {
     });
   // A path as written, or where it really leads: a script reached through a symlink elsewhere (`/tmp/link/h.py` with
   // /tmp/link -> a root) is a root's script. A path that doesn't exist or can't be resolved counts as written only.
+  // Lookups never touch a network mount (a hung NFS share would block an lstat with no timeout); a deleted script
+  // reached through a symlinked folder still resolves, by the folder that exists.
+  const network = networkMounts();
   const reachesRoot = (value: string): boolean => {
     if (isAntigravityPath(value)) return true;
-    try {
-      return isAntigravityPath(fs.realpathSync(value));
-    } catch {
-      return false;
-    }
+    const resolved = path.resolve(value);
+    if (network.some((mount) => within(resolved, mount))) return false;
+    return (spellings(resolved) ?? []).some(isAntigravityPath);
   };
   const deniedExe = new Set(['EACCES', 'EPERM']);
   // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A

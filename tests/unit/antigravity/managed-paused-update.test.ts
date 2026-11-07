@@ -558,6 +558,10 @@ describe('runtime-free Antigravity process census', () => {
     const encoded = `file://${helperDir.replace('.gemini', '%2Egemini')}/h.mjs`;
     for (const argv of [
       ['node', `--import=${encoded}`, 'app.js'],
+      ['node', `--import=${encoded.replace('file:', 'FILE:')}`, 'app.js'],
+      ['node', `--path=/a:${encoded}`, 'app.js'],
+      ['node', `--path=file:///a:${path.join(helperDir, 'h.mjs')}`, 'app.js'],
+      ['python3', path.join(link, 'gone-now.py')],
       ['python3', path.join(link, 'h.py')],
       ['node', `-r${path.join(helperDir, 'hook.js')}`, 'app.js'],
       ['node', `--import=file://${path.join(helperDir, 'h.mjs')}`, 'app.js'],
