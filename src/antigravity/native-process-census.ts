@@ -118,6 +118,10 @@ function networkMounts(file: string): string[] | null {
   });
 }
 
+/** A file an interpreter runs, by its extension. */
+const SCRIPT_FILE =
+  /\.(?:[cm]?[jt]sx?|py[cwz]?|pl|pm|rb|php\d?|phar|lua|r|jl|sh|bash|zsh|ksh|fish|tcl|ps1)$/i;
+
 /** lstat results shared by one census's lookups, so repeated parent folders cost one call. */
 type StatCache = Map<string, fs.Stats | string>;
 
@@ -149,7 +153,8 @@ function resolveLocally(
   file: string,
   network: readonly string[],
   cache: StatCache,
-  budget: { steps: number }
+  budget: { steps: number },
+  report?: { vanished: boolean }
 ): string | typeof UNRESOLVED | typeof OVER_BUDGET {
   // a NUL can't be in a path the kernel opens: nothing runs from it
   if (file.includes('\0')) return file;
@@ -192,12 +197,18 @@ function resolveLocally(
       continue;
     }
     const stat = cachedLstat(next, cache);
-    if (typeof stat === 'string')
+    if (typeof stat === 'string') {
       // missing, not a folder, or a name the kernel can't open either (a long prompt's "and/or" reads as a path):
       // the rest is kept as written
+      // A missing path that names a script file (its last part has a script's extension) is a script that ran and was
+      // removed since, or whose link was (`python3 h.py`, then `h.py` deleted): reported, so an interpreter's script
+      // can't be placed. A prompt that only mentions a missing path (`see /x and/or y`) names no script file.
+      if (report && (stat === 'ENOENT' || stat === 'ENOTDIR') && SCRIPT_FILE.test(stack[0] ?? part))
+        report.vanished = true;
       return KERNEL_CANT_OPEN.has(stat)
         ? path.join(current, part, ...[...stack].reverse())
         : UNRESOLVED;
+    }
     if (!stat.isSymbolicLink()) {
       current = next;
       continue;
@@ -245,25 +256,68 @@ function candidateScripts(argument: string, operand = false): string[] {
   const equals = argument.indexOf('=');
   if (!operand && argument.startsWith('-')) {
     if (equals > 0) value = argument.slice(equals + 1);
-    else if (/^-[A-Za-z][./~]/.test(argument)) value = argument.slice(2);
-    // a short option's glued value (`php -fh.py`, `ruby -rh.py`): a bare name, looked up only if it is a link there
-    else if (/^-[A-Za-z][^-]/.test(argument)) value = argument.slice(2);
-    else return [];
+    else if (/^-[A-Za-z][^-]/.test(argument)) {
+      // a short option's glued value (`php -fh.py`, `ruby -rh.py`, a bare name looked up only if it is a link there),
+      // possibly after a cluster of flags (`perl -wI/x/lib`): each place a value could start, up to the first
+      // character that is no letter
+      const starts: string[] = [];
+      for (let at = 2; at < argument.length && at <= 18; at += 1) {
+        starts.push(argument.slice(at));
+        if (!/[A-Za-z]/.test(argument[at])) break;
+      }
+      return [...new Set(starts.flatMap((start) => [start, ...listParts(start)]))];
+    } else return [];
   } else {
     value =
       equals > 0 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(argument.slice(0, equals))
         ? argument.slice(equals + 1)
         : argument;
   }
-  // Each part of a `,` or `:` list, and every `file:` URL anywhere in it as its decoded path, any case of the scheme
-  // (`FILE:///x/%2Egemini/h.mjs` is `/x/.gemini/h.mjs`; `/a:file:///b` gives `/a` and `/b`).
-  const parts = value
+  // the whole value too, when splitting it could lose a path that holds a comma or a colon (never a URL's text)
+  const whole = /[,:]/.test(value) && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) ? [value] : [];
+  const parts = [...whole, ...listParts(value)];
+  if (operand || !argument.startsWith('-')) parts.unshift(argument);
+  return [...new Set(parts.filter(Boolean))];
+}
+
+/**
+ * Each part of a `,` or `:` list, and every `file:` URL anywhere in it as its decoded path, any case of the scheme
+ * (`FILE:///x/%2Egemini/h.mjs` is `/x/.gemini/h.mjs`; `/a:file:///b` gives `/a` and `/b`). The whole value is kept
+ * beside them by the caller, since a path may itself hold a comma or a colon.
+ */
+function listParts(value: string): string[] {
+  return value
     .split(',')
     .flatMap((item) => [...item.split(':'), ...fileUrlPaths(item)])
     .filter(Boolean);
+}
+
+/**
+ * A script as written in an argument, not a fragment of one: the argument itself, an assignment's value, or an
+ * option's whole value (`--require=./h.js`, `-r./h.js`). Only such a script, when missing, reads as vanished.
+ */
+function writtenScripts(argument: string, operand = false): string[] {
+  const equals = argument.indexOf('=');
   if (operand || !argument.startsWith('-'))
-    return [argument, ...parts.filter((part) => part !== argument)];
-  return parts;
+    return equals > 0 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(argument.slice(0, equals))
+      ? [argument, argument.slice(equals + 1)]
+      : [argument];
+  if (equals > 0) return [argument.slice(equals + 1)];
+  return /^-[A-Za-z][^-]/.test(argument) ? [argument.slice(2)] : [];
+}
+
+/** The scripts written whole in a command line (see writtenScripts), with `--` handled as for candidates. */
+function commandLineWritten(argv: readonly string[]): Set<string> {
+  const end = argv.indexOf('--');
+  return new Set(
+    argv.flatMap((argument, at) =>
+      end !== -1 && at > end
+        ? writtenScripts(argument, true)
+        : at === end
+          ? []
+          : writtenScripts(argument)
+    )
+  );
 }
 
 /** Every argument's candidate scripts; after `--` each argument is an operand as written (`python3 -- --x/h.py`). */
@@ -344,8 +398,14 @@ function filePath(url: string): string {
  * would block on a hung share and `~/.local/bin` links into the share are
  * common); a denied folder or an unreadable link leaves an interpreter
  * unplaced, even when only a prompt names the folder (that process holds the
- * update while it runs, which fails safe); at most 4096 lookups per process, past which an interpreter's script is
- * unplaced.
+ * update while it runs, which fails safe); so does a script written in an
+ * argument that names a script file and is missing (it ran and was removed, or
+ * its link was), an interpreter whose working folder is hidden even with no
+ * script named (it may read one from stdin), and a process whose name or
+ * executable keeps changing while it is read (it is read again twice first, so
+ * an exec mid-read is judged by its new image); at most 4096 lookups per
+ * process, past which an interpreter's script is unplaced. A folder is listed
+ * for links only where it really is, never on a mount.
  *
  * An interpreter is known by its process name, argv0 or executable (a
  * rewritten title still runs /usr/bin/python3). For one, every non-option
@@ -429,7 +489,7 @@ export function censusAntigravityProcesses(options: {
   let overLookups = false;
   let unresolvedSeen = false;
   const steps = { steps: STEPS_PER_PROCESS };
-  const resolved = new Map<string, string | typeof UNRESOLVED>();
+  const resolved = new Map<string, { real: string | typeof UNRESOLVED; vanished: boolean }>();
   // A bare word leads into the working folder, which is judged on its own (an interpreter working in a root counts),
   // unless it is a link there: so a bare word is looked up only when the folder holds a link by that name, read once
   // per folder (never on a network mount), and a long inline script costs no lookups.
@@ -439,42 +499,48 @@ export function censusAntigravityProcesses(options: {
     let links = linksIn.get(folder);
     if (links === undefined) {
       links = new Set();
-      if (!network.some((root) => within(folder, root))) {
+      // listed only where it really is, and never on a mount (a removed cwd's "(deleted)" spelling may be a link)
+      const real = resolveLocally(folder, network, stats, steps);
+      if (typeof real !== 'string' || network.some((root) => within(real, root))) links = null;
+      else
         try {
-          for (const entry of fs.readdirSync(folder, { withFileTypes: true }))
+          for (const entry of fs.readdirSync(real, { withFileTypes: true }))
             if (entry.isSymbolicLink()) links.add(entry.name);
         } catch {
           links = null;
         }
-      }
       linksIn.set(folder, links);
     }
     return links === null || links.has(name);
   };
-  const reachesRoot = (value: string, lookup = true): boolean => {
+  /** `script`: an interpreter's candidate script, which a vanished script file leaves unplaced. */
+  const reachesRoot = (value: string, lookup = true, script = false): boolean => {
     if (isAntigravityPath(value)) return true;
     if (!lookup) return false;
-    let real = resolved.get(value);
-    if (real === undefined) {
+    let found = resolved.get(value);
+    if (found === undefined) {
       if (lookups >= LOOKUPS_PER_PROCESS) {
         overLookups = true;
         return false;
       }
       lookups += 1;
-      const found = resolveLocally(value, network, stats, steps);
-      if (found === OVER_BUDGET) {
+      const report = { vanished: false };
+      const real = resolveLocally(value, network, stats, steps, report);
+      if (real === OVER_BUDGET) {
         overLookups = true;
         return false;
       }
-      real = found;
-      resolved.set(value, real);
+      found = { real, vanished: report.vanished };
+      resolved.set(value, found);
     }
     // where it leads is unknown (a denied folder, a link loop): an interpreter's script can't be placed
-    if (real === UNRESOLVED) {
+    if (found.real === UNRESOLVED) {
       unresolvedSeen = true;
       return false;
     }
-    return isAntigravityPath(real);
+    if (isAntigravityPath(found.real)) return true;
+    if (script && found.vanished) unresolvedSeen = true;
+    return false;
   };
   const deniedExe = new Set(['EACCES', 'EPERM']);
   // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A
@@ -488,7 +554,11 @@ export function censusAntigravityProcesses(options: {
   let unplaced = false;
   let running = 0;
   try {
-    for (const name of entries) {
+    // a process that execs while it is read is read again, twice at most, before it is called unplaced
+    const queue = [...entries];
+    const reread = new Map<string, number>();
+    for (let index = 0; index < queue.length; index += 1) {
+      const name = queue[index];
       if (!/^\d{1,10}$/.test(name)) continue;
       const pid = Number(name);
       if (pid <= 1 || pid === self) continue;
@@ -525,6 +595,7 @@ export function censusAntigravityProcesses(options: {
           (exe !== null && named(path.basename(exe)));
         const shell = SHELL.test(comm) || SHELL.test(path.basename(all[0] ?? ''));
         const operands = interpreter ? commandLineCandidates(all.slice(1)) : [];
+        const written = interpreter ? commandLineWritten(all.slice(1)) : new Set<string>();
         let cwds: string[] | undefined;
         let cwdDenied = false;
         const resolveArgument = (argument: string, bare = false): string[] => {
@@ -558,7 +629,9 @@ export function censusAntigravityProcesses(options: {
                 file,
                 path.isAbsolute(argument) ||
                   argument.includes(path.sep) ||
-                  isLinkIn(path.dirname(file), path.basename(file))
+                  SCRIPT_FILE.test(argument) ||
+                  isLinkIn(path.dirname(file), path.basename(file)),
+                written.has(argument)
               )
             )
           ) ||
@@ -572,8 +645,21 @@ export function censusAntigravityProcesses(options: {
         // Idle stays unproven for an interpreter whose script couldn't be placed: its working folder is hidden while it
         // has a candidate script, or the command line was cut at the read limit with no candidate found.
         const truncated = read.bytes >= CMDLINE_BYTES || overLookups;
-        if (interpreter && ((cwdDenied && operands.length > 0) || truncated || unresolvedSeen))
-          unplaced = true;
+        // a process that changed its name or executable while it was read (an exec) is judged by mixed readings
+        const commAfter = readField(() =>
+          fs.readFileSync(path.join(directory, 'comm'), 'utf8').trim()
+        );
+        const exeAfter = readTolerant(
+          () => fs.readlinkSync(path.join(directory, 'exe')),
+          deniedExe
+        );
+        if (commAfter !== comm || exeAfter !== exe) {
+          const times = reread.get(name) ?? 0;
+          if (times < 2) {
+            reread.set(name, times + 1);
+            queue.push(name);
+          } else unplaced = true;
+        } else if (interpreter && (cwdDenied || truncated || unresolvedSeen)) unplaced = true;
       } catch (error) {
         if (error instanceof ProcessGone) continue;
         throw error;

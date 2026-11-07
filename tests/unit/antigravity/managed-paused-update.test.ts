@@ -492,6 +492,7 @@ describe('runtime-free Antigravity process census', () => {
     expect(value.census()).toEqual({ complete: true, running: 1 });
     fs.rmSync(path.join(value.proc, '961'), { recursive: true });
     // the same bare script outside the roots is not a helper
+    fs.writeFileSync(path.join(value.root, 'server.js'), '');
     value.add(962, 'node', '/usr/bin/node', ['node', 'server.js'], value.root);
     expect(value.census()).toEqual({ complete: true, running: 0 });
     // a non-interpreter's bare words stay unresolved
@@ -505,6 +506,7 @@ describe('runtime-free Antigravity process census', () => {
       ...Array.from({ length: 40 }, (_, i) => `-W${i}`),
       script,
     ];
+    fs.writeFileSync(path.join(value.root, 'helper.py'), '');
     value.add(964, 'python3', '/usr/bin/python3', many('helper.py'), value.root);
     expect(value.census()).toEqual({ complete: true, running: 0 });
     fs.rmSync(path.join(value.proc, '964'), { recursive: true });
@@ -827,6 +829,7 @@ describe('runtime-free Antigravity process census', () => {
     expect(value.census()).toEqual({ complete: true, running: 0 });
     fs.rmSync(path.join(value.proc, '1010'), { recursive: true });
     // a NUL byte (file:///tmp/a%00b.py) names no openable path
+    fs.writeFileSync(path.join(value.root, 'app.js'), '');
     value.add(
       1012,
       'node',
@@ -998,9 +1001,134 @@ describe('runtime-free Antigravity process census', () => {
     }
   });
 
+  test('a hidden cwd with a stdin script, an exec mid-read, glued and listed paths, a vanished script', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(helperDir, { recursive: true });
+    const realReadlink = fs.readlinkSync;
+    const realRead = fs.readFileSync;
+    // a non-dumpable interpreter reading its script from stdin, its cwd hidden: it can't be placed
+    value.add(1050, 'python3', '/usr/bin/python3', ['python3'], helperDir);
+    const hidden = spyOn(fs, 'readlinkSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(file) === path.join(value.proc, '1050', 'cwd'))
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return (realReadlink as (...a: unknown[]) => string)(file, ...rest);
+    }) as typeof fs.readlinkSync);
+    try {
+      expect(value.census()).toEqual({ complete: false, running: 0 });
+    } finally {
+      hidden.mockRestore();
+      fs.rmSync(path.join(value.proc, '1050'), { recursive: true });
+    }
+    // a launcher that execs python between the census's reads is read again, and its new image is judged (here its
+    // script is a helper's); one whose name keeps changing can't be judged and is unplaced
+    value.add(
+      1051,
+      'launcher',
+      '/usr/bin/launcher',
+      ['worker', '-I', '-u', '-B', path.join(helperDir, 'h.py')],
+      value.root
+    );
+    for (const [changes, expected] of [
+      [(reads: number) => (reads > 1 ? 'python3\n' : null), { complete: true, running: 1 }],
+      [
+        (reads: number) => (reads % 2 === 0 ? 'python3\n' : 'launcher\n'),
+        { complete: false, running: 0 },
+      ],
+    ] as const) {
+      let commReads = 0;
+      const exec = spyOn(fs, 'readFileSync').mockImplementation(((
+        file: fs.PathOrFileDescriptor,
+        ...rest: unknown[]
+      ) => {
+        if (String(file) === path.join(value.proc, '1051', 'comm')) {
+          const changed = changes(++commReads);
+          if (changed !== null) return changed;
+        }
+        return (realRead as (...a: unknown[]) => unknown)(file, ...rest);
+      }) as typeof fs.readFileSync);
+      try {
+        expect(value.census()).toEqual(expected);
+      } finally {
+        exec.mockRestore();
+      }
+    }
+    fs.rmSync(path.join(value.proc, '1051'), { recursive: true });
+    // a path glued after a cluster of short options, and one holding a comma or a colon, are read whole
+    fs.symlinkSync(helperDir, path.join(value.root, 'alias,one'));
+    fs.symlinkSync(helperDir, path.join(value.root, 'alias:two'));
+    for (const argv of [
+      ['perl', `-wI${helperDir}`, '-MFakeHelper', '-e', '1'],
+      ['node', `--require=${path.join(value.root, 'alias,one', 'hook.cjs')}`, 'app.js'],
+      ['node', `--require=${path.join(value.root, 'alias:two', 'hook.cjs')}`, 'app.js'],
+    ]) {
+      value.add(1052, argv[0], `/usr/bin/${argv[0]}`, argv, value.root);
+      expect([argv, value.census()]).toEqual([argv, { complete: true, running: 1 }]);
+      fs.rmSync(path.join(value.proc, '1052'), { recursive: true });
+    }
+    // a script whose launch path is gone (a link deleted after it loaded) can't be placed; a prompt that only
+    // mentions a missing path stays idle
+    value.add(1053, 'python3', '/usr/bin/python3', ['python3', 'h.py'], value.root);
+    expect(value.census()).toEqual({ complete: false, running: 0 });
+    fs.rmSync(path.join(value.proc, '1053'), { recursive: true });
+    value.add(
+      1054,
+      'node',
+      '/usr/bin/node',
+      ['node', '/nonexistent/x/app.js', 'see /tmp/x and/or y'],
+      value.root
+    );
+    expect(value.census()).toEqual({ complete: false, running: 0 });
+    fs.rmSync(path.join(value.proc, '1054'), { recursive: true });
+    fs.writeFileSync(path.join(value.root, 'app.js'), '');
+    value.add(
+      1055,
+      'node',
+      '/usr/bin/node',
+      ['node', 'app.js', 'see /tmp/nothing-here and/or y'],
+      value.root
+    );
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+    fs.rmSync(path.join(value.proc, '1055'), { recursive: true });
+  });
+
+  test('a removed working folder spelled onto a mount is never listed', () => {
+    const value = procFixture();
+    const mount = path.join(value.root, 'share');
+    fs.mkdirSync(mount);
+    fs.writeFileSync(path.join(mount, 'marker'), '');
+    const mountInfo = path.join(value.root, 'mountinfo');
+    fs.writeFileSync(mountInfo, `50 25 0:50 / ${mount} rw - autofs systemd-1 rw\n`);
+    // the kernel's "(deleted)" spelling of a removed cwd, here a link with that very name onto the mount
+    const spelled = path.join(value.root, 'work (deleted)');
+    fs.symlinkSync(mount, spelled);
+    // a bare name with no extension is looked up only when its folder holds a link by that name: the folder is listed
+    value.add(1060, 'python3', '/usr/bin/python3', ['python3', 'helper'], spelled);
+    const list = spyOn(fs, 'readdirSync');
+    try {
+      censusAntigravityProcesses({
+        home: value.home,
+        nativeBinary: value.native,
+        procRoot: value.proc,
+        selfPid: 7,
+        mountInfo,
+      });
+      const listed = list.mock.calls
+        .map(([folder]) => String(folder))
+        .filter((folder) => folder.startsWith(spelled) || folder.startsWith(mount));
+      expect(listed).toEqual([]);
+    } finally {
+      list.mockRestore();
+    }
+  });
+
   test('a long prompt with a slash stays idle, and an unreadable mount table is incomplete', () => {
     const value = procFixture();
     const prompt = `${'review the change carefully '.repeat(12)}and/or file a bug`;
+    fs.writeFileSync(path.join(value.root, 'app.js'), '');
     for (const argv of [
       ['bash', '-c', `set -e; true && ${'x'.repeat(300)}/etc/hostname`],
       ['node', 'app.js', prompt],
