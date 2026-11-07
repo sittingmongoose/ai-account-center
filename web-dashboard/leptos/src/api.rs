@@ -995,10 +995,10 @@ pub fn send_id(answers: &[AnswerEntry]) -> String {
 /// An entry's id: its draft's random nonce plus what it says (its own id field left out). A retry of the same draft
 /// is the same entry; a new draft with the same words is a new one.
 pub fn entry_id(nonce: &str, entry: &AnswerEntry) -> String {
-    // A note's words stand whatever version of the card they were written on: an agent's reply between a lost
-    // response and the retry must not make the same note a new one. A choice (answer, done, object) is bound to the
-    // version it was made on, so an unchanged tap on a re-asked question is a new answer.
-    let note = entry.kind == "note";
+    // Words stand whatever version of the card they were written on (a note, an objection, which doesn't close the
+    // card): an agent's reply between a lost response and the retry must not make them new. A closing choice (answer,
+    // done) is bound to the version it was made on, so an unchanged tap on a re-asked question is a new answer.
+    let note = entry.kind == "note" || entry.kind == "object";
     let content = AnswerEntry {
         entry_id: String::new(),
         card_seq: if note { 0 } else { entry.card_seq },
@@ -1201,6 +1201,16 @@ mod tests {
             ..entry("")
         };
         assert_ne!(entry_id("n1", &answer(3)), entry_id("n1", &answer(4)));
+        let object = |seq: u64| AnswerEntry {
+            kind: "object".into(),
+            card_seq: seq,
+            ..entry("not this way")
+        };
+        assert_eq!(
+            entry_id("n1", &object(3)),
+            entry_id("n1", &object(4)),
+            "an objection's words stand across versions too"
+        );
         let mut carrying = entry("go");
         carrying.entry_id = id.clone();
         assert_eq!(
