@@ -419,10 +419,11 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
 - The note is stored exactly as typed (trimmed of surrounding whitespace only), at most 4,000 characters, no control
   characters other than tab and newlines.
 - Stored in `<ccsDir>/status/answers.jsonl` (append-only, local disk, this server only. Each line carries its own id;
-  a record that fails to be written whole is cancelled by a `void` line naming it, never cut, so no writer can remove
-  another's record. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
+  each record starts on a line of its own and is written in one piece or refused; a record that fails to be written
+  whole is cancelled by a `void` line naming it, never cut, so no writer can remove another's record. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
   each minute; a second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
-  over when its holder on this computer has ended, or on Linux was written in an earlier boot, or, written by another
+  over when its holder on this computer has ended, or on Linux was written in an earlier boot or names a pid since
+  reused, or, written by another
   host such as a replaced container, when no one has refreshed it for 10 minutes; nothing is judged by the clock for
   a holder on this computer. Deleting the file frees it at once), then written signed to the share
   (temporary file and rename), then a signed send summary, then the askers are rung through pm-mail. An answer or a

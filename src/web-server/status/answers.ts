@@ -243,26 +243,17 @@ function appendLine(file: string, record: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const fd = fs.openSync(file, 'a+', 0o600);
   try {
-    // A crash mid-write can leave a torn last line with no newline. Joined to it, the next record would be one
-    // unparseable line and be lost on the next load, so end the torn line first (it stays unparseable on its own).
-    const { size } = fs.fstatSync(fd);
-    let lead = '';
-    if (size > 0) {
-      const last = Buffer.alloc(1);
-      fs.readSync(fd, last, 0, 1, size - 1);
-      if (last[0] !== 0x0a) lead = '\n';
-    }
-    // A write may take fewer bytes than asked (a file-size limit, a full disk): loop until all are written, so a
-    // record is never acknowledged half-stored; a failure throws and the caller refuses the entry.
+    // Every record starts on a line of its own: a torn line (a crash, or another writer's failed part) can never
+    // swallow it. Blank lines are skipped on load.
     const line = randomBytes(8).toString('hex');
-    const data = Buffer.from(`${lead}${JSON.stringify({ ...record, line })}\n`);
+    const data = Buffer.from(`\n${JSON.stringify({ ...record, line })}\n`);
     let written = 0;
     try {
-      while (written < data.length) {
-        const taken = fs.writeSync(fd, data, written, data.length - written);
-        if (taken <= 0) throw new ConfigError('The answer store took no bytes.', file);
-        written += taken;
-      }
+      // One write, taken whole or refused: a second part could land after another writer's line and split this one,
+      // so a short write (a file-size limit, a full disk) refuses the record instead of finishing it.
+      written = fs.writeSync(fd, data, 0, data.length);
+      if (written !== data.length)
+        throw new ConfigError('The answer store took part of a record.', file);
       fs.fsyncSync(fd);
     } catch (error) {
       // A refused record must not count after a restart (it would ring): cancel it. The leading newline ends whatever

@@ -141,7 +141,10 @@ describe('answers', () => {
     expect(recorded.answer.note).toBe('Keep it inside — but test at 320 px.\n  Thanks');
     expect(recorded.answer.kind).toBe('answer');
     expect(recorded.answer.answeredBy).toBe('owner');
-    const line = fs.readFileSync(path.join(store, 'answers.jsonl'), 'utf8').split('\n')[0];
+    const line = fs
+      .readFileSync(path.join(store, 'answers.jsonl'), 'utf8')
+      .split('\n')
+      .filter(Boolean)[0];
     expect(JSON.parse(line).answer.cardSha256).toBe(sha);
     const shared = fs.readFileSync(path.join(root, 'v1', 'answers', 'vm.lead--Q1.json'), 'utf8');
     const pub = fs.readFileSync(path.join(root, 'v1', 'keys', 'aac-answers.pub'), 'utf8');

@@ -8,7 +8,8 @@
  * The lock names its holder (pid, host, Linux boot id, time), and the holder refreshes its time stamp on every write
  * and every retry pass (each minute). A lock is taken over only when its holder is gone:
  * - on this host, when its pid no longer runs (a zombie, ended but not yet reaped, counts as ended), or, on Linux,
- *   when it was written in an earlier boot (its pid belongs to another process now). Nothing is judged by the clock:
+ *   when it was written in an earlier boot or its pid now belongs to a process that started later (a reused number).
+ *   Nothing is judged by the clock:
  *   a stalled holder or a clock correction never loses its lock;
  * - from another host (a replaced container on the same volume), whose processes can't be seen from here, when no one
  *   has refreshed it for UNREFRESHED_MS;
@@ -40,6 +41,18 @@ interface Holder {
   pid: number;
   host: string;
   boot: string | null;
+  start: string | null;
+}
+
+/** When a process started, in clock ticks since boot, on Linux (so a reused pid is told apart); null elsewhere. */
+function processStart(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // the fields after the name (which may hold spaces and parentheses) start with the state, field 3
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** This boot's id on Linux (it changes at every start, whatever the clock says); null elsewhere. */
@@ -76,6 +89,7 @@ function parseHolder(text: string): Holder | null {
           pid: value.pid as number,
           host: value.host,
           boot: typeof value.boot === 'string' ? value.boot : null,
+          start: typeof value.start === 'string' ? value.start : null,
         }
       : null;
   } catch {
@@ -106,7 +120,10 @@ function stale(holder: Holder | null, mtimeMs: number): boolean {
   if (holder.host !== os.hostname()) return Date.now() - mtimeMs > UNREFRESHED_MS;
   const boot = bootId();
   if (boot !== null && holder.boot !== null && holder.boot !== boot) return true;
-  return !running(holder.pid);
+  if (!running(holder.pid)) return true;
+  // the same number, but a process that started later: the holder ended and its pid was reused
+  const start = processStart(holder.pid);
+  return start !== null && holder.start !== null && start !== holder.start;
 }
 
 /** Moves a stale lock aside, and puts it back if what moved was not the lock judged stale. */
@@ -175,6 +192,7 @@ export function holdWriterLock(dir: string): void {
       pid: process.pid,
       host: os.hostname(),
       boot: bootId(),
+      start: processStart(process.pid),
       at: Date.now(),
     });
     try {

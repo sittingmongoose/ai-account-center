@@ -1965,11 +1965,12 @@ process.exit(0);
 describe('round three', () => {
   const ID = 'd'.repeat(32);
 
-  it('a store that takes part of a write still records the whole answer, and a note with a secret is refused', async () => {
-    const { root, make } = setup();
+  it('a store that takes part of a write refuses the answer and cancels the part, and a note with a secret is refused', async () => {
+    const { root, store, make } = setup();
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
     const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
-    // every write takes at most 7 bytes (a file-size limit or a slow disk): the line is still completed
+    // every write takes at most 7 bytes (a file-size limit): a record written in parts could be split by another
+    // writer's line, so it is refused, never acknowledged half-stored
     const realWrite = fs.writeSync;
     const write = spyOn(fs, 'writeSync').mockImplementation(((
       fd: number,
@@ -1984,16 +1985,24 @@ describe('round three', () => {
       return (realWrite as (...a: unknown[]) => number)(fd, data, ...rest);
     }) as typeof fs.writeSync);
     try {
-      expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+      expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0]).toMatchObject({
+        outcome: 'refused',
+        code: 'answer_not_saved',
+      });
     } finally {
       write.mockRestore();
     }
+    await settle();
+    expect(make().list()).toEqual([]);
+    // the disk taking whole writes again, the answer is recorded
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
     await settle();
     expect(
       make()
         .list()
         .map((r) => r.card.id)
     ).toEqual([CARD]);
+    expect(fs.existsSync(path.join(store, 'answers.jsonl'))).toBe(true);
     // a note holding a token is refused before anything is stored, signed, written or rung
     const token = `sk-${'A1b2C3d4'.repeat(4)}`;
     const answers = make();
@@ -2328,6 +2337,40 @@ describe('round three', () => {
     ).toEqual([CARD]);
   });
 
+  it('a part-record another writer left, with no newline and no void, never swallows the next record', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    await settle();
+    const storeFile = path.join(store, 'answers.jsonl');
+    // after our size check, another writer's part-record lands (its void failed too: the disk was full)
+    const storeIno = fs.statSync(storeFile).ino;
+    const realWrite = fs.writeSync;
+    let torn = false;
+    const write = spyOn(fs, 'writeSync').mockImplementation(((fd: number, ...rest: unknown[]) => {
+      if (!torn && fs.fstatSync(fd).ino === storeIno) {
+        torn = true;
+        fs.appendFileSync(storeFile, '{"type":"answer","id":"theirs","answer":{"kind":"ans');
+      }
+      return (realWrite as (...a: unknown[]) => number)(fd, ...rest);
+    }) as typeof fs.writeSync);
+    try {
+      expect((await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].outcome).toBe(
+        'recorded'
+      );
+    } finally {
+      write.mockRestore();
+    }
+    await settle();
+    expect(
+      make()
+        .list()
+        .map((r) => r.card.id)
+        .sort()
+    ).toEqual([CARD, 'vm.lead--Q2']);
+  });
+
   it('the answer key: a key another process links first wins the race, and no temp file is left', () => {
     const dir = path.join(dirs.make('ccs-status-key-'), 'status');
     const otherDir = path.join(dirs.make('ccs-status-key-other-'), 'status');
@@ -2463,6 +2506,19 @@ describe('round three', () => {
     fs.writeFileSync(lock, JSON.stringify({ pid: gone, host: os.hostname(), at: 0 }));
     expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
     expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
+    // on Linux, a live pid that started after the lock was written (its number reused) is another process
+    if (fs.existsSync('/proc/sys/kernel/random/boot_id')) {
+      const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+      fs.writeFileSync(
+        lock,
+        JSON.stringify({ pid: process.ppid, host: os.hostname(), boot, start: '1', at: 0 })
+      );
+      const q3 = writeCard(root, cardDoc('vm.lead', 'Q3'));
+      expect((await make().submitSet([entry('vm.lead--Q3', q3)], 'Mac'))[0].outcome).toBe(
+        'recorded'
+      );
+      expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
+    }
     // on Linux, a live pid's lock from an earlier boot: that pid is another process now
     if (fs.existsSync('/proc/sys/kernel/random/boot_id')) {
       fs.writeFileSync(
