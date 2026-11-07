@@ -907,6 +907,20 @@ describe('runtime-free Antigravity process census', () => {
           [['deno', 'run', 'npm:ts-node@10', path.join(locked, 'in', 'my helper')]],
           [['bun', 'x', '@esbuild-kit/esr@1', path.join(locked, 'in', 'my helper')]],
           [['node', 'node_modules/tsx/dist/cli.mjs', path.join(locked, 'in', 'my helper')]],
+          [
+            [
+              'node',
+              'node_modules/.pnpm/tsx@4.19.2/node_modules/tsx/dist/cli.mjs',
+              path.join(locked, 'in', 'my helper'),
+            ],
+          ],
+          [
+            [
+              'node',
+              '/usr/lib/node_modules/.pnpm/ts-node@10.9.2/node_modules/ts-node/dist/bin.js',
+              path.join(locked, 'in', 'my helper'),
+            ],
+          ],
           // a file an interpreter runs, by its extension, is never prose wherever it sits
           [['node', 'launcher.js', path.join(locked, 'in', 'my helper.js')]],
           [['node', 'app.js', `--require=${path.join(locked, 'in', 'my hook.mjs')}`]],

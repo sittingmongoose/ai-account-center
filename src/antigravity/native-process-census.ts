@@ -370,6 +370,8 @@ const RUN_SUBCOMMANDS = new Set([
   'watch',
 ]);
 const PACKAGE_SUBCOMMANDS = new Set(['x', 'exec']);
+/** A package folder under node_modules, its scope dropped (`node_modules/@scope/name/`). */
+const NODE_MODULES_PACKAGE = /(?:^|[\\/])node_modules[\\/](?:@[^\\/]+[\\/])?([^\\/]+)(?=[\\/])/g;
 /** Scripts that run a script of their own, named next (`node node_modules/.bin/tsx helper.ts`). */
 const SCRIPT_RUNNERS = new Set([
   'tsx',
@@ -438,12 +440,13 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
       .basename(argument.replace(/^(?:npm|jsr):/, ''))
       .replace(/@[^@/]*$/, '')
       .replace(/\.[^.]+$/, '');
-    const entry = /(?:^|[\\/])node_modules[\\/](?:@[^\\/]+[\\/])?([^\\/]+)[\\/]/.exec(
-      argument
-    )?.[1];
+    // every package on the way counts (pnpm nests them: `node_modules/.pnpm/tsx@4/node_modules/tsx/...`)
+    const entries = [...argument.matchAll(NODE_MODULES_PACKAGE)].map((match) =>
+      match[1].replace(/@[^@/\\]*$/, '')
+    );
     if (
       !ranBy &&
-      (SCRIPT_RUNNERS.has(name) || (entry !== undefined && SCRIPT_RUNNERS.has(entry)))
+      (SCRIPT_RUNNERS.has(name) || entries.some((entry) => SCRIPT_RUNNERS.has(entry)))
     ) {
       ranBy = true;
       continue;
