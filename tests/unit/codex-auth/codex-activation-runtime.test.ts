@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
+import * as runtimeModule from '../../../src/codex-auth/codex-activation-runtime';
 import {
   isDesktop,
   CodexActivationRuntimeError,
@@ -502,6 +503,18 @@ describe('Codex Desktop update retry on the real runtime', () => {
       closed: ['/usr/lib/chatgpt/ChatGPT', '-- c', '--user-data-dir=/x/b'],
       other: '',
       owed: '/x/b',
+    },
+    {
+      form: 'a whole argument with a space after the name is another switch',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', '--user-data-dir /x/b'],
+      other: '',
+      owed: '/x/a',
+    },
+    {
+      form: 'a whole argument with a tab after the name is another switch',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/a', '--user-data-dir\t/x/b'],
+      other: '',
+      owed: '/x/a',
     },
     {
       form: 'a single-dash switch counts',
@@ -1947,6 +1960,34 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0))
     fs.rmSync(directory, { recursive: true, force: true });
 });
+
+/**
+ * A small reference for base::CommandLine's switch parsing on Linux, written apart from the
+ * runtime's port: everything after argv[0] and before the first `--` is read; a switch is `--` or
+ * `-` and at least one more character; its name runs to the first `=`, its value is the rest; the
+ * last one wins.
+ */
+function referenceSwitches(argv: string[]): [string, string][] {
+  const rest = argv.slice(1);
+  const end = rest.indexOf('--');
+  const switches: Record<string, string> = Object.create(null);
+  for (const arg of end < 0 ? rest : rest.slice(0, end)) {
+    const match = /^(?:--|-)(?!$)([^=]*)(?:=([\s\S]*))?$/.exec(arg);
+    if (match) switches[match[1]] = match[2] ?? '';
+  }
+  return Object.entries(switches).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** A small seeded generator, so a failing case can be replayed. */
+function seeded(seed: number): () => number {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 describe('desktop main process detection', () => {
   it('reads a descendant bare user-data-dir as the default folder, never the next word', async () => {
     const splitRenderer = {
@@ -2093,6 +2134,128 @@ describe('desktop main process detection', () => {
       }
     );
     expect(isDesktop(zygote)).toBe(false);
+  });
+
+  describe('switch parsing against a reference for base::CommandLine', () => {
+    const exe = '/usr/lib/chatgpt/ChatGPT';
+    const names = [
+      'user-data-dir',
+      'type',
+      'class',
+      'user-data-dirx',
+      'user-data',
+      'User-Data-Dir',
+      '',
+    ];
+    const values = ['/x/a', '/x/a b', '/x/a\tb', '', '/x/=b', '/x/a --b', '/x/a -c', 'rel/x'];
+    const prefixes = ['--', '-', '---', ''];
+    /** One argv element: switches in every form, spaces, tabs, `=`, empty values and terminators. */
+    const element = (random: () => number): string => {
+      const pick = <T>(items: T[]): T => items[Math.floor(random() * items.length)];
+      switch (Math.floor(random() * 9)) {
+        case 0:
+        case 1:
+        case 2:
+          return `${pick(prefixes)}${pick(names)}=${pick(values)}`;
+        case 3:
+          return `${pick(prefixes)}${pick(names)}`;
+        case 4:
+          return `${pick(prefixes)}${pick(names)}${pick([' ', '\t'])}${pick(values)}`;
+        case 5:
+          return pick(['--', '-', '', '-- c', '--\t']);
+        case 6:
+          return pick(values);
+        default:
+          return `--user-data-dir=${pick(values)}`;
+      }
+    };
+    const generate = (random: () => number): string[] =>
+      Array.from({ length: Math.floor(random() * 8) }, () => element(random));
+    const sorted = (switches: Map<string, string>): [string, string][] =>
+      [...switches.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+    it('reads every generated argv exactly as the reference does', () => {
+      const random = seeded(20261107);
+      for (let run = 0; run < 5000; run++) {
+        const argv = [exe, ...generate(random)];
+        expect({ argv, switches: sorted(runtimeModule.chromiumSwitches(argv)) }).toEqual({
+          argv,
+          switches: referenceSwitches(argv),
+        });
+      }
+    });
+
+    it('names each generated desktop by the folder the reference reads', async () => {
+      const random = seeded(7);
+      for (let run = 0; run < 600; run++) {
+        const argv = [exe, ...generate(random)];
+        const switches = new Map(referenceSwitches(argv));
+        const main = processFixture(20, argv, { cwd: '/fixture', env: { DISPLAY: ':8' }, exe });
+        const folder = switches.get('user-data-dir') ?? '';
+        const expected = switches.get('type')
+          ? []
+          : [
+              codexDesktopInstance(
+                folder === '' || path.isAbsolute(folder) ? folder : `/fixture/${folder}`
+              ),
+            ];
+        expect(isDesktop(main)).toBe(!switches.get('type'));
+        const runtime = createCodexActivationRuntime(home, harness([daemon, main, bundled]).deps);
+        expect({ argv, desktops: (await runtime.restartState()).desktops }).toEqual({
+          argv,
+          desktops: expected,
+        });
+      }
+    });
+
+    it('reads a rewritten cmdline as the argv it was joined from, when that argv had no spaces', async () => {
+      const random = seeded(11);
+      const pick = <T>(items: T[]): T => items[Math.floor(random() * items.length)];
+      let checked = 0;
+      for (let run = 0; run < 3000 && checked < 400; run++) {
+        // Elements without whitespace; a plain word only after a bare switch or the terminator,
+        // where the joined string still says where it belongs.
+        const argv = [exe];
+        let ended = false;
+        for (let index = Math.floor(random() * 7); index > 0; index--) {
+          if (ended) {
+            argv.push(pick(['/x/p', '--user-data-dir=/x/c', '--type=renderer', '--']));
+            continue;
+          }
+          const kind = Math.floor(random() * 4);
+          const name = pick(['user-data-dir', 'type', 'class']);
+          if (kind === 0) argv.push(`--${name}=${pick(['/x/a', '', '/x/=b', 'rel/x'])}`);
+          else if (kind === 1) {
+            argv.push(`--${name}`);
+            if (random() < 0.5) argv.push('/x/p');
+          } else if (kind === 2) {
+            argv.push('--');
+            ended = true;
+          } else argv.push(`--user-data-dir=${pick(['/x/a', '/x/b'])}`);
+        }
+        const joined = argv.join(' ');
+        if (!/\s--/.test(joined)) continue;
+        checked++;
+        const switches = new Map(referenceSwitches(argv));
+        const folder = switches.get('user-data-dir') ?? '';
+        const main = processFixture(20, [joined], { cwd: '/fixture', env: { DISPLAY: ':8' }, exe });
+        expect({ joined, desktop: isDesktop(main) }).toEqual({
+          joined,
+          desktop: !switches.get('type'),
+        });
+        if (switches.get('type')) continue;
+        const runtime = createCodexActivationRuntime(home, harness([daemon, main, bundled]).deps);
+        expect({ joined, desktops: (await runtime.restartState()).desktops }).toEqual({
+          joined,
+          desktops: [
+            codexDesktopInstance(
+              folder === '' || path.isAbsolute(folder) ? folder : `/fixture/${folder}`
+            ),
+          ],
+        });
+      }
+      expect(checked).toBe(400);
+    });
   });
 
   it('reads switches as Chromium does: the last wins, and none after --', async () => {

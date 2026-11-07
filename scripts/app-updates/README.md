@@ -729,7 +729,10 @@ inside `stop()` still leaves it. The marker records what that plan closes:
 the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder keyed with a random
 0600 salt beside the marker (`codex-desktop-instance.salt`), never the path. Each desktop is one entry:
 two whose folders read alike, as a cmdline Electron rewrote into one string can make them, are the same
-hash twice, and both must be back. The folder is the one Chromium takes: the last `--user-data-dir`
+hash twice, and both must be back. Switches are read by a port of Chromium's `base::CommandLine`
+parsing, checked against a reference over generated argv lists; a cmdline Electron rewrote into one
+string is split back into argv first, and there an argument that held spaces can't be told from
+two. The folder is the one Chromium takes: the last `--user-data-dir`
 before a `--` terminator, from `--` or `-` (and `/` on Windows), an empty one meaning the default
 folder, as does a bare switch whatever word follows it. A relative `--user-data-dir` is resolved against that desktop
 process's own working directory, never the updater's, and symlinks are followed before `..`, as

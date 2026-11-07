@@ -438,6 +438,46 @@ class UpdaterTests(unittest.TestCase):
             with self.assertRaises(common.UpdateFailure):
                 terminal.check_terminal('ubuntu', [mock.Mock()])
 
+    def test_desktop_arguments_match_a_reference_for_chromium_switch_parsing(self):
+        import random, re
+        from app_update_processes import desktop_arguments
+
+        def reference(argv):
+            # base::CommandLine on Linux: up to an exact "--"; "--" or "-" and more; name to the
+            # first "="; the last one wins.
+            rest = argv[1:]
+            if "--" in rest:
+                rest = rest[:rest.index("--")]
+            value = None
+            for arg in rest:
+                match = re.fullmatch(r"(?:--|-)(?!$)([^=]*)(?:=(.*))?", arg, re.S)
+                if match and match.group(1) == "user-data-dir":
+                    value = match.group(2) or ""
+            return value
+
+        names = ["user-data-dir", "type", "user-data-dirx", "User-Data-Dir", ""]
+        values = ["/x/a", "/x/a b", "/x/a\tb", "", "/x/=b", "rel/x"]
+        generator = random.Random(20261107)
+
+        def element():
+            kind = generator.randrange(6)
+            if kind < 2:
+                return generator.choice(["--", "-", "---", ""]) + generator.choice(names) + "=" + generator.choice(values)
+            if kind == 2:
+                return generator.choice(["--", "-"]) + generator.choice(names)
+            if kind == 3:
+                return "--user-data-dir" + generator.choice([" ", "\t"]) + generator.choice(values)
+            if kind == 4:
+                return generator.choice(["--", "-", "", "-- c"])
+            return generator.choice(values)
+
+        for _ in range(3000):
+            argv = ["/app"] + [element() for _ in range(generator.randrange(7))]
+            value = reference(argv)
+            folder = None if not value else value if value.startswith("/") else "/fixture/" + value
+            expected = ["--user-data-dir=" + folder] if folder else []
+            self.assertEqual((argv, desktop_arguments(mock.Mock(args=argv, cwd="/fixture"), "linux")), (argv, expected))
+
     def test_desktop_arguments_take_the_folder_chromium_takes(self):
         from app_update_processes import desktop_arguments
         cases = {

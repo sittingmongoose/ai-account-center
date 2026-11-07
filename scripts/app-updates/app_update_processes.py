@@ -794,6 +794,8 @@ def desktop_arguments(context, platform):
 
     value = None
     for arg in args:
+        # As base::CommandLine does: on Windows each argument is trimmed first.
+        arg = arg.strip() if windows else arg
         if arg == "--":
             break
         prefix = next((item for item in prefixes if arg.startswith(item) and len(arg) > len(item)), None)

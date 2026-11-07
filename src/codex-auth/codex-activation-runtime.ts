@@ -168,67 +168,52 @@ function rewrittenCmdline(process: CodexProcessSnapshot): boolean {
 }
 
 /**
- * A process's arguments, each one whole. The NUL-separated cmdline already gives whole arguments, so a
- * data folder such as `/home/me/Work One` stays one, and only an argument that is exactly `--` is a
- * terminator. Only a rewritten cmdline is split, and then only before each flag, so a value keeps its
- * own spaces and stays joined to its flag: `--class Codex`. There a `--` followed by a space is the
- * terminator, split from the words after it.
+ * A process's argv. The NUL-separated cmdline already gives it whole, so a data folder such as
+ * `/home/me/Work One` stays one argument and `--user-data-dir V` stays the one argument it was. Only
+ * a cmdline Electron rewrote into one space-joined string is split back: before each `--` word, then a
+ * flag joined to the word after it as two arguments, as it was typed, and a `--` followed by a space
+ * as the terminator and the words after it. Past the terminator the words stay as they are.
  */
-function argWords(process: CodexProcessSnapshot): string[] {
+function processArgv(process: CodexProcessSnapshot): string[] {
   if (!rewrittenCmdline(process)) return process.args.filter(Boolean);
+  let ended = false;
   return process.args[0]
     .split(/\s+(?=--)/)
     .filter(Boolean)
-    .flatMap((word, index) =>
-      index > 0 && /^--\s/.test(word) ? ['--', word.slice(2).trim()].filter(Boolean) : [word]
+    .flatMap((word, index) => {
+      if (index === 0 || ended) return [word];
+      const terminator = /^--(?:\s+([\s\S]*))?$/.exec(word);
+      if (terminator) {
+        ended = true;
+        return terminator[1] ? ['--', terminator[1].trim()] : ['--'];
+      }
+      const joined = /^(--[^\s=]+)\s+([\s\S]+)$/.exec(word);
+      return joined ? [joined[1], joined[2].trim()] : [word];
+    });
+}
+
+/**
+ * The switches Chromium reads from an argv, ported from base::CommandLine on Linux
+ * (AppendSwitchesAndArguments, IsSwitch, GetSwitchPrefixLength, AppendSwitchNative): after argv[0],
+ * up to an argument that is exactly `--`; a switch starts `--` or `-` and has more after its prefix;
+ * its name runs to the first `=`, its value is the rest, and none means an empty value; a later
+ * switch replaces an earlier one of the same name.
+ */
+export function chromiumSwitches(argv: string[]): Map<string, string> {
+  const switches = new Map<string, string>();
+  let parseSwitches = true;
+  for (const arg of argv.slice(1)) {
+    parseSwitches = parseSwitches && arg !== '--';
+    if (!parseSwitches) continue;
+    const prefix = arg.startsWith('--') ? 2 : arg.startsWith('-') ? 1 : 0;
+    if (prefix === 0 || prefix === arg.length) continue;
+    const equals = arg.indexOf('=');
+    switches.set(
+      arg.slice(prefix, equals < 0 ? undefined : equals),
+      equals < 0 ? '' : arg.slice(equals + 1)
     );
-}
-
-/**
- * A rewritten cmdline's words as real arguments again: a flag joined to the word after it becomes
- * two arguments, as it was typed, so Chromium reads them as it did. Words past the terminator are
- * plain arguments, kept as they are.
- */
-function relaunchArguments(process: CodexProcessSnapshot): string[] {
-  if (!rewrittenCmdline(process)) return process.args.filter(Boolean);
-  let ended = false;
-  return argWords(process).flatMap((word, index) => {
-    if (index === 0 || ended) return [word];
-    if (isTerminator(word)) {
-      ended = true;
-      return [word];
-    }
-    const joined = /^(--[^\s=]+)\s+([\s\S]+)$/.exec(word);
-    return joined ? [joined[1], joined[2].trim()] : [word];
-  });
-}
-
-/** Chromium's switch terminator: every word after it is a plain argument, never a switch. */
-function isTerminator(word: string): boolean {
-  return word === '--';
-}
-
-/** The words Chromium reads switches from: after the program, and up to the terminator. */
-function switchWords(words: string[]): string[] {
-  const end = words.findIndex((word, index) => index > 0 && isTerminator(word));
-  return words.slice(1, end < 0 ? undefined : end);
-}
-
-/**
- * The value Chromium takes for a switch, as base::CommandLine reads it on Linux: `--name=value` or
- * `-name=value`, a bare name being an empty value, and a later one replacing an earlier one. Null
- * when the switch isn't given.
- */
-function lastSwitch(words: string[], name: string): string | null {
-  let value: string | null = null;
-  for (const word of switchWords(words)) {
-    const prefix = word.startsWith('--') ? 2 : word.startsWith('-') ? 1 : 0;
-    if (!prefix || !word.startsWith(name, prefix)) continue;
-    const rest = word.slice(prefix + name.length);
-    if (rest === '') value = '';
-    else if (rest.startsWith('=')) value = rest.slice(1);
   }
-  return value;
+  return switches;
 }
 
 /**
@@ -238,7 +223,7 @@ function lastSwitch(words: string[], name: string): string | null {
 export function isDesktop(process: CodexProcessSnapshot): boolean {
   return (
     process.exe.replace(/ \(deleted\)$/, '') === '/usr/lib/chatgpt/ChatGPT' &&
-    !lastSwitch(argWords(process), 'type')
+    !chromiumSwitches(processArgv(process)).get('type')
   );
 }
 
@@ -741,21 +726,11 @@ function restartPlan(launchers: CodexProcessSnapshot[]): CodexRestartPlan {
 }
 
 /**
- * The `--user-data-dir` Chromium takes from a process's words: the last one before the terminator,
- * from either switch prefix, its value only after `=`. A bare switch, or an empty value, means the
- * default folder (''), whatever word follows it: Chromium never takes the next word as the value.
- * A rewritten cmdline's `--user-data-dir VALUE` is that bare switch and a plain word. Null when none
- * is given.
+ * The `--user-data-dir` Chromium takes from an argv: '' for a bare switch or an empty value, which is
+ * the default folder, and null when none is given.
  */
-function userDataArgument(words: string[]): string | null {
-  let value: string | null = null;
-  for (const word of switchWords(words)) {
-    const named = /^--?user-data-dir(?=$|[=\s])/.exec(word);
-    if (!named) continue;
-    const rest = word.slice(named[0].length);
-    value = rest.startsWith('=') ? rest.slice(1) : '';
-  }
-  return value;
+function userDataArgument(argv: string[]): string | null {
+  return chromiumSwitches(argv).get('user-data-dir') ?? null;
 }
 
 /**
@@ -768,7 +743,7 @@ function desktopFolderArgument(
   processes: CodexProcessSnapshot[]
 ): { value: string; owner: CodexProcessSnapshot } | null {
   for (const owner of [desktop, ...descendants(desktop, processes)]) {
-    const value = userDataArgument(argWords(owner));
+    const value = userDataArgument(processArgv(owner));
     if (value !== null) return { value, owner };
   }
   return null;
@@ -817,7 +792,7 @@ function desktopLauncher(
       'Cannot recover the VM Codex desktop display; no account was changed.'
     );
   }
-  const args = relaunchArguments(desktop);
+  const args = processArgv(desktop);
   if (userDataArgument(args) === null) {
     // The folder a child names, absolute when its directory is known: the relaunch runs in the
     // main process's directory, which need not be the child's.
@@ -825,7 +800,7 @@ function desktopLauncher(
     const userData = desktopUserData(desktop, processes);
     const folder = path.isAbsolute(userData) ? userData : found?.value;
     // Before the terminator, or Chromium would read it as a plain argument.
-    const end = args.findIndex((word, index) => index > 0 && isTerminator(word));
+    const end = args.findIndex((word, index) => index > 0 && word === '--');
     args.splice(
       end < 0 ? args.length : end,
       0,
