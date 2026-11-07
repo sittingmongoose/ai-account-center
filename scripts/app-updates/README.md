@@ -329,7 +329,9 @@ review list, is not proof of an unreviewed build: it keeps the coordinator.
   as named and as resolved; the first 64 KB of a command line, whose first four
   arguments are checked). A relative argument that names a path (it contains a
   slash, such as `./bin/helper.js`) is resolved against the process's working
-  folder, also when that folder was removed; a bare word is not. Any match
+  folder, also when that folder was removed; a bare word is not, except an
+  interpreter's script (python, node, sh and the like: every non-option argument
+  among the first 32, `python3 -I helper.py` included). Any match
   reports `action_required` / `in_use` and nothing changes. The census is
   complete only when every same-user process was read and the listing includes
   the census's own process; a read failure other than the process exiting makes

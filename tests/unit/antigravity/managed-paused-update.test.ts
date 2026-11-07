@@ -290,9 +290,9 @@ describe('runtime-free Antigravity process census', () => {
     const root = path.join(value.home, '.gemini/antigravity-cli');
     fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
     value.add(890, 'node', '/opt/fixture-runtime/node', ['node', './bin/helper.js'], root);
-    // A relative word without a slash is not resolved (documented limit).
+    // An interpreter's bare script name resolves too (it is its script, whatever its spelling).
     value.add(891, 'node', '/opt/fixture-runtime/node', ['node', 'helper.js'], root);
-    expect(value.census()).toEqual({ complete: true, running: 1 });
+    expect(value.census()).toEqual({ complete: true, running: 2 });
   });
 
   test('a relative argument from a removed working folder still resolves inside the root', () => {
@@ -471,6 +471,35 @@ describe('runtime-free Antigravity process census', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  test('an interpreter`s script is found after any options and by a bare name', () => {
+    const value = procFixture();
+    const helperDir = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(helperDir, { recursive: true });
+    // readable working folders: the script is placed and counted
+    value.add(960, 'python3', '/usr/bin/python3', ['python3', 'helper.py'], helperDir);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '960'), { recursive: true });
+    value.add(
+      961,
+      'python3',
+      '/usr/bin/python3',
+      ['python3', '-I', '-u', '-B', './helper.py'],
+      helperDir
+    );
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '961'), { recursive: true });
+    // the same bare script outside the roots is not a helper
+    value.add(962, 'node', '/usr/bin/node', ['node', 'server.js'], value.root);
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+    // a non-interpreter's bare words stay unresolved
+    value.add(963, 'rg', '/usr/bin/rg', ['rg', 'helper.py'], helperDir);
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+    // an interpreter with only options in the part read: its script is unknown
+    const many = ['python3', ...Array.from({ length: 40 }, (_, i) => `-W${i}`), 'helper.py'];
+    value.add(964, 'python3', '/usr/bin/python3', many, value.root);
+    expect(value.census()).toEqual({ complete: false, running: 0 });
   });
 
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {

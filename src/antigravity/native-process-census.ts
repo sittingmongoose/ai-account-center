@@ -23,6 +23,8 @@ export interface NativeProcessCensus {
 }
 
 const CMDLINE_BYTES = 65_536;
+/** How many arguments after an interpreter's own name are looked at for its script. */
+const SCRIPT_SCAN = 32;
 /** Only these mean the process exited between the listing and the read. */
 const GONE = new Set(['ENOENT', 'ESRCH']);
 
@@ -141,13 +143,19 @@ function readCmdline(file: string): string {
  *
  * Command-line arguments are the first four; a relative one that names a path
  * (it contains a slash, such as `./bin/helper.js`) is resolved against the
- * process's working folder. A bare relative word (`helper.js`) is not, so a
- * script started by bare name from inside a root folder matches only by its
- * process name or executable. Two further limits are known: `./bin/x` started
+ * process's working folder. A bare relative word (`helper.js`) is not, except
+ * as an interpreter's script (below), so another program started by bare name
+ * from inside a root folder matches only by its process name or executable.
+ * Two further limits are known: `./bin/x` started
  * from a root by a process that then changes folder (`chdir("/")`) resolves
  * against its new folder, and an absolute argument that reaches a root only
  * through a symlink elsewhere is not resolved. Both still match by name or
  * executable when those are Antigravity's.
+ *
+ * For an interpreter, every non-option argument among the first 32 is a
+ * candidate script, a bare name (`python3 helper.py`) included, resolved
+ * against its working folder; one with no candidate within what was read
+ * leaves idle unproven.
  *
  * A non-dumpable process hides its working folder, so a relative script can't
  * be placed. When such a process is an interpreter (python, node, sh, perl,
@@ -226,12 +234,20 @@ export function censusAntigravityProcesses(options: {
           continue;
         }
         const cmdline = readField(() => readCmdline(path.join(directory, 'cmdline')));
-        const args = cmdline.split('\0').filter(Boolean).slice(0, 4);
+        const all = cmdline.split('\0').filter(Boolean);
+        const args = all.slice(0, 4);
+        // An interpreter's script can follow any number of options and may be a bare name (`python3 -I -u helper.py`,
+        // `node helper.js`): for one, every non-option argument within the first SCRIPT_SCAN is a candidate script,
+        // resolved against the working folder like a relative path.
+        const interpreter = INTERPRETER.test(comm) || INTERPRETER.test(path.basename(all[0] ?? ''));
+        const operands = interpreter
+          ? all.slice(1, 1 + SCRIPT_SCAN).filter((argument) => !argument.startsWith('-'))
+          : [];
         let cwds: string[] | undefined;
         let cwdDenied = false;
-        const resolveArgument = (argument: string): string[] => {
+        const resolveArgument = (argument: string, bare = false): string[] => {
           if (path.isAbsolute(argument)) return [argument];
-          if (!argument.includes('/')) return [];
+          if (!bare && !argument.includes('/')) return [];
           if (cwds === undefined) {
             const link = readTolerant(
               () => fs.readlinkSync(path.join(directory, 'cwd')),
@@ -244,13 +260,19 @@ export function censusAntigravityProcesses(options: {
           }
           return cwds.map((cwd) => path.resolve(cwd, argument));
         };
-        if (args.some((argument) => resolveArgument(argument).some(isAntigravityPath))) {
+        if (
+          args.some((argument) => resolveArgument(argument).some(isAntigravityPath)) ||
+          operands.some((argument) => resolveArgument(argument, true).some(isAntigravityPath))
+        ) {
           running += 1;
           continue;
         }
-        const interpreter =
-          INTERPRETER.test(comm) || INTERPRETER.test(path.basename(args[0] ?? ''));
-        if (cwdDenied && interpreter) unplaced = true;
+        // Idle stays unproven for an interpreter whose script couldn't be placed: its working folder is hidden, or
+        // no candidate script turned up within the part of the command line that was read.
+        const unscanned =
+          operands.length === 0 &&
+          (all.length > 1 + SCRIPT_SCAN || Buffer.byteLength(cmdline) >= CMDLINE_BYTES);
+        if (interpreter && (cwdDenied || unscanned)) unplaced = true;
       } catch (error) {
         if (error instanceof ProcessGone) continue;
         throw error;
