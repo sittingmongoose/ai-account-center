@@ -9,18 +9,24 @@
  * - Names: an identifier (`DB_PASSWORD`, `PGPASSWORD`, `API_KEY_2`, `clientSecret`, `x-api-key`), a short phrase
  *   (`the api key`, `db pass`), a flag (`--password`), `setx NAME`, before `=`, `:`, `=>`, `->`, `:=`, `"]=`, a
  *   quoted name's `,` (`setenv("PASSWORD", ...)`) or, after a phrase, "is"; then `Bearer`/`Basic`, a URL's password
- *   (`scheme://user:pw@`, the user may be empty), `-p<glued>` and `-u user:pw`. A name ending in a word like file,
- *   path, count, hash or manager names something else; `ssh key` and `GPG key` in prose are public ids.
+ *   (`scheme://user:pw@`, the user may be empty), `-p<glued>`, `-p <value>` after `sshpass` or `login`, and
+ *   `-u user:pw`. A name ending in a word like file, path, count, hash, manager, ref or endpoint names something
+ *   else; `ssh key` and `GPG key` in prose are public ids; `cache_key`, `sort_key` and their kind are lookup keys.
  * - A bare `pass`, `pw` or `pwd` (or one in a phrase, `db pass`) is weaker evidence: never `PASS:` (a test result),
- *   and its value must hold a run of 6 or more mixing letters with digits or symbols, with no slash.
- * - Values: a reference or placeholder (`$VAR`, `%VAR%`, `<your-key>`), a URL, a date, a version (`v2.3.1`) or a
- *   `SHA256:` fingerprint is no secret; after "is", neither is `p95=320ms`. A path (from `~`, `.`, a drive or a
+ *   and no slash; its value is a secret with a run of 6 or more mixing letters with digits or symbols, or, as a
+ *   human password (8 or more with a letter and a digit), after `=` or with a capital or a symbol (`Summer_2026`,
+ *   not `test_auth_2`).
+ * - Values: a reference or placeholder (`$VAR`, `%VAR%`, `<your-key>`), a URL, a date, a version (`v2.3.1`), a
+ *   `SHA256:` fingerprint or a setting list (`id=x,src=y`) is no secret; after "is", only a value of 8 or more is
+ *   judged, and never one with `=` (`p95=320ms`). A path (from `~`, `.`, a drive or a
  *   system root, or `a/b.ext`) is split at slashes too and judged by its runs. After a password's name, any other
  *   value of 8 or more with a letter and a digit, or 8 or more digits, is one (`Summer_2026`, `Winter-2025!`);
  *   otherwise a run of 6 mixing letters with digits or symbols (`hunter2`). After a key's name, a run of 8.
  *   Runs are split at `-` `.` `_` `:`, so model names, versions and test names have none (`claude-opus-5-5`).
  * Each pattern is bounded and matches only the name, reading the value by lookahead, so a value is searched for
  * names in its turn, and the search stays linear.
+ * Known limits: a letters-only password (`correcthorsebatterystaple`), a quoted value with a space, and a name with no
+ * separator (`password Summer_2026`) are not found.
  */
 type SecretKind = 'password' | 'bare' | 'key';
 const NAMED_VALUE =
@@ -33,15 +39,23 @@ const AUTH_VALUE = /(?<![A-Za-z0-9])(?:bearer|basic)\s{1,4}(?=([^\s'"`]{1,256}))
 const URL_PASSWORD =
   /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@]{0,64}:(?=([^\s/@]{1,256})@)/g;
 const GLUED_PASSWORD = /(?<![A-Za-z0-9-])-p(?=([^\s'"=-][^\s'"]{0,255}))/g;
+const LOGIN_PASSWORD =
+  /(?<![A-Za-z0-9-])(?:sshpass|login)(?=[^\n]{0,200}?\s-p\s{1,4}['"]?([^\s'"]{1,256}))/g;
 const USER_PASSWORD =
   /(?<![A-Za-z0-9-])(?:-u|--user)(?:\s{1,4}|=)['"]?[^\s:'"]{1,64}:(?=([^\s'"@]{1,256}))/g;
 const NOT_A_SECRET_NAME = new Set(
   (
     'file files path dir url uri name names count limit length len size ttl type kind mode policy budget usage id ' +
-    'ids at expires expiry env hash hashes manager scanning scanner fingerprint min max'
+    'ids at expires expiry env hash hashes manager scanning scanner fingerprint min max ref refs endpoint helper'
   ).split(' ')
 );
 const KEY_PAIR = new Set('api access private secret signing encryption master deploy'.split(' '));
+/** Words before `key` that make it a lookup key, not a secret (`cache_key`, `sort_key`). */
+const LOOKUP_KEY = new Set(
+  'cache sort partition primary foreign idempotency dedupe dedup hot row shard routing lookup map group index object'.split(
+    ' '
+  )
+);
 const PATH_LIKE = new RegExp(
   '^(?:~[\\\\/]|\\.{1,2}[\\\\/]|[A-Za-z]:[\\\\/]|' +
     '[\\\\/](?:home|Users|etc|var|tmp|usr|opt|mnt|run|srv|root|Volumes|private|proc|dev|sys|bin|sbin|lib|lib64|' +
@@ -69,7 +83,12 @@ function secretKind(name: string, separator: string, flag: boolean): SecretKind 
     : /(?:secret|token|credentials?|apikey|accesskey|privatekey|signingkey|secretkey)$/;
   if (words.some((word) => glued.test(word))) return 'key';
   for (let at = 1; at < words.length; at += 1)
-    if (words[at] === 'key' && (!phrase || KEY_PAIR.has(words[at - 1]))) return 'key';
+    if (
+      words[at] === 'key' &&
+      !LOOKUP_KEY.has(words[at - 1]) &&
+      (!phrase || KEY_PAIR.has(words[at - 1]))
+    )
+      return 'key';
   return null;
 }
 
@@ -83,7 +102,8 @@ function longestMixedRun(value: string, separators: RegExp): number {
 }
 
 /** Whether a value after a secret's name looks like one (see above). */
-function secretValue(kind: SecretKind, raw: string, afterIs = false): boolean {
+function secretValue(kind: SecretKind, raw: string, separator = '='): boolean {
+  const afterIs = separator === 'is' || separator === 'was';
   if (/^(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|%[A-Za-z_][A-Za-z0-9_]*%|<[^>]*>?|\{\{.*)$/.test(raw))
     return false;
   const value = raw.replace(/^[([]+/, '').replace(/[)\]}>.,;:!?]+$/, '');
@@ -92,13 +112,19 @@ function secretValue(kind: SecretKind, raw: string, afterIs = false): boolean {
     /^\d{4}-\d{2}-\d{2}/.test(value) ||
     /^v?\d+(?:\.\d+)+(?:[-+][\w.]+)?$/.test(value) ||
     /^(?:SHA256|SHA1|MD5):/i.test(value) ||
-    (afterIs && value.includes('='))
+    /^[A-Za-z_][\w-]*=/.test(value) ||
+    (afterIs && (value.includes('=') || value.length < 8))
   )
     return false;
   if (PATH_LIKE.test(value))
     return kind !== 'bare' && longestMixedRun(value, /[-._:\\/]+/) >= (kind === 'key' ? 8 : 6);
   if (kind === 'key') return longestMixedRun(value, /[-._:]+/) >= 8;
-  if (kind === 'bare') return !/[\\/]/.test(value) && longestMixedRun(value, /[-._:]+/) >= 6;
+  if (kind === 'bare') {
+    if (/[\\/]/.test(value)) return false;
+    if (longestMixedRun(value, /[-._:]+/) >= 6) return true;
+    const human = value.length >= 8 && /[A-Za-z]/.test(value) && /\d/.test(value);
+    return human && (separator === '=' || /[A-Z]/.test(value) || /[^A-Za-z0-9_.-]/.test(value));
+  }
   // a password: human ones are a word and a number (`Summer_2026`), so the whole value counts
   if (/^\d{8,}$/.test(value)) return true;
   if (value.length >= 8 && /[A-Za-z]/.test(value) && /\d/.test(value)) return true;
@@ -106,19 +132,18 @@ function secretValue(kind: SecretKind, raw: string, afterIs = false): boolean {
 }
 
 export function findTypedSecret(text: string): string | null {
-  const found = (kind: SecretKind | null, value: string | undefined, afterIs = false) =>
-    kind !== null && value !== undefined && secretValue(kind, value, afterIs);
+  const found = (kind: SecretKind | null, value: string | undefined, separator = '=') =>
+    kind !== null && value !== undefined && secretValue(kind, value, separator);
   for (const match of text.matchAll(NAMED_VALUE)) {
     const separator = match[2].replace(/['"\]\s]/g, '');
-    const afterIs = separator === 'is' || separator === 'was';
-    if (found(secretKind(match[1], separator, false), match[3], afterIs))
+    if (found(secretKind(match[1], separator, false), match[3], separator))
       return 'a password or key';
   }
   for (const match of text.matchAll(SETX_VALUE))
     if (found(secretKind(match[1], '=', false), match[2])) return 'a password or key';
   for (const match of text.matchAll(FLAG_VALUE))
     if (found(secretKind(match[1], '=', true), match[2])) return 'a password or key';
-  for (const pattern of [AUTH_VALUE, URL_PASSWORD, GLUED_PASSWORD, USER_PASSWORD])
+  for (const pattern of [AUTH_VALUE, URL_PASSWORD, GLUED_PASSWORD, LOGIN_PASSWORD, USER_PASSWORD])
     for (const match of text.matchAll(pattern))
       if (found('password', match[1])) return 'a password or key';
   return null;

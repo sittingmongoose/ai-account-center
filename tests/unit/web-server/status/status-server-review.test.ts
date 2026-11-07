@@ -2091,6 +2091,17 @@ describe('round three', () => {
       'curl -u admin:Passw0rd123 https://example.org',
       'redis://:Hunter2xyz@cache:6379',
       'Authorization: Bearer abc1234',
+      // a bare name with a human password: an = separator, or a value with a capital or a symbol
+      'pass: Summer_2026',
+      'pass=Summer_2026',
+      'PASS=Summer_2026',
+      'pw: Summer_2026',
+      'pwd=summer_2026',
+      'wifi pass: Summer_2026',
+      'user=jared pass=Summer_2026',
+      // -p with a separate value after a login or sshpass
+      'docker login -u jared -p Summer_2026',
+      'sshpass -p Summer_2026 ssh host',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, 'a password or key']);
   });
@@ -2137,6 +2148,17 @@ describe('round three', () => {
       'docker run -u 1000:1000 -p8080:80 img',
       'gcc -pthread -O2 -print0',
       'first pass: test_auth_2',
+      'pass: v2_final_2026',
+      'secret_ref: vault/aac/prod2',
+      'CACHE_KEY=ubuntu2404node20',
+      'cacheKey: ubuntu2404node20',
+      'idempotency_key=order12345678',
+      'sort_key=createdAt2026',
+      'token endpoint: /oauth2/token',
+      'docker build --secret id=mysecret,src=secret.txt .',
+      'docker build --secret id=npmrc,src=$HOME/.npmrc .',
+      'the password was wrong3 times',
+      'docker run -p 8080:80 img && ssh -p 2222 host',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, null]);
   });
@@ -2156,6 +2178,8 @@ describe('round three', () => {
       '"a", ',
       'a"] = ',
       'a is ',
+      'login ',
+      'sshpass -x ',
     ])
       for (const text of [filler.repeat(4000 / filler.length), `${filler.repeat(1000)}x`]) {
         const started = performance.now();
