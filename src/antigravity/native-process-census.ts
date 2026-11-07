@@ -85,13 +85,13 @@ const UNRESOLVED = Symbol('unresolved');
 /** How many path lookups one process's arguments may cost the census. */
 const LOOKUPS_PER_PROCESS = 4096;
 
-/** Mount points of such filesystems, from a mount table (`/proc/self/mountinfo`); none when it can't be read. */
-function networkMounts(file: string): string[] {
+/** Mount points of such filesystems, from a mount table (`/proc/self/mountinfo`); null when it can't be read. */
+function networkMounts(file: string): string[] | null {
   let text: string;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch {
-    return [];
+    return null;
   }
   return text.split('\n').flatMap((line) => {
     const [left, right] = line.split(' - ');
@@ -179,7 +179,9 @@ function resolveLocally(
     }
     const stat = cachedLstat(next, cache);
     if (typeof stat === 'string')
-      return stat === 'ENOENT' || stat === 'ENOTDIR'
+      // missing, not a folder, or a name the kernel can't open either (a long prompt's "and/or" reads as a path):
+      // the rest is kept as written
+      return stat === 'ENOENT' || stat === 'ENOTDIR' || stat === 'ENAMETOOLONG'
         ? path.join(current, part, ...[...stack].reverse())
         : UNRESOLVED;
     if (!stat.isSymbolicLink()) {
@@ -347,7 +349,9 @@ export function censusAntigravityProcesses(options: {
   if (typeof uid !== 'number' || !Number.isSafeInteger(uid)) return incomplete;
   const home = path.resolve(options.home);
   // read first: resolving the home, the roots and the native never touches a network or automount either
+  // without the mount table no lookup can be kept off a hung share: nothing is proven
   const network = networkMounts(options.mountInfo ?? '/proc/self/mountinfo');
+  if (network === null) return incomplete;
   const stats: StatCache = new Map();
   /** A path as written and where it really leads (a missing tail kept); null when that can't be known. */
   const spellings = (file: string): string[] | null => {

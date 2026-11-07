@@ -869,6 +869,29 @@ describe('runtime-free Antigravity process census', () => {
     }
   });
 
+  test('a long prompt with a slash stays idle, and an unreadable mount table is incomplete', () => {
+    const value = procFixture();
+    const prompt = `${'review the change carefully '.repeat(12)}and/or file a bug`;
+    for (const argv of [
+      ['bash', '-c', `set -e; true && ${'x'.repeat(300)}/etc/hostname`],
+      ['node', 'app.js', prompt],
+      ['node', 'app.js', `--prompt=${'y'.repeat(300)}/x`],
+    ]) {
+      value.add(1020, argv[0], `/usr/bin/${argv[0]}`, argv, value.root);
+      expect([argv, value.census()]).toEqual([argv, { complete: true, running: 0 }]);
+      fs.rmSync(path.join(value.proc, '1020'), { recursive: true });
+    }
+    expect(
+      censusAntigravityProcesses({
+        home: value.home,
+        nativeBinary: value.native,
+        procRoot: value.proc,
+        selfPid: 7,
+        mountInfo: path.join(value.root, 'no-such-mountinfo'),
+      })
+    ).toEqual({ complete: false, running: 0 });
+  });
+
   test('the real /proc census is complete despite non-dumpable same-user processes', () => {
     // Read-only; any native path works. systemd --user, ssh-agent and sshd-session
     // deny their exe link, which must not make the census incomplete forever.
