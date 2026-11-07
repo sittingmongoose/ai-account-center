@@ -23,8 +23,6 @@ export interface NativeProcessCensus {
 }
 
 const CMDLINE_BYTES = 65_536;
-/** How many arguments after an interpreter's own name are looked at for its script. */
-const SCRIPT_SCAN = 32;
 /** Only these mean the process exited between the listing and the read. */
 const GONE = new Set(['ENOENT', 'ESRCH']);
 
@@ -152,16 +150,17 @@ function readCmdline(file: string): string {
  * through a symlink elsewhere is not resolved. Both still match by name or
  * executable when those are Antigravity's.
  *
- * For an interpreter, every non-option argument among the first 32 is a
- * candidate script, a bare name (`python3 helper.py`) included, resolved
- * against its working folder; one with no candidate within what was read
- * leaves idle unproven.
+ * For an interpreter, every non-option argument and every `--opt=value`
+ * value in the part of the command line read is a candidate script, a bare
+ * name (`python3 helper.py`) included, resolved against its working folder;
+ * an interpreter whose working folder is inside a root counts whatever its
+ * arguments (`python3 -m mod` there); one whose command line was cut at the
+ * read limit leaves idle unproven.
  *
  * A non-dumpable process hides its working folder, so a relative script can't
  * be placed. When such a process is an interpreter (python, node, sh, perl,
- * lua, php and the like, by process name or argv0) running a relative script
- * with a slash, it may be a live helper, so the census is incomplete rather
- * than idle. Other non-dumpable processes (systemd --user, ssh-agent,
+ * lua, php and the like, by process name or argv0) with a candidate script, it
+ * may be a live helper, so the census is incomplete rather than idle. Other non-dumpable processes (systemd --user, ssh-agent,
  * gpg-agent, sshd-session, sandboxed browser renderers whose
  * `--flag=/path` arguments read like relative paths) are not judged by a
  * script path. An interpreter under a renamed binary is a known limit.
@@ -237,11 +236,16 @@ export function censusAntigravityProcesses(options: {
         const all = cmdline.split('\0').filter(Boolean);
         const args = all.slice(0, 4);
         // An interpreter's script can follow any number of options and may be a bare name (`python3 -I -u helper.py`,
-        // `node helper.js`): for one, every non-option argument within the first SCRIPT_SCAN is a candidate script,
-        // resolved against the working folder like a relative path.
+        // `node helper.js`) or an option's value (`node --require=./hook.js app.js`): for one, every non-option
+        // argument and every `--opt=value` value in the part of the command line read is a candidate script, resolved
+        // against the working folder like a relative path.
         const interpreter = INTERPRETER.test(comm) || INTERPRETER.test(path.basename(all[0] ?? ''));
         const operands = interpreter
-          ? all.slice(1, 1 + SCRIPT_SCAN).filter((argument) => !argument.startsWith('-'))
+          ? all.slice(1).flatMap((argument) => {
+              if (!argument.startsWith('-')) return [argument];
+              const equals = argument.indexOf('=');
+              return equals > 0 && equals < argument.length - 1 ? [argument.slice(equals + 1)] : [];
+            })
           : [];
         let cwds: string[] | undefined;
         let cwdDenied = false;
@@ -260,19 +264,25 @@ export function censusAntigravityProcesses(options: {
           }
           return cwds.map((cwd) => path.resolve(cwd, argument));
         };
+        // An interpreter working inside a root runs Antigravity's code whatever its arguments say (`python3 -m mod`,
+        // `python3 -c ...`, a script on stdin): it counts too. Only one with arguments: a bare interpreter name (an
+        // empty or reaped command line) is no evidence either way.
+        const inRoot = (): boolean => {
+          resolveArgument('./x', true);
+          return (cwds ?? []).some(isAntigravityPath);
+        };
         if (
           args.some((argument) => resolveArgument(argument).some(isAntigravityPath)) ||
-          operands.some((argument) => resolveArgument(argument, true).some(isAntigravityPath))
+          operands.some((argument) => resolveArgument(argument, true).some(isAntigravityPath)) ||
+          (interpreter && all.length > 1 && inRoot())
         ) {
           running += 1;
           continue;
         }
-        // Idle stays unproven for an interpreter whose script couldn't be placed: its working folder is hidden, or
-        // no candidate script turned up within the part of the command line that was read.
-        const unscanned =
-          operands.length === 0 &&
-          (all.length > 1 + SCRIPT_SCAN || Buffer.byteLength(cmdline) >= CMDLINE_BYTES);
-        if (interpreter && (cwdDenied || unscanned)) unplaced = true;
+        // Idle stays unproven for an interpreter whose script couldn't be placed: its working folder is hidden while it
+        // has a candidate script, or the command line was cut at the read limit with no candidate found.
+        const truncated = Buffer.byteLength(cmdline) >= CMDLINE_BYTES;
+        if (interpreter && ((cwdDenied && operands.length > 0) || truncated)) unplaced = true;
       } catch (error) {
         if (error instanceof ProcessGone) continue;
         throw error;

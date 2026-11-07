@@ -496,9 +496,58 @@ describe('runtime-free Antigravity process census', () => {
     // a non-interpreter's bare words stay unresolved
     value.add(963, 'rg', '/usr/bin/rg', ['rg', 'helper.py'], helperDir);
     expect(value.census()).toEqual({ complete: true, running: 0 });
-    // an interpreter with only options in the part read: its script is unknown
-    const many = ['python3', ...Array.from({ length: 40 }, (_, i) => `-W${i}`), 'helper.py'];
-    value.add(964, 'python3', '/usr/bin/python3', many, value.root);
+    // every argument read is looked at: a script after 40 options outside the roots is idle, inside them busy
+    const many = (script: string) => [
+      'python3',
+      '-X',
+      'dev',
+      ...Array.from({ length: 40 }, (_, i) => `-W${i}`),
+      script,
+    ];
+    value.add(964, 'python3', '/usr/bin/python3', many('helper.py'), value.root);
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+    fs.rmSync(path.join(value.proc, '964'), { recursive: true });
+    value.add(
+      965,
+      'python3',
+      '/usr/bin/python3',
+      many(path.join(helperDir, 'helper.py')),
+      value.root
+    );
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '965'), { recursive: true });
+    // an option's value is a script too
+    value.add(
+      966,
+      'node',
+      '/usr/bin/node',
+      ['node', `--require=${path.join(helperDir, 'hook.js')}`, 'app.js'],
+      value.root
+    );
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '966'), { recursive: true });
+    // an interpreter working inside a root counts whatever its arguments say
+    for (const argv of [
+      ['python3', '-m', 'helper'],
+      ['python3', '-c', 'import helper'],
+      ['python3', '-u'],
+    ]) {
+      value.add(967, 'python3', '/usr/bin/python3', argv, helperDir);
+      expect([argv, value.census()]).toEqual([argv, { complete: true, running: 1 }]);
+      fs.rmSync(path.join(value.proc, '967'), { recursive: true });
+    }
+    // a bare interpreter name (an empty or reaped command line) is no evidence
+    value.add(968, 'node', '/usr/bin/node', ['node'], helperDir);
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+    fs.rmSync(path.join(value.proc, '968'), { recursive: true });
+    // a command line cut at the read limit leaves idle unproven
+    value.add(
+      969,
+      'python3',
+      '/usr/bin/python3',
+      ['python3', '-W', 'x'.repeat(70_000)],
+      value.root
+    );
     expect(value.census()).toEqual({ complete: false, running: 0 });
   });
 
