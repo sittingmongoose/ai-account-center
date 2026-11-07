@@ -9,6 +9,8 @@ const BRIDGE_SOURCE = path.resolve(
   '../../../scripts/app-updates/app_update_codex.cjs'
 );
 const bridge = require(BRIDGE_SOURCE);
+/** The daemon a fake readiness check vouches for, and a fake scan finds. */
+const DAEMON = { pid: 1, startTime: '1' };
 const directories: string[] = [];
 afterEach(() => {
   for (const value of directories.splice(0)) fs.rmSync(value, { recursive: true, force: true });
@@ -74,7 +76,7 @@ function fixture() {
         stopPlan: () => ({ daemon: false, desktops: [] }),
         retiredPlan: async () => ({ daemon: false, desktops: [] }),
         restartState: async () => ({ daemon: false, desktops: [], proxy: false }),
-        verifyRunningDaemon: async () => true,
+        verifyRunningDaemon: async () => DAEMON,
         stop: async () => {
           events.push('stop');
           if (busy-- > 0) throw Object.assign(new Error('private'), { code: 'busy' });
@@ -450,8 +452,17 @@ describe('Pending-marker retry', () => {
   const A = 'a'.repeat(32);
   const B = 'b'.repeat(32);
   type Plan = { daemon?: boolean; desktops?: string[] };
-  type Live = Plan & { proxy?: boolean };
-  const state = (live: Live = {}) => ({ daemon: false, desktops: [], proxy: false, ...live });
+  type Live = Plan & {
+    proxy?: boolean;
+    daemonIdentity?: { pid: number; startTime: string } | null;
+  };
+  const state = (live: Live = {}) => ({
+    daemon: false,
+    desktops: [],
+    proxy: false,
+    daemonIdentity: live.daemon ? DAEMON : null,
+    ...live,
+  });
   const plan = (value: Plan = {}) => ({ daemon: false, desktops: [], ...value });
   /** The runtime a click meets: what its stop() plans to close, and what runs after start(). */
   const runtime = (planned: Plan = {}, after: Live = {}) => ({
@@ -461,7 +472,7 @@ describe('Pending-marker retry', () => {
     stopPlan: () => plan(planned),
     retiredPlan: async () => plan(planned),
     restartState: async () => state(after),
-    verifyRunningDaemon: async () => true,
+    verifyRunningDaemon: async () => DAEMON,
   });
   function retry(marker: Record<string, unknown> | null, after: Live = {}, planned: Plan = {}) {
     const value = fixture();
@@ -634,10 +645,13 @@ describe('Pending-marker retry', () => {
       { daemon: true, desktops: [B] }
     );
     await bridge.execute(deps);
-    expect(value.marks).toEqual([
-      { desktop: true, daemon: false, desktops: [A] },
-      { desktop: true, daemon: true, desktops: [A, B] },
-    ]);
+    // The intent before the updater, the same on to stop(), then what stop() closed.
+    expect(value.marks[0]).toEqual({ desktop: true, daemon: false, desktops: [A] });
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: true,
+      daemon: true,
+      desktops: [A, B],
+    });
   });
 
   it('leaves a busy run with a marker that names nothing', async () => {
@@ -827,7 +841,11 @@ describe('Pending-marker retry', () => {
     const result = await bridge.execute(partialCli(value, true));
     expect(result.status).toBe('restart_failed');
     expect(result.version).toBe('2.0.0');
-    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [] }]);
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
   });
 
   it('owes nothing after a partial first CLI update with no daemon running', async () => {
@@ -850,7 +868,11 @@ describe('Pending-marker retry', () => {
       }),
     });
     expect(result.status).toBe('restart_failed');
-    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [] }]);
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
   });
 
   it('takes a runtime that cannot be created to mean a daemon after a partial first CLI update', async () => {
@@ -862,7 +884,11 @@ describe('Pending-marker retry', () => {
       },
     });
     expect(result.status).toBe('restart_failed');
-    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [] }]);
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
   });
 
   it('takes an older runtime to have a daemon after a partial first CLI update', async () => {
@@ -871,7 +897,11 @@ describe('Pending-marker retry', () => {
       ...partialCli(value, false),
       runtime: () => ({ stop: async () => {}, start: async () => {} }),
     });
-    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: [] }]);
+    expect(value.marks[value.marks.length - 1]).toEqual({
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
   });
 
   it('never writes an empty version over the record', async () => {
@@ -894,7 +924,7 @@ describe('Pending-marker retry', () => {
     const { value, deps } = retry({ daemon: true }, { daemon: true });
     deps.runtime = () => ({
       ...runtime({}, { daemon: true }),
-      verifyRunningDaemon: async () => false,
+      verifyRunningDaemon: async () => null,
     });
     const result = await bridge.execute(deps);
     expect(result.messageCode).toBe('restart_not_running');
@@ -915,7 +945,7 @@ describe('Pending-marker retry', () => {
         restartState: async () => state(checked ? afterCheck : { daemon: true, desktops: [A] }),
         verifyRunningDaemon: async () => {
           checked = true;
-          return true;
+          return DAEMON;
         },
       });
       expect((await bridge.execute(deps)).status).toBe(status);
@@ -954,7 +984,7 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => ({
         ...runtime({ daemon: true }, { daemon: true }),
-        verifyRunningDaemon: async () => false,
+        verifyRunningDaemon: async () => null,
       }),
     });
     expect(result.status).toBe('restart_failed');
@@ -971,6 +1001,136 @@ describe('Pending-marker retry', () => {
     expect(result.status).toBe('updated');
   });
 
+  it('checks a daemon that replaced the verified one before trusting it', async () => {
+    for (const [replacementReady, status] of [
+      [false, 'restart_failed'],
+      [true, 'updated'],
+    ] as Array<[boolean, string]>) {
+      const { deps } = retry({ daemon: true }, { daemon: true });
+      const checked: unknown[] = [];
+      let running = { pid: 1, startTime: '1' };
+      deps.runtime = () => ({
+        ...runtime({}, {}),
+        restartState: async () => state({ daemon: true, daemonIdentity: running }),
+        verifyRunningDaemon: async () => {
+          const target = running;
+          checked.push(target);
+          if (target.pid === 2) return replacementReady ? target : null;
+          running = { pid: 2, startTime: '2' };
+          return target;
+        },
+      });
+      expect((await bridge.execute(deps)).status).toBe(status);
+      expect(checked).toEqual([
+        { pid: 1, startTime: '1' },
+        { pid: 2, startTime: '2' },
+      ]);
+    }
+  });
+
+  it('gives up on a daemon that keeps being replaced', async () => {
+    const { deps } = retry({ daemon: true }, { daemon: true });
+    let pid = 1;
+    deps.runtime = () => ({
+      ...runtime({}, {}),
+      restartState: async () =>
+        state({ daemon: true, daemonIdentity: { pid, startTime: String(pid) } }),
+      verifyRunningDaemon: async () => {
+        const target = { pid, startTime: String(pid) };
+        pid++;
+        return target;
+      },
+    });
+    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
+    expect(pid).toBe(3);
+  });
+
+  it('writes the restart intent before the CLI updater runs', async () => {
+    const value = fixture();
+    let atUpdate: unknown;
+    await bridge.execute({
+      ...value.deps,
+      update: async () => {
+        atUpdate = value.deps.marked();
+      },
+      operation: 'cli',
+      runtime: () => runtime({}, { daemon: true }),
+    });
+    expect(atUpdate).toEqual({ version: '1.0.0', desktop: false, daemon: true, desktops: [] });
+  });
+
+  it('puts the earlier marker back exactly when the updater turns out a no-op', async () => {
+    const value = fixture();
+    const result = await bridge.execute({
+      ...value.deps,
+      update: async () => {},
+      operation: 'cli',
+      runtime: () => runtime({}, { daemon: true }),
+    });
+    expect(result.status).toBe('current');
+    expect(value.deps.marked()).toBeNull();
+    const earlier = JSON.stringify({ version: '0.9.0', target: '1.0.0' });
+    const other = fixture();
+    const kept = await bridge.execute({
+      ...other.deps,
+      markerSnapshot: () => earlier,
+      update: async () => {},
+      operation: 'cli',
+      runtime: () => runtime({}, { daemon: true }),
+    });
+    expect(kept.status).toBe('current');
+    expect(other.restored).toEqual([earlier]);
+  });
+
+  it('writes no intent when no daemon is running', async () => {
+    const value = fixture();
+    let atUpdate: unknown = 'unset';
+    await bridge.execute({
+      ...value.deps,
+      update: async () => {
+        atUpdate = value.deps.marked();
+      },
+      operation: 'cli',
+      runtime: () => runtime({}, {}),
+    });
+    expect(atUpdate).toBeNull();
+  });
+
+  it('takes a failed scan before the updater to mean a daemon', async () => {
+    const value = fixture();
+    let atUpdate: unknown;
+    await bridge.execute({
+      ...value.deps,
+      update: async () => {
+        atUpdate = value.deps.marked();
+      },
+      operation: 'cli',
+      runtime: () => ({
+        ...runtime(),
+        restartState: async () => {
+          throw new Error('Codex inventory failed.');
+        },
+      }),
+    });
+    expect(atUpdate).toEqual({ version: '1.0.0', desktop: false, daemon: true, desktops: [] });
+  });
+
+  it('keeps the intent on the marker until stop() hands over its plan', async () => {
+    const value = fixture();
+    let atStop: unknown;
+    await bridge.execute({
+      ...value.deps,
+      operation: 'cli',
+      runtime: () => ({
+        ...runtime({ daemon: true }, { daemon: true }),
+        stop: async () => {
+          atStop = value.deps.marked();
+        },
+      }),
+    });
+    expect(atStop).toEqual({ version: '1.0.0', desktop: false, daemon: true, desktops: [] });
+  });
+
   it('does not run the readiness check when no daemon is owed', async () => {
     const { deps } = retry({ desktop: true, desktops: [A] }, { desktops: [A], daemon: true });
     let checks = 0;
@@ -978,7 +1138,7 @@ describe('Pending-marker retry', () => {
       ...runtime({}, { desktops: [A], daemon: true }),
       verifyRunningDaemon: async () => {
         checks++;
-        return false;
+        return null;
       },
     });
     expect((await bridge.execute(deps)).status).toBe('updated');
@@ -991,7 +1151,7 @@ describe('Pending-marker retry', () => {
       ...failedInstall(value, { daemon: true }, { daemon: true }),
       runtime: () => ({
         ...runtime({ daemon: true }, { daemon: true }),
-        verifyRunningDaemon: async () => false,
+        verifyRunningDaemon: async () => null,
       }),
     });
     expect(value.pending()).toBe(true);
@@ -1138,7 +1298,7 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => ({
         ...failingStop({ daemon: true }, { daemon: true }),
-        verifyRunningDaemon: async () => false,
+        verifyRunningDaemon: async () => null,
       }),
     });
     expect(result.status).toBe('restart_failed');
@@ -1159,7 +1319,7 @@ describe('Pending-marker retry', () => {
         ...failingStop({ daemon: true }, { daemon: true }),
         verifyRunningDaemon: async () => {
           atCheck = value.marks[value.marks.length - 1];
-          return true;
+          return DAEMON;
         },
       }),
     });
@@ -1173,8 +1333,12 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => failingStop({ daemon: true }, { daemon: true }),
     });
-    expect(value.restored).toEqual([JSON.stringify({ version: '1.0.0' })]);
-    expect(value.deps.marked()).toEqual({ version: '1.0.0' });
+    // The earlier marker is the intent written before the updater: the daemon still runs the old
+    // binary, so it stays owed.
+    expect(value.restored).toEqual([
+      JSON.stringify({ version: '1.0.0', desktop: false, daemon: true, desktops: [] }),
+    ]);
+    expect(value.deps.marked()?.daemon).toBe(true);
   });
 
   it('removes the marker it added when there was none and the daemon passes', async () => {
@@ -1213,7 +1377,8 @@ describe('Pending-marker retry', () => {
     deps.runtime = () => failingStop({ daemon: true }, { daemon: true, desktops: [A] });
     await bridge.execute(deps);
     expect(value.restored.map((text) => JSON.parse(text))).toEqual([
-      { version: '1.0.0', desktop: true, daemon: false, desktops: [A] },
+      // With the intent written before the updater, the running daemon is owed as well.
+      { version: '1.0.0', desktop: true, daemon: true, desktops: [A] },
     ]);
   });
 
@@ -1326,12 +1491,18 @@ describe('Pending-marker retry', () => {
         ...failingStop({ daemon: true }, { daemon: true }, {}),
         verifyRunningDaemon: async () => {
           checks++;
-          return false;
+          return null;
         },
       }),
     });
     expect(checks).toBe(0);
-    expect(value.marks).toEqual([undefined]);
+    // Only the intent from before the updater: nothing retired, nothing more recorded.
+    expect(
+      value.marks.every(
+        (mark) =>
+          JSON.stringify(mark) === JSON.stringify({ desktop: false, daemon: true, desktops: [] })
+      )
+    ).toBe(true);
   });
 
   it('adds nothing when a failed stop() recovered what it closed', async () => {
@@ -1341,8 +1512,12 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => failingStop({ daemon: true, desktops: [A] }, { daemon: true, desktops: [A] }),
     });
-    expect(value.restored).toEqual([JSON.stringify({ version: '1.0.0' })]);
-    expect(value.deps.marked()).toEqual({ version: '1.0.0' });
+    // The earlier marker is the intent written before the updater: the daemon still runs the old
+    // binary, so it stays owed.
+    expect(value.restored).toEqual([
+      JSON.stringify({ version: '1.0.0', desktop: false, daemon: true, desktops: [] }),
+    ]);
+    expect(value.deps.marked()?.daemon).toBe(true);
   });
 
   it('adds nothing when a failed stop() never made a plan', async () => {
@@ -1403,7 +1578,12 @@ exports.createCodexActivationRuntime = (home, overrides) => {
   const read = async () => {
     const seen = await overrides.scan();
     const desktop = seen.some((row) => row.exe === '/usr/lib/chatgpt/ChatGPT');
-    return { daemon: seen.some((row) => row.args.includes('--listen')), desktops: desktop ? [INSTANCE] : [] };
+    const daemon = seen.find((row) => row.args.includes('--listen'));
+    return {
+      daemon: Boolean(daemon),
+      daemonIdentity: daemon ? { pid: daemon.pid, startTime: daemon.startTime } : null,
+      desktops: desktop ? [INSTANCE] : [],
+    };
   };
   let plan = { daemon: false, desktops: [] };
   return {
@@ -1414,7 +1594,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     },
     verifyRunningDaemon: async () => {
       if (process.env.FIXTURE_AT_VERIFY) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_VERIFY);
-      return process.env.FIXTURE_VERIFY !== 'fail';
+      return process.env.FIXTURE_VERIFY === 'fail' ? null : (await read()).daemonIdentity;
     },
     restartState: async () => ({ ...(await read()), proxy: false }),
     stop: async () => {
@@ -1549,14 +1729,15 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it('writes what stop() closed to the real marker, and nothing before stop()', () => {
+  it('writes the running daemon before the update, and what stop() closed after it', () => {
     const { result, marker, atStop, salt } = run('fail', {
       marker: null,
       next: '3.0.0',
       procs: running,
     });
     expect(result.status).toBe('restart_failed');
-    expect(read(atStop)).toEqual({ version: '3.0.0' });
+    // The intent written before the updater ran: the daemon on the old binary.
+    expect(read(atStop)).toEqual({ version: '3.0.0', desktop: false, daemon: true, desktops: [] });
     expect(read(marker)).toEqual({
       version: '3.0.0',
       desktop: true,
@@ -1591,14 +1772,15 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     });
   });
 
-  it('leaves the real marker naming nothing when a failed stop() recovered', () => {
+  it('leaves the update intent on the real marker when a failed stop() recovered', () => {
     const { marker } = run('idle', {
       marker: null,
       next: '3.0.0',
       stop: 'fail-recovered',
       procs: running,
     });
-    expect(read(marker)).toEqual({ version: '3.0.0' });
+    // Recovery brought the old daemon back, still on the old binary: it is still owed.
+    expect(read(marker)).toEqual({ version: '3.0.0', desktop: false, daemon: true, desktops: [] });
   });
 
   it('reads a marker the Python path wrote for a prerelease as a retry', () => {
@@ -1678,7 +1860,8 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       procs: running,
     });
     expect(read(atVerify).daemon).toBe(true);
-    expect(read(marker)).toEqual({ version: '3.0.0' });
+    // Put back as it was before stop(): the update intent naming the daemon.
+    expect(read(marker)).toEqual({ version: '3.0.0', desktop: false, daemon: true, desktops: [] });
     expect(result.status).toBe('restart_failed');
   });
 

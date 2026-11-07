@@ -657,6 +657,67 @@ describe('Codex Desktop update retry on the real runtime', () => {
     });
   });
 
+  /** A retry owing a daemon, where daemon B replaces the one that just passed the bridge's check. */
+  function replacedAfterCheck(replacementReady: boolean) {
+    const fake = harness([daemon]);
+    const checked: number[] = [];
+    const { deps, marker } = click(fake);
+    const replacement = { ...daemon, pid: 999, startTime: '999' };
+    return {
+      fake,
+      checked,
+      marker,
+      run: async () => {
+        bridge.output.restartedProcesses = 0;
+        return {
+          ...(await bridge.execute({
+            ...deps,
+            operation: 'cli',
+            update: async () => {},
+            readVersion: async () => '2.0.0',
+            pending: () => true,
+            marked: () => ({ version: '2.0.0', desktop: false, daemon: true, desktops: [] }),
+            runtime: (hooks = {}) =>
+              createCodexActivationRuntime(home, {
+                ...fake.deps,
+                ...hooks,
+                launch: (target, isDesktop) =>
+                  bridge.relaunch(target, isDesktop, fake.deps.launch, { inside: () => true }),
+                verifyDaemon: async (target) => {
+                  checked.push(target.pid);
+                  if (target.pid === replacement.pid) {
+                    if (!replacementReady) throw new CodexActivationRuntimeError('never bound');
+                    return;
+                  }
+                  // The bridge's own check (after start()'s): it passes, then B takes over.
+                  if (checked.length === 2) {
+                    for (const entry of [...fake.current()])
+                      await fake.deps.signal(entry, 'SIGKILL');
+                    fake.inject(replacement);
+                  }
+                },
+              }),
+          })),
+        };
+      },
+    };
+  }
+
+  it('does not credit a replacement daemon with the readiness of the one it replaced', async () => {
+    const { run, checked, marker } = replacedAfterCheck(false);
+    const result = await run();
+    expect(checked).toContain(999);
+    expect(result.status).toBe('restart_failed');
+    expect(result.messageCode).toBe('restart_not_running');
+    expect(marker()).toBeNull();
+  });
+
+  it('accepts a replacement daemon once it passes its own readiness check', async () => {
+    const { run, checked } = replacedAfterCheck(true);
+    expect((await run()).status).toBe('updated');
+    expect(checked[checked.length - 1]).toBe(999);
+  });
+
   it('accepts a respawned daemon once the readiness check passes', async () => {
     let checks = 0;
     const { run } = respawnedDaemon(async () => {
@@ -786,17 +847,25 @@ describe('What the runtime reports for a retry', () => {
         checked.push(target.pid);
       },
     });
-    expect(await runtime.verifyRunningDaemon()).toBe(true);
+    expect(await runtime.verifyRunningDaemon()).toEqual({
+      pid: daemon.pid,
+      startTime: daemon.startTime,
+    });
+    expect((await runtime.restartState()).daemonIdentity).toEqual({
+      pid: daemon.pid,
+      startTime: daemon.startTime,
+    });
     expect(checked).toEqual([daemon.pid]);
     const none = createCodexActivationRuntime(home, harness([]).deps);
-    expect(await none.verifyRunningDaemon()).toBe(false);
+    expect(await none.verifyRunningDaemon()).toBeNull();
+    expect((await none.restartState()).daemonIdentity).toBeNull();
     const failing = createCodexActivationRuntime(home, {
       ...fake.deps,
       verifyDaemon: async () => {
         throw new CodexActivationRuntimeError('socket not bound');
       },
     });
-    expect(await failing.verifyRunningDaemon()).toBe(false);
+    expect(await failing.verifyRunningDaemon()).toBeNull();
   });
 
   it('hands its plan to beforeStop under the lock, before anything is signalled', async () => {
@@ -864,25 +933,9 @@ describe("A helper killed during stop()'s own recovery", () => {
     PYTHONDONTWRITEBYTECODE: '1',
   });
 
-  it('leaves a marker that sends the next click to the bridge, not to current', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-recovery-'));
-    roots.push(root);
-    const child = spawnSync(
-      process.execPath,
-      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/killed-recovery.ts')],
-      { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
-    );
-    expect(child.signal).toBe('SIGKILL');
-    const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
-    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual({
-      version: '2.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: [],
-    });
-
-    // The next updater call, once the failed replacement has exited: the real Python routing.
-    const next = spawnSync(
+  /** The next Python updater call on what a killed helper left, with no daemon reported running. */
+  const nextClick = (root: string) => {
+    return spawnSync(
       'python3',
       [
         '-c',
@@ -907,11 +960,55 @@ describe("A helper killed during stop()'s own recovery", () => {
       ],
       { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
     );
+  };
+
+  it('leaves a marker that sends the next click to the bridge, not to current', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-recovery-'));
+    roots.push(root);
+    const child = spawnSync(
+      process.execPath,
+      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/killed-recovery.ts')],
+      { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
+    );
+    expect(child.signal).toBe('SIGKILL');
+    const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual({
+      version: '2.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
+
+    // The next updater call, once the failed replacement has exited: the real Python routing.
+    const next = nextClick(root);
     expect(next.status).toBe(0);
     const routed = JSON.parse(next.stdout.trim());
     expect(routed.bridged).toBe(true);
     expect(routed.status).not.toBe('current');
     expect(routed.marker).toBe(true);
+  });
+
+  it('leaves a marker naming the old daemon when killed while the updater runs', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-install-'));
+    roots.push(root);
+    const child = spawnSync(
+      process.execPath,
+      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts')],
+      { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
+    );
+    expect(child.signal).toBe('SIGKILL');
+    const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual({
+      version: '1.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: [],
+    });
+    const next = nextClick(root);
+    expect(next.status).toBe(0);
+    const routed = JSON.parse(next.stdout.trim());
+    expect(routed.bridged).toBe(true);
+    expect(routed.status).not.toBe('current');
   });
 });
 

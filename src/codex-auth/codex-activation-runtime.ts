@@ -24,7 +24,7 @@ export interface CodexActivationRuntime {
    * start()'s bounded readiness check, on a daemon running now. A retry's own plan may name no daemon
    * when a proxy respawned it, and a daemon's arguments say nothing about its socket being bound.
    */
-  verifyRunningDaemon(): Promise<boolean>;
+  verifyRunningDaemon(): Promise<CodexDaemonIdentity | null>;
 }
 
 export interface CodexRestartPlan {
@@ -33,8 +33,16 @@ export interface CodexRestartPlan {
   desktops: string[];
 }
 
+/** Which process a readiness check vouched for: a later scan must find this same one. */
+export interface CodexDaemonIdentity {
+  pid: number;
+  startTime: string;
+}
+
 export interface CodexRestartState extends CodexRestartPlan {
   proxy: boolean;
+  /** The shared daemon running now, or null. */
+  daemonIdentity: CodexDaemonIdentity | null;
 }
 
 /**
@@ -570,12 +578,12 @@ export function createCodexActivationRuntime(
       const daemon = (await scan()).find(
         (entry) => isDaemon(entry) && !isProxy(entry) && usesHome(entry, codexHome)
       );
-      if (!daemon) return false;
+      if (!daemon) return null;
       try {
         await dependencies.verifyDaemon(daemon);
-        return true;
+        return { pid: daemon.pid, startTime: daemon.startTime };
       } catch {
-        return false;
+        return null;
       }
     },
     restartState: async () => {
@@ -585,8 +593,10 @@ export function createCodexActivationRuntime(
       const mains = processes.filter(isDesktop);
       const instance = (main: CodexProcessSnapshot): string =>
         codexDesktopInstance(desktopUserData(main, processes));
+      const daemon = processes.find((entry) => isDaemon(entry) && !isProxy(entry) && onHome(entry));
       return {
-        daemon: processes.some((entry) => isDaemon(entry) && !isProxy(entry) && onHome(entry)),
+        daemon: daemon !== undefined,
+        daemonIdentity: daemon ? { pid: daemon.pid, startTime: daemon.startTime } : null,
         // start()'s readiness test: a live app server on this home under the main process.
         desktops: mains
           .filter((main) =>

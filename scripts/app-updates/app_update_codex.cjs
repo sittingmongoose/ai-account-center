@@ -169,14 +169,21 @@ const runtimeState = async (runtime, deps) => {
 /**
  * What runs now, with a daemon that owes readiness held to start()'s own bounded check. That check can
  * take about 40 seconds, so everything is judged on a scan taken after it: a desktop that exits while
- * it waits is not back, and the daemon must still be running as well as have passed.
+ * it waits is not back. The daemon in that scan must be the very one the check vouched for, by pid and
+ * start time. One that replaced it during the check gets a check of its own, once; a daemon that
+ * keeps being replaced is not ready.
  */
+const sameDaemon = (left, right) => Boolean(left && right && left.pid === right.pid && left.startTime === right.startTime);
 const verifiedState = async (runtime, deps, owed) => {
-  const live = await runtimeState(runtime, deps);
-  if (!owed.daemon || !live.daemon) return live;
-  const ready = (await runtime.verifyRunningDaemon?.()) === true;
-  const after = await runtimeState(runtime, deps);
-  return ready ? after : { ...after, daemon: false };
+  let after = await runtimeState(runtime, deps);
+  if (!owed.daemon || !after.daemon) return after;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const checked = await runtime.verifyRunningDaemon?.();
+    after = await runtimeState(runtime, deps);
+    if (!checked || typeof checked !== 'object' || !after.daemon) return { ...after, daemon: false };
+    if (sameDaemon(checked, after.daemonIdentity)) return after;
+  }
+  return { ...after, daemon: false };
 };
 async function execute(deps) {
   const idle = Math.max(1, Math.min(seconds, deps.idleSeconds ?? IDLE_WAIT_SECONDS));
@@ -204,16 +211,32 @@ async function execute(deps) {
     retried = stillOwed(prior, { daemon: false, desktops: [] });
     if (mode === 'cli') {
       output.updateAttempted = true;
+      // The updater can replace Codex under a daemon still running the old binary, and the helper can
+      // be killed before anything else is written. So a running daemon goes in the marker first, and the
+      // earlier marker comes back exactly if the update turns out to change nothing. An older runtime,
+      // one that can't be created, or a failed scan can't say, so there is taken to be one.
+      const pendingBefore = deps.pending(output.previousVersion);
+      let running = true;
+      try {
+        const probe = deps.runtime();
+        if (probe.restartState) running = (await probe.restartState()).daemon;
+      } catch { /* Stays true. */ }
+      const intent = { ...prior, daemon: prior.daemon || running };
+      const intended = stillOwed(intent, { daemon: false, desktops: [] });
+      const earlierAtInstall = intended ? deps.markerSnapshot() : null;
+      if (intended) deps.mark(markerFields(intent));
       updating = true;
       await deps.update();
       updating = false;
       output.version = version(await deps.readVersion());
       if (!output.version) { output.messageCode = 'version_unknown'; return output; }
       if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
-      if (output.version === output.previousVersion && !retried && !deps.pending(output.version)) {
+      if (output.version === output.previousVersion && !retried && !pendingBefore) {
+        if (intended) { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); }
         output.status = 'current'; output.messageCode = 'current'; return output;
       }
-      deps.mark(retried ? markerFields(prior) : undefined);
+      // Until stop() hands over its plan, the marker keeps naming the daemon on the new version.
+      deps.mark(intended ? markerFields(intent) : undefined);
     }
     // A salt problem must not cost a close and reopen: it is met here, before anything stops.
     deps.prepareSeal?.();
