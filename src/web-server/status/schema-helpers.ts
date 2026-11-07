@@ -214,9 +214,32 @@ export function count(value: unknown, field: string): number {
 }
 
 export function iso(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !ISO.test(value) || !Number.isFinite(Date.parse(value)))
-    fail(field);
+  if (typeof value !== 'string' || !ISO.test(value) || !realTimestamp(value)) fail(field);
   return value;
+}
+
+const ISO_PARTS =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+/**
+ * A real calendar moment, as agreed with agent-report so the two never diverge: a real month and day (leap years
+ * counted), hour 00-23, minute and second 00-59 (no leap second, no 24:00), and an offset within +-14:00. `Date.parse`
+ * alone rolls over (`2026-02-30` reads as March 2).
+ */
+export function realTimestamp(value: string): boolean {
+  const m = ISO_PARTS.exec(value);
+  if (!m) return false;
+  const [year, month, day, hour, minute] = [m[1], m[2], m[3], m[4], m[5]].map(Number);
+  const second = m[6] === undefined ? 0 : Number(m[6]);
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day < 1 || day > lastDay) return false;
+  if (m[7] !== undefined) {
+    const offsetHours = Number(m[8]);
+    const offsetMinutes = Number(m[9]);
+    if (offsetMinutes > 59 || offsetHours * 60 + offsetMinutes > 14 * 60) return false;
+  }
+  return Number.isFinite(Date.parse(value));
 }
 
 export function optIso(value: unknown, field: string): string | null {

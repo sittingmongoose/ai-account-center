@@ -30,6 +30,7 @@ import {
   isPmMailName,
   isWriterName,
   jsonFromBytes,
+  realTimestamp,
   REPORT_SIZE_CAPS,
 } from '../../../../src/web-server/status/report-schema';
 import {
@@ -135,6 +136,35 @@ describe('the test environment', () => {
     expect(agentReportsRoot()).not.toBe(DEFAULT_AGENT_REPORTS_DIR);
     expect(pmMailRegistryDir()).not.toBe(DEFAULT_PM_MAIL_REGISTRY);
     expect(process.env.AAC_STATUS_DOORBELL).toBe('off');
+  });
+});
+
+describe('timestamps are real calendar moments', () => {
+  it('takes real dates and refuses rollovers, 24:00, leap seconds and wild offsets', () => {
+    for (const ok of [
+      '2026-11-06T16:00:00Z',
+      '2026-11-06T16:00Z',
+      '2026-11-06T16:00:00.123Z',
+      '2028-02-29T00:00:00Z',
+      '2026-12-31T23:59:59-05:00',
+      '2026-01-01T00:00:00+14:00',
+    ])
+      expect([ok, realTimestamp(ok)]).toEqual([ok, true]);
+    for (const bad of [
+      '2026-99-99T99:99:99Z',
+      '2026-02-30T10:00:00Z',
+      '2026-02-29T10:00:00Z',
+      '2026-04-31T10:00:00Z',
+      '2026-13-01T00:00:00Z',
+      '2026-00-10T00:00:00Z',
+      '2026-01-00T00:00:00Z',
+      '2026-11-06T24:00:00Z',
+      '2026-11-06T23:60:00Z',
+      '2026-11-06T23:59:60Z',
+      '2026-11-06T10:00:00+14:30',
+      '2026-11-06T10:00:00+05:61',
+    ])
+      expect([bad, realTimestamp(bad)]).toEqual([bad, false]);
   });
 });
 

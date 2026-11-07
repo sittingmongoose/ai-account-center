@@ -30,6 +30,8 @@ const ALLOWED_KEYWORDS = new Set([
   'oneOf',
   'anyOf',
   'description',
+  // only `"format": "date-time"` (beside a timestamp's pattern; agent-report and AAC both check real calendar dates)
+  'format',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -60,6 +62,9 @@ function collectKeywordViolations(node: unknown, path: string, out: string[]): v
     }
     if (!ALLOWED_KEYWORDS.has(key)) {
       out.push(`${path}: unknown keyword "${key}"`);
+    }
+    if (key === 'format' && (node[key] !== 'date-time' || typeof node.pattern !== 'string')) {
+      out.push(`${path}: "format" is only "date-time", beside a pattern`);
     }
     collectKeywordViolations(node[key], `${path}.${key}`, out);
   }
