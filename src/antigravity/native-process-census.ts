@@ -123,7 +123,8 @@ const SCRIPT_FILE =
   /\.(?:[cm]?[jt]sx?|py[cwz]?|pl|pm|rb|php\d?|phar|lua|r|jl|sh|bash|zsh|ksh|fish|tcl|ps1)$/i;
 
 /**
- * Interpreter options known to take no separate value, by family (short ones also inside a cluster, `-uOO`); with
+ * Interpreter options known to take no separate value, by family (an option whose value is optional and only ever
+ * attached, such as perl's `-i[ext]`, is one when alone) (short ones also inside a cluster, `-uOO`); with
  * `--no-...` and, for deno, `--allow-...`, `--deny-...` and `--unstable...`. Any other option without `=` may take the
  * next argument as its value, so the script is looked for after it: a list that misses a flag only makes the census
  * more careful, and none needs to know every option that takes a value (`python3 -uW ignore`, `bash -eo pipefail`,
@@ -259,6 +260,12 @@ const FLAG_OPTIONS: Readonly<Record<string, readonly string[]>> = {
     '-l',
     '-0',
     '-u',
+    '-i',
+    '-x',
+    '-d',
+    '-D',
+    '-f',
+    '-V',
   ],
   ruby: [
     '-w',
@@ -273,6 +280,10 @@ const FLAG_OPTIONS: Readonly<Record<string, readonly string[]>> = {
     '-c',
     '-y',
     '-h',
+    '-i',
+    '-x',
+    '-0',
+    '-K',
     '--verbose',
     '--version',
     '--help',
@@ -338,9 +349,9 @@ function takesNoValue(option: string, flags: ReadonlySet<string>, clusters: bool
       [...flags].some((flag) => flag.endsWith('*') && option.startsWith(flag.slice(0, -1)))
     );
   if (flags.has(option)) return true;
-  if (!clusters || !/^[-+][A-Za-z0-9]+$/.test(option)) return false;
+  if (!clusters || !/^[-+][A-Za-z0-9]/.test(option)) return false;
   for (let at = 1; at < option.length; at += 1) {
-    if (flags.has(`-${option[at]}`)) continue;
+    if (/[A-Za-z0-9]/.test(option[at]) && flags.has(`-${option[at]}`)) continue;
     // the first letter that is no flag holds the rest as its value, or takes the next argument when it is last
     return at < option.length - 1;
   }
@@ -422,8 +433,18 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
       packageNext = false;
       continue;
     }
-    const name = path.basename(argument.replace(/^(?:npm|jsr):/, '')).replace(/\.[^.]+$/, '');
-    if (!ranBy && SCRIPT_RUNNERS.has(name)) {
+    // a runner by its name (`npm:tsx@4.19.2`, `@esbuild-kit/esr@1`) or its package's entry (`node_modules/tsx/...`)
+    const name = path
+      .basename(argument.replace(/^(?:npm|jsr):/, ''))
+      .replace(/@[^@/]*$/, '')
+      .replace(/\.[^.]+$/, '');
+    const entry = /(?:^|[\\/])node_modules[\\/](?:@[^\\/]+[\\/])?([^\\/]+)[\\/]/.exec(
+      argument
+    )?.[1];
+    if (
+      !ranBy &&
+      (SCRIPT_RUNNERS.has(name) || (entry !== undefined && SCRIPT_RUNNERS.has(entry)))
+    ) {
       ranBy = true;
       continue;
     }
