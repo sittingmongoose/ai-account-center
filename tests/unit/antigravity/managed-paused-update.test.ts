@@ -810,11 +810,11 @@ describe('runtime-free Antigravity process census', () => {
     expect(performance.now() - started).toBeLessThan(3000);
   });
 
-  test('a denied or looping lookup leaves an interpreter unplaced, and start-up never touches a mount', () => {
+  test('a denied script path is unknown, a loop or a prose mention is not, and start-up never touches a mount', () => {
     const value = procFixture();
     const helperDir = path.join(value.home, '.gemini/antigravity-cli');
     fs.mkdirSync(helperDir, { recursive: true });
-    // a link loop in the script's path: where it leads is unknown, so idle can't be proven
+    // a link loop: the kernel can't open the path either (ELOOP), so nothing runs from it
     fs.symlinkSync(path.join(value.root, 'loop-b'), path.join(value.root, 'loop-a'));
     fs.symlinkSync(path.join(value.root, 'loop-a'), path.join(value.root, 'loop-b'));
     value.add(
@@ -824,8 +824,18 @@ describe('runtime-free Antigravity process census', () => {
       ['python3', path.join(value.root, 'loop-a', 'h.py')],
       value.root
     );
-    expect(value.census()).toEqual({ complete: false, running: 0 });
+    expect(value.census()).toEqual({ complete: true, running: 0 });
     fs.rmSync(path.join(value.proc, '1010'), { recursive: true });
+    // a NUL byte (file:///tmp/a%00b.py) names no openable path
+    value.add(
+      1012,
+      'node',
+      '/usr/bin/node',
+      ['node', '--import=file:///tmp/a%00b.py', 'app.js'],
+      value.root
+    );
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+    fs.rmSync(path.join(value.proc, '1012'), { recursive: true });
     // a denied folder on the way (not root, which reads mode-000 folders)
     if (process.getuid?.() !== 0) {
       const locked = path.join(value.root, 'locked');
@@ -841,6 +851,16 @@ describe('runtime-free Antigravity process census', () => {
         );
         expect(value.census()).toEqual({ complete: false, running: 0 });
         fs.rmSync(path.join(value.proc, '1011'), { recursive: true });
+        // the same folder in a prose prompt (spaces) is no script: idle stays provable
+        value.add(
+          1013,
+          'node',
+          '/usr/bin/node',
+          ['node', 'app.js', `see ${locked}/in and/or later`],
+          value.root
+        );
+        expect(value.census()).toEqual({ complete: true, running: 0 });
+        fs.rmSync(path.join(value.proc, '1013'), { recursive: true });
       } finally {
         fs.chmodSync(locked, 0o755);
       }

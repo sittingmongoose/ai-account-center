@@ -80,8 +80,16 @@ const NETWORK_FS =
 const STEPS_PER_PROCESS = 65_536;
 /** A lookup that ran out of the process's step budget. */
 const OVER_BUDGET = Symbol('over budget');
-/** A lookup that couldn't be finished (a denied folder, a link loop): where the path leads is unknown. */
+/** A lookup that couldn't be finished (a denied folder, an unreadable link): where the path leads is unknown. */
 const UNRESOLVED = Symbol('unresolved');
+/** lstat failures that mean the kernel couldn't open the path either, so no script runs from it. */
+const KERNEL_CANT_OPEN = new Set([
+  'ENOENT',
+  'ENOTDIR',
+  'ENAMETOOLONG',
+  'EINVAL',
+  'ERR_INVALID_ARG_VALUE',
+]);
 /** How many path lookups one process's arguments may cost the census. */
 const LOOKUPS_PER_PROCESS = 4096;
 
@@ -130,8 +138,10 @@ function cachedLstat(file: string, cache: StatCache): fs.Stats | string {
  * Where a path really leads, resolved one component at a time as the kernel does: `.` and `..` apply to the folder
  * reached so far, after links (`/tmp/l/../h.py` with `/tmp/l -> root/sub` is `root/h.py`). Nothing on or under a mount
  * in `network` is touched: the path from there on is kept as written. A missing tail is kept (`/tmp/link/gone.py`
- * through `/tmp/link -> root` is `root/gone.py`), and so is a dangling link's target. A loop or any other failure is
- * null.
+ * through `/tmp/link -> root` is `root/gone.py`), and so is a dangling link's target. What the kernel couldn't open
+ * either (a missing name, one too long, a NUL byte, a chain past 40 links) is kept as written; a denied folder is kept
+ * as written only for text with spaces (a prose prompt that mentions /root/...), since a script path the owner's own
+ * processes can't reach may still be a helper's under other credentials; any other failure is UNRESOLVED.
  */
 function resolveLocally(
   file: string,
@@ -139,6 +149,9 @@ function resolveLocally(
   cache: StatCache,
   budget: { steps: number }
 ): string | typeof UNRESOLVED | typeof OVER_BUDGET {
+  // a NUL can't be in a path the kernel opens: nothing runs from it
+  if (file.includes('\0')) return file;
+  const prose = /\s/.test(file);
   // components still to walk, last first, so each step is O(1)
   const stack = file.split(path.sep).filter(Boolean).reverse();
   let current: string = path.sep;
@@ -181,7 +194,7 @@ function resolveLocally(
     if (typeof stat === 'string')
       // missing, not a folder, or a name the kernel can't open either (a long prompt's "and/or" reads as a path):
       // the rest is kept as written
-      return stat === 'ENOENT' || stat === 'ENOTDIR' || stat === 'ENAMETOOLONG'
+      return KERNEL_CANT_OPEN.has(stat) || (prose && (stat === 'EACCES' || stat === 'EPERM'))
         ? path.join(current, part, ...[...stack].reverse())
         : UNRESOLVED;
     if (!stat.isSymbolicLink()) {
@@ -189,7 +202,8 @@ function resolveLocally(
       continue;
     }
     hops += 1;
-    if (hops > 40) return UNRESOLVED;
+    // past the kernel's own limit (ELOOP): nothing can be opened through this path
+    if (hops > 40) return path.join(next, ...[...stack].reverse());
     let target: string;
     try {
       target = fs.readlinkSync(next);
@@ -311,7 +325,8 @@ function filePath(url: string): string {
  * up (a link that leads onto such a mount is read as written from there: a link
  * on the share pointing back into a root is a known limit, since following it
  * would block on a hung share and `~/.local/bin` links into the share are
- * common); a denied folder or a link loop leaves an interpreter unplaced; at most 4096 lookups per process, past which an interpreter's script is
+ * common); a denied folder on a script-like path (no spaces) or an unreadable
+ * link leaves an interpreter unplaced; at most 4096 lookups per process, past which an interpreter's script is
  * unplaced.
  *
  * An interpreter is known by its process name, argv0 or executable (a
