@@ -1221,6 +1221,43 @@ describe("A helper killed during stop()'s own recovery", () => {
     expect(routed.marker).toBe(true);
   });
 
+  it.each(['same', 'distinct'])(
+    'keeps what a failed stop() owes when killed during its readiness check (%s folders)',
+    (profiles) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-standing-'));
+      roots.push(root);
+      const env = { ...isolated(root), AAC_FIXTURE_PROFILES: profiles };
+      const fixture = path.join(repo, 'tests/unit/codex-auth/fixtures/killed-standing-total.ts');
+      const spawn = (mode: string) =>
+        spawnSync(process.execPath, ['run', fixture, mode], {
+          cwd: repo,
+          env,
+          encoding: 'utf8',
+          timeout: 60_000,
+        });
+      expect(spawn('kill').signal).toBe('SIGKILL');
+      const marker = JSON.parse(
+        fs.readFileSync(
+          path.join(root, '.ccs/app-updates/codex-desktop-pending-restart.json'),
+          'utf8'
+        )
+      );
+      expect(marker.daemon).toBe(true);
+      // One folder: the closed desktop and its standing twin are both owed, the same hash twice.
+      // Two folders: only the closed one; the twin stop() never reached is not owed.
+      expect(marker.desktops).toHaveLength(profiles === 'same' ? 2 : 1);
+
+      // The next update finds only the twin and the daemon running, and the closed desktop is not back.
+      const retry = spawn('retry');
+      expect(retry.status).toBe(0);
+      expect(JSON.parse(retry.stdout.trim().split('\n').pop() as string)).toEqual({
+        status: 'restart_failed',
+        messageCode: 'restart_not_running',
+        desktops: 1,
+      });
+    }
+  );
+
   it('leaves a marker naming the old daemon when killed while the updater runs', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-install-'));
     roots.push(root);

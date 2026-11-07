@@ -369,16 +369,17 @@ async function execute(deps) {
       try {
         const retired = await runtimeRetired(runtime, deps);
         const earlier = intentWritten ? earlierAtStop : deps.markerSnapshot();
-        // The readiness check can take about 40 seconds and a parent timeout can kill this helper
-        // during it, so what is owed goes in the marker first, and comes out if the daemon passes.
-        if (retired.daemon) deps.mark(markerFields(addObligations(prior, retired)));
-        // A replacement that fails the readiness check is not back, or the marker would name nothing.
-        const live = await verifiedState(runtime, deps, retired);
         // Every later run reads the marker's desktops as a total that must be running. So a planned
         // twin stop() never reached counts toward what must be running, and can't stand in for a
         // retired desktop that reads the same, and a hash that lost any is written with every entry
         // it needs, never the remainder. A planned desktop that was never reached is still not owed.
+        // No write here may name less than that total before an await a helper can be killed in.
         const needed = [...retired.desktops, ...retired.standing.filter((item) => retired.desktops.includes(item))];
+        // The readiness check can take about 40 seconds and a parent timeout can kill this helper
+        // during it, so what is owed goes in the marker first, and comes out if the daemon passes.
+        if (retired.daemon) deps.mark(markerFields(addObligations(prior, { ...retired, desktops: needed })));
+        // A replacement that fails the readiness check is not back, or the marker would name nothing.
+        const live = await verifiedState(runtime, deps, retired);
         const missing = missingDesktops(needed, live.desktops);
         const lost = {
           daemon: retired.daemon && !live.daemon,
