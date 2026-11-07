@@ -367,7 +367,8 @@ address, including one typed as prose such as `password: ...` with a digit in it
 so it is refused; the refusal names the kind, `It looks like an API key.`, and quotes none of it), `invalid_via`, `invalid_kind` (the entry's kind does not fit the card's
 kind), `words_required` (an objection without the owner's words), `sample_card` (a format sample takes no answer),
 `judgement_anchored` (a judgement card that carries a recommendation), `answer_not_saved` (the private store could
-not be written; nothing else happened for that entry), `share_unavailable` (the share failed or did not answer in time, so the
+not be written; nothing else happened for that entry), `store_busy` (another dashboard process on this computer holds
+the private store; nothing was written or sent), `share_unavailable` (the share failed or did not answer in time, so the
 card could not be checked; nothing was recorded for that entry, and it can be sent again). `card_changed` means the share
 answered: the card is not there, or is not that version. If the send cannot finish at
 all the answer is `500 answers_failed`: some entries may have been recorded.
@@ -417,7 +418,9 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   checks the choice is exactly the card's recommendation (`invalid_via` otherwise).
 - The note is stored exactly as typed (trimmed of surrounding whitespace only), at most 4,000 characters, no control
   characters other than tab and newlines.
-- Stored in `<ccsDir>/status/answers.jsonl` (append, local disk, this server only), then written signed to the share
+- Stored in `<ccsDir>/status/answers.jsonl` (append, local disk, this server only: the process that records answers
+  holds `<ccsDir>/status/answers.lock` while it runs, and a second dashboard on the same folder is refused with
+  `store_busy`, writing nothing), then written signed to the share
   (temporary file and rename), then a signed send summary, then the askers are rung through pm-mail. An answer or a
   done goes to `<reports>/v1/answers/<card>.json` (a later answer to a newer version of the card replaces it); each
   note gets its own file `<card>.note-<12 hex>.json` and each objection `<card>.object-<12 hex>.json`, so none
