@@ -230,8 +230,19 @@ export function chromiumSwitches(argv: string[]): Map<string, string> {
 export function isDesktop(process: CodexProcessSnapshot): boolean {
   return (
     process.exe.replace(/ \(deleted\)$/, '') === '/usr/lib/chatgpt/ChatGPT' &&
+    !electronRunsAsNode(process) &&
     !chromiumSwitches(processArgv(process)).get('type')
   );
+}
+
+/**
+ * Electron started in Node mode: ELECTRON_RUN_AS_NODE set and not empty, the test Electron itself
+ * makes. Such a process runs a script, never a window, so it is never a desktop and never names one;
+ * it stays in the inventory, so an app server under it still makes its desktop ready. readProcesses
+ * reads the environ of every process with this executable, and fails the whole scan when it can't.
+ */
+function electronRunsAsNode(process: CodexProcessSnapshot): boolean {
+  return Boolean(process.env.ELECTRON_RUN_AS_NODE);
 }
 
 /** The Codex home a Codex CLI or desktop process reads and refreshes; null for other processes. */

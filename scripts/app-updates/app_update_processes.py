@@ -325,6 +325,27 @@ def family(install, processes, include_descendants=True):
     return values
 
 
+def electron_runs_as_node(pid):
+    """Whether a Linux process is Electron in Node mode: ELECTRON_RUN_AS_NODE set and not empty, the
+    test Electron makes. Such a process runs a script, never a window. An environ that can't be read
+    counts as Node mode, so that process never stands in for a desktop."""
+    try:
+        raw = pathlib.Path("/proc", str(pid), "environ").read_bytes()
+    except OSError:
+        return True
+    name = b"ELECTRON_RUN_AS_NODE="
+    return any(entry.startswith(name) and len(entry) > len(name) for entry in raw.split(b"\0"))
+
+
+def desktop_roots(install, processes):
+    """The app's main processes among `processes`: roots of its family, and on Ubuntu none in Node mode."""
+    pids = {item.pid for item in processes}
+    roots = [item for item in processes if item.ppid not in pids]
+    if install.platform == "ubuntu":
+        roots = [item for item in roots if not electron_runs_as_node(item.pid)]
+    return roots
+
+
 def main_contexts(install, processes):
     selected = family(install, processes)
     pids = {item.pid for item in selected}
@@ -342,11 +363,18 @@ def main_contexts(install, processes):
                 if len(raw) > 1024 * 1024:
                     raise UpdateFailure("restart_context")
                 item.env = dict(value.decode("utf-8", "surrogateescape").split("=", 1) for value in raw.split(b"\0") if b"=" in value)
+                # Electron in Node mode runs a script, never a window: not a desktop to reopen.
+                if item.env.get("ELECTRON_RUN_AS_NODE"):
+                    continue
                 item.cwd = os.readlink("/proc/" + str(item.pid) + "/cwd")
                 if not item.env.get("DISPLAY") and not item.env.get("WAYLAND_DISPLAY"):
                     raise UpdateFailure("restart_context")
             except OSError:
                 raise UpdateFailure("restart_context") from None
+    if install.platform == "ubuntu":
+        mains = [item for item in mains if not item.env.get("ELECTRON_RUN_AS_NODE")]
+        if selected and not mains:
+            raise UpdateFailure("restart_context")
     return mains
 
 
@@ -890,9 +918,7 @@ def restart_desktops(install, contexts):
     if contexts:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            existing = family(install, scan(install.platform))
-            pids = {item.pid for item in existing}
-            if len([item for item in existing if item.ppid not in pids]) >= len(contexts):
+            if len(desktop_roots(install, family(install, scan(install.platform)))) >= len(contexts):
                 return restarted
             time.sleep(.3)
         raise UpdateFailure("restart_failed")

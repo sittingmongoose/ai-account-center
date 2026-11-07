@@ -570,6 +570,61 @@ describe('Codex Desktop update retry on the real runtime', () => {
     }
   );
 
+  it.each(['electron', 'none', 'node'])(
+    'never lets a Node-mode Electron helper stand in for a closed desktop (helper: %s)',
+    async (helper) => {
+      const exe = '/usr/lib/chatgpt/ChatGPT';
+      const fallback = path.join(os.homedir(), '.config', 'Codex');
+      const at = (pid: number, args: string[]) =>
+        processFixture(pid, args, { env: { HOME: '/fixture', DISPLAY: ':8' }, exe });
+      // Under desktop B, a helper owning B's app server: Electron itself in Node mode, or plain node.
+      const helperOf = (fake: ReturnType<typeof harness>, mainPid: number, pid: number) => {
+        if (helper === 'none') {
+          fake.inject(childOf(pid + 1, mainPid));
+          return;
+        }
+        fake.inject(
+          processFixture(pid, [helper === 'node' ? '/usr/bin/node' : exe, '/fixture/helper.js'], {
+            ppid: mainPid,
+            exe: helper === 'node' ? '/usr/bin/node' : exe,
+            env: { HOME: '/fixture', DISPLAY: ':8', ELECTRON_RUN_AS_NODE: '1' },
+          })
+        );
+        fake.inject(childOf(pid + 1, pid));
+      };
+      const fake = harness([at(40, [exe, `--user-data-dir=${fallback}`]), childOf(41, 40)]);
+      let nextHelper = 300;
+      const { run, marker } = click(fake, async (target, isDesktopLaunch) => {
+        // Desktop A, on the default folder named explicitly, never comes back.
+        if (isDesktopLaunch && target.args.includes(`--user-data-dir=${fallback}`)) {
+          throw new CodexActivationRuntimeError('fixture launch failed');
+        }
+        const before = new Set(fake.current().map((entry) => entry.pid));
+        await fake.deps.launch(target, isDesktopLaunch);
+        if (!isDesktopLaunch || !target.args.includes('--user-data-dir=/x/b')) return;
+        // The harness gives a relaunched desktop an app server; B's lives under its helper.
+        const added = fake.current().filter((entry) => !before.has(entry.pid));
+        const main = added.find((entry) => entry.args.includes('--user-data-dir=/x/b'));
+        for (const entry of added.filter((item) => item !== main))
+          await fake.deps.signal(entry, 'SIGKILL');
+        helperOf(fake, (main as CodexProcessSnapshot).pid, (nextHelper += 10));
+      });
+      expect((await run({})).status).toBe('restart_failed');
+      expect((marker() as { desktops: string[] }).desktops).toEqual([
+        codexDesktopInstance(fallback),
+      ]);
+
+      // Before the retry, desktop B runs, its app server under the helper. A stays closed.
+      fake.inject(at(50, [exe, '--user-data-dir=/x/b']));
+      helperOf(fake, 50, 52);
+      const second = await run({ restartOnly: true, launchOnly: true });
+      expect([second.status, second.messageCode]).toEqual([
+        'restart_failed',
+        'restart_not_running',
+      ]);
+    }
+  );
+
   it('is updated when the desktop on the folder Chromium took is back', async () => {
     const at = (pid: number, args: string[]) =>
       processFixture(pid, args, {
@@ -2354,6 +2409,25 @@ describe('desktop main process detection', () => {
     expect(again.launches.filter(isDesktop).map((entry) => entry.args)).toEqual([
       ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=/x/b', '--', '/fixture/file'],
     ]);
+  });
+
+  it('never counts Electron in Node mode as a desktop, yet lets it make its desktop ready', async () => {
+    const exe = '/usr/lib/chatgpt/ChatGPT';
+    const helper = (env: Record<string, string>) =>
+      processFixture(22, [exe, '/fixture/helper.js'], {
+        ppid: 20,
+        exe,
+        env: { DISPLAY: ':8', ...env },
+      });
+    expect(isDesktop(helper({ ELECTRON_RUN_AS_NODE: '1' }))).toBe(false);
+    expect(isDesktop(helper({ ELECTRON_RUN_AS_NODE: '0' }))).toBe(false);
+    // Electron runs as Node only when the variable is set and not empty.
+    expect(isDesktop(helper({ ELECTRON_RUN_AS_NODE: '' }))).toBe(true);
+    const main = processFixture(20, [exe, '--user-data-dir=/x/b'], { env: { DISPLAY: ':8' }, exe });
+    const server = { ...bundled, pid: 23, ppid: 22 };
+    const fake = harness([daemon, main, helper({ ELECTRON_RUN_AS_NODE: '1' }), server]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    expect((await runtime.restartState()).desktops).toEqual([codexDesktopInstance('/x/b')]);
   });
 
   it('treats only the Electron main process as the desktop, including rewritten zygote cmdlines', () => {

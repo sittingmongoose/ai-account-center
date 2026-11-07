@@ -438,6 +438,28 @@ class UpdaterTests(unittest.TestCase):
             with self.assertRaises(common.UpdateFailure):
                 terminal.check_terminal('ubuntu', [mock.Mock()])
 
+    def test_ubuntu_desktops_never_count_electron_in_node_mode(self):
+        import app_update_processes as processes
+        install = mock.Mock(platform="ubuntu")
+        main = processes.Process(pid=1, ppid=0, uid=0, exe="/fixture/app", identity="1", args=["/fixture/app"])
+        helper = processes.Process(pid=2, ppid=0, uid=0, exe="/fixture/app", identity="2", args=["/fixture/app", "/fixture/helper.js"])
+        hidden = processes.Process(pid=3, ppid=0, uid=0, exe="/fixture/app", identity="3", args=["/fixture/app"])
+        # The helper has no display of its own: it is skipped, never a reason to give up the restart.
+        environs = {"1": b"DISPLAY=:8\0ELECTRON_RUN_AS_NODE=\0", "2": b"ELECTRON_RUN_AS_NODE=1\0"}
+        def read_bytes(path):
+            parts = pathlib.Path(path).parts
+            if parts[-1] == "environ" and parts[-2] in environs:
+                return environs[parts[-2]]
+            raise PermissionError(path)
+
+        with mock.patch.object(pathlib.Path, "read_bytes", read_bytes), mock.patch.object(processes.os, "readlink", return_value="/fixture"), \
+                mock.patch.object(processes, "family", return_value=[main, helper]):
+            self.assertEqual([item.pid for item in processes.main_contexts(install, [])], [1])
+        # Counting desktops back after a relaunch: a Node-mode root, or one whose environ can't be
+        # read, never stands in for one.
+        with mock.patch.object(pathlib.Path, "read_bytes", read_bytes):
+            self.assertEqual([item.pid for item in processes.desktop_roots(install, [main, helper, hidden])], [1])
+
     def test_desktop_arguments_match_a_reference_for_chromium_switch_parsing(self):
         import random, re
         from app_update_processes import desktop_arguments
@@ -515,6 +537,7 @@ class UpdaterTests(unittest.TestCase):
         item = mock.Mock(args=['/fixture/claude-desktop', '--user-data-dir=/fixture/data'], cwd='/fixture', env={'KEEP': 'yes', 'CCS_SESSION_SECRET': 'hidden'}, pid=1, ppid=0)
         with mock.patch.object(processes, 'in_service_cgroup', return_value=in_service), \
                 mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'electron_runs_as_node', return_value=False), \
                 mock.patch.object(processes, 'command') as run, mock.patch.object(processes.subprocess, 'Popen') as popen, \
                 mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
             self.assertEqual(processes.restart_desktops(install, [item]), 1)
@@ -566,6 +589,7 @@ class UpdaterTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {'XDG_RUNTIME_DIR': '/run/user/dashboard'}), \
                 mock.patch.object(processes, 'in_service_cgroup', return_value=True), \
                 mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'electron_runs_as_node', return_value=False), \
                 mock.patch.object(processes, 'command') as run, mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
             processes.restart_desktops(install, [item])
         self.assertEqual(run.call_args.kwargs['env']['XDG_RUNTIME_DIR'], '/run/user/dashboard')
@@ -576,6 +600,7 @@ class UpdaterTests(unittest.TestCase):
                          env={'LD_PRELOAD': '/secret/preload.so', 'LD_LIBRARY_PATH': '/secret/lib'})
         with mock.patch.object(processes, 'in_service_cgroup', return_value=True), \
                 mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'electron_runs_as_node', return_value=False), \
                 mock.patch.object(processes, 'command') as run, mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
             processes.restart_desktops(install, [item])
         argv, env = run.call_args.args[0], run.call_args.kwargs['env']
