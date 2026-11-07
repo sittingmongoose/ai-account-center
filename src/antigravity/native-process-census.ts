@@ -199,6 +199,11 @@ const FLAG_OPTIONS: Readonly<Record<string, readonly string[]>> = {
     '--report-on-fatalerror',
     '--report-uncaught-exception',
     '--zero-fill-buffers',
+    '--trace-gc',
+    '--trace-sigint',
+    '--trace-sync-io',
+    '--trace-tls',
+    '--expose-internals',
   ],
   bun: [
     '--watch',
@@ -232,7 +237,6 @@ const FLAG_OPTIONS: Readonly<Record<string, readonly string[]>> = {
     '-r',
     '--cached-only',
     '--frozen',
-    '--lock',
     '--allow-*',
     '--deny-*',
     '--unstable*',
@@ -288,19 +292,19 @@ const FLAG_OPTIONS: Readonly<Record<string, readonly string[]>> = {
     '-s',
     '-a',
     '-b',
-    '-f',
     '-h',
     '-m',
-    '-p',
     '-t',
     '-E',
-    '-T',
     '-B',
     '-H',
     '-P',
     '-k',
     '-r',
     '--login',
+    '--noprofile',
+    '--norc',
+    '--noediting',
     '--posix',
     '--verbose',
     '--restricted',
@@ -320,8 +324,12 @@ function interpreterFamily(name: string): string {
   return base === 'pypy' ? 'python' : base === 'nodejs' ? 'node' : base === 'luajit' ? 'lua' : base;
 }
 
-/** Whether an option certainly takes no separate value (see FLAG_OPTIONS). */
-function takesNoValue(option: string, flags: ReadonlySet<string>): boolean {
+/**
+ * Whether an option certainly takes no separate value (see FLAG_OPTIONS). Short options are read as getopt does
+ * (`-uW ignore`: `u` a flag, `W` takes the next argument; `-Wignore`: `W` holds a glued value), except for tclsh,
+ * whose single-dash options are whole words (`-encoding utf-8`).
+ */
+function takesNoValue(option: string, flags: ReadonlySet<string>, clusters: boolean): boolean {
   if (option.includes('=')) return true;
   if (option.startsWith('--'))
     return (
@@ -329,17 +337,48 @@ function takesNoValue(option: string, flags: ReadonlySet<string>): boolean {
       option.startsWith('--no-') ||
       [...flags].some((flag) => flag.endsWith('*') && option.startsWith(flag.slice(0, -1)))
     );
-  // a cluster of short flags (`-uOO`, `-eu`): any other letter may take the next argument
-  return (
-    /^[-+][A-Za-z0-9]+$/.test(option) &&
-    [...option.slice(1)].every((letter) => flags.has(`-${letter}`))
-  );
+  if (flags.has(option)) return true;
+  if (!clusters || !/^[-+][A-Za-z0-9]+$/.test(option)) return false;
+  for (let at = 1; at < option.length; at += 1) {
+    if (flags.has(`-${option[at]}`)) continue;
+    // the first letter that is no flag holds the rest as its value, or takes the next argument when it is last
+    return at < option.length - 1;
+  }
+  return true;
 }
 
+/** Runner subcommands: after `run`-like ones the next word is the script or task; after `x`/`exec`, a package. */
+const RUN_SUBCOMMANDS = new Set([
+  'run',
+  'task',
+  'test',
+  'serve',
+  'bench',
+  'eval',
+  'compile',
+  'watch',
+]);
+const PACKAGE_SUBCOMMANDS = new Set(['x', 'exec']);
+/** Scripts that run a script of their own, named next (`node node_modules/.bin/tsx helper.ts`). */
+const SCRIPT_RUNNERS = new Set([
+  'tsx',
+  'ts-node',
+  'ts-node-esm',
+  'esno',
+  'esr',
+  'nodemon',
+  'vite-node',
+  'jiti',
+  'babel-node',
+  'swc-node',
+  'coffee',
+]);
+
 /**
- * The program, and for an interpreter every argument up to its script: code, so never prose. The script is the first
- * argument with a path separator or a script's extension that no option may be taking as its value; the bare words
- * before it are options' values or subcommands (`bun run`, `bun x tsx`, `deno task`). Each is kept with its
+ * The program, and for an interpreter every argument up to its script: code, so never prose. Any option that may
+ * take a value takes the next argument; the script is the first argument after that (`node server`, `python3 app`,
+ * `node .`). For bun and deno, a subcommand comes first (`bun run dev`, `deno task dev`, `bun x tsx helper.ts`), and a
+ * script that runs another (`tsx`, `ts-node`, `nodemon`) has that one after it, code too. Each is kept with its
  * candidate spellings.
  */
 function codeArguments(all: readonly string[], families: readonly string[]): Set<string> {
@@ -350,7 +389,12 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
   };
   if (families.length === 0) return code;
   const flags = new Set(families.flatMap((family) => FLAG_OPTIONS[family] ?? []));
+  const clusters = !families.includes('tclsh');
+  const runner = families.includes('bun') || families.includes('deno');
   let optionValue = false;
+  let subcommand = !runner;
+  let packageNext = false;
+  let ranBy = false;
   for (let at = 1; at < all.length; at += 1) {
     const argument = all[at];
     if (argument === '--') {
@@ -358,7 +402,7 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
       break;
     }
     if (/^[-+]./.test(argument)) {
-      optionValue = !takesNoValue(argument, flags);
+      optionValue = !takesNoValue(argument, flags, clusters);
       continue;
     }
     add(argument);
@@ -366,7 +410,24 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
       optionValue = false;
       continue;
     }
-    if (/[\\/]/.test(argument) || SCRIPT_FILE.test(argument)) break;
+    if (!subcommand) {
+      subcommand = true;
+      if (RUN_SUBCOMMANDS.has(argument)) continue;
+      if (PACKAGE_SUBCOMMANDS.has(argument)) {
+        packageNext = true;
+        continue;
+      }
+    }
+    if (packageNext) {
+      packageNext = false;
+      continue;
+    }
+    const name = path.basename(argument.replace(/^(?:npm|jsr):/, '')).replace(/\.[^.]+$/, '');
+    if (!ranBy && SCRIPT_RUNNERS.has(name)) {
+      ranBy = true;
+      continue;
+    }
+    break;
   }
   return code;
 }
@@ -594,8 +655,9 @@ function filePath(url: string): string {
  * would block on a hung share and `~/.local/bin` links into the share are
  * common); a denied folder or an unreadable link leaves an interpreter unplaced,
  * except a denied folder in prose: an argument after an interpreter's script
- * (the first argument with a path separator or a script's extension that no
- * option may be taking as its value; every argument before it is code), whose
+ * (the first argument no option may be taking as its value, after a bun or
+ * deno subcommand and past a runner such as tsx; every argument before it is
+ * code, and any option not known as a flag may take the next one), whose
  * space comes at or after the part that can't be looked up, with no link on the
  * way, and which doesn't end in a script's extension
  * (`node app.js "/root/notes are here"`); a script is never prose, whatever
