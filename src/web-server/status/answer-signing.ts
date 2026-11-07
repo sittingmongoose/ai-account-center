@@ -88,6 +88,16 @@ function pause(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/** `file`'s status, or `null` when it is gone. */
+function statIfThere(file: string): fs.Stats | null {
+  try {
+    return fs.statSync(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 /** The key in `file`, `null` when the file holds no readable key, or `undefined` when there is no file. */
 function readKey(file: string): KeyObject | null | undefined {
   let pem: string;
@@ -183,11 +193,13 @@ export function loadOrCreateAnswerKey(dir: string): AnswerKey {
       pause(KEY_READ_PAUSE_MS);
       continue;
     }
-    const broken = fs.statSync(file);
+    // another process may move the broken file aside at any moment: then it is read again
+    const broken = statIfThere(file);
+    if (broken === null) continue;
     if (Date.now() - broken.mtimeMs < BROKEN_KEY_AGE_MS)
       throw new ValidationError('The answer key is being written. Try again in a minute.');
     // moved aside (removed with the stale temp files), only while it is still the same broken file
-    if (fs.statSync(file).ino === broken.ino) {
+    if (statIfThere(file)?.ino === broken.ino) {
       try {
         fs.renameSync(
           file,

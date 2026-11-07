@@ -2064,6 +2064,33 @@ describe('round three', () => {
       'secret: /K7MDENGbPxRfiCY2EXAMPLEKEY',
       // a strong value with slashes that is not a path
       'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+      'secret: /K7MDENG/bPxRfiCYEXAMPLEKEY',
+      // human passwords: a word and a year or number, judged whole after a password's name
+      'password: Summer_2026',
+      'password: Winter-2025!',
+      'password: Spring.2026',
+      'password: Pa55-word',
+      'password: qwerty-123456',
+      'DB_PASSWORD=my-secret-pass-42',
+      'password: abc_123_xyz',
+      'password: 12345678',
+      // a bare pass, pw or pwd, and one in a short phrase
+      'pass: Hunter2xyz',
+      'pw: Hunter2xyz',
+      'pwd: Hunter2xyz',
+      'PWD=Hunter2xyz',
+      'db pass: Hunter2xyz',
+      // code and command lines
+      'config["password"] = "Hunter2xyz"',
+      'os.environ["API_KEY"] = "abcd1234efgh5678"',
+      "ENV['SECRET'] = 'abcd1234efgh5678'",
+      'setenv("PASSWORD", "Hunter2xyz")',
+      'setx API_KEY abcd1234efgh5678',
+      'password -> Hunter2xyz',
+      'mysql -pS3cret99 -h db',
+      'curl -u admin:Passw0rd123 https://example.org',
+      'redis://:Hunter2xyz@cache:6379',
+      'Authorization: Bearer abc1234',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, 'a password or key']);
   });
@@ -2095,12 +2122,41 @@ describe('round three', () => {
       'the token is claude-opus-5-5',
       'password: see the vault entry',
       'OLDPWD=/home/me/x2',
+      '--- PASS: TestLogin2FA (0.00s)',
+      'Password manager: 1Password',
+      'password hash: bcrypt12',
+      'GPG key: 4AEE18F83AFDEB23',
+      'ssh key: SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8',
+      'credentials: config/v2/creds.json',
+      'secret scanning: gitleaks8',
+      'token is p95=320ms',
+      'password: v2.3.1',
+      'password: v10.2.3-rc1',
+      'deploy key: SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8',
+      'password_min_length: 12345678',
+      'docker run -u 1000:1000 -p8080:80 img',
+      'gcc -pthread -O2 -print0',
+      'first pass: test_auth_2',
     ])
       expect([text, findTypedSecret(text)]).toEqual([text, null]);
   });
 
   it('typed secrets: a long note is searched in linear time', () => {
-    for (const filler of ['a', 'a ', 'password ', 'token: ', 'A_', '--token ', 'x://'])
+    for (const filler of [
+      'a',
+      'a ',
+      'password ',
+      'token: ',
+      'A_',
+      '--token ',
+      'x://',
+      '-pa',
+      '-u a:',
+      'setx A ',
+      '"a", ',
+      'a"] = ',
+      'a is ',
+    ])
       for (const text of [filler.repeat(4000 / filler.length), `${filler.repeat(1000)}x`]) {
         const started = performance.now();
         findTypedSecret(text);
@@ -2235,6 +2291,34 @@ describe('round three', () => {
       read.mockRestore();
     }
     expect(mine.keyId).toBe(other.keyId);
+  });
+
+  it('the answer key: a broken file another process moves aside under us is read again, not thrown', () => {
+    const dir = path.join(dirs.make('ccs-status-key-moved-'), 'status');
+    const target = path.join(dir, 'answer-key.pem');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(target, '', { mode: 0o600 });
+    // after our reads find it broken, another process moves it aside before we look at its age
+    const realStat = fs.statSync;
+    let moved = false;
+    const stat = spyOn(fs, 'statSync').mockImplementation(((
+      file: fs.PathLike,
+      options?: unknown
+    ) => {
+      if (String(file) === target && !moved) {
+        moved = true;
+        fs.renameSync(target, path.join(dir, '.answer-key.broken.other.tmp'));
+      }
+      return realStat(file, options as fs.StatSyncOptions);
+    }) as typeof fs.statSync);
+    let key;
+    try {
+      key = loadOrCreateAnswerKey(dir);
+    } finally {
+      stat.mockRestore();
+    }
+    expect(moved).toBe(true);
+    expect(loadOrCreateAnswerKey(dir).keyId).toBe(key.keyId);
   });
 
   it('the answer key: a key file still broken a minute after its last write is replaced', () => {
