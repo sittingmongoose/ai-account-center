@@ -418,12 +418,13 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   checks the choice is exactly the card's recommendation (`invalid_via` otherwise).
 - The note is stored exactly as typed (trimmed of surrounding whitespace only), at most 4,000 characters, no control
   characters other than tab and newlines.
-- Stored in `<ccsDir>/status/answers.jsonl` (append, local disk, this server only: the process that records answers
-  holds `<ccsDir>/status/answers.lock` while it runs, refreshing it each minute, and a second dashboard on the same
-  folder is refused with `store_busy`, writing nothing. A lock is taken over when its holder on this computer has ended
-  or it dates from before the last restart, or, written by another host (a replaced container), when no one has
-  refreshed it for 10 minutes; a running holder is never judged gone by age. Deleting the file frees it at once. A
-  failed write takes back only its own bytes), then written signed to the share
+- Stored in `<ccsDir>/status/answers.jsonl` (append-only, local disk, this server only. Each line carries its own id;
+  a record that fails to be written whole is cancelled by a `void` line naming it, never cut, so no writer can remove
+  another's record. The process that records answers holds `<ccsDir>/status/answers.lock` while it runs, refreshing it
+  each minute; a second dashboard on the same folder is refused with `store_busy`, writing nothing. A lock is taken
+  over when its holder on this computer has ended, or on Linux was written in an earlier boot, or, written by another
+  host such as a replaced container, when no one has refreshed it for 10 minutes; nothing is judged by the clock for
+  a holder on this computer. Deleting the file frees it at once), then written signed to the share
   (temporary file and rename), then a signed send summary, then the askers are rung through pm-mail. An answer or a
   done goes to `<reports>/v1/answers/<card>.json` (a later answer to a newer version of the card replaces it); each
   note gets its own file `<card>.note-<12 hex>.json` and each objection `<card>.object-<12 hex>.json`, so none

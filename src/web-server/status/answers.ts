@@ -234,46 +234,12 @@ async function writeAtomic(
   }
 }
 
-/** Most bytes searched for a refused record that other bytes followed. */
-const TAKE_BACK_WINDOW = 4 * 1024 * 1024;
-
 /**
- * Takes a refused record's bytes back out of the store without touching anyone else's: cut back to where it began
- * when nothing follows it, otherwise blank its own bytes in place (a blank line is skipped on load). A descriptor
- * opened for append may refuse to truncate (Windows), so the path is truncated instead.
+ * Appends one record to the store. The store is only ever appended to, never cut or overwritten, so no writer can
+ * remove or damage a record another wrote: each line carries its own id (`line`), and a record that fails to be
+ * written whole and synced is cancelled by a `void` line naming that id, which the loader honours.
  */
-function takeBack(fd: number, file: string, size: number, ours: Buffer): void {
-  if (ours.length === 0) return;
-  try {
-    const end = fs.fstatSync(fd).size;
-    if (end === size + ours.length) {
-      try {
-        fs.ftruncateSync(fd, size);
-      } catch {
-        fs.truncateSync(file, size);
-      }
-      return;
-    }
-    // another writer appended after it (a lock taken by mistake): find these bytes and blank them where they are
-    const length = Math.min(end - size, TAKE_BACK_WINDOW);
-    const region = Buffer.alloc(length);
-    fs.readSync(fd, region, 0, length, size);
-    const at = region.indexOf(ours);
-    if (at === -1) return;
-    const blank = Buffer.from(ours.map((byte) => (byte === 0x0a ? 0x0a : 0x20)));
-    const writer = fs.openSync(file, 'r+');
-    try {
-      fs.writeSync(writer, blank, 0, blank.length, size + at);
-      fs.fsyncSync(writer);
-    } finally {
-      fs.closeSync(writer);
-    }
-  } catch {
-    /* the store can't be taken back: the record may come back after a restart; the error still refuses it */
-  }
-}
-
-function appendLine(file: string, record: unknown): void {
+function appendLine(file: string, record: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const fd = fs.openSync(file, 'a+', 0o600);
   try {
@@ -288,7 +254,8 @@ function appendLine(file: string, record: unknown): void {
     }
     // A write may take fewer bytes than asked (a file-size limit, a full disk): loop until all are written, so a
     // record is never acknowledged half-stored; a failure throws and the caller refuses the entry.
-    const data = Buffer.from(`${lead}${JSON.stringify(record)}\n`);
+    const line = randomBytes(8).toString('hex');
+    const data = Buffer.from(`${lead}${JSON.stringify({ ...record, line })}\n`);
     let written = 0;
     try {
       while (written < data.length) {
@@ -298,8 +265,21 @@ function appendLine(file: string, record: unknown): void {
       }
       fs.fsyncSync(fd);
     } catch (error) {
-      // A refused record must not be left in the store (a restart would ring it).
-      takeBack(fd, file, size, data.subarray(0, written));
+      // A refused record must not count after a restart (it would ring): cancel it. The leading newline ends whatever
+      // part of it was written. If the disk refuses this too, the record may come back; the error still refuses it.
+      if (written > 0) {
+        try {
+          const cancel = Buffer.from(`\n${JSON.stringify({ type: 'void', line })}\n`);
+          for (let done = 0; done < cancel.length; ) {
+            const taken = fs.writeSync(fd, cancel, done, cancel.length - done);
+            if (taken <= 0) break;
+            done += taken;
+          }
+          fs.fsyncSync(fd);
+        } catch {
+          /* see above */
+        }
+      }
       throw error;
     }
   } finally {
@@ -437,14 +417,22 @@ export class StatusAnswers {
     } catch {
       text = '';
     }
+    const records: Record<string, unknown>[] = [];
+    const voided = new Set<string>();
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
-      let record: Record<string, unknown>;
       try {
-        record = JSON.parse(line) as Record<string, unknown>;
+        const record = JSON.parse(line) as Record<string, unknown>;
+        if (!record || typeof record !== 'object') continue;
+        if (record.type === 'void' && typeof record.line === 'string') voided.add(record.line);
+        else records.push(record);
       } catch {
-        continue;
+        /* a torn or partial line */
       }
+    }
+    for (const record of records) {
+      // a record its writer cancelled (it failed to be stored whole) does not count
+      if (typeof record.line === 'string' && voided.has(record.line)) continue;
       if (
         record.type === 'answer' &&
         typeof record.id === 'string' &&

@@ -1,6 +1,6 @@
 /** Regressions from the blind server review of the Status API (docs/status-tab.md). */
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
-import { execFileSync, spawnSync } from 'child_process';
+import { execFileSync, spawn, spawnSync } from 'child_process';
 import express from 'express';
 import fs from 'fs';
 import http, { type Server } from 'http';
@@ -2252,7 +2252,7 @@ describe('round three', () => {
     }
   });
 
-  it('a record whose fsync fails is cut back out of the store and never comes back', async () => {
+  it('a record whose fsync fails is cancelled in the store and never comes back', async () => {
     const { root, store, make } = setup();
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
     const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
@@ -2275,8 +2275,15 @@ describe('round three', () => {
       fsync.mockRestore();
     }
     expect(result?.outcome).toBe('refused');
-    // the refused record's bytes are gone, so a restart neither lists nor rings it
-    expect(fs.statSync(storeFile).size).toBe(before);
+    // nothing before it was cut or changed, and a void line cancels it, so a restart neither lists nor rings it
+    const text = fs.readFileSync(storeFile, 'utf8');
+    expect(text.length).toBeGreaterThan(before);
+    const lines = text
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const refused = lines.find((line) => line.type === 'answer' && line.card?.id === 'vm.lead--Q2');
+    expect(lines.at(-1)).toEqual({ type: 'void', line: refused.line });
     expect(
       make()
         .list()
@@ -2284,7 +2291,7 @@ describe('round three', () => {
     ).toEqual([CARD]);
   });
 
-  it('a failed record never removes bytes another writer appended after it: it is blanked in place', async () => {
+  it('a failed record never removes bytes another writer appended after it: it is cancelled, not cut', async () => {
     const { root, store, make } = setup();
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
     const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
@@ -2310,9 +2317,10 @@ describe('round three', () => {
     }
     expect(result?.outcome).toBe('refused');
     const lines = fs.readFileSync(storeFile, 'utf8').split('\n');
-    // their line is whole; ours is blank, so a restart neither lists nor rings it
+    // their line is whole, and ours is cancelled by a void line, so a restart neither lists nor rings it
     expect(lines).toContain(theirs);
-    expect(lines.filter((line) => line.includes('vm.lead--Q2'))).toEqual([]);
+    const ours = JSON.parse(lines.find((line) => line.includes('vm.lead--Q2')) ?? '{}');
+    expect(lines).toContain(JSON.stringify({ type: 'void', line: ours.line }));
     expect(
       make()
         .list()
@@ -2455,12 +2463,45 @@ describe('round three', () => {
     fs.writeFileSync(lock, JSON.stringify({ pid: gone, host: os.hostname(), at: 0 }));
     expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
     expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
-    // a live pid's lock from before this computer last started: that pid is another process now
-    fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, host: os.hostname(), at: 0 }));
-    const beforeBoot = new Date(Date.now() - os.uptime() * 1000 - 60 * 60 * 1000);
-    fs.utimesSync(lock, beforeBoot, beforeBoot);
-    expect((await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].outcome).toBe('recorded');
-    expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
+    // on Linux, a live pid's lock from an earlier boot: that pid is another process now
+    if (fs.existsSync('/proc/sys/kernel/random/boot_id')) {
+      fs.writeFileSync(
+        lock,
+        JSON.stringify({ pid: process.ppid, host: os.hostname(), boot: 'an-earlier-boot', at: 0 })
+      );
+      expect((await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].outcome).toBe(
+        'recorded'
+      );
+      expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
+    }
+  });
+
+  it('the answer store has one writer: a holder that ended but was not reaped (a zombie) is gone', async () => {
+    if (!fs.existsSync('/proc/self/stat')) return;
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    fs.mkdirSync(store, { recursive: true });
+    // `sleep 0` ends at once, and its parent then becomes `sleep 5`, which never reaps it
+    const parent = spawn('sh', ['-c', 'sleep 0 & echo $!; exec sleep 5']);
+    try {
+      const zombie = Number(
+        await new Promise<string>((resolve) =>
+          parent.stdout.once('data', (chunk: Buffer) => resolve(chunk.toString().trim()))
+        )
+      );
+      for (let tries = 0; tries < 50; tries += 1) {
+        const stat = fs.readFileSync(`/proc/${zombie}/stat`, 'utf8');
+        if (stat.charAt(stat.lastIndexOf(')') + 2) === 'Z') break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      fs.writeFileSync(
+        path.join(store, 'answers.lock'),
+        JSON.stringify({ pid: zombie, host: os.hostname(), at: Date.now() })
+      );
+      expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    } finally {
+      parent.kill();
+    }
   });
 
   it('the answer store has one writer: a lock no one has refreshed for ten minutes is taken over', async () => {
