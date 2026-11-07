@@ -1001,7 +1001,7 @@ describe('runtime-free Antigravity process census', () => {
     }
   });
 
-  test('a hidden cwd with a stdin script, an exec mid-read, glued and listed paths, a vanished script', () => {
+  test('a hidden cwd with a stdin script, an exec mid-read, glued and listed paths; ordinary processes stay idle', () => {
     const value = procFixture();
     const helperDir = path.join(value.home, '.gemini/antigravity-cli');
     fs.mkdirSync(helperDir, { recursive: true });
@@ -1069,30 +1069,57 @@ describe('runtime-free Antigravity process census', () => {
       expect([argv, value.census()]).toEqual([argv, { complete: true, running: 1 }]);
       fs.rmSync(path.join(value.proc, '1052'), { recursive: true });
     }
-    // a script whose launch path is gone (a link deleted after it loaded) can't be placed; a prompt that only
-    // mentions a missing path stays idle
-    value.add(1053, 'python3', '/usr/bin/python3', ['python3', 'h.py'], value.root);
-    expect(value.census()).toEqual({ complete: false, running: 0 });
+    // an exec into the same program (comm and exe unchanged) is caught by the command line read again
+    fs.writeFileSync(path.join(value.root, 'launcher.py'), '');
+    value.add(1053, 'python3', '/usr/bin/python3', ['python3', 'launcher.py'], value.root);
+    const cmdline = path.join(value.proc, '1053', 'cmdline');
+    const realOpen = fs.openSync;
+    for (const [next, expected] of [
+      [
+        (opens: number) => (opens === 2 ? ['python3', path.join(helperDir, 'h.py')] : null),
+        { complete: true, running: 1 },
+      ],
+      [
+        (opens: number) => (opens % 2 === 0 ? ['python3', 'launcher.py'] : ['python3', 'other.py']),
+        { complete: false, running: 0 },
+      ],
+    ] as const) {
+      fs.writeFileSync(cmdline, 'python3\0launcher.py\0');
+      let opens = 0;
+      const exec = spyOn(fs, 'openSync').mockImplementation(((
+        file: fs.PathLike,
+        ...rest: unknown[]
+      ) => {
+        if (String(file) === cmdline) {
+          const argv = next(++opens);
+          if (argv) fs.writeFileSync(cmdline, argv.map((arg) => `${arg}\0`).join(''));
+        }
+        return (realOpen as (...a: unknown[]) => number)(file, ...rest);
+      }) as typeof fs.openSync);
+      try {
+        expect(value.census()).toEqual(expected);
+      } finally {
+        exec.mockRestore();
+      }
+    }
     fs.rmSync(path.join(value.proc, '1053'), { recursive: true });
-    value.add(
-      1054,
-      'node',
-      '/usr/bin/node',
-      ['node', '/nonexistent/x/app.js', 'see /tmp/x and/or y'],
-      value.root
-    );
-    expect(value.census()).toEqual({ complete: false, running: 0 });
-    fs.rmSync(path.join(value.proc, '1054'), { recursive: true });
+    // ordinary processes stay idle: a dashboard run from a removed folder, a test runner given a glob, a one-liner
+    // and a prompt that end in a file name (a script removed after it loaded reads as gone: a known limit)
     fs.writeFileSync(path.join(value.root, 'app.js'), '');
-    value.add(
-      1055,
-      'node',
-      '/usr/bin/node',
-      ['node', 'app.js', 'see /tmp/nothing-here and/or y'],
-      value.root
-    );
-    expect(value.census()).toEqual({ complete: true, running: 0 });
-    fs.rmSync(path.join(value.proc, '1055'), { recursive: true });
+    for (const [argv, cwd] of [
+      [['node', 'dist/ccs.js', 'dashboard'], `${path.join(value.root, 'aac-bc')} (deleted)`],
+      [
+        ['python3', '-m', 'unittest', 'discover', '-s', 'tests/unit', '-p', '*_test.py'],
+        value.root,
+      ],
+      [['python3', '-c', 'import time; time.sleep(120) # missing.py'], value.root],
+      [['node', 'app.js', '--prompt=Please review missing.py'], value.root],
+      [['node', 'app.js', 'see /tmp/nothing-here and/or y'], value.root],
+    ] as [string[], string][]) {
+      value.add(1055, argv[0], `/usr/bin/${argv[0]}`, argv, cwd);
+      expect([argv, value.census()]).toEqual([argv, { complete: true, running: 0 }]);
+      fs.rmSync(path.join(value.proc, '1055'), { recursive: true });
+    }
   });
 
   test('a removed working folder spelled onto a mount is never listed', () => {
