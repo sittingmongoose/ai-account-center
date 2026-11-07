@@ -123,68 +123,195 @@ const SCRIPT_FILE =
   /\.(?:[cm]?[jt]sx?|py[cwz]?|pl|pm|rb|php\d?|phar|lua|r|jl|sh|bash|zsh|ksh|fish|tcl|ps1)$/i;
 
 /**
- * Interpreter options whose value is the next argument (`python3 -W ignore`, `node --require ./hook.js`), by family:
- * that value and the script after it are code, never prose. Listing an option that takes no value only makes the
- * census more careful (the script is then read as a value, and the next argument as the script).
+ * Interpreter options known to take no separate value, by family (short ones also inside a cluster, `-uOO`); with
+ * `--no-...` and, for deno, `--allow-...`, `--deny-...` and `--unstable...`. Any other option without `=` may take the
+ * next argument as its value, so the script is looked for after it: a list that misses a flag only makes the census
+ * more careful, and none needs to know every option that takes a value (`python3 -uW ignore`, `bash -eo pipefail`,
+ * `node --watch-path ./src`).
  */
-const VALUE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
-  python: ['-W', '-X', '-m', '-c', '-Q'],
+const FLAG_OPTIONS: Readonly<Record<string, readonly string[]>> = {
+  python: [
+    '-b',
+    '-B',
+    '-d',
+    '-E',
+    '-h',
+    '-i',
+    '-I',
+    '-O',
+    '-P',
+    '-q',
+    '-R',
+    '-s',
+    '-S',
+    '-u',
+    '-v',
+    '-V',
+    '-x',
+    '--version',
+    '--help',
+    '--help-env',
+    '--help-xoptions',
+    '--help-all',
+  ],
   node: [
-    '-r',
-    '--require',
-    '--import',
-    '--loader',
-    '--experimental-loader',
-    '-C',
-    '--conditions',
-    '-e',
-    '--eval',
-    '-p',
-    '--print',
-    '--env-file',
-    '--input-type',
-    '--title',
-    '--inspect-port',
+    '-i',
+    '--interactive',
+    '-c',
+    '--check',
+    '-v',
+    '--version',
+    '-h',
+    '--help',
+    '--inspect',
+    '--inspect-brk',
+    '--inspect-wait',
+    '--watch',
+    '--watch-preserve-output',
+    '--test',
+    '--test-only',
+    '--enable-source-maps',
+    '--expose-gc',
+    '--trace-warnings',
+    '--trace-deprecation',
+    '--trace-uncaught',
+    '--trace-exit',
+    '--throw-deprecation',
+    '--pending-deprecation',
+    '--preserve-symlinks',
+    '--preserve-symlinks-main',
+    '--abort-on-uncaught-exception',
+    '--jitless',
+    '--prof',
+    '--use-strict',
+    '--frozen-intrinsics',
+    '--harmony',
+    '--experimental-vm-modules',
+    '--experimental-strip-types',
+    '--experimental-transform-types',
+    '--experimental-require-module',
+    '--experimental-detect-module',
+    '--experimental-wasm-modules',
+    '--experimental-import-meta-resolve',
+    '--experimental-sqlite',
+    '--experimental-websocket',
+    '--permission',
+    '--report-on-fatalerror',
+    '--report-uncaught-exception',
+    '--zero-fill-buffers',
   ],
   bun: [
-    '-r',
-    '--preload',
-    '--cwd',
-    '-c',
-    '--config',
-    '--env-file',
-    '--tsconfig-override',
-    '-d',
-    '--define',
-    '-l',
-    '--loader',
-    '--conditions',
-    '-e',
-    '--eval',
-    '-p',
-    '--print',
+    '--watch',
+    '--hot',
+    '--smol',
+    '--bun',
+    '-b',
+    '--silent',
+    '--revision',
+    '-v',
+    '--version',
+    '-h',
+    '--help',
+    '--inspect',
+    '--inspect-brk',
+    '--inspect-wait',
+    '--if-present',
+    '--only',
+    '--todo',
+    '--coverage',
+    '--prefer-offline',
+    '--prefer-latest',
   ],
   deno: [
-    '-c',
-    '--config',
-    '--import-map',
+    '-A',
+    '-q',
+    '--quiet',
+    '--check',
+    '--watch',
+    '--reload',
+    '-r',
+    '--cached-only',
+    '--frozen',
     '--lock',
-    '--cert',
-    '--location',
-    '--seed',
-    '--env-file',
+    '--allow-*',
+    '--deny-*',
+    '--unstable*',
   ],
-  perl: ['-I', '-M', '-m', '-e', '-E', '-x'],
-  ruby: ['-I', '-r', '-e', '-C', '-E', '-x'],
-  php: ['-c', '-d', '-f', '-r', '-z', '-t', '-B', '-R', '-F', '-E'],
-  lua: ['-e', '-l'],
-  shell: ['-c', '-o', '-O', '+o', '+O'],
-  Rscript: ['-e'],
-  julia: ['-e', '-E', '-L', '-p', '-t', '-C', '-J'],
+  perl: [
+    '-w',
+    '-W',
+    '-X',
+    '-T',
+    '-t',
+    '-n',
+    '-p',
+    '-a',
+    '-s',
+    '-c',
+    '-U',
+    '-S',
+    '-v',
+    '-h',
+    '-l',
+    '-0',
+    '-u',
+  ],
+  ruby: [
+    '-w',
+    '-W',
+    '-v',
+    '-d',
+    '-n',
+    '-p',
+    '-a',
+    '-l',
+    '-s',
+    '-c',
+    '-y',
+    '-h',
+    '--verbose',
+    '--version',
+    '--help',
+    '--jit',
+    '--yjit',
+  ],
+  php: ['-a', '-e', '-h', '-H', '-i', '-l', '-m', '-n', '-q', '-s', '-v', '-w'],
+  lua: ['-i', '-v', '-E', '-W'],
+  shell: [
+    '-e',
+    '-u',
+    '-x',
+    '-v',
+    '-n',
+    '-l',
+    '-i',
+    '-s',
+    '-a',
+    '-b',
+    '-f',
+    '-h',
+    '-m',
+    '-p',
+    '-t',
+    '-E',
+    '-T',
+    '-B',
+    '-H',
+    '-P',
+    '-k',
+    '-r',
+    '--login',
+    '--posix',
+    '--verbose',
+    '--restricted',
+    '--debugger',
+    '--version',
+    '--help',
+  ],
+  Rscript: ['--vanilla', '--verbose', '--save', '--slave', '--quiet', '--version', '--help'],
+  julia: ['-q', '--quiet', '-i', '-v', '--version', '-h', '--help'],
   tclsh: [],
 };
-/** Words before the script for these runners (`bun run x.ts`, `deno task dev`). */
-const SUBCOMMANDS = new Set(['run', 'task', 'test', 'x', 'exec', 'eval', 'serve', 'bench']);
 const SHELL_NAME = /^(?:sh|bash|dash|zsh|ksh|mksh|fish)$/;
 
 function interpreterFamily(name: string): string {
@@ -193,9 +320,27 @@ function interpreterFamily(name: string): string {
   return base === 'pypy' ? 'python' : base === 'nodejs' ? 'node' : base === 'luajit' ? 'lua' : base;
 }
 
+/** Whether an option certainly takes no separate value (see FLAG_OPTIONS). */
+function takesNoValue(option: string, flags: ReadonlySet<string>): boolean {
+  if (option.includes('=')) return true;
+  if (option.startsWith('--'))
+    return (
+      flags.has(option) ||
+      option.startsWith('--no-') ||
+      [...flags].some((flag) => flag.endsWith('*') && option.startsWith(flag.slice(0, -1)))
+    );
+  // a cluster of short flags (`-uOO`, `-eu`): any other letter may take the next argument
+  return (
+    /^[-+][A-Za-z0-9]+$/.test(option) &&
+    [...option.slice(1)].every((letter) => flags.has(`-${letter}`))
+  );
+}
+
 /**
- * The program, and for an interpreter its options' separate values and its script (the first operand that is no
- * option's value, after any subcommand): code, so never prose. Each is kept with its candidate spellings.
+ * The program, and for an interpreter every argument up to its script: code, so never prose. The script is the first
+ * argument with a path separator or a script's extension that no option may be taking as its value; the bare words
+ * before it are options' values or subcommands (`bun run`, `bun x tsx`, `deno task`). Each is kept with its
+ * candidate spellings.
  */
 function codeArguments(all: readonly string[], families: readonly string[]): Set<string> {
   const code = new Set<string>([all[0] ?? '']);
@@ -204,24 +349,24 @@ function codeArguments(all: readonly string[], families: readonly string[]): Set
     for (const candidate of candidateScripts(argument)) code.add(candidate);
   };
   if (families.length === 0) return code;
-  const valued = new Set(families.flatMap((family) => VALUE_OPTIONS[family] ?? []));
-  const runner = families.some((family) => family === 'bun' || family === 'deno');
+  const flags = new Set(families.flatMap((family) => FLAG_OPTIONS[family] ?? []));
+  let optionValue = false;
   for (let at = 1; at < all.length; at += 1) {
     const argument = all[at];
     if (argument === '--') {
       if (at + 1 < all.length) add(all[at + 1]);
       break;
     }
-    if (argument.startsWith('-') || argument.startsWith('+')) {
-      if (valued.has(argument) && at + 1 < all.length) {
-        at += 1;
-        add(all[at]);
-      }
+    if (/^[-+]./.test(argument)) {
+      optionValue = !takesNoValue(argument, flags);
       continue;
     }
     add(argument);
-    if (runner && SUBCOMMANDS.has(argument)) continue;
-    break;
+    if (optionValue) {
+      optionValue = false;
+      continue;
+    }
+    if (/[\\/]/.test(argument) || SCRIPT_FILE.test(argument)) break;
   }
   return code;
 }
@@ -448,12 +593,16 @@ function filePath(url: string): string {
  * on the share pointing back into a root is a known limit, since following it
  * would block on a hung share and `~/.local/bin` links into the share are
  * common); a denied folder or an unreadable link leaves an interpreter unplaced,
- * except a denied folder in prose: an argument other than the program, an
- * interpreter's options' separate values and its script (after any `run`-style
- * subcommand), whose space comes at or after the part that can't be looked up,
- * with no link on the way, and which doesn't end in a script's extension
+ * except a denied folder in prose: an argument after an interpreter's script
+ * (the first argument with a path separator or a script's extension that no
+ * option may be taking as its value; every argument before it is code), whose
+ * space comes at or after the part that can't be looked up, with no link on the
+ * way, and which doesn't end in a script's extension
  * (`node app.js "/root/notes are here"`); a script is never prose, whatever
- * spaces its folders, its name or its working folder have; at most 4096 lookups per process, past which an interpreter's script is
+ * spaces its folders, its name or its working folder have. Failing safe, the
+ * argument after `-c CODE` or `-e CODE` is read as a script, and so is a prompt
+ * ending in a file name (`... fix main.py`); one limit is known: an unknown
+ * `--opt=<path>` after the script, with a space and no extension, is prose; at most 4096 lookups per process, past which an interpreter's script is
  * unplaced.
  *
  * An interpreter is known by its process name, argv0 or executable (a
