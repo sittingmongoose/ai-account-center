@@ -2100,6 +2100,44 @@ describe('round four', () => {
       expect(again.list()[0].share.state).toBe('skipped');
     });
 
+    it('a signed answer copied from another card, or a signed note, blocks nothing', async () => {
+      for (const held of [
+        { ...unsigned(50, 'c'.repeat(64)), cardId: 'vm.lead--Q9' },
+        { ...unsigned(50, 'c'.repeat(64)), kind: 'note' as const, choice: [], note: 'words' },
+      ]) {
+        const { root, store, answers, rings } = await behind();
+        fs.writeFileSync(
+          answerFile(root),
+          JSON.stringify(signAnswer(held, loadOrCreateAnswerKey(store)))
+        );
+        await answers.retryPending();
+        expect(signedSeq(root)).toBe(1);
+        const [record] = answers.list();
+        expect(record.share.state).toBe('done');
+        expect(deliveryView(record).detail ?? '').not.toContain('newer answer');
+        expect(rings).toHaveLength(1);
+      }
+    });
+
+    it('a file this server cannot read is replaced, not a reason to stop delivery', async () => {
+      const { root, answers } = await behind();
+      const realOpen = fs.promises.open;
+      const open = spyOn(fs.promises, 'open').mockImplementation((async (
+        ...args: Parameters<typeof fs.promises.open>
+      ) => {
+        if (String(args[0]) === answerFile(root))
+          throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return realOpen(...args);
+      }) as typeof fs.promises.open);
+      try {
+        await answers.retryPending();
+      } finally {
+        open.mockRestore();
+      }
+      expect(signedSeq(root)).toBe(1);
+      expect(answers.list()[0].share.state).toBe('done');
+    });
+
     it('a higher seq not signed by this server blocks nothing', async () => {
       const { root, answers } = await behind(true);
       await answers.retryPending();

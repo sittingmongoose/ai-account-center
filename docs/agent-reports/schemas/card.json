@@ -888,7 +888,7 @@
       "description": "Ordered list of optional card sections."
     },
     "seq": {
-      "description": "Increases on every write by this writer.",
+      "description": "Increases on every write by this writer and never restarts: once the owner has answered seq N, a lower seq for this card is refused; to start over, use a higher seq or a new card id.",
       "minimum": 0,
       "type": "integer"
     },

@@ -183,6 +183,10 @@ pub fn forget_sent(drafts: &mut Drafts, cards: &[Card], sent: &AnswerEntry) {
         .is_some_and(|now| now.entry_id == sent.entry_id);
     if unchanged {
         drafts.remove(&sent.card_id);
+    } else if let Some(kept) = drafts.get_mut(&sent.card_id) {
+        // The kept draft is a new one: the recorded entry's nonce must not come back if the owner later types the
+        // recorded words again (that would read as a retry and be dropped).
+        kept.nonce = fresh_nonce();
     }
 }
 
@@ -358,6 +362,9 @@ mod tests {
         set_note(&mut d, &n, "second thoughts".into());
         forget_sent(&mut d, &[n.clone()], &sent);
         assert_eq!(d["n"].note, "second thoughts");
+        // the owner later types the recorded words again: a new entry, not a retry of the recorded one
+        set_note(&mut d, &n, "first words".into());
+        assert_ne!(entries(&d, &[n])[0].entry_id, sent.entry_id);
     }
 
     #[test]

@@ -610,11 +610,21 @@ export class StatusAnswers {
       bytes = await readRegularFile(file, 64 * 1024);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | null)?.code;
-      if (code === 'ENOENT' || code === 'ENOTREG' || code === 'ELOOP') return;
+      // Nothing there, not a plain file, or a file this server can't read: none of these is a newer answer of ours
+      // (the store already refused older versions), so the write goes ahead and replaces it.
+      if (['ENOENT', 'ENOTREG', 'ELOOP', 'EACCES', 'EPERM'].includes(code ?? '')) return;
       throw error;
     }
     const held = verifySignedAnswer(bytes, this.answerKey().publicKeyPem);
-    if (held.ok && held.answer.cardSeq > entry.answer.cardSeq) throw new ShareHasNewerError();
+    // Only this server's own closing answer to this same card blocks: a signed file copied from another card (the
+    // share's answers folder is writable by every writer) or a note is no newer answer to this one.
+    if (
+      held.ok &&
+      held.answer.cardId === entry.answer.cardId &&
+      CLOSING_KINDS.has(held.answer.kind) &&
+      held.answer.cardSeq > entry.answer.cardSeq
+    )
+      throw new ShareHasNewerError();
   }
 
   private markSuperseded(entry: AnswerHistoryEntry): void {

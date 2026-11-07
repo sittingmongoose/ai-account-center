@@ -401,8 +401,9 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
 - The card must not be older than a `seq` the reader has already read or any record the store holds for that card (an
   older copy can land on the share and read fresh; it is `card_changed`, and the card shows `answerable: false`, also
   after a restart). Publishing checks again: `<card>.json` is never renamed over a file with this server's signature and
-  a higher `cardSeq` (that record then reads as superseded). A higher one signed by another key does not count, so a file
-  dropped on the share cannot block a real answer.
+  a higher `cardSeq` (that record then reads as superseded). Only this server's own closing answer to the same card
+  counts: one signed by another key, a signed file copied from another card, a note, or a file the server can't read
+  does not, so a file dropped on the share cannot block a real answer.
 - The card must be open on disk at that `seq` and hash (read fresh, not from the last scan) and that version not yet
   answered. Otherwise that entry is `card_changed` and the page reloads the card.
 - `choice` keys must be the card's option keys, without repeats (one unless `multiple`).
