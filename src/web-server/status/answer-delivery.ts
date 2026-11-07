@@ -107,6 +107,7 @@ export function ringBody(sendId: string | null, records: SentRecord[], keyId: st
     const { answer } = record;
     lines.push(
       `Card ${oneLine(answer.cardId)} (seq ${answer.cardSeq})`,
+      ...(answer.answerId ? [`  Answer id: ${answer.answerId}`] : []),
       `  Kind: ${KIND_WORDS[answer.kind] ?? answer.kind}`,
       `  Choice: ${choiceText(record)}`,
       `  Words: ${answer.note ? answer.note.replace(/\r\n?|\n/g, '\n    ') : '(none)'}`,

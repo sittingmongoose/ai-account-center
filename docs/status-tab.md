@@ -442,10 +442,22 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   and synchronously immediately before rename. Losing or regaining the lock drops that attempt; reacquisition
   reloads and reconciles history before a later retry decides what still needs delivery. A failed reload keeps the held records and sends attached to in-flight deliveries, leaves ownership unconfirmed,
   and retries reconciliation by id on the next gain. Held objects are kept separately from readable history:
-  list and history refuse after a read error until ownership and a good authoritative read are confirmed.
-  Successful delivery effects whose completion lines could not be appended remain pending persistence work,
-  separate from journal-confirmed done steps. With confirmed ownership, the next good read/retry appends those
-  completion lines before considering the steps done; persistence repair never rings again. Durable done steps
+  list and history refuse after a read error until a good authoritative read succeeds. A second dashboard
+  may recover by reading without ownership; it still refuses every store-dependent decision with `store_busy`.
+  Successful delivery effects append their completion lines immediately under the writer lock, even if a
+  journal read failed: appending a true, idempotent done fact needs no read. Only a failed append leaves pending
+  persistence work. It is retried before ownership reconciliation, on retry, on server close and on process exit
+  (including the CLI's existing SIGTERM/SIGINT cleanup), while the lock can be held. No new signal handler changes
+  termination behavior. A completion persisted before a lock handoff prevents the next owner repeating it.
+  An external lock deletion while appends still fail cannot be made safe by this process; pending facts remain
+  attached and are retried when it can own the store again.
+  **Delivery is at least once.** A crash or kill between a ring and its done line can ring again after restart;
+  receivers must dedupe by answer id. New agent-report `answer@1` files carry the signed `answerId` (the private
+  record UUID), also named in the doorbell. Tests check it matches the stored id and survives a restart/retry.
+  The field is optional for legacy files: those carry `signature.keyId` and `signature.value`, which receivers can
+  use together as a fallback signed-content identity. Persist the id after verifying the pinned signing key;
+  card id alone cannot distinguish multiple notes.
+  Persistence repair never rings again. Durable done steps
   stay done, and persistence retries continue even after the delivery attempt limit. Nothing is written when `<reports>/v1` is not
   there: only folders below it are created, so an unmounted share grows no local folder, and the step reads
   "The reports share is not available."
@@ -456,7 +468,7 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
   signed to `<reports>/v1/answers/batches/<sendId>.json`: `{ schema: "agent-reports/send@1", sendId, at, answeredBy:
   "owner", device, entries: [ { cardId, seq, cardSha256, kind, choice, note } ], signature }`, entries in the order
   sent, signed exactly like an answer (`verifySignedDocument(fileText, publicKeyPem, "agent-reports/send@1")`).
-- The answer file: `{ schema: "agent-reports/answer@1", cardId, cardSeq, cardSha256, kind: "answer" | "note" |
+- The answer file: `{ schema: "agent-reports/answer@1", answerId, cardId, cardSeq, cardSha256, kind: "answer" | "note" |
   "object" | "done", choice, note, via,
   answeredAt, answeredBy: "owner", device, signature }`. `device` is a word from the browser (`iPhone`, `iPad`,
   `Android`, `Mac`, `Windows`, `Linux`, `browser`).

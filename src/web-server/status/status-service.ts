@@ -379,6 +379,7 @@ export class StatusService {
     every(COLLECT_EVERY_MS, () => this.answers.retryPending());
     const unsubscribe = (this.deps.subscribeUsage ?? onAccountAnalyticsSample)(this.recordUsage);
     return () => {
+      this.answers.flushCompletions();
       for (const timer of timers) clearInterval(timer);
       unsubscribe();
       if (this.hintTimer) clearTimeout(this.hintTimer);

@@ -64,6 +64,7 @@ import { readRegularFile } from './share-read';
 import { findSecretIn } from './schema-helpers';
 import { findTypedSecret } from './typed-secrets';
 import { holdWriterLock, WriterBusyError } from './writer-lock';
+import { registerCleanup } from '../../errors/cleanup-registry';
 import { ConfigError } from '../../errors/error-types';
 
 export * from './answer-entries';
@@ -363,6 +364,7 @@ export class StatusAnswers {
   /** Delivery objects survive failed reads, but are never served as authoritative history. */
   private readonly heldEntries = new Map<string, AnswerHistoryEntry>();
   private historyUnavailable = false;
+  private readonly heldSends = new Map<string, SendRecord>();
   /** Successful effects awaiting a durable completion line; repair persistence without repeating them. */
   private readonly pendingCompletions = new Map<
     string,
@@ -436,8 +438,13 @@ export class StatusAnswers {
   /** Every record in the private store, oldest first (folded with its delivery steps). */
   list(): AnswerHistoryEntry[] {
     if (this.historyUnavailable) {
-      this.writer();
-      return this.list();
+      try {
+        this.writer();
+        return this.list();
+      } catch (error) {
+        if (!(error instanceof WriterBusyError)) throw error;
+        // A viewer needs an authoritative read, but no writer ownership or decision authority.
+      }
     }
     if (this.entries) return this.entries;
     let text = '';
@@ -450,7 +457,13 @@ export class StatusAnswers {
         throw error;
       }
     }
-    return this.load(text);
+    for (const [id, send] of this.sends) if (!this.heldSends.has(id)) this.heldSends.set(id, send);
+    this.sends.clear();
+    this.replays.clear();
+    this.drafts.clear();
+    const loaded = this.load(text);
+    this.historyUnavailable = false;
+    return loaded;
   }
 
   /** Fold an already-read journal; I/O failures cannot clear held delivery objects. */
@@ -567,6 +580,7 @@ export class StatusAnswers {
 
   /** Takes or confirms the store's writer lock: no other process may append to the store or touch the key. */
   private writer(): void {
+    this.flushCompletions();
     let gained: boolean;
     try {
       gained = holdWriterLock(this.storeDir());
@@ -594,8 +608,9 @@ export class StatusAnswers {
         text = '';
       }
       const heldEntries = new Map(this.heldEntries);
-      for (const held of this.entries ?? []) heldEntries.set(held.id, held);
-      const heldSends = new Map(this.sends);
+      for (const held of this.entries ?? [])
+        if (!heldEntries.has(held.id)) heldEntries.set(held.id, held);
+      const heldSends = new Map([...this.sends, ...this.heldSends]);
       this.entries = null;
       this.sends.clear();
       this.replays.clear();
@@ -619,28 +634,61 @@ export class StatusAnswers {
         this.sends.set(sendId, held);
       }
       this.heldEntries.clear();
+      this.heldSends.clear();
       this.historyUnavailable = false;
       this.owner = true;
       this.epoch += 1;
     }
     // Even an empty in-memory store must load successfully before replay, recording or ringing.
     this.list();
-    // Ownership and an authoritative read are prerequisites for repairing a completion.
-    // Failure leaves this work queued and refuses delivery; it never requires another ring.
+    this.flushCompletions();
+    if (this.pendingCompletions.size)
+      throw new ConfigError('Delivery completion could not be saved.', this.storeFile());
+  }
+
+  /**
+   * Completion facts require no read or decision: done stays done. Delivery is at least once:
+   * a crash/kill between ringing and appending done can ring again. Receivers dedupe by the
+   * signed answerId (legacy files: signature.keyId + signature.value), stable across retries.
+   */
+  flushCompletions(): void {
+    if (!this.pendingCompletions.size) return;
+    try {
+      if (holdWriterLock(this.storeDir())) this.owner = false;
+    } catch {
+      this.owner = false;
+      return; // Retain the facts for the next gain; never write under another live owner.
+    }
     for (const [key, pending] of this.pendingCompletions) {
-      const current =
-        pending.step === 'summary'
-          ? (pending.target as SendRecord).summary
-          : (pending.target as AnswerHistoryEntry)[pending.step];
-      if (current.state === 'done') {
-        this.pendingCompletions.delete(key);
+      try {
+        appendLine(this.storeFile(), pending.line);
+      } catch {
         continue;
       }
-      appendLine(this.storeFile(), pending.line);
       if (pending.step === 'summary') (pending.target as SendRecord).summary = pending.value;
       else (pending.target as AnswerHistoryEntry)[pending.step] = pending.value;
       this.pendingCompletions.delete(key);
     }
+    if (!this.pendingCompletions.size) {
+      this.unregisterCompletionCleanup?.();
+      this.unregisterCompletionCleanup = null;
+    }
+  }
+
+  private unregisterCompletionCleanup: (() => void) | null = null;
+
+  private watchCompletions(): void {
+    if (!this.unregisterCompletionCleanup) {
+      const flush = () => this.flushCompletions();
+      // Prepend so done lines land before writer-lock's exit listener releases ownership.
+      process.prependOnceListener('exit', flush);
+      const unregister = registerCleanup(flush); // Existing SIGTERM/SIGINT exit behavior is unchanged.
+      this.unregisterCompletionCleanup = () => {
+        process.off('exit', flush);
+        unregister();
+      };
+    }
+    this.flushCompletions();
   }
 
   private answerKey(): AnswerKey {
@@ -657,6 +705,15 @@ export class StatusAnswers {
       appendLine(this.storeFile(), line);
       return true;
     } catch {
+      if (line.type === 'delivery' && line.state === 'done') {
+        try {
+          holdWriterLock(this.storeDir());
+          appendLine(this.storeFile(), line);
+          return true;
+        } catch {
+          // Only failed persistence remains queued; this completion makes no cached decision.
+        }
+      }
       return false;
     }
   }
@@ -683,6 +740,7 @@ export class StatusAnswers {
     else if (state === 'done')
       this.pendingCompletions.set(key, { line, target: entry, step, value });
     else if (!this.pendingCompletions.has(key)) entry[step] = value;
+    if (this.pendingCompletions.size) this.watchCompletions();
     this.notifyChange();
   }
 
@@ -918,6 +976,7 @@ export class StatusAnswers {
         value,
       });
     else if (!this.pendingCompletions.has(send.sendId + ':summary')) send.summary = value;
+    if (this.pendingCompletions.size) this.watchCompletions();
     return state === 'done';
   }
 
@@ -1007,8 +1066,10 @@ export class StatusAnswers {
     recorded: AnswerHistoryEntry[],
     draft: { entryId: string; hash: string } | null
   ): Promise<AnswerHistoryEntry | null> {
+    const id = randomUUID();
     const unsigned: UnsignedAnswer = {
       schema: ANSWER_SCHEMA,
+      answerId: id,
       cardId: parsed.doc.id,
       cardSeq: parsed.doc.seq,
       cardSha256: parsed.sha256,
@@ -1023,7 +1084,7 @@ export class StatusAnswers {
     let entry: AnswerHistoryEntry;
     try {
       entry = {
-        id: randomUUID(),
+        id,
         sendId,
         answer: signAnswer(unsigned, this.answerKey()),
         card: parsed.doc,

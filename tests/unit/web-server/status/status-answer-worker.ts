@@ -16,6 +16,17 @@ const reports = path.join(root, 'reports');
 let faultCount = 0;
 let faults = 0;
 let faultCode = 'EIO';
+let failCompletionAppends = false;
+const realWrite = fs.writeSync;
+fs.writeSync = ((fd: any, data: any, ...args: any[]) => {
+  if (
+    failCompletionAppends &&
+    String(data).includes('\"step\":\"doorbell\"') &&
+    String(data).includes('\"state\":\"done\"')
+  )
+    throw Object.assign(Error('Injected completion append failure'), { code: faultCode });
+  return (realWrite as any)(fd, data, ...args);
+}) as typeof fs.writeSync;
 let ringResume: (() => void) | null = null;
 let gateRing = false;
 const realRead = fs.readFileSync;
@@ -120,6 +131,17 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
         historyStatus: history.status,
         history: await history.json(),
       });
+      return;
+    }
+    if (cmd.cmd === 'append-fault') {
+      failCompletionAppends = cmd.fail;
+      faultCode = cmd.code ?? 'EIO';
+      emit({ event: 'armed' });
+      return;
+    }
+    if (cmd.cmd === 'close') {
+      answers.flushCompletions();
+      emit({ event: 'closed' });
       return;
     }
     if (cmd.cmd === 'arm') {

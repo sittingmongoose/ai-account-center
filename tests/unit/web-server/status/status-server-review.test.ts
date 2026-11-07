@@ -3468,6 +3468,138 @@ describe('real-process journal and publication fences', () => {
     return { root, doc, entry };
   };
   for (const code of ['EIO', 'EACCES']) {
+    for (const schedule of ['restart-faulty', 'restart-healed', 'handoff']) {
+      it('read-failed completion survives ' + schedule + ': ' + code, async () => {
+        const { root, entry } = fixture(schedule + code);
+        const a = new Worker(root);
+        let b: Worker | undefined;
+        try {
+          await a.next('ready');
+          a.send({ cmd: 'ring-gate' });
+          await a.next('gated');
+          a.send({ cmd: 'submit', entries: [entry] });
+          await a.next('ring-wait');
+          await a.next('submitted');
+          fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
+          a.send({ cmd: 'arm', n: 100000, code });
+          await a.next('armed');
+          a.send({ cmd: 'retry' });
+          await a.next('retried');
+          a.send({ cmd: 'release-ring' });
+          await a.next('ring-released');
+          a.send({ cmd: 'history' });
+          await a.next('error');
+          if (schedule !== 'restart-faulty') {
+            a.send({ cmd: 'arm', n: 0 });
+            await a.next('armed');
+          }
+          if (schedule === 'handoff') fs.unlinkSync(path.join(root, 'store', 'answers.lock'));
+          else await a.exit();
+          b = new Worker(root);
+          await b.next('ready');
+          b.send({ cmd: 'retry' });
+          await b.next('retried');
+          const signed = JSON.parse(
+            fs.readFileSync(
+              path.join(root, 'reports', 'v1', 'answers', entry.cardId + '.json'),
+              'utf8'
+            )
+          );
+          const stored = answerRecords(root)[0].answer;
+          assert.equal(signed.answerId, answerRecords(root)[0].id);
+          assert.equal(signed.answerId, stored.answerId);
+          assert.equal(signed.signature.keyId, stored.signature.keyId);
+          assert.equal(signed.signature.value, stored.signature.value);
+          assert.ok(signed.signature.value);
+          assert.equal(
+            fs.readFileSync(path.join(root, 'rings.jsonl'), 'utf8').trim().split('\n').length,
+            1
+          );
+          assert.equal(
+            records(root).filter(
+              (x) => x.type === 'delivery' && x.step === 'doorbell' && x.state === 'done'
+            ).length,
+            1
+          );
+        } finally {
+          await a.kill();
+          await b?.kill();
+        }
+      });
+    }
+    it('a second dashboard recovers read-only history: ' + code, async () => {
+      const { root, entry } = fixture('readonly-' + code);
+      const a = new Worker(root),
+        b = new Worker(root);
+      try {
+        await Promise.all([a.next('ready'), b.next('ready')]);
+        a.send({ cmd: 'submit', entries: [entry] });
+        await a.next('submitted');
+        b.send({ cmd: 'arm', n: 1, code });
+        await b.next('armed');
+        b.send({ cmd: 'history' });
+        await b.next('error');
+        b.send({ cmd: 'history' });
+        assert.equal((await b.next('history')).entries.length, 1);
+        b.send({ cmd: 'submit', entries: [entry] });
+        assert.equal((await b.next('submitted')).result[0].code, 'store_busy');
+        b.send({ cmd: 'retry' });
+        await b.next('retried');
+        assert.equal(answerRecords(root).length, 1);
+        assert.equal(
+          fs.readFileSync(path.join(root, 'rings.jsonl'), 'utf8').trim().split('\n').length,
+          1
+        );
+      } finally {
+        await Promise.all([a.kill(), b.kill()]);
+      }
+    });
+    for (const shutdown of ['exit', 'close']) {
+      it('failed completion append flushes on ' + shutdown + ': ' + code, async () => {
+        const { root, entry } = fixture('append-' + shutdown + code);
+        const a = new Worker(root);
+        let b: Worker | undefined;
+        try {
+          await a.next('ready');
+          a.send({ cmd: 'append-fault', fail: true, code });
+          await a.next('armed');
+          a.send({ cmd: 'submit', entries: [entry] });
+          await a.next('submitted');
+          assert.equal(
+            records(root).filter((x) => x.step === 'doorbell' && x.state === 'done').length,
+            0
+          );
+          a.send({ cmd: 'retry' });
+          await a.next('retried');
+          assert.equal(
+            fs.readFileSync(path.join(root, 'rings.jsonl'), 'utf8').trim().split('\n').length,
+            1
+          );
+          a.send({ cmd: 'append-fault', fail: false });
+          await a.next('armed');
+          if (shutdown === 'close') {
+            a.send({ cmd: 'close' });
+            await a.next('closed');
+          }
+          await a.exit();
+          b = new Worker(root);
+          await b.next('ready');
+          b.send({ cmd: 'retry' });
+          await b.next('retried');
+          assert.equal(
+            records(root).filter((x) => x.step === 'doorbell' && x.state === 'done').length,
+            1
+          );
+          assert.equal(
+            fs.readFileSync(path.join(root, 'rings.jsonl'), 'utf8').trim().split('\n').length,
+            1
+          );
+        } finally {
+          await a.kill();
+          await b?.kill();
+        }
+      });
+    }
     it('warm history routes refuse a failed authoritative reload: ' + code, async () => {
       const { root, entry } = fixture('warm-' + code);
       const a = new Worker(root),
@@ -3528,7 +3660,7 @@ describe('real-process journal and publication fences', () => {
           records(root).filter(
             (x) => x.type === 'delivery' && x.step === 'doorbell' && x.state === 'done'
           ).length,
-          0
+          1
         );
         a.send({ cmd: 'retry' });
         await a.next('retried');

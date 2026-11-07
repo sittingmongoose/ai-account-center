@@ -25,6 +25,8 @@ export interface AnswerSignature {
 }
 
 export interface UnsignedAnswer {
+  /** Stable record id for receiver deduplication; absent from legacy answers. */
+  answerId?: string;
   schema: typeof ANSWER_SCHEMA;
   cardId: string;
   cardSeq: number;
