@@ -247,10 +247,7 @@ describe('secret search', () => {
       { api_key: 123456789 },
       // a credential behind 256 decoys that fail to parse
       {
-        items: [
-          '{"password":["hunter2222"]}',
-          ...Array.from({ length: 300 }, () => '[x]'),
-        ],
+        items: ['{"password":["hunter2222"]}', ...Array.from({ length: 300 }, () => '[x]')],
       },
       // escaped keys and token prefixes inside JSON text inside a string
       { note: '{"pass\\u0077ord":"hunter2-hunter2"}' },
