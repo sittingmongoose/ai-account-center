@@ -280,6 +280,13 @@ function appendLine(file: string, record: Record<string, unknown>): void {
 
 const PENDING: StepState = Object.freeze({ state: 'pending', at: null, detail: null, attempts: 0 });
 
+/** Of two readings of one delivery step, the one further along: done, else the one with more attempts. */
+function furthest(a: StepState, b: StepState): StepState {
+  if (a.state === 'done') return a;
+  if (b.state === 'done') return b;
+  return a.attempts >= b.attempts ? a : b;
+}
+
 function stepFrom(record: Record<string, unknown>, before: StepState): StepState {
   return {
     state: (['done', 'failed', 'skipped'] as const).find((s) => s === record.state) ?? 'failed',
@@ -528,13 +535,32 @@ export class StatusAnswers {
       throw error;
     }
     if (gained || !this.owner) {
-      // newly the store's writer: another process may have written meanwhile, so what this one remembered (history,
-      // sends, replays, drafts) is read again from the store before anything is judged against it
+      // Newly the store's writer: another process may have written meanwhile, so history, sends, replays and drafts
+      // are read again from the store before anything is judged against them. A record or send this process already
+      // holds keeps its object (a ring or summary still running updates it), with the further-along delivery steps.
       this.owner = true;
+      const heldEntries = new Map((this.entries ?? []).map((held) => [held.id, held]));
+      const heldSends = new Map(this.sends);
       this.entries = null;
       this.sends.clear();
       this.replays.clear();
       this.drafts.clear();
+      if (heldEntries.size > 0 || heldSends.size > 0) {
+        this.entries = this.list().map((fresh) => {
+          const held = heldEntries.get(fresh.id);
+          if (!held) return fresh;
+          held.share = furthest(held.share, fresh.share);
+          held.doorbell = furthest(held.doorbell, fresh.doorbell);
+          return held;
+        });
+        for (const [sendId, fresh] of this.sends) {
+          const held = heldSends.get(sendId);
+          if (!held) continue;
+          held.summary = furthest(held.summary, fresh.summary);
+          held.entryIds = fresh.entryIds;
+          this.sends.set(sendId, held);
+        }
+      }
     }
   }
 

@@ -2588,6 +2588,47 @@ describe('round three', () => {
     expect(answers).toHaveLength(1);
   });
 
+  it('the answer store has one writer: re-gaining it mid-delivery keeps the delivery, so a retry rings no one again', async () => {
+    const { root, store, make, rings } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const answers = make();
+    const lock = path.join(store, 'answers.lock');
+    // the lock vanishes just before the share step is recorded, so record() takes it again mid-delivery
+    const storeFile = path.join(store, 'answers.jsonl');
+    const realAppend = fs.openSync;
+    let removed = false;
+    const open = spyOn(fs, 'openSync').mockImplementation(((
+      file: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (
+        !removed &&
+        String(file) === storeFile &&
+        fs.existsSync(storeFile) &&
+        fs.existsSync(lock)
+      ) {
+        const text = fs.readFileSync(storeFile, 'utf8');
+        if (text.includes('"type":"answer"')) {
+          removed = true;
+          fs.rmSync(lock);
+        }
+      }
+      return (realAppend as (...a: unknown[]) => number)(file, ...rest);
+    }) as typeof fs.openSync);
+    try {
+      expect((await answers.submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+      await settle();
+    } finally {
+      open.mockRestore();
+    }
+    expect(removed).toBe(true);
+    const rung = rings.length;
+    expect(rung).toBeGreaterThan(0);
+    await answers.retryPending();
+    await settle();
+    expect(rings.length).toBe(rung);
+  });
+
   it('the answer store has one writer: a lock naming this pid from another incarnation is not adopted', async () => {
     if (!fs.existsSync('/proc/sys/kernel/random/boot_id')) return;
     const { root, store, make } = setup();
