@@ -161,8 +161,8 @@ function createKeyFile(dir: string, file: string): void {
  * `<dir>/answer-key.pem` (PKCS#8, 0600), created on first use; a second process racing the creation uses the key
  * the first one wrote. A key file that is empty or unreadable is read again a few times (another process may be
  * writing it in place); one still broken a minute after its last write is moved aside and a new key made.
- * Limit: two processes that both find the same broken file can, in a window of microseconds, each move aside the
- * other's new key; the next start of either then reads one key again.
+ * The answer store's writer lock (writer-lock.ts) is held before this runs, so no second process creates or repairs
+ * the key at the same time.
  */
 export function loadOrCreateAnswerKey(dir: string): AnswerKey {
   const file = path.join(dir, 'answer-key.pem');

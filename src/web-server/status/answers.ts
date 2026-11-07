@@ -63,6 +63,7 @@ import {
 import { readRegularFile } from './share-read';
 import { findSecretIn } from './schema-helpers';
 import { findTypedSecret } from './typed-secrets';
+import { holdWriterLock, WriterBusyError } from './writer-lock';
 import { ConfigError } from '../../errors/error-types';
 
 export * from './answer-entries';
@@ -505,13 +506,22 @@ export class StatusAnswers {
     );
   }
 
+  /** Takes or confirms the store's writer lock: no other process may append to the store or touch the key. */
+  private writer(): void {
+    holdWriterLock(this.storeDir());
+  }
+
   private answerKey(): AnswerKey {
-    if (!this.key) this.key = loadOrCreateAnswerKey(this.storeDir());
+    if (!this.key) {
+      this.writer();
+      this.key = loadOrCreateAnswerKey(this.storeDir());
+    }
     return this.key;
   }
 
   private record(line: Record<string, unknown>): void {
     try {
+      this.writer();
       appendLine(this.storeFile(), line);
     } catch {
       /* The in-memory history still shows it; the next retry records again. */
@@ -823,6 +833,7 @@ export class StatusAnswers {
         doorbell: { ...PENDING },
       };
       this.list();
+      this.writer();
       appendLine(this.storeFile(), {
         type: 'answer',
         id: entry.id,
@@ -923,6 +934,15 @@ export class StatusAnswers {
         entry.choice[0] !== parsed.doc.recommendation.key)
     )
       return refused(entry.cardId, 'invalid_via');
+    // a second dashboard on this store records nothing: one process appends and holds the key
+    try {
+      this.writer();
+    } catch (error) {
+      return refused(
+        entry.cardId,
+        error instanceof WriterBusyError ? 'store_busy' : 'answer_not_saved'
+      );
+    }
     const done = await this.answerCard(
       parsed,
       entry.choice,
@@ -1014,6 +1034,12 @@ export class StatusAnswers {
   /** Retries every share write, send summary and ring that has not succeeded and has attempts left. */
   async retryPending(): Promise<void> {
     if (this.retrying) return;
+    // another process holds the store: its retries are its own
+    try {
+      this.writer();
+    } catch {
+      return;
+    }
     this.retrying = true;
     try {
       // A hung share spends this pass's budget; what is left waits for the next pass, uncounted.

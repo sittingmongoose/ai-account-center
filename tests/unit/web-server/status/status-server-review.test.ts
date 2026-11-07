@@ -1,9 +1,10 @@
 /** Regressions from the blind server review of the Status API (docs/status-tab.md). */
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import express from 'express';
 import fs from 'fs';
 import http, { type Server } from 'http';
+import os from 'os';
 import type { AddressInfo } from 'net';
 import path from 'path';
 import { Writable } from 'stream';
@@ -2389,6 +2390,41 @@ describe('round three', () => {
     const key = loadOrCreateAnswerKey(dir);
     expect(loadOrCreateAnswerKey(dir).keyId).toBe(key.keyId);
     expect(fs.readFileSync(target, 'utf8')).not.toContain('MC4CAQ\n');
+  });
+
+  it('the answer store has one writer: a lock a live process holds refuses the send and writes nothing', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    fs.mkdirSync(store, { recursive: true });
+    // another dashboard (a live process on this host) holds the store
+    fs.writeFileSync(
+      path.join(store, 'answers.lock'),
+      JSON.stringify({ pid: process.ppid, host: os.hostname(), at: Date.now() })
+    );
+    const [result] = await make().submitSet([entry(CARD, q1)], 'Mac');
+    expect(result).toMatchObject({ outcome: 'refused', code: 'store_busy' });
+    // nothing appended, no key made, and the retry pass leaves the store to its writer
+    await make().retryPending();
+    expect(fs.readdirSync(store).sort()).toEqual(['answers.lock']);
+  });
+
+  it('the answer store has one writer: a lock its holder left behind is taken over', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const q2 = writeCard(root, cardDoc('vm.lead', 'Q2'));
+    fs.mkdirSync(store, { recursive: true });
+    const lock = path.join(store, 'answers.lock');
+    // a process that has ended
+    const gone = spawnSync(process.execPath, ['-e', '0']).pid;
+    fs.writeFileSync(lock, JSON.stringify({ pid: gone, host: os.hostname(), at: 0 }));
+    expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
+    expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
+    // a live pid's lock written before this computer last started is stale too
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, host: os.hostname(), at: 0 }));
+    const beforeBoot = new Date(Date.now() - os.uptime() * 1000 - 60 * 60 * 1000);
+    fs.utimesSync(lock, beforeBoot, beforeBoot);
+    expect((await make().submitSet([entry('vm.lead--Q2', q2)], 'Mac'))[0].outcome).toBe('recorded');
+    expect(JSON.parse(fs.readFileSync(lock, 'utf8')).pid).toBe(process.pid);
   });
 
   it('a torn last store line does not swallow the next record after a restart', async () => {
