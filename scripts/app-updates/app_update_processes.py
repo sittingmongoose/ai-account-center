@@ -773,9 +773,10 @@ def desktop_arguments(context, platform):
     """Only an existing data-directory flag is reapplied; never replay work arguments.
 
     The folder is the one Chromium takes: the last --user-data-dir before a "--" terminator, with any
-    switch prefix the platform accepts, an empty one meaning the default folder. A value typed apart
-    from the switch is read too. A relative folder is the app's own: it is resolved against the app's
-    working directory, never this helper's, and dropped when that directory is unknown.
+    switch prefix the platform accepts, its value only after "=". A bare switch or an empty value is
+    the default folder, whatever word follows it, so nothing is replayed. A relative folder is the
+    app's own: it is resolved against the app's working directory, never this helper's, and dropped
+    when that directory is unknown.
     """
     args = context.args[1:]
     cwd = getattr(context, "cwd", None)
@@ -792,23 +793,14 @@ def desktop_arguments(context, platform):
         return None
 
     value = None
-    index = 0
-    while index < len(args):
-        arg = args[index]
+    for arg in args:
         if arg == "--":
             break
         prefix = next((item for item in prefixes if arg.startswith(item) and len(arg) > len(item)), None)
         if prefix:
             name, separator, rest = arg[len(prefix):].partition("=")
             if (name.lower() if windows else name) == "user-data-dir":
-                if separator:
-                    value = rest
-                elif index + 1 < len(args) and not args[index + 1].startswith("-"):
-                    value = args[index + 1]
-                    index += 1
-                else:
-                    value = ""
-        index += 1
+                value = rest if separator else ""
     # Chromium on Linux may rewrite argv0 to just its executable. Its existing
     # data directory is still supplied by the preserved process environment.
     folder = absolute(value)

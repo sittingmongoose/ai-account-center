@@ -169,39 +169,43 @@ function rewrittenCmdline(process: CodexProcessSnapshot): boolean {
 
 /**
  * A process's arguments, each one whole. The NUL-separated cmdline already gives whole arguments, so a
- * data folder such as `/home/me/Work One` stays one. Only a rewritten cmdline is split, and then only
- * before each flag, so a value keeps its own spaces and stays joined to its flag: `--class Codex`.
+ * data folder such as `/home/me/Work One` stays one, and only an argument that is exactly `--` is a
+ * terminator. Only a rewritten cmdline is split, and then only before each flag, so a value keeps its
+ * own spaces and stays joined to its flag: `--class Codex`. There a `--` followed by a space is the
+ * terminator, split from the words after it.
  */
 function argWords(process: CodexProcessSnapshot): string[] {
-  if (rewrittenCmdline(process)) return process.args[0].split(/\s+(?=--)/).filter(Boolean);
-  return process.args.filter(Boolean);
+  if (!rewrittenCmdline(process)) return process.args.filter(Boolean);
+  return process.args[0]
+    .split(/\s+(?=--)/)
+    .filter(Boolean)
+    .flatMap((word, index) =>
+      index > 0 && /^--\s/.test(word) ? ['--', word.slice(2).trim()].filter(Boolean) : [word]
+    );
 }
 
 /**
- * A rewritten cmdline's words as real arguments again. A flag joined to its value becomes two
- * arguments, as it was typed, except the data folder, which becomes `--user-data-dir=VALUE`: Chromium
- * takes it whole that way, spaces and all, and it reads back as the same folder.
+ * A rewritten cmdline's words as real arguments again: a flag joined to the word after it becomes
+ * two arguments, as it was typed, so Chromium reads them as it did. Words past the terminator are
+ * plain arguments, kept as they are.
  */
 function relaunchArguments(process: CodexProcessSnapshot): string[] {
   if (!rewrittenCmdline(process)) return process.args.filter(Boolean);
   let ended = false;
   return argWords(process).flatMap((word, index) => {
-    // Past the terminator every word is a plain argument, kept as it is.
     if (index === 0 || ended) return [word];
     if (isTerminator(word)) {
       ended = true;
-      return word === '--' ? [word] : ['--', word.slice(2).trim()];
+      return [word];
     }
     const joined = /^(--[^\s=]+)\s+([\s\S]+)$/.exec(word);
-    if (!joined) return [word];
-    const [, flag, value] = joined;
-    return flag === '--user-data-dir' ? [`${flag}=${value.trim()}`] : [flag, value.trim()];
+    return joined ? [joined[1], joined[2].trim()] : [word];
   });
 }
 
 /** Chromium's switch terminator: every word after it is a plain argument, never a switch. */
 function isTerminator(word: string): boolean {
-  return word === '--' || /^--\s/.test(word);
+  return word === '--';
 }
 
 /** The words Chromium reads switches from: after the program, and up to the terminator. */
@@ -738,27 +742,18 @@ function restartPlan(launchers: CodexProcessSnapshot[]): CodexRestartPlan {
 
 /**
  * The `--user-data-dir` Chromium takes from a process's words: the last one before the terminator,
- * from either switch prefix, an empty one meaning the default folder (''). Null when none is given.
- * Beyond Chromium, a value is also read where it was typed apart from the switch: in the next plain
- * word, or joined to it by a space in a rewritten cmdline (`--user-data-dir /home/me/Work One`).
+ * from either switch prefix, its value only after `=`. A bare switch, or an empty value, means the
+ * default folder (''), whatever word follows it: Chromium never takes the next word as the value.
+ * A rewritten cmdline's `--user-data-dir VALUE` is that bare switch and a plain word. Null when none
+ * is given.
  */
 function userDataArgument(words: string[]): string | null {
-  const switches = switchWords(words);
   let value: string | null = null;
-  for (let index = 0; index < switches.length; index++) {
-    const word = switches[index];
+  for (const word of switchWords(words)) {
     const named = /^--?user-data-dir(?=$|[=\s])/.exec(word);
     if (!named) continue;
     const rest = word.slice(named[0].length);
-    if (rest.startsWith('=')) value = rest.slice(1);
-    else if (rest) value = rest.trim();
-    else {
-      const next = switches[index + 1];
-      if (next !== undefined && !next.startsWith('-')) {
-        value = next;
-        index++;
-      } else value = '';
-    }
+    value = rest.startsWith('=') ? rest.slice(1) : '';
   }
   return value;
 }

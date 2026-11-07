@@ -731,7 +731,7 @@ the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder 
 two whose folders read alike, as a cmdline Electron rewrote into one string can make them, are the same
 hash twice, and both must be back. The folder is the one Chromium takes: the last `--user-data-dir`
 before a `--` terminator, from `--` or `-` (and `/` on Windows), an empty one meaning the default
-folder; a value typed apart from the switch is read too. A relative `--user-data-dir` is resolved against that desktop
+folder, as does a bare switch whatever word follows it. A relative `--user-data-dir` is resolved against that desktop
 process's own working directory, never the updater's, and symlinks are followed before `..`, as
 Chromium does; with that directory unknown, the desktop is
 named by its process alone, so it stays owed. Every run reads `desktops` as that total, so a failed `stop()` that

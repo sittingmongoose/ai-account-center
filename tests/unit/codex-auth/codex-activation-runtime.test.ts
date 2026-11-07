@@ -352,45 +352,45 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(marker()).toBeNull();
   });
 
-  it.each([
-    { form: 'inline', flag: (dir: string) => [`--user-data-dir=${dir}`] },
-    { form: 'separate', flag: (dir: string) => ['--user-data-dir', dir] },
-  ])('owes each desktop by its full spaced data folder ($form)', async ({ flag }) => {
-    const spaced = (pid: number, dir: string) =>
-      processFixture(pid, ['/usr/lib/chatgpt/ChatGPT', ...flag(dir)], {
-        env: { HOME: '/fixture', DISPLAY: ':8' },
+  it.each([{ form: 'inline', flag: (dir: string) => [`--user-data-dir=${dir}`] }])(
+    'owes each desktop by its full spaced data folder ($form)',
+    async ({ flag }) => {
+      const spaced = (pid: number, dir: string) =>
+        processFixture(pid, ['/usr/lib/chatgpt/ChatGPT', ...flag(dir)], {
+          env: { HOME: '/fixture', DISPLAY: ':8' },
+        });
+      const one = '/private/Work One';
+      const two = '/private/Work Two';
+      const fake = harness([spaced(40, one), childOf(41, 40), spaced(50, two), childOf(51, 50)]);
+      let failTwo = true;
+      const attempted: string[][] = [];
+      const { run, marker } = click(fake, async (target, isDesktop) => {
+        if (isDesktop) attempted.push(target.args);
+        if (failTwo && target.args.join('\0').includes(two)) {
+          throw new CodexActivationRuntimeError('fixture launch failed');
+        }
+        await fake.deps.launch(target, isDesktop);
       });
-    const one = '/private/Work One';
-    const two = '/private/Work Two';
-    const fake = harness([spaced(40, one), childOf(41, 40), spaced(50, two), childOf(51, 50)]);
-    let failTwo = true;
-    const attempted: string[][] = [];
-    const { run, marker } = click(fake, async (target, isDesktop) => {
-      if (isDesktop) attempted.push(target.args);
-      if (failTwo && target.args.join('\0').includes(two)) {
-        throw new CodexActivationRuntimeError('fixture launch failed');
-      }
-      await fake.deps.launch(target, isDesktop);
-    });
-    expect((await run({})).status).toBe('restart_failed');
-    expect((marker() as { desktops: string[] }).desktops).toEqual([
-      codexDesktopInstance(one),
-      codexDesktopInstance(two),
-    ]);
-    // Each relaunch carries its folder as one argument, never split at the space.
-    expect(attempted).toContainEqual(['/usr/lib/chatgpt/ChatGPT', ...flag(one)]);
-    expect(attempted).toContainEqual(['/usr/lib/chatgpt/ChatGPT', ...flag(two)]);
+      expect((await run({})).status).toBe('restart_failed');
+      expect((marker() as { desktops: string[] }).desktops).toEqual([
+        codexDesktopInstance(one),
+        codexDesktopInstance(two),
+      ]);
+      // Each relaunch carries its folder as one argument, never split at the space.
+      expect(attempted).toContainEqual(['/usr/lib/chatgpt/ChatGPT', ...flag(one)]);
+      expect(attempted).toContainEqual(['/usr/lib/chatgpt/ChatGPT', ...flag(two)]);
 
-    // The user reopens only Work One; Work Two is still closed.
-    failTwo = false;
-    for (const entry of fake.current().filter((item) => item.args.join('\0').includes(one)))
-      await fake.deps.signal(entry, 'SIGKILL');
-    fake.inject(spaced(60, one));
-    fake.inject(childOf(61, 60));
-    const second = await run({ restartOnly: true });
-    expect(second.status).toBe('restart_failed');
-    expect(second.messageCode).toBe('restart_not_running');
-  });
+      // The user reopens only Work One; Work Two is still closed.
+      failTwo = false;
+      for (const entry of fake.current().filter((item) => item.args.join('\0').includes(one)))
+        await fake.deps.signal(entry, 'SIGKILL');
+      fake.inject(spaced(60, one));
+      fake.inject(childOf(61, 60));
+      const second = await run({ restartOnly: true });
+      expect(second.status).toBe('restart_failed');
+      expect(second.messageCode).toBe('restart_not_running');
+    }
+  );
 
   it.each([
     { form: 'relative', a: 'profile', b: 'profile' },
@@ -484,6 +484,24 @@ describe('Codex Desktop update retry on the real runtime', () => {
       closed: ['/usr/lib/chatgpt/ChatGPT', '--', '--user-data-dir=/x/a'],
       other: '/x/a',
       owed: '',
+    },
+    {
+      form: 'a bare switch is the default folder, never the next word',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir', '/x/b'],
+      other: '/x/b',
+      owed: '',
+    },
+    {
+      form: 'a bare switch in a rewritten cmdline is the default folder',
+      closed: ['/usr/lib/chatgpt/ChatGPT --user-data-dir /x/b --class Codex'],
+      other: '/x/b',
+      owed: '',
+    },
+    {
+      form: 'a whole argument starting -- and a space is not the terminator',
+      closed: ['/usr/lib/chatgpt/ChatGPT', '-- c', '--user-data-dir=/x/b'],
+      other: '',
+      owed: '/x/b',
     },
     {
       form: 'a single-dash switch counts',
@@ -1930,7 +1948,7 @@ afterEach(() => {
     fs.rmSync(directory, { recursive: true, force: true });
 });
 describe('desktop main process detection', () => {
-  it('recovers a split descendant user-data-dir without falling back to another profile', async () => {
+  it('reads a descendant bare user-data-dir as the default folder, never the next word', async () => {
     const splitRenderer = {
       ...renderer,
       args: [renderer.exe, '--type=renderer', '--user-data-dir', '/fixture/custom-profile'],
@@ -1941,7 +1959,7 @@ describe('desktop main process detection', () => {
     await runtime.start();
     expect(fake.launches[1].args).toEqual([
       '/usr/lib/chatgpt/ChatGPT',
-      '--user-data-dir=/fixture/custom-profile',
+      `--user-data-dir=${path.join(os.homedir(), '.config', 'Codex')}`,
     ]);
   });
 
@@ -2001,16 +2019,19 @@ describe('desktop main process detection', () => {
   it('reads a relative data folder in the desktop process own working directory', async () => {
     const at = (pid: number, cwd: string, args: string[]) =>
       processFixture(pid, args, { cwd, env: { DISPLAY: ':8' }, exe: '/usr/lib/chatgpt/ChatGPT' });
-    for (const args of [
-      ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=profile'],
-      ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir', 'profile'],
-      ['/usr/lib/chatgpt/ChatGPT --user-data-dir profile --class Codex'],
-    ]) {
-      const fake = harness([daemon, at(20, '/fixture/project-a', args), bundled]);
+    for (const [args, folder] of [
+      [['/usr/lib/chatgpt/ChatGPT', '--user-data-dir=profile'], '/fixture/project-a/profile'],
+      [
+        ['/usr/lib/chatgpt/ChatGPT --user-data-dir=profile --class Codex'],
+        '/fixture/project-a/profile',
+      ],
+      // A bare switch is the default folder, whatever word follows it.
+      [['/usr/lib/chatgpt/ChatGPT', '--user-data-dir', 'profile'], ''],
+      [['/usr/lib/chatgpt/ChatGPT --user-data-dir profile --class Codex'], ''],
+    ] as const) {
+      const fake = harness([daemon, at(20, '/fixture/project-a', [...args]), bundled]);
       const runtime = createCodexActivationRuntime(home, fake.deps);
-      expect((await runtime.restartState()).desktops).toEqual([
-        codexDesktopInstance('/fixture/project-a/profile'),
-      ]);
+      expect((await runtime.restartState()).desktops).toEqual([codexDesktopInstance(folder)]);
     }
     // A folder a child names is resolved in that child's directory, not the main process's.
     const child = processFixture(
@@ -2046,11 +2067,13 @@ describe('desktop main process detection', () => {
 
   it('reads a spaced data folder whole, from real argv and from a rewritten cmdline', async () => {
     const dir = '/fixture/Work One';
-    for (const args of [
-      ['/usr/lib/chatgpt/ChatGPT', `--user-data-dir=${dir}`],
-      ['/usr/lib/chatgpt/ChatGPT', '--user-data-dir', dir],
-      [`/usr/lib/chatgpt/ChatGPT --user-data-dir=${dir}`],
-      [`/usr/lib/chatgpt/ChatGPT --user-data-dir ${dir} --enable-features=X`],
+    for (const [args, folder] of [
+      [['/usr/lib/chatgpt/ChatGPT', `--user-data-dir=${dir}`], dir],
+      [[`/usr/lib/chatgpt/ChatGPT --user-data-dir=${dir}`], dir],
+      [[`/usr/lib/chatgpt/ChatGPT --user-data-dir=${dir} --enable-features=X`], dir],
+      // A bare switch is the default folder, whatever word follows it.
+      [['/usr/lib/chatgpt/ChatGPT', '--user-data-dir', dir], ''],
+      [[`/usr/lib/chatgpt/ChatGPT --user-data-dir ${dir} --enable-features=X`], ''],
     ]) {
       const main = processFixture(20, args, {
         env: { DISPLAY: ':8' },
@@ -2059,7 +2082,7 @@ describe('desktop main process detection', () => {
       expect(isDesktop(main)).toBe(true);
       const fake = harness([daemon, main, bundled]);
       const runtime = createCodexActivationRuntime(home, fake.deps);
-      expect((await runtime.restartState()).desktops).toEqual([codexDesktopInstance(dir)]);
+      expect((await runtime.restartState()).desktops).toEqual([codexDesktopInstance(folder)]);
     }
     const zygote = processFixture(
       23,
@@ -2096,6 +2119,10 @@ describe('desktop main process detection', () => {
       codexDesktopInstance(''),
     ]);
     expect(await state([`${exe} --user-data-dir=/x/b -- --user-data-dir=/x/a`])).toEqual([
+      codexDesktopInstance('/x/b'),
+    ]);
+    // Only a word that is exactly `--` ends the switches in real argv.
+    expect(await state([exe, '-- c', '--user-data-dir=/x/b'])).toEqual([
       codexDesktopInstance('/x/b'),
     ]);
     // A `--type=` after the terminator is a plain argument: this is still the main process.
@@ -2169,7 +2196,7 @@ describe('desktop main process detection', () => {
     ]);
   });
 
-  it('relaunches each rewritten flag and its separate value as their own arguments', async () => {
+  it('relaunches a rewritten flag and the word after it as two arguments', async () => {
     const rewritten = processFixture(
       20,
       [
@@ -2181,18 +2208,18 @@ describe('desktop main process detection', () => {
     const runtime = createCodexActivationRuntime(home, fake.deps);
     await runtime.stop();
     await runtime.start();
+    // As typed, so Chromium reads them as it did: a bare switch, which is the default folder.
     expect(fake.launches.filter(isDesktop).map((entry) => entry.args)).toEqual([
       [
         '/usr/lib/chatgpt/ChatGPT',
-        '--user-data-dir=/fixture/Work One',
+        '--user-data-dir',
+        '/fixture/Work One',
         '--class',
         'Codex',
         '--enable-features=X',
       ],
     ]);
-    expect((await runtime.restartState()).desktops).toEqual([
-      codexDesktopInstance('/fixture/Work One'),
-    ]);
+    expect((await runtime.restartState()).desktops).toEqual([codexDesktopInstance('')]);
   });
 });
 
