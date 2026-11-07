@@ -507,7 +507,10 @@ export function censusAntigravityProcesses(options: {
    * For a process whose leader reads as gone: 'gone' when no other thread lives, 'running' when one runs a helper's
    * executable, else 'unplaced' (its command line and working folder went with the leader).
    */
-  const survivingThreads = (directory: string, pid: number): 'gone' | 'running' | 'unplaced' => {
+  const survivingThreads = (
+    directory: string,
+    pid: number
+  ): 'gone' | 'running' | 'unplaced' | 'reread' => {
     let tids: string[];
     try {
       tids = fs.readdirSync(path.join(directory, 'task')).filter((tid) => tid !== String(pid));
@@ -515,6 +518,7 @@ export function censusAntigravityProcesses(options: {
       return GONE.has(code(error)) ? 'gone' : 'unplaced';
     }
     let live = false;
+    let vanished = false;
     for (const tid of tids) {
       const task = path.join(directory, 'task', tid);
       try {
@@ -525,11 +529,15 @@ export function censusAntigravityProcesses(options: {
         const exe = fs.readlinkSync(path.join(task, 'exe'));
         if (isAntigravityPath(exe)) return 'running';
       } catch (error) {
-        if (GONE.has(code(error))) continue;
+        // a thread that went while it was read may have exec'd: its new image runs as the leader, read again
+        if (GONE.has(code(error))) {
+          vanished = true;
+          continue;
+        }
         live = true;
       }
     }
-    return live ? 'unplaced' : 'gone';
+    return live ? 'unplaced' : vanished ? 'reread' : 'gone';
   };
   // An interpreter running a script by a relative path (`python3 ./bin/helper.py`) is judged by its working folder. A
   // non-dumpable one denies that link, and then the script can't be placed: such a process may be a live helper, so
@@ -653,6 +661,13 @@ export function censusAntigravityProcesses(options: {
           const threads = survivingThreads(directory, Number(name));
           if (threads === 'running') running += 1;
           else if (threads === 'unplaced') unplaced = true;
+          else if (threads === 'reread') {
+            const times = reread.get(name) ?? 0;
+            if (times < 2) {
+              reread.set(name, times + 1);
+              queue.push(name);
+            } else unplaced = true;
+          }
           continue;
         }
         throw error;

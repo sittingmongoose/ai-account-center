@@ -1149,6 +1149,31 @@ describe('runtime-free Antigravity process census', () => {
       '1071 (helper-bin) Z 1 1071 1071 0'
     );
     expect(value.census()).toEqual({ complete: true, running: 0 });
+    // the worker execs a helper while it is read: its thread id goes, and the new image runs as the leader
+    fs.writeFileSync(
+      path.join(leader, 'task', '1071', 'stat'),
+      '1071 (helper-bin) S 1 1071 1071 0'
+    );
+    const realRead = fs.readFileSync;
+    const exec = spyOn(fs, 'readFileSync').mockImplementation(((
+      file: fs.PathOrFileDescriptor,
+      ...rest: unknown[]
+    ) => {
+      if (
+        String(file) === path.join(leader, 'task', '1071', 'stat') &&
+        !fs.existsSync(path.join(leader, 'exe'))
+      ) {
+        fs.rmSync(path.join(leader, 'task', '1071'), { recursive: true });
+        fs.symlinkSync(helperExe, path.join(leader, 'exe'));
+        throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      }
+      return (realRead as (...a: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.readFileSync);
+    try {
+      expect(value.census()).toEqual({ complete: true, running: 1 });
+    } finally {
+      exec.mockRestore();
+    }
     fs.rmSync(leader, { recursive: true });
     for (const [argv, exe] of [
       // an interpreter whose executable was replaced on disk reads "python3 (deleted)"
