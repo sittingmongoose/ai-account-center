@@ -715,6 +715,13 @@ argv, and names systemd refuses are left out rather than failing the relaunch. A
 `systemd-run`. A `$` in a replayed command line is escaped so it arrives literally. The Codex daemon
 logs to `app-server-control/app-server.log`, which moves to `.1` at launch once past 5 MB.
 
+**Where environment values go (the owner's decision, 2026-11-07).** Values travel by bare
+`--setenv=KEY`, so they never appear on any argv. systemd stores them in the app's transient unit file
+under `/run/user/<uid>/systemd/transient/`. That is tmpfs inside the user's 0700 runtime folder, so
+only the user and root can read it. The file exists while the unit is loaded and is collected after.
+That is the same exposure as the running app's `/proc/<pid>/environ`, and the owner accepted it.
+Account activation used to put the values on argv, and no longer does.
+
 A pending-marker retry restarts only what it finds running, since the launch snapshot of the failed
 run is gone. Once `stop()` has succeeded, the marker records what the runtime's own stop plan closed:
 the Codex `daemon`, and each desktop in `desktops` by a hash of its data folder, never the path. A

@@ -131,6 +131,12 @@ function unitEnvironment(env: Record<string, string | undefined>): Record<string
  * Environment values never go on this argv, which any local user can read through ps or /proc:
  * a bare --setenv=KEY takes the value from systemd-run's own environment (systemdRunEnvironment).
  *
+ * The owner's decision (2026-11-07): systemd stores those values in the app's transient unit file
+ * under /run/user/<uid>/systemd/transient/. That is tmpfs inside the user's 0700 runtime folder, so
+ * only the user and root can read it, and it exists while the unit is loaded and is collected after:
+ * the same exposure as the running app's /proc/<pid>/environ. Account activation used to put the
+ * values on argv, and no longer does.
+ *
  * KillMode=process keeps what the old session start gave: quitting the app does not kill what it
  * started, such as an Electron in-app relaunch or a terminal. A Type=simple transient unit would
  * otherwise default to control-group and stop them when its main process exits.

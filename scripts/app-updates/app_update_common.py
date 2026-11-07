@@ -124,6 +124,12 @@ def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple", prope
     Values never go on this argv, which any local user can read: a bare
     --setenv=KEY takes the value from systemd-run's own environment, so run it
     with systemd_run_environment(env).
+
+    The owner's decision (2026-11-07): systemd stores those values in the app's
+    transient unit file under /run/user/<uid>/systemd/transient/. That is tmpfs
+    inside the user's 0700 runtime folder, so only the user and root can read
+    it, and it exists while the unit is loaded and is collected after: the same
+    exposure as the running app's /proc/<pid>/environ.
     """
     runner = shutil.which("systemd-run")
     if runner is None:
