@@ -57,6 +57,9 @@ const SECRET_PATTERNS: ReadonlyArray<readonly [string, (text: string) => boolean
   ['a GitHub token', matches(/\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})/)],
   ['a Slack token', matches(/\bxox[abposr]-[A-Za-z0-9-]{10,}/)],
   ['an AWS key', matches(/\bAKIA[0-9A-Z]{16}\b/)],
+  ['a GitLab token', matches(/\bglpat-[A-Za-z0-9_-]{20,}/)],
+  ['an npm token', matches(/\bnpm_[A-Za-z0-9]{36}\b/)],
+  ['a Hugging Face token', matches(/\bhf_[A-Za-z0-9]{30,}\b/)],
   ['a Google API key', matches(/\bAIza[0-9A-Za-z_-]{35}/)],
   ['a JSON web token', hasJsonWebToken],
   ['a bearer token', matches(/\bBearer\s+[A-Za-z0-9._~+/-]{20,}/i)],
@@ -172,6 +175,18 @@ const CREDENTIAL_KEY =
  * file nested thousands of levels deep (which `JSON.parse` takes and `JSON.stringify` throws on) is walked, not a
  * crash of the scan. Any hit refuses the file.
  */
+/**
+ * A secret written the way a person types one in prose (`password: hunter2isbad`, `api_key=abc123def456`): the
+ * patterns above are shaped for JSON files. Only a value of 8 or more characters with a digit counts, so ordinary words
+ * after a colon ("token: refresh it") are left alone. For the owner's notes, which go to the share.
+ */
+const TYPED_SECRET =
+  /\b(?:password|passwd|pwd|passphrase|secret|api[_ -]?key|access[_ -]?token|auth[_ -]?token|token)\s*[:=]\s*(?=\S*\d)\S{8,}/i;
+
+export function findTypedSecret(text: string): string | null {
+  return TYPED_SECRET.test(text) ? 'a password or key' : null;
+}
+
 export function findSecretIn(source: string, value: unknown): string | null {
   const raw = findSecret(source);
   if (raw) return raw;

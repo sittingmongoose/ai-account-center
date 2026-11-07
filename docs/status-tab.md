@@ -363,7 +363,8 @@ own, in order, one set at a time; the response is `{ "results": [ { cardId, outc
 entries are refused; `code` and `error` are null for `recorded`; `cardId` is null when the entry did not name a valid
 card id). Entry codes: `card_changed`, `invalid_entry` (not the strict entry shape, or an `entryId` already used with other content), `invalid_choice`, `empty_entry`
 (no choice and no note), `invalid_note`, `note_secret` (the note looks like it holds a key, token, password or email
-address: it would be written to the share, so it is refused and the refusal quotes none of it), `invalid_via`, `invalid_kind` (the entry's kind does not fit the card's
+address, including one typed as prose such as `password: ...` with a digit in it: it would be written to the share,
+so it is refused; the refusal names the kind, `It looks like an API key.`, and quotes none of it), `invalid_via`, `invalid_kind` (the entry's kind does not fit the card's
 kind), `words_required` (an objection without the owner's words), `sample_card` (a format sample takes no answer),
 `judgement_anchored` (a judgement card that carries a recommendation), `answer_not_saved` (the private store could
 not be written; nothing else happened for that entry), `share_unavailable` (the share failed or did not answer in time, so the

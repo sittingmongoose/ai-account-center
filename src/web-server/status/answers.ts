@@ -61,7 +61,7 @@ import {
   type ParsedReport,
 } from './report-schema';
 import { readRegularFile } from './share-read';
-import { findSecretIn } from './schema-helpers';
+import { findSecretIn, findTypedSecret } from './schema-helpers';
 import { ConfigError } from '../../errors/error-types';
 
 export * from './answer-entries';
@@ -248,12 +248,22 @@ function appendLine(file: string, record: unknown): void {
     // A write may take fewer bytes than asked (a file-size limit, a full disk): loop until all are written, so a
     // record is never acknowledged half-stored; a failure throws and the caller refuses the entry.
     const data = Buffer.from(`${lead}${JSON.stringify(record)}\n`);
-    for (let offset = 0; offset < data.length; ) {
-      const written = fs.writeSync(fd, data, offset, data.length - offset);
-      if (written <= 0) throw new ConfigError('The answer store took no bytes.', file);
-      offset += written;
+    try {
+      for (let offset = 0; offset < data.length; ) {
+        const written = fs.writeSync(fd, data, offset, data.length - offset);
+        if (written <= 0) throw new ConfigError('The answer store took no bytes.', file);
+        offset += written;
+      }
+      fs.fsyncSync(fd);
+    } catch (error) {
+      // A refused record must not be left in the store (a restart would ring it): cut back to where it began.
+      try {
+        fs.ftruncateSync(fd, size);
+      } catch {
+        /* the store is unwritable: the next load reads at most a torn last line, which is skipped */
+      }
+      throw error;
     }
-    fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
@@ -883,7 +893,8 @@ export class StatusAnswers {
     if (note === null) return refused(entry.cardId, 'invalid_note');
     // the note is signed and written to the share and the mail: the same secret check as any file there (decoded,
     // JSON inside it walked); the refusal names no part of it
-    if (note && findSecretIn(note, note)) return refused(entry.cardId, 'note_secret');
+    const secret = note ? (findSecretIn(note, note) ?? findTypedSecret(note)) : null;
+    if (secret) return refused(entry.cardId, 'note_secret', secret);
     // Before the card is read: a retried answer's card has closed since, and that is no refusal.
     this.list();
     const hash = entry.entryId ? draftHash(entry, note) : null;

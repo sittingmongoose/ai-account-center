@@ -8,6 +8,7 @@ import {
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
+  randomBytes,
   sign,
   verify,
 } from 'crypto';
@@ -91,12 +92,26 @@ export function loadOrCreateAnswerKey(dir: string): AnswerKey {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     const { privateKey } = generateKeyPairSync('ed25519');
     const created = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    // Written whole to a private temp file, synced, then linked into place: a crash or a second process never sees
+    // half a key, and if another process got there first its key is the one used.
+    const temp = path.join(dir, `.answer-key.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
     try {
-      fs.writeFileSync(file, created, { mode: 0o600, flag: 'wx' });
-      pem = created;
-    } catch (writeError) {
-      if ((writeError as NodeJS.ErrnoException).code !== 'EEXIST') throw writeError;
-      pem = fs.readFileSync(file, 'utf8');
+      const fd = fs.openSync(temp, 'wx', 0o600);
+      try {
+        fs.writeFileSync(fd, created);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      try {
+        fs.linkSync(temp, file);
+        pem = created;
+      } catch (linkError) {
+        if ((linkError as NodeJS.ErrnoException).code !== 'EEXIST') throw linkError;
+        pem = fs.readFileSync(file, 'utf8');
+      }
+    } finally {
+      fs.rmSync(temp, { force: true });
     }
   }
   try {

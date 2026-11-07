@@ -37,12 +37,13 @@ export interface EntryResult {
   error: string | null;
 }
 
-export function refused(cardId: string | null, code: RefusalCode): EntryResult {
+/** `kind` is a fixed phrase naming what tripped a check (`an API key`), never input. */
+export function refused(cardId: string | null, code: RefusalCode, kind?: string): EntryResult {
   return {
     cardId,
     outcome: code === 'card_changed' ? 'card_changed' : 'refused',
     code,
-    error: REFUSALS[code],
+    error: kind ? `${REFUSALS[code]} It looks like ${kind}.` : REFUSALS[code],
   };
 }
 

@@ -2004,6 +2004,65 @@ describe('round three', () => {
     expect(make().list()).toHaveLength(1);
   });
 
+  it('notes: typed secrets and token prefixes are refused by kind; ordinary prose is not', async () => {
+    const { root, make } = setup();
+    const answers = make();
+    const cards = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8', 'Q9'].map((id) => ({
+      id: `vm.lead--${id}`,
+      sha: writeCard(root, cardDoc('vm.lead', id)),
+    }));
+    const send = async (i: number, note: string) =>
+      (await answers.submitSet([entry(cards[i].id, cards[i].sha, { choice: [], note })], 'Mac'))[0];
+    for (const [i, note] of [
+      [0, 'password: hunter2isbad'],
+      [1, 'api_key=abcdef1234567890'],
+      [2, `use glpat-${'A1b2C3'.repeat(4)}`],
+      [3, `npm_${'a1B2c3D4e5'.repeat(4).slice(0, 36)}`],
+    ] as const) {
+      const result = await send(i, note);
+      expect([note, result.code]).toEqual([note, 'note_secret']);
+      expect(result.error).toMatch(
+        /It looks like (a password or key|a GitLab token|an npm token)\./
+      );
+    }
+    for (const [i, note] of [
+      [4, 'the token: refresh it later'],
+      [5, 'see https://example.org/path/to/page and /home/me/x.py'],
+      [6, 'Bearer tokens are fine to mention in prose'],
+      [7, 'pin react@18.3.1 and keep sha 1dbdea02'],
+    ] as const) {
+      const result = await send(i, note);
+      expect([note, result.outcome]).toEqual([note, 'recorded']);
+    }
+  });
+
+  it('a record whose write fails is cut back out of the store, and the answer key is never half written', async () => {
+    const { root, store, make } = setup();
+    const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const answers = make();
+    const realFsync = fs.fsyncSync;
+    const fsync = spyOn(fs, 'fsyncSync').mockImplementation(((fd: number) => {
+      if (
+        fs.fstatSync(fd).size > 0 &&
+        String(fs.readFileSync(path.join(store, 'answers.jsonl'), 'utf8')).includes(
+          '"type":"answer"'
+        )
+      )
+        throw Object.assign(new Error('disk gone'), { code: 'EIO' });
+      return realFsync(fd);
+    }) as typeof fs.fsyncSync);
+    let result;
+    try {
+      [result] = await answers.submitSet([entry(CARD, q1)], 'Mac');
+    } finally {
+      fsync.mockRestore();
+    }
+    expect(result?.outcome).toBe('refused');
+    expect(make().list()).toHaveLength(0);
+    // the key: no partial file is ever at answer-key.pem, and no temp file is left
+    expect(fs.readdirSync(store).filter((f) => f.startsWith('.answer-key'))).toEqual([]);
+  });
+
   it('a torn last store line does not swallow the next record after a restart', async () => {
     const { root, store, make } = setup();
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
