@@ -536,10 +536,31 @@ describe('runtime-free Antigravity process census', () => {
       expect([argv, value.census()]).toEqual([argv, { complete: true, running: 1 }]);
       fs.rmSync(path.join(value.proc, '967'), { recursive: true });
     }
-    // a bare interpreter name (an empty or reaped command line) is no evidence
+    // an interpreter with no arguments in a root reads its script from stdin: busy; a bare shell parked there is not
     value.add(968, 'node', '/usr/bin/node', ['node'], helperDir);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '968'), { recursive: true });
+    value.add(968, 'bash', '/usr/bin/bash', ['bash'], helperDir);
     expect(value.census()).toEqual({ complete: true, running: 0 });
     fs.rmSync(path.join(value.proc, '968'), { recursive: true });
+    // an empty command line is no evidence
+    value.add(968, 'python3', '/usr/bin/python3', [], helperDir);
+    expect(value.census()).toEqual({ complete: true, running: 0 });
+    fs.rmSync(path.join(value.proc, '968'), { recursive: true });
+    // a rewritten title still runs the interpreter (by its exe); attached and listed option values are scripts too
+    value.add(970, 'helper', '/usr/bin/python3.12', ['helper', 'x.py'], helperDir);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+    fs.rmSync(path.join(value.proc, '970'), { recursive: true });
+    for (const argv of [
+      ['node', `-r${path.join(helperDir, 'hook.js')}`, 'app.js'],
+      ['node', `--import=file://${path.join(helperDir, 'h.mjs')}`, 'app.js'],
+      ['node', `--path=/a:${helperDir}`, 'app.js'],
+      ['python3', 'script.py', `ROOT=${path.join(helperDir, 'x')}`],
+    ]) {
+      value.add(971, argv[0], `/usr/bin/${argv[0]}`, argv, value.root);
+      expect([argv, value.census()]).toEqual([argv, { complete: true, running: 1 }]);
+      fs.rmSync(path.join(value.proc, '971'), { recursive: true });
+    }
     // a command line cut at the read limit leaves idle unproven
     value.add(
       969,

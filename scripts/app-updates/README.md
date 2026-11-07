@@ -330,10 +330,11 @@ review list, is not proof of an unreviewed build: it keeps the coordinator.
   arguments are checked). A relative argument that names a path (it contains a
   slash, such as `./bin/helper.js`) is resolved against the process's working
   folder, also when that folder was removed; a bare word is not, except an
-  interpreter's script (python, node, sh and the like: every non-option argument
-  and `--opt=value` value in the part read, `python3 -I helper.py` included), and
-  an interpreter working inside a root counts whatever its arguments
-  (`python3 -m mod` there). Any match
+  interpreter's script (python, node, sh and the like, known by name, argv0 or
+  executable: every non-option argument and option or assignment value in the
+  part read, `python3 -I helper.py` and `node -r/x/hook.js` included), and an
+  interpreter working inside a root counts whatever its arguments
+  (`python3 -m mod` or a script on stdin there; a bare shell does not). Any match
   reports `action_required` / `in_use` and nothing changes. The census is
   complete only when every same-user process was read and the listing includes
   the census's own process; a read failure other than the process exiting makes
