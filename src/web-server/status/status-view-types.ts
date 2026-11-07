@@ -91,6 +91,9 @@ export interface Source {
   detail: string;
 }
 
+/** A source's state as attached to the readings it supplied on another source's panel. */
+export type SourceRef = Pick<Source, 'id' | 'label' | 'state' | 'asOf' | 'ageSeconds' | 'detail'>;
+
 export interface HeadlineRun {
   text: string;
   strong?: boolean;
@@ -243,6 +246,8 @@ export interface ThreadView {
   /** How far ahead of this server's clock the writer's `writtenAt` was, when over 2 minutes. */
   clockAheadSeconds: number | null;
   problem: string | null;
+  /** pm-mail rows: the registry's state, age and problem (its failure keeps the last good row); null on report rows. */
+  registrySource: SourceRef | null;
 }
 
 export interface MachineView {
@@ -259,6 +264,8 @@ export interface MachineView {
   recordings: { running: number | null; max: number | null } | null;
   gpuPct: number | null;
   sessions: BrowserSession[];
+  /** browser-check's state, age and problem for `browsers`, `recordings`, `gpuPct` and `sessions`. */
+  slotsSource: SourceRef;
   warnings: string[];
 }
 
@@ -279,6 +286,8 @@ export interface UsageAccountView {
   runsOutBeforeReset: boolean | null;
   atLimit: boolean;
   stale: boolean;
+  /** The reset passed after this reading: the number is history, not a current limit or projection. */
+  resetPassed: boolean;
 }
 
 export interface UsageWarning {
@@ -318,8 +327,9 @@ export interface StatusView {
     complete: boolean;
   };
   projects: ProjectView[];
-  threads: { source: 'agent-reports'; rows: ThreadView[] };
-  machines: { source: 'machines'; rows: MachineView[] };
+  /** `also`: the panel's secondary sources; their failures are shown on the panel and its rows. */
+  threads: { source: 'agent-reports'; also: ['pm-mail']; rows: ThreadView[] };
+  machines: { source: 'machines'; also: ['browsers']; rows: MachineView[] };
   simlock: { source: 'simlock'; capacity: SimlockCapacity[]; leases: SimlockLease[] };
   usage: { source: 'usage'; warnings: UsageWarning[]; accounts: UsageAccountView[] };
   /** quota-watch's per-stream estimates (docs/status-tab.md, Spend). */

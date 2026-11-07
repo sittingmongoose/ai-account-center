@@ -162,8 +162,8 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
   "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ],
              "complete": true },
   "projects": [ Project ],
-  "threads": { "source": "...", "rows": [ Thread ] },
-  "machines": { "source": "...", "rows": [ Machine ] },
+  "threads": { "source": "...", "also": [ "pm-mail" ], "rows": [ Thread ] },
+  "machines": { "source": "...", "also": [ "browsers" ], "rows": [ Machine ] },
   "simlock": { "source": "...", "capacity": [ Capacity ], "leases": [ Lease ] },
   "usage": { "source": "...", "warnings": [ UsageWarning ], "accounts": [ UsageAccount ] },
   "spend": Spend
@@ -174,6 +174,11 @@ If the private answer journal cannot be read, the rest of the view still returns
 `null`, and `cards.answerHistoryProblem` reads "The answer history can't be read right now." (otherwise null).
 Cards remain visible but cannot be answered until history recovers; `cards.complete` is false so drafts stay safe.
 The page shows this problem beside the questions. A later successful read restores history automatically.
+
+A panel's `also` names its secondary sources. The page shows each one's problem on that panel next to the main
+source's, and the rows they supplied carry that source's own state (`SourceRef`: `{ id, label, state, asOf,
+ageSeconds, detail }`), so a healthy main source never makes a failed secondary reading look live. A failed secondary
+source keeps its last good readings, labelled cached with their age.
 
 Every number the page shows is in this view, already rounded and worded. A missing value is `null` with a reason
 word, never 0. Times are ISO UTC; the page shows them as relative ages ("2m ago") and Eastern 12-hour on hover/tap.
@@ -292,23 +297,27 @@ modification time, read only for paths inside the share that holds the reports f
 of the share are mapped); elsewhere `ageSeconds` is null.
 
 **Thread**: `{ name, writer, machine, project, stream, state, doing, blockedOn, progress, model, effort, account,
-source: "report" | "pm-mail", lastSeen, ageSeconds, stale, clockAheadSeconds, problem }`. Threads quiet for more than
+source: "report" | "pm-mail", lastSeen, ageSeconds, stale, clockAheadSeconds, problem, registrySource }`. Threads quiet for more than
 a day are left out unless they report `blocked`. `lastSeen` is the older of the writer's `writtenAt` and when AAC first
 saw that version, so a writer whose clock runs ahead cannot look fresh; `clockAheadSeconds` says by how much when over
 2 minutes. A report is `stale` after its `ttlSeconds` or while its file is unreadable. `ttlSeconds` may be null only
 when `state` is `waiting`, `idle`, `done` or `paused` (a thread that ended its turn cannot heartbeat): such a thread
 shows its age and is never stale for lack of a heartbeat (null with `working` or `blocked` makes the file unreadable). pm-mail rows (registry threads
 with no report, seen in the last day) have `state: null`, `doing` = their about line, and are stale after 30 minutes.
+Their `registrySource` is the pm-mail registry's `SourceRef` (null on report rows): while the registry fails, its rows
+are the last good scan, shown as cached with the registry's problem.
 `blockedOn.kind` is any short slug (documented: `owner`, `agent`, `review`, `lock`, `resource`, `quota`).
 
 **Machine**: `{ id: "vm" | "mac" | "windows" | "nas1", label, state: "ok" | "stale" | "unreachable", asOf, ageSeconds,
 detail, cpu: { cores, load1, busyPct }, memory: { availableGb, totalGb }, disk: [ { mount, freeGb, totalGb } ],
 browsers: { running, max }, recordings: { running, max }, gpuPct, sessions: [ { id, url, owner, recording,
-ageSeconds } ], warnings: [ "Disk 17.7 GB free, under the 50 GB floor" ] }`. Floors: 50 GB disk, 6 GB memory (the
+ageSeconds } ], slotsSource, warnings: [ "Disk 17.7 GB free, under the 50 GB floor" ] }`. Floors: 50 GB disk, 6 GB memory (the
 shared machine rules). GB here is GiB (as `free -g` and `df -h`). `unreachable` keeps the last good reading with its
 time in `detail`. Windows has no load average (`load1: null`). Session URLs are host and path only (a file URL shows its
 path); query strings and fragments are never shown. `browsers`, `recordings`, `gpuPct` and `sessions` come from
-`browser-check` (null or empty when it has no row for that machine).
+`browser-check` (null or empty when it has no row for that machine); `slotsSource` is that source's `SourceRef`, apart
+from the machine's own `state`, so a failed `browser-check` shows its cached readings with their age and problem while
+CPU, memory and disk stay current.
 
 **Capacity** (Simlock): `{ platform, running, max, reserved, overLimit }` (one row per platform Simlock lists,
 including `global`). **Lease**: `{ device, deviceLabel, platform, holder, since, expiresAt }`. Device ids and holders
@@ -316,9 +325,12 @@ are shown as Simlock reports them (`holder` is the worker label, else the reques
 never.
 
 **UsageAccount**: `{ id, provider, label, host, active, window, kind, usedPct, remaining, limit, unit, resetsAt,
-projectedFullAt, runsOutBeforeReset, atLimit, stale }`, one row per rate-limit window and per balance (Codex credits:
+projectedFullAt, runsOutBeforeReset, atLimit, stale, resetPassed }`, one row per rate-limit window and per balance (Codex credits:
 `kind: "balance"` with `remaining`/`unit`), from AAC's own dashboard samples and the same pace math as
-`aac-usage` (no extra provider refresh). Accounts hidden on the dashboard are left out. **UsageWarning**: `{ tone,
+`aac-usage` (no extra provider refresh). Accounts hidden on the dashboard are left out. Every view rechecks each
+reading against its reset with the dashboard's rule (the reset is due and the reading predates it, or its time is
+unknown), not only when the sample was taken: such a row has `resetPassed: true` and `stale: true`, keeps its measured
+`usedPct` as history (never an assumed 0), and has no `atLimit`, projection or warning. **UsageWarning**: `{ tone,
 text }`, worst first, only from current readings: `bad` "claude main (7-day): at its limit until its Nov 12 4:00 PM
 reset", `warn` "claude main (7-day): full in 1d 11h, before its Nov 12 reset".
 

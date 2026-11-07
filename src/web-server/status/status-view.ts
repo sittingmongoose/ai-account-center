@@ -17,7 +17,7 @@ import {
   type TasksDoc,
   type ThreadDoc,
 } from './report-schema';
-import { buildUsage, machinesSource, machineView } from './status-view-panels';
+import { buildUsage, machinesSource, machineView, sourceRef } from './status-view-panels';
 import { buildSpend, quotaSource } from './status-view-quota';
 import type {
   BatchView,
@@ -217,6 +217,7 @@ function reportThreadView(row: SeenReport<ThreadDoc>, now: number): ThreadView {
     stale: threadStale(row, now),
     clockAheadSeconds: ahead > 120 ? Math.round(ahead) : null,
     problem: row.problem?.reason ?? null,
+    registrySource: null,
   };
 }
 
@@ -229,7 +230,8 @@ const THREAD_RANK: Record<string, number> = {
   done: 5,
 };
 
-function buildThreads(inputs: StatusInputs): ThreadView[] {
+/** Report rows, then pm-mail rows; each pm-mail row carries the registry's state (`registrySource`). */
+function buildThreads(inputs: StatusInputs, registry: Source): ThreadView[] {
   const { now } = inputs;
   const hidden = new Set(inputs.hiddenThreadNames ?? []);
   const rows: ThreadView[] = [];
@@ -264,6 +266,7 @@ function buildThreads(inputs: StatusInputs): ThreadView[] {
       stale: now - at > PM_MAIL_STALE_MS,
       clockAheadSeconds: null,
       problem: null,
+      registrySource: sourceRef(registry),
     });
   }
   return rows.sort(
@@ -565,28 +568,30 @@ function buildProjects(inputs: StatusInputs): ProjectView[] {
 
 export function buildStatusView(inputs: StatusInputs): StatusView {
   const { now, timeZone } = inputs;
-  const machineRows = MACHINES.map((id) => machineView(inputs, id));
+  const registrySrc = collectedSource(
+    'pm-mail',
+    'pm-mail registry',
+    inputs.registry,
+    STALE_AFTER_SECONDS['pm-mail'],
+    now,
+    timeZone
+  );
+  const browsersSrc = collectedSource(
+    'browsers',
+    'Browsers and recordings',
+    inputs.browsers,
+    STALE_AFTER_SECONDS.browsers,
+    now,
+    timeZone
+  );
+  const machineRows = MACHINES.map((id) => machineView(inputs, id, browsersSrc));
   const quotaSrc = quotaSource(inputs.quota, now, timeZone);
   const usageSrc = usageSource(inputs);
   const sources: Source[] = [
     reportsSource(inputs),
-    collectedSource(
-      'pm-mail',
-      'pm-mail registry',
-      inputs.registry,
-      STALE_AFTER_SECONDS['pm-mail'],
-      now,
-      timeZone
-    ),
+    registrySrc,
     machinesSource(inputs, machineRows),
-    collectedSource(
-      'browsers',
-      'Browsers and recordings',
-      inputs.browsers,
-      STALE_AFTER_SECONDS.browsers,
-      now,
-      timeZone
-    ),
+    browsersSrc,
     collectedSource(
       'simlock',
       'Simlock',
@@ -600,7 +605,7 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   ];
   const cards = buildCards(inputs);
   const projects = buildProjects(inputs);
-  const threads = buildThreads(inputs);
+  const threads = buildThreads(inputs, registrySrc);
   const usage = buildUsage(inputs, usageSrc);
   const spend = buildSpend(inputs.quota, streamLabels(inputs));
   // Only a current report can raise the budget warning.
@@ -657,8 +662,8 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     sources,
     cards,
     projects,
-    threads: { source: 'agent-reports', rows: threads },
-    machines: { source: 'machines', rows: machineRows },
+    threads: { source: 'agent-reports', also: ['pm-mail'], rows: threads },
+    machines: { source: 'machines', also: ['browsers'], rows: machineRows },
     simlock: {
       source: 'simlock',
       capacity: inputs.simlock.data?.capacity ?? [],

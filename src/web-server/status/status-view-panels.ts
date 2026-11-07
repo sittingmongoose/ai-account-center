@@ -1,9 +1,11 @@
 /** The machines and usage panels of the Status tab view. */
 import { MACHINES, type MachineId } from './report-schema';
 import type { MachineSample } from './status-collectors';
+import { readingPredatesReset } from '../agent-usage/agent-usage-projection';
 import type {
   MachineView,
   Source,
+  SourceRef,
   StatusInputs,
   StatusView,
   UsageAccountView,
@@ -47,7 +49,17 @@ export function machineWarnings(sample: MachineSample | null): string[] {
   return warnings;
 }
 
-export function machineView(inputs: StatusInputs, id: MachineId): MachineView {
+/** The parts of a source a row on another source's panel carries with the readings it supplied. */
+export function sourceRef(source: Source): SourceRef {
+  const { id, label, state, asOf, ageSeconds, detail } = source;
+  return { id, label, state, asOf, ageSeconds, detail };
+}
+
+/**
+ * One machine. Its CPU, memory and disk come from the machine read; browsers, recordings, GPU and
+ * sessions come from browser-check and carry that source's own state (`slotsSource`).
+ */
+export function machineView(inputs: StatusInputs, id: MachineId, browsers: Source): MachineView {
   const { now, timeZone } = inputs;
   const collected = inputs.machines[id];
   const sample = collected.data;
@@ -94,6 +106,7 @@ export function machineView(inputs: StatusInputs, id: MachineId): MachineView {
     recordings: browser ? browser.recordings : null,
     gpuPct: browser?.gpuPct ?? null,
     sessions: browser?.sessions ?? [],
+    slotsSource: sourceRef(browsers),
     warnings: machineWarnings(sample),
   };
 }
@@ -139,11 +152,15 @@ export function buildUsage(inputs: StatusInputs, source: Source): StatusView['us
     if (account.hidden) continue;
     for (const window of account.windows) {
       if (!USAGE_KINDS.has(window.kind)) continue;
+      // The sample's own projection is rechecked at view time: a reset can pass between samples.
+      const resetPassed =
+        window.resetPassed ||
+        readingPredatesReset(window.resetAt, window.sampledAt ?? account.sampledAt, now);
       // Only a current reading of a fresh sample can raise a warning.
-      const stale = sampleStale || account.status !== 'ok' || window.cached || window.resetPassed;
-      const atLimit =
-        window.usedPercent !== null && window.usedPercent >= 100 && !window.resetPassed;
-      const burn = window.burn;
+      const stale = sampleStale || account.status !== 'ok' || window.cached || resetPassed;
+      const atLimit = window.usedPercent !== null && window.usedPercent >= 100 && !resetPassed;
+      // A passed reset ends the old window: its pace says nothing about the new one.
+      const burn = resetPassed ? null : window.burn;
       const row: UsageAccountView = {
         id: account.id,
         provider: account.provider,
@@ -161,6 +178,7 @@ export function buildUsage(inputs: StatusInputs, source: Source): StatusView['us
         runsOutBeforeReset: burn?.runsOutBeforeReset ?? null,
         atLimit,
         stale,
+        resetPassed,
       };
       accounts.push(row);
       if (stale) continue;
