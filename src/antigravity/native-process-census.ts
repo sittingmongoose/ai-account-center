@@ -242,85 +242,63 @@ function readCmdline(file: string): { text: string; bytes: number } {
 }
 
 /**
- * The script paths one interpreter argument may name: the argument itself, an option's value (`--require=x`,
- * `-r/abs/x`), an assignment's value (`ROOT=/x`), each part of a `:` or `,` list (`--path=/a:/b`), and a `file://`
- * URL as its path. A plain flag (`-u`, `--inspect`) names none.
+ * Enumerate positions, not interpreter option grammars. Keep whole spellings beside every possible
+ * delimiter ending, including whole file URLs containing literal `file:` folder names. Generation
+ * and filesystem lookup are independently bounded; exhaustion leaves the interpreter unplaced.
  */
-function candidateScripts(argument: string, operand = false): string[] {
-  let value: string;
-  const equals = argument.indexOf('=');
-  if (!operand && argument.startsWith('-')) {
-    if (equals > 0) value = argument.slice(equals + 1);
-    else if (/^-[A-Za-z][^-]/.test(argument)) {
-      // a short option's glued value (`php -fh.py`, `ruby -rh.py`, a bare name looked up only if it is a link there),
-      // possibly after a cluster of flags (`perl -wI/x/lib`): each place a value could start, up to the first
-      // character that is no letter
-      const starts: string[] = [];
+function commandLineCandidates(argv: readonly string[]): { paths: string[]; exhausted: boolean } {
+  const paths = new Set<string>();
+  let count = 0;
+  const add = (value: string): boolean => {
+    count += 1;
+    if (count > LOOKUPS_PER_PROCESS) return false;
+    if (value) paths.add(value);
+    return true;
+  };
+  const separator = argv.indexOf('--');
+  for (const [position, argument] of argv.entries()) {
+    if (position === separator) continue;
+    const starts = new Set([0]);
+    if (/^-[A-Za-z][^-]/.test(argument)) {
       for (let at = 2; at < argument.length; at += 1) {
-        starts.push(argument.slice(at));
+        starts.add(at);
         if (!/[A-Za-z]/.test(argument[at])) break;
       }
-      return [...new Set(starts.flatMap((start) => [start, ...listParts(start)]))];
-    } else return [];
-  } else {
-    value =
-      equals > 0 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(argument.slice(0, equals))
-        ? argument.slice(equals + 1)
-        : argument;
+    }
+    const ends: number[] = [];
+    for (let at = 0; at < argument.length; at += 1) {
+      if (/[=,:;@]/.test(argument[at])) starts.add(at + 1);
+      if (/[=,:;]/.test(argument[at])) ends.push(at);
+      if (
+        argument[at] === '/' ||
+        argument.startsWith('~/', at) ||
+        argument.startsWith('./', at) ||
+        argument.startsWith('../', at)
+      )
+        starts.add(at);
+    }
+    if (starts.size > LOOKUPS_PER_PROCESS) return { paths: [], exhausted: true };
+    for (const start of starts) {
+      if (!add(argument.slice(start))) return { paths: [], exhausted: true };
+      for (const end of ends) {
+        if (end > start && !add(argument.slice(start, end))) return { paths: [], exhausted: true };
+      }
+    }
+    for (const match of argument.matchAll(/file:/gi)) {
+      const start = match.index ?? 0;
+      // Always decode the whole URL before trying list interpretations.
+      if (!add(filePath(argument.slice(start)))) return { paths: [], exhausted: true };
+      for (const end of ends) {
+        if (
+          end > start + 4 &&
+          /[:,]/.test(argument[end]) &&
+          !add(filePath(argument.slice(start, end)))
+        )
+          return { paths: [], exhausted: true };
+      }
+    }
   }
-  // the whole value too, when splitting it could lose a path that holds a comma or a colon (never a URL's text)
-  const whole = /[,:]/.test(value) && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) ? [value] : [];
-  const parts = [...whole, ...listParts(value)];
-  if (operand || !argument.startsWith('-')) parts.unshift(argument);
-  return [...new Set(parts.filter(Boolean))];
-}
-
-/**
- * Each part of a `,` or `:` list, and every `file:` URL anywhere in it as its decoded path, any case of the scheme
- * (`FILE:///x/%2Egemini/h.mjs` is `/x/.gemini/h.mjs`; `/a:file:///b` gives `/a` and `/b`). The whole value is kept
- * beside them by the caller, since a path may itself hold a comma or a colon.
- */
-function listParts(value: string): string[] {
-  // a file: URL whose path holds a comma is read whole too, before the list is split
-  return [...fileUrlPaths(value), ...value.split(',')]
-    .flatMap((item) => [item, ...item.split(':'), ...fileUrlPaths(item)])
-    .filter(Boolean);
-}
-
-/** Every argument's candidate scripts; after `--` each argument is an operand as written (`python3 -- --x/h.py`). */
-function commandLineCandidates(argv: readonly string[]): string[] {
-  const end = argv.indexOf('--');
-  return [
-    ...new Set(
-      argv.flatMap((argument, at) =>
-        end !== -1 && at > end
-          ? candidateScripts(argument, true)
-          : at === end
-            ? []
-            : candidateScripts(argument)
-      )
-    ),
-  ];
-}
-
-/**
- * Every `file:` URL in a list item as a decoded path. Several URLs may share an item (`file:///a:file:///b`), and a URL
- * may be followed by `:more` (`file:///x/root:/b`), so each URL is also read up to each of its first colons.
- */
-function fileUrlPaths(item: string): string[] {
-  return item
-    .split(/(?=file:)/i)
-    .filter((segment) => /^file:/i.test(segment))
-    .flatMap((segment) => {
-      const cuts = [segment];
-      for (
-        let at = segment.indexOf(':', 5);
-        at !== -1 && cuts.length < 16;
-        at = segment.indexOf(':', at + 1)
-      )
-        cuts.push(segment.slice(0, at));
-      return cuts.map(filePath);
-    });
+  return { paths: [...paths], exhausted: false };
 }
 
 /** A `file:` URL as its path, percent-escapes decoded; a URL that doesn't parse keeps its text after the scheme. */
@@ -376,16 +354,15 @@ function filePath(url: string): string {
  * An interpreter is known by its process name, argv0 or executable (a
  * rewritten title still runs /usr/bin/python3, and one replaced on disk reads
  * "python3 (deleted)"). A process whose leader thread exited while others run
- * is judged by those threads: a helper's executable counts, anything else is
- * unplaced. For one, every non-option
- * argument and every option or assignment value in the part of the command
- * line read is a candidate script, and after `--` every argument as written
- * (`python3 helper.py`, `-r/x/hook.js`, `python3 -- --x/h.py`,
- * `--import=file:///x`, `--path=/a:/b`, `ROOT=/x`), resolved against its
- * working folder; an interpreter whose working folder is inside a root counts
- * whatever its arguments (`python3 -m mod`, a script on stdin), except a shell
- * with no arguments; one whose command line was cut at the read limit leaves
- * idle unproven.
+ * is judged by those threads: a helper's executable counts, anything else is unplaced.
+ * Every argument contributes its start, short-option glued offsets, positions after = , : ; @,
+ * absolute and ./ ../ ~/ path starts, with whole and delimiter endings. Every file: occurrence
+ * is decoded whole and up to later colons or commas. Relative candidates use the process cwd;
+ * operands after -- stay as written. Candidate or lookup exhaustion holds the update.
+ * Every interpreter's cwd and open fd links count, shells included even without arguments.
+ * A shell parked in a runtime folder holds the update. A denied cwd, or denied fd listing with
+ * candidates, leaves idle unproven. A script removed after it loaded reads as gone unless another
+ * path, cwd or open fd still places it.
  *
  * A non-dumpable process hides its working folder, so a relative script can't
  * be placed. When such a process is an interpreter (python, node, sh, perl,
@@ -569,7 +546,6 @@ export function censusAntigravityProcesses(options: {
   // judged by a script path at all.
   const INTERPRETER =
     /^(?:python[\d.]*|pypy[\d.]*|node|nodejs|bun|deno|sh|bash|dash|zsh|ksh|mksh|fish|perl[\d.]*|ruby[\d.]*|lua[\d.]*|luajit|php[\d.]*|tclsh[\d.]*|Rscript|julia)$/;
-  const SHELL = /^(?:sh|bash|dash|zsh|ksh|mksh|fish)$/;
   let unplaced = false;
   let running = 0;
   try {
@@ -611,10 +587,8 @@ export function censusAntigravityProcesses(options: {
         const cmdline = read.text;
         const all = cmdline.split('\0').filter(Boolean);
         const args = all.slice(0, 4);
-        // An interpreter's script can follow any number of options and may be a bare name (`python3 -I -u helper.py`,
-        // `node helper.js`) or an option's value (`node --require=./hook.js app.js`): for one, every non-option
-        // argument and every `--opt=value` value in the part of the command line read is a candidate script, resolved
-        // against the working folder like a relative path.
+        // An interpreter's script can follow any number or spelling of options. Enumerate candidate positions
+        // throughout every argument read, preserving whole operands; resolve relative paths against its cwd.
         // By process name, argv0 or the executable itself (a rewritten title still runs /usr/bin/python3).
         const named = (word: string) => INTERPRETER.test(word);
         const interpreter =
@@ -622,8 +596,10 @@ export function censusAntigravityProcesses(options: {
           named(path.basename(all[0] ?? '')) ||
           // an executable replaced on disk reads "python3 (deleted)"
           (exe !== null && pathSpellings(exe).some((spelling) => named(path.basename(spelling))));
-        const shell = SHELL.test(comm) || SHELL.test(path.basename(all[0] ?? ''));
-        const operands = interpreter ? commandLineCandidates(all.slice(1)) : [];
+        const candidates = interpreter
+          ? commandLineCandidates(all.slice(1))
+          : { paths: [], exhausted: false };
+        const operands = candidates.paths;
         let cwds: string[] | undefined;
         let cwdDenied = false;
         const resolveArgument = (argument: string, bare = false): string[] => {
@@ -642,9 +618,30 @@ export function censusAntigravityProcesses(options: {
           // joined as written, so `..` is applied after links (path.resolve would apply it first)
           return cwds.map((cwd) => `${cwd}${path.sep}${argument}`);
         };
-        // An interpreter working inside a root runs Antigravity's code whatever its arguments say (`python3 -m mod`,
-        // `python3 -c ...`, a script on stdin): it counts too. Only one with arguments: a bare interpreter name (an
-        // empty or reaped command line) is no evidence either way.
+        // Every interpreter, including a no-argument shell, may read code from stdin or an open module.
+        let fdDenied = false;
+        const openRuntimeFile = (): boolean => {
+          let fds: string[];
+          try {
+            fds = fs.readdirSync(path.join(directory, 'fd'));
+          } catch (error) {
+            if (GONE.has(code(error))) throw new ProcessGone();
+            fdDenied = true;
+            return false;
+          }
+          for (const fd of fds) {
+            let target: string;
+            try {
+              target = fs.readlinkSync(path.join(directory, 'fd', fd));
+            } catch (error) {
+              // Descriptors can close independently of the process.
+              if (!GONE.has(code(error))) fdDenied = true;
+              continue;
+            }
+            if (path.isAbsolute(target) && reachesRoot(target)) return true;
+          }
+          return false;
+        };
         const inRoot = (): boolean => {
           resolveArgument('./x', true);
           return (cwds ?? []).some((cwd) => reachesRoot(cwd));
@@ -661,16 +658,15 @@ export function censusAntigravityProcesses(options: {
               )
             )
           ) ||
-          // a shell needs arguments (an interactive one parked in a root folder is no helper); another interpreter
-          // with none reads its script from stdin
-          (interpreter && (all.length > 1 || (all.length === 1 && !shell)) && inRoot())
+          (interpreter && inRoot()) ||
+          (interpreter && openRuntimeFile())
         ) {
           running += 1;
           continue;
         }
         // Idle stays unproven for an interpreter whose script couldn't be placed: its working folder is hidden while it
         // has a candidate script, or the command line was cut at the read limit with no candidate found.
-        const truncated = read.bytes >= CMDLINE_BYTES || overLookups;
+        const truncated = read.bytes >= CMDLINE_BYTES || overLookups || candidates.exhausted;
         // a process that changed its name or executable while it was read (an exec) is judged by mixed readings
         const commAfter = readField(() =>
           fs.readFileSync(path.join(directory, 'comm'), 'utf8').trim()
@@ -686,7 +682,11 @@ export function censusAntigravityProcesses(options: {
             reread.set(name, times + 1);
             queue.push(name);
           } else unplaced = true;
-        } else if (interpreter && (cwdDenied || truncated || unresolvedSeen)) unplaced = true;
+        } else if (
+          interpreter &&
+          (cwdDenied || truncated || unresolvedSeen || (fdDenied && operands.length > 0))
+        )
+          unplaced = true;
       } catch (error) {
         if (error instanceof ProcessGone) {
           // A leader that exited (pthread_exit) while its other threads run reads as gone: judge by those threads.

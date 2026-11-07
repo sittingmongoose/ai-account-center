@@ -331,10 +331,19 @@ review list, is not proof of an unreviewed build: it keeps the coordinator.
   slash, such as `./bin/helper.js`) is resolved against the process's working
   folder, also when that folder was removed; a bare word is not, except an
   interpreter's script (python, node, sh and the like, known by name, argv0 or
-  executable: every non-option argument and option or assignment value in the
-  part read, `python3 -I helper.py` and `node -r/x/hook.js` included), and an
+  executable: candidates at argument starts, glued short-option offsets, after
+  `=`, `,`, `:`, `;`, `@`, and at absolute or `~/`, `./`, `../` path starts; whole
+  values and endings before later `,`, `:`, `;`, `=` are kept. Every `file:`
+  occurrence is decoded whole and before later colons or commas; `--` operands
+  stay as written. Candidate generation and path lookups are capped at 4096
+  per process; exhaustion leaves the interpreter unplaced), and an
   interpreter working inside a root counts whatever its arguments
-  (`python3 -m mod` or a script on stdin there; a bare shell does not). Any match
+  (`python3 -m mod` or a script on stdin there, including a shell with no arguments).
+  A shell parked in the runtime folder holds the update. Open `/proc/PID/fd/*`
+  links into a runtime also count, including stdin scripts and held modules. A
+  denied cwd, or denied fd listing with candidate arguments, leaves idle unproven.
+  A script removed after it loaded reads as gone unless another path, cwd or
+  open fd still places it. Any match
   reports `action_required` / `in_use` and nothing changes. The census is
   complete only when every same-user process was read and the listing includes
   the census's own process; a read failure other than the process exiting makes

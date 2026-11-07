@@ -133,6 +133,7 @@ describe('runtime-free Antigravity process census', () => {
     const add = (pid: number, comm: string, exe: string, args: string[], cwd?: string) => {
       const directory = path.join(proc, String(pid));
       fs.mkdirSync(directory);
+      fs.mkdirSync(path.join(directory, 'fd'));
       fs.writeFileSync(path.join(directory, 'comm'), `${comm}\n`);
       fs.symlinkSync(exe, path.join(directory, 'exe'));
       fs.writeFileSync(path.join(directory, 'cmdline'), args.map((arg) => `${arg}\0`).join(''));
@@ -150,10 +151,134 @@ describe('runtime-free Antigravity process census', () => {
     return { root, home, native, proc, add, census };
   }
 
+  for (const kind of [
+    'shell-stdin',
+    'glued-equals',
+    'file-in-url',
+    'cluster-equals',
+    'escaped-url',
+    'open-fd',
+    'bare-shell',
+    'at-candidate',
+    'semicolon-candidate',
+  ]) {
+    test(`live positional census: ${kind}`, async () => {
+      const value = procFixture();
+      const runtime = path.join(value.home, '.local/share/ai-account-center/antigravity-runtime');
+      fs.mkdirSync(runtime, { recursive: true });
+      const main = path.join(value.root, 'main.cjs');
+      fs.writeFileSync(main, "console.log('READY'); setInterval(() => {}, 1000);");
+      let argv = ['node', main];
+      let cwd = value.root;
+      let stdin: number | undefined;
+      if (kind === 'shell-stdin' || kind === 'bare-shell') {
+        cwd = runtime;
+        if (kind === 'shell-stdin') {
+          const script = path.join(runtime, 'helper.sh');
+          fs.writeFileSync(script, "printf 'READY\\n'; read -r -u 3; . ./later.sh");
+          stdin = fs.openSync(script, 'r');
+        }
+        argv = ['/bin/bash'];
+      } else if (kind === 'glued-equals' || kind === 'cluster-equals') {
+        const lib = path.join(runtime, 'a=b');
+        fs.mkdirSync(lib);
+        fs.writeFileSync(path.join(lib, 'Hook.pm'), 'BEGIN { $|=1; print "READY\\n"; } 1;');
+        argv = [
+          'perl',
+          `${kind === 'cluster-equals' ? '-wI' : '-I'}${lib}`,
+          '-MHook',
+          '-e',
+          'sleep 60',
+        ];
+      } else if (kind === 'file-in-url' || kind === 'escaped-url') {
+        const alias = path.join(value.root, 'aliasfile:one');
+        fs.symlinkSync(runtime, alias);
+        fs.writeFileSync(path.join(runtime, 'hook space.mjs'), "console.log('READY');");
+        argv = [
+          'node',
+          `--import=file://${alias}/hook${kind === 'escaped-url' ? '%20' : ' '}space.mjs`,
+          main,
+        ];
+      } else if (kind === 'open-fd') {
+        const held = path.join(runtime, 'held');
+        fs.writeFileSync(held, 'held');
+        argv = [
+          'node',
+          '-e',
+          "require('fs').openSync(process.env.HELD_FILE, 'r'); console.log('READY'); setInterval(() => {}, 1000)",
+        ];
+      } else argv.push(`prefix${kind === 'at-candidate' ? '@' : ';'}${runtime}/module`);
+      const child = spawn(argv[0], argv.slice(1), {
+        cwd,
+        env: { ...process.env, HELD_FILE: path.join(runtime, 'held') },
+        stdio: [stdin ?? 'pipe', 'pipe', 'pipe', 'pipe'],
+      });
+      try {
+        if (kind === 'bare-shell') child.stdin?.write("printf 'READY\\n'; read -r -u 3\n");
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('child readiness timeout')), 4000);
+          child.stdout!.once('data', (data) => {
+            clearTimeout(timer);
+            if (String(data).includes('READY')) resolve();
+            else reject(new Error(String(data)));
+          });
+          child.once('error', (error) => {
+            clearTimeout(timer);
+            reject(error);
+          });
+        });
+        fs.symlinkSync(`/proc/${child.pid}`, path.join(value.proc, String(child.pid)));
+        expect(value.census()).toEqual({ complete: true, running: 1 });
+      } finally {
+        const exited =
+          child.exitCode !== null || child.signalCode !== null
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => child.once('exit', () => resolve()));
+        child.kill('SIGKILL');
+        await exited;
+        if (stdin !== undefined) fs.closeSync(stdin);
+      }
+    });
+  }
+
+  test('a denied fd listing with candidates leaves an interpreter unplaced', () => {
+    const value = procFixture();
+    value.add(998, 'node', '/usr/bin/node', ['node', 'app.js'], value.root);
+    const real = fs.readdirSync;
+    const listing = spyOn(fs, 'readdirSync').mockImplementation(((
+      folder: fs.PathLike,
+      ...rest: unknown[]
+    ) => {
+      if (String(folder) === path.join(value.proc, '998/fd'))
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return (real as (...args: unknown[]) => unknown)(folder, ...rest);
+    }) as typeof fs.readdirSync);
+    try {
+      expect(value.census()).toEqual({ complete: false, running: 0 });
+    } finally {
+      listing.mockRestore();
+    }
+  });
+
+  test('a literal -- operand after the separator retains its spelling', () => {
+    const value = procFixture();
+    const runtime = path.join(value.home, '.gemini/antigravity-cli');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.symlinkSync(runtime, path.join(value.root, '--'));
+    value.add(999, 'python3', '/usr/bin/python3', ['python3', '--', '--'], value.root);
+    expect(value.census()).toEqual({ complete: true, running: 1 });
+  });
+
+  test('positional candidate exhaustion holds rather than reporting idle', () => {
+    const value = procFixture();
+    value.add(999, 'node', '/usr/bin/node', ['node', 'x' + '@x'.repeat(5000)], value.root);
+    expect(value.census()).toEqual({ complete: false, running: 0 });
+  });
+
   test('no Antigravity process: complete and idle; unrelated, self and pid 1 are ignored', () => {
     const value = procFixture();
     value.add(1, 'agy', value.native, [value.native]);
-    value.add(200, 'bash', '/usr/bin/bash', ['bash']);
+    value.add(200, 'bash', '/usr/bin/bash', ['bash'], value.root);
     fs.mkdirSync(path.join(value.proc, 'self'));
     expect(value.census()).toEqual({ complete: true, running: 0 });
   });
@@ -539,16 +664,16 @@ describe('runtime-free Antigravity process census', () => {
       expect([argv, value.census()]).toEqual([argv, { complete: true, running: 1 }]);
       fs.rmSync(path.join(value.proc, '967'), { recursive: true });
     }
-    // an interpreter with no arguments in a root reads its script from stdin: busy; a bare shell parked there is not
+    // an interpreter with no arguments in a root reads its script from stdin: busy; a bare shell parked there also holds
     value.add(968, 'node', '/usr/bin/node', ['node'], helperDir);
     expect(value.census()).toEqual({ complete: true, running: 1 });
     fs.rmSync(path.join(value.proc, '968'), { recursive: true });
     value.add(968, 'bash', '/usr/bin/bash', ['bash'], helperDir);
-    expect(value.census()).toEqual({ complete: true, running: 0 });
+    expect(value.census()).toEqual({ complete: true, running: 1 });
     fs.rmSync(path.join(value.proc, '968'), { recursive: true });
-    // an empty command line is no evidence
+    // Even an empty command line cannot exempt a known interpreter with a runtime cwd
     value.add(968, 'python3', '/usr/bin/python3', [], helperDir);
-    expect(value.census()).toEqual({ complete: true, running: 0 });
+    expect(value.census()).toEqual({ complete: true, running: 1 });
     fs.rmSync(path.join(value.proc, '968'), { recursive: true });
     // a rewritten title still runs the interpreter (by its exe); attached and listed option values are scripts too
     value.add(970, 'helper', '/usr/bin/python3.12', ['helper', 'x.py'], helperDir);
@@ -641,10 +766,10 @@ describe('runtime-free Antigravity process census', () => {
       expect([argv, census()]).toEqual([argv, { complete: true, running: 1 }]);
       fs.rmSync(path.join(value.proc, '982'), { recursive: true });
     }
-    // a long inline script's bare fragments cost no lookups: the census stays complete
+    // Excessive candidate positions exhaust the generation budget even without lookups
     const script = Array.from({ length: 2000 }, (_, i) => `echo step${i}:done,ok`).join('; ');
     value.add(984, 'bash', '/usr/bin/bash', ['bash', '-c', script], value.root);
-    expect(census()).toEqual({ complete: true, running: 0 });
+    expect(census()).toEqual({ complete: false, running: 0 });
     fs.rmSync(path.join(value.proc, '984'), { recursive: true });
     // past the lookup cap (thousands of distinct paths) an interpreter's script is unplaced, not idle
     const many = Array.from({ length: 5000 }, (_, i) => `/q/${i}`);
