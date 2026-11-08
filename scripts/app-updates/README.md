@@ -747,10 +747,14 @@ desktop install that fails clears that record once everything is back. An older 
 plan is taken to have closed everything. A marker naming nothing
 is not a retry. A marker that names something is owed whatever version is installed now, so `update_cli`
 and `update_linux` route it to the bridge even with no daemon running. A CLI update that replaces the app
-and then fails also names a daemon still running the old binary. In fact a running daemon is written to
-the marker before the CLI updater starts, so a helper killed during the install still leaves it; the
-earlier marker comes back exactly if the update changes nothing, including an updater that fails or
-installs the wrong version while the installed version stays put. A retry that leaves anything owed is `restart_failed` with
+and then fails also names a daemon still running the old binary. In fact the daemon is written to the
+marker before the CLI updater starts whether or not one runs then, since a proxy can start one on the
+old binary during the install, so a helper killed then still leaves it. The earlier marker comes back
+exactly if the update changes nothing, including an updater that fails or installs the wrong version
+while the installed version stays put, or an updater that fails with no daemon running afterwards; and
+`stop()`'s plan, made under the startup lock, settles it once the app is replaced. A plan that finds no
+daemon puts the earlier marker back. A busy run, or a `stop()` that fails before making its plan, keeps
+it: the next click checks the daemon, at worst with one `restart_not_running`. A retry that leaves anything owed is `restart_failed` with
 `restart_not_running`: any desktop an earlier run closed, and an owed daemon that does not pass
 `start()`'s own bounded readiness check. The
 daemon found afterwards must be the one that passed, by pid and start time, or it is checked itself. A first

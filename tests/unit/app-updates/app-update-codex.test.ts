@@ -99,6 +99,7 @@ describe('Codex update idle and restart coordinator', () => {
     const result = await bridge.execute(value.deps);
     expect(result.status).toBe('updated');
     expect(value.events).toEqual([
+      'mark',
       'update',
       'mark',
       'stop',
@@ -135,7 +136,9 @@ describe('Codex update idle and restart coordinator', () => {
     };
     const result = await bridge.execute(value.deps);
     expect(result.status).toBe('current');
-    expect(value.events).toEqual(['update']);
+    // The install intent, then the marker from before it put back: there was none.
+    expect(value.events).toEqual(['mark', 'update', 'clear']);
+    expect(value.pending()).toBe(false);
   });
   it('gives up on a Codex that stays busy after about a minute, never fifteen', async () => {
     // The live 2026-10-06 run waited 14.8 minutes here while Mac and Windows queued.
@@ -678,8 +681,15 @@ describe('Pending-marker retry', () => {
         },
       }),
     });
-    expect(atStop).toEqual([undefined]);
-    expect(first.marks).toEqual([undefined, { desktop: true, daemon: false, desktops: 2 }]);
+    expect(atStop).toEqual([
+      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0 },
+    ]);
+    expect(first.marks).toEqual([
+      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: true, daemon: false, desktops: 2 },
+    ]);
   });
 
   it('keeps what an earlier run closed across a retry', async () => {
@@ -689,8 +699,8 @@ describe('Pending-marker retry', () => {
       { daemon: true, desktops: 1 }
     );
     await bridge.execute(deps);
-    // The intent before the updater, the same on to stop(), then what stop() closed.
-    expect(value.marks[0]).toEqual({ desktop: true, daemon: false, desktops: 1 });
+    // The intent before the updater, naming the daemon, the same on to stop(), then what stop() closed.
+    expect(value.marks[0]).toEqual({ desktop: true, daemon: true, desktops: 1 });
     expect(value.marks[value.marks.length - 1]).toEqual({
       desktop: true,
       daemon: true,
@@ -698,7 +708,7 @@ describe('Pending-marker retry', () => {
     });
   });
 
-  it('leaves a busy run with a marker that names nothing', async () => {
+  it('leaves a busy run owing the daemon it could not check', async () => {
     const value = fixture();
     const result = await bridge.execute({
       ...value.deps,
@@ -712,7 +722,11 @@ describe('Pending-marker retry', () => {
       }),
     });
     expect(result.messageCode).toBe('codex_busy');
-    expect(value.marks).toEqual([undefined]);
+    // stop() never ran its plan, so the install intent stands: the next click checks the daemon.
+    expect(value.marks).toEqual([
+      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0 },
+    ]);
   });
 
   it('writes the marker as soon as stop() returns, before a desktop install', async () => {
@@ -862,7 +876,9 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
     });
     expect(result.status).toBe('failed');
-    expect(value.marks).toEqual([]);
+    // The intent, then the marker from before it put back exactly: there was none.
+    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: 0 }]);
+    expect(value.deps.marked()).toBeNull();
   });
 
   /** A first CLI update that puts 2.0.0 in place and then exits unsuccessfully, with no marker. */
@@ -897,7 +913,8 @@ describe('Pending-marker retry', () => {
     const result = await bridge.execute(partialCli(value, false));
     expect(result.status).toBe('failed');
     expect(result.version).toBe('2.0.0');
-    expect(value.marks).toEqual([]);
+    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: 0 }]);
+    expect(value.deps.marked()).toBeNull();
   });
 
   it('takes a failed scan to mean a daemon after a partial first CLI update', async () => {
@@ -1223,10 +1240,11 @@ describe('Pending-marker retry', () => {
     expect(value.pending()).toBe(true);
   });
 
-  it('writes no intent when no daemon is running', async () => {
+  it('names the daemon before the updater even when none runs yet', async () => {
+    // A proxy can start one on the old binary while the updater runs, and stop() alone can say.
     const value = fixture();
     let atUpdate: unknown = 'unset';
-    await bridge.execute({
+    const result = await bridge.execute({
       ...value.deps,
       update: async () => {
         atUpdate = value.deps.marked();
@@ -1234,7 +1252,29 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => runtime({}, {}),
     });
-    expect(atUpdate).toBeNull();
+    expect(atUpdate).toMatchObject({ daemon: true });
+    // A verified no-op puts the earlier marker back exactly: here, none.
+    expect(result.status).toBe('current');
+    expect(value.deps.marked()).toBeNull();
+  });
+
+  it('settles the intent on the stop plan once an update replaced the app', async () => {
+    const value = fixture();
+    const marks: unknown[] = [];
+    const result = await bridge.execute({
+      ...value.deps,
+      mark: (fields?: Record<string, boolean>) => {
+        marks.push(fields);
+        value.deps.mark(fields);
+      },
+      operation: 'cli',
+      runtime: () => runtime({}, {}),
+    });
+    // Named before the updater, then what stop() found under its lock: no daemon, nothing owed.
+    expect(marks[0]).toMatchObject({ daemon: true });
+    expect(marks[marks.length - 1]).toEqual({ desktop: false, daemon: false, desktops: 0 });
+    expect(result.status).toBe('updated');
+    expect(value.deps.marked()).toBeNull();
   });
 
   it('takes a failed scan before the updater to mean a daemon', async () => {
@@ -1423,7 +1463,11 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => failingStop({ desktops: 1 }, {}, {}),
     });
-    expect(value.marks).toEqual([undefined]);
+    // Not the desktop; the install intent stands, since stop() failed before it made its plan.
+    expect(value.marks).toEqual([
+      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0 },
+    ]);
   });
 
   it('owes a daemon a failed stop() retired when its replacement fails the readiness check', async () => {
@@ -1572,7 +1616,7 @@ describe('Pending-marker retry', () => {
     expect(value.restored).toEqual([earlier]);
   });
 
-  it('writes nothing ahead of a stop plan that names nothing', async () => {
+  it('settles the install intent on a stop plan that names nothing', async () => {
     const value = fixture();
     const seen: unknown[] = [];
     await bridge.execute({
@@ -1580,7 +1624,8 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: handsOver(value, {}, {}, seen),
     });
-    expect(seen).toEqual([{ version: '1.0.0' }]);
+    // The plan under the lock found no daemon, so the marker from before the intent is back: none.
+    expect(seen).toEqual([null]);
   });
 
   it('falls back to the plan when a scan fails after a failed stop()', async () => {
@@ -1610,7 +1655,10 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => ({ ...failingStop({}, {}), retiredPlan: scanFails }),
     });
-    expect(value.marks).toEqual([undefined]);
+    expect(value.marks).toEqual([
+      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0 },
+    ]);
   });
 
   it('does not run the readiness check when a failed stop() retired no daemon', async () => {
@@ -1655,7 +1703,11 @@ describe('Pending-marker retry', () => {
   it('adds nothing when a failed stop() never made a plan', async () => {
     const value = fixture();
     await bridge.execute({ ...value.deps, operation: 'cli', runtime: () => failingStop({}, {}) });
-    expect(value.marks).toEqual([undefined]);
+    // stop() failed before it made its plan, so the install intent stands.
+    expect(value.marks).toEqual([
+      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0 },
+    ]);
   });
 
   it('keeps what an earlier run closed when a failed stop() loses something more', async () => {

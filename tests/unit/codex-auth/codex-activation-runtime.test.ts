@@ -615,12 +615,13 @@ describe('Codex Desktop update retry on the real runtime', () => {
             ...deps,
             operation: 'cli',
             expectedCandidate: '2.0.0',
-            runtime: () =>
+            runtime: (hooks: Partial<CodexActivationRuntimeDependencies> = {}) =>
               createCodexActivationRuntime(home, {
                 ...fake.deps,
                 signal,
                 launch: (target, isDesktop) =>
                   bridge.relaunch(target, isDesktop, launch, { inside: () => true }),
+                ...hooks,
               }),
           })),
         };
@@ -713,8 +714,9 @@ describe('Codex Desktop update retry on the real runtime', () => {
     const { run, marker } = interruptedClick(fake, refuse, refuse);
     await run();
     // Still running, and not ready: only the fact it was never retired keeps it out of the marker.
+    // The plan under the lock found no daemon, so the install intent is settled too.
     expect(fake.current().some(isDesktop)).toBe(true);
-    expect(marker()).toEqual({ version: '2.0.0' });
+    expect(marker()).toBeNull();
   });
 
   it('keeps what stop() closed when the install fails and recovery fails too', async () => {
@@ -1228,6 +1230,50 @@ describe("A helper killed during stop()'s own recovery", () => {
     const routed = JSON.parse(next.stdout.trim());
     expect(routed.bridged).toBe(true);
     expect(routed.status).not.toBe('current');
+  });
+
+  it('owes a daemon that arrived on the old binary while the updater ran, when killed then', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-arrival-'));
+    roots.push(root);
+    const env = { ...isolated(root), AAC_FIXTURE_ARRIVAL: '1' };
+    const fixture = path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts');
+    const spawn = (...args: string[]) =>
+      spawnSync(process.execPath, ['run', fixture, ...args], {
+        cwd: repo,
+        env,
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+    // No daemon ran when the update began, only a proxy; one started during the install.
+    expect(spawn().signal).toBe('SIGKILL');
+    const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toMatchObject({ daemon: true });
+    // The real Python routing sends the next click to the bridge.
+    const routed = JSON.parse(nextClick(root).stdout.trim());
+    expect(routed.bridged).toBe(true);
+    // That bridge restarts the daemon still running 1.0.0 instead of calling 2.0.0 current.
+    const retry = JSON.parse(spawn('retry').stdout.trim().split('\n').pop() as string);
+    expect(retry.status).toBe('updated');
+    expect(retry.signals).toBeGreaterThan(0);
+    expect(retry.marker).toBeNull();
+  });
+
+  it('restarts a daemon that arrived while the updater ran, when nothing is killed', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-arrival-'));
+    roots.push(root);
+    const child = spawnSync(
+      process.execPath,
+      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts')],
+      {
+        cwd: repo,
+        env: { ...isolated(root), AAC_FIXTURE_ARRIVAL: '1', AAC_FIXTURE_NO_KILL: '1' },
+        encoding: 'utf8',
+        timeout: 60_000,
+      }
+    );
+    const result = JSON.parse(child.stdout.trim().split('\n').pop() as string);
+    expect(result).toMatchObject({ status: 'updated', marker: null });
+    expect(result.signals).toBeGreaterThan(0);
   });
 });
 

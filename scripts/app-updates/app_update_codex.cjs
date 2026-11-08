@@ -214,20 +214,16 @@ async function execute(deps) {
     retried = stillOwed(prior, { daemon: false });
     if (mode === 'cli') {
       output.updateAttempted = true;
-      // The updater can replace Codex under a daemon still running the old binary, and the helper can
-      // be killed before anything else is written. So a running daemon goes in the marker first, and the
-      // earlier marker comes back exactly if the update turns out to change nothing. An older runtime,
-      // one that can't be created, or a failed scan can't say, so there is taken to be one.
+      // The updater can replace Codex under a daemon still running the old binary, a proxy can start one
+      // on the old binary while the updater runs, and the helper can be killed before anything else is
+      // written. Only stop(), under the startup lock, can say which daemon runs. So the daemon goes in
+      // the marker first whatever runs now; the earlier marker comes back exactly if the update turns out
+      // to change nothing, and stop()'s plan settles it otherwise.
       pendingBefore = deps.pending(output.previousVersion);
-      let running = true;
-      try {
-        const probe = deps.runtime();
-        if (probe.restartState) running = (await probe.restartState()).daemon;
-      } catch { /* Stays true. */ }
-      const intent = { ...prior, daemon: prior.daemon || running };
-      intended = stillOwed(intent, { daemon: false });
-      earlierAtInstall = intended ? deps.markerSnapshot() : null;
-      if (intended) deps.mark(markerFields(intent));
+      const intent = { ...prior, daemon: true };
+      intended = true;
+      earlierAtInstall = deps.markerSnapshot();
+      deps.mark(markerFields(intent));
       updating = true;
       await deps.update();
       updating = false;
@@ -245,10 +241,14 @@ async function execute(deps) {
     // The runtime hands over its plan under the startup lock, before it signals anything or waits on a
     // recovery. Writing it there means a helper killed anywhere inside stop() still leaves what is owed.
     // The marker as it was is kept, to put back once a failed stop() is shown to have recovered.
+    // The plan is made under the startup lock, so it says whether a daemon runs: with none, this run's
+    // CLI install intent is settled, and the marker from before it is what a failed stop() puts back.
     const beforeStop = (plan) => {
-      if (!intentWritten) { earlierAtStop = deps.markerSnapshot(); intentWritten = true; }
+      const settled = mode === 'cli' && !counted(plan).daemon;
+      if (!intentWritten) { earlierAtStop = settled ? earlierAtInstall : deps.markerSnapshot(); intentWritten = true; }
       const owed = addObligations(prior, counted(plan));
       if (stillOwed(owed, { daemon: false })) deps.mark({ ...markerFields(owed), ...(target ? { target } : {}) });
+      else if (settled) { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); }
     };
     runtime = deps.runtime({ beforeStop });
     while (true) {
@@ -321,9 +321,13 @@ async function execute(deps) {
               const probe = deps.runtime();
               if (probe.restartState) running = (await probe.restartState()).daemon;
             } catch { /* Stays true. */ }
+            // The new binary is in place, so a daemon started from here on runs it: one seen now is all.
             const owed = { ...prior, daemon: prior.daemon || running };
             if (stillOwed(owed, { daemon: false })) deps.mark(markerFields(owed));
-            else nothingOwed = true;
+            else {
+              nothingOwed = true;
+              try { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); } catch { /* The intent stays. */ }
+            }
           }
         }
       } catch { /* The version stays as it was read before the install. */ }
