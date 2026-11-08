@@ -450,6 +450,16 @@ describe('status collectors', () => {
         error: 'The machine did not report its CPU.',
       });
     }
+    // Windows prints raw values: a missing one is empty, never a cast 0 (checked on the PC).
+    expect(windowsScript).not.toContain('[int64]');
+    const winEmpty = parseMachineProbe(
+      'windows',
+      'cores=0\r\ncpuLoad=10\r\nmemTotalKb=2\r\nmemAvailKb=\r\ndiskTotalB=10\r\ndiskFreeB=\r\nmount=C:\r\n'
+    );
+    expect(winEmpty?.cores).toBeNull();
+    expect(winEmpty?.memoryError).toBe('The machine did not report its memory.');
+    expect(winEmpty?.diskError).toBe('The machine did not report its system disk.');
+    expect(winEmpty?.disk).toBeNull();
     // A Mac answer without its core count cannot divide the summed ps: no figure, named.
     const macNoCores = parseMachineProbe(
       'mac',

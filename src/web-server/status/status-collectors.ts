@@ -681,10 +681,11 @@ const WINDOWS_PROBE_SCRIPT = [
   // One line per processor; the server averages them. Measure-Object counts a null LoadPercentage
   // as 0, so averaging here could turn an unknown load into a measured 0%.
   'foreach ($p in $cpu) { "cpuLoad=" + $p.LoadPercentage }',
-  '"memTotalKb=" + [int64]$os.TotalVisibleMemorySize',
-  '"memAvailKb=" + [int64]$os.FreePhysicalMemory',
-  '"diskTotalB=" + [int64]$disk.Size',
-  '"diskFreeB=" + [int64]$disk.FreeSpace',
+  // Raw values, no [int64] cast: a cast turns a missing value into a measured 0.
+  '"memTotalKb=" + $os.TotalVisibleMemorySize',
+  '"memAvailKb=" + $os.FreePhysicalMemory',
+  '"diskTotalB=" + $disk.Size',
+  '"diskFreeB=" + $disk.FreeSpace',
   '"mount=" + $drive',
 ].join('; ');
 
@@ -746,7 +747,8 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
     const value = Number(raw);
     return Number.isFinite(value) && value >= 0 ? value : null;
   };
-  const cores = n('cores');
+  // No machine has zero cores: a 0 is a sum over missing values, not a count.
+  const cores = n('cores') || null;
   const kib = (key: string): number | null => {
     const value = n(key);
     return value === null ? null : value * 1024;
