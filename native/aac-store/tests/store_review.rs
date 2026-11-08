@@ -1438,6 +1438,56 @@ fn final_review_truncated_to_nothing_before_seal_is_disclosed() {
 }
 
 #[test]
+fn final_review_interior_frame_removed_before_seal_is_disclosed() {
+    // Sol max 8069c9fb M3: one whole interior frame removed from the live log before the daily
+    // seal keeps both endpoints. A sequence gap with the acknowledged length stays valid.
+    let base = temp_dir("final-seal-interior");
+    let dir = base.join("store");
+    let primary = base.join("primary");
+    let engine = open(&dir);
+    record(
+        &engine,
+        (0..5).map(|i| obs(T0 + i * MIN, 10.0 + 2.0 * i as f64)).collect(),
+    );
+    let active = find(&dir.join("log/readings"), ".active").remove(0);
+    let bytes = fs::read(&active).unwrap();
+    let scanned = aac_store::log::scan(&bytes);
+    assert_eq!(scanned.frames.len(), 5);
+    assert!(scanned.stop.is_none());
+    let dropped = &scanned.frames[2];
+    let mut shortened = Vec::with_capacity(bytes.len() - dropped.len);
+    shortened.extend_from_slice(&bytes[..dropped.offset]);
+    shortened.extend_from_slice(&bytes[dropped.offset + dropped.len..]);
+    fs::write(&active, &shortened).unwrap();
+    engine.seal_and_compress(now_ms() + 2 * DAY as u64).unwrap();
+    assert!(
+        find(&dir.join("log/readings"), ".active").is_empty(),
+        "the shortened active log sealed"
+    );
+    let backup = call(&engine, "backup", json!({"roots": [primary], "withRedb": false}));
+    engine.close().unwrap();
+    drop(engine);
+    let restored = base.join("restore");
+    restore(&restored, &primary.join("sets").join(backup["id"].as_str().unwrap())).unwrap();
+    let engine = open(&restored);
+    let status = call(&engine, "status", json!({}));
+    assert_eq!(status["state"], "degraded", "the lost reading is disclosed: {status}");
+    let check = call(&engine, "maintain", json!({ "verify": true }));
+    let findings = check["verified"]["findings"].as_array().unwrap();
+    assert!(
+        findings.iter().any(|f| {
+            f["kind"] == "segment_degraded" && f["detail"].as_str().unwrap_or("").contains("acknowledged length")
+        }),
+        "the check is not OK: {check}"
+    );
+    let starts = raw_starts(&engine);
+    assert_eq!(starts.len(), 4, "the removed reading stays gone: {starts:?}");
+    assert!(!starts.contains(&(T0 + 2 * MIN)));
+    engine.close().unwrap();
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn final_review_raw_backup_preserves_older_sets() {
     final_review_corrupt_backup(false);
 }
