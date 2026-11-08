@@ -207,7 +207,10 @@ probe answers without its disk lines) keeps CPU and memory current, keeps the ea
 warning, and marks the machine `stale` with "Disk: The system disk could not be read (since 10:01 AM). Showing the
 disk reading from 10:00 AM." (or "No earlier disk reading."), so Machines is not `ok` until a disk read works again.
 A remote answer without its memory lines is handled the same way ("Memory: The machine did not report its memory
-..."), keeping the earlier memory reading and its low-memory warning.
+..."), keeping the earlier memory reading and its low-memory warning, and so is the CPU busy figure ("CPU: The machine
+did not report its CPU ..." when a probe has no CPU line; locally on Linux "CPU: The CPU counters could not be read"
+when `/proc/stat` fails). The Mac probe prints `cpuPct` only when `ps` succeeds and Windows only when
+`LoadPercentage` has a value, so a failed command is never a measured 0%.
 When the folder listing or the command worked but named parts of it failed,
 the source is not `ok` and its `detail` names each part with its reason and since when, then "The rest read <time>.":
 a pm-mail registry file that can't be read, isn't JSON, is over 64 KB or isn't a regular file makes the registry

@@ -296,9 +296,11 @@ export class StatusService {
         const before = held.data;
         const busy = busyBetween(before?.cpuTimes ?? null, sample.cpuTimes);
         const now = this.now();
+        const busyPct = busy ?? sample.busyPct;
         const data: MachineSample = {
           ...sample,
-          busyPct: busy ?? sample.busyPct,
+          busyPct,
+          cpuReadAt: busyPct === null ? (before?.cpuReadAt ?? null) : now,
           diskReadAt: sample.disk ? now : null,
           memoryReadAt: sample.memoryError ? null : now,
         };
@@ -310,6 +312,13 @@ export class StatusService {
           data.disk = before?.disk ?? null;
           data.diskReadAt = before?.disk ? (before.diskReadAt ?? held.asOf) : null;
           problems.push(nextProblem(earlier('disk'), 'disk', sample.diskError, now));
+        }
+        if (sample.cpuError) {
+          // Keep the earlier busy figure and counters: the next good read measures across the gap.
+          data.busyPct = before?.busyPct ?? null;
+          data.cpuTimes = before?.cpuTimes ?? null;
+          data.cpuReadAt = before?.cpuReadAt ?? null;
+          problems.push(nextProblem(earlier('cpu'), 'cpu', sample.cpuError, now));
         }
         if (sample.memoryError) {
           // The held reading already carries the last good memory forward, with its time.

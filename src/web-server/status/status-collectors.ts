@@ -646,6 +646,10 @@ export interface MachineSample {
    * read failed and the service kept the earlier disk reading.
    */
   diskReadAt?: number | null;
+  /** The same for the CPU busy figure (busy percent or the counters it comes from). */
+  cpuError?: string;
+  /** Set by the service: when `busyPct` was read (epoch ms). */
+  cpuReadAt?: number | null;
   /** The same for memory: why it was not reported this time, in fixed words. */
   memoryError?: string;
   /** Set by the service: when the memory numbers were read (epoch ms). */
@@ -664,7 +668,7 @@ export const REMOTE_MACHINES: Readonly<Record<Exclude<MachineId, 'vm'>, HostOs>>
 
 const LINUX_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk / | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
-const MAC_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(sysctl -n hw.ncpu)"; printf 'load=%s\n' "$(sysctl -n vm.loadavg | awk '{print $2}')"; printf 'memTotalB=%s\n' "$(sysctl -n hw.memsize)"; vm_stat | awk '/page size of/{print "pageSize="$8} /^Pages (free|inactive|speculative|purgeable):/{v=$NF; sub(/\.$/,"",v); print "pagesAvail="v}'; printf 'cpuPct=%s\n' "$(ps -A -o %cpu= | awk '{s+=$1} END {print s+0}')"; d=/System/Volumes/Data; [ -d "$d" ] || d=/; df -Pk "$d" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
+const MAC_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(sysctl -n hw.ncpu)"; printf 'load=%s\n' "$(sysctl -n vm.loadavg | awk '{print $2}')"; printf 'memTotalB=%s\n' "$(sysctl -n hw.memsize)"; vm_stat | awk '/page size of/{print "pageSize="$8} /^Pages (free|inactive|speculative|purgeable):/{v=$NF; sub(/\.$/,"",v); print "pagesAvail="v}'; c=$(ps -A -o %cpu=) && printf 'cpuPct=%s\n' "$(printf '%s\n' "$c" | awk '{s+=$1} END {print s+0}')"; d=/System/Volumes/Data; [ -d "$d" ] || d=/; df -Pk "$d" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
 const WINDOWS_PROBE_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
@@ -674,7 +678,8 @@ const WINDOWS_PROBE_SCRIPT = [
   '$drive = $env:SystemDrive',
   '$disk = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID=\'" + $drive + "\'")',
   '"cores=" + [int](($cpu | Measure-Object NumberOfLogicalProcessors -Sum).Sum)',
-  '"cpuPct=" + [int](($cpu | Measure-Object LoadPercentage -Average).Average)',
+  '$load = ($cpu | Measure-Object LoadPercentage -Average).Average',
+  'if ($null -ne $load) { "cpuPct=" + [int]$load }',
   '"memTotalKb=" + [int64]$os.TotalVisibleMemorySize',
   '"memAvailKb=" + [int64]$os.FreePhysicalMemory',
   '"diskTotalB=" + [int64]$disk.Size',
@@ -733,6 +738,8 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
   if (memTotal === 0) memTotal = null;
   if (cores === null && memTotal === null && diskTotal === null) return null;
   const cpuPct = n('cpuPct');
+  const cpuTimes = hostOs === 'linux' ? linuxCpuTimes(values.get('cpu')) : null;
+  const cpuRead = hostOs === 'linux' ? cpuTimes !== null : cpuPct !== null;
   const diskRead = diskTotal !== null && diskFree !== null && diskTotal > 0;
   return {
     cores,
@@ -755,7 +762,8 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
     ...(memTotal !== null && memAvail !== null
       ? {}
       : { memoryError: 'The machine did not report its memory.' }),
-    cpuTimes: hostOs === 'linux' ? linuxCpuTimes(values.get('cpu')) : null,
+    ...(cpuRead ? {} : { cpuError: 'The machine did not report its CPU.' }),
+    cpuTimes,
   };
 }
 
@@ -782,18 +790,33 @@ export function localMachineId(
 
 /** This computer, read directly (no process). */
 export async function readLocalMachine(
-  options: { statfs?: (target: string) => Promise<fs.StatsFs> } = {}
+  options: {
+    statfs?: (target: string) => Promise<fs.StatsFs>;
+    readFile?: (file: string) => Promise<string>;
+    platform?: NodeJS.Platform;
+  } = {}
 ): Promise<MachineSample> {
   let memAvail: number | null = os.freemem();
   let cpuTimes: MachineSample['cpuTimes'] = null;
+  let cpuError: string | undefined;
+  const readFile = options.readFile ?? ((file: string) => fs.promises.readFile(file, 'utf8'));
+  const linux = (options.platform ?? process.platform) === 'linux';
   try {
-    const meminfo = await fs.promises.readFile('/proc/meminfo', 'utf8');
+    const meminfo = await readFile('/proc/meminfo');
     const match = /^MemAvailable:\s+(\d+)\s+kB/m.exec(meminfo);
     if (match) memAvail = Number(match[1]) * 1024;
-    const stat = await fs.promises.readFile('/proc/stat', 'utf8');
-    cpuTimes = linuxCpuTimes(/^cpu\s+(.*)$/m.exec(stat)?.[1]);
   } catch {
-    /* Not Linux: the os module's numbers stand. */
+    /* The os module's figure stands (libuv reads the same MemAvailable). */
+  }
+  if (linux) {
+    try {
+      const stat = await readFile('/proc/stat');
+      cpuTimes = linuxCpuTimes(/^cpu\s+(.*)$/m.exec(stat)?.[1]);
+    } catch {
+      cpuTimes = null;
+    }
+    // The busy percent comes only from these counters: without them it is a failed read, named.
+    if (!cpuTimes) cpuError = 'The CPU counters could not be read.';
   }
   let disk: MachineSample['disk'] = null;
   let diskError: string | undefined;
@@ -817,6 +840,7 @@ export async function readLocalMachine(
     memTotalBytes: os.totalmem(),
     disk,
     ...(diskError ? { diskError } : {}),
+    ...(cpuError ? { cpuError } : {}),
     cpuTimes,
   };
 }

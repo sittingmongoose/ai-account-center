@@ -49,6 +49,8 @@ function setup(options: { registryDir?: string } = {}) {
     disk: 'ok' as 'ok' | 'low' | 'error',
     /** The machine read's memory: plenty, under the 6 GB floor, or left out of the answer. */
     memory: 'ok' as 'ok' | 'low' | 'missing',
+    /** The machine read's CPU busy figure: read, or failed (as a Mac whose `ps` failed). */
+    cpu: 'ok' as 'ok' | 'error',
   };
   const registryReader = {
     scan: async () => {
@@ -70,7 +72,8 @@ function setup(options: { registryDir?: string } = {}) {
   const machine = async () => ({
     cores: 8,
     load1: 1,
-    busyPct: 12,
+    busyPct: fail.cpu === 'error' ? null : 12,
+    ...(fail.cpu === 'error' ? { cpuError: 'The machine did not report its CPU.' } : {}),
     memAvailableBytes: fail.memory === 'missing' ? null : (fail.memory === 'low' ? 4 : 16) * GIB,
     memTotalBytes: fail.memory === 'missing' ? null : 32 * GIB,
     ...(fail.memory === 'missing' ? { memoryError: 'The machine did not report its memory.' } : {}),
@@ -287,6 +290,44 @@ describe('secondary sources on their panels', () => {
     expect(vm.state).toBe('ok');
     expect(vm.detail).toBeNull();
     expect(vm.memory).toEqual({ availableGb: 16, totalGb: 32 });
+  });
+
+  it('a failed CPU read keeps the earlier busy figure, named, never a fresh 0% or a silent fallback', async () => {
+    const { service, clock, fail } = setup();
+    await warm(service);
+    let vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('ok');
+    expect(vm.cpu?.busyPct).toBe(12);
+
+    fail.cpu = 'error';
+    for (const step of [1, 2]) {
+      clock.now += 60_000;
+      await service.collect();
+      vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+      expect({ step, state: vm.state }).toEqual({ step, state: 'stale' });
+      expect(vm.cpu?.busyPct).toBe(12);
+      expect(vm.detail).toBe(
+        'CPU: The machine did not report its CPU (since 10:01 AM). Showing the CPU reading from 10:00 AM.'
+      );
+    }
+    fail.cpu = 'ok';
+    clock.now += 60_000;
+    await service.collect();
+    vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('ok');
+    expect(vm.detail).toBeNull();
+  });
+
+  it('a CPU that never read well is named, never shown as a reading', async () => {
+    const { service, fail } = setup();
+    fail.cpu = 'error';
+    await warm(service);
+    const vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('stale');
+    expect(vm.cpu?.busyPct).toBeNull();
+    expect(vm.detail).toBe(
+      'CPU: The machine did not report its CPU (since 10:00 AM). No earlier CPU reading.'
+    );
   });
 
   it('a memory that never read well is named, never shown as a reading', async () => {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -335,18 +336,91 @@ describe('status collectors', () => {
     );
   });
 
-  it('a local disk read that fails leaves the rest of the reading and names the disk', async () => {
-    const sample = await readLocalMachine({
+  it('a local disk or CPU read that fails leaves the rest of the reading and names the part', async () => {
+    const eio = () => Object.assign(new Error('EIO'), { code: 'EIO' });
+    const statfs = async () => ({ bavail: 10, bsize: 4096, blocks: 100 }) as fs.StatsFs;
+    const proc = (fail: string | null) => async (file: string) => {
+      if (file === fail) throw eio();
+      return file === '/proc/stat'
+        ? 'cpu  100 0 50 800 50 0 0 0\n'
+        : 'MemTotal: 1000 kB\nMemAvailable: 500 kB\n';
+    };
+    const noDisk = await readLocalMachine({
       statfs: async () => {
-        throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        throw eio();
       },
+      readFile: proc(null),
+      platform: 'linux',
     });
-    expect(sample.disk).toBeNull();
-    expect(sample.diskError).toBe('The system disk could not be read.');
-    expect(sample.memTotalBytes).toBeGreaterThan(0);
-    const good = await readLocalMachine();
-    expect(good.disk?.mount).toBe('/');
-    expect(good.diskError).toBeUndefined();
+    expect(noDisk.disk).toBeNull();
+    expect(noDisk.diskError).toBe('The system disk could not be read.');
+    expect(noDisk.memAvailableBytes).toBe(500 * 1024);
+    expect(noDisk.cpuError).toBeUndefined();
+    const noCpu = await readLocalMachine({
+      statfs,
+      readFile: proc('/proc/stat'),
+      platform: 'linux',
+    });
+    expect(noCpu.cpuTimes).toBeNull();
+    expect(noCpu.cpuError).toBe('The CPU counters could not be read.');
+    expect(noCpu.disk?.mount).toBe('/');
+    expect(noCpu.diskError).toBeUndefined();
+    // A failed /proc/meminfo keeps the OS figure and the CPU counters.
+    const noMeminfo = await readLocalMachine({
+      statfs,
+      readFile: proc('/proc/meminfo'),
+      platform: 'linux',
+    });
+    expect(noMeminfo.cpuTimes).toEqual({ busy: 150, total: 1000 });
+    expect(noMeminfo.cpuError).toBeUndefined();
+    // No /proc on other systems: the busy figure is simply not a thing measured there.
+    const mac = await readLocalMachine({
+      statfs,
+      readFile: proc('/proc/stat'),
+      platform: 'darwin',
+    });
+    expect(mac.cpuError).toBeUndefined();
+  });
+
+  it('a host probe whose CPU command fails reports no CPU, never 0% busy', () => {
+    const mac = machineProbeCommand('mac');
+    expect(mac).toContain("c=$(ps -A -o %cpu=) && printf 'cpuPct=%s\\n'");
+    // The Mac probe as a shell runs it, with ps failing: no cpuPct line at all.
+    const script = mac
+      .replace(/"\$\(sysctl -n hw\.ncpu\)"/, '8')
+      .replace(/"\$\(sysctl -n vm\.loadavg \| awk '\{print \$2\}'\)"/, '1.5')
+      .replace(/"\$\(sysctl -n hw\.memsize\)"/, '17179869184')
+      .replace(/vm_stat \| awk '[^']*'/, "printf 'pageSize=16384\\npagesAvail=1000\\n'")
+      .replace('ps -A -o %cpu=', 'false')
+      .replace(
+        /df -Pk "\$d"/,
+        "printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/x 100 50 50 50%% /\\n'; true"
+      );
+    const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    // Control: the same script with a working ps sums its lines.
+    const good = execFileSync(
+      'bash',
+      ['-c', script.replace('c=$(false)', "c=$(printf '10\\n20\\n')")],
+      {
+        encoding: 'utf8',
+      }
+    );
+    expect(good).toContain('cpuPct=30');
+    expect(parseMachineProbe('mac', good)?.cpuError).toBeUndefined();
+    expect(out).not.toContain('cpuPct=');
+    const sample = parseMachineProbe('mac', out);
+    expect(sample?.busyPct).toBeNull();
+    expect(sample?.cpuError).toBe('The machine did not report its CPU.');
+    expect(sample?.memoryError).toBeUndefined();
+    // Windows prints cpuPct only when LoadPercentage has a value.
+    expect(
+      Buffer.from(machineProbeCommand('windows').split(' ').pop()!, 'base64').toString('utf16le')
+    ).toContain('if ($null -ne $load) { "cpuPct=" + [int]$load }');
+    const linux = parseMachineProbe(
+      'linux',
+      'cores=6\nmemTotalKb=2\nmemAvailKb=1\ndiskTotalKb=10\ndiskFreeKb=5\n'
+    );
+    expect(linux?.cpuError).toBe('The machine did not report its CPU.');
   });
 
   it('keeps a registry row through one ENOENT race and names a listed file gone twice in a row', async () => {
