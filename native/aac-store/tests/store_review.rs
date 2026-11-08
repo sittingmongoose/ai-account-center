@@ -949,3 +949,190 @@ fn a_backup_from_an_unreleased_test_build_is_refused() {
     assert_eq!(walk(&store), before);
     fs::remove_dir_all(&base).unwrap();
 }
+
+/// The non-zero bytes of the file a SIGKILL left while redb was creating `aac.redb` (recheck of
+/// 1225bf52, `evidence/killed-create-aac.redb`; the rebuild kill left the same file). It is
+/// 1,056,768 bytes long and zero everywhere else: redb writes its magic number last.
+const KILLED_CREATE: &[(usize, u8)] = &[
+    (9, 0x04),
+    (13, 0x10),
+    (22, 0x10),
+    (28, 0x01),
+    (29, 0x01),
+    (64, 0x03),
+    (176, 0x1a),
+    (177, 0x6a),
+    (178, 0xb5),
+    (179, 0xef),
+    (180, 0x61),
+    (181, 0xd1),
+    (182, 0x80),
+    (183, 0x8d),
+    (184, 0x07),
+    (185, 0x2c),
+    (186, 0x03),
+    (187, 0x93),
+    (188, 0x86),
+    (189, 0xfb),
+    (190, 0xbc),
+    (191, 0x3f),
+    (192, 0x03),
+    (304, 0x1a),
+    (305, 0x6a),
+    (306, 0xb5),
+    (307, 0xef),
+    (308, 0x61),
+    (309, 0xd1),
+    (310, 0x80),
+    (311, 0x8d),
+    (312, 0x07),
+    (313, 0x2c),
+    (314, 0x03),
+    (315, 0x93),
+    (316, 0x86),
+    (317, 0xfb),
+    (318, 0xbc),
+    (319, 0x3f),
+];
+
+fn killed_create_redb() -> Vec<u8> {
+    let mut bytes = vec![0u8; 1_056_768];
+    for &(at, byte) in KILLED_CREATE {
+        bytes[at] = byte;
+    }
+    bytes
+}
+
+/// A redb file that was never finished (a kill mid-creation, or an empty file) is a derived
+/// file: it is moved to `quarantine/`, a new one is made, and both logs are replayed, for a new
+/// store and for a rebuild alike. It must never leave the store refusing to open.
+#[test]
+fn an_unfinished_redb_is_quarantined_and_rebuilt() {
+    let base = temp_dir("review-killed-create");
+    let full = base.join("full");
+    let (starts, before) = {
+        let engine = open(&full);
+        record(&engine, (0..5).map(|i| obs(T0 + i * HOUR, 10.0 + i as f64)).collect());
+        let starts = raw_starts(&engine);
+        let before = call(
+            &engine,
+            "seriesPoints",
+            json!({ "fromMs": T0 - DAY, "toMs": T0 + DAY, "resolution": "day" }),
+        );
+        engine.close().unwrap();
+        (starts, before)
+    };
+    assert_eq!(starts.len(), 5);
+    // A new store: the release marker is written before redb, so only the marker and the file.
+    let fresh = base.join("fresh");
+    fs::create_dir_all(&fresh).unwrap();
+    fs::write(fresh.join("release"), "1").unwrap();
+    for (name, bytes) in [("killed", killed_create_redb()), ("empty", Vec::new())] {
+        for (store, expect) in [(&full, starts.len()), (&fresh, 0)] {
+            fs::write(store.join("aac.redb"), &bytes).unwrap();
+            let quarantined = fs::read_dir(store.join("quarantine")).map(|d| d.count()).unwrap_or(0);
+            let engine = ops::open_engine(store.to_str().unwrap(), None, None)
+                .unwrap_or_else(|e| panic!("{name} {}: {}: {}", store.display(), e.code, e.message));
+            assert!(
+                kinds(&engine).iter().any(|k| k == "redb_quarantined"),
+                "{name}: {:?}",
+                kinds(&engine)
+            );
+            assert_eq!(raw_starts(&engine).len(), expect, "{name}: every reading replayed");
+            if expect > 0 {
+                assert_eq!(
+                    call(
+                        &engine,
+                        "seriesPoints",
+                        json!({ "fromMs": T0 - DAY, "toMs": T0 + DAY, "resolution": "day" })
+                    ),
+                    before,
+                    "{name}: rollups rebuilt"
+                );
+            }
+            engine.close().unwrap();
+            drop(engine);
+            assert_eq!(
+                fs::read_dir(store.join("quarantine")).unwrap().count(),
+                quarantined + 1,
+                "{name}: the unfinished file is kept in quarantine, not deleted"
+            );
+            // And it stays open: the next open is clean.
+            let engine = open(store);
+            assert!(
+                !kinds(&engine).iter().any(|k| k == "redb_quarantined"),
+                "{name}: {:?}",
+                kinds(&engine)
+            );
+            assert_eq!(raw_starts(&engine).len(), expect);
+            engine.close().unwrap();
+        }
+    }
+    fs::remove_dir_all(&base).unwrap();
+}
+
+/// A new redb is made under `tmp/` and renamed into place after its first commit, so a kill
+/// mid-creation leaves only a temporary file; the next open removes it.
+#[test]
+fn a_new_redb_is_made_aside_and_leftovers_are_removed() {
+    let dir = temp_dir("review-redb-aside");
+    fs::create_dir_all(dir.join("tmp")).unwrap();
+    fs::write(dir.join("release"), "1").unwrap();
+    let leftover = dir.join("tmp").join("aac.redb.0123456789abcdef");
+    fs::write(&leftover, killed_create_redb()).unwrap();
+    let engine = open(&dir);
+    assert!(!leftover.exists(), "the leftover from a killed create is removed");
+    assert!(dir.join("aac.redb").exists());
+    assert_eq!(
+        fs::read_dir(dir.join("tmp")).unwrap().count(),
+        0,
+        "nothing left under tmp/"
+    );
+    assert!(!kinds(&engine).iter().any(|k| k == "redb_quarantined"));
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Meta values from TypeScript are persisted strings too: a credential is refused, ordinary
+/// values (such as the backfill markers) are stored.
+#[test]
+fn set_meta_refuses_credentials() {
+    let dir = temp_dir("review-meta-secret");
+    let engine = open(&dir);
+    for value in [
+        "Bearer sk-ant-api03-SYNTHETIC_SECRET_1234567890",
+        "{\"file\":\"ghp_SYNTHETICSECRETabcdefghijklmnopqrstuvwxyz\",\"records\":1}",
+        "api_key=SYNTHETIC_SECRET",
+        "line\nbreak",
+        "",
+    ] {
+        let refused = ops::call(
+            &engine,
+            "setMeta",
+            &json!({ "key": "ts:probe", "value": value }).to_string(),
+        );
+        assert_eq!(refused.err().map(|e| e.code), Some("invalid"), "{value:?}");
+    }
+    assert_eq!(call(&engine, "getMeta", json!({ "key": "ts:probe" })), Json::Null);
+    let marker = "{\"file\":\"usage-history.jsonl\",\"records\":120,\"at\":1793000000000}";
+    call(&engine, "setMeta", json!({ "key": "ts:backfill:abc", "value": marker }));
+    call(
+        &engine,
+        "setMeta",
+        json!({ "key": "ts:last_redb_backup_ms", "value": "1793000000000" }),
+    );
+    assert_eq!(
+        call(&engine, "getMeta", json!({ "key": "ts:backfill:abc" })),
+        json!(marker)
+    );
+    engine.close().unwrap();
+    drop(engine);
+    for (path, bytes) in walk(&dir) {
+        assert!(
+            !bytes.windows(b"SYNTHETIC".len()).any(|w| w == b"SYNTHETIC"),
+            "{path} holds a synthetic credential"
+        );
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}

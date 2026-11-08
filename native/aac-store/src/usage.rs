@@ -103,7 +103,7 @@ pub struct SeenBatch {
 const ACCOUNTS_PER_EVENT: usize = 64;
 
 /// A persisted string: bounded, no control characters, nothing shaped like a credential.
-fn text_ok(s: &str, max: usize) -> bool {
+pub(crate) fn text_ok(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.chars().any(|c| c.is_control()) && !crate::secret::looks_secret(s)
 }
 

@@ -10,6 +10,9 @@ use serde_json::{Value as Json, json};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// The longest meta value TypeScript may store (its markers and reports are small JSON).
+const META_VALUE_MAX: usize = 16 * 1024;
+
 pub type Slot = Mutex<Option<Arc<Engine>>>;
 
 #[derive(Deserialize)]
@@ -192,6 +195,11 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             let a: MetaArgs = parse(args)?;
             if !a.key.starts_with("ts:") {
                 fail!("invalid", "TypeScript meta keys start with ts:");
+            }
+            // A meta value is a persisted string like any other: bounded, no control
+            // characters, nothing shaped like a credential.
+            if !usage::text_ok(&a.value, META_VALUE_MAX) {
+                fail!("invalid", "the meta value is empty, too long or not plain text");
             }
             engine.set_meta(&a.key, &a.value)?;
             json!({ "ok": true })

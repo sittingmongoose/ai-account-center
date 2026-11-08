@@ -134,19 +134,48 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Opens redb with the bounded cache. Below the size limit every open verifies every page
-/// checksum (`set_check_integrity_on_open`), so an altered file fails with `Corrupted` instead
-/// of being trusted.
+/// Opens the existing redb file with the bounded cache; it never creates one. Below the size
+/// limit every open verifies every page checksum (`set_check_integrity_on_open`), so an altered
+/// file fails with `Corrupted` instead of being trusted.
 fn open_database(path: &Path, config: &Config) -> std::result::Result<Database, redb::DatabaseError> {
     let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let mut builder = Database::builder();
     builder.set_cache_size(config.cache_bytes);
     builder.set_check_integrity_on_open(size < config.integrity_max_bytes);
-    builder.create(path)
+    builder.open(path)
 }
 
-fn is_corruption(error: &redb::DatabaseError) -> bool {
-    matches!(error, redb::DatabaseError::Storage(redb::StorageError::Corrupted(_)))
+/// Prefix of a redb file being made under `tmp/`.
+const REDB_MAKING: &str = "aac.redb.";
+
+/// Makes a new, empty redb under `tmp/` and renames it into place only after its first commit.
+/// redb writes its magic number last, so a kill mid-creation would otherwise leave an
+/// `aac.redb` that never opens; here it leaves a temporary file the next open removes.
+fn create_database(dir: &Path, config: &Config) -> Result<()> {
+    let making = dir.join("tmp").join(format!("{REDB_MAKING}{}", fsx::random_hex(8)));
+    {
+        let mut builder = Database::builder();
+        builder.set_cache_size(config.cache_bytes);
+        let database = builder
+            .create(&making)
+            .map_err(|e| Error::new("db_unavailable", e.to_string()))?;
+        let txn = begin(&database)?;
+        db::create_tables(&txn)?;
+        txn.commit()?;
+    }
+    fs::rename(&making, dir.join(REDB_FILE))?;
+    fsx::sync_dir(dir)
+}
+
+/// Removes redb files a killed creation left under `tmp/` (the store lock is held).
+fn remove_unfinished_redb(dir: &Path) -> Result<()> {
+    for entry in fs::read_dir(dir.join("tmp"))?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(REDB_MAKING) && entry.file_type()?.is_file() {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// A write transaction with the store's durability settings.
@@ -202,15 +231,26 @@ impl Engine {
                 );
             }
         }
+        remove_unfinished_redb(dir)?;
+        if !db_path.exists() {
+            create_database(dir, &config)?;
+        }
+        // Every table is derived from the logs, so a redb that fails to open for any reason but
+        // another holder (corrupt, never finished, empty, unreadable) is moved to quarantine and
+        // rebuilt; it is never deleted.
         let database = match open_database(&db_path, &config) {
             Ok(db) => db,
-            Err(e) if is_corruption(&e) => {
-                quarantine(dir, &db_path, "redb_corrupt")?;
+            Err(redb::DatabaseError::DatabaseAlreadyOpen) => fail!("lock_held", "the database is open elsewhere"),
+            Err(e) => {
+                let reason = match e {
+                    redb::DatabaseError::Storage(redb::StorageError::Corrupted(_)) => "redb_corrupt",
+                    _ => "redb_unreadable",
+                };
+                quarantine(dir, &db_path, reason)?;
                 findings.push(finding("redb_quarantined", &e.to_string()));
+                create_database(dir, &config)?;
                 open_database(&db_path, &config).map_err(|e| Error::new("db_unavailable", e.to_string()))?
             }
-            Err(redb::DatabaseError::DatabaseAlreadyOpen) => fail!("lock_held", "the database is open elsewhere"),
-            Err(e) => fail!("db_unavailable", "{e}"),
         };
         let size = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
         let checked = size < config.integrity_max_bytes;
