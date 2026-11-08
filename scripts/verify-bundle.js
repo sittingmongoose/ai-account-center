@@ -226,6 +226,31 @@ const CODEX_RUNTIME_FORBIDDEN = ['activate-codex-profile', 'activateCodexProfile
  * exporting exactly { createCodexActivationRuntime, lockfile }, with no
  * account activation code and no path of the checkout that built it.
  */
+/**
+ * The status readers' native module for this computer. Absent is allowed (the dashboard runs
+ * without the readers); present, it must match the note it was built with and load in Node
+ * with the expected binding version. After the history store's verifyStoreModule.
+ */
+function verifyStatusModule(dir = path.join(__dirname, '../dist/native')) {
+  const name = `aac-status.${process.platform}-${process.arch}.node`;
+  const file = path.join(dir, name);
+  if (!fs.existsSync(file)) return { present: false, name };
+  const notePath = `${file}.json`;
+  if (fs.existsSync(notePath)) {
+    const note = JSON.parse(fs.readFileSync(notePath, 'utf8'));
+    if (note.sha256 !== sha256(fs.readFileSync(file)))
+      throw new Error(`${name} does not match the build note beside it.`);
+  }
+  const { spawnSync } = require('child_process');
+  const probe = spawnSync(
+    process.execPath,
+    ['-e', `process.exit(require(${JSON.stringify(file)}).bindingVersion() === 1 ? 0 : 3)`],
+    { encoding: 'utf8' }
+  );
+  if (probe.status !== 0) throw new Error(`${name} does not load in Node.`);
+  return { present: true, name, bytes: fs.statSync(file).size };
+}
+
 function verifyCodexUpdateRuntime(file = CODEX_RUNTIME_FILE) {
   if (!fs.existsSync(file)) {
     throw new Error('Missing the Codex update runtime; run bun run build:server.');
@@ -298,6 +323,27 @@ if (require.main === module) {
     );
     process.exitCode = 1;
   }
+  try {
+    const result = verifyStatusModule();
+    if (result.present)
+      console.log(
+        `[OK] Status readers module ${result.name}: ${(result.bytes / 1024).toFixed(1)}KB.`
+      );
+    else
+      console.warn(
+        `[!] No status readers module for this computer (${result.name}): the dashboard runs without them. Build it with: bun run status:build`
+      );
+  } catch (error) {
+    console.error(
+      `[X] ${error instanceof Error ? error.message : 'Status readers module verification failed.'}`
+    );
+    process.exitCode = 1;
+  }
 }
 
-module.exports = { CODEX_RUNTIME_FILE, verifyBundle, verifyCodexUpdateRuntime };
+module.exports = {
+  CODEX_RUNTIME_FILE,
+  verifyBundle,
+  verifyCodexUpdateRuntime,
+  verifyStatusModule,
+};

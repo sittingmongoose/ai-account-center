@@ -1,0 +1,38 @@
+[package]
+name = "aac-status"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+description = "AI Account Center status readers: T3 pinned threads and agent-reports/status@1"
+repository = "https://github.com/sittingmongoose/ai-account-center"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["node"]
+# The Node binding. `cargo test --no-default-features` tests the readers without it.
+node = ["dep:napi", "dep:napi-derive"]
+
+[dependencies]
+napi = { version = "3", optional = true }
+napi-derive = { version = "3", optional = true }
+rusqlite = { version = "0.37", features = ["bundled"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+
+[build-dependencies]
+napi-build = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+opt-level = 3
+strip = true
+codegen-units = 1
