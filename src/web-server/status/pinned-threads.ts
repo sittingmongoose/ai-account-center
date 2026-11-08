@@ -66,6 +66,8 @@ export class PinnedThreadsCollector {
   private merged: MergedPin[] = [];
   private problems: Array<{ machine: PinsMachine; code: PinsProblemCode }> = [];
   private composed: PinnedView | null = null;
+  /** False until the first collect lands, so no update is composed over an empty pin list. */
+  private collected = false;
   readonly docs: StatusDocsReader;
 
   constructor(private readonly deps: PinnedThreadsDeps = {}) {
@@ -96,13 +98,15 @@ export class PinnedThreadsCollector {
   /** The panel now: the last composed view, or why there is none. */
   view(): PinnedPanel {
     if (!this.handle) return { unavailable: this.moduleReason };
+    if (!this.collected) return { unavailable: 'the pinned threads have not been read yet' };
     if (this.composed) return this.composed;
-    return { unavailable: 'the pinned threads have not been read yet' };
+    return { unavailable: 'the pinned updates could not be composed' };
   }
 
   /** Every machine's pins, re-read: the VM from its database, the others over ssh. */
   async collect(): Promise<void> {
     if (!this.handle) return;
+    this.collected = true;
     const now = this.now();
     await Promise.all(
       PINS_MACHINES.map(async (machine) => {
@@ -189,6 +193,9 @@ export class PinnedThreadsCollector {
     docs?: StatusDocsState
   ): Promise<void> {
     if (!this.handle) return;
+    // Before the first collect there are no pins to compose over; the reports scan that runs
+    // first must not publish an empty panel.
+    if (!this.collected) return;
     const statuses = docs ?? this.docs.snapshot();
     const input = {
       nowMs: this.now(),
