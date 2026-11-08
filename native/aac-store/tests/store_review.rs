@@ -1157,6 +1157,44 @@ fn final_review_burn_excludes_consumption_before_partial_hour() {
     );
     assert_eq!(burn[0]["spans"][0]["consumed"], 0.0, "{burn}");
     assert_eq!(burn[0]["spans"][0]["coverage"], 0.93, "{burn}");
+    record(
+        &engine,
+        [55, 60, 65]
+            .into_iter()
+            .map(|m| {
+                obs_with(T0 + m * MIN, m as f64, |o| {
+                    o["account"]["identity"] = json!(format!("{:064x}", 2));
+                    o["account"]["account_id"] = json!("claude:a2");
+                })
+            })
+            .collect(),
+    );
+    let boundary = call(
+        &engine,
+        "burnLong",
+        json!({
+            "series": [{"identity": format!("{:064x}", 2), "window": "[\"five_hour\",\"rate_limit\",null]"}],
+            "spansMs": [HOUR], "nowMs": T0 + 119 * MIN
+        }),
+    );
+    assert_eq!(boundary[0]["spans"][0]["coverage"], 0.1, "{boundary}");
+    assert!(
+        boundary[0]["spans"][0]["consumed"].is_null(),
+        "a change crossing the lower bound is unknown: {boundary}"
+    );
+
+    let interior = call(
+        &engine,
+        "burnLong",
+        json!({
+            "series": [{"identity": format!("{:064x}", 2), "window": "[\"five_hour\",\"rate_limit\",null]"}],
+            "spansMs": [2 * HOUR], "nowMs": T0 + 179 * MIN
+        }),
+    );
+    assert!(
+        interior[0]["spans"][0]["consumed"].is_null(),
+        "a crossing change cannot enter the interior bucket: {interior}"
+    );
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(dir).unwrap();

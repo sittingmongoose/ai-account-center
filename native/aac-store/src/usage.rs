@@ -2286,25 +2286,31 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
                     {
                         rows.push(row);
                     }
-                    visit_spans(&readings, &open, (a, w), (lo, last), |t, row| {
-                        rows.push((t, row));
-                        Ok(true)
-                    })?;
+                    visit_spans(
+                        &readings,
+                        &open,
+                        (a, w),
+                        (lo, now.min(hi.saturating_add(COVER_GAP_MS))),
+                        |t, row| {
+                            rows.push((t, row));
+                            Ok(true)
+                        },
+                    )?;
                     let mut previous: Option<(u64, Row)> = None;
                     for (t, row) in rows {
                         let end = row.last_seen.min(hi);
-                        if !row.vals.cached && row.vals.used_pct.is_some() && end >= lo {
+                        if t <= last && !row.vals.cached && row.vals.used_pct.is_some() && end >= lo {
                             any = true;
                             covered += end.saturating_sub(t.max(lo));
                         }
                         if let Some((_, prev)) = &previous {
                             let pt = prev.last_seen;
-                            if t >= lo && t <= hi && t.saturating_sub(pt) <= COVER_GAP_MS {
+                            if t >= lo && t.saturating_sub(pt) <= COVER_GAP_MS {
                                 covered += t.min(hi).saturating_sub(pt.max(lo));
                             }
                             if t > from
                                 && t >= lo
-                                && t <= hi
+                                && t <= now
                                 && !prev.vals.cached
                                 && !row.vals.cached
                                 && let (Some(up), Some(u)) = (prev.vals.used_pct, row.vals.used_pct)
@@ -2314,10 +2320,10 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
                                 } else {
                                     (u - up).max(0.0)
                                 };
-                                if pt >= from {
-                                    consumed += added;
-                                } else if added > 0.0 {
+                                if pt < from && added > 0.0 {
                                     uncertain = true;
+                                } else if t <= last {
+                                    consumed += added;
                                 }
                             }
                         }
