@@ -5,8 +5,18 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { AntigravityProfileRegistry } from './registry';
-import { createInstalledAntigravityComponents } from './production-runtime';
-import { updateManagedAntigravity, type ManagedNativeUpdate } from './managed-updater';
+import {
+  createInstalledAntigravityComponents,
+  hashOwnedAntigravityNative,
+} from './production-runtime';
+import {
+  routeManagedAntigravityUpdate,
+  type ManagedNativeUpdate,
+  type ManagedUpdateResult,
+  type NativeReviewState,
+} from './managed-updater';
+import { defaultNativeReleaseFile, readNativeRelease } from './native-version';
+import { probeRuntimeSocket } from './runtime-socket-probe';
 import { AntigravityError } from './errors';
 
 const MAX_COMMAND_BYTES = 65_536;
@@ -24,7 +34,20 @@ export interface ManagedNativeUpdateOptions {
   runCommand?: ManagedNativeCommand;
 }
 
-type ManagedCoordinatorResult = Awaited<ReturnType<typeof updateManagedAntigravity>>;
+type ManagedCoordinatorResult = ManagedUpdateResult;
+
+/**
+ * Why a managed update failed before it could finish, beyond update_failed:
+ * runtime_unavailable - the resident runtime did not answer (nothing ran);
+ * runtime_paused - switching is paused on an unreviewed build, the runtime is
+ * stopped, and `agy update` ran without it but did not finish;
+ * runtime_paused_blocked - the same, but it refused before `agy update` ran.
+ */
+export type ManagedFailureCode =
+  | 'update_failed'
+  | 'runtime_unavailable'
+  | 'runtime_paused'
+  | 'runtime_paused_blocked';
 
 export interface ManagedUpdateCommandOptions extends ManagedNativeUpdateOptions {
   /** Explicit coordinator injection; importing or constructing options performs no work. */
@@ -36,7 +59,7 @@ export interface ManagedUpdateCommandResult {
   platform: 'ubuntu';
   manager: 'native';
   status: Exclude<ManagedCoordinatorResult['status'], 'in_use'> | 'action_required';
-  messageCode: ManagedCoordinatorResult['status'] | 'update_failed';
+  messageCode: ManagedCoordinatorResult['status'] | ManagedFailureCode;
   updateAttempted: boolean;
   restartedProcesses: number;
   previousVersion?: string;
@@ -152,6 +175,7 @@ export function createManagedNativeUpdate(
   if (!path.isAbsolute(binary) || !path.isAbsolute(ccs))
     throw new AntigravityError('update-native-unsafe');
   const run = options.runCommand ?? command;
+  let selected: ReturnType<typeof nativeBytes> | undefined;
   let original: ReturnType<typeof nativeBytes> | undefined;
   let afterUpdate: ReturnType<typeof nativeBytes> | undefined;
   const invoke = async (args: string[], capture = false): Promise<string> => {
@@ -167,6 +191,7 @@ export function createManagedNativeUpdate(
   };
   return {
     version: async () => {
+      selected ??= nativeBytes(binary);
       const value = (await invoke(['--version'], true)).match(
         /\b(\d+\.\d+\.\d+(?:-[\w.-]+)?)\b/
       )?.[1];
@@ -175,6 +200,8 @@ export function createManagedNativeUpdate(
     },
     backup: async () => {
       original = nativeBytes(binary);
+      if (selected && !unchangedNative(selected, original))
+        throw new AntigravityError('update-native-changed');
       const directory = privateBackupDirectory(ccs);
       const backup = path.join(directory, original.sha);
       if (fs.existsSync(backup)) {
@@ -196,6 +223,28 @@ export function createManagedNativeUpdate(
         } finally {
           fs.closeSync(fd);
         }
+      }
+    },
+    unchangedSinceBackup: (quick = false) => {
+      if (!original) return false;
+      if (!quick) return unchangedNative(original, nativeBytes(binary));
+      // One stat, no read or hash: the digest was bound by the full check.
+      try {
+        const now = fs.lstatSync(binary);
+        const then = original.stat;
+        return (
+          now.isFile() &&
+          now.dev === then.dev &&
+          now.ino === then.ino &&
+          now.size === then.size &&
+          now.mtimeMs === then.mtimeMs &&
+          now.ctimeMs === then.ctimeMs &&
+          now.mode === then.mode &&
+          now.uid === then.uid &&
+          now.nlink === then.nlink
+        );
+      } catch {
+        return false;
       }
     },
     update: async () => {
@@ -220,16 +269,24 @@ export function createManagedNativeUpdate(
   };
 }
 
-function failedCommandResult(updateAttempted: boolean): ManagedUpdateCommandResult {
+function failedCommandResult(
+  updateAttempted: boolean,
+  messageCode: ManagedFailureCode = 'update_failed'
+): ManagedUpdateCommandResult {
   return {
     appId: 'antigravity-cli',
     platform: 'ubuntu',
     manager: 'native',
     status: 'failed',
-    messageCode: 'update_failed',
+    messageCode,
     updateAttempted,
     restartedProcesses: 0,
   };
+}
+
+/** Paused-path failures say whether `agy update` itself ran. */
+function pausedCode(attempted: boolean): ManagedFailureCode {
+  return attempted ? 'runtime_paused' : 'runtime_paused_blocked';
 }
 
 function safeVersion(value: unknown): value is string {
@@ -272,34 +329,70 @@ export async function runManagedAntigravityUpdateCommand(
       manager: 'native',
       // A running Antigravity kept an idle-only update from starting: nothing changed.
       status: value.status === 'in_use' ? 'action_required' : value.status,
-      messageCode: value.status,
+      messageCode:
+        value.status === 'failed' && value.runtimePaused === true
+          ? pausedCode(attempted)
+          : value.status,
       previousVersion: value.previousVersion,
       version: value.version,
       updateAttempted: attempted,
       restartedProcesses: value.restartedProcesses,
     };
-  } catch {
-    return failedCommandResult(attempted);
+  } catch (error) {
+    const message = error instanceof AntigravityError ? error.message : '';
+    return failedCommandResult(
+      attempted,
+      // runtime_unavailable promises nothing ran; after a counted update it stays generic.
+      message === 'antigravity-runtime-unavailable' && !attempted
+        ? 'runtime_unavailable'
+        : message === 'update-runtime-paused'
+          ? pausedCode(attempted)
+          : 'update_failed'
+    );
   }
+}
+
+/**
+ * Whether the installed native is a reviewed build, hashed once. Only a native
+ * that was read in full and matched no reviewed hash is 'unreviewed'; a read
+ * failure or an unusable review list is 'unknown' and never counts as paused.
+ */
+export function nativeReviewState(nativeBinary: string, releaseFile?: string): NativeReviewState {
+  const release = readNativeRelease(releaseFile ?? defaultNativeReleaseFile());
+  if (!release.reviewed.length) return 'unknown';
+  const digest = hashOwnedAntigravityNative(nativeBinary);
+  if (digest === null) return 'unknown';
+  return release.reviewed.some((entry) => entry.sha256 === digest) ? 'reviewed' : 'unreviewed';
 }
 
 export async function runInstalledManagedAntigravityUpdate(
   home = os.homedir(),
-  { idleOnly = true }: { idleOnly?: boolean } = {}
+  {
+    idleOnly = true,
+    releaseFile,
+  }: {
+    idleOnly?: boolean;
+    /** Owned fixture injection only; production reads the packaged release file. */
+    releaseFile?: string;
+  } = {}
 ) {
   try {
     const ccs = path.join(home, '.ccs');
     const components = createInstalledAntigravityComponents(ccs, home);
-    if (!components) throw new AntigravityError('update-runtime-unavailable');
+    // The descriptor is present (the helper checked) but unusable: no runtime can run.
+    if (!components) return failedCommandResult(false, 'runtime_unavailable');
+    const { nativeBinary, socketPath } = components.installed;
     return await runManagedAntigravityUpdateCommand({
-      nativeBinary: components.installed.nativeBinary,
+      nativeBinary,
       ccsDirectory: ccs,
       execute: (native) =>
-        updateManagedAntigravity({
+        routeManagedAntigravityUpdate({
           registry: new AntigravityProfileRegistry(ccs),
           driver: components.driver,
           native,
           idleOnly,
+          nativeReview: () => nativeReviewState(nativeBinary, releaseFile),
+          runtimeSocket: () => probeRuntimeSocket(socketPath),
         }),
     });
   } catch {
@@ -317,15 +410,25 @@ export function managedUpdateArguments(args: string[]): { idleOnly: boolean } | 
   return args.length === 1 && args[0] === '--idle-only' ? { idleOnly: true } : null;
 }
 
+/**
+ * The command-line entry point. Only idleOnly crosses the command line; the
+ * releaseFile fixture seam never does, and refused arguments run nothing.
+ */
+export async function main(
+  argv: string[],
+  run: typeof runInstalledManagedAntigravityUpdate = runInstalledManagedAntigravityUpdate
+): Promise<ManagedUpdateCommandResult> {
+  const parsed = managedUpdateArguments(argv);
+  if (!parsed) return failedCommandResult(false);
+  try {
+    return await run(os.homedir(), { idleOnly: parsed.idleOnly });
+  } catch {
+    return failedCommandResult(false);
+  }
+}
+
 if (require.main === module) {
-  const parsed = managedUpdateArguments(process.argv.slice(2));
-  void (
-    parsed
-      ? runInstalledManagedAntigravityUpdate(os.homedir(), parsed)
-      : Promise.resolve(failedCommandResult(false))
-  )
-    .then((result) => process.stdout.write(JSON.stringify(result) + '\n'))
-    .catch(() => {
-      process.stdout.write(JSON.stringify(failedCommandResult(false)) + '\n');
-    });
+  void main(process.argv.slice(2)).then((result) =>
+    process.stdout.write(JSON.stringify(result) + '\n')
+  );
 }
