@@ -25,11 +25,7 @@ const DEAD_CODES = [
 
 export type CodexRefreshDeadCode = (typeof DEAD_CODES)[number] | 'unauthorized';
 export type CodexRefreshTransientCode =
-  | 'timeout'
-  | 'network'
-  | 'rate_limited'
-  | 'server_error'
-  | 'http_error';
+  'timeout' | 'network' | 'rate_limited' | 'server_error' | 'http_error';
 
 export interface CodexRefreshedTokens {
   idToken?: string;

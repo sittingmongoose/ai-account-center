@@ -88,20 +88,12 @@ const PASSED_ENV = [
 ];
 
 export type CodexRemoveRefusal =
-  | 'account_active'
-  | 'account_default'
-  | 'last_account'
-  | 'activation_running'
-  | 'signin_running';
+  'account_active' | 'account_default' | 'last_account' | 'activation_running' | 'signin_running';
 
 export class CodexLifecycleError extends Error {
   constructor(
     readonly code:
-      | CodexRemoveRefusal
-      | 'unknown_account'
-      | 'remove_failed'
-      | 'id_in_use'
-      | 'tool_missing'
+      CodexRemoveRefusal | 'unknown_account' | 'remove_failed' | 'id_in_use' | 'tool_missing'
   ) {
     super(code);
     this.name = 'CodexLifecycleError';

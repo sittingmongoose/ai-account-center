@@ -23,12 +23,7 @@ import { createLogger } from '../../services/logging';
 const logger = createLogger('web-server:claude-open');
 
 export type ClaudeOpenOperationState =
-  | 'checking'
-  | 'copying'
-  | 'opening'
-  | 'opened'
-  | 'blocked_uncertain'
-  | 'failed';
+  'checking' | 'copying' | 'opening' | 'opened' | 'blocked_uncertain' | 'failed';
 
 /** No UUIDs, titles, transcript text, ssh details or paths. */
 export interface ClaudeOpenOperation {

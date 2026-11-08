@@ -221,8 +221,7 @@ function project(raw: unknown): QuotaReportDoc {
 }
 
 export type QuotaParse =
-  | { ok: true; doc: QuotaReportDoc; sha256: string }
-  | { ok: false; reason: string };
+  { ok: true; doc: QuotaReportDoc; sha256: string } | { ok: false; reason: string };
 
 /** Bytes of report.json -> the projected report, or a fixed reason. */
 export function parseQuotaReport(bytes: Buffer): QuotaParse {

@@ -386,8 +386,7 @@ export function precompressedStatic(ui: StaticUi): RequestHandler {
 }
 
 export type PageRouteResult =
-  | { kind: 'page' }
-  | { kind: 'redirect'; status: 301 | 302; location: string };
+  { kind: 'page' } | { kind: 'redirect'; status: 301 | 302; location: string };
 
 /** Exact, case-sensitive page routes. Queries are not read here. */
 export function resolvePageRoute(

@@ -99,12 +99,7 @@ interface ParsedCodexErrorBody {
 }
 
 type CodexWindowKind =
-  | 'usage-5h'
-  | 'usage-weekly'
-  | 'code-review-5h'
-  | 'code-review-weekly'
-  | 'code-review'
-  | 'unknown';
+  'usage-5h' | 'usage-weekly' | 'code-review-5h' | 'code-review-weekly' | 'code-review' | 'unknown';
 
 function getCodexWindowKind(label: string): CodexWindowKind {
   const lower = (label || '').toLowerCase();

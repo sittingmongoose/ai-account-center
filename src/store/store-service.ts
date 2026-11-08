@@ -42,9 +42,7 @@ export interface RecordResult {
 }
 
 export type Thinning =
-  | { kind: 'bucket'; bucketMs: number }
-  | { kind: 'history' }
-  | { kind: 'none' };
+  { kind: 'bucket'; bucketMs: number } | { kind: 'history' } | { kind: 'none' };
 
 export interface SeriesRef {
   identity: string;

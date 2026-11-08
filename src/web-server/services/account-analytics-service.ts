@@ -470,9 +470,8 @@ export class AccountAnalyticsService {
       provisional.from,
       provisional.to,
       { tz }
-    ).catch(
-      (): AccountAnalyticsActivityResult =>
-        unavailableActivity('Local usage history is temporarily unavailable.', tz)
+    ).catch((): AccountAnalyticsActivityResult =>
+      unavailableActivity('Local usage history is temporarily unavailable.', tz)
     );
     const { coverage, ...activity } = activityResult;
     let oldestQuota = Infinity;

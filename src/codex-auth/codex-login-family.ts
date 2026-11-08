@@ -44,12 +44,7 @@ export interface CodexLoginFingerprint {
 }
 
 export type CodexLoginSourceKind =
-  | 'live'
-  | 'profile'
-  | 'codex_home'
-  | 'process_home'
-  | 'cliproxy'
-  | 'extra';
+  'live' | 'profile' | 'codex_home' | 'process_home' | 'cliproxy' | 'extra';
 
 export interface CodexLoginSource {
   path: string;

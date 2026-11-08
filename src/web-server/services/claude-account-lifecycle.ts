@@ -489,9 +489,8 @@ export class ClaudeAccountLifecycle {
     await updateTrash(this.ccsDir(), async (entries) => ({
       next: entries
         .filter((entry) => !purged.has(entry.trashId))
-        .map(
-          (entry): ClaudeTrashEntry =>
-            pending.has(entry.trashId) ? { ...entry, state: 'deleting' } : entry
+        .map((entry): ClaudeTrashEntry =>
+          pending.has(entry.trashId) ? { ...entry, state: 'deleting' } : entry
         ),
       result: undefined,
     })).catch(() => undefined);

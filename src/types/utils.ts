@@ -22,14 +22,7 @@ export type LogLevel = (typeof LogLevel)[keyof typeof LogLevel];
  * Color codes (TTY-aware)
  */
 export type ColorName =
-  | 'red'
-  | 'green'
-  | 'yellow'
-  | 'blue'
-  | 'cyan'
-  | 'bold'
-  | 'cyanBold'
-  | 'reset';
+  'red' | 'green' | 'yellow' | 'blue' | 'cyan' | 'bold' | 'cyanBold' | 'reset';
 
 /**
  * Terminal capabilities

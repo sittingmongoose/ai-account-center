@@ -156,7 +156,7 @@ class AppendUnclearError extends ConfigError {
 /** Appends one `void` line cancelling `line` and syncs it. Throws if the disk refuses either. */
 function appendVoid(fd: number, line: string, file: string): void {
   const cancel = Buffer.from(`\n${JSON.stringify({ type: 'void', line })}\n`);
-  for (let done = 0; done < cancel.length; ) {
+  for (let done = 0; done < cancel.length;) {
     const taken = fs.writeSync(fd, cancel, done, cancel.length - done);
     if (taken <= 0) throw new ConfigError('The answer store took no part of a void line.', file);
     done += taken;

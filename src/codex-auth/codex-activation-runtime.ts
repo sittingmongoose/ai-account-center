@@ -272,9 +272,9 @@ function isOwnedBrowserHelper(
   const parent = processes.find((entry) => entry.pid === process.ppid);
   return Boolean(
     process.args.includes('app-server') &&
-      process.args.includes('stdio://') &&
-      parent?.exe === '/usr/lib/chatgpt/resources/cua_node/bin/node_repl' &&
-      daemons.some((daemon) => descendants(daemon, processes).includes(process))
+    process.args.includes('stdio://') &&
+    parent?.exe === '/usr/lib/chatgpt/resources/cua_node/bin/node_repl' &&
+    daemons.some((daemon) => descendants(daemon, processes).includes(process))
   );
 }
 

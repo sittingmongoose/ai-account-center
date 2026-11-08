@@ -153,8 +153,7 @@ export interface UsageWorkerResult {
 }
 
 export type UsageWorkerResponse =
-  | { ok: true; data: UsageWorkerResult }
-  | { ok: false; error: string };
+  { ok: true; data: UsageWorkerResult } | { ok: false; error: string };
 
 function getUsageWorkerPath(): string {
   // Bun runs source tests directly; installed Node runs the emitted neighbor.

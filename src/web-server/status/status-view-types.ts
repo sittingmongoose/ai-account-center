@@ -77,13 +77,7 @@ export interface StatusInputs {
 // View
 
 export type SourceId =
-  | 'agent-reports'
-  | 'pm-mail'
-  | 'machines'
-  | 'browsers'
-  | 'simlock'
-  | 'usage'
-  | 'quota-watch';
+  'agent-reports' | 'pm-mail' | 'machines' | 'browsers' | 'simlock' | 'usage' | 'quota-watch';
 export type SourceState = 'ok' | 'stale' | 'missing' | 'unreadable' | 'error' | 'unconfigured';
 export type Tone = 'good' | 'warn' | 'bad';
 

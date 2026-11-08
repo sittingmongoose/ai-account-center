@@ -22,9 +22,7 @@ import { createLogger } from '../../services/logging';
  *   folder. Missing directories are created at 0700.
  */
 export type PrivateJsonRead =
-  | { state: 'absent' }
-  | { state: 'invalid' }
-  | { state: 'ok'; value: unknown; contents: string };
+  { state: 'absent' } | { state: 'invalid' } | { state: 'ok'; value: unknown; contents: string };
 
 const logger = createLogger('private-json-store');
 const locks = new Map<string, Promise<void>>();

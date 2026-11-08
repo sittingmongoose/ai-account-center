@@ -68,9 +68,7 @@ export async function writeAuthJson(file: string, value: unknown): Promise<void>
 }
 
 export type AuthFileRead =
-  | { state: 'absent' }
-  | { state: 'invalid' }
-  | { state: 'ok'; value: unknown; stamp: string };
+  { state: 'absent' } | { state: 'invalid' } | { state: 'ok'; value: unknown; stamp: string };
 
 function isPrivate(stat: Stats): boolean {
   return process.platform === 'win32' || (stat.mode & 0o077) === 0;

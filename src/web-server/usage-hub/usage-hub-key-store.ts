@@ -32,9 +32,7 @@ export interface UsageHubKeyRecord {
 }
 
 export type UsageHubKeyState =
-  | { state: 'off' }
-  | { state: 'invalid' }
-  | { state: 'on'; record: UsageHubKeyRecord };
+  { state: 'off' } | { state: 'invalid' } | { state: 'on'; record: UsageHubKeyRecord };
 
 export function usageHubKeyPath(): string {
   return path.join(authDirectory(), USAGE_HUB_KEY_FILE);
