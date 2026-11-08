@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1400,
-    "filesAffected": 138,
+    "totalOccurrences": 1401,
+    "filesAffected": 139,
     "hotpathOccurrences": 749,
     "hotpathFilesAffected": 83,
     "topHotpathFiles": [
@@ -623,8 +623,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 490,
-      "coverageRatio": 0.0898,
+      "totalSourceFiles": 492,
+      "coverageRatio": 0.0894,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -645,6 +645,7 @@
         "delegation",
         "management",
         "shared",
+        "status-native",
         "targets",
         "types"
       ],
