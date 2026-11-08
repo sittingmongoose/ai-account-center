@@ -67,6 +67,103 @@ def environment(extra=None):
     return strip_dashboard_secrets(result)
 
 
+def sanitize_unit_fragment(value):
+    cleaned = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
+    return cleaned or "app"
+
+
+def systemd_can_carry(key, value):
+    """Whether systemd accepts this variable. A name like BASH_FUNC_ml%% or a.b, or a value that is
+    not UTF-8, fails the whole systemd-run; the app would stay closed after its update."""
+    if value is None or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        return False
+    try:
+        str(value).encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+LOADER_ENV = ("LD_PRELOAD", "LD_LIBRARY_PATH")
+LOADER_ENV_PREFIX = "AAC_LOADER_"
+# Puts the loader settings back for the app alone. systemd-run and this shell run without them, the
+# values stay off every argv, and exec keeps the unit's main process id. systemd expands $NAME in a
+# command line before it runs, which would put the value on this shell's argv, so every $ is $$.
+LOADER_TRAMPOLINE = "; ".join(
+    ['if [ "$${%s%s+x}" ]; then export %s="$$%s%s"; unset %s%s; fi' % (LOADER_ENV_PREFIX, name, name, LOADER_ENV_PREFIX, name, LOADER_ENV_PREFIX, name)
+     for name in LOADER_ENV] + ['exec "$$@"'])
+
+
+def _unit_environment(env):
+    """What systemd-run receives to hand on: entries as given, with loader settings renamed, since
+    a captured LD_PRELOAD or LD_LIBRARY_PATH (AppImage, snap) would load into systemd-run itself."""
+    return {(LOADER_ENV_PREFIX + key if key in LOADER_ENV else key): value for key, value in env.items()}
+
+
+def systemd_run_environment(env):
+    """The environment systemd-run runs with: the app's values for its bare --setenv flags, and this
+    process's XDG_RUNTIME_DIR, which is how systemd-run reaches the user manager."""
+    values = _unit_environment(env)
+    if os.environ.get("XDG_RUNTIME_DIR"):
+        values["XDG_RUNTIME_DIR"] = os.environ["XDG_RUNTIME_DIR"]
+    return values
+
+
+def systemd_user_service_argv(unit, cwd, env, argv, service_type="simple", properties=()):
+    """Wrap argv so it starts in a transient user service OUTSIDE our cgroup.
+
+    Why: the dashboard runs as a systemd user unit with KillMode=control-group.
+    A plain spawn keeps the child (here: the restarted tmux server, and with it
+    the user's CLI session) in the unit's cgroup, so the next dashboard
+    restart or deploy would kill it. A transient user service re-parents the
+    process to app.slice instead. Transient *scopes* are deliberately NOT used:
+    this host's systemd aborts `--scope` units, so scope launches silently do
+    nothing. When systemd-run is missing there is no safe launch: fail closed
+    rather than cage the session in the service cgroup.
+
+    Values never go on this argv, which any local user can read: a bare
+    --setenv=KEY takes the value from systemd-run's own environment, so run it
+    with systemd_run_environment(env).
+
+    The owner's decision (2026-11-07): systemd stores those values in the app's
+    transient unit file under /run/user/<uid>/systemd/transient/. That is tmpfs
+    inside the user's 0700 runtime folder, so only the user and root can read
+    it, and it exists while the unit is loaded and is collected after: the same
+    exposure as the running app's /proc/<pid>/environ.
+    """
+    runner = shutil.which("systemd-run")
+    if runner is None:
+        raise UpdateFailure("restart_context")
+    wrapped = [runner, "--user", "--unit=" + unit, "--collect"]
+    if service_type != "simple":
+        wrapped.append("--service-type=" + service_type)
+    wrapped.extend("--property=" + item for item in properties)
+    if cwd:
+        wrapped.append("--working-directory=" + str(cwd))
+    names = [key for key, value in strip_dashboard_secrets(_unit_environment(env or {})).items()
+             if systemd_can_carry(key, value)]
+    wrapped.extend("--setenv=" + key for key in names)
+    wrapped.append("--")
+    # systemd-run looks up the executable itself and does not expand it, so an escaped $ there would
+    # name a path that does not exist. The sh step takes that path as an ordinary argument.
+    if "$" in str(argv[0]) or any(key.startswith(LOADER_ENV_PREFIX) for key in names):
+        wrapped.extend(["/bin/sh", "-c", LOADER_TRAMPOLINE, "sh"])
+    # systemd expands $NAME in a command line, and a relaunch replays whatever the app was given.
+    wrapped.extend(str(word).replace("$", "$$") for word in argv)
+    return wrapped
+
+
+def in_service_cgroup():
+    """Whether this process runs in a systemd user service's cgroup (the dashboard), where everything
+    it starts is charged to that service: its MemoryMax, and with KillMode=process its cgroup and
+    memory.peak stay alive across restarts. An ssh session or a plain shell needs no transient unit."""
+    try:
+        with open("/proc/self/cgroup", encoding="utf-8") as lines:
+            return any(re.search(r"/user@\d+\.service/(?:.*/)?[^/]+\.service(?:/|$)", line.strip()) for line in lines)
+    except OSError:
+        return False
+
+
 def _stop_group(process):
     """Stop a timed-out child. On POSIX the child leads its own session, so the
     whole group goes (an installer's helpers included); a detached app relaunch
@@ -155,6 +252,36 @@ def version_text(value):
         return None
     match = re.search(r"(?<!\d)(\d+\.\d+(?:\.[0-9]+){0,3}(?:-[A-Za-z0-9.]+)?)(?![0-9])", value)
     return match.group(1) if match else None
+
+
+def marker_names_version(marker_version, installed):
+    """Whether a pending-restart marker is for this install. The Codex bridge writes the numeric
+    part alone (0.50.0), where version_text keeps a prerelease (0.50.0-alpha.1)."""
+    def numeric(value):
+        match = re.search(r"\d+\.\d+(?:\.\d+){0,3}", value) if isinstance(value, str) else None
+        return match.group(0) if match else None
+    return numeric(marker_version) is not None and numeric(marker_version) == numeric(installed)
+
+
+def pending_marker(pending):
+    """A pending-restart marker's fields, or none without a readable one."""
+    try:
+        value = json.loads(pending.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def marker_owes_restart(marker):
+    """Whether a marker names something an earlier run closed. That is owed whatever version is
+    installed now, since a helper can be killed after replacing the app; the bridge checks what runs."""
+    return marker.get("desktop") is True or marker.get("daemon") is True
+
+
+def marker_applies_to(marker, installed):
+    """Whether a pending-restart marker is for this install: the version it records, or the version a
+    desktop install was about to put in place when it was interrupted."""
+    return isinstance(marker, dict) and any(marker_names_version(marker.get(key), installed) for key in ("version", "target"))
 
 
 def version_tuple(value):

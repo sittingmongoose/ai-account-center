@@ -16,8 +16,11 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
-from app_update_common import UpdateFailure, command, environment, powershell
+from app_update_common import (
+    UpdateFailure, command, environment, in_service_cgroup, powershell, sanitize_unit_fragment, systemd_run_environment, systemd_user_service_argv,
+)
 
 # T3's own server and desktop, by exact location. A CLI process started below
 # one of them belongs to a T3 session: normally Update all never stops,
@@ -322,6 +325,27 @@ def family(install, processes, include_descendants=True):
     return values
 
 
+def electron_runs_as_node(pid):
+    """Whether a Linux process is Electron in Node mode: ELECTRON_RUN_AS_NODE set and not empty, the
+    test Electron makes. Such a process runs a script, never a window. An environ that can't be read
+    counts as Node mode, so that process never stands in for a desktop."""
+    try:
+        raw = pathlib.Path("/proc", str(pid), "environ").read_bytes()
+    except OSError:
+        return True
+    name = b"ELECTRON_RUN_AS_NODE="
+    return any(entry.startswith(name) and len(entry) > len(name) for entry in raw.split(b"\0"))
+
+
+def desktop_roots(install, processes):
+    """The app's main processes among `processes`: roots of its family, and on Ubuntu none in Node mode."""
+    pids = {item.pid for item in processes}
+    roots = [item for item in processes if item.ppid not in pids]
+    if install.platform == "ubuntu":
+        roots = [item for item in roots if not electron_runs_as_node(item.pid)]
+    return roots
+
+
 def main_contexts(install, processes):
     selected = family(install, processes)
     pids = {item.pid for item in selected}
@@ -339,11 +363,18 @@ def main_contexts(install, processes):
                 if len(raw) > 1024 * 1024:
                     raise UpdateFailure("restart_context")
                 item.env = dict(value.decode("utf-8", "surrogateescape").split("=", 1) for value in raw.split(b"\0") if b"=" in value)
+                # Electron in Node mode runs a script, never a window: not a desktop to reopen.
+                if item.env.get("ELECTRON_RUN_AS_NODE"):
+                    continue
                 item.cwd = os.readlink("/proc/" + str(item.pid) + "/cwd")
                 if not item.env.get("DISPLAY") and not item.env.get("WAYLAND_DISPLAY"):
                     raise UpdateFailure("restart_context")
             except OSError:
                 raise UpdateFailure("restart_context") from None
+    if install.platform == "ubuntu":
+        mains = [item for item in mains if not item.env.get("ELECTRON_RUN_AS_NODE")]
+        if selected and not mains:
+            raise UpdateFailure("restart_context")
     return mains
 
 
@@ -767,21 +798,45 @@ def sys_platform_linux():
 
 
 def desktop_arguments(context, platform):
-    """Only existing data-directory flags are reapplied; never replay work arguments."""
+    """Only an existing data-directory flag is reapplied; never replay work arguments.
+
+    The folder is the one Chromium takes, each argument trimmed of whitespace first: the last
+    --user-data-dir before a "--" terminator, with any switch prefix the platform accepts, its value
+    only after "=". A bare switch or an empty value is the default folder, whatever word follows it,
+    so nothing is replayed. A relative folder is the
+    app's own: it is resolved against the app's working directory, never this helper's, and dropped
+    when that directory is unknown.
+    """
     args = context.args[1:]
-    found = []
-    for index, arg in enumerate(args):
-        if arg.startswith("--user-data-dir="):
-            value = arg[len("--user-data-dir="):]
-            if value and pathlib.Path(value).is_absolute():
-                found = ["--user-data-dir=" + value]
-        elif arg == "--user-data-dir" and index + 1 < len(args):
-            value = args[index + 1]
-            if pathlib.Path(value).is_absolute():
-                found = ["--user-data-dir=" + value]
+    cwd = getattr(context, "cwd", None)
+    windows = platform == "windows"
+    prefixes = ("--", "-", "/") if windows else ("--", "-")
+
+    def absolute(value):
+        if not value:
+            return None
+        if pathlib.Path(value).is_absolute():
+            return value
+        if isinstance(cwd, str) and cwd and pathlib.Path(cwd).is_absolute():
+            return str(pathlib.Path(cwd) / value)
+        return None
+
+    value = None
+    for arg in args:
+        # As base::CommandLine does: each argument is trimmed first, of any whitespace on Windows
+        # and of ASCII whitespace (0x09-0x0D and space) elsewhere.
+        arg = arg.strip() if windows else arg.strip(" \t\n\v\f\r")
+        if arg == "--":
+            break
+        prefix = next((item for item in prefixes if arg.startswith(item) and len(arg) > len(item)), None)
+        if prefix:
+            name, separator, rest = arg[len(prefix):].partition("=")
+            if (name.lower() if windows else name) == "user-data-dir":
+                value = rest if separator else ""
     # Chromium on Linux may rewrite argv0 to just its executable. Its existing
     # data directory is still supplied by the preserved process environment.
-    return found
+    folder = absolute(value)
+    return ["--user-data-dir=" + folder] if folder else []
 
 
 def terminate_desktops(install, contexts, grace=15, ready=None):
@@ -846,6 +901,16 @@ def restart_desktops(install, contexts):
         elif install.platform == "windows":
             subprocess.Popen([str(install.path), *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        elif in_service_cgroup():
+            # A plain start would stay in the dashboard's cgroup: the app and all it runs would
+            # count against the dashboard's memory limit and outlive its restarts there.
+            unit = "aac-launch-%s-%s" % (sanitize_unit_fragment(install.app_id), uuid.uuid4().hex[:12])
+            values = environment(item.env)
+            # KillMode=process: quitting the app must not kill what it started (an Electron in-app
+            # relaunch, a terminal), as a Type=simple unit's default control-group would.
+            command(systemd_user_service_argv(unit, item.cwd, values, [str(install.path), *args],
+                                              properties=("KillMode=process", "StandardOutput=null", "StandardError=null")),
+                    timeout=15, env=systemd_run_environment(values), preserve_env=True)
         else:
             subprocess.Popen([str(install.path), *args], cwd=item.cwd, env=environment(item.env), stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -853,9 +918,7 @@ def restart_desktops(install, contexts):
     if contexts:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            existing = family(install, scan(install.platform))
-            pids = {item.pid for item in existing}
-            if len([item for item in existing if item.ppid not in pids]) >= len(contexts):
+            if len(desktop_roots(install, family(install, scan(install.platform)))) >= len(contexts):
                 return restarted
             time.sleep(.3)
         raise UpdateFailure("restart_failed")

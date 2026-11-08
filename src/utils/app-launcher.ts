@@ -33,7 +33,7 @@ export interface AppLaunchSpec {
   cwd?: string;
   /** Full replacement environment for the launched app. */
   env?: Record<string, string | undefined>;
-  /** Daemon log file (appended stdout+stderr). GUI apps omit it. */
+  /** Daemon log file (appended stdout+stderr). GUI apps omit it, and their output is discarded. */
   logFile?: string;
 }
 
@@ -43,6 +43,8 @@ export interface AppLaunchResult {
   route: AppLaunchRoute;
   /** Transient unit name (systemd-service route only). */
   unit?: string;
+  /** The spawned process (direct route only). */
+  pid?: number;
 }
 
 export interface AppLauncherDeps {
@@ -85,26 +87,99 @@ function defaultSystemdRunPath(): string | null {
   return null;
 }
 
+/** What systemd accepts as a variable name; `BASH_FUNC_ml%%` or `a.b` fails the whole launch. */
+const SYSTEMD_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The environment entries systemd can carry; the rest are left out, never a failed launch. */
+function carriedEnvironment(env: Record<string, string | undefined>): Record<string, string> {
+  const carried: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && SYSTEMD_ENV_NAME.test(key) && !value.includes('\0')) {
+      carried[key] = value;
+    }
+  }
+  return carried;
+}
+
+/** Loader settings the app needs but systemd-run must not load (an AppImage's or snap's libraries). */
+const LOADER_ENV = ['LD_PRELOAD', 'LD_LIBRARY_PATH'];
+const LOADER_ENV_PREFIX = 'AAC_LOADER_';
+/**
+ * Puts the loader settings back for the app alone. systemd-run and this shell run without them, the
+ * values stay off every argv, and exec keeps the unit's main process id. systemd expands $NAME in a
+ * command line before it runs, which would put the value on this shell's argv, so every $ is $$.
+ */
+const LOADER_TRAMPOLINE = [
+  ...LOADER_ENV.map(
+    (name) =>
+      `if [ "\$\${${LOADER_ENV_PREFIX}${name}+x}" ]; then export ${name}="\$\$${LOADER_ENV_PREFIX}${name}"; unset ${LOADER_ENV_PREFIX}${name}; fi`
+  ),
+  'exec "$$@"',
+].join('; ');
+
+/** What systemd-run receives to hand on: carried entries, with the loader settings renamed. */
+function unitEnvironment(env: Record<string, string | undefined>): Record<string, string> {
+  const unit: Record<string, string> = {};
+  for (const [key, value] of Object.entries(carriedEnvironment(env))) {
+    unit[LOADER_ENV.includes(key) ? `${LOADER_ENV_PREFIX}${key}` : key] = value;
+  }
+  return unit;
+}
+
 /**
  * Build the systemd-run argv for a launch. Exported for tests.
  * --collect drops the unit once the app exits so repeated launches never collide.
+ *
+ * Environment values never go on this argv, which any local user can read through ps or /proc:
+ * a bare --setenv=KEY takes the value from systemd-run's own environment (systemdRunEnvironment).
+ *
+ * The owner's decision (2026-11-07): systemd stores those values in the app's transient unit file
+ * under /run/user/<uid>/systemd/transient/. That is tmpfs inside the user's 0700 runtime folder, so
+ * only the user and root can read it, and it exists while the unit is loaded and is collected after:
+ * the same exposure as the running app's /proc/<pid>/environ. Account activation used to put the
+ * values on argv, and no longer does.
+ *
+ * KillMode=process keeps what the old session start gave: quitting the app does not kill what it
+ * started, such as an Electron in-app relaunch or a terminal. A Type=simple transient unit would
+ * otherwise default to control-group and stop them when its main process exits.
  */
 export function buildSystemdRunArgs(spec: AppLaunchSpec, unit: string): string[] {
-  const argv = ['--user', `--unit=${unit}`, '--collect'];
+  const argv = ['--user', `--unit=${unit}`, '--collect', '--property=KillMode=process'];
   if (spec.cwd !== undefined && spec.cwd !== '') {
     argv.push(`--working-directory=${spec.cwd}`);
   }
-  if (spec.env !== undefined) {
-    for (const [key, value] of Object.entries(spec.env)) {
-      if (value !== undefined) argv.push(`--setenv=${key}=${value}`);
-    }
-  }
+  const names = spec.env === undefined ? [] : Object.keys(unitEnvironment(spec.env));
+  for (const key of names) argv.push(`--setenv=${key}`);
   if (spec.logFile !== undefined && spec.logFile !== '') {
     argv.push(`--property=StandardOutput=append:${spec.logFile}`);
     argv.push(`--property=StandardError=append:${spec.logFile}`);
+  } else {
+    argv.push('--property=StandardOutput=null', '--property=StandardError=null');
   }
-  argv.push('--', spec.exe, ...spec.args);
+  argv.push('--');
+  // systemd-run looks up the executable itself and does not expand it, so an escaped $ there would
+  // name a path that does not exist. The sh step takes that path as an ordinary argument.
+  if (spec.exe.includes('$') || names.some((key) => key.startsWith(LOADER_ENV_PREFIX))) {
+    argv.push('/bin/sh', '-c', LOADER_TRAMPOLINE, 'sh');
+  }
+  // systemd expands $NAME in a command line, and a relaunch replays whatever the app was given.
+  argv.push(...[spec.exe, ...spec.args].map((word) => word.replace(/\$/g, '$$$$')));
   return argv;
+}
+
+/**
+ * The environment systemd-run itself runs with: the app's values, for its bare --setenv flags,
+ * and this process's XDG_RUNTIME_DIR, which is how systemd-run reaches the user manager. Undefined
+ * when the spec names no environment, so systemd-run inherits this process's. Exported for tests.
+ */
+export function systemdRunEnvironment(
+  spec: AppLaunchSpec,
+  inherited: NodeJS.ProcessEnv = process.env
+): Record<string, string> | undefined {
+  if (spec.env === undefined) return undefined;
+  const env = unitEnvironment(spec.env);
+  if (inherited.XDG_RUNTIME_DIR) env.XDG_RUNTIME_DIR = inherited.XDG_RUNTIME_DIR;
+  return env;
 }
 
 function waitForExit(child: ChildProcess): Promise<number | null> {
@@ -137,7 +212,7 @@ export async function launchApp(
       child.once('error', reject);
       child.once('spawn', () => resolve());
     });
-    return { route: 'direct' };
+    return { route: 'direct', ...(child.pid === undefined ? {} : { pid: child.pid }) };
   }
 
   const systemdRun =
@@ -151,7 +226,11 @@ export async function launchApp(
   const pid = deps.pid ?? process.pid;
   const suffix = deps.randomSuffix ? deps.randomSuffix() : defaultRandomSuffix();
   const unit = transientUnitName(spec.app, pid, suffix);
-  const child = spawnFn(systemdRun, buildSystemdRunArgs(spec, unit), { stdio: 'ignore' });
+  const env = systemdRunEnvironment(spec);
+  const child = spawnFn(systemdRun, buildSystemdRunArgs(spec, unit), {
+    stdio: 'ignore',
+    ...(env === undefined ? {} : { env }),
+  });
   let code: number | null;
   try {
     code = await waitForExit(child);

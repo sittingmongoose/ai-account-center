@@ -9,6 +9,7 @@ export const MESSAGES = {
   update_failed: 'The app update failed; check its supported installer.',
   version_unknown: 'The installed version could not be verified after the update.',
   restart_failed: 'The update finished, but an original instance could not restart.',
+  restart_not_running: 'Updated, but Codex did not restart. Start it again when you need it.',
   host_unavailable: 'This computer could not complete the update request.',
   helper_invalid: 'The update helper returned an unsupported result.',
   helper_sync_failed:

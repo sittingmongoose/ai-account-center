@@ -39,6 +39,13 @@ APT_POLICY_NAS1 = ('chatgpt:\n  Installed: 26.1007.21434\n  Candidate: 26.1007.2
                    '        100 /var/lib/dpkg/status\n')
 
 
+# A test that starts a real transient unit runs only when asked, and only with a user manager to
+# reach: the suite is otherwise offline and leaves the machine's units alone.
+REAL_UNITS_REASON = 'starts a real user unit: set AAC_REAL_UNIT_TESTS=1, with a reachable user manager'
+REAL_UNITS_REACHABLE = os.environ.get('AAC_REAL_UNIT_TESTS') == '1' and shutil.which('systemctl') is not None and \
+    subprocess.run(['systemctl', '--user', 'show-environment'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
 class UpdaterTests(unittest.TestCase):
     def test_inventory_has_no_update_side_effect(self):
         installations = {key: None for key in common.APP_LABELS}
@@ -431,6 +438,286 @@ class UpdaterTests(unittest.TestCase):
             with self.assertRaises(common.UpdateFailure):
                 terminal.check_terminal('ubuntu', [mock.Mock()])
 
+    def test_ubuntu_desktops_never_count_electron_in_node_mode(self):
+        import app_update_processes as processes
+        install = mock.Mock(platform="ubuntu")
+        main = processes.Process(pid=1, ppid=0, uid=0, exe="/fixture/app", identity="1", args=["/fixture/app"])
+        helper = processes.Process(pid=2, ppid=0, uid=0, exe="/fixture/app", identity="2", args=["/fixture/app", "/fixture/helper.js"])
+        hidden = processes.Process(pid=3, ppid=0, uid=0, exe="/fixture/app", identity="3", args=["/fixture/app"])
+        # The helper has no display of its own: it is skipped, never a reason to give up the restart.
+        environs = {"1": b"DISPLAY=:8\0ELECTRON_RUN_AS_NODE=\0", "2": b"ELECTRON_RUN_AS_NODE=1\0"}
+        def read_bytes(path):
+            parts = pathlib.Path(path).parts
+            if parts[-1] == "environ" and parts[-2] in environs:
+                return environs[parts[-2]]
+            raise PermissionError(path)
+
+        with mock.patch.object(pathlib.Path, "read_bytes", read_bytes), mock.patch.object(processes.os, "readlink", return_value="/fixture"), \
+                mock.patch.object(processes, "family", return_value=[main, helper]):
+            self.assertEqual([item.pid for item in processes.main_contexts(install, [])], [1])
+        # Counting desktops back after a relaunch: a Node-mode root, or one whose environ can't be
+        # read, never stands in for one.
+        with mock.patch.object(pathlib.Path, "read_bytes", read_bytes):
+            self.assertEqual([item.pid for item in processes.desktop_roots(install, [main, helper, hidden])], [1])
+
+    def test_desktop_arguments_match_a_reference_for_chromium_switch_parsing(self):
+        import random, re
+        from app_update_processes import desktop_arguments
+
+        def reference(argv):
+            # base::CommandLine on Linux: each argument loses ASCII whitespace (0x09-0x0D, space)
+            # at both ends; up to an exact "--"; "--" or "-" and more; name to the first "=";
+            # the last one wins.
+            rest = [re.sub(r"^[\x09-\x0d ]+|[\x09-\x0d ]+$", "", arg) for arg in argv[1:]]
+            if "--" in rest:
+                rest = rest[:rest.index("--")]
+            value = None
+            for arg in rest:
+                match = re.fullmatch(r"(?:--|-)(?!$)([^=]*)(?:=(.*))?", arg, re.S)
+                if match and match.group(1) == "user-data-dir":
+                    value = match.group(2) or ""
+            return value
+
+        names = ["user-data-dir", "type", "user-data-dirx", "User-Data-Dir", ""]
+        values = ["/x/a", "/x/a b", "/x/a\tb", "", "/x/=b", "rel/x"]
+        generator = random.Random(20261107)
+
+        def element():
+            kind = generator.randrange(6)
+            if kind < 2:
+                return generator.choice(["--", "-", "---", ""]) + generator.choice(names) + "=" + generator.choice(values)
+            if kind == 2:
+                return generator.choice(["--", "-"]) + generator.choice(names)
+            if kind == 3:
+                return "--user-data-dir" + generator.choice([" ", "\t"]) + generator.choice(values)
+            if kind == 4:
+                return generator.choice(["--", "-", "", "-- c"])
+            return generator.choice(values)
+
+        for _ in range(3000):
+            pads = ["", "", " ", "\t", "\n", "\v", "\f", "\r", "\u00a0"]
+            argv = ["/app"] + [generator.choice(pads) + element() + generator.choice(pads) for _ in range(generator.randrange(7))]
+            value = reference(argv)
+            folder = None if not value else value if value.startswith("/") else "/fixture/" + value
+            expected = ["--user-data-dir=" + folder] if folder else []
+            self.assertEqual((argv, desktop_arguments(mock.Mock(args=argv, cwd="/fixture"), "linux")), (argv, expected))
+
+    def test_desktop_arguments_take_the_folder_chromium_takes(self):
+        from app_update_processes import desktop_arguments
+        cases = {
+            'the last switch wins': (['/app', '--user-data-dir=/x/a', '--user-data-dir=/x/b'], ['--user-data-dir=/x/b']),
+            'nothing after -- is a switch': (['/app', '--user-data-dir=/x/b', '--', '--user-data-dir=/x/a'], ['--user-data-dir=/x/b']),
+            'only a positional after --': (['/app', '--', '--user-data-dir=/x/a'], []),
+            'an empty last switch is the default folder': (['/app', '--user-data-dir=/x/a', '--user-data-dir='], []),
+            'a single-dash switch counts': (['/app', '-user-data-dir=/x/b'], ['--user-data-dir=/x/b']),
+            'leading whitespace is trimmed': (['/app', '--user-data-dir=/x/a', ' --user-data-dir=/x/b'], ['--user-data-dir=/x/b']),
+            'trailing whitespace leaves a bare switch': (['/app', '--user-data-dir=/x/b', '--user-data-dir '], []),
+            'a terminator with trailing whitespace': (['/app', '-- ', '--user-data-dir=/x/b'], []),
+            'a bare switch is the default folder, never the next word': (['/app', '--user-data-dir', '/x/b'], []),
+            'a bare last switch overrides an earlier folder': (['/app', '--user-data-dir=/x/a', '--user-data-dir', '/x/b'], []),
+            'a whole argument starting -- and a space is not the terminator': (['/app', '-- c', '--user-data-dir=/x/b'], ['--user-data-dir=/x/b']),
+        }
+        for name, (args, expected) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(desktop_arguments(mock.Mock(args=args, cwd='/fixture'), 'linux'), expected)
+        # Windows also takes a `/` prefix, and switch names in any case.
+        self.assertEqual(desktop_arguments(mock.Mock(args=['/fixture/app.exe', '/User-Data-Dir=/fixture/x/b'], cwd=None), 'windows'),
+                         ['--user-data-dir=/fixture/x/b'])
+
+    def test_desktop_arguments_resolve_a_relative_data_folder_in_the_app_working_directory(self):
+        from app_update_processes import desktop_arguments
+        for args in (['/fixture/app', '--user-data-dir=profile'],):
+            item = mock.Mock(args=args, cwd='/fixture/project-a')
+            self.assertEqual(desktop_arguments(item, 'linux'), ['--user-data-dir=/fixture/project-a/profile'])
+        # With no working directory known, a relative folder is not guessed.
+        self.assertEqual(desktop_arguments(mock.Mock(args=['/fixture/app', '--user-data-dir=profile'], cwd=None), 'linux'), [])
+
+    def _restart_ubuntu_desktop(self, in_service):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+        item = mock.Mock(args=['/fixture/claude-desktop', '--user-data-dir=/fixture/data'], cwd='/fixture', env={'KEEP': 'yes', 'CCS_SESSION_SECRET': 'hidden'}, pid=1, ppid=0)
+        with mock.patch.object(processes, 'in_service_cgroup', return_value=in_service), \
+                mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'electron_runs_as_node', return_value=False), \
+                mock.patch.object(processes, 'command') as run, mock.patch.object(processes.subprocess, 'Popen') as popen, \
+                mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            self.assertEqual(processes.restart_desktops(install, [item]), 1)
+        return run, popen
+
+    def test_desktop_relaunch_leaves_the_dashboard_cgroup(self):
+        run, popen = self._restart_ubuntu_desktop(True)
+        popen.assert_not_called()
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:2], ['/usr/bin/systemd-run', '--user'])
+        self.assertEqual(argv[argv.index('--') + 1:], ['/fixture/claude-desktop', '--user-data-dir=/fixture/data'])
+        self.assertIn('--setenv=KEEP', argv)
+        self.assertFalse(any('CCS_SESSION_SECRET' in value for value in argv))
+        self.assertNotIn('CCS_SESSION_SECRET', run.call_args.kwargs['env'])
+        for wanted in ('--property=KillMode=process', '--property=StandardOutput=null', '--property=StandardError=null'):
+            self.assertIn(wanted, argv)
+
+    def test_systemd_argv_leaves_out_what_systemd_refuses(self):
+        values = {'KEEP': 'yes', 'BASH_FUNC_ml%%': '() { :; }', 'a.b': '1', '1BAD': '1', 'NONE': None, 'BAD_BYTES': 'a\udcffb'}
+        with mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            argv = common.systemd_user_service_argv('unit', '/tmp', values, ['app'])
+        self.assertEqual([item for item in argv if item.startswith('--setenv')], ['--setenv=KEEP'])
+        self.assertFalse(any('() {' in item for item in argv))
+
+    def test_failed_systemd_run_never_falls_back_to_a_plain_start(self):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+        item = mock.Mock(args=['/fixture/claude-desktop'], cwd='/fixture', env={}, pid=1, ppid=0)
+        newer = common.Install('claude-desktop', 'ubuntu', install.path, '2.0.0', 'apt', 'claude-desktop')
+        with mock.patch.object(processes, 'in_service_cgroup', return_value=True), \
+                mock.patch.object(processes, 'command', side_effect=common.UpdateFailure('update_failed')), \
+                mock.patch.object(processes.subprocess, 'Popen') as popen, \
+                mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            with self.assertRaises(common.UpdateFailure):
+                processes.restart_desktops(install, [item])
+            popen.assert_not_called()
+            policy = 'claude-desktop:\n  Installed: 1.0.0\n  Candidate: 2.0.0\n  Version table:\n *** 2.0.0 500\n        500 https://example.invalid stable/main amd64 Packages\n'
+            with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), \
+                    mock.patch.object(desktop, 'command', side_effect=lambda argv, **kwargs: policy if 'policy' in argv else ''), \
+                    mock.patch.object(desktop, 'main_contexts', return_value=[item]), mock.patch.object(desktop, 'scan', return_value=[]), \
+                    mock.patch.object(desktop, 'terminate_desktops', return_value=0), mock.patch.object(desktop, 'detect_desktop', return_value=newer):
+                value = desktop.update_linux(install)
+            popen.assert_not_called()
+        self.assertEqual(value['status'], 'restart_failed')
+        self.assertEqual(value['messageCode'], 'restart_failed')
+
+    def test_systemd_run_uses_this_process_runtime_dir_not_the_apps(self):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+        item = mock.Mock(args=['/fixture/claude-desktop'], cwd='/fixture', env={'XDG_RUNTIME_DIR': '/run/user/stale'}, pid=1, ppid=0)
+        with mock.patch.dict(os.environ, {'XDG_RUNTIME_DIR': '/run/user/dashboard'}), \
+                mock.patch.object(processes, 'in_service_cgroup', return_value=True), \
+                mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'electron_runs_as_node', return_value=False), \
+                mock.patch.object(processes, 'command') as run, mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            processes.restart_desktops(install, [item])
+        self.assertEqual(run.call_args.kwargs['env']['XDG_RUNTIME_DIR'], '/run/user/dashboard')
+
+    def test_captured_loader_settings_stay_out_of_systemd_run_and_off_the_argv(self):
+        install = common.Install('claude-desktop', 'ubuntu', pathlib.Path('/fixture/claude-desktop'), '1.0.0', 'apt', 'claude-desktop')
+        item = mock.Mock(args=['/fixture/claude-desktop'], cwd='/fixture', pid=1, ppid=0,
+                         env={'LD_PRELOAD': '/secret/preload.so', 'LD_LIBRARY_PATH': '/secret/lib'})
+        with mock.patch.object(processes, 'in_service_cgroup', return_value=True), \
+                mock.patch.object(processes, 'family', return_value=[item]), mock.patch.object(processes, 'scan', return_value=[item]), \
+                mock.patch.object(processes, 'electron_runs_as_node', return_value=False), \
+                mock.patch.object(processes, 'command') as run, mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            processes.restart_desktops(install, [item])
+        argv, env = run.call_args.args[0], run.call_args.kwargs['env']
+        self.assertNotIn('/secret', ' '.join(argv))
+        self.assertIn('--setenv=AAC_LOADER_LD_PRELOAD', argv)
+        self.assertNotIn('--setenv=LD_PRELOAD', argv)
+        self.assertNotIn('LD_PRELOAD', env)
+        self.assertNotIn('LD_LIBRARY_PATH', env)
+        self.assertEqual(env['AAC_LOADER_LD_LIBRARY_PATH'], '/secret/lib')
+        command = argv[argv.index('--') + 1:]
+        self.assertEqual(command[:2], ['/bin/sh', '-c'])
+        self.assertEqual(command[3:], ['sh', '/fixture/claude-desktop'])
+        self.assertNotRegex(command[2], r'(^|[^$])\$([^$]|$)', 'an unescaped $ would be expanded by systemd onto the argv')
+        seen = subprocess.run(['/bin/sh', '-c', command[2].replace('$$', '$'), 'sh', '/bin/sh', '-c', 'echo "$LD_LIBRARY_PATH|$AAC_LOADER_LD_LIBRARY_PATH"'],
+                              env={'AAC_LOADER_LD_LIBRARY_PATH': '/nonexistent/lib'}, capture_output=True, text=True, check=True)
+        self.assertEqual(seen.stdout.strip(), '/nonexistent/lib|')
+
+    def _click_codex_cli(self, root, version, marker=None, manager='native', binary=True, running=()):
+        install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), version, manager)
+        state = root / '.ccs/app-updates'
+        state.mkdir(parents=True, exist_ok=True)
+        if marker is not None:
+            (state / 'codex-cli-pending-restart.json').write_text(json.dumps(marker), encoding='utf-8')
+        if binary:
+            (root / '.local/bin').mkdir(parents=True, exist_ok=True)
+            (root / '.local/bin/codex').write_text('', encoding='utf-8')
+        answer = {'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'restart_failed', 'previousVersion': version,
+                  'version': version, 'manager': manager, 'messageCode': 'restart_not_running', 'updateAttempted': True,
+                  'restartedProcesses': 0, 'forcedStops': 0}
+        with mock.patch.object(pathlib.Path, 'home', return_value=root), \
+                mock.patch.object(updater, 'scan', return_value=list(running)), \
+                mock.patch.object(updater, 'family', return_value=list(running)), \
+                mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
+                mock.patch.object(updater, 'cli_instances', return_value=([], [], [])), \
+                mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'detect_cli', return_value=install), \
+                mock.patch.object(updater, 'command', return_value=json.dumps(answer)) as run:
+            value = updater.update_cli(install, time.monotonic() + 600)
+        bridged = any('app_update_codex.cjs' in ' '.join(str(arg) for arg in call.args[0]) for call in run.call_args_list)
+        return value, bridged
+
+    def test_marker_version_match_ignores_only_the_prerelease(self):
+        self.assertTrue(common.marker_names_version('0.50.0', '0.50.0-alpha.1'))
+        self.assertTrue(common.marker_names_version('26.930.51102', '26.930.51102-1'))
+        self.assertFalse(common.marker_names_version('0.50.1', '0.50.0'))
+        self.assertFalse(common.marker_names_version(None, '0.50.0'))
+        self.assertFalse(common.marker_names_version('', ''))
+
+    def test_a_cli_click_with_no_daemon_stays_on_the_ordinary_path_whatever_marker_it_finds(self):
+        # Each Codex CLI click stands alone (owner decision 2026-11-08): no marker carries a restart over,
+        # not even one an older version wrote naming the daemon.
+        closed = {'version': '2.0.0', 'daemon': True}
+        cases = ({'marker': None}, {'marker': {'version': '1.0.0'}}, {'marker': {'version': '2.0.0'}},
+                 {'marker': {'version': '2.0.0', 'desktop': False, 'daemon': False}}, {'marker': closed},
+                 {'marker': closed, 'manager': 'npm'}, {'marker': closed, 'binary': False})
+        for case in cases:
+            with tempfile.TemporaryDirectory() as directory:
+                _, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', **case)
+            self.assertFalse(bridged, case)
+
+    def test_systemd_argv_escapes_every_dollar_in_the_arguments(self):
+        command = ['/opt/app', '--user-data-dir=/d$HOME/x', '$$', '${X}', 'plain']
+        with mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            argv = common.systemd_user_service_argv('unit', '/tmp', {}, command)
+        words = argv[argv.index('--') + 1:]
+        for word in words:
+            self.assertNotRegex(word, r'(^|[^$])\$([^$]|$)')
+        self.assertEqual([word.replace('$$', '$') for word in words], command)
+
+    def test_systemd_argv_runs_an_executable_with_a_dollar_through_the_sh_step(self):
+        # systemd-run looks up word 0 itself and would find no /opt/a$$b/app.
+        with mock.patch.object(common.shutil, 'which', return_value='/usr/bin/systemd-run'):
+            argv = common.systemd_user_service_argv('unit', '/tmp', {}, ['/opt/a$b/app', '$x'])
+        words = argv[argv.index('--') + 1:]
+        self.assertEqual(words[:2], ['/bin/sh', '-c'])
+        self.assertEqual(words[3:], ['sh', '/opt/a$$b/app', '$$x'])
+
+    def test_tmux_relaunch_gives_systemd_run_its_own_environment(self):
+        install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/$HOME/codex'), '0.160.0')
+        context = mock.Mock(cwd='/tmp', args=[], env={'HOME': '/tmp', 'XDG_RUNTIME_DIR': '/run/user/stale', 'LD_LIBRARY_PATH': '/secret/lib'})
+        alive = [mock.Mock(pid=4242, ppid=1, identity='4242')]
+        which = lambda name: {'tmux': '/usr/bin/tmux', 'systemd-run': '/usr/bin/systemd-run'}.get(name)
+        with mock.patch.dict(os.environ, {'XDG_RUNTIME_DIR': '/run/user/dashboard'}), \
+                mock.patch.object(terminal.shutil, 'which', side_effect=which), \
+                mock.patch.object(terminal, 'command') as run, \
+                mock.patch.object(terminal, 'user_family', side_effect=[[], alive]), \
+                mock.patch.object(terminal, 'scan', return_value=[]):
+            terminal.restart_cli(install, [context])
+        argv, env = run.call_args.args[0], run.call_args.kwargs['env']
+        self.assertEqual(env['XDG_RUNTIME_DIR'], '/run/user/dashboard')
+        self.assertNotIn('LD_LIBRARY_PATH', env)
+        self.assertEqual(env['AAC_LOADER_LD_LIBRARY_PATH'], '/secret/lib')
+        self.assertNotIn('/secret', ' '.join(argv))
+        self.assertTrue(any('/fixture/$$HOME/codex' in word for word in argv), argv)
+
+    def test_desktop_relaunch_from_a_session_starts_directly(self):
+        run, popen = self._restart_ubuntu_desktop(False)
+        run.assert_not_called()
+        popen.assert_called_once()
+
+    def test_service_cgroup_detection(self):
+        cases = {
+            '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service\n': True,
+            '0::/user.slice/user-1000.slice/session-3.scope\n': False,
+            '0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-agents.slice\n': False,
+            '0::/system.slice/ssh.service\n': False,
+            '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service/sub\n': True,
+            '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-dashboard.service/sub.scope\n': True,
+            '0::/user.slice/user-1000.slice/user@1000.service/init.scope\n': False,
+        }
+        for text, expected in cases.items():
+            with mock.patch('builtins.open', mock.mock_open(read_data=text)):
+                self.assertEqual(common.in_service_cgroup(), expected, text)
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertFalse(common.in_service_cgroup())
+
+    @unittest.skipUnless(REAL_UNITS_REACHABLE, REAL_UNITS_REASON)
     def test_real_standin_cli_restarts_in_new_pty_without_original_prompt(self):
         source = r'''#include <stdio.h>
 #include <stdlib.h>

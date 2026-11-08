@@ -6,7 +6,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1402 |
+| Sync fs occurrences (all) | 1407 |
 | Sync fs files affected (all) | 141 |
 | Sync fs occurrences (runtime hotpaths) | 749 |
 | Sync fs files affected (runtime hotpaths) | 83 |
@@ -89,9 +89,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/account-activity-collector.ts` | 3724 |
 | `src/web-server/status/answers.ts` | 1737 |
 | `src/web-server/services/account-analytics-activity.ts` | 1734 |
+| `src/codex-auth/codex-activation-runtime.ts` | 1340 |
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1104 |
-| `src/codex-auth/codex-activation-runtime.ts` | 1066 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 995 |
 | `src/web-server/services/usage-failover-service.ts` | 993 |
 | `src/web-server/services/account-dashboard-service.ts` | 938 |

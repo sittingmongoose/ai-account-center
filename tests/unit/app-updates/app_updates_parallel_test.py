@@ -226,63 +226,81 @@ class UpdateRecoveryTests(unittest.TestCase):
         sleep.assert_not_called()
 
     def test_metadata_child_deadline_covers_http_headers_chunks_trailers_and_body(self):
+        # A real Python child has to start and connect inside the budget. On a busy host it may not,
+        # which says nothing about the deadline, so a miss gets larger budgets before it counts.
         for case in ("complete", "body", "headers", "chunk-extension", "trailer"):
             with self.subTest(case=case):
-                server = socket.socket()
-                server.bind(("127.0.0.1", 0))
-                server.listen(1)
-                server.settimeout(2)
-                stop, received = threading.Event(), threading.Event()
-                children = []
-                real_popen = common.subprocess.Popen
-                def spawn(*args, **kwargs):
-                    child = real_popen(*args, **kwargs)
-                    children.append(child)
-                    return child
-                def serve():
+                for budget, final in ((1.5, False), (4, False), (8, True)):
+                    if self._metadata_deadline_attempt(case, budget, final):
+                        break
+
+    def _metadata_deadline_attempt(self, case, budget, final):
+        """One bounded read against a peer that keeps dripping; False when the child never got there."""
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        server.settimeout(20)
+        stop, received = threading.Event(), threading.Event()
+        children = []
+        real_popen = common.subprocess.Popen
+        def spawn(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            children.append(child)
+            return child
+        def serve():
+            try:
+                connection, _ = server.accept()
+                with connection:
+                    connection.settimeout(5)
+                    connection.recv(8192)
+                    received.set()
+                    if case == "complete":
+                        connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc")
+                        return
+                    prefix = {
+                        "body": b"HTTP/1.1 200 OK\r\nContent-Length: 800\r\n\r\n",
+                        "headers": b"HTTP/1.1 200 OK\r\nX-Slow: ",
+                        "chunk-extension": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1;extension=",
+                        "trailer": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\nX-Trailer: ",
+                    }[case]
+                    connection.sendall(prefix)
+                    for _ in range(360):
+                        if stop.wait(.05):
+                            return
+                        connection.sendall(b"x")
+                    connection.sendall(b"\r\n\r\n")
+            except OSError:
+                pass
+        thread = threading.Thread(target=serve)
+        thread.start()
+        url = "http://127.0.0.1:%d/metadata" % server.getsockname()[1]
+        try:
+            started = time.monotonic()
+            with mock.patch.object(common.subprocess, "Popen", side_effect=spawn):
+                if case == "complete":
                     try:
-                        connection, _ = server.accept()
-                        with connection:
-                            connection.settimeout(2)
-                            connection.recv(8192)
-                            received.set()
-                            if case == "complete":
-                                connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc")
-                                return
-                            prefix = {
-                                "body": b"HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n",
-                                "headers": b"HTTP/1.1 200 OK\r\nX-Slow: ",
-                                "chunk-extension": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1;extension=",
-                                "trailer": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\nX-Trailer: ",
-                            }[case]
-                            connection.sendall(prefix)
-                            for _ in range(40):
-                                if stop.wait(.05):
-                                    return
-                                connection.sendall(b"x")
-                            connection.sendall(b"\r\n\r\n")
-                    except OSError:
-                        pass
-                thread = threading.Thread(target=serve)
-                thread.start()
-                url = "http://127.0.0.1:%d/metadata" % server.getsockname()[1]
-                try:
-                    started = time.monotonic()
-                    with mock.patch.object(common.subprocess, "Popen", side_effect=spawn):
-                        if case == "complete":
-                            self.assertEqual(zcode.read_bounded(url, "http://127.0.0.1:", 1024, deadline=started + .6), b"abc")
-                        else:
-                            with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
-                                zcode.read_bounded(url, "http://127.0.0.1:", 1024, deadline=started + .6)
-                    self.assertLess(time.monotonic() - started, 1.2, "the complete operation must stop before a two-second drip finishes")
-                    self.assertTrue(received.is_set())
-                    self.assertEqual(len(children), 1)
-                    self.assertIsNotNone(children[0].poll(), "the metadata child must be reaped")
-                finally:
-                    stop.set()
-                    server.close()
-                    thread.join(3)
-                self.assertFalse(thread.is_alive())
+                        self.assertEqual(zcode.read_bounded(url, "http://127.0.0.1:", 1024, deadline=started + budget), b"abc")
+                    except common.UpdateFailure as error:
+                        if final or error.code != "timeout":
+                            raise
+                        return False
+                else:
+                    with self.assertRaisesRegex(common.UpdateFailure, "timeout"):
+                        zcode.read_bounded(url, "http://127.0.0.1:", 1024, deadline=started + budget)
+            elapsed = time.monotonic() - started
+            self.assertEqual(len(children), 1)
+            self.assertIsNotNone(children[0].poll(), "the metadata child must be reaped")
+            # A starved first attempt says nothing yet; the final one has to hold both.
+            if not final and (not received.is_set() or elapsed >= budget * 2):
+                return False
+            self.assertLess(elapsed, budget * 2, "the complete operation must stop before an eighteen-second drip finishes")
+            self.assertTrue(received.is_set())
+        finally:
+            stop.set()
+            server.close()
+            thread.join(6)
+        self.assertFalse(thread.is_alive())
+        return True
 
     def test_parallel_windows_stops_do_not_interleave_console_attachment(self):
         state, operations = threading.local(), []

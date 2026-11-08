@@ -13,6 +13,50 @@ export interface CodexActivationRuntime {
   stop(approval?: CodexActivationStopPlan): Promise<void>;
   start(): Promise<void>;
   dispose?(): Promise<void>;
+  /** What stop() planned to close, captured under its lock. Holds no launch context. */
+  stopPlan(): CodexRestartPlan;
+  /**
+   * What is closed and not back: the planned daemon if it no longer runs (by pid and start time), and
+   * each planned desktop that stopped and that start() has not relaunched and seen come up.
+   */
+  retiredPlan(): Promise<CodexRestartPlan>;
+  /** The daemon and proxies running now, by the same rules stop() and start() use. */
+  restartState(): Promise<CodexRestartState>;
+  /**
+   * start()'s bounded readiness check, on a daemon running now. A retry's own plan may name no daemon
+   * when a proxy respawned it, and a daemon's arguments say nothing about its socket being bound.
+   */
+  verifyRunningDaemon(): Promise<CodexDaemonIdentity | null>;
+}
+
+export interface CodexRestartPlan {
+  daemon: boolean;
+  /** How many Codex Desktops: each one is owed until AAC's own relaunch of it comes up. */
+  desktops: number;
+}
+
+/**
+ * What a launch started, so start() can tell its own process from any other: the pid it spawned with
+ * that process's start time, so a later process given the same pid is never taken for it, or the
+ * transient systemd unit it started it in.
+ */
+export interface CodexLaunch {
+  pid?: number;
+  startTime?: string;
+  unit?: string;
+}
+
+/** Which process a readiness check vouched for: a later scan must find this same one. */
+export interface CodexDaemonIdentity {
+  pid: number;
+  startTime: string;
+}
+
+export interface CodexRestartState {
+  daemon: boolean;
+  proxy: boolean;
+  /** The shared daemon running now, or null. */
+  daemonIdentity: CodexDaemonIdentity | null;
 }
 
 export class CodexActivationRuntimeError extends Error {
@@ -36,6 +80,8 @@ export interface CodexProcessSnapshot {
   exe: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  /** The systemd service whose cgroup the process runs in, when it is one. */
+  unit?: string;
 }
 
 export interface CodexActivationRuntimeDependencies {
@@ -46,13 +92,27 @@ export interface CodexActivationRuntimeDependencies {
   releaseNativeStartupLock(): Promise<void>;
   assertIdle(processes: CodexProcessSnapshot[]): Promise<void>;
   signal(process: CodexProcessSnapshot, signal: NodeJS.Signals): Promise<void>;
-  launch(process: CodexProcessSnapshot, desktop: boolean): Promise<void>;
+  /**
+   * `outside` is the default launcher (launchApp, outside the dashboard cgroup), for an override
+   * that only changes what it starts: the update bridge starts the updated executable.
+   */
+  launch(
+    process: CodexProcessSnapshot,
+    desktop: boolean,
+    outside?: (process: CodexProcessSnapshot, desktop: boolean) => Promise<CodexLaunch | void>
+  ): Promise<CodexLaunch | void>;
   prepareCli(process: CodexProcessSnapshot): Promise<void>;
   launchCli(process: CodexProcessSnapshot): Promise<void>;
   verifyDaemon(process: CodexProcessSnapshot): Promise<void>;
   removeControlSocket(): void;
   sleep(milliseconds: number): Promise<void>;
   now(): number;
+  /**
+   * Called under the startup lock with what stop() is about to close, before anything is signalled
+   * or any recovery waits. A caller that must not lose that record writes it here; an error closes
+   * nothing.
+   */
+  beforeStop?(plan: CodexRestartPlan): Promise<void> | void;
 }
 
 const STOP_TIMEOUT = 10000;
@@ -69,20 +129,87 @@ function isCodex(process: CodexProcessSnapshot): boolean {
   );
 }
 
-/** Electron and its zygotes rewrite argv into one space-joined string. */
-function argWords(process: CodexProcessSnapshot): string[] {
-  return process.args.flatMap((arg) => arg.split(/\s+/)).filter(Boolean);
+/** Electron and its zygotes can rewrite a cmdline into one space-joined string. */
+function rewrittenCmdline(process: CodexProcessSnapshot): boolean {
+  return process.args.length === 1 && /\s--/.test(process.args[0]);
 }
 
 /**
- * Chromium zygotes rewrite their cmdline into one space-joined string, so a
- * `--type=` flag can sit inside a single argv element rather than start one.
+ * A process's argv. The NUL-separated cmdline already gives it whole, so a data folder such as
+ * `/home/me/Work One` stays one argument and `--user-data-dir V` stays the one argument it was. Only
+ * a cmdline Electron rewrote into one space-joined string is split back: before each `--` word, then a
+ * flag joined to the word after it as two arguments, as it was typed, and a `--` followed by a space
+ * as the terminator and the words after it. Past the terminator the words stay as they are.
+ */
+function processArgv(process: CodexProcessSnapshot): string[] {
+  if (!rewrittenCmdline(process)) return process.args.filter(Boolean);
+  let ended = false;
+  return process.args[0]
+    .split(/\s+(?=--)/)
+    .filter(Boolean)
+    .flatMap((word, index) => {
+      if (index === 0 || ended) return [word];
+      const terminator = /^--(?:\s+([\s\S]*))?$/.exec(word);
+      if (terminator) {
+        ended = true;
+        return terminator[1] ? ['--', terminator[1].trim()] : ['--'];
+      }
+      const joined = /^(--[^\s=]+)\s+([\s\S]+)$/.exec(word);
+      return joined ? [joined[1], joined[2].trim()] : [word];
+    });
+}
+
+/** base::TrimWhitespaceASCII(TRIM_ALL): tab, line feed, vertical tab, form feed, return, space. */
+function trimWhitespaceAscii(text: string): string {
+  return text.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, '');
+}
+
+/**
+ * The switches Chromium reads from an argv, ported from base::CommandLine on Linux
+ * (AppendSwitchesAndArguments, IsSwitch, GetSwitchPrefixLength, AppendSwitchNative): after argv[0],
+ * each argument first loses ASCII whitespace at both ends; parsing stops at an argument that is then
+ * exactly `--`; a switch starts `--` or `-` and has more after its prefix; its name runs to the first
+ * `=`, its value is the rest, and none means an empty value; a later switch replaces an earlier one
+ * of the same name. (An embedder may install a duplicate-switch handler; it is not used for this
+ * folder.)
+ */
+export function chromiumSwitches(argv: string[]): Map<string, string> {
+  const switches = new Map<string, string>();
+  let parseSwitches = true;
+  for (const arg of argv.slice(1).map(trimWhitespaceAscii)) {
+    parseSwitches = parseSwitches && arg !== '--';
+    if (!parseSwitches) continue;
+    const prefix = arg.startsWith('--') ? 2 : arg.startsWith('-') ? 1 : 0;
+    if (prefix === 0 || prefix === arg.length) continue;
+    const equals = arg.indexOf('=');
+    switches.set(
+      arg.slice(prefix, equals < 0 ? undefined : equals),
+      equals < 0 ? '' : arg.slice(equals + 1)
+    );
+  }
+  return switches;
+}
+
+/**
+ * The Electron main process. Its children carry a `--type=`, which a rewritten zygote cmdline can
+ * hold inside one space-joined string; an empty one, or one past the terminator, is not a child's.
  */
 export function isDesktop(process: CodexProcessSnapshot): boolean {
   return (
     process.exe.replace(/ \(deleted\)$/, '') === '/usr/lib/chatgpt/ChatGPT' &&
-    !argWords(process).some((word) => word.startsWith('--type='))
+    !electronRunsAsNode(process) &&
+    !chromiumSwitches(processArgv(process)).get('type')
   );
+}
+
+/**
+ * Electron started in Node mode: ELECTRON_RUN_AS_NODE set and not empty, the test Electron itself
+ * makes. Such a process runs a script, never a window, so it is never a desktop and never names one;
+ * it stays in the inventory, so an app server under it still makes its desktop ready. readProcesses
+ * reads the environ of every process with this executable, and fails the whole scan when it can't.
+ */
+function electronRunsAsNode(process: CodexProcessSnapshot): boolean {
+  return Boolean(process.env.ELECTRON_RUN_AS_NODE);
 }
 
 /** The Codex home a Codex CLI or desktop process reads and refreshes; null for other processes. */
@@ -211,12 +338,16 @@ export function createCodexActivationRuntime(
   codexHome: string,
   overrides: Partial<CodexActivationRuntimeDependencies> = {}
 ): CodexActivationRuntime {
-  const dependencies = { ...createDependencies(codexHome), ...overrides };
+  const defaults = createDependencies(codexHome);
+  const dependencies = { ...defaults, ...overrides };
   let releaseLock: (() => Promise<void>) | undefined;
   let launchers: CodexProcessSnapshot[] = [];
   let cliLaunchers: CodexProcessSnapshot[] = [];
   let confirmed = false;
   const restartedClis: CodexProcessSnapshot[] = [];
+  // The desktop launchers start() relaunched and saw come up, each with the process it started: only
+  // these are back, and only while a later stop() has not closed that process again.
+  const relaunched = new Map<CodexProcessSnapshot, CodexProcessSnapshot>();
   let stopped = false;
 
   const scan = async (): Promise<CodexProcessSnapshot[]> =>
@@ -291,29 +422,30 @@ export function createCodexActivationRuntime(
       await release();
       for (const launcher of launchers.filter(isDaemon)) {
         if (!(await scan()).some((entry) => isDaemon(entry) && usesHome(entry, codexHome))) {
-          await dependencies.launch(launcher, false);
+          await dependencies.launch(launcher, false, defaults.launch);
         }
         await dependencies.verifyDaemon(launcher);
       }
+      // A desktop is back only when AAC relaunched it and saw the process it started come up: the pid
+      // it spawned or a process in the unit it made, with an app server on this home under it. One a
+      // failed stop() never closed still runs, by pid and start time, and is not relaunched. One reopened
+      // before is skipped only while that process still runs: a rollback's stop() closes it again.
       for (const launcher of launchers.filter(isDesktop)) {
-        const matchesDesktop = (
-          main: CodexProcessSnapshot,
-          processes: CodexProcessSnapshot[]
-        ): boolean =>
-          isDesktop(main) &&
-          desktopUserData(main, processes) === desktopUserData(launcher, [launcher]);
-        const existing = await scan();
-        if (!existing.some((entry) => matchesDesktop(entry, existing))) {
-          await dependencies.launch(launcher, true);
-        }
+        const running = await scan();
+        const replacement = relaunched.get(launcher);
+        if (replacement && running.some((entry) => sameProcess(replacement, entry))) continue;
+        relaunched.delete(launcher);
+        if (running.some((entry) => sameProcess(launcher, entry))) continue;
+        const launch = await dependencies.launch(launcher, true, defaults.launch);
         const deadline = dependencies.now() + START_TIMEOUT;
         let ready = false;
         do {
           const processes = await scan();
-          const main = processes.find((entry) => matchesDesktop(entry, processes));
-          ready = Boolean(
-            main &&
-              descendants(main, processes).some(
+          const main = processes.find(
+            (entry) =>
+              isDesktop(entry) &&
+              startedBy(launch, entry, processes) &&
+              descendants(entry, processes).some(
                 (process) =>
                   isCodex(process) &&
                   usesHome(process, codexHome) &&
@@ -321,6 +453,8 @@ export function createCodexActivationRuntime(
                   !isProxy(process)
               )
           );
+          ready = main !== undefined;
+          if (main) relaunched.set(launcher, main);
           if (ready) break;
           await dependencies.sleep(250);
         } while (dependencies.now() < deadline);
@@ -469,8 +603,15 @@ export function createCodexActivationRuntime(
             ...desktops.map((desktop) => desktopLauncher(desktop, processes)),
           ];
         }
+        await dependencies.beforeStop?.(restartPlan(launchers));
         mutationStarted = true;
         await retire(desktops, processes);
+        // A desktop start() reopened and this stop() closed again is not back any more.
+        for (const [launcher, replacement] of relaunched) {
+          if (desktops.some((desktop) => sameProcess(desktop, replacement))) {
+            relaunched.delete(launcher);
+          }
+        }
         await retire(daemons, processes);
         await retire(cliRoots, processes);
         // A daemon respawned by an SSH proxy is retired again in start(), after the swap.
@@ -509,27 +650,91 @@ export function createCodexActivationRuntime(
     },
     start,
     dispose: release,
+    stopPlan: () => restartPlan(launchers),
+    retiredPlan: async () => {
+      const processes = await dependencies.scan();
+      const running = (launcher: CodexProcessSnapshot): boolean =>
+        processes.some((process) => sameProcess(launcher, process));
+      return restartPlan(
+        launchers.filter((launcher) => !running(launcher) && !relaunched.has(launcher))
+      );
+    },
+    verifyRunningDaemon: async () => {
+      const daemon = (await scan()).find(
+        (entry) => isDaemon(entry) && !isProxy(entry) && usesHome(entry, codexHome)
+      );
+      if (!daemon) return null;
+      try {
+        await dependencies.verifyDaemon(daemon);
+        return { pid: daemon.pid, startTime: daemon.startTime };
+      } catch {
+        return null;
+      }
+    },
+    restartState: async () => {
+      const processes = await scan();
+      const onHome = (entry: CodexProcessSnapshot): boolean =>
+        isCodex(entry) && usesHome(entry, codexHome);
+      const daemon = processes.find((entry) => isDaemon(entry) && !isProxy(entry) && onHome(entry));
+      return {
+        daemon: daemon !== undefined,
+        daemonIdentity: daemon ? { pid: daemon.pid, startTime: daemon.startTime } : null,
+        proxy: processes.some((entry) => onHome(entry) && isProxy(entry)),
+      };
+    },
   };
 }
 
-function userDataArgument(args: string[]): string {
-  const inline = args.find((arg) => arg.startsWith('--user-data-dir='));
-  if (inline) return inline.slice('--user-data-dir='.length);
-  const index = args.indexOf('--user-data-dir');
-  const value = index >= 0 ? args[index + 1] : undefined;
-  return value && !value.startsWith('--') ? value : '';
+/** What a stop closes: whether a daemon, and how many desktops, each one owed on its own. */
+function restartPlan(launchers: CodexProcessSnapshot[]): CodexRestartPlan {
+  return { daemon: launchers.some(isDaemon), desktops: launchers.filter(isDesktop).length };
 }
 
-function desktopUserData(desktop: CodexProcessSnapshot, processes: CodexProcessSnapshot[]): string {
-  // Recover each process's own argv; a missing split value cannot consume the
-  // first argument from a different child. The main process's override wins.
-  return (
-    userDataArgument(argWords(desktop)) ||
-    descendants(desktop, processes)
-      .map((child) => userDataArgument(argWords(child)))
-      .find(Boolean) ||
-    ''
-  );
+/**
+ * Whether a desktop main process is one a launch started: the pid it spawned or a process under it,
+ * or a process in the transient unit it made. A launch that names neither started nothing AAC can
+ * tell apart, so nothing counts as it.
+ */
+function startedBy(
+  launch: CodexLaunch | void,
+  main: CodexProcessSnapshot,
+  processes: CodexProcessSnapshot[]
+): boolean {
+  if (!launch) return false;
+  if (launch.unit && (main.unit === launch.unit || main.unit === `${launch.unit}.service`)) {
+    return true;
+  }
+  if (launch.pid === undefined || launch.startTime === undefined) return false;
+  for (let entry: CodexProcessSnapshot | undefined = main, hops = 0; entry && hops < 64; hops++) {
+    if (entry.pid === launch.pid) return entry.startTime === launch.startTime;
+    const parent: number = entry.ppid;
+    entry = processes.find((process) => process.pid === parent);
+  }
+  return false;
+}
+
+/**
+ * The `--user-data-dir` Chromium takes from an argv: '' for a bare switch or an empty value, which is
+ * the default folder, and null when none is given.
+ */
+function userDataArgument(argv: string[]): string | null {
+  return chromiumSwitches(argv).get('user-data-dir') ?? null;
+}
+
+/**
+ * The `--user-data-dir` a desktop runs with, as written, and the process it was read from. Each
+ * process's own argv is read, so a missing split value can't take an argument from another child.
+ * The main process's override wins.
+ */
+function desktopFolderArgument(
+  desktop: CodexProcessSnapshot,
+  processes: CodexProcessSnapshot[]
+): { value: string; owner: CodexProcessSnapshot } | null {
+  for (const owner of [desktop, ...descendants(desktop, processes)]) {
+    const value = userDataArgument(processArgv(owner));
+    if (value !== null) return { value, owner };
+  }
+  return null;
 }
 
 function desktopLauncher(
@@ -556,12 +761,49 @@ function desktopLauncher(
       'Cannot recover the VM Codex desktop display; no account was changed.'
     );
   }
-  const args = argWords(desktop);
-  if (!args.some((arg) => arg === '--user-data-dir' || arg.startsWith('--user-data-dir='))) {
-    const userData = desktopUserData(desktop, processes);
-    args.push(`--user-data-dir=${userData || path.join(os.homedir(), '.config', 'Codex')}`);
+  const args = processArgv(desktop);
+  if (userDataArgument(args) === null) {
+    // The folder a child names, joined to that child's directory when it is relative: the relaunch
+    // runs in the main process's directory, which need not be the child's.
+    const found = desktopFolderArgument(desktop, processes);
+    const folder =
+      found && found.value && !path.isAbsolute(found.value) && path.isAbsolute(found.owner.cwd)
+        ? `${found.owner.cwd.replace(/\/+$/, '')}/${found.value}`
+        : found?.value;
+    // Before the terminator, or Chromium would read it as a plain argument.
+    const end = args.findIndex((word, index) => index > 0 && trimWhitespaceAscii(word) === '--');
+    args.splice(
+      end < 0 ? args.length : end,
+      0,
+      `--user-data-dir=${folder || path.join(os.homedir(), '.config', 'Codex')}`
+    );
   }
   return { ...desktop, args, env };
+}
+
+/** A process's start time, as /proc/<pid>/stat gives it and the scans record it; else undefined. */
+function processStartTime(pid: number): string | undefined {
+  try {
+    const stat = fs.readFileSync(path.join('/proc', String(pid), 'stat'), 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The systemd service whose cgroup a process runs in, from its /proc cgroup text; else undefined. */
+export function systemdUnitOf(cgroup: string): string | undefined {
+  const line = cgroup.split('\n').find((entry) => entry.startsWith('0::'));
+  const last = line?.slice(3).split('/').pop();
+  return last && last.endsWith('.service') ? last : undefined;
+}
+
+function processUnit(directory: string): string | undefined {
+  try {
+    return systemdUnitOf(fs.readFileSync(path.join(directory, 'cgroup'), 'utf8'));
+  } catch {
+    return undefined;
+  }
 }
 
 /** Same-user processes (Linux /proc). Env stays in memory; never serialize a snapshot. */
@@ -605,6 +847,7 @@ export function readProcesses(): CodexProcessSnapshot[] {
         exe,
         cwd: relevant ? fs.readlinkSync(path.join(directory, 'cwd')) : '',
         env,
+        ...(relevant ? { unit: processUnit(directory) } : {}),
       });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -783,36 +1026,7 @@ function createDependencies(codexHome: string): CodexActivationRuntimeDependenci
         }
       }
     },
-    launch: async (target, desktop) => {
-      // The app-server log keeps tokens out of the journal; pre-create it 0600
-      // so the transient service below only ever appends. GUI output goes to
-      // the journal (systemd default), same as a desktop-session start.
-      const logFile = desktop
-        ? undefined
-        : path.join(codexHome, 'app-server-control', 'app-server.log');
-      if (logFile !== undefined) {
-        const stream = fs.openSync(logFile, 'a', 0o600);
-        fs.closeSync(stream);
-      }
-      // launchApp starts the app OUTSIDE the dashboard cgroup (see
-      // src/utils/app-launcher.ts): a detached spawn would cage it -- and
-      // everything it starts -- in ccs-dashboard.service, where the next
-      // dashboard restart would kill it (KillMode=control-group).
-      // Note: argv0 is no longer preserved; the app now starts with argv0 set
-      // to its exe path, i.e. the standard absolute-path invocation form.
-      try {
-        await launchApp({
-          app: desktop ? 'codex-desktop' : 'codex-app-server',
-          exe: target.exe,
-          args: target.args.slice(1),
-          cwd: target.cwd,
-          env: target.env,
-          ...(logFile === undefined ? {} : { logFile }),
-        });
-      } catch {
-        throw new CodexActivationRuntimeError('Could not launch Codex.');
-      }
-    },
+    launch: (target, desktop) => launchCodexProcess(codexHome, target, desktop),
     prepareCli: (target) => runCliRestartHelper(target, true),
     launchCli: (target) => runCliRestartHelper(target, false),
     verifyDaemon: async (target) => {
@@ -850,6 +1064,66 @@ function createDependencies(codexHome: string): CodexActivationRuntimeDependenci
     sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
     now: Date.now,
   };
+}
+
+/** The app-server log past this size moves to `.1` at the next launch, replacing the older copy. */
+const APP_SERVER_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The daemon log, ready for a unit to append to: its folder exists, the file is 0600 before the
+ * transient service below opens it, and one over the cap has rotated. A failed rotation keeps
+ * appending; it never stops a relaunch. Exported for tests.
+ */
+export function prepareAppServerLog(logFile: string): void {
+  fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
+  try {
+    const stats = fs.lstatSync(logFile);
+    if (stats.isFile() && stats.size > APP_SERVER_LOG_MAX_BYTES) {
+      fs.renameSync(logFile, `${logFile}.1`);
+    }
+  } catch {
+    /* First launch, or a rotation that could not happen. */
+  }
+  const stream = fs.openSync(logFile, 'a', 0o600);
+  fs.closeSync(stream);
+}
+
+/** Starts one captured Codex process through launchApp. Exported for tests. */
+export async function launchCodexProcess(
+  codexHome: string,
+  target: CodexProcessSnapshot,
+  desktop: boolean,
+  launcher: typeof launchApp = launchApp
+): Promise<CodexLaunch> {
+  // The app-server log keeps tokens out of the journal. GUI output is discarded, as it
+  // was when a desktop-session start sent it nowhere.
+  const logFile = desktop
+    ? undefined
+    : path.join(codexHome, 'app-server-control', 'app-server.log');
+  if (logFile !== undefined) prepareAppServerLog(logFile);
+  // launchApp starts the app OUTSIDE the dashboard cgroup (see
+  // src/utils/app-launcher.ts): a detached spawn would cage it -- and
+  // everything it starts -- in ccs-dashboard.service, where the next
+  // dashboard restart would kill it (KillMode=control-group).
+  // Note: argv0 is no longer preserved; the app now starts with argv0 set
+  // to its exe path, i.e. the standard absolute-path invocation form.
+  try {
+    const started = await launcher({
+      app: desktop ? 'codex-desktop' : 'codex-app-server',
+      exe: target.exe,
+      args: target.args.slice(1),
+      cwd: target.cwd,
+      env: target.env,
+      ...(logFile === undefined ? {} : { logFile }),
+    });
+    const startTime = started.pid ? processStartTime(started.pid) : undefined;
+    return {
+      ...(started.unit ? { unit: started.unit } : {}),
+      ...(started.pid && startTime ? { pid: started.pid, startTime } : {}),
+    };
+  } catch {
+    throw new CodexActivationRuntimeError('Could not launch Codex.');
+  }
 }
 
 async function assertDaemonIdle(daemon: CodexProcessSnapshot, codexHome: string): Promise<void> {

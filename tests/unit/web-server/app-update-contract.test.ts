@@ -765,6 +765,30 @@ describe('Update apps contract for held ACP adapter parts', () => {
   });
 });
 
+describe('A retry that found nothing to restart', () => {
+  it('keeps its own message instead of becoming helper_invalid', () => {
+    const row = normalizeAppUpdateRow(
+      {
+        appId: 'codex-cli',
+        platform: 'ubuntu',
+        status: 'restart_failed',
+        previousVersion: '2.0.0',
+        version: '2.0.0',
+        manager: 'native',
+        messageCode: 'restart_not_running',
+        updateAttempted: true,
+        restartedProcesses: 0,
+        forcedStops: 0,
+      },
+      'codex-cli',
+      'ubuntu'
+    );
+    expect(row.status).toBe('restart_failed');
+    expect(row.message).toBe(MESSAGES.restart_not_running);
+    expect(row.message).not.toBe(MESSAGES.helper_invalid);
+  });
+});
+
 describe('paused Antigravity update messages', () => {
   it('carries the restart note on both success codes', () => {
     for (const code of ['updated', 'updated_unreviewed'] as const) {
