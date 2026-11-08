@@ -1,4 +1,4 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_theme_ready, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_theme_ready, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, report_content_area, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
 import { needToasts } from './claude-signins.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
@@ -17,6 +17,7 @@ import { premultiplySvgTextureUploads } from './renderer.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
+import { createShellFrames, effectiveTheme } from './shell-frame.mjs';
 import { setDisplayTimeZone, zonedMonthStart } from './time-format.mjs';
 import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen, viewportSize } from './device.mjs';
 
@@ -142,6 +143,9 @@ function auth(signedIn, state, extra = {}) {
   if (signedIn || state === 'limited') { try { loginBridge?.clearPassword(); } catch {} }
   set_auth(signedIn, JSON.stringify(view));
   syncThemeColor();
+  // the Status and Scoreboard iframes live only while signed in (shell-frame.mjs)
+  shellFrames?.setSignedIn(signedIn);
+  if (signedIn) askContentArea();
 }
 
 // A password change, Sign out other browsers and Sign out all devices give this browser a new session id. A
@@ -745,6 +749,8 @@ function navigate(page, { replace = false } = {}) {
   // to Home, it replaces, so Back from Analytics or Accounts goes Home and Back from Home leaves.
   const method = replace || !wasHome || page === 'home' ? 'replaceState' : 'pushState';
   try { globalThis.history?.[method]?.(null, '', url); } catch {}
+  shellFrames?.setPage(page);
+  askContentArea();
   if (page === 'analytics' && authenticated) enterAnalytics();
   if (page === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') { void accounts.loadAll(); void updateStatus(); } }
 }
@@ -870,6 +876,17 @@ async function signedIn(name) {
   if (last && last !== currentPage && PAGES.includes(last) && pageFromLocation() === 'home') navigate(last);
 }
 let loginBridge = null;
+/** The Status and Scoreboard iframes over the canvas (shell-frame.mjs); created at boot. */
+let shellFrames = null;
+let contentAsk = 0;
+/**
+ * Ask the shell for the content area (lib.rs report_content_area) a moment after anything that can move it: the
+ * shell pushes it on change too, but a push was seen to go missing on some loads, and the iframe must not wait.
+ */
+function askContentArea() {
+  clearTimeout(contentAsk);
+  contentAsk = setTimeout(() => { try { report_content_area(); } catch {} }, 120);
+}
 /** The Slint sign-in value ("user\npassword\n1|0", auth-view.mjs parseLoginValue) for what the HTML form holds. */
 const loginValue = filled => `${filled.username}\n${filled.password}\n${filled.remember ? '1' : '0'}`;
 async function signIn(value) {
@@ -956,6 +973,9 @@ window.ccsDashboardAction = async (action, value) => {
     }
     if (action === 'auth-recheck') { if (!authenticated && !busy) await checkSession(); return; }
     if (action === 'login-limit-over') { if (!authenticated && !busy) auth(false, 'default', { notice: true, message: 'Sign-in is open again.' }); return; }
+    // the content area and what the canvas draws over it: the Status and Scoreboard iframes follow
+    if (action === 'content-rect') { shellFrames?.setRect(value); return; }
+    if (action === 'content-cover') { shellFrames?.setCover(value); return; }
     if (action === 'probe-rect') {
       if (!e2e) return;
       const [id, x, y, w, h] = String(value).split('|');
@@ -1089,6 +1109,7 @@ function setOnline(value) {
 function pushSafeArea() {
   const insets = readSafeArea(safeProbe, (element) => getComputedStyle(element));
   try { set_safe_area(insets.top, insets.right, insets.bottom, insets.left); } catch {}
+  askContentArea();
 }
 function pushInputProfile() {
   let coarse = false, hover = true, standalone = false;
@@ -1169,6 +1190,7 @@ function resize() {
     const vp = currentViewport();
     resize_dashboard(vp.width, vp.height);
   } catch {}
+  askContentArea();
 }
 function pushKeyboard() {
   let height = 0;
@@ -1178,12 +1200,13 @@ function pushKeyboard() {
     height = keyboardHeight(
       vp.height,
       viewport ? { height: viewport.height, offsetTop: viewport.offsetTop ?? 0 } : null,
-      keyboardFocus
+      keyboardFocus || document.activeElement?.tagName === 'IFRAME'
     );
     // The document is fixed (index.html), so iOS must not pan it while a field has focus.
     if (keyboardFocus && viewport && viewport.offsetTop > 0) scrollTo(0, 0);
   } catch {}
   try { set_keyboard(height); } catch {}
+  askContentArea();
 }
 function setupDevice() {
   try {
@@ -1232,7 +1255,7 @@ function setupDevice() {
     document.addEventListener('focusout', () => { keyboardFocus = false; pushKeyboard(); });
   } catch {}
   try {
-    addEventListener('online', () => { setOnline(true); retryOffline(); });
+    addEventListener('online', () => { setOnline(true); retryOffline(); shellFrames?.retry(); });
     addEventListener('offline', () => setOnline(false));
   } catch {}
   try {
@@ -1311,7 +1334,10 @@ function saveTheme(value) {
   themeModeName = value;
   set_theme_mode(THEMES[value]);
   syncThemeColor();
+  syncFrameTheme();
 }
+/** The Status and Scoreboard pages draw in the shell's effective theme (aac-theme messages). */
+function syncFrameTheme() { shellFrames?.setTheme(effectiveTheme(themeModeName, themeSystemDark)); }
 function watchMedia(query, apply) {
   const media = typeof matchMedia === 'function' ? matchMedia(query) : null;
   apply(media?.matches === true);
@@ -1319,7 +1345,17 @@ function watchMedia(query, apply) {
 }
 
 // ---------------------------------------------------------------- boot
+/**
+ * This shell loaded inside one of its own Status or Scoreboard iframes (a redirect or a fallback answered
+ * /app/status with the shell): it must not start a second dashboard there. The outer shell sees the wrong path
+ * and shows its "unavailable" note instead (shell-frame.mjs).
+ */
+function insideOwnFrame() {
+  try { return globalThis.top !== globalThis.self && globalThis.parent?.__aacShell === true; } catch { return false; }
+}
 try {
+  if (insideOwnFrame()) throw Object.assign(new Error('The dashboard shell loaded inside its own page frame.'), { code: 'framed' });
+  globalThis.__aacShell = true;
   requireWebGL();
   requireWasmFeatures();
   // Before Slint creates its first image: SVG marks must upload premultiplied (renderer.mjs).
@@ -1356,6 +1392,14 @@ try {
       onPointer: ({ focus, hover }) => { try { set_login_pointer(focus, hover); } catch {} },
     });
   } catch {}
+  try {
+    shellFrames = createShellFrames({
+      doc: document, win: window, origin,
+      onNavigate: page => { if (authenticated && PAGES.includes(page)) navigate(page); },
+    });
+    shellFrames.setPage(currentPage);
+    if (e2e) globalThis.__aacFrames = shellFrames;
+  } catch {}
   set_current_page(currentPage);
   addEventListener('resize', resize); resize();
   closeDetailsOnOutsideClicks(document.querySelector('#canvas'));
@@ -1369,6 +1413,8 @@ try {
       return;
     }
     currentPage = pageFromLocation(); set_current_page(currentPage);
+    shellFrames?.setPage(currentPage);
+    askContentArea();
     if (currentPage === 'analytics' && authenticated) enterAnalytics();
     if (currentPage === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') { void accounts.loadAll(); void updateStatus(); } }
   });
@@ -1382,10 +1428,11 @@ try {
   const schemeDark = () => schemeQuery?.matches === true;
   const applySystemDark = dark => {
     if (dark === themeSystemDark) return;
-    themeSystemDark = dark; set_system_dark(dark); syncThemeColor();
+    themeSystemDark = dark; set_system_dark(dark); syncThemeColor(); syncFrameTheme();
   };
   themeSystemDark = startDark;
   applySystemDark(schemeDark());
+  syncFrameTheme();
   let schemeHold = 0;
   const followScheme = () => {
     clearTimeout(schemeHold);
@@ -1416,6 +1463,7 @@ try {
   setInterval(() => { if (authenticated && !refreshing && !busy) render(); }, 60_000);
 } catch (error) {
   const status = document.querySelector('#loading');
-  status.hidden = false; status.textContent = error?.code === 'webgl_required' ? WEBGL_REQUIRED_MESSAGE : error?.code === 'wasm_features_required' ? WASM_REQUIRED_MESSAGE : 'Unable to start the Slint dashboard. Reload to try again.';
-  console.error('Slint dashboard failed to start.', error);
+  status.hidden = false; status.textContent = error?.code === 'framed' ? 'This page is unavailable here.' : error?.code === 'webgl_required' ? WEBGL_REQUIRED_MESSAGE : error?.code === 'wasm_features_required' ? WASM_REQUIRED_MESSAGE : 'Unable to start the Slint dashboard. Reload to try again.';
+  // the shell inside its own page frame is an expected refusal, not a failure (the outer shell shows its note)
+  if (error?.code !== 'framed') console.error('Slint dashboard failed to start.', error);
 }

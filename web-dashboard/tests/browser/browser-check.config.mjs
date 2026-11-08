@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // Probes that are things to click or type into. The rest are headings, hints, bars, panels and marks, which t.audit must not
 // judge as controls (a 21 px heading isn't a target that is too small). pw-others is left out: the "Also sign out other
@@ -15,7 +16,7 @@ import path from 'node:path';
 // audits leave them out by name until the row gives them room; every other control on the page is audited.
 export const KNOWN_SMALL = [/^acct-(show|tray):/];
 
-const CONTROL = /^(signin-(user|pass|submit|remember)$|update-apps$|install-app$|status-(line|block)$|home-legend$|analytics-provider$|included-usage$|tab-(home|analytics|accounts)$|(show|tray|add|add-key|row|acct-show|acct-tray|remove|signin-again|signin|session-signin|recheck):|recheck$|logout$|logsource-add$|cleanup-now$|all-(ask|do)$|network$|others-out$|pw-(cur|new|conf|toggle|submit|cancel)$)/;
+const CONTROL = /^(signin-(user|pass|submit|remember)$|update-apps$|install-app$|status-(line|block)$|home-legend$|analytics-provider$|included-usage$|(tab|nav)-(home|analytics|accounts|status|scoreboard)$|(show|tray|add|add-key|row|acct-show|acct-tray|remove|signin-again|signin|session-signin|recheck):|recheck$|logout$|logsource-add$|cleanup-now$|all-(ask|do)$|network$|others-out$|pw-(cur|new|conf|toggle|submit|cancel)$)/;
 
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
@@ -34,19 +35,31 @@ export default (ctx) => {
 				if (inside(src, os.homedir()) && !inside(src, os.tmpdir())) throw new Error('home= must be a fixture folder outside your real home (temp folders are fine)');
 				fs.cpSync(src, home, { recursive: true });
 			} else fs.mkdirSync(home, { recursive: true });
-			return { home, port: +ctx.args.port || (await ctx.freePort()) };
+			// The Status tab reads agent reports from the share by default. Here it reads a fixture in the temporary home
+			// (scripts/status-fixture.mjs: 9 open cards, 2 answered, threads, streams and option media), its answers go to
+			// that home's store, and the doorbell is off, so a test answer never reaches a real thread.
+			const reports = path.join(home, 'agent-reports');
+			if (!fs.existsSync(path.join(reports, 'v1', 'writers'))) {
+				const { writeStatusFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'status-fixture.mjs')).href);
+				writeStatusFixture(reports, { ccsDir: path.join(home, '.ccs'), withKinds: true });
+				// The Model Scoreboard reads runs and the catalog from the same folder.
+				const { writeScoreboardFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'scoreboard-fixture.mjs')).href);
+				writeScoreboardFixture(reports);
+			}
+			return { home, reports, port: +ctx.args.port || (await ctx.freePort()) };
 		},
 		// CCS_HOME alone is not enough: some provider collectors read the real home (CLI logins, usage files, ssh keys
 		// for other machines). Every home-like variable points at the temporary folder, so no real account shows up.
 		server: (_, s) => ({
 			command: [process.execPath, cli, 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: +ctx.args.serverTimeout || 240000, // node_modules on the share can take 90 s to load
-			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude') }
+			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude'), AAC_AGENT_REPORTS_DIR: s.reports, AAC_PM_MAIL_REGISTRY_DIR: path.join(s.reports, 'pm-mail-registry'), AAC_STATUS_DOORBELL: 'off' }
 		}),
 		async teardown(_, s) { if (s && s.home && !ctx.args.keep) fs.rmSync(s.home, { recursive: true, force: true }); },
 		viewport: { width: 1920, height: 1080 },
 		// Signed out on an empty CCS_HOME, the update status call answers 401 by design
 		consoleErrors: { fail: true, allow: [/status of 401 .*\/api\/app-updates\/status/] },
-		failedRequests: { fail: false },
+		// A video with preload="metadata" stops its own request once it has the metadata (net::ERR_ABORTED).
+		failedRequests: { fail: false, allow: [/\/api\/status\/files\/.*\.(mp4|webm)\b/] },
 		// The canvas's controls, for t.audit, t.clickControl and t.scrollToControl (browser-check 2.0): the interactive probes on
 		// this page, in CSS pixels. Signed in, the sign-in panel's probes still report while it is hidden, so they are left out.
 		// null off an ?e2e page, where nothing reports.

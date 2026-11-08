@@ -16,6 +16,7 @@ public/accounts-view.mjs  DTO -> Accounts & Settings view model v2 (pure, tested
 public/accounts-controller.mjs  the Accounts & Settings state machine with injected I/O (tested with a fake server)
 public/account-actions.mjs  each action's request and each error code's words (pure, tested)
 public/auth-view.mjs      the sign-in page's words and rules: strength, setup checks, limiter headers (pure, tested)
+public/shell-frame.mjs    the Status and Scoreboard iframes over the canvas: rect, cover, messages, unavailable note (tested)
 public/claude-open.mjs    Claude Open progress: the 202 poller (injected I/O) and the row's progress line (tested)
 public/*-data.mjs, *-confirmation.mjs, visible-usage.mjs   truthfulness and switching rules (tested)
 src/lib.rs                wasm entry points; JSON -> Slint structs; persistent models updated in place
@@ -37,7 +38,7 @@ reading in Slint, never add or average across accounts, never turn a missing val
 ## The data seam
 
 - **Intent goes out through one callback**: `action(kind, value)` in Slint -> `window.ccsDashboardAction(kind,
-  value)` in bridge.js. Kinds in use: `navigate` (home|analytics|accounts), `navigate-dashboard`,
+  value)` in bridge.js. Kinds in use: `navigate` (home|analytics|accounts|status|scoreboard), `navigate-dashboard`,
   `navigate-analytics`, `theme` (light|dark|auto), `refresh`, `update-apps`, `logout`, `login`
   ("user\npassword"), `details` (account id), `details-closed`, `launch` ("profile:mac|windows"), `activate`
   (Codex profile), `antigravity-activate` (profile id), `automatic`, `threshold` ("95%"),
@@ -48,6 +49,9 @@ reading in Slint, never add or average across accounts, never turn a missing val
   `restore`, `restore-commit`, `flow-submit` ("provider\nfield\nlabel"), `flow-cancel`, `flow-done`, `flow-retry`,
   `flow-copy`, `flow-open-url`, `flow-open-app`, `flow-recheck`, `others-out`, `network-off`, `network-on`,
   `pw-toggle`, `pw-typing`, `pw-submit`, `device-revoke`, `devices-revoke-all`), `probe-rect` (?e2e only),
+  `content-rect` ("x,y,w,h" in CSS px: the content area the Status and Scoreboard iframes fill) and
+  `content-cover` ("all", "" or "x,y,w,h" rects joined by ";": what the canvas draws over that area; see Shell
+  iframe below),
   `antigravity-cooldown`
   (seconds), `setup` ("user\npassword\nconfirm\ncode"), `setup-typing` ("password\nconfirm"), `auth-recheck`,
   `login-limit-over`, the Analytics kinds listed under Analytics v3,
@@ -305,9 +309,23 @@ The real login screen. bridge.js builds `AuthView` with the words from public/au
 
 ### URL state
 
-The page routes `/`, `/analytics` and `/accounts` (also `/accounts/<provider>`; the server sends `/settings` to
-`/accounts`), read and written by public/page-route.mjs. `?view=home|analytics|accounts` still works as an alias.
-bridge.js pushes the path on navigation and follows `popstate`.
+The page routes `/`, `/analytics`, `/accounts` (also `/accounts/<provider>`; the server sends `/settings` to
+`/accounts`), `/status` and `/scoreboard`, read and written by public/page-route.mjs.
+`?view=home|analytics|accounts|status|scoreboard` still works as an alias. bridge.js pushes the path on
+navigation and follows `popstate`.
+
+### Shell iframe (Status and Scoreboard)
+
+Status and Scoreboard are Leptos pages (`/app/status`, `/app/scoreboard`; [docs/status-tab.md](../../docs/status-tab.md)
+is the contract, "Shell iframe" the part the shell owns). The shell has their tabs and draws only the background
+for them (nothing animates under the iframe); public/shell-frame.mjs lays one iframe per page over the canvas, made
+on the first visit and kept while hidden, shown only while its tab is current, the user is signed in and the page
+has said `aac-ready`, removed at sign-out. dashboard.slint reports `content-rect` (below the chrome, above the tab
+bar, keyboard and bottom safe area, inside the side safe areas) and `content-cover` (`all` while a menu, sheet,
+popover, dialog or Details is open, so a click outside them reaches the canvas; else the toast stack and hover card
+as rects cut out of the iframe with clip-path). Messages: shell -> page `aac-theme` (light|dark, the effective
+theme), page -> shell `aac-ready` and `aac-navigate` (a page id); same origin and our own iframes only. A page that
+fails, lands outside /app or never says ready shows the shell's "Status page unavailable" note with Try again.
 
 ## Theme
 
@@ -334,7 +352,10 @@ outer landscape). The `Device` global (theme.slint) carries what the JS shell pu
 `standalone` (installed PWA) and `online`.
 
 The shell below D (ui/shell/chrome.slint, ui/dashboard.slint): P gets a top bar plus a bottom tab bar (Home,
-Analytics, Accounts); F a two-row top header with tabs; T a one-row touch header (D keeps the desktop Header).
+Analytics, Accounts, Status, Scoreboard; 11 px labels below 72 px cells); F a two-row top header with tabs; T a
+one-row touch header (D keeps the desktop Header). Every NavBar gets the width its row leaves it (`max-w`) and
+steps down to fit: "Accounts & Settings" becomes "Accounts", then the icons go, then the labels (icons only, with
+full accessible names).
 Overlays are a sheet or side panel (ui/components/sheet.slint), a popover (ui/components/popover.slint) or the
 desktop slide-over: Details is a bottom sheet on P and on F below 760 px window width, a side panel above that;
 the Account menu is a sheet on P and a popover on F/T.
@@ -428,7 +449,7 @@ reason.
 | slide-over.slint | `SlideOver` | the scrim only tints and lets clicks through (as in the concept): a row click swaps the content (`swap()`), any other click closes it (the window's background TouchAreas, and bridge.js `closeDetailsOnOutsideClicks` for clicks a button or card takes), Escape closes it |
 | dialog.slint | `Dialog` | scrim + rising card; `dismissable` |
 | field.slint | `Field` | text and password fields with show/hide |
-| nav.slint | `NavBar` | the indicator glides between the three items |
+| nav.slint | `NavBar` | the indicator glides between the five items; fits `max-w` by shortening, then dropping icons, then labels |
 
 Gotchas found while building W1 (Slint 1.18.1):
 - `row`, `col`, `colspan`, `rowspan` are reserved (grid cells); `color` on a component inheriting Rectangle

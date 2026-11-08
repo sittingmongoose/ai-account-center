@@ -66,6 +66,8 @@ import {
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { startScoreboardService } from './scoreboard/scoreboard-service';
+import { startStatusService } from './status/status-service';
 import { getSignInHealth } from './services/signin-health-service';
 import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
@@ -149,14 +151,14 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
         if (sendAuthPathError(req, res, 400, 'invalid_json', 'Invalid JSON in request body'))
           return;
-        res.status(400).json({ error: 'Invalid JSON in request body' });
+        res.status(400).json({ error: 'Invalid JSON in request body', code: 'invalid_json' });
         return;
       }
       // body-parser's own 413 would otherwise reach Express's HTML error page.
       if (err.type === 'entity.too.large') {
         if (sendAuthPathError(req, res, 413, 'body_too_large', 'Request body is too large.'))
           return;
-        res.status(413).json({ error: 'Request body is too large.' });
+        res.status(413).json({ error: 'Request body is too large.', code: 'body_too_large' });
         return;
       }
       next(err);
@@ -294,6 +296,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let httpsServer: https.Server | null = null;
   let stopCgroupForeignCheck: (() => void) | null = null;
   let stopAgentUsageSnapshot: (() => void) | null = null;
+  let stopStatusService: (() => void) | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   const codexRenewal = getCodexProfileRenewalService();
@@ -317,6 +320,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopAccountAnalyticsSampling();
     stopAgentUsageSnapshot?.();
     stopAgentUsageSnapshot = null;
+    stopStatusService?.();
+    stopStatusService = null;
     stopCgroupForeignCheck?.();
     stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
@@ -402,6 +407,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
             : null;
         },
       });
+      // Status tab readers and collectors (read-only; process collectors run only while viewed).
+      stopStatusService = startStatusService();
+      // Scoreboard catalog seeds (runs are read on demand).
+      startScoreboardService();
       startAccountAnalyticsSampling();
       // Warn when launched apps leaked into the dashboard cgroup (read-only).
       stopCgroupForeignCheck = startCgroupForeignCheck();

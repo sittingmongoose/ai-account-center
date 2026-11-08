@@ -1,0 +1,84 @@
+{
+ "schema": "agent-reports/run@1",
+ "id": "windows.opus-typed-decisions--plan-pilot2-a_tk-design-tf-tfxir",
+ "writer": "windows.opus-typed-decisions",
+ "seq": 96,
+ "writtenAt": "2026-11-06T18:13:32Z",
+ "source": "benchmark",
+ "benchmark": "plan-pilot2",
+ "project": "puppet-master",
+ "stream": null,
+ "task": {
+  "id": "design-tf-tfxir",
+  "type": "plan",
+  "title": "fidelity backing check on a_t's firm obligations: design-tf-tfxir (design)",
+  "size": {
+   "words": 8918
+  }
+ },
+ "model": {
+  "id": "openai/gpt-6.1-sol",
+  "provider": "openai",
+  "harness": "codex",
+  "effort": "medium",
+  "account": "account-a"
+ },
+ "startedAt": null,
+ "endedAt": "2026-10-31T02:48:21Z",
+ "outcome": "done",
+ "cost": {
+  "usd": null,
+  "credits": null,
+  "quota": null,
+  "tokens": {
+   "in": null,
+   "out": null,
+   "cached": null
+  }
+ },
+ "scope": {},
+ "process": {
+  "id": "a_tk",
+  "version": "consult5-pilot2/run_backing2.py",
+  "sha256": "f26ff666d5ab26b810eebb563bda887171091979965c6c7ab342b9ae7699c433"
+ },
+ "metrics": {
+  "modelSeconds": 51.4,
+  "calls": 3,
+  "modelSecondsPer1kWords": 6.0,
+  "singleRun": 1,
+  "answerKeyFinal": 0,
+  "firmObligationsChecked": 164,
+  "targets": 38,
+  "repaired": 3,
+  "madeProvisional": 1,
+  "goldAgreed": 154,
+  "right": 147,
+  "rightFlagged": 1,
+  "wrongFlagged": 1,
+  "silent": 5,
+  "silentRate": 0.0325,
+  "strict_goldAgreed": 154,
+  "strict_right": 146,
+  "strict_rightFlagged": 2,
+  "strict_wrongFlagged": 2,
+  "strict_silent": 4,
+  "strict_silentRate": 0.026,
+  "configModelSecondsPer1kWords": 81.6
+ },
+ "imported": {
+  "from": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\runs\\a_tk\\design-tf-tfxir.json",
+  "at": "2026-11-06T18:13:32Z"
+ },
+ "evidence": [
+  {
+   "label": "pilot-2 results (preliminary, before the owner's cards)",
+   "path": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\RESULTS.md"
+  },
+  {
+   "label": "preregistration and amendments",
+   "path": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\PREREG.md"
+  }
+ ],
+ "wallSeconds": 52
+}

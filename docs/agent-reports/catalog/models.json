@@ -1,0 +1,140 @@
+{
+  "schema": "catalog-models@1",
+  "models": [
+    {
+      "model": "anthropic/claude-opus-5-5",
+      "label": "Opus 5.5",
+      "family": "Claude",
+      "runtimes": [
+        "claude-code"
+      ],
+      "efforts": [
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "anthropic/claude-sonnet-5-5",
+      "label": "Sonnet 5.5",
+      "family": "Claude",
+      "runtimes": [
+        "claude-code"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "anthropic/claude-haiku-5-5",
+      "label": "Haiku 5.5",
+      "family": "Claude",
+      "runtimes": [
+        "claude-code"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "anthropic/claude-fable-5-1",
+      "label": "Fable 5.1",
+      "family": "Claude",
+      "runtimes": [
+        "claude-code"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "openai/gpt-6.1-sol",
+      "label": "Sol 6.1",
+      "family": "GPT-6",
+      "runtimes": [
+        "codex"
+      ],
+      "efforts": [
+        "medium",
+        "high",
+        "max"
+      ],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "openai/gpt-6-astra",
+      "label": "Astra",
+      "family": "GPT-6",
+      "runtimes": [
+        "codex"
+      ],
+      "efforts": [
+        "max"
+      ],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "openai/gpt-6-luna",
+      "label": "Luna",
+      "family": "GPT-6",
+      "runtimes": [
+        "codex"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "openai/gpt-6.1-terra",
+      "label": "Terra 6.1",
+      "family": "GPT-6",
+      "runtimes": [
+        "codex"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "zai/glm-5.3",
+      "label": "GLM 5.3",
+      "family": "GLM",
+      "runtimes": [
+        "zcode"
+      ],
+      "efforts": [
+        "max"
+      ],
+      "prices": null,
+      "notes": "Mechanical work, reviewed."
+    },
+    {
+      "model": "muse/muse-spark-1.3-contributor",
+      "label": "Muse Spark 1.3",
+      "family": "Muse",
+      "runtimes": [
+        "muse"
+      ],
+      "efforts": [
+        "max"
+      ],
+      "prices": null,
+      "notes": "Easy and mechanical work."
+    },
+    {
+      "model": "muse/muse-wonder-full-1.0",
+      "label": "Muse Wonder 1.0",
+      "family": "Muse",
+      "runtimes": [
+        "muse"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    }
+  ]
+}

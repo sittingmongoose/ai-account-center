@@ -1,0 +1,2561 @@
+{
+  "version": 1,
+  "generatedAt": "2026-11-06T21:00:00.808Z",
+  "refresh": {
+    "pollSeconds": 30
+  },
+  "headline": {
+    "tone": "bad",
+    "runs": [
+      {
+        "text": "9 questions",
+        "strong": true,
+        "tone": "warn"
+      },
+      {
+        "text": " for you"
+      },
+      {
+        "text": " · 10 of 26 items landed"
+      },
+      {
+        "text": " · "
+      },
+      {
+        "text": "2 blocked",
+        "tone": "warn"
+      },
+      {
+        "text": " · "
+      },
+      {
+        "text": "1 budget at or over its limit (estimate)",
+        "tone": "bad"
+      },
+      {
+        "text": " · "
+      },
+      {
+        "text": "2 sources not current",
+        "tone": "warn"
+      }
+    ],
+    "counts": {
+      "openCards": 9,
+      "blockedItems": 2,
+      "workingThreads": 3,
+      "staleSources": 2
+    }
+  },
+  "sources": [
+    {
+      "id": "agent-reports",
+      "label": "Agent reports",
+      "asOf": "2026-11-06T21:00:00.808Z",
+      "ageSeconds": 0,
+      "staleAfterSeconds": 60,
+      "state": "unreadable",
+      "detail": "2 files unreadable since 4:00 PM: vm.fo-welcome/cards/vm.fo-welcome--Q1.json (contains NUL bytes from a damaged write), vm.fo-welcome/tasks.json (not valid JSON)."
+    },
+    {
+      "id": "pm-mail",
+      "label": "pm-mail registry",
+      "asOf": "2026-11-06T21:00:00.808Z",
+      "ageSeconds": 0,
+      "staleAfterSeconds": 120,
+      "state": "ok",
+      "detail": "Read 4:00 PM."
+    },
+    {
+      "id": "machines",
+      "label": "Machines",
+      "asOf": "2026-11-06T20:59:50.808Z",
+      "ageSeconds": 10,
+      "staleAfterSeconds": 180,
+      "state": "stale",
+      "detail": "Windows PC unreachable: ssh did not answer in time (since 3:58 PM). Showing the reading from 3:50 PM. Nas1 unreachable: ssh refused (since 3:59 PM)."
+    },
+    {
+      "id": "browsers",
+      "label": "Browsers and recordings",
+      "asOf": "2026-11-06T20:59:55.808Z",
+      "ageSeconds": 5,
+      "staleAfterSeconds": 180,
+      "state": "ok",
+      "detail": "Read 3:59 PM."
+    },
+    {
+      "id": "simlock",
+      "label": "Simlock",
+      "asOf": "2026-11-06T20:59:40.808Z",
+      "ageSeconds": 20,
+      "staleAfterSeconds": 180,
+      "state": "ok",
+      "detail": "Read 3:59 PM."
+    },
+    {
+      "id": "usage",
+      "label": "Account usage",
+      "state": "ok",
+      "asOf": "2026-11-06T20:59:30.808Z",
+      "ageSeconds": 30,
+      "staleAfterSeconds": 300,
+      "detail": "Sampled 3:59 PM."
+    },
+    {
+      "id": "quota-watch",
+      "label": "Quota watch (estimates)",
+      "asOf": "2026-11-06T20:57:00.808Z",
+      "ageSeconds": 180,
+      "staleAfterSeconds": 1800,
+      "state": "ok",
+      "detail": "Report from 3:57 PM. Every number is an estimate."
+    }
+  ],
+  "cards": {
+    "source": "agent-reports",
+    "open": [
+      {
+        "id": "vm.tools-lead--Q1",
+        "label": "T-Q1",
+        "writer": "vm.tools-lead",
+        "seq": 13,
+        "project": "puppet-master",
+        "stream": "TOOLS",
+        "askedBy": "tools-lead",
+        "title": "Which machines may record during the owner’s streaming hours?",
+        "now": "Recording on the VM drops frames while Moonlight streams.",
+        "nowAsOf": null,
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "vm",
+            "label": "Ubuntu VM",
+            "gets": "Smoothest video.",
+            "costs": "Drops frames while streaming.",
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "mac",
+            "label": "Mac",
+            "gets": null,
+            "costs": null,
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "windows",
+            "label": "Windows PC",
+            "gets": "Fastest encoder.",
+            "costs": "It is the owner’s own PC.",
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "nas1",
+            "label": "Nas1",
+            "gets": null,
+            "costs": "No GPU encoder.",
+            "media": [],
+            "sections": [],
+            "stance": null
+          }
+        ],
+        "recommendation": null,
+        "multiple": true,
+        "urgency": "now",
+        "blocks": "T-19",
+        "sections": [
+          {
+            "title": "What other setups do",
+            "fold": false,
+            "type": "compare",
+            "items": [
+              {
+                "name": "OBS on the gaming PC",
+                "does": "Records with the GPU encoder while streaming.",
+                "problem": "Competes with the game for the encoder.",
+                "link": {
+                  "label": "OBS",
+                  "url": "https://obsproject.com/"
+                },
+                "version": "31"
+              }
+            ]
+          },
+          {
+            "title": null,
+            "fold": true,
+            "type": "notCopying",
+            "items": [
+              {
+                "what": "Recording at 60 fps",
+                "why": "Doubles the encoder load."
+              }
+            ]
+          },
+          {
+            "title": null,
+            "fold": true,
+            "type": "terms",
+            "items": [
+              {
+                "term": "Moonlight",
+                "meaning": "The app that streams the VM desktop to the owner."
+              }
+            ]
+          },
+          {
+            "title": null,
+            "fold": false,
+            "type": "unknowns",
+            "items": [
+              "Whether the Mac encoder holds up at 1080p."
+            ]
+          },
+          {
+            "title": "Steps if VM is chosen",
+            "fold": true,
+            "type": "list",
+            "items": [
+              "Pause Moonlight",
+              "Record",
+              "Resume"
+            ],
+            "ordered": true
+          },
+          {
+            "title": "Encoders",
+            "fold": true,
+            "type": "table",
+            "columns": [
+              "Machine",
+              "Encoder"
+            ],
+            "rows": [
+              [
+                "VM",
+                "NVENC"
+              ],
+              [
+                "Nas1",
+                ""
+              ]
+            ]
+          },
+          {
+            "title": null,
+            "fold": true,
+            "type": "links",
+            "items": [
+              {
+                "label": "Board",
+                "url": "/mnt/Cursor/share/puppet-master/TOOLS.md"
+              }
+            ]
+          }
+        ],
+        "batch": null,
+        "evidence": [
+          {
+            "label": "Frame drop log",
+            "path": "/tmp/aac-view-CqMrWs/agent-reports/boards/TOOLS.md"
+          }
+        ],
+        "replies": [],
+        "kind": "question",
+        "neededBy": null,
+        "exception": null,
+        "reversible": null,
+        "verdict": null,
+        "group": null,
+        "agreement": null,
+        "doubt": null,
+        "appliesTo": null,
+        "changesCanon": [],
+        "related": [],
+        "askedAt": "2026-11-06T20:35:00.808Z",
+        "ageSeconds": 1500,
+        "askerState": "waiting",
+        "cardSha256": "9b9decee5ebd12d6b3f0efd1a4a7662c7a05a434b6e05701f89170341b462aab",
+        "notes": [],
+        "problem": null,
+        "answerable": true
+      },
+      {
+        "id": "vm.aac-status-lead--D1",
+        "label": "ST-D1",
+        "writer": "vm.aac-status-lead",
+        "seq": 14,
+        "project": "ai-account-center",
+        "stream": "STATUS",
+        "askedBy": "aac-status-lead",
+        "title": "Sign in to the second Claude account on the Mac",
+        "now": "Its sign-in ended this morning; only you can complete the CAPTCHA.",
+        "nowAsOf": null,
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [],
+        "recommendation": null,
+        "multiple": false,
+        "urgency": "now",
+        "blocks": null,
+        "sections": [],
+        "batch": null,
+        "evidence": [],
+        "replies": [],
+        "kind": "action",
+        "neededBy": null,
+        "exception": {
+          "rule": "Agents never sign in for you",
+          "text": "This one needs your hands."
+        },
+        "reversible": null,
+        "verdict": null,
+        "group": null,
+        "agreement": null,
+        "doubt": null,
+        "appliesTo": null,
+        "changesCanon": [],
+        "related": [],
+        "askedAt": "2026-11-06T20:45:00.808Z",
+        "ageSeconds": 900,
+        "askerState": "working",
+        "cardSha256": "d007aecb154a76dca693b3b4720ad87b59020085897884a800d28ac27082d67c",
+        "notes": [],
+        "problem": null,
+        "answerable": true
+      },
+      {
+        "id": "vm.pm-fo-lead--Q3",
+        "label": "F-Q3",
+        "writer": "vm.pm-fo-lead",
+        "seq": 13,
+        "project": "puppet-master",
+        "stream": "F",
+        "askedBy": "pm-fo-lead",
+        "title": "Where should the lines chart put its label?",
+        "now": "On small windows the chart label covers the newest point, so the latest value is hidden.",
+        "nowAsOf": "2026-11-06T19:00:00.808Z",
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "A",
+            "label": "Keep the label inside the plot",
+            "gets": "The label moves left when it would cover a point.",
+            "costs": "Can still feel crowded on a phone.",
+            "media": [
+              {
+                "kind": "image",
+                "path": "images/fo33-inside.png",
+                "caption": "The label inside the plot at 320 px",
+                "label": "mockup",
+                "poster": null,
+                "url": "/api/status/files/vm.pm-fo-lead/images/fo33-inside.png",
+                "posterUrl": null
+              }
+            ],
+            "sections": [
+              {
+                "title": "How it moves",
+                "fold": true,
+                "type": "text",
+                "body": "It slides left of the newest point."
+              }
+            ],
+            "stance": null
+          },
+          {
+            "key": "B",
+            "label": "Move it under the axis",
+            "gets": "The label never covers data.",
+            "costs": "It sits further from the line it names.",
+            "media": [
+              {
+                "kind": "image",
+                "path": "images/fo33-under-axis.png",
+                "caption": "The label under the axis",
+                "label": "mockup",
+                "poster": null,
+                "url": "/api/status/files/vm.pm-fo-lead/images/fo33-under-axis.png",
+                "posterUrl": null
+              }
+            ],
+            "sections": [],
+            "stance": null
+          }
+        ],
+        "recommendation": {
+          "key": "A",
+          "why": "Matches the other charts.",
+          "confidence": "medium",
+          "flip": "If the chart gets narrower than 280 px, B reads better."
+        },
+        "multiple": false,
+        "urgency": "today",
+        "blocks": "FO-33 landing (group 4)",
+        "sections": [
+          {
+            "title": "Where it shows",
+            "fold": false,
+            "type": "facts",
+            "rows": [
+              {
+                "label": "Windows narrower than",
+                "value": "420 px"
+              },
+              {
+                "label": "Charts affected",
+                "value": "3 of 11"
+              }
+            ]
+          },
+          {
+            "title": null,
+            "fold": false,
+            "type": "callout",
+            "tone": "warn",
+            "body": "The newest value is the one people read first."
+          },
+          {
+            "title": "A section type this page does not know",
+            "fold": true,
+            "type": "timeline",
+            "unknown": true
+          }
+        ],
+        "batch": "F-questions-2026-11-05",
+        "evidence": [],
+        "replies": [],
+        "kind": "question",
+        "neededBy": null,
+        "exception": null,
+        "reversible": null,
+        "verdict": null,
+        "group": null,
+        "agreement": null,
+        "doubt": null,
+        "appliesTo": null,
+        "changesCanon": [],
+        "related": [],
+        "askedAt": "2026-11-06T19:00:00.808Z",
+        "ageSeconds": 7200,
+        "askerState": "working",
+        "cardSha256": "77ed1d2edb00a533ee9352e2ab6f09daf623e4d5d67f1d32a41f10214f3f927e",
+        "notes": [],
+        "problem": null,
+        "answerable": true
+      },
+      {
+        "id": "vm.pm-fo-lead--Q4",
+        "label": "F-Q4",
+        "writer": "vm.pm-fo-lead",
+        "seq": 14,
+        "project": "puppet-master",
+        "stream": "F",
+        "askedBy": "pm-fo-lead",
+        "title": "Should the newest toast appear on top or at the bottom?",
+        "now": "Toasts stack in arrival order, so a new one can appear under older ones.",
+        "nowAsOf": null,
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "A",
+            "label": "Newest on top",
+            "gets": "The latest message is where the eye lands first.",
+            "costs": null,
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "B",
+            "label": "Newest at the bottom",
+            "gets": "Reads like a chat log.",
+            "costs": "New messages push older ones up.",
+            "media": [],
+            "sections": [],
+            "stance": null
+          }
+        ],
+        "recommendation": {
+          "key": "A",
+          "why": "The eye lands on the top first.",
+          "confidence": null,
+          "flip": null
+        },
+        "multiple": false,
+        "urgency": "today",
+        "blocks": null,
+        "sections": [],
+        "batch": "F-questions-2026-11-05",
+        "evidence": [],
+        "replies": [],
+        "kind": "question",
+        "neededBy": null,
+        "exception": null,
+        "reversible": null,
+        "verdict": "adapt",
+        "group": "toasts",
+        "agreement": {
+          "same": false,
+          "note": "Two reviewers split on this one."
+        },
+        "doubt": null,
+        "appliesTo": null,
+        "changesCanon": [],
+        "related": [
+          "vm.pm-fo-lead--Q3"
+        ],
+        "askedAt": "2026-11-06T19:20:00.808Z",
+        "ageSeconds": 6000,
+        "askerState": "working",
+        "cardSha256": "72c5083523baf259738254941dff9efbb82b69aeee120a03f8065b1e715f2680",
+        "notes": [],
+        "problem": null,
+        "answerable": true
+      },
+      {
+        "id": "vm.pm-fo-lead--O1",
+        "label": "F-O1",
+        "writer": "vm.pm-fo-lead",
+        "seq": 16,
+        "project": "puppet-master",
+        "stream": "F",
+        "askedBy": "pm-fo-lead",
+        "title": "I am moving the export button into the toolbar",
+        "now": "Two people missed it at the bottom of the panel during QA.",
+        "nowAsOf": null,
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [],
+        "recommendation": null,
+        "multiple": false,
+        "urgency": "today",
+        "blocks": null,
+        "sections": [],
+        "batch": null,
+        "evidence": [],
+        "replies": [],
+        "kind": "objection",
+        "neededBy": {
+          "at": "2026-11-07T01:00:00.808Z",
+          "ifNoAnswer": "It lands with group 4 tonight."
+        },
+        "exception": null,
+        "reversible": {
+          "yes": true,
+          "how": "One commit to revert."
+        },
+        "verdict": null,
+        "group": null,
+        "agreement": null,
+        "doubt": null,
+        "appliesTo": null,
+        "changesCanon": [],
+        "related": [],
+        "askedAt": "2026-11-06T19:50:00.808Z",
+        "ageSeconds": 4200,
+        "askerState": "working",
+        "cardSha256": "b53df82eef2466b09a1f120ac941b3f4e54a874501714842146c69beca8918d5",
+        "notes": [],
+        "problem": null,
+        "answerable": true
+      },
+      {
+        "id": "vm.pm-closure-lead--J1",
+        "label": "C-J1",
+        "writer": "vm.pm-closure-lead",
+        "seq": 12,
+        "project": "puppet-master",
+        "stream": "C",
+        "askedBy": "pm-closure-lead",
+        "title": "Do these two summaries say the same thing?",
+        "now": "A measurement card: your answer becomes part of the answer key.",
+        "nowAsOf": null,
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "same",
+            "label": "Same meaning",
+            "gets": null,
+            "costs": null,
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "different",
+            "label": "Different meaning",
+            "gets": null,
+            "costs": null,
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "cant-tell",
+            "label": "Can’t tell",
+            "gets": null,
+            "costs": null,
+            "media": [],
+            "sections": [],
+            "stance": null
+          }
+        ],
+        "recommendation": null,
+        "multiple": false,
+        "urgency": "today",
+        "blocks": null,
+        "sections": [],
+        "batch": "C-judgements",
+        "evidence": [],
+        "replies": [],
+        "kind": "judgement",
+        "neededBy": null,
+        "exception": null,
+        "reversible": null,
+        "verdict": null,
+        "group": "retention-key",
+        "agreement": null,
+        "doubt": null,
+        "appliesTo": null,
+        "changesCanon": [],
+        "related": [],
+        "askedAt": "2026-11-06T20:10:00.808Z",
+        "ageSeconds": 3000,
+        "askerState": "blocked",
+        "cardSha256": "8cf37481034d63649adef21c7562b5e4d80afa297f81237aa3029c7c194935d9",
+        "notes": [],
+        "problem": null,
+        "answerable": true
+      },
+      {
+        "id": "vm.pm-closure-lead--S1",
+        "label": "C-S1",
+        "writer": "vm.pm-closure-lead",
+        "seq": 13,
+        "project": "puppet-master",
+        "stream": "C",
+        "askedBy": "pm-closure-lead",
+        "title": "Format sample: a card with a quote section",
+        "now": null,
+        "nowAsOf": null,
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "A",
+            "label": "First",
+            "gets": null,
+            "costs": null,
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "B",
+            "label": "Second",
+            "gets": null,
+            "costs": null,
+            "media": [],
+            "sections": [],
+            "stance": null
+          }
+        ],
+        "recommendation": null,
+        "multiple": false,
+        "urgency": "today",
+        "blocks": null,
+        "sections": [],
+        "batch": null,
+        "evidence": [],
+        "replies": [],
+        "kind": "sample",
+        "neededBy": null,
+        "exception": null,
+        "reversible": null,
+        "verdict": null,
+        "group": null,
+        "agreement": null,
+        "doubt": null,
+        "appliesTo": null,
+        "changesCanon": [],
+        "related": [],
+        "askedAt": "2026-11-06T20:15:00.808Z",
+        "ageSeconds": 2700,
+        "askerState": "blocked",
+        "cardSha256": "70bdd01928851f88041b880fa256daa4b6f7fcbd326489d9fcf6e1fed5b01898",
+        "notes": [],
+        "problem": null,
+        "answerable": false
+      },
+      {
+        "id": "vm.pm-fo-lead--Q5",
+        "label": "F-Q5",
+        "writer": "vm.pm-fo-lead",
+        "seq": 15,
+        "project": "puppet-master",
+        "stream": "F",
+        "askedBy": "pm-fo-lead",
+        "title": "Drop the old splash animation for good?",
+        "now": "The new welcome screen replaced it; the old one is still in the build behind a flag.",
+        "nowAsOf": null,
+        "oldAnswer": {
+          "text": "Keep it for one more release.",
+          "at": "2026-10-28T21:00:00.808Z"
+        },
+        "whatChanged": "That release shipped and nobody turned the flag on.",
+        "options": [
+          {
+            "key": "A",
+            "label": "Drop it",
+            "gets": "A smaller build and one less setting.",
+            "costs": null,
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "B",
+            "label": "Keep it behind a setting",
+            "gets": null,
+            "costs": "Another setting to test every release.",
+            "media": [],
+            "sections": [],
+            "stance": null
+          }
+        ],
+        "recommendation": {
+          "key": "A",
+          "why": "Nobody has turned it on since PM6.",
+          "confidence": null,
+          "flip": null
+        },
+        "multiple": false,
+        "urgency": "this-week",
+        "blocks": null,
+        "sections": [],
+        "batch": "F-questions-2026-11-05",
+        "evidence": [],
+        "replies": [],
+        "kind": "question",
+        "neededBy": null,
+        "exception": null,
+        "reversible": null,
+        "verdict": null,
+        "group": null,
+        "agreement": null,
+        "doubt": "One tester may still use the old splash on a slow machine.",
+        "appliesTo": {
+          "count": 4,
+          "description": "Every feature still behind a PM6 flag"
+        },
+        "changesCanon": [
+          {
+            "ref": "PM7 plan > Flags",
+            "what": "Old flags are removed, not kept"
+          }
+        ],
+        "related": [],
+        "askedAt": "2026-11-06T19:30:00.808Z",
+        "ageSeconds": 5400,
+        "askerState": "working",
+        "cardSha256": "562682d9f9261ba67d49eb8fa192c098817704344b5c221c68bf3c7a28c06210",
+        "notes": [],
+        "problem": null,
+        "answerable": true
+      },
+      {
+        "id": "vm.aac-status-lead--Q2",
+        "label": "ST-Q2",
+        "writer": "vm.aac-status-lead",
+        "seq": 13,
+        "project": "ai-account-center",
+        "stream": "STATUS",
+        "askedBy": "aac-status-lead",
+        "title": "Show stale threads collapsed or greyed?",
+        "now": "Threads that stopped reporting still take a full row.",
+        "nowAsOf": null,
+        "oldAnswer": null,
+        "whatChanged": null,
+        "options": [
+          {
+            "key": "A",
+            "label": "Collapsed under \"quiet\"",
+            "gets": "A shorter list.",
+            "costs": "One tap to see them.",
+            "media": [],
+            "sections": [],
+            "stance": null
+          },
+          {
+            "key": "B",
+            "label": "Greyed in place",
+            "gets": "Nothing moves while you read.",
+            "costs": "A longer list.",
+            "media": [],
+            "sections": [],
+            "stance": null
+          }
+        ],
+        "recommendation": {
+          "key": "B",
+          "why": "Nothing moves while you read.",
+          "confidence": null,
+          "flip": null
+        },
+        "multiple": false,
+        "urgency": "whenever",
+        "blocks": null,
+        "sections": [
+          {
+            "title": "What the Status contract says",
+            "fold": false,
+            "type": "quote",
+            "items": [
+              {
+                "text": "Nothing is ever shown as live when its source is stale.",
+                "where": "GET /api/status > Source",
+                "context": [
+                  "Agreed 2026-11-06"
+                ],
+                "source": "docs/status-tab.md",
+                "link": null,
+                "version": "v1"
+              }
+            ]
+          },
+          {
+            "title": null,
+            "fold": true,
+            "type": "planChange",
+            "doc": "docs/status-tab.md",
+            "unit": "Thread",
+            "now": "Stale threads take a full row.",
+            "proposed": "Stale threads are greyed in place."
+          }
+        ],
+        "batch": null,
+        "evidence": [],
+        "replies": [
+          {
+            "at": "2026-11-06T20:50:00.808Z",
+            "text": "Both are in the screenshot set now; greyed is on the left."
+          }
+        ],
+        "kind": "question",
+        "neededBy": null,
+        "exception": null,
+        "reversible": null,
+        "verdict": null,
+        "group": null,
+        "agreement": null,
+        "doubt": null,
+        "appliesTo": null,
+        "changesCanon": [],
+        "related": [],
+        "askedAt": "2026-11-06T20:20:00.808Z",
+        "ageSeconds": 2400,
+        "askerState": "working",
+        "cardSha256": "81bed5809d713d4dbfdc96ed47d794865486e38ce243d002950f3c9d14bde800",
+        "notes": [
+          {
+            "kind": "note",
+            "note": "Could you show both side by side first?",
+            "at": "2026-11-06T20:30:00.808Z",
+            "delivery": {
+              "share": {
+                "state": "done",
+                "at": "2026-11-06T20:31:00.808Z",
+                "detail": "Signed copy written to the share.",
+                "attempts": 1
+              },
+              "doorbell": {
+                "state": "done",
+                "at": "2026-11-06T20:31:00.808Z",
+                "detail": "Rang aac-status-lead through pm-mail.",
+                "attempts": 1
+              },
+              "state": "rang",
+              "at": "2026-11-06T20:31:00.808Z",
+              "detail": "Rang aac-status-lead through pm-mail."
+            }
+          }
+        ],
+        "problem": null,
+        "answerable": true
+      }
+    ],
+    "answered": [
+      {
+        "card": {
+          "id": "vm.pm-closure-lead--Q1",
+          "label": "C-Q1",
+          "writer": "vm.pm-closure-lead",
+          "seq": 14,
+          "project": "puppet-master",
+          "stream": "C",
+          "askedBy": "pm-closure-lead",
+          "title": "Re-audit B09 with a second reviewer pair?",
+          "now": "B09 passed one review but carries a shortcut flag.",
+          "nowAsOf": null,
+          "oldAnswer": null,
+          "whatChanged": null,
+          "options": [
+            {
+              "key": "A",
+              "label": "Yes, Sol and Astra",
+              "gets": "A second opinion on the flagged batch.",
+              "costs": "About an hour of quota.",
+              "media": [],
+              "sections": [],
+              "stance": null
+            },
+            {
+              "key": "B",
+              "label": "No, one pass is enough",
+              "gets": "Saves the quota.",
+              "costs": "The flag stays unexplained.",
+              "media": [],
+              "sections": [],
+              "stance": null
+            }
+          ],
+          "recommendation": {
+            "key": "A",
+            "why": "B09 had a shortcut flag."
+          },
+          "multiple": false,
+          "urgency": "today",
+          "blocks": null,
+          "sections": [],
+          "batch": null,
+          "evidence": [],
+          "replies": [],
+          "kind": "question",
+          "neededBy": null,
+          "exception": null,
+          "reversible": null,
+          "verdict": null,
+          "group": null,
+          "agreement": null,
+          "doubt": null,
+          "appliesTo": null,
+          "changesCanon": [],
+          "related": [],
+          "askedAt": "2026-11-06T16:00:00.808Z",
+          "ageSeconds": 18000,
+          "askerState": "blocked",
+          "cardSha256": "b6f9593f0eb598d3531010d3e83bf40083dba279153f3eaff8e55077241f6010",
+          "notes": [],
+          "problem": null,
+          "answerable": true
+        },
+        "answer": {
+          "kind": "answer",
+          "choice": [
+            "A"
+          ],
+          "note": "",
+          "via": "recommended",
+          "answeredAt": "2026-11-06T18:00:00.808Z",
+          "device": "iPhone",
+          "delivery": {
+            "share": {
+              "state": "done",
+              "at": "2026-11-06T18:01:00.808Z",
+              "detail": "Signed copy written to the share.",
+              "attempts": 1
+            },
+            "doorbell": {
+              "state": "done",
+              "at": "2026-11-06T18:01:00.808Z",
+              "detail": "Rang pm-closure-lead through pm-mail.",
+              "attempts": 1
+            },
+            "state": "rang",
+            "at": "2026-11-06T18:01:00.808Z",
+            "detail": "Rang pm-closure-lead through pm-mail."
+          }
+        }
+      },
+      {
+        "card": {
+          "id": "mac.aac-claude-relogin--Q7",
+          "label": "SR-Q7",
+          "writer": "mac.aac-claude-relogin",
+          "seq": 13,
+          "project": "ai-account-center",
+          "stream": "SIGNIN",
+          "askedBy": "aac-claude-relogin",
+          "title": "Renew Windows sign-ins from the Mac runner?",
+          "now": null,
+          "nowAsOf": null,
+          "oldAnswer": null,
+          "whatChanged": null,
+          "options": [
+            {
+              "key": "A",
+              "label": "Yes",
+              "gets": null,
+              "costs": null,
+              "media": [],
+              "sections": [],
+              "stance": null
+            },
+            {
+              "key": "B",
+              "label": "No, give Windows its own runner",
+              "gets": null,
+              "costs": null,
+              "media": [],
+              "sections": [],
+              "stance": null
+            }
+          ],
+          "recommendation": {
+            "key": "B"
+          },
+          "multiple": false,
+          "urgency": "today",
+          "blocks": null,
+          "sections": [],
+          "batch": null,
+          "evidence": [],
+          "replies": [],
+          "kind": "question",
+          "neededBy": null,
+          "exception": null,
+          "reversible": null,
+          "verdict": null,
+          "group": null,
+          "agreement": null,
+          "doubt": null,
+          "appliesTo": null,
+          "changesCanon": [],
+          "related": [],
+          "askedAt": "2026-11-05T19:00:00.808Z",
+          "ageSeconds": 93600,
+          "askerState": "done",
+          "cardSha256": "c1e53dfa606a54e148f27df5fe692fec1ff519c97abcf6ea5033017a5bab336b",
+          "notes": [],
+          "problem": null,
+          "answerable": true
+        },
+        "answer": {
+          "kind": "answer",
+          "choice": [
+            "B"
+          ],
+          "note": "Windows gets its own runner; keep the Mac one simple.",
+          "via": "deck",
+          "answeredAt": "2026-11-06T01:00:00.808Z",
+          "device": "iPhone",
+          "delivery": {
+            "share": {
+              "state": "done",
+              "at": "2026-11-06T01:01:00.808Z",
+              "detail": "Signed copy written to the share.",
+              "attempts": 1
+            },
+            "doorbell": {
+              "state": "done",
+              "at": "2026-11-06T01:01:00.808Z",
+              "detail": "Rang aac-claude-relogin through pm-mail.",
+              "attempts": 1
+            },
+            "state": "rang",
+            "at": "2026-11-06T01:01:00.808Z",
+            "detail": "Rang aac-claude-relogin through pm-mail."
+          }
+        }
+      }
+    ],
+    "batches": [
+      {
+        "id": "F-questions-2026-11-05",
+        "label": "F-questions-2026-11-05",
+        "cardIds": [
+          "vm.pm-fo-lead--Q3",
+          "vm.pm-fo-lead--Q4",
+          "vm.pm-fo-lead--Q5"
+        ]
+      },
+      {
+        "id": "C-judgements",
+        "label": "C-judgements",
+        "cardIds": [
+          "vm.pm-closure-lead--J1"
+        ]
+      }
+    ],
+    "complete": true
+  },
+  "projects": [
+    {
+      "id": "ai-account-center",
+      "label": "AI Account Center",
+      "streams": [
+        {
+          "id": "SIGNIN",
+          "label": "Sign-in renewal",
+          "owner": "aac-claude-relogin",
+          "goal": "Claude sign-ins renew by themselves",
+          "writer": "mac.aac-claude-relogin",
+          "board": null,
+          "source": "tasks",
+          "asOf": "2026-11-06T20:05:00.808Z",
+          "ageSeconds": 3300,
+          "stale": false,
+          "problem": null,
+          "counts": {
+            "total": 3,
+            "todo": 0,
+            "working": 0,
+            "review": 0,
+            "fixing": 0,
+            "blocked": 0,
+            "ready": 0,
+            "landed": 2,
+            "done": 1,
+            "dropped": 0
+          },
+          "completion": {
+            "done": 3,
+            "of": 3
+          },
+          "items": [
+            {
+              "id": "SR-1",
+              "title": "Runner on the Mac",
+              "state": "landed",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-05T15:00:00.808Z"
+              },
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-05T15:00:00.808Z",
+              "ageSeconds": 108000
+            },
+            {
+              "id": "SR-2",
+              "title": "CAPTCHA wait clean-up",
+              "state": "landed",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-06T19:00:00.808Z"
+              },
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T19:00:00.808Z",
+              "ageSeconds": 7200
+            },
+            {
+              "id": "SR-3",
+              "title": "Windows runner",
+              "state": "done",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T18:00:00.808Z",
+              "ageSeconds": 10800
+            }
+          ]
+        },
+        {
+          "id": "STATUS",
+          "label": "Status tab",
+          "owner": "aac-status-lead",
+          "goal": "One page that answers \"how are we looking?\"",
+          "writer": "vm.aac-status-lead",
+          "board": {
+            "path": "/tmp/aac-view-CqMrWs/agent-reports/boards/STATUS.md",
+            "ageSeconds": 1200
+          },
+          "source": "tasks",
+          "asOf": "2026-11-06T20:57:00.808Z",
+          "ageSeconds": 180,
+          "stale": false,
+          "problem": null,
+          "counts": {
+            "total": 6,
+            "todo": 2,
+            "working": 2,
+            "review": 1,
+            "fixing": 0,
+            "blocked": 0,
+            "ready": 0,
+            "landed": 1,
+            "done": 0,
+            "dropped": 0
+          },
+          "completion": {
+            "done": 1,
+            "of": 6
+          },
+          "items": [
+            {
+              "id": "ST-1",
+              "title": "Contract",
+              "state": "landed",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-06T15:00:00.808Z"
+              },
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T15:00:00.808Z",
+              "ageSeconds": 21600
+            },
+            {
+              "id": "ST-2",
+              "title": "Server view and answers",
+              "state": "review",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:50:00.808Z",
+              "ageSeconds": 600
+            },
+            {
+              "id": "ST-3",
+              "title": "Leptos page",
+              "state": "working",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:45:00.808Z",
+              "ageSeconds": 900
+            },
+            {
+              "id": "ST-4",
+              "title": "Shell tab and iframe",
+              "state": "working",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:35:00.808Z",
+              "ageSeconds": 1500
+            },
+            {
+              "id": "ST-5",
+              "title": "Phone layout",
+              "state": "todo",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:00:00.808Z",
+              "ageSeconds": 3600
+            },
+            {
+              "id": "ST-6",
+              "title": "Scoreboard tab",
+              "state": "todo",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:00:00.808Z",
+              "ageSeconds": 3600
+            }
+          ]
+        }
+      ],
+      "counts": {
+        "total": 9,
+        "todo": 2,
+        "working": 2,
+        "review": 1,
+        "fixing": 0,
+        "blocked": 0,
+        "ready": 0,
+        "landed": 3,
+        "done": 1,
+        "dropped": 0
+      },
+      "completion": {
+        "done": 4,
+        "of": 9
+      }
+    },
+    {
+      "id": "puppet-master",
+      "label": "Puppet Master",
+      "streams": [
+        {
+          "id": "TOOLS",
+          "label": "Agent tools",
+          "owner": "tools-lead",
+          "goal": "Shared tools every agent can rely on",
+          "writer": "vm.tools-lead",
+          "board": {
+            "path": "/tmp/aac-view-CqMrWs/agent-reports/boards/TOOLS.md",
+            "ageSeconds": 7200
+          },
+          "source": "tasks",
+          "asOf": "2026-11-06T20:50:00.808Z",
+          "ageSeconds": 600,
+          "stale": false,
+          "problem": null,
+          "counts": {
+            "total": 6,
+            "todo": 0,
+            "working": 2,
+            "review": 1,
+            "fixing": 0,
+            "blocked": 1,
+            "ready": 0,
+            "landed": 2,
+            "done": 0,
+            "dropped": 0
+          },
+          "completion": {
+            "done": 2,
+            "of": 6
+          },
+          "items": [
+            {
+              "id": "T-16",
+              "title": "browser-check 2.1 slots",
+              "state": "review",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:30:00.808Z",
+              "ageSeconds": 1800
+            },
+            {
+              "id": "T-17",
+              "title": "simlock iOS warm pool",
+              "state": "working",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:10:00.808Z",
+              "ageSeconds": 3000
+            },
+            {
+              "id": "T-18",
+              "title": "agent-report command",
+              "state": "working",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:40:00.808Z",
+              "ageSeconds": 1200
+            },
+            {
+              "id": "T-14",
+              "title": "quota-watch per-stream attribution",
+              "state": "landed",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-06T19:00:00.808Z"
+              },
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T19:00:00.808Z",
+              "ageSeconds": 7200
+            },
+            {
+              "id": "T-15",
+              "title": "pm-mail rings through T3",
+              "state": "landed",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-05T15:00:00.808Z"
+              },
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-05T15:00:00.808Z",
+              "ageSeconds": 108000
+            },
+            {
+              "id": "T-19",
+              "title": "Recording codec fallback",
+              "state": "blocked",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": {
+                "kind": "resource",
+                "what": "Windows GPU busy",
+                "since": "2026-11-06T18:00:00.808Z"
+              },
+              "why": null,
+              "updatedAt": "2026-11-06T18:00:00.808Z",
+              "ageSeconds": 10800
+            }
+          ]
+        },
+        {
+          "id": "C",
+          "label": "C",
+          "owner": "pm-closure-lead",
+          "goal": null,
+          "writer": "vm.pm-closure-lead",
+          "board": {
+            "path": "/tmp/aac-view-CqMrWs/agent-reports/boards/C-closure.md",
+            "ageSeconds": 10800
+          },
+          "source": "board-only",
+          "asOf": "2026-11-06T20:48:00.808Z",
+          "ageSeconds": 720,
+          "stale": false,
+          "problem": null,
+          "counts": null,
+          "completion": null,
+          "items": []
+        },
+        {
+          "id": "F",
+          "label": "PM7 follow-ups",
+          "owner": "pm-fo-lead",
+          "goal": "Fix every PM7 follow-up before the owner’s QA round",
+          "writer": "vm.pm-fo-lead",
+          "board": {
+            "path": "/tmp/aac-view-CqMrWs/agent-reports/boards/F-follow-ups.md",
+            "ageSeconds": 1800
+          },
+          "source": "tasks",
+          "asOf": "2026-11-06T20:55:00.808Z",
+          "ageSeconds": 300,
+          "stale": false,
+          "problem": null,
+          "counts": {
+            "total": 12,
+            "todo": 2,
+            "working": 1,
+            "review": 1,
+            "fixing": 1,
+            "blocked": 1,
+            "ready": 1,
+            "landed": 3,
+            "done": 1,
+            "dropped": 1
+          },
+          "completion": {
+            "done": 4,
+            "of": 11
+          },
+          "items": [
+            {
+              "id": "FO-38",
+              "title": "Welcome screen focus ring",
+              "state": "landed",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [
+                {
+                  "by": "gpt-6.1-sol/max",
+                  "verdict": "pass",
+                  "at": "2026-11-05T18:00:00.808Z"
+                }
+              ],
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-05T19:00:00.808Z"
+              },
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-05T19:00:00.808Z",
+              "ageSeconds": 93600
+            },
+            {
+              "id": "FO-39",
+              "title": "Settings search highlights",
+              "state": "landed",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-06T01:00:00.808Z"
+              },
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T01:00:00.808Z",
+              "ageSeconds": 72000
+            },
+            {
+              "id": "FO-40",
+              "title": "Welcome PiP look glitch",
+              "state": "landed",
+              "owner": "fo-welcome",
+              "branch": "t3/fix/welcome-pip-look-glitches",
+              "head": "369a1bcdfa",
+              "reviews": [],
+              "landed": {
+                "sha": "c76d1cf756",
+                "at": "2026-11-06T16:00:00.808Z"
+              },
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T16:00:00.808Z",
+              "ageSeconds": 18000
+            },
+            {
+              "id": "FO-41",
+              "title": "PiP shadow on resize",
+              "state": "working",
+              "owner": "fo-welcome",
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:54:00.808Z",
+              "ageSeconds": 360
+            },
+            {
+              "id": "FO-33",
+              "title": "Lines chart label placement",
+              "state": "blocked",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": {
+                "kind": "owner",
+                "what": "Card vm.pm-fo-lead--Q3",
+                "since": "2026-11-06T19:00:00.808Z"
+              },
+              "why": null,
+              "updatedAt": "2026-11-06T19:00:00.808Z",
+              "ageSeconds": 7200
+            },
+            {
+              "id": "FO-34",
+              "title": "Empty state copy",
+              "state": "review",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:20:00.808Z",
+              "ageSeconds": 2400
+            },
+            {
+              "id": "FO-35",
+              "title": "Toast stacking order",
+              "state": "fixing",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:35:00.808Z",
+              "ageSeconds": 1500
+            },
+            {
+              "id": "FO-36",
+              "title": "Export button spacing",
+              "state": "ready",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T20:45:00.808Z",
+              "ageSeconds": 900
+            },
+            {
+              "id": "FO-37",
+              "title": "Keyboard shortcut sheet",
+              "state": "todo",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T18:00:00.808Z",
+              "ageSeconds": 10800
+            },
+            {
+              "id": "FO-42",
+              "title": "Old splash animation",
+              "state": "dropped",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": "Replaced by the new welcome",
+              "updatedAt": "2026-11-06T13:00:00.808Z",
+              "ageSeconds": 28800
+            },
+            {
+              "id": "FO-43",
+              "title": "Docs link in About",
+              "state": "done",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T12:00:00.808Z",
+              "ageSeconds": 32400
+            },
+            {
+              "id": "FO-44",
+              "title": "Window title casing",
+              "state": "todo",
+              "owner": null,
+              "branch": null,
+              "head": null,
+              "reviews": [],
+              "landed": null,
+              "blockedOn": null,
+              "why": null,
+              "updatedAt": "2026-11-06T17:00:00.808Z",
+              "ageSeconds": 14400
+            }
+          ]
+        }
+      ],
+      "counts": {
+        "total": 18,
+        "todo": 2,
+        "working": 3,
+        "review": 2,
+        "fixing": 1,
+        "blocked": 2,
+        "ready": 1,
+        "landed": 5,
+        "done": 1,
+        "dropped": 1
+      },
+      "completion": {
+        "done": 6,
+        "of": 17
+      }
+    }
+  ],
+  "threads": {
+    "source": "agent-reports",
+    "rows": [
+      {
+        "name": "pm-closure-lead",
+        "writer": "vm.pm-closure-lead",
+        "machine": "vm",
+        "project": "puppet-master",
+        "stream": "C",
+        "state": "blocked",
+        "doing": "Re-audit batch B09",
+        "blockedOn": {
+          "kind": "owner",
+          "what": "Which reviewer pair to trust for B09",
+          "since": "2026-11-06T20:20:00.808Z"
+        },
+        "progress": null,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "account": "claude_main",
+        "source": "report",
+        "lastSeen": "2026-11-06T20:48:00.808Z",
+        "ageSeconds": 720,
+        "stale": false,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "tools-lead",
+        "writer": "vm.tools-lead",
+        "machine": "vm",
+        "project": "puppet-master",
+        "stream": "TOOLS",
+        "state": "waiting",
+        "doing": "Blind pre-check of browser-check 2.1",
+        "blockedOn": null,
+        "progress": null,
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
+        "account": "claude_main",
+        "source": "report",
+        "lastSeen": "2026-11-06T20:51:00.808Z",
+        "ageSeconds": 540,
+        "stale": false,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "aac-status-lead",
+        "writer": "vm.aac-status-lead",
+        "machine": "vm",
+        "project": "ai-account-center",
+        "stream": "STATUS",
+        "state": "working",
+        "doing": "Status tab page and phone layout",
+        "blockedOn": null,
+        "progress": {
+          "done": 3,
+          "total": 8,
+          "unit": "items"
+        },
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "account": "claude_main",
+        "source": "report",
+        "lastSeen": "2026-11-06T20:58:00.808Z",
+        "ageSeconds": 120,
+        "stale": false,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "pm-fo-lead",
+        "writer": "vm.pm-fo-lead",
+        "machine": "vm",
+        "project": "puppet-master",
+        "stream": "F",
+        "state": "working",
+        "doing": "Landing group 4 of the PM7 follow-ups",
+        "blockedOn": null,
+        "progress": {
+          "done": 7,
+          "total": 12,
+          "unit": "items"
+        },
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "account": "claude_main",
+        "source": "report",
+        "lastSeen": "2026-11-06T20:56:00.808Z",
+        "ageSeconds": 240,
+        "stale": false,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "fo-welcome",
+        "writer": "vm.fo-welcome",
+        "machine": "vm",
+        "project": "puppet-master",
+        "stream": "F",
+        "state": "working",
+        "doing": "Welcome PiP look glitch (FO-41)",
+        "blockedOn": null,
+        "progress": null,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "account": "claude_main",
+        "source": "report",
+        "lastSeen": "2026-11-06T20:54:00.808Z",
+        "ageSeconds": 360,
+        "stale": false,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "nas-backup",
+        "writer": "nas1.nas-backup",
+        "machine": "nas1",
+        "project": null,
+        "stream": null,
+        "state": "idle",
+        "doing": "Nightly share backup check",
+        "blockedOn": null,
+        "progress": null,
+        "model": "glm-5.3",
+        "effort": "high",
+        "account": "zcode",
+        "source": "report",
+        "lastSeen": "2026-11-06T20:40:00.808Z",
+        "ageSeconds": 1200,
+        "stale": false,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "aac-claude-relogin",
+        "writer": "mac.aac-claude-relogin",
+        "machine": "mac",
+        "project": "ai-account-center",
+        "stream": "SIGNIN",
+        "state": "done",
+        "doing": "Sign-in renewal landed; runner reinstalled",
+        "blockedOn": null,
+        "progress": null,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "account": "claude_main",
+        "source": "report",
+        "lastSeen": "2026-11-06T20:10:00.808Z",
+        "ageSeconds": 3000,
+        "stale": false,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "pm-win-build",
+        "writer": "windows.pm-win-build",
+        "machine": "windows",
+        "project": "puppet-master",
+        "stream": "F",
+        "state": "paused",
+        "doing": "Windows release build (waiting for a quiet PC)",
+        "blockedOn": null,
+        "progress": null,
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "account": "codex_main",
+        "source": "report",
+        "lastSeen": "2026-11-06T18:00:00.808Z",
+        "ageSeconds": 10800,
+        "stale": true,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "pm-docs-sweep",
+        "writer": null,
+        "machine": "vm",
+        "project": null,
+        "stream": null,
+        "state": null,
+        "doing": "Docs sweep for PM7 release notes",
+        "blockedOn": null,
+        "progress": null,
+        "model": null,
+        "effort": null,
+        "account": null,
+        "source": "pm-mail",
+        "lastSeen": "2026-11-06T20:45:00.808Z",
+        "ageSeconds": 900,
+        "stale": false,
+        "clockAheadSeconds": null,
+        "problem": null
+      },
+      {
+        "name": "aac-mac-bar",
+        "writer": null,
+        "machine": "mac",
+        "project": null,
+        "stream": null,
+        "state": null,
+        "doing": "Mac bar quota colours",
+        "blockedOn": null,
+        "progress": null,
+        "model": null,
+        "effort": null,
+        "account": null,
+        "source": "pm-mail",
+        "lastSeen": "2026-11-06T20:15:00.808Z",
+        "ageSeconds": 2700,
+        "stale": true,
+        "clockAheadSeconds": null,
+        "problem": null
+      }
+    ]
+  },
+  "machines": {
+    "source": "machines",
+    "rows": [
+      {
+        "id": "vm",
+        "label": "Ubuntu VM",
+        "state": "ok",
+        "asOf": "2026-11-06T20:59:50.808Z",
+        "ageSeconds": 10,
+        "detail": null,
+        "cpu": {
+          "cores": 8,
+          "load1": 1.2,
+          "busyPct": 12
+        },
+        "memory": {
+          "availableGb": 16,
+          "totalGb": 32
+        },
+        "disk": [
+          {
+            "mount": "/",
+            "freeGb": 200,
+            "totalGb": 500
+          }
+        ],
+        "browsers": {
+          "running": 6,
+          "max": 12
+        },
+        "recordings": {
+          "running": 1,
+          "max": 5
+        },
+        "gpuPct": 39,
+        "sessions": [
+          {
+            "id": "s1",
+            "url": "localhost:3000/app/status",
+            "owner": "aac-status-lead",
+            "recording": true,
+            "ageSeconds": 120
+          }
+        ],
+        "warnings": []
+      },
+      {
+        "id": "mac",
+        "label": "Mac",
+        "state": "ok",
+        "asOf": "2026-11-06T20:59:50.808Z",
+        "ageSeconds": 10,
+        "detail": null,
+        "cpu": {
+          "cores": 8,
+          "load1": 1.2,
+          "busyPct": 12
+        },
+        "memory": {
+          "availableGb": 16,
+          "totalGb": 32
+        },
+        "disk": [
+          {
+            "mount": "/System/Volumes/Data",
+            "freeGb": 17.7,
+            "totalGb": 460
+          }
+        ],
+        "browsers": null,
+        "recordings": null,
+        "gpuPct": null,
+        "sessions": [],
+        "warnings": [
+          "Disk 17.7 GB free, under the 50 GB floor"
+        ]
+      },
+      {
+        "id": "windows",
+        "label": "Windows PC",
+        "state": "unreachable",
+        "asOf": "2026-11-06T20:50:00.808Z",
+        "ageSeconds": 600,
+        "detail": "ssh did not answer in time (since 3:58 PM). Showing the reading from 3:50 PM.",
+        "cpu": {
+          "cores": 8,
+          "load1": 1.2,
+          "busyPct": 12
+        },
+        "memory": {
+          "availableGb": 16,
+          "totalGb": 32
+        },
+        "disk": [
+          {
+            "mount": "/",
+            "freeGb": 200,
+            "totalGb": 500
+          }
+        ],
+        "browsers": null,
+        "recordings": null,
+        "gpuPct": null,
+        "sessions": [],
+        "warnings": []
+      },
+      {
+        "id": "nas1",
+        "label": "Nas1",
+        "state": "unreachable",
+        "asOf": null,
+        "ageSeconds": null,
+        "detail": "ssh refused (since 3:59 PM).",
+        "cpu": null,
+        "memory": null,
+        "disk": [],
+        "browsers": null,
+        "recordings": null,
+        "gpuPct": null,
+        "sessions": [],
+        "warnings": []
+      }
+    ]
+  },
+  "simlock": {
+    "source": "simlock",
+    "capacity": [
+      {
+        "platform": "ios",
+        "running": 1,
+        "max": 2,
+        "reserved": 0,
+        "overLimit": false
+      }
+    ],
+    "leases": [
+      {
+        "device": "iphone-17-pro",
+        "deviceLabel": "iPhone 17 Pro",
+        "platform": "ios",
+        "holder": "pm7-build",
+        "since": "2026-11-06T20:45:00.808Z",
+        "expiresAt": null
+      }
+    ]
+  },
+  "usage": {
+    "source": "usage",
+    "warnings": [
+      {
+        "tone": "bad",
+        "text": "claude full (7-day): at its limit until its Nov 9 4:00 PM reset"
+      },
+      {
+        "tone": "warn",
+        "text": "claude main (7-day): full in 1d 12h, before its Nov 9 reset"
+      }
+    ],
+    "accounts": [
+      {
+        "id": "claude:full",
+        "provider": "claude",
+        "label": "full",
+        "host": "ubuntu",
+        "active": true,
+        "window": "7-day",
+        "kind": "rate_limit",
+        "usedPct": 100,
+        "remaining": null,
+        "limit": null,
+        "unit": null,
+        "resetsAt": "2026-11-09T21:00:00.808Z",
+        "projectedFullAt": null,
+        "runsOutBeforeReset": null,
+        "atLimit": true,
+        "stale": false
+      },
+      {
+        "id": "claude:main",
+        "provider": "claude",
+        "label": "main",
+        "host": "ubuntu",
+        "active": true,
+        "window": "7-day",
+        "kind": "rate_limit",
+        "usedPct": 60,
+        "remaining": null,
+        "limit": null,
+        "unit": null,
+        "resetsAt": "2026-11-09T21:00:00.808Z",
+        "projectedFullAt": "2026-11-08T09:00:00.808Z",
+        "runsOutBeforeReset": true,
+        "atLimit": false,
+        "stale": false
+      }
+    ]
+  },
+  "spend": {
+    "source": "quota-watch",
+    "estimate": true,
+    "asOf": "2026-11-06T20:57:00.808Z",
+    "generatedAt": "2026-11-06T20:57:00.808Z",
+    "writer": "vm.quota-watch",
+    "methodId": "token-share-at-list-price",
+    "method": "Each account meter's observed use over the window (credits spent, or percentage points of a usage window, from AI Account Center's readings) is split by each session's share of that account's tokens, weighted by list prices per model. Every per-thread and per-stream number is an estimate.",
+    "periods": [
+      {
+        "id": "day",
+        "label": "Today",
+        "period": "day-fixture",
+        "start": "2026-11-06T11:00:00.808Z",
+        "end": "2026-11-06T20:57:00.808Z",
+        "coverage": 0.67,
+        "coverageText": null,
+        "streams": [
+          {
+            "stream": "TOOLS",
+            "label": "Agent tools",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": 6.1,
+                "valueText": "≈ 6.10 credits",
+                "estimate": true
+              },
+              {
+                "account": "claude:account-b",
+                "meter": "five_hour",
+                "meterLabel": "5-hour window",
+                "unit": "percent",
+                "value": 12.5,
+                "valueText": "≈ 12.5 points of the 5-hour window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "F",
+            "label": "PM7 follow-ups",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": 18.28,
+                "valueText": "≈ 18.28 credits",
+                "estimate": true
+              },
+              {
+                "account": "claude:account-b",
+                "meter": "seven_day",
+                "meterLabel": "7-day window",
+                "unit": "percent",
+                "value": 4.4,
+                "valueText": "≈ 4.4 points of the 7-day window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "STATUS",
+            "label": "Status tab",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "claude:account-c",
+                "meter": "seven_day",
+                "meterLabel": "7-day window",
+                "unit": "percent",
+                "value": 2.2,
+                "valueText": "≈ 2.2 points of the 7-day window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "(no stream)",
+            "label": "(no stream)",
+            "bucket": true,
+            "rows": [
+              {
+                "account": "claude:account-b",
+                "meter": "five_hour",
+                "meterLabel": "5-hour window",
+                "unit": "percent",
+                "value": 34.3,
+                "valueText": "≈ 34.3 points of the 5-hour window",
+                "estimate": true
+              },
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": null,
+                "valueText": "not read",
+                "estimate": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "week",
+        "label": "This week",
+        "period": "week-fixture",
+        "start": "2026-11-02T21:00:00.808Z",
+        "end": "2026-11-06T20:57:00.808Z",
+        "coverage": 0.09,
+        "coverageText": "covers 9% of the week",
+        "streams": [
+          {
+            "stream": "TOOLS",
+            "label": "Agent tools",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": 14.64,
+                "valueText": "≈ 14.64 credits",
+                "estimate": true
+              },
+              {
+                "account": "claude:account-b",
+                "meter": "five_hour",
+                "meterLabel": "5-hour window",
+                "unit": "percent",
+                "value": 30,
+                "valueText": "≈ 30.0 points of the 5-hour window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "F",
+            "label": "PM7 follow-ups",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": 43.87,
+                "valueText": "≈ 43.87 credits",
+                "estimate": true
+              },
+              {
+                "account": "claude:account-b",
+                "meter": "seven_day",
+                "meterLabel": "7-day window",
+                "unit": "percent",
+                "value": 10.6,
+                "valueText": "≈ 10.6 points of the 7-day window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "STATUS",
+            "label": "Status tab",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "claude:account-c",
+                "meter": "seven_day",
+                "meterLabel": "7-day window",
+                "unit": "percent",
+                "value": 5.3,
+                "valueText": "≈ 5.3 points of the 7-day window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "(no stream)",
+            "label": "(no stream)",
+            "bucket": true,
+            "rows": [
+              {
+                "account": "claude:account-b",
+                "meter": "five_hour",
+                "meterLabel": "5-hour window",
+                "unit": "percent",
+                "value": 82.3,
+                "valueText": "≈ 82.3 points of the 5-hour window",
+                "estimate": true
+              },
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": null,
+                "valueText": "not read",
+                "estimate": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "window",
+        "label": "Last 6 hours",
+        "period": null,
+        "start": "2026-11-06T15:00:00.808Z",
+        "end": "2026-11-06T20:57:00.808Z",
+        "coverage": 1,
+        "coverageText": null,
+        "streams": [
+          {
+            "stream": "TOOLS",
+            "label": "Agent tools",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": 4.88,
+                "valueText": "≈ 4.88 credits",
+                "estimate": true
+              },
+              {
+                "account": "claude:account-b",
+                "meter": "five_hour",
+                "meterLabel": "5-hour window",
+                "unit": "percent",
+                "value": 10,
+                "valueText": "≈ 10.0 points of the 5-hour window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "F",
+            "label": "PM7 follow-ups",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": 14.62,
+                "valueText": "≈ 14.62 credits",
+                "estimate": true
+              },
+              {
+                "account": "claude:account-b",
+                "meter": "seven_day",
+                "meterLabel": "7-day window",
+                "unit": "percent",
+                "value": 3.5,
+                "valueText": "≈ 3.5 points of the 7-day window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "STATUS",
+            "label": "Status tab",
+            "bucket": false,
+            "rows": [
+              {
+                "account": "claude:account-c",
+                "meter": "seven_day",
+                "meterLabel": "7-day window",
+                "unit": "percent",
+                "value": 1.8,
+                "valueText": "≈ 1.8 points of the 7-day window",
+                "estimate": true
+              }
+            ]
+          },
+          {
+            "stream": "(no stream)",
+            "label": "(no stream)",
+            "bucket": true,
+            "rows": [
+              {
+                "account": "claude:account-b",
+                "meter": "five_hour",
+                "meterLabel": "5-hour window",
+                "unit": "percent",
+                "value": 27.4,
+                "valueText": "≈ 27.4 points of the 5-hour window",
+                "estimate": true
+              },
+              {
+                "account": "codex:account-a",
+                "meter": "credits_balance",
+                "meterLabel": "Credits",
+                "unit": "credits",
+                "value": null,
+                "valueText": "not read",
+                "estimate": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "budgets": [
+      {
+        "stream": "F",
+        "streamLabel": "PM7 follow-ups",
+        "desc": "Codex credits",
+        "accounts": [
+          "codex:account-a"
+        ],
+        "unit": "credits",
+        "meter": "credits_balance",
+        "meterLabel": "Credits",
+        "per": "day",
+        "limit": null,
+        "use": 18.28,
+        "known": true,
+        "percent": null,
+        "period": "day-fixture",
+        "coverage": 0.67,
+        "coverageText": null,
+        "overLimit": false,
+        "estimate": true,
+        "text": "≈ 18.28 credits today; no limit set."
+      },
+      {
+        "stream": "TOOLS",
+        "streamLabel": "Agent tools",
+        "desc": "Claude 5-hour",
+        "accounts": [
+          "claude:account-b"
+        ],
+        "unit": "percent",
+        "meter": "five_hour",
+        "meterLabel": "5-hour window",
+        "per": "window",
+        "limit": 25,
+        "use": 26.1,
+        "known": true,
+        "percent": 104.4,
+        "period": null,
+        "coverage": 1,
+        "coverageText": null,
+        "overLimit": true,
+        "estimate": true,
+        "text": "≈ 26.1 of 25.0 points of the 5-hour window in the window (104%)."
+      },
+      {
+        "stream": "STATUS",
+        "streamLabel": "Status tab",
+        "desc": "Claude weekly",
+        "accounts": [
+          "claude:account-c"
+        ],
+        "unit": "percent",
+        "meter": "seven_day",
+        "meterLabel": "7-day window",
+        "per": "week",
+        "limit": 20,
+        "use": 5.3,
+        "known": false,
+        "percent": 26.5,
+        "period": "week-fixture",
+        "coverage": 0.09,
+        "coverageText": "covers 9% of the week",
+        "overLimit": false,
+        "estimate": true,
+        "text": "at least ≈ 5.3 of 20.0 points of the 7-day window this week (27%)."
+      }
+    ],
+    "unattributed": [
+      {
+        "account": "codex:account-a",
+        "meter": "credits_balance",
+        "meterLabel": "Credits",
+        "unit": "credits",
+        "amount": 470.53,
+        "amountText": "≈ 470.53 credits",
+        "reason": "(no stream)",
+        "why": "threads no stream rule claims",
+        "estimate": true
+      },
+      {
+        "account": "claude:account-b",
+        "meter": "seven_day",
+        "meterLabel": "7-day window",
+        "unit": "percent",
+        "amount": null,
+        "amountText": "not read",
+        "reason": "(no reading)",
+        "why": "the meter had no reading in the window",
+        "estimate": true
+      },
+      {
+        "account": "claude:account-c",
+        "meter": "five_hour",
+        "meterLabel": "5-hour window",
+        "unit": "percent",
+        "amount": 1.2,
+        "amountText": "≈ 1.2 points of the 5-hour window",
+        "reason": "(no session seen)",
+        "why": "measured use with no session to split it",
+        "estimate": false
+      }
+    ],
+    "machinesNotScanned": [
+      {
+        "name": "windows",
+        "thisPass": true,
+        "error": "ssh: connect timed out",
+        "runsMissed": 2,
+        "runsInWindow": 36
+      }
+    ],
+    "overLimitBudgets": 1
+  }
+}

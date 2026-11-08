@@ -8,7 +8,7 @@ The production account dashboard is a real Slint UI compiled from
 (light, dark and auto themes, embedded Instrument Sans and Martian Mono, Lucide
 icons, official provider marks and the Apex Soft logo). `public/bridge.js`
 supplies browser session authentication, same-origin API requests, URL state
-(the page routes `/`, `/analytics` and `/accounts`, with `?view=` as an alias)
+(the page routes `/`, `/analytics`, `/accounts`, `/status` and `/scoreboard`, with `?view=` as an alias)
 and asynchronous updates; it does not render
 the dashboard. `public/view-model.mjs` turns the API responses into the version 2
 view model that `src/lib.rs` writes into persistent Slint models in place, so
@@ -170,6 +170,10 @@ page as file:// or configure a cross-origin API URL.
   follows the trusted local network (trusted, not on it, or trust off with plain
   guidance), and first-run setup appears only when the server reports setup mode
   (with the setup code when the server asks for one).
+- Status and Scoreboard are tabs after Accounts whose pages are Leptos pages served at `/app/status` and
+  `/app/scoreboard`; `public/shell-frame.mjs` shows each in an iframe over the canvas, in the content area the
+  shell reports, and the shell's own "Status page unavailable" note when a page cannot load. Contract:
+  [docs/status-tab.md](../docs/status-tab.md), "Shell iframe".
 - Reported usage can exceed 100%. Amounts and percentage labels preserve the
   overage; only visual progress-bar widths are bounded by their tracks.
   Displayed fractions use at most two decimal places; source precision is retained.
