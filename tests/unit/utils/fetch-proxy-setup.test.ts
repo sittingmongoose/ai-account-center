@@ -7,7 +7,7 @@ import {
   fetch as undiciFetch,
   getGlobalDispatcher,
   setGlobalDispatcher,
-} from 'undici';
+} from 'undici/index.js';
 import {
   applyGlobalFetchProxy,
   createGlobalFetchProxyDispatcher,

@@ -5,7 +5,15 @@
  * variables without routing CCS loopback traffic back through the proxy.
  */
 
-import { Agent, Dispatcher, ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
+// Bun's bare `undici` import is a native fetch that ignores dispatcher.dispatch,
+// so loopback bypass never runs. The package entry is the JavaScript client.
+import {
+  Agent,
+  Dispatcher,
+  ProxyAgent,
+  fetch as undiciFetch,
+  setGlobalDispatcher,
+} from 'undici/index.js';
 import { getProxyResolution, shouldBypassProxy } from './proxy-env';
 
 const FETCH_PROXY_PROTOCOLS = ['http:', 'https:'];
