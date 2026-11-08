@@ -502,138 +502,6 @@ class UpdaterTests(unittest.TestCase):
             expected = ["--user-data-dir=" + folder] if folder else []
             self.assertEqual((argv, desktop_arguments(mock.Mock(args=argv, cwd="/fixture"), "linux")), (argv, expected))
 
-    def _ordinary_codex_click(self, arrive=False, fail=False, earlier=None, manager='native', binary=True, noop=False, terminals=False):
-        """Python's own update_cli path for a native Ubuntu Codex: no app-server at its first scan."""
-        with tempfile.TemporaryDirectory() as directory:
-            home = pathlib.Path(directory)
-            releases = home / '.codex/packages/standalone/releases'
-            for value in ('1.0.0', '2.0.0'):
-                (releases / value).mkdir(parents=True)
-                (releases / value / 'codex').write_text('')
-            path = home / '.local/bin/codex'
-            path.parent.mkdir(parents=True)
-            if binary:
-                path.symlink_to(releases / '1.0.0' / 'codex')
-            else:
-                path = releases / '1.0.0' / 'codex'
-            pending = home / '.ccs/app-updates/codex-cli-pending-restart.json'
-            if earlier is not None:
-                pending.parent.mkdir(parents=True)
-                pending.write_bytes(earlier)
-            inventory, seen, bridged = [], {}, []
-            installed = {'version': '1.0.0'}
-            uid = os.getuid()
-            old = str(releases / '1.0.0' / 'codex')
-
-            def perform(install, deadline=None):
-                seen['during'] = pending.read_bytes() if pending.exists() else None
-                if arrive:
-                    # A Mac or Windows Codex app connects: its proxy starts a daemon on the old binary.
-                    inventory.append(processes.Process(15, 1, uid, old, '15', [old, 'app-server', 'proxy']))
-                    inventory.append(processes.Process(20, 1, uid, old, '20', [old, 'app-server', '--listen', 'unix://']))
-                if fail:
-                    raise common.UpdateFailure('update_failed')
-                if noop:
-                    return
-                if binary:
-                    path.unlink()
-                    path.symlink_to(releases / '2.0.0' / 'codex')
-                installed['version'] = '2.0.0'
-
-            def detect(app, platform):
-                return common.Install('codex-cli', 'ubuntu', path, installed['version'], manager)
-
-            real_put_back = updater.put_back_marker
-
-            def put_back(target, value):
-                real_put_back(target, value)
-                seen['after'] = target.read_bytes() if target.exists() else None
-
-            # Terminal Codex sessions found by the first scan, on the old binary; the scan after the
-            # swap no longer matches them.
-            terminal = mock.Mock(name='terminal-session')
-            first = ([terminal], [terminal], []) if terminals else ([], [], [])
-            restarted = []
-
-            def run(argv, **kwargs):
-                bridged.append([str(item) for item in argv])
-                return json.dumps({'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'updated', 'previousVersion': '2.0.0',
-                                   'version': '2.0.0', 'manager': 'native', 'messageCode': 'updated', 'updateAttempted': True,
-                                   'restartedProcesses': 1, 'forcedStops': 0})
-
-            install = common.Install('codex-cli', 'ubuntu', path, '1.0.0', manager)
-            with mock.patch.object(pathlib.Path, 'home', return_value=home), \
-                    mock.patch.object(updater, 'scan', side_effect=lambda platform: list(inventory)), \
-                    mock.patch.object(updater, 'command', side_effect=run), \
-                    mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
-                    mock.patch.object(updater, 'cli_instances', return_value=first), \
-                    mock.patch.object(updater, 'check_terminal'), \
-                    mock.patch.object(updater, 'perform_cli_update', side_effect=perform), \
-                    mock.patch.object(updater, 'detect_cli', side_effect=detect), \
-                    mock.patch.object(updater, 'put_back_marker', side_effect=put_back), \
-                    mock.patch.object(updater, 'restart_cli', side_effect=lambda inst, contexts: restarted.append(list(contexts)) or []), \
-                    mock.patch.object(updater, 'terminate_cli', return_value=0):
-                value = updater.update_cli(install, time.monotonic() + 600)
-            seen['final'] = pending.read_bytes() if pending.exists() else None
-            seen['restarted'] = restarted
-            seen['terminal'] = terminal
-            return value, seen, bridged
-
-    def test_python_cli_install_names_the_daemon_and_hands_an_arrival_to_the_bridge(self):
-        value, seen, bridged = self._ordinary_codex_click(arrive=True)
-        # The daemon was named before the installer ran, whatever ran then, as an install intent that
-        # keeps the marker from before it, so the bridge settles it as its own.
-        intent = json.loads(seen['during'])
-        self.assertTrue(intent['daemon'])
-        self.assertEqual(intent['install'], {'earlier': None})
-        # A proxy and a daemon on the old binary appeared during the install: the bridge restarts them.
-        self.assertEqual(len(bridged), 1)
-        self.assertTrue(bridged[0][1].endswith('app_update_codex.cjs'))
-        self.assertEqual((value['status'], value['previousVersion'], value['version']), ('updated', '1.0.0', '2.0.0'))
-
-    def test_python_cli_install_hands_over_only_when_the_version_changed(self):
-        # An app server starting during a no-op install runs the current binary: nothing to restart.
-        value, seen, bridged = self._ordinary_codex_click(arrive=True, noop=True, earlier=b'{"version": "0.9.0"}')
-        self.assertEqual(bridged, [])
-        self.assertEqual(value['status'], 'current')
-        self.assertEqual(seen['after'], b'{"version": "0.9.0"}')
-
-    def test_python_cli_hand_over_reopens_the_terminal_sessions_of_the_first_scan(self):
-        value, seen, bridged = self._ordinary_codex_click(arrive=True, terminals=True)
-        self.assertEqual(len(bridged), 1)
-        self.assertEqual(seen['restarted'], [[seen['terminal']]])
-
-    def test_python_cli_install_puts_the_earlier_marker_back_when_nothing_arrived(self):
-        for earlier in (None, b'{"version": "0.9.0"}'):
-            with self.subTest(earlier=earlier):
-                value, seen, bridged = self._ordinary_codex_click(earlier=earlier)
-                self.assertTrue(json.loads(seen['during'])['daemon'])
-                self.assertEqual(bridged, [])
-                self.assertEqual(seen['after'], earlier)
-                self.assertEqual(value['status'], 'updated')
-
-    def test_python_cli_install_that_fails_and_changes_nothing_owes_nothing(self):
-        for earlier in (None, b'{"version": "0.9.0"}'):
-            with self.subTest(earlier=earlier):
-                value, seen, bridged = self._ordinary_codex_click(fail=True, earlier=earlier)
-                self.assertEqual(value['status'], 'failed')
-                self.assertEqual(bridged, [])
-                self.assertEqual(seen['final'], earlier)
-
-    def test_python_cli_install_carries_on_past_an_undecodable_earlier_marker(self):
-        earlier = b'\xff\xfe not a marker'
-        value, seen, bridged = self._ordinary_codex_click(earlier=earlier)
-        self.assertEqual(value['status'], 'updated')
-        self.assertTrue(json.loads(seen['during'])['daemon'])
-        # Python's own put-back is byte for byte.
-        self.assertEqual(seen['after'], earlier)
-
-    def test_python_cli_install_names_no_daemon_where_there_is_no_shared_one(self):
-        for options in ({'manager': 'npm'}, {'binary': False}):
-            with self.subTest(**options):
-                value, seen, bridged = self._ordinary_codex_click(**options)
-                self.assertIsNone(seen['during'])
-
     def test_desktop_arguments_take_the_folder_chromium_takes(self):
         from app_update_processes import desktop_arguments
         cases = {
@@ -774,31 +642,6 @@ class UpdaterTests(unittest.TestCase):
         bridged = any('app_update_codex.cjs' in ' '.join(str(arg) for arg in call.args[0]) for call in run.call_args_list)
         return value, bridged
 
-    def test_a_cli_retry_with_no_daemon_goes_to_the_bridge_not_current(self):
-        with tempfile.TemporaryDirectory() as directory:
-            value, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker={'version': '2.0.0', 'daemon': True})
-        self.assertTrue(bridged)
-        self.assertEqual(value['status'], 'restart_failed')
-        self.assertEqual(value['messageCode'], 'restart_not_running')
-
-    def test_a_cli_retry_reaches_the_bridge_by_the_markers_target(self):
-        with tempfile.TemporaryDirectory() as directory:
-            _, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker={'version': '1.0.0', 'target': '2.0.0', 'daemon': True})
-        self.assertTrue(bridged)
-
-    def test_a_cli_retry_killed_after_replacing_codex_still_reaches_the_bridge(self):
-        with tempfile.TemporaryDirectory() as directory:
-            value, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', marker={'version': '1.0.0', 'daemon': True})
-        self.assertTrue(bridged)
-        self.assertEqual(value['messageCode'], 'restart_not_running')
-
-    def test_a_cli_retry_reaches_the_bridge_for_a_prerelease(self):
-        # The bridge writes the numeric part; version_text keeps the prerelease.
-        self.assertEqual(common.version_text('codex-cli 0.50.0-alpha.1'), '0.50.0-alpha.1')
-        with tempfile.TemporaryDirectory() as directory:
-            _, bridged = self._click_codex_cli(pathlib.Path(directory), '0.50.0-alpha.1', marker={'version': '0.50.0', 'desktop': True})
-        self.assertTrue(bridged)
-
     def test_marker_version_match_ignores_only_the_prerelease(self):
         self.assertTrue(common.marker_names_version('0.50.0', '0.50.0-alpha.1'))
         self.assertTrue(common.marker_names_version('26.930.51102', '26.930.51102-1'))
@@ -806,10 +649,13 @@ class UpdaterTests(unittest.TestCase):
         self.assertFalse(common.marker_names_version(None, '0.50.0'))
         self.assertFalse(common.marker_names_version('', ''))
 
-    def test_a_cli_click_with_no_daemon_and_no_matching_marker_stays_on_the_ordinary_path(self):
+    def test_a_cli_click_with_no_daemon_stays_on_the_ordinary_path_whatever_marker_it_finds(self):
+        # Each Codex CLI click stands alone (owner decision 2026-11-08): no marker carries a restart over,
+        # not even one an older version wrote naming the daemon.
         closed = {'version': '2.0.0', 'daemon': True}
         cases = ({'marker': None}, {'marker': {'version': '1.0.0'}}, {'marker': {'version': '2.0.0'}},
-                 {'marker': {'version': '2.0.0', 'desktop': False, 'daemon': False}}, {'marker': closed, 'manager': 'npm'}, {'marker': closed, 'binary': False})
+                 {'marker': {'version': '2.0.0', 'desktop': False, 'daemon': False}}, {'marker': closed},
+                 {'marker': closed, 'manager': 'npm'}, {'marker': closed, 'binary': False})
         for case in cases:
             with tempfile.TemporaryDirectory() as directory:
                 _, bridged = self._click_codex_cli(pathlib.Path(directory), '2.0.0', **case)

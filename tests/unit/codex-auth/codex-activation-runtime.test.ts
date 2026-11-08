@@ -208,7 +208,6 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(marker()).toEqual({
       version: '2.0.0',
       desktop: true,
-      daemon: true,
       desktops: 1,
     });
 
@@ -238,41 +237,12 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(marker()).toEqual({
       version: '2.0.0',
       desktop: true,
-      daemon: false,
       desktops: 1,
     });
 
     const second = await run({ restartOnly: true });
     expect(second.status).toBe('restart_failed');
     expect(second.messageCode).toBe('restart_not_running');
-  });
-
-  it('records the daemon when stop() closes it and its own recovery fails', async () => {
-    const fake = harness([daemon]);
-    const { deps, marker } = click(fake, async () => {
-      throw new CodexActivationRuntimeError('fixture launch failed');
-    });
-    const interrupted = {
-      ...deps,
-      runtime: () =>
-        createCodexActivationRuntime(home, {
-          ...fake.deps,
-          signal: async (target, signal) => {
-            await fake.deps.signal(target, signal);
-            // A new writer appears once the daemon is gone, so stop() must recover.
-            fake.inject(processFixture(30, ['/fixture/bin/codex', 'exec'], {}));
-          },
-          launch: async () => {
-            throw new CodexActivationRuntimeError('fixture launch failed');
-          },
-        }),
-    };
-    bridge.output.restartedProcesses = 0;
-    const result = {
-      ...(await bridge.execute({ ...interrupted, operation: 'cli', expectedCandidate: '2.0.0' })),
-    };
-    expect(result.status).toBe('restart_failed');
-    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: 0 });
   });
 
   const dataDesktop = (pid: number, data: string) =>
@@ -284,30 +254,6 @@ describe('Codex Desktop update retry on the real runtime', () => {
     pid,
     ppid,
     startTime: String(pid),
-  });
-
-  it('names a daemon that appeared just before stop() took its lock', async () => {
-    const fake = harness([]);
-    const { deps, marker } = click(fake);
-    const result = {
-      ...(await bridge.execute({
-        ...deps,
-        operation: 'cli',
-        runtime: () =>
-          createCodexActivationRuntime(home, {
-            ...fake.deps,
-            acquireStartupLock: async () => {
-              fake.inject(daemon);
-              return fake.deps.acquireStartupLock();
-            },
-            launch: async () => {
-              throw new CodexActivationRuntimeError('fixture launch failed');
-            },
-          }),
-      })),
-    };
-    expect(result.status).toBe('restart_failed');
-    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: 0 });
   });
 
   it('owes every desktop it closed: one coming back does not satisfy a retry', async () => {
@@ -325,7 +271,7 @@ describe('Codex Desktop update retry on the real runtime', () => {
     });
     const first = await run({});
     expect(first.status).toBe('restart_failed');
-    expect(marker()).toEqual({ version: '2.0.0', desktop: true, daemon: false, desktops: 2 });
+    expect(marker()).toEqual({ version: '2.0.0', desktop: true, desktops: 2 });
     expect(JSON.stringify(marker())).not.toContain('/private');
 
     const second = await run({ restartOnly: true });
@@ -565,7 +511,7 @@ describe('Codex Desktop update retry on the real runtime', () => {
       return fake.deps.launch(target, isDesktopLaunch);
     });
     expect((await run({})).status).toBe('restart_failed');
-    expect(marker()).toEqual({ version: '2.0.0', desktop: true, daemon: false, desktops: 1 });
+    expect(marker()).toEqual({ version: '2.0.0', desktop: true, desktops: 1 });
 
     // The user reopens it. The retry closes and relaunches that one, and still can't call the earlier
     // restart done: only AAC's own relaunch of the desktop it closed clears it.
@@ -587,7 +533,7 @@ describe('Codex Desktop update retry on the real runtime', () => {
       return { pid: 999 };
     });
     expect((await run({})).status).toBe('restart_failed');
-    expect(marker()).toEqual({ version: '2.0.0', desktop: true, daemon: false, desktops: 1 });
+    expect(marker()).toEqual({ version: '2.0.0', desktop: true, desktops: 1 });
   });
 
   const withoutServer = (fake: ReturnType<typeof harness>) =>
@@ -613,7 +559,7 @@ describe('Codex Desktop update retry on the real runtime', () => {
         return {
           ...(await bridge.execute({
             ...deps,
-            operation: 'cli',
+            operation: 'desktop',
             expectedCandidate: '2.0.0',
             runtime: (hooks: Partial<CodexActivationRuntimeDependencies> = {}) =>
               createCodexActivationRuntime(home, {
@@ -637,73 +583,14 @@ describe('Codex Desktop update retry on the real runtime', () => {
     });
     expect((await run()).status).toBe('restart_failed');
     expect(fake.current().some(isDesktop)).toBe(true);
+    // A desktop run: stop() failed before the install, so the marker names what is installed, and the
+    // install it was about to attempt.
     expect(marker()).toEqual({
-      version: '2.0.0',
+      version: '1.0.0',
+      target: '2.0.0',
       desktop: true,
-      daemon: false,
       desktops: 1,
     });
-  });
-
-  it('owes a daemon a failed stop() retired when its relaunch fails the readiness check', async () => {
-    const fake = harness([daemon]);
-    let checks = 0;
-    const { deps, marker } = click(fake);
-    const result = {
-      ...(await bridge.execute({
-        ...deps,
-        operation: 'cli',
-        expectedCandidate: '2.0.0',
-        runtime: () =>
-          createCodexActivationRuntime(home, {
-            ...fake.deps,
-            signal: async (target, signal) => {
-              await fake.deps.signal(target, signal);
-              // A new writer appears once the daemon is gone, so stop() must recover.
-              fake.inject(processFixture(30, ['/fixture/bin/codex', 'exec'], {}));
-            },
-            launch: (target, isDesktop) =>
-              bridge.relaunch(target, isDesktop, fake.deps.launch, { inside: () => true }),
-            verifyDaemon: async () => {
-              checks++;
-              throw new CodexActivationRuntimeError('socket not bound');
-            },
-          }),
-      })),
-    };
-    expect(result.status).toBe('restart_failed');
-    // Recovery relaunched it, so a daemon is running, but it never passed the check.
-    expect(fake.current().some((entry) => entry.args.includes('--listen'))).toBe(true);
-    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: 0 });
-    expect(checks).toBeGreaterThan(1);
-  });
-
-  it('keeps the plan when every scan fails after stop() retired the daemon', async () => {
-    const fake = harness([daemon]);
-    let broken = false;
-    const { deps, marker } = click(fake);
-    const result = {
-      ...(await bridge.execute({
-        ...deps,
-        operation: 'cli',
-        expectedCandidate: '2.0.0',
-        runtime: () =>
-          createCodexActivationRuntime(home, {
-            ...fake.deps,
-            scan: async () => {
-              if (broken) throw new CodexActivationRuntimeError('Codex inventory failed.');
-              return fake.deps.scan();
-            },
-            signal: async (target, signal) => {
-              await fake.deps.signal(target, signal);
-              broken = true;
-            },
-          }),
-      })),
-    };
-    expect(result.status).toBe('restart_failed');
-    expect(fake.current().some((entry) => entry.args.includes('--listen'))).toBe(false);
-    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: 0 });
   });
 
   it('does not owe a proxy-only desktop a failed stop() never retired', async () => {
@@ -735,81 +622,13 @@ describe('Codex Desktop update retry on the real runtime', () => {
       version: '1.0.0',
       target: '2.0.0',
       desktop: true,
-      daemon: true,
       desktops: 1,
     });
     const second = await run({ ...failed, expectedCandidate: '1.0.0', restartOnly: true });
     expect(second.messageCode).toBe('restart_not_running');
   });
 
-  it('keeps the record when an installer replaces the app, fails, and the relaunch fails', async () => {
-    const fake = harness([daemon]);
-    let installedNow = '1.0.0';
-    const { run, marker } = click(fake, async () => {
-      throw new CodexActivationRuntimeError('fixture launch failed');
-    });
-    const partial = {
-      readVersion: async () => installedNow,
-      update: async () => {
-        installedNow = '2.0.0';
-        throw new Error('fixture installer failed');
-      },
-    };
-    const first = await run(partial);
-    expect(first.status).toBe('restart_failed');
-    expect(first.version).toBe('2.0.0');
-    expect(marker()).toEqual({ version: '2.0.0', desktop: false, daemon: true, desktops: 0 });
-    // Both installed and candidate are now 2.0.0: the record still applies, and is still owed.
-    const second = await run({ ...partial, restartOnly: true });
-    expect(second.messageCode).toBe('restart_not_running');
-  });
-
   /** A retry owing a daemon, whose stop() finds only a proxy that respawns it as the lock is released. */
-  function respawnedDaemon(verifyDaemon: CodexActivationRuntimeDependencies['verifyDaemon']) {
-    const proxy = processFixture(70, ['/fixture/bin/codex', 'app-server', 'proxy'], {
-      env: { HOME: '/fixture', CODEX_HOME: home },
-    });
-    const fake = harness([proxy]);
-    let unlocked = 0;
-    const { deps } = click(fake);
-    return {
-      fake,
-      run: async () => {
-        bridge.output.restartedProcesses = 0;
-        return {
-          ...(await bridge.execute({
-            ...deps,
-            operation: 'cli',
-            update: async () => {},
-            readVersion: async () => '2.0.0',
-            pending: () => true,
-            marked: () => ({ version: '2.0.0', desktop: false, daemon: true, desktops: 0 }),
-            runtime: () =>
-              createCodexActivationRuntime(home, {
-                ...fake.deps,
-                verifyDaemon,
-                releaseNativeStartupLock: async () => {
-                  await fake.deps.releaseNativeStartupLock();
-                  if (++unlocked === 1) fake.inject(daemon);
-                },
-              }),
-          })),
-        };
-      },
-    };
-  }
-
-  it('does not take a respawned daemon for ready without the readiness check', async () => {
-    let checks = 0;
-    const { run } = respawnedDaemon(async () => {
-      checks++;
-      throw new CodexActivationRuntimeError('socket not bound');
-    });
-    const result = await run();
-    expect(checks).toBe(1);
-    expect(result.messageCode).toBe('restart_not_running');
-  });
-
   /** A retry owing a daemon, where daemon B replaces the one that just passed the bridge's check. */
   function replacedAfterCheck(replacementReady: boolean) {
     const fake = harness([daemon]);
@@ -826,10 +645,6 @@ describe('Codex Desktop update retry on the real runtime', () => {
           ...(await bridge.execute({
             ...deps,
             operation: 'cli',
-            update: async () => {},
-            readVersion: async () => '2.0.0',
-            pending: () => true,
-            marked: () => ({ version: '2.0.0', desktop: false, daemon: true, desktops: 0 }),
             runtime: (hooks = {}) =>
               createCodexActivationRuntime(home, {
                 ...fake.deps,
@@ -861,7 +676,7 @@ describe('Codex Desktop update retry on the real runtime', () => {
     const result = await run();
     expect(checked).toContain(999);
     expect(result.status).toBe('restart_failed');
-    expect(result.messageCode).toBe('restart_not_running');
+    expect(result.messageCode).toBe('restart_failed');
     expect(marker()).toBeNull();
   });
 
@@ -889,15 +704,6 @@ describe('Codex Desktop update retry on the real runtime', () => {
     expect(result.messageCode).toBe('update_failed');
     expect(marker()).toBeNull();
     expect(fake.events.some((event) => event.startsWith('SIG'))).toBe(false);
-  });
-
-  it('accepts a respawned daemon once the readiness check passes', async () => {
-    let checks = 0;
-    const { run } = respawnedDaemon(async () => {
-      checks++;
-    });
-    expect((await run()).status).toBe('updated');
-    expect(checks).toBe(1);
   });
 
   it('does not call a desktop whose app server never started a restart', async () => {
@@ -1101,211 +907,33 @@ describe('What the runtime reports for a retry', () => {
   });
 });
 
-describe("A helper killed during stop()'s own recovery", () => {
+describe('A daemon that arrives during the CLI install', () => {
   const repo = path.resolve(import.meta.dir, '../../..');
   const roots: string[] = [];
   afterEach(() => {
     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   });
-  const isolated = (root: string) => ({
-    PATH: process.env.PATH ?? '',
-    HOME: root,
-    USERPROFILE: root,
-    CCS_HOME: path.join(root, 'ccs'),
-    XDG_CONFIG_HOME: path.join(root, '.config'),
-    XDG_DATA_HOME: path.join(root, '.local/share'),
-    XDG_STATE_HOME: path.join(root, '.local/state'),
-    XDG_CACHE_HOME: path.join(root, '.cache'),
-    CODEX_HOME: path.join(root, '.codex'),
-    CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
-    PYTHONDONTWRITEBYTECODE: '1',
-  });
 
-  /** The next Python updater call on what a killed helper left, with no daemon reported running. */
-  const nextClick = (root: string) => {
-    return spawnSync(
-      'python3',
-      [
-        '-c',
-        [
-          'import json, pathlib, sys, time',
-          'from unittest import mock',
-          "sys.path.insert(0, 'scripts/app-updates')",
-          'import app_update_common as common, app_updates as updater',
-          'root = pathlib.Path(sys.argv[1])',
-          "(root / '.local/bin').mkdir(parents=True, exist_ok=True)",
-          "(root / '.local/bin/codex').write_text('')",
-          "install = common.Install('codex-cli', 'ubuntu', pathlib.Path('/fixture/codex'), '2.0.0', 'native')",
-          "answer = {'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'restart_failed', 'previousVersion': '2.0.0', 'version': '2.0.0', 'manager': 'native', 'messageCode': 'restart_not_running', 'updateAttempted': True, 'restartedProcesses': 0, 'forcedStops': 0}",
-          "patches = [mock.patch.object(pathlib.Path, 'home', return_value=root), mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'family', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'cli_instances', return_value=([], [], [])), mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'detect_cli', return_value=install)]",
-          '[patch.start() for patch in patches]',
-          "with mock.patch.object(updater, 'command', return_value=json.dumps(answer)) as run:",
-          '    value = updater.update_cli(install, time.monotonic() + 600)',
-          "bridged = any('app_update_codex.cjs' in ' '.join(str(arg) for arg in call.args[0]) for call in run.call_args_list)",
-          "print(json.dumps({'bridged': bridged, 'status': value['status'], 'marker': (root / '.ccs/app-updates/codex-cli-pending-restart.json').exists()}))",
-        ].join('\n'),
-        root,
-      ],
-      { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
-    );
-  };
-
-  it('leaves a marker that sends the next click to the bridge, not to current', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-recovery-'));
-    roots.push(root);
-    const child = spawnSync(
-      process.execPath,
-      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/killed-recovery.ts')],
-      { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
-    );
-    expect(child.signal).toBe('SIGKILL');
-    const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
-    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual({
-      version: '2.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-    });
-
-    // The next updater call, once the failed replacement has exited: the real Python routing.
-    const next = nextClick(root);
-    expect(next.status).toBe(0);
-    const routed = JSON.parse(next.stdout.trim());
-    expect(routed.bridged).toBe(true);
-    expect(routed.status).not.toBe('current');
-    expect(routed.marker).toBe(true);
-  });
-
-  it('keeps what a failed stop() owes when killed during its readiness check', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-standing-'));
-    roots.push(root);
-    const env = isolated(root);
-    const fixture = path.join(repo, 'tests/unit/codex-auth/fixtures/killed-standing-total.ts');
-    const spawn = (mode: string) =>
-      spawnSync(process.execPath, ['run', fixture, mode], {
-        cwd: repo,
-        env,
-        encoding: 'utf8',
-        timeout: 60_000,
-      });
-    expect(spawn('kill').signal).toBe('SIGKILL');
-    const marker = JSON.parse(
-      fs.readFileSync(
-        path.join(root, '.ccs/app-updates/codex-desktop-pending-restart.json'),
-        'utf8'
-      )
-    );
-    // The daemon, and the desktop stop() closed and could not bring back; not the one it never reached.
-    expect(marker.daemon).toBe(true);
-    expect(marker.desktops).toBe(1);
-
-    // The next update finds only the other desktop and the daemon running: the closed one is not back.
-    const retry = spawn('retry');
-    expect(retry.status).toBe(0);
-    expect(JSON.parse(retry.stdout.trim().split('\n').pop() as string)).toEqual({
-      status: 'restart_failed',
-      messageCode: 'restart_not_running',
-      desktops: 1,
-    });
-  });
-
-  it('leaves a marker naming the old daemon when killed while the updater runs', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-install-'));
-    roots.push(root);
-    const child = spawnSync(
-      process.execPath,
-      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts')],
-      { cwd: repo, env: isolated(root), encoding: 'utf8', timeout: 60_000 }
-    );
-    expect(child.signal).toBe('SIGKILL');
-    const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
-    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual({
-      version: '1.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      install: { earlier: null },
-    });
-    const next = nextClick(root);
-    expect(next.status).toBe(0);
-    const routed = JSON.parse(next.stdout.trim());
-    expect(routed.bridged).toBe(true);
-    expect(routed.status).not.toBe('current');
-  });
-
-  it.each(['1.0.0,2.0.0', '0.50.0-alpha.1,0.50.0'])(
-    'owes a daemon that arrived on the old binary while the updater ran, when killed then (%s)',
-    (versions) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-arrival-'));
-      roots.push(root);
-      const env = { ...isolated(root), AAC_FIXTURE_ARRIVAL: '1', AAC_FIXTURE_VERSIONS: versions };
-      const fixture = path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts');
-      const spawn = (...args: string[]) =>
-        spawnSync(process.execPath, ['run', fixture, ...args], {
-          cwd: repo,
-          env,
-          encoding: 'utf8',
-          timeout: 60_000,
-        });
-      // No daemon ran when the update began, only a proxy; one started during the install.
-      expect(spawn().signal).toBe('SIGKILL');
-      const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
-      expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toMatchObject({ daemon: true });
-      // The real Python routing sends the next click to the bridge.
-      const routed = JSON.parse(nextClick(root).stdout.trim());
-      expect(routed.bridged).toBe(true);
-      // That bridge restarts the daemon still running 1.0.0 instead of calling 2.0.0 current.
-      const retry = JSON.parse(spawn('retry').stdout.trim().split('\n').pop() as string);
-      expect(retry.status).toBe('updated');
-      expect(retry.signals).toBeGreaterThan(0);
-      expect(retry.marker).toBeNull();
-    }
-  );
-
-  it.each(['1.0.0,2.0.0', '0.50.0-alpha.1,0.50.0'])(
-    'keeps a seen version change owed when a killed retry returns to the version it began from (%s)',
-    (versions) => {
-      const [from, to] = versions.split(',');
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-cycle-'));
-      roots.push(root);
-      const env = { ...isolated(root), AAC_FIXTURE_ARRIVAL: '1', AAC_FIXTURE_VERSIONS: versions };
-      const fixture = path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts');
-      const spawn = (extra: Record<string, string>, ...args: string[]) =>
-        spawnSync(process.execPath, ['run', fixture, ...args], {
-          cwd: repo,
-          env: { ...env, ...extra },
-          encoding: 'utf8',
-          timeout: 60_000,
-        });
-      // A to B, a daemon arriving on B, killed. Then a retry whose installer goes B to A, killed too.
-      expect(spawn({}).signal).toBe('SIGKILL');
-      expect(
-        spawn({ AAC_FIXTURE_RETRY_TO: from, AAC_FIXTURE_RETRY_KILL: '1' }, 'retry').signal
-      ).toBe('SIGKILL');
-      const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
-      expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toMatchObject({
-        daemon: true,
-        install: { changed: true },
-      });
-      // The next click finds A installed, as at the start, and still restarts the daemon left on B.
-      const last = spawn({ AAC_FIXTURE_INSTALLED: from }, 'retry');
-      const result = JSON.parse(last.stdout.trim().split('\n').pop() as string);
-      expect(result.status).toBe('updated');
-      expect(result.signals).toBeGreaterThan(0);
-      expect(result.marker).toBeNull();
-      expect(to).not.toBe(from);
-    }
-  );
-
-  it('restarts a daemon that arrived while the updater ran, when nothing is killed', () => {
+  it('is in the stop plan, so it is restarted on the new version', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-arrival-'));
     roots.push(root);
     const child = spawnSync(
       process.execPath,
-      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts')],
+      ['run', path.join(repo, 'tests/unit/codex-auth/fixtures/arrival-install.ts')],
       {
         cwd: repo,
-        env: { ...isolated(root), AAC_FIXTURE_ARRIVAL: '1', AAC_FIXTURE_NO_KILL: '1' },
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: root,
+          USERPROFILE: root,
+          CCS_HOME: path.join(root, 'ccs'),
+          XDG_CONFIG_HOME: path.join(root, '.config'),
+          XDG_DATA_HOME: path.join(root, '.local/share'),
+          XDG_STATE_HOME: path.join(root, '.local/state'),
+          XDG_CACHE_HOME: path.join(root, '.cache'),
+          CODEX_HOME: path.join(root, '.codex'),
+          CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
+        },
         encoding: 'utf8',
         timeout: 60_000,
       }

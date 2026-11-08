@@ -98,24 +98,21 @@ describe('Codex update idle and restart coordinator', () => {
     const value = fixture();
     const result = await bridge.execute(value.deps);
     expect(result.status).toBe('updated');
+    // A CLI click keeps no record: it updates, then stops and starts under the same protection.
     expect(value.events).toEqual([
-      'mark',
       'update',
-      'mark',
       'stop',
       'wait',
       'stop',
       'wait',
       'stop',
-      'mark',
       'proxy-reconnect',
       'start',
-      'clear',
       'dispose',
     ]);
     expect(value.pending()).toBe(false);
   });
-  it('retains pending restart after a failure so a later explicit click retries', async () => {
+  it('says the restart failed, keeping no record, when start() fails', async () => {
     const value = fixture();
     value.deps.runtime = () => ({
       stop: async () => {},
@@ -126,18 +123,17 @@ describe('Codex update idle and restart coordinator', () => {
     });
     const result = await bridge.execute(value.deps);
     expect(result.status).toBe('restart_failed');
-    expect(value.pending()).toBe(true);
+    expect(value.pending()).toBe(false);
     expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL');
   });
-  it('does not stop a current package without pending restart', async () => {
+  it('does not stop a current package', async () => {
     const value = fixture();
     value.deps.update = async () => {
       value.events.push('update');
     };
     const result = await bridge.execute(value.deps);
     expect(result.status).toBe('current');
-    // The install intent, then the marker from before it put back: there was none.
-    expect(value.events).toEqual(['mark', 'update', 'clear']);
+    expect(value.events).toEqual(['update']);
     expect(value.pending()).toBe(false);
   });
   it('gives up on a Codex that stays busy after about a minute, never fifteen', async () => {
@@ -163,9 +159,9 @@ describe('Codex update idle and restart coordinator', () => {
     expect(result.status).toBe('action_required');
     expect(result.messageCode).toBe('codex_busy');
     expect(result.version).toBe('2.0.0');
-    // Nothing was stopped, so nothing restarts; the marker stays for the next click.
+    // Nothing was stopped, so nothing restarts, and no record is kept for a later click.
     expect(value.events).not.toContain('start');
-    expect(value.pending()).toBe(true);
+    expect(value.pending()).toBe(false);
     expect(JSON.stringify(result)).not.toContain('PRIVATE_SENTINEL');
   });
   it('honours a shorter idle budget', async () => {
@@ -186,7 +182,7 @@ describe('Codex update idle and restart coordinator', () => {
     value.deps.hasOldProxies = async () => true;
     const result = await bridge.execute(value.deps);
     expect(result.status).toBe('restart_failed');
-    expect(value.pending()).toBe(true);
+    expect(value.pending()).toBe(false);
   });
 });
 describe('Codex update runtime resolution', () => {
@@ -478,1608 +474,330 @@ describe('Codex relaunch after an update', () => {
   });
 });
 
-describe('Pending-marker retry', () => {
+describe('Restart obligations', () => {
   beforeEach(() => {
     bridge.output.restartedProcesses = 0;
   });
   type Plan = { daemon?: boolean; desktops?: number };
-  /** What runs after start(). */
-  type Live = {
-    daemon?: boolean;
-    proxy?: boolean;
-    daemonIdentity?: { pid: number; startTime: string } | null;
-    /** How many of the desktops this run closed start() relaunched and saw come up. */
-    desktops?: number;
-  };
-  const state = ({ desktops: _desktops, ...live }: Live = {}) => ({
-    daemon: false,
-    proxy: false,
-    daemonIdentity: live.daemon ? DAEMON : null,
-    ...live,
-  });
-  const plan = (value: Plan = {}) => ({ daemon: false, desktops: 0, ...value });
-  /** The runtime a click meets: what its stop() plans to close, and what runs after start(). */
-  const runtime = (planned: Plan = {}, after: Live = {}) => ({
-    stop: async () => {},
-    start: async () => {},
+  /** What runs after start(): the daemon, a proxy, and how many of the desktops it closed came back. */
+  type Live = { daemon?: boolean; proxy?: boolean; desktops?: number };
+  const runtime = (planned: Plan = {}, after: Live = {}, events: string[] = []) => ({
+    stop: async () => {
+      events.push('stop');
+    },
+    start: async () => {
+      events.push('start');
+    },
     dispose: async () => {},
-    stopPlan: () => plan(planned),
+    stopPlan: () => ({ daemon: false, desktops: 0, ...planned }),
     retiredPlan: async () => ({
       daemon: planned.daemon ?? false,
       desktops: Math.max(0, (planned.desktops ?? 0) - (after.desktops ?? 0)),
     }),
-    restartState: async () => state(after),
+    restartState: async () => ({
+      daemon: after.daemon ?? false,
+      proxy: after.proxy ?? false,
+      daemonIdentity: after.daemon ? DAEMON : null,
+    }),
     verifyRunningDaemon: async () => DAEMON,
   });
-  function retry(marker: Record<string, unknown> | null, after: Live = {}, planned: Plan = {}) {
-    const value = fixture();
-    if (marker) value.deps.mark();
-    value.marks.length = 0;
-    return {
-      value,
-      deps: {
-        ...value.deps,
-        update: async () => {},
-        pending: () => marker !== null,
-        marked: () => (marker ? { version: '1.0.0', ...marker } : null),
-        operation: 'cli',
-        runtime: () => runtime(planned, after),
-      },
-    };
-  }
-  const desktopRetry = (deps: object) => ({
-    ...deps,
-    operation: 'desktop',
-    expectedCandidate: '1.0.0',
-    restartOnly: true,
-  });
 
-  it('reports restart_not_running when the daemon it closed stays closed', async () => {
-    const { value, deps } = retry({ daemon: true });
-    const result = await bridge.execute(deps);
-    expect(result.status).toBe('restart_failed');
-    expect(result.messageCode).toBe('restart_not_running');
-    expect(value.pending()).toBe(false);
-  });
-
-  it('stays updated once what the marker names is running again', async () => {
-    const { value, deps } = retry({ daemon: true }, { daemon: true });
-    expect((await bridge.execute(deps)).status).toBe('updated');
-    expect(value.pending()).toBe(false);
-  });
-
-  it('never applies to a first update, where no marker existed', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
+  describe('the Codex CLI: each click stands alone', () => {
+    const cli = (value: ReturnType<typeof fixture>, extra: object = {}) => ({
       ...value.deps,
       operation: 'cli',
-      runtime: () => runtime(),
+      ...extra,
     });
-    expect(result.status).toBe('updated');
-  });
 
-  it('never clears a desktop an earlier run owes, whatever runs now', async () => {
-    // Only AAC's own relaunch of a desktop, seen coming up, clears it; that run's launcher is gone.
-    for (const marker of [
-      { desktop: true, desktops: 2 },
-      { desktop: true, desktops: ['a'.repeat(32), 'b'.repeat(32)] },
-      { desktop: true },
-    ]) {
-      for (const desktops of [0, 1, 2]) {
-        const { value, deps } = retry(marker, { desktops }, { desktops });
-        const result = await bridge.execute(desktopRetry(deps));
-        expect([result.status, result.messageCode]).toEqual([
-          'restart_failed',
-          'restart_not_running',
-        ]);
-        // Said once, then cleared: nothing here could ever finish it.
-        expect(value.pending()).toBe(false);
-      }
-    }
-  });
-
-  it('owes the desktops a run closed even when the daemon it closed is back', async () => {
-    const marker = { desktop: true, daemon: true, desktops: 1 };
-    for (const after of [
-      { desktops: 1 },
-      { daemon: true },
-      { daemon: true, desktops: 1 },
-    ] as Live[]) {
-      expect((await bridge.execute(retry(marker, after).deps)).status).toBe('restart_failed');
-    }
-  });
-
-  it('holds a user-reopened desktop to the daemon the marker also names', async () => {
-    const { deps } = retry({ daemon: true }, { desktops: 1 }, { desktops: 1 });
-    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
-  });
-
-  it('counts a desktop marker from before these fields as owing some desktop', async () => {
-    const { deps } = retry({}, { daemon: true });
-    expect((await bridge.execute(desktopRetry(deps))).messageCode).toBe('restart_not_running');
-    const back = retry({}, { desktops: 1 }, { desktops: 1 });
-    expect((await bridge.execute(desktopRetry(back.deps))).messageCode).toBe('restart_not_running');
-  });
-
-  it('reads a marker that names a desktop but no count as owing one', async () => {
-    for (const marker of [
-      { desktop: true, desktops: ['/private/path', 7] },
-      { desktop: true, desktops: -1 },
-    ]) {
-      const { deps } = retry(marker);
-      expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
-      const back = retry(marker, { desktops: 1 }, { desktops: 1 });
-      expect((await bridge.execute(back.deps)).messageCode).toBe('restart_not_running');
-    }
-  });
-
-  it('does not count a CLI marker that names nothing as a retry', async () => {
-    const { value, deps } = retry({});
-    const result = await bridge.execute(deps);
-    expect(result.status).toBe('updated');
-    expect(value.pending()).toBe(false);
-  });
-
-  it('does not demand what the marker says nothing closed', async () => {
-    const { deps } = retry({ desktop: false, daemon: false, desktops: 0 });
-    expect((await bridge.execute(desktopRetry(deps))).status).toBe('updated');
-  });
-
-  it('keeps a real upgrade with a stale marker that names nothing clean', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      marked: () => ({ version: '0.9.0', desktop: false, daemon: false, desktops: 0 }),
-      operation: 'cli',
-      runtime: () => runtime(),
-    });
-    expect(result.status).toBe('updated');
-  });
-
-  it('owes what a marker names whatever version is installed now', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      marked: () => ({ version: '0.9.0', daemon: true }),
-      operation: 'cli',
-      runtime: () => runtime(),
-    });
-    expect(result.messageCode).toBe('restart_not_running');
-  });
-
-  it('does not call a retry current when the update changed nothing', async () => {
-    const { deps } = retry({ version: '0.9.0', daemon: true });
-    deps.pending = () => false;
-    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
-    const back = retry({ version: '0.9.0', daemon: true }, { daemon: true });
-    back.deps.pending = () => false;
-    expect((await bridge.execute(back.deps)).status).toBe('updated');
-  });
-
-  it('reports a failed retry as a failed restart at any version', async () => {
-    const { deps } = retry({ version: '0.9.0', daemon: true });
-    deps.pending = () => false;
-    deps.runtime = () => ({
-      ...runtime(),
-      start: async () => {
-        throw new Error('private');
-      },
-    });
-    expect((await bridge.execute(deps)).status).toBe('restart_failed');
-  });
-
-  it('writes what was closed only after stop(), from the runtime plan', async () => {
-    const first = fixture();
-    let atStop: unknown[] = [];
-    await bridge.execute({
-      ...first.deps,
-      operation: 'cli',
-      runtime: () => ({
-        ...runtime({ desktops: 2 }, { desktops: 2 }),
-        stop: async () => {
-          atStop = [...first.marks];
-        },
-      }),
-    });
-    expect(atStop).toEqual([
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      {
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        version: '1.0.0',
-        install: { earlier: null, changed: true },
-      },
-    ]);
-    expect(first.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      {
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        version: '1.0.0',
-        install: { earlier: null, changed: true },
-      },
-      { desktop: true, daemon: false, desktops: 2 },
-    ]);
-  });
-
-  it('keeps what an earlier run closed across a retry', async () => {
-    const { value, deps } = retry(
-      { desktop: true, desktops: 1 },
-      {},
-      { daemon: true, desktops: 1 }
-    );
-    await bridge.execute(deps);
-    // The intent before the updater, naming the daemon, the same on to stop(), then what stop() closed.
-    expect(value.marks[0]).toEqual({
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-      version: '1.0.0',
-      // retry()'s stored marker, as the fixture keeps it.
-      install: { earlier: JSON.stringify({ version: '1.0.0' }) },
-    });
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: true,
-      daemon: true,
-      desktops: 2,
-    });
-  });
-
-  it('leaves a busy run owing the daemon it could not check', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      idleSeconds: 1,
-      operation: 'cli',
-      runtime: () => ({
-        ...runtime({ daemon: true, desktops: 1 }),
-        stop: async () => {
-          throw Object.assign(new Error('private'), { code: 'busy' });
-        },
-      }),
-    });
-    expect(result.messageCode).toBe('codex_busy');
-    // stop() never ran its plan, so the install intent stands: the next click checks the daemon.
-    expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      {
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        version: '1.0.0',
-        install: { earlier: null, changed: true },
-      },
-    ]);
-  });
-
-  it('writes the marker as soon as stop() returns, before a desktop install', async () => {
-    const value = fixture();
-    let atUpdate: unknown[] = [];
-    await bridge.execute({
-      ...value.deps,
-      update: async () => {
-        atUpdate = [...value.marks];
-        await value.deps.update();
-      },
-      operation: 'desktop',
-      runtime: () => runtime({ daemon: true, desktops: 1 }, { daemon: true, desktops: 1 }),
-    });
-    expect(atUpdate).toEqual([{ desktop: true, daemon: true, desktops: 1 }]);
-  });
-
-  const failedInstall = (value: ReturnType<typeof fixture>, planned: Plan, after: Live) => ({
-    ...value.deps,
-    update: async () => {
-      throw new Error('private');
-    },
-    operation: 'desktop',
-    runtime: () => runtime(planned, after),
-  });
-
-  it('keeps what a failed install left closed in the marker', async () => {
-    const value = fixture();
-    const result = await bridge.execute(failedInstall(value, { desktops: 1 }, {}));
-    expect(result.status).toBe('restart_failed');
-    expect(value.marks).toEqual([{ desktop: true, daemon: false, desktops: 1 }]);
-    expect(value.pending()).toBe(true);
-  });
-
-  it('owes nothing after a failed install once everything is back', async () => {
-    const value = fixture();
-    const result = await bridge.execute(failedInstall(value, { desktops: 1 }, { desktops: 1 }));
-    expect(result.status).toBe('failed');
-    expect(result.messageCode).toBe('update_failed');
-    expect(value.pending()).toBe(false);
-  });
-
-  it('keeps what an earlier run owed after a failed install', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...failedInstall(value, { desktops: 1 }, { desktops: 1 }),
-      marked: () => ({ version: '1.0.0', desktop: true, desktops: 1 }),
-    });
-    expect(result.status).not.toBe('updated');
-    expect(value.pending()).toBe(true);
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: true,
-      daemon: false,
-      desktops: 2,
-    });
-  });
-
-  /** An installer that puts 2.0.0 in place and then exits unsuccessfully. */
-  function partialInstall(_value: ReturnType<typeof fixture>) {
-    let installed = '1.0.0';
-    return {
-      readVersion: async () => installed,
-      update: async () => {
-        installed = '2.0.0';
-        throw new Error('private');
-      },
-      expectedCandidate: '2.0.0',
-      operation: 'desktop',
-    };
-  }
-
-  it('records the install it is about to attempt before attempting it', async () => {
-    const value = fixture();
-    let atUpdate: unknown[] = [];
-    await bridge.execute({
-      ...value.deps,
-      update: async () => {
-        atUpdate = [...value.marks];
-        throw new Error('private');
-      },
-      expectedCandidate: '2.0.0',
-      operation: 'desktop',
-      runtime: () => runtime({ daemon: true }),
-    });
-    expect(atUpdate).toEqual([{ desktop: false, daemon: true, desktops: 0, target: '2.0.0' }]);
-  });
-
-  it('moves the record to what an installer that failed really left installed', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      ...partialInstall(value),
-      runtime: () => runtime({ daemon: true }),
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(result.version).toBe('2.0.0');
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-    });
-    expect(value.pending()).toBe(true);
-  });
-
-  it('reports a failed install, not a failed restart, when it replaced the app and all came back', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      ...partialInstall(value),
-      runtime: () => runtime({ daemon: true }, { daemon: true }),
-    });
-    expect(result.status).toBe('failed');
-    expect(result.messageCode).toBe('update_failed');
-    expect(value.pending()).toBe(false);
-  });
-
-  it('carries a CLI retry to the version an updater that failed left installed', async () => {
-    const value = fixture();
-    let installed = '1.0.0';
-    const result = await bridge.execute({
-      ...value.deps,
-      readVersion: async () => installed,
-      update: async () => {
-        installed = '2.0.0';
-        throw new Error('private');
-      },
-      pending: () => true,
-      marked: () => ({ version: '1.0.0', daemon: true }),
-      operation: 'cli',
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(result.version).toBe('2.0.0');
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      version: '1.0.0',
-      install: { earlier: null, changed: true },
-    });
-  });
-
-  it('leaves a first CLI update that failed and changed nothing as a failed update', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      update: async () => {
-        throw new Error('private');
-      },
-      operation: 'cli',
-    });
-    expect(result.status).toBe('failed');
-    // The intent, then the marker from before it put back exactly: there was none.
-    expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-    ]);
-    expect(value.deps.marked()).toBeNull();
-  });
-
-  /** A first CLI update that puts 2.0.0 in place and then exits unsuccessfully, with no marker. */
-  function partialCli(value: ReturnType<typeof fixture>, daemon: boolean) {
-    let installed = '1.0.0';
-    return {
-      ...value.deps,
-      readVersion: async () => installed,
-      update: async () => {
-        installed = '2.0.0';
-        throw new Error('private');
-      },
-      operation: 'cli',
-      runtime: () => runtime({}, { daemon }),
-    };
-  }
-
-  it('owes a restart to a daemon a partial first CLI update left on the old binary', async () => {
-    const value = fixture();
-    const result = await bridge.execute(partialCli(value, true));
-    expect(result.status).toBe('restart_failed');
-    expect(result.version).toBe('2.0.0');
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      version: '1.0.0',
-      install: { earlier: null, changed: true },
-    });
-  });
-
-  it('owes nothing after a partial first CLI update with no daemon running', async () => {
-    const value = fixture();
-    const result = await bridge.execute(partialCli(value, false));
-    expect(result.status).toBe('failed');
-    expect(result.version).toBe('2.0.0');
-    // The installer replaced the app, so the change stays on record for the next click's stop plan to
-    // settle; with no daemon seen now, the row is a failed update, not a restart.
-    expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      {
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        version: '1.0.0',
-        install: { earlier: null, changed: true },
-      },
-    ]);
-    expect(value.deps.marked()).toMatchObject({ daemon: true, install: { changed: true } });
-  });
-
-  it('takes a failed scan to mean a daemon after a partial first CLI update', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...partialCli(value, false),
-      runtime: () => ({
-        ...runtime(),
-        restartState: async () => {
-          throw new Error('Codex inventory failed.');
-        },
-      }),
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      version: '1.0.0',
-      install: { earlier: null, changed: true },
-    });
-  });
-
-  it('takes a runtime that cannot be created to mean a daemon after a partial first CLI update', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...partialCli(value, false),
-      runtime: () => {
-        throw new Error('private');
-      },
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      version: '1.0.0',
-      install: { earlier: null, changed: true },
-    });
-  });
-
-  it('takes an older runtime to have a daemon after a partial first CLI update', async () => {
-    const value = fixture();
-    await bridge.execute({
-      ...partialCli(value, false),
-      runtime: () => ({ stop: async () => {}, start: async () => {} }),
-    });
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      version: '1.0.0',
-      install: { earlier: null, changed: true },
-    });
-  });
-
-  it('never writes an empty version over the record', async () => {
-    const value = fixture();
-    let reads = 0;
-    const result = await bridge.execute({
-      ...value.deps,
-      readVersion: async () => (reads++ === 0 ? '1.0.0' : ''),
-      update: async () => {},
-      expectedCandidate: '2.0.0',
-      operation: 'desktop',
-      runtime: () => runtime({ daemon: true }),
-    });
-    expect(result.status).toBe('restart_failed');
-    // Only the record from when stop() returned: the version read came back empty.
-    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: 0, target: '2.0.0' }]);
-  });
-
-  it('holds an owed daemon to the readiness check, not its arguments', async () => {
-    const { value, deps } = retry({ daemon: true }, { daemon: true });
-    deps.runtime = () => ({
-      ...runtime({}, { daemon: true }),
-      verifyRunningDaemon: async () => null,
-    });
-    const result = await bridge.execute(deps);
-    expect(result.messageCode).toBe('restart_not_running');
-    expect(value.pending()).toBe(false);
-  });
-
-  it('judges the daemon on a fresh scan taken after the readiness check', async () => {
-    for (const [afterCheck, status] of [
-      [{ daemon: false }, 'restart_failed'],
-      [{ daemon: true }, 'updated'],
-    ] as Array<[Live, string]>) {
-      const { deps } = retry({ daemon: true }, { daemon: true });
-      let checked = false;
-      deps.runtime = () => ({
-        ...runtime({}, {}),
-        restartState: async () => state(checked ? afterCheck : { daemon: true }),
-        verifyRunningDaemon: async () => {
-          checked = true;
-          return DAEMON;
-        },
-      });
-      expect((await bridge.execute(deps)).status).toBe(status);
-    }
-  });
-
-  it('checks a first update on a fresh scan after the proxy check, and keeps the marker', async () => {
-    // A desktop start() saw come up is back; the daemon must still be ready after the proxy check.
-    for (const [after, status] of [
-      [{ daemon: false, desktops: 1 }, 'restart_failed'],
-      [{ daemon: true, desktops: 1 }, 'updated'],
-    ] as Array<[Live, string]>) {
+    it('restarts the daemon on the new version and reports updated', async () => {
       const value = fixture();
-      let proxiesChecked = false;
-      const result = await bridge.execute({
-        ...value.deps,
-        operation: 'cli',
-        hasOldProxies: async () => {
-          proxiesChecked = true;
-          return false;
-        },
-        runtime: () => ({
-          ...runtime({ daemon: true, desktops: 1 }, { desktops: 1 }),
-          restartState: async () => state(proxiesChecked ? after : { daemon: true, desktops: 1 }),
-        }),
-      });
-      expect(result.status).toBe(status);
-      expect(value.pending()).toBe(status !== 'updated');
-    }
-  });
-
-  it('owes a first update the desktops start() did not see come up, and only those', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => runtime({ daemon: true, desktops: 2 }, { daemon: true, desktops: 1 }),
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(value.deps.marked()).toEqual({
-      version: '1.0.0',
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-    });
-  });
-
-  it('holds a first update to the readiness check of the daemon it restarted', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({
-        ...runtime({ daemon: true }, { daemon: true }),
-        verifyRunningDaemon: async () => null,
-      }),
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(value.pending()).toBe(true);
-  });
-
-  it('leaves a first update on an older runtime that cannot be scanned as updated', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({ stop: async () => {}, start: async () => {} }),
-    });
-    expect(result.status).toBe('updated');
-  });
-
-  it('checks a daemon that replaced the verified one before trusting it', async () => {
-    for (const [replacementReady, status] of [
-      [false, 'restart_failed'],
-      [true, 'updated'],
-    ] as Array<[boolean, string]>) {
-      const { deps } = retry({ daemon: true }, { daemon: true });
-      const checked: unknown[] = [];
-      let running = { pid: 1, startTime: '1' };
-      deps.runtime = () => ({
-        ...runtime({}, {}),
-        restartState: async () => state({ daemon: true, daemonIdentity: running }),
-        verifyRunningDaemon: async () => {
-          const target = running;
-          checked.push(target);
-          if (target.pid === 2) return replacementReady ? target : null;
-          running = { pid: 2, startTime: '2' };
-          return target;
-        },
-      });
-      expect((await bridge.execute(deps)).status).toBe(status);
-      expect(checked).toEqual([
-        { pid: 1, startTime: '1' },
-        { pid: 2, startTime: '2' },
+      const events: string[] = [];
+      const result = await bridge.execute(
+        cli(value, { runtime: () => runtime({ daemon: true }, { daemon: true }, events) })
+      );
+      expect([result.status, result.previousVersion, result.version]).toEqual([
+        'updated',
+        '1.0.0',
+        '2.0.0',
       ]);
-    }
-  });
-
-  it('gives up on a daemon that keeps being replaced', async () => {
-    const { deps } = retry({ daemon: true }, { daemon: true });
-    let pid = 1;
-    deps.runtime = () => ({
-      ...runtime({}, {}),
-      restartState: async () =>
-        state({ daemon: true, daemonIdentity: { pid, startTime: String(pid) } }),
-      verifyRunningDaemon: async () => {
-        const target = { pid, startTime: String(pid) };
-        pid++;
-        return target;
-      },
+      expect(events).toEqual(['stop', 'start']);
+      expect(value.marks).toEqual([]);
     });
-    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
-    expect(pid).toBe(3);
-  });
 
-  it('writes the restart intent before the CLI updater runs', async () => {
-    const value = fixture();
-    let atUpdate: unknown;
-    await bridge.execute({
-      ...value.deps,
-      update: async () => {
-        atUpdate = value.deps.marked();
-      },
-      operation: 'cli',
-      runtime: () => runtime({}, { daemon: true }),
-    });
-    expect(atUpdate).toEqual({
-      version: '1.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      install: { earlier: null },
-    });
-  });
-
-  it('puts the earlier marker back exactly when the updater turns out a no-op', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      update: async () => {},
-      operation: 'cli',
-      runtime: () => runtime({}, { daemon: true }),
-    });
-    expect(result.status).toBe('current');
-    expect(value.deps.marked()).toBeNull();
-    const earlier = JSON.stringify({ version: '0.9.0', target: '1.0.0' });
-    const other = fixture();
-    const kept = await bridge.execute({
-      ...other.deps,
-      markerSnapshot: () => earlier,
-      update: async () => {},
-      operation: 'cli',
-      runtime: () => runtime({}, { daemon: true }),
-    });
-    expect(kept.status).toBe('current');
-    expect(other.restored).toEqual([earlier]);
-  });
-
-  /** A CLI click with a daemon running, whose updater fails having installed nothing. */
-  const failedUpdater = (value: ReturnType<typeof fixture>, extra: object = {}) => ({
-    ...value.deps,
-    update: async () => {
-      throw new Error('network error');
-    },
-    operation: 'cli',
-    runtime: () => runtime({}, { daemon: true }),
-    ...extra,
-  });
-
-  it('reports a failed updater that installed nothing as a failed update, owing nothing', async () => {
-    const value = fixture();
-    const result = await bridge.execute(failedUpdater(value));
-    expect(result.status).toBe('failed');
-    expect(result.messageCode).toBe('update_failed');
-    expect(value.deps.marked()).toBeNull();
-  });
-
-  it('puts the earlier marker back exactly after a failed updater that installed nothing', async () => {
-    const value = fixture();
-    const earlier = JSON.stringify({ version: '0.9.0', target: '1.0.0' });
-    const result = await bridge.execute(failedUpdater(value, { markerSnapshot: () => earlier }));
-    expect(result.status).toBe('failed');
-    expect(value.restored).toEqual([earlier]);
-  });
-
-  it('owes nothing when the expected version was not installed and nothing changed', async () => {
-    const value = fixture();
-    const result = await bridge.execute(
-      failedUpdater(value, { update: async () => {}, expectedCandidate: '2.0.0' })
-    );
-    expect(result.status).toBe('failed');
-    expect(result.messageCode).toBe('update_failed');
-    expect(value.deps.marked()).toBeNull();
-  });
-
-  it('keeps the daemon owed when a failed updater changed only the prerelease', async () => {
-    const value = fixture();
-    let installed = 'codex-cli 0.50.0-alpha.1';
-    const result = await bridge.execute(
-      failedUpdater(value, {
-        readVersion: async () => installed,
-        update: async () => {
-          installed = 'codex-cli 0.50.0-alpha.2';
-          throw new Error('network error');
-        },
-      })
-    );
-    // 0.50.0-alpha.2 is not the 0.50.0-alpha.1 the run began from, though their numbers match.
-    expect(result.status).toBe('restart_failed');
-    expect(value.deps.marked()?.daemon).toBe(true);
-  });
-
-  it('keeps the daemon owed when the updater installed a version other than expected', async () => {
-    const value = fixture();
-    let installed = '1.0.0';
-    const result = await bridge.execute(
-      failedUpdater(value, {
-        readVersion: async () => installed,
-        update: async () => {
-          installed = '1.5.0';
-        },
-        expectedCandidate: '2.0.0',
-      })
-    );
-    expect(result.status).toBe('restart_failed');
-    expect(value.deps.marked()?.daemon).toBe(true);
-  });
-
-  it('keeps the intent when the installed version cannot be read after a failed updater', async () => {
-    const value = fixture();
-    let reads = 0;
-    await bridge.execute(
-      failedUpdater(value, {
-        readVersion: async () => {
-          if (reads++ === 0) return '1.0.0';
-          throw new Error('private');
-        },
-      })
-    );
-    expect(value.deps.marked()?.daemon).toBe(true);
-  });
-
-  it('keeps what a retry owes when its updater fails', async () => {
-    const { value, deps } = retry({ daemon: true }, { daemon: true });
-    const result = await bridge.execute({
-      ...deps,
-      // An owed restart from another version: only the marker's own obligation makes this a retry.
-      marked: () => ({ version: '0.9.0', daemon: true }),
-      pending: () => false,
-      update: async () => {
-        throw new Error('network error');
-      },
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(value.restored).toEqual([]);
-    expect(value.pending()).toBe(true);
-  });
-
-  it('names the daemon before the updater even when none runs yet', async () => {
-    // A proxy can start one on the old binary while the updater runs, and stop() alone can say.
-    const value = fixture();
-    let atUpdate: unknown = 'unset';
-    const result = await bridge.execute({
-      ...value.deps,
-      update: async () => {
-        atUpdate = value.deps.marked();
-      },
-      operation: 'cli',
-      runtime: () => runtime({}, {}),
-    });
-    expect(atUpdate).toMatchObject({ daemon: true });
-    // A verified no-op puts the earlier marker back exactly: here, none.
-    expect(result.status).toBe('current');
-    expect(value.deps.marked()).toBeNull();
-  });
-
-  it.each([
-    { name: 'Python handed over after its own install', version: '2.0.0', updated: false },
-    { name: 'a helper was killed during its own install', version: '1.0.0', updated: true },
-  ])(
-    'settles an install intent as its own when $name',
-    async ({ version: installedAtStart, updated }) => {
-      // The intent names the daemon and keeps the marker from before it. With no daemon found under the
-      // lock (a proxy only, or none ever), nothing is owed: never a false restart_not_running.
+    it('says the restart failed when the daemon does not come up, and keeps no record', async () => {
       const value = fixture();
-      let installed = installedAtStart;
-      const earlier = JSON.stringify({ version: '0.9.0' });
+      const result = await bridge.execute(
+        cli(value, { runtime: () => runtime({ daemon: true }, {}) })
+      );
+      expect([result.status, result.messageCode]).toEqual(['restart_failed', 'restart_failed']);
+      expect(value.marks).toEqual([]);
+      expect(value.deps.marked()).toBeNull();
+    });
+
+    it('says failed with the version installed now when the updater fails, and stops nothing', async () => {
+      for (const [left, shown] of [
+        [null, '1.0.0'],
+        ['codex-cli 1.5.0', '1.5.0'],
+      ] as const) {
+        const value = fixture();
+        const events: string[] = [];
+        let installed = 'codex-cli 1.0.0';
+        const result = await bridge.execute(
+          cli(value, {
+            readVersion: async () => installed,
+            update: async () => {
+              if (left) installed = left;
+              throw new Error('network error');
+            },
+            runtime: () => runtime({ daemon: true }, { daemon: true }, events),
+          })
+        );
+        expect([result.status, result.messageCode, result.version]).toEqual([
+          'failed',
+          'update_failed',
+          shown,
+        ]);
+        expect(events).toEqual([]);
+        expect(value.marks).toEqual([]);
+      }
+    });
+
+    it('says current and stops nothing when the version did not change', async () => {
+      const value = fixture();
+      const events: string[] = [];
+      const result = await bridge.execute(
+        cli(value, {
+          update: async () => {},
+          runtime: () => runtime({ daemon: true }, { daemon: true }, events),
+        })
+      );
+      expect(result.status).toBe('current');
+      expect(events).toEqual([]);
+      expect(value.marks).toEqual([]);
+    });
+
+    it.each([
+      { from: '0.50.0-alpha.1', to: '0.50.0', status: 'updated' },
+      { from: '0.50.0', to: '0.50.0-alpha.1', status: 'updated' },
+      { from: '0.50.0-alpha.1', to: '0.50.0-alpha.1', status: 'current' },
+    ])('judges a change on the whole version: $from -> $to', async ({ from, to, status }) => {
+      const value = fixture();
+      let installed = from;
+      const result = await bridge.execute(
+        cli(value, {
+          readVersion: async () => `codex-cli ${installed}`,
+          update: async () => {
+            installed = to;
+          },
+          runtime: () => runtime({ daemon: true }, { daemon: true }),
+        })
+      );
+      expect(result.status).toBe(status);
+    });
+
+    it('carries nothing over from a marker an older version left', async () => {
+      const value = fixture();
       value.deps.restoreMarker(
         JSON.stringify({
           version: '1.0.0',
           desktop: false,
           daemon: true,
           desktops: 0,
-          install: { earlier },
+          install: { earlier: null, changed: true },
         })
       );
-      const result = await bridge.execute({
-        ...value.deps,
-        readVersion: async () => installed,
-        update: async () => {
-          if (updated) installed = '2.0.0';
-        },
-        pending: () => false,
-        operation: 'cli',
-        runtime: () => runtime({}, {}),
-      });
-      expect([result.status, result.messageCode]).toEqual(['updated', 'updated']);
-      expect(result.previousVersion).toBe('1.0.0');
-      expect(value.deps.marked()).toBeNull();
-    }
-  );
+      const events: string[] = [];
+      const result = await bridge.execute(
+        cli(value, { update: async () => {}, runtime: () => runtime({ daemon: true }, {}, events) })
+      );
+      expect(result.status).toBe('current');
+      expect(events).toEqual([]);
+    });
 
-  it.each([
-    { from: '0.50.0-alpha.1', to: '0.50.0', changed: true },
-    { from: '0.50.0', to: '0.50.0-alpha.1', changed: true },
-    { from: '0.50.0-alpha.1', to: '0.50.0-alpha.2', changed: true },
-    { from: '0.50.0-alpha.1', to: '0.50.0-alpha.1', changed: false },
-  ])(
-    'judges whether a CLI install changed anything on the whole version: $from -> $to',
-    async ({ from, to, changed }) => {
-      for (const route of ['own', 'handed over']) {
-        const value = fixture();
-        let installed = route === 'own' ? from : to;
-        if (route === 'handed over') {
-          // Python installed it and handed over: its install intent names the version it began from.
-          value.deps.restoreMarker(
-            JSON.stringify({
-              version: from,
-              desktop: false,
-              daemon: true,
-              desktops: 0,
-              install: { earlier: null },
-            })
-          );
-        }
-        const result = await bridge.execute({
-          ...value.deps,
-          readVersion: async () => `codex-cli ${installed}`,
-          update: async () => {
-            installed = to;
-          },
-          pending: () => false,
-          operation: 'cli',
-          runtime: () => runtime({ daemon: true }, { daemon: true }),
-        });
-        // A changed prerelease is an update: the daemon on the old binary is restarted.
-        expect({ route, status: result.status }).toEqual({
-          route,
-          status: changed ? 'updated' : 'current',
-        });
-      }
-    }
-  );
+    it('reports Codex busy and changes nothing while it stays busy', async () => {
+      const value = fixture();
+      const result = await bridge.execute(
+        cli(value, {
+          idleSeconds: 1,
+          runtime: () => ({
+            ...runtime({ daemon: true }),
+            stop: async () => {
+              throw Object.assign(new Error('private'), { code: 'busy' });
+            },
+          }),
+        })
+      );
+      expect([result.status, result.messageCode]).toEqual(['action_required', 'codex_busy']);
+      expect(value.marks).toEqual([]);
+    });
 
-  it.each([
-    { name: 'back to A', from: '1.0.0', middle: '2.0.0', to: '1.0.0' },
-    {
-      name: 'back to A, prereleases',
-      from: '0.50.0-alpha.1',
-      middle: '0.50.0',
-      to: '0.50.0-alpha.1',
-    },
-    { name: 'on to C', from: '1.0.0', middle: '2.0.0', to: '3.0.0' },
-    { name: 'staying on B', from: '1.0.0', middle: '2.0.0', to: '2.0.0' },
-  ])(
-    "settles an earlier attempt's version change only by the stop plan: $name",
-    async ({ from, middle, to }) => {
-      // An earlier attempt went from A to B and was killed. This click finds B and installs `to`.
-      for (const recorded of [{ earlier: null }, { earlier: null, changed: true }]) {
-        const value = fixture();
-        let installed = middle;
-        let atUpdate: Record<string, unknown> | null = null;
-        let stops = 0;
-        value.deps.restoreMarker(
-          JSON.stringify({
-            version: from,
-            desktop: false,
-            daemon: true,
-            desktops: 0,
-            install: recorded,
-          })
-        );
-        const result = await bridge.execute({
-          ...value.deps,
-          readVersion: async () => `codex-cli ${installed}`,
-          update: async () => {
-            // What a kill right after this installer would leave: the change is already on record.
-            atUpdate = value.deps.marked();
-            installed = to;
-          },
-          pending: () => false,
-          operation: 'cli',
+    it('says the restart failed when stop() fails after the update', async () => {
+      const value = fixture();
+      const result = await bridge.execute(
+        cli(value, {
           runtime: () => ({
             ...runtime({ daemon: true }, { daemon: true }),
             stop: async () => {
-              stops++;
+              throw new Error('private');
             },
           }),
-        });
-        expect((atUpdate as { install?: { changed?: boolean } } | null)?.install?.changed).toBe(
-          true
+        })
+      );
+      expect([result.status, result.version]).toEqual(['restart_failed', '2.0.0']);
+      expect(value.marks).toEqual([]);
+    });
+
+    it('takes the daemon to be ready only when it is the one the readiness check vouched for', async () => {
+      for (const [identity, status] of [
+        [DAEMON, 'updated'],
+        [{ pid: 2, startTime: '2' }, 'restart_failed'],
+      ] as const) {
+        const value = fixture();
+        const result = await bridge.execute(
+          cli(value, {
+            runtime: () => ({
+              ...runtime({ daemon: true }, { daemon: true }),
+              restartState: async () => ({ daemon: true, proxy: false, daemonIdentity: identity }),
+            }),
+          })
         );
-        // The daemon left on B is stopped and restarted: never `current` with it still running.
-        expect(stops).toBe(1);
-        expect(result.status).toBe('updated');
+        expect(result.status).toBe(status);
       }
-    }
-  );
-
-  it('keeps a seen version change owed when the retry installer fails having changed nothing', async () => {
-    // A to B was seen and killed; this retry's installer fails with B still installed.
-    const value = fixture();
-    value.deps.restoreMarker(
-      JSON.stringify({
-        version: '1.0.0',
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        install: { earlier: null },
-      })
-    );
-    const result = await bridge.execute({
-      ...value.deps,
-      readVersion: async () => '2.0.0',
-      update: async () => {
-        throw new Error('network error');
-      },
-      pending: () => false,
-      operation: 'cli',
-      runtime: () => runtime({}, { daemon: true }),
-    });
-    expect(result.status).not.toBe('current');
-    expect(value.deps.marked()).toMatchObject({ daemon: true, install: { changed: true } });
-  });
-
-  it('keeps a seen version change owed when the retry installer fails after returning to A', async () => {
-    const value = fixture();
-    let installed = '2.0.0';
-    value.deps.restoreMarker(
-      JSON.stringify({
-        version: '1.0.0',
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        install: { earlier: null, changed: true },
-      })
-    );
-    const result = await bridge.execute({
-      ...value.deps,
-      readVersion: async () => installed,
-      update: async () => {
-        installed = '1.0.0';
-        throw new Error('network error');
-      },
-      pending: () => false,
-      operation: 'cli',
-      runtime: () => runtime({}, { daemon: true }),
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(value.deps.marked()).toMatchObject({ daemon: true, install: { changed: true } });
-  });
-
-  it('puts back the marker from before an install intent once the update is a no-op', async () => {
-    // Killed before the installer replaced anything: the next click installs nothing new.
-    const value = fixture();
-    const earlier = JSON.stringify({ version: '0.9.0' });
-    value.deps.restoreMarker(
-      JSON.stringify({
-        version: '1.0.0',
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        install: { earlier },
-      })
-    );
-    const result = await bridge.execute({
-      ...value.deps,
-      readVersion: async () => '1.0.0',
-      update: async () => {},
-      pending: () => false,
-      operation: 'cli',
-      runtime: () => runtime({}, {}),
-    });
-    expect(result.status).toBe('current');
-    expect(value.restored[value.restored.length - 1]).toBe(earlier);
-  });
-
-  it('keeps what the marker from before an install intent owed', async () => {
-    const value = fixture();
-    const earlier = JSON.stringify({ version: '0.9.0', desktop: true, daemon: false, desktops: 1 });
-    value.deps.restoreMarker(
-      JSON.stringify({
-        version: '1.0.0',
-        desktop: true,
-        daemon: true,
-        desktops: 1,
-        install: { earlier },
-      })
-    );
-    const result = await bridge.execute({
-      ...value.deps,
-      readVersion: async () => '2.0.0',
-      update: async () => {},
-      pending: () => false,
-      operation: 'cli',
-      runtime: () => runtime({}, {}),
-    });
-    // A desktop an earlier run closed is still owed, and said once.
-    expect([result.status, result.messageCode]).toEqual(['restart_failed', 'restart_not_running']);
-  });
-
-  it('settles the intent on the stop plan once an update replaced the app', async () => {
-    const value = fixture();
-    const marks: unknown[] = [];
-    const result = await bridge.execute({
-      ...value.deps,
-      mark: (fields?: Record<string, boolean>) => {
-        marks.push(fields);
-        value.deps.mark(fields);
-      },
-      operation: 'cli',
-      runtime: () => runtime({}, {}),
-    });
-    // Named before the updater, then what stop() found under its lock: no daemon, nothing owed.
-    expect(marks[0]).toMatchObject({ daemon: true });
-    expect(marks[marks.length - 1]).toEqual({ desktop: false, daemon: false, desktops: 0 });
-    expect(result.status).toBe('updated');
-    expect(value.deps.marked()).toBeNull();
-  });
-
-  it('takes a failed scan before the updater to mean a daemon', async () => {
-    const value = fixture();
-    let atUpdate: unknown;
-    await bridge.execute({
-      ...value.deps,
-      update: async () => {
-        atUpdate = value.deps.marked();
-      },
-      operation: 'cli',
-      runtime: () => ({
-        ...runtime(),
-        restartState: async () => {
-          throw new Error('Codex inventory failed.');
-        },
-      }),
-    });
-    expect(atUpdate).toEqual({
-      version: '1.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      install: { earlier: null },
-    });
-  });
-
-  it('keeps the intent on the marker until stop() hands over its plan', async () => {
-    const value = fixture();
-    let atStop: unknown;
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({
-        ...runtime({ daemon: true }, { daemon: true }),
-        stop: async () => {
-          atStop = value.deps.marked();
-        },
-      }),
-    });
-    expect(atStop).toEqual({
-      version: '1.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      install: { earlier: null, changed: true },
-    });
-  });
-
-  it('does not run the readiness check when no daemon is owed', async () => {
-    const value = fixture();
-    let checks = 0;
-    const result = await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({
-        ...runtime({ desktops: 1 }, { desktops: 1 }),
-        verifyRunningDaemon: async () => {
-          checks++;
-          return null;
-        },
-      }),
-    });
-    expect(result.status).toBe('updated');
-    expect(checks).toBe(0);
-  });
-
-  it('does not clear a failed install over a daemon that fails the readiness check', async () => {
-    const value = fixture();
-    await bridge.execute({
-      ...failedInstall(value, { daemon: true }, { daemon: true }),
-      runtime: () => ({
-        ...runtime({ daemon: true }, { daemon: true }),
-        verifyRunningDaemon: async () => null,
-      }),
-    });
-    expect(value.pending()).toBe(true);
-  });
-
-  it('fails closed when a runtime has no readiness check', async () => {
-    const { deps } = retry({ daemon: true }, { daemon: true });
-    deps.runtime = () => {
-      const { verifyRunningDaemon: _dropped, ...older } = runtime({}, { daemon: true });
-      return older as ReturnType<typeof runtime>;
-    };
-    expect((await bridge.execute(deps)).messageCode).toBe('restart_not_running');
-  });
-
-  const olderRuntime = () => ({
-    stop: async () => {},
-    start: async () => {
-      throw new Error('private');
-    },
-    dispose: async () => {},
-  });
-
-  it('fails closed on an older runtime that reports no plan', async () => {
-    const value = fixture();
-    const result = await bridge.execute({ ...value.deps, operation: 'cli', runtime: olderRuntime });
-    expect(result.status).toBe('restart_failed');
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-    });
-  });
-
-  it('reads the next click on an older runtime as restart_not_running', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      update: async () => {},
-      pending: () => true,
-      marked: () => ({ version: '1.0.0', desktop: true, daemon: true, desktops: 0 }),
-      operation: 'cli',
-      runtime: () => ({ ...olderRuntime(), start: async () => {} }),
-    });
-    expect(result.messageCode).toBe('restart_not_running');
-  });
-
-  it('fails closed when a stop() on an older runtime fails', async () => {
-    const value = fixture();
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({
-        ...olderRuntime(),
-        stop: async () => {
-          throw new Error('private');
-        },
-      }),
-    });
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-    });
-  });
-
-  it('gives a live proxy a bounded while to bring the daemon back', async () => {
-    const { value, deps } = retry({ daemon: true });
-    let checks = 0;
-    deps.runtime = () => ({
-      ...runtime(),
-      restartState: async () => {
-        checks++;
-        return state({ daemon: checks > 3, proxy: true });
-      },
-    });
-    expect((await bridge.execute(deps)).status).toBe('updated');
-    expect(value.events).toContain('wait');
-  });
-
-  it('stops waiting for a proxy at the bound and reports the daemon closed', async () => {
-    const { value, deps } = retry({ daemon: true }, { proxy: true });
-    const result = await bridge.execute({ ...deps, settleMs: 1000 });
-    expect(result.messageCode).toBe('restart_not_running');
-    expect(value.events.filter((event) => event === 'wait').length).toBe(4);
-  });
-
-  it('does not wait with no proxy to bring the daemon back', async () => {
-    const { value, deps } = retry({ daemon: true });
-    await bridge.execute(deps);
-    expect(value.events).not.toContain('wait');
-  });
-
-  /** A stop() that fails: `retired` is what it closed, and `after` what its recovery brought back. */
-  const failingStop = (planned: Plan, after: Live, retired: Plan = planned) => ({
-    ...runtime(planned, after),
-    retiredPlan: async () => ({
-      daemon: retired.daemon ?? false,
-      desktops: Math.max(0, (retired.desktops ?? 0) - (after.desktops ?? 0)),
-    }),
-    stop: async () => {
-      throw new Error('private');
-    },
-  });
-
-  it('records what a failed stop() retired and did not bring back to ready', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => failingStop({ daemon: true, desktops: 2 }, { desktops: 1 }),
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-    });
-  });
-
-  it('does not owe a planned desktop a failed stop() never reached', async () => {
-    const value = fixture();
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => failingStop({ desktops: 1 }, {}, {}),
-    });
-    // Not the desktop; the install intent stands, since stop() failed before it made its plan.
-    expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      {
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        version: '1.0.0',
-        install: { earlier: null, changed: true },
-      },
-    ]);
-  });
-
-  it('owes a daemon a failed stop() retired when its replacement fails the readiness check', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({
-        ...failingStop({ daemon: true }, { daemon: true }),
-        verifyRunningDaemon: async () => null,
-      }),
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-    });
-  });
-
-  it('names the retired daemon before the readiness check, in case this helper is killed', async () => {
-    const value = fixture();
-    let atCheck: unknown;
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({
-        ...failingStop({ daemon: true }, { daemon: true }),
-        verifyRunningDaemon: async () => {
-          atCheck = value.marks[value.marks.length - 1];
-          return DAEMON;
-        },
-      }),
-    });
-    expect(atCheck).toEqual({ desktop: false, daemon: true, desktops: 0 });
-  });
-
-  it('puts the earlier marker back when the retired daemon passes the readiness check', async () => {
-    const value = fixture();
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => failingStop({ daemon: true }, { daemon: true }),
-    });
-    // The earlier marker is the intent written before the updater: the daemon still runs the old
-    // binary, so it stays owed.
-    expect(value.restored).toEqual([
-      JSON.stringify({
-        version: '1.0.0',
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        install: { earlier: null, changed: true },
-      }),
-    ]);
-    expect(value.deps.marked()?.daemon).toBe(true);
-  });
-
-  it('removes the marker it added when there was none and the daemon passes', async () => {
-    const value = fixture();
-    const result = await bridge.execute({
-      ...value.deps,
-      expectedCandidate: '2.0.0',
-      operation: 'desktop',
-      runtime: () => failingStop({ daemon: true }, { daemon: true }),
-    });
-    expect(value.deps.marked()).toBeNull();
-    expect(result.status).toBe('failed');
-  });
-
-  it('puts an earlier marker back exactly as it was stored', async () => {
-    const value = fixture();
-    const earlier = JSON.stringify({ version: '0.5.0', target: '0.9.0' }, null, 2);
-    const result = await bridge.execute({
-      ...value.deps,
-      markerSnapshot: () => earlier,
-      // As the real one reads: the restored marker is for another version.
-      pending: (expected: string) => value.deps.marked()?.version === expected,
-      expectedCandidate: '2.0.0',
-      operation: 'desktop',
-      runtime: () => failingStop({ daemon: true }, { daemon: true }),
-    });
-    expect(value.restored).toEqual([earlier]);
-    expect(result.status).toBe('failed');
-  });
-
-  it('puts back what an earlier run owed when the retired daemon passes', async () => {
-    const { value, deps } = retry({ desktop: true, desktops: 1 }, { daemon: true, desktops: 1 });
-    deps.runtime = () => failingStop({ daemon: true }, { daemon: true, desktops: 1 });
-    await bridge.execute(deps);
-    expect(value.restored.map((text) => JSON.parse(text))).toEqual([
-      // With the intent written before the updater, the running daemon is owed as well.
-      {
-        version: '1.0.0',
-        desktop: true,
-        daemon: true,
-        desktops: 1,
-        // retry()'s stored marker, as the fixture keeps it.
-        install: { earlier: JSON.stringify({ version: '1.0.0' }) },
-      },
-    ]);
-  });
-
-  const scanFails = async () => {
-    throw new Error('Codex inventory failed.');
-  };
-
-  /** A runtime that hands over its plan the way the real one does, then fails during recovery. */
-  const handsOver =
-    (value: ReturnType<typeof fixture>, planned: Plan, after: Live, seen: unknown[]) =>
-    (hooks: { beforeStop?: (plan: unknown) => unknown } = {}) => ({
-      ...failingStop(planned, after),
-      stop: async () => {
-        await hooks.beforeStop?.(plan(planned));
-        // What a helper killed from here on would leave on disk.
-        seen.push(value.deps.marked());
-        throw new Error('private');
-      },
     });
 
-  it('records the stop plan before stop() closes anything', async () => {
-    const value = fixture();
-    const seen: unknown[] = [];
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: handsOver(value, { daemon: true, desktops: 1 }, {}, seen),
-    });
-    expect(seen).toEqual([{ version: '1.0.0', desktop: true, daemon: true, desktops: 1 }]);
-  });
-
-  it('records the desktop install target with the stop plan', async () => {
-    const value = fixture();
-    const seen: unknown[] = [];
-    await bridge.execute({
-      ...value.deps,
-      expectedCandidate: '2.0.0',
-      operation: 'desktop',
-      runtime: handsOver(value, { desktops: 1 }, {}, seen),
-    });
-    expect(seen).toEqual([
-      { version: '1.0.0', desktop: true, daemon: false, desktops: 1, target: '2.0.0' },
-    ]);
-  });
-
-  it('puts the earlier marker back once recovery from a failed stop() is verified', async () => {
-    const value = fixture();
-    const seen: unknown[] = [];
-    const earlier = JSON.stringify({ version: '0.5.0', target: '0.9.0' });
-    await bridge.execute({
-      ...value.deps,
-      // As the real one reads: what is on disk now, which the stop plan has overwritten by the end.
-      markerSnapshot: () => (value.marks.length ? JSON.stringify(value.deps.marked()) : earlier),
-      pending: (expected: string) => value.deps.marked()?.version === expected,
-      expectedCandidate: '2.0.0',
-      operation: 'desktop',
-      runtime: handsOver(value, { desktops: 1 }, { desktops: 1 }, seen),
-    });
-    expect(value.restored).toEqual([earlier]);
-  });
-
-  it('settles the install intent on a stop plan that names nothing', async () => {
-    const value = fixture();
-    const seen: unknown[] = [];
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: handsOver(value, {}, {}, seen),
-    });
-    // The plan under the lock found no daemon, so the marker from before the intent is back: none.
-    expect(seen).toEqual([null]);
-  });
-
-  it('falls back to the plan when a scan fails after a failed stop()', async () => {
-    for (const broken of ['retiredPlan', 'restartState', 'verifyRunningDaemon']) {
+    it('gives a daemon a live proxy brings back a short while', async () => {
       const value = fixture();
-      const result = await bridge.execute({
-        ...value.deps,
-        operation: 'cli',
-        runtime: () => ({
-          ...failingStop({ daemon: true, desktops: 1 }, { daemon: true, desktops: 1 }),
-          [broken]: scanFails,
-        }),
-      });
+      let scans = 0;
+      const result = await bridge.execute(
+        cli(value, {
+          runtime: () => ({
+            ...runtime({ daemon: true }, { daemon: true }),
+            restartState: async () =>
+              scans++ < 2
+                ? { daemon: false, proxy: true, daemonIdentity: null }
+                : { daemon: true, proxy: true, daemonIdentity: DAEMON },
+          }),
+        })
+      );
+      expect(result.status).toBe('updated');
+      expect(value.events).toContain('wait');
+    });
+  });
+
+  describe('Codex Desktop: a desktop it closed is owed until AAC relaunches it', () => {
+    const desktop = (value: ReturnType<typeof fixture>, extra: object = {}) => ({
+      ...value.deps,
+      operation: 'desktop',
+      expectedCandidate: '2.0.0',
+      ...extra,
+    });
+
+    it('updates, relaunches every desktop it closed, and clears the marker', async () => {
+      const value = fixture();
+      const result = await bridge.execute(
+        desktop(value, { runtime: () => runtime({ desktops: 1 }, { desktops: 1 }) })
+      );
+      expect(result.status).toBe('updated');
+      expect(value.deps.marked()).toBeNull();
+    });
+
+    it('records the desktops before stop() closes anything, with the install target', async () => {
+      const value = fixture();
+      let seen: unknown = null;
+      await bridge.execute(
+        desktop(value, {
+          runtime: (hooks: { beforeStop?: (plan: Plan) => void } = {}) => ({
+            ...runtime({ desktops: 1 }, { desktops: 1 }),
+            stop: async () => {
+              hooks.beforeStop?.({ daemon: true, desktops: 1 });
+              seen = value.deps.marked();
+            },
+          }),
+        })
+      );
+      // Desktops only: the daemon is never carried to a later click.
+      expect(seen).toEqual({ version: '1.0.0', desktop: true, desktops: 1, target: '2.0.0' });
+    });
+
+    it('owes the desktops start() did not see come up, and only those', async () => {
+      const value = fixture();
+      const result = await bridge.execute(
+        desktop(value, { runtime: () => runtime({ desktops: 2 }, { desktops: 1 }) })
+      );
       expect(result.status).toBe('restart_failed');
-      expect(value.marks[value.marks.length - 1]).toEqual({
-        desktop: true,
-        daemon: true,
-        desktops: 1,
-      });
-    }
-  });
-
-  it('adds nothing when a scan fails and stop() had made no plan', async () => {
-    const value = fixture();
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({ ...failingStop({}, {}), retiredPlan: scanFails }),
+      expect(value.deps.marked()).toEqual({ version: '1.0.0', desktop: true, desktops: 1 });
     });
-    expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      {
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        version: '1.0.0',
-        install: { earlier: null, changed: true },
-      },
-    ]);
-  });
 
-  it('does not run the readiness check when a failed stop() retired no daemon', async () => {
-    const value = fixture();
-    let checks = 0;
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => ({
-        ...failingStop({ daemon: true }, { daemon: true }, {}),
-        verifyRunningDaemon: async () => {
-          checks++;
-          return null;
-        },
-      }),
-    });
-    expect(checks).toBe(0);
-    // Only the install intent, before and after the updater: nothing retired, nothing more recorded.
-    expect(
-      value.marks.every((mark) => {
-        const { install, ...rest } = mark as { install: { earlier: null } } & Record<
-          string,
-          unknown
-        >;
-        return (
-          JSON.stringify(rest) ===
-            JSON.stringify({ desktop: false, daemon: true, desktops: 0, version: '1.0.0' }) &&
-          install.earlier === null
+    it('never clears desktops an earlier run owes, whatever runs now, and says so once', async () => {
+      for (const marker of [{ desktop: true, desktops: 2 }, { desktop: true }, {}]) {
+        const value = fixture();
+        value.deps.restoreMarker(JSON.stringify({ version: '1.0.0', ...marker }));
+        const result = await bridge.execute(
+          desktop(value, {
+            expectedCandidate: '1.0.0',
+            restartOnly: true,
+            runtime: () => runtime({ desktops: 1 }, { desktops: 1 }),
+          })
         );
-      })
-    ).toBe(true);
-  });
-
-  it('adds nothing when a failed stop() recovered what it closed', async () => {
-    const value = fixture();
-    await bridge.execute({
-      ...value.deps,
-      operation: 'cli',
-      runtime: () => failingStop({ daemon: true, desktops: 1 }, { daemon: true, desktops: 1 }),
+        expect([result.status, result.messageCode]).toEqual([
+          'restart_failed',
+          'restart_not_running',
+        ]);
+        expect(value.deps.marked()).toBeNull();
+      }
     });
-    // The earlier marker is the intent written before the updater: the daemon still runs the old
-    // binary, so it stays owed.
-    expect(value.restored).toEqual([
-      JSON.stringify({
-        version: '1.0.0',
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        install: { earlier: null, changed: true },
-      }),
-    ]);
-    expect(value.deps.marked()?.daemon).toBe(true);
-  });
 
-  it('adds nothing when a failed stop() never made a plan', async () => {
-    const value = fixture();
-    await bridge.execute({ ...value.deps, operation: 'cli', runtime: () => failingStop({}, {}) });
-    // stop() failed before it made its plan, so the install intent stands.
-    expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      {
-        desktop: false,
-        daemon: true,
-        desktops: 0,
-        version: '1.0.0',
-        install: { earlier: null, changed: true },
-      },
-    ]);
-  });
+    it('owes nothing after a failed install once everything is back', async () => {
+      const value = fixture();
+      const result = await bridge.execute(
+        desktop(value, {
+          update: async () => {
+            throw new Error('apt failed');
+          },
+          runtime: () => runtime({ desktops: 1 }, { desktops: 1 }),
+        })
+      );
+      expect(result.status).toBe('failed');
+      expect(value.deps.marked()).toBeNull();
+    });
 
-  it('keeps what an earlier run closed when a failed stop() loses something more', async () => {
-    const { value, deps } = retry({ desktop: true, desktops: 1 });
-    deps.runtime = () => failingStop({ daemon: true }, {});
-    await bridge.execute(deps);
-    expect(value.marks[value.marks.length - 1]).toEqual({
-      desktop: true,
-      daemon: true,
-      desktops: 1,
+    it('keeps the desktops a failed install left closed', async () => {
+      const value = fixture();
+      await bridge.execute(
+        desktop(value, {
+          update: async () => {
+            throw new Error('apt failed');
+          },
+          runtime: () => runtime({ desktops: 1 }, {}),
+        })
+      );
+      expect(value.deps.marked()).toEqual({
+        version: '1.0.0',
+        desktop: true,
+        desktops: 1,
+        target: '2.0.0',
+      });
+    });
+
+    it('records the desktops a failed stop() closed and did not bring back', async () => {
+      const value = fixture();
+      const result = await bridge.execute(
+        desktop(value, {
+          runtime: () => ({
+            ...runtime({ desktops: 2 }, { desktops: 1 }),
+            stop: async () => {
+              throw new Error('private');
+            },
+          }),
+        })
+      );
+      expect(result.status).not.toBe('updated');
+      expect(value.deps.marked()).toEqual({
+        version: '1.0.0',
+        desktop: true,
+        desktops: 1,
+        target: '2.0.0',
+      });
     });
   });
 });
@@ -2141,12 +859,12 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       return process.env.FIXTURE_STOP === 'fail-replaced' ? { ...plan, desktops: 0 } : plan;
     },
     verifyRunningDaemon: async () => {
-      if (process.env.FIXTURE_AT_VERIFY) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_VERIFY);
+      if (process.env.FIXTURE_AT_VERIFY && fs.existsSync(process.env.FIXTURE_MARKER)) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_VERIFY);
       return process.env.FIXTURE_VERIFY === 'fail' ? null : (await read()).daemonIdentity;
     },
     restartState: async () => ({ ...(await read()), proxy: false }),
     stop: async () => {
-      if (process.env.FIXTURE_AT_STOP) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_STOP);
+      if (process.env.FIXTURE_AT_STOP && fs.existsSync(process.env.FIXTURE_MARKER)) fs.copyFileSync(process.env.FIXTURE_MARKER, process.env.FIXTURE_AT_STOP);
       if (process.env.FIXTURE_KILL) {
         await overrides.beforeStop?.(await read());
         process.kill(process.pid, 'SIGKILL');
@@ -2246,11 +964,13 @@ exports.createCodexActivationRuntime = (home, overrides) => {
   ];
   const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
-  it('starts the updated executable through the runtime launcher', () => {
+  it('starts the updated executable through the runtime launcher, and keeps no CLI marker', () => {
     const { result, record, marker, codex } = run('launch', {
-      marker: { version: '2.0.0', daemon: true },
+      marker: null,
+      next: '3.0.0',
       procs: running,
     });
+    // The stand-in never brings a daemon up, so the restart is said to have failed.
     expect(result.status).toBe('restart_failed');
     expect(result.restartedProcesses).toBe(1);
     const target = read(record);
@@ -2259,203 +979,17 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it('asks the real process check before calling a retry a restart', () => {
-    const { result, record, marker } = run('idle', { marker: { version: '2.0.0', daemon: true } });
-    expect(result.status).toBe('restart_failed');
-    expect(result.messageCode).toBe('restart_not_running');
+  it('calls an unchanged CLI current and starts nothing', () => {
+    const { result, record, marker } = run('launch', { marker: null, procs: running });
+    expect(result.status).toBe('current');
     expect(fs.existsSync(record)).toBe(false);
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it('writes the running daemon before the update, and what stop() closed after it', () => {
-    const { result, marker, atStop } = run('fail', {
-      marker: null,
-      next: '3.0.0',
-      procs: running,
-    });
-    expect(result.status).toBe('restart_failed');
-    // The intent written before the updater ran: the daemon on the old binary, and the version the
-    // update began from, so a click after a kill never takes 3.0.0 for a no-op.
-    expect(read(atStop)).toEqual({
-      version: '2.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      install: { earlier: null, changed: true },
-    });
-    expect(read(marker)).toEqual({
-      version: '3.0.0',
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-    });
-  });
-
-  it('records only what was running on the real marker', () => {
-    const { marker } = run('fail', { marker: null, next: '3.0.0' });
-    expect(read(marker)).toEqual({ version: '3.0.0', desktop: false, daemon: false, desktops: 0 });
-  });
-
-  it('keeps what an earlier run closed on the real marker across a failed retry', () => {
-    const { marker } = run('fail', { marker: { version: '2.0.0', desktop: true } });
-    expect(read(marker)).toEqual({ version: '2.0.0', desktop: true, daemon: false, desktops: 1 });
-  });
-
-  it('records on the real marker what a failed stop() could not bring back', () => {
-    const { result, marker } = run('idle', {
-      marker: null,
-      next: '3.0.0',
-      stop: 'fail',
-      procs: running,
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(read(marker)).toEqual({
-      version: '3.0.0',
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-    });
-  });
-
-  it('leaves the update intent on the real marker when a failed stop() recovered', () => {
-    const { marker } = run('idle', {
-      marker: null,
-      next: '3.0.0',
-      stop: 'fail-recovered',
-      procs: running,
-    });
-    // Recovery brought the old daemon back, still on the old binary: it is still owed.
-    expect(read(marker)).toEqual({
-      version: '2.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      install: { earlier: null, changed: true },
-    });
-  });
-
-  it('reads a marker the Python path wrote for a prerelease as a retry', () => {
-    const { result, marker } = run('idle', {
-      installed: '2.0.0-alpha.1',
-      marker: { version: '2.0.0-alpha.1', daemon: true },
-    });
-    expect(result.messageCode).toBe('restart_not_running');
-    expect(fs.existsSync(marker)).toBe(false);
-  });
-
-  it('reads a prerelease marker naming nothing as a restart owed, not as current', () => {
-    const { result, marker } = run('idle', {
-      installed: '2.0.0-alpha.1',
-      marker: { version: '2.0.0-alpha.1' },
-    });
-    expect(result.status).toBe('updated');
-    expect(fs.existsSync(marker)).toBe(false);
-  });
-
-  it('finds a real marker by its target after an interrupted install', () => {
-    const { result, marker } = run('idle', {
-      marker: { version: '1.0.0', target: '2.0.0', daemon: true },
-    });
-    expect(result.messageCode).toBe('restart_not_running');
-    expect(fs.existsSync(marker)).toBe(false);
-  });
-
-  it('still owes what a marker names after a helper was killed mid-update', () => {
-    const { result, marker } = run('idle', { marker: { version: '1.0.0', daemon: true } });
-    expect(result.status).toBe('restart_failed');
-    expect(result.messageCode).toBe('restart_not_running');
-    expect(fs.existsSync(marker)).toBe(false);
-  });
-
-  it('has the real marker naming the daemon during the readiness check, and restores it', () => {
-    const { marker, atVerify, result } = run('idle', {
-      marker: null,
-      next: '3.0.0',
-      stop: 'fail-replaced',
-      procs: running,
-    });
-    expect(read(atVerify).daemon).toBe(true);
-    // Put back as it was before stop(): the update intent naming the daemon.
-    expect(read(marker)).toEqual({
-      version: '2.0.0',
-      desktop: false,
-      daemon: true,
-      desktops: 0,
-      install: { earlier: null, changed: true },
-    });
-    expect(result.status).toBe('restart_failed');
-  });
-
-  it('keeps the daemon on the real marker when the replacement fails the check', () => {
-    const { marker } = run('idle', {
-      marker: null,
-      next: '3.0.0',
-      stop: 'fail-replaced',
-      verify: 'fail',
-      procs: running,
-    });
-    expect(read(marker).daemon).toBe(true);
-  });
-
-  it('keeps the plan on the real marker when the scan fails after a failed stop()', () => {
-    const { result, marker } = run('idle', {
-      marker: null,
-      next: '3.0.0',
-      stop: 'fail-scan',
-      procs: running,
-    });
-    expect(result.status).toBe('restart_failed');
-    expect(read(marker)).toEqual({
-      version: '3.0.0',
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-    });
-  });
-
-  it('has the stop plan on the real marker when the helper is killed inside stop()', () => {
-    const { marker } = run('idle', {
-      marker: null,
-      next: '3.0.0',
-      kill: true,
-      procs: running,
-    });
-    expect(read(marker)).toEqual({
-      version: '3.0.0',
-      desktop: true,
-      daemon: true,
-      desktops: 1,
-    });
-  });
-
-  it('does not turn a marker that names nothing into a red row', () => {
-    const { result, marker } = run('idle', { marker: { version: '2.0.0' } });
-    expect(result.status).toBe('updated');
-    expect(fs.existsSync(marker)).toBe(false);
-  });
-});
-
-describe('Putting a marker back', () => {
-  it('writes the stored bytes back exactly, privately and in one step', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-marker-'));
-    directories.push(root);
-    const file = path.join(root, 'state', 'codex-desktop-pending-restart.json');
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    // As the Python path writes one: its own spacing, a prerelease version and a target.
-    const earlier = '{\n  "version": "0.50.0-alpha.1",\n  "target": "0.51.0"\n}\n';
-    fs.writeFileSync(file, earlier, { mode: 0o600 });
-    const snapshot = bridge.markerSnapshot(file);
-    expect(snapshot).toBe(earlier);
-    fs.writeFileSync(file, JSON.stringify({ version: '2.0.0', daemon: true }));
-    bridge.restoreMarker(snapshot, file);
-    expect(fs.readFileSync(file, 'utf8')).toBe(earlier);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    expect(fs.readdirSync(path.dirname(file))).toEqual(['codex-desktop-pending-restart.json']);
-  });
-
-  it('reads no snapshot from a missing marker', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-marker-'));
-    directories.push(root);
-    expect(bridge.markerSnapshot(path.join(root, 'none.json'))).toBeNull();
+  it('leaves a marker an older version wrote alone and carries nothing from it', () => {
+    const old = { version: '2.0.0', desktop: false, daemon: true, desktops: 0 };
+    const { result, marker } = run('launch', { marker: old, procs: running });
+    expect(result.status).toBe('current');
+    expect(read(marker)).toEqual(old);
   });
 });

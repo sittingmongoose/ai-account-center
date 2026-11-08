@@ -770,60 +770,35 @@ only the user and root can read it. The file exists while the unit is loaded and
 That is the same exposure as the running app's `/proc/<pid>/environ`, and the owner accepted it.
 Account activation used to put the values on argv, and no longer does.
 
-A pending-marker retry restarts only what it finds running, since the launch snapshot of the failed
-run is gone. The runtime hands its stop plan to the bridge under the startup lock, before it signals
-anything or waits on a recovery, and the bridge writes it to the marker then. A helper killed anywhere
-inside `stop()` still leaves it. The marker records what that plan closes: the Codex `daemon`, and
-how many `desktops`, with no path or profile.
+**The Codex CLI and its daemon: each click stands alone** (owner decision, 2026-11-08). A click runs the
+updater; if the installed version changed (judged on the whole version, a prerelease included, so
+`0.50.0-alpha.1` to `0.50.0` is a change), it restarts the daemon now and checks it came up: the
+daemon in a scan taken after `start()`'s bounded readiness check must be the one that check vouched
+for, by pid and start time, or it gets a check of its own, and while a live proxy could bring it back
+it gets up to 10 seconds. The row is `updated`, `current` when nothing changed (nothing is stopped),
+`restart_failed` when the new version is installed but the daemon did not come back, or `failed` with
+the version actually installed, read fresh, when the updater fails. **Interrupted updates are not
+recovered** (owner decision, 2026-11-08): nothing is carried between clicks for the CLI or its daemon,
+there is no marker for them, and after a busy run, a failure or a kill the old daemon keeps running
+until the user retries or Codex restarts it. `update_cli` sends a native Ubuntu Codex to the bridge only
+when an app server of that install runs.
 
-A desktop restart that is owed is cleared only when AAC itself relaunched that desktop and saw the
-process it started come up (owner decision, 2026-11-07): the pid its launch spawned, or a process in
-the transient unit it made, read from `/proc/<pid>/cgroup`, with a live app server on this Codex home
-under it. AAC never matches other running desktops by profile folder to clear it. So a desktop an
-earlier run closed stays owed on a retry whatever runs then, since that run's launch snapshot is gone,
-and the retry reports `restart_not_running` once and clears it; the worst case is one extra "reopen
-Codex Desktop" prompt. A desktop a failed `stop()` never closed still runs, by pid and start time, and
-is neither relaunched nor owed. Electron started in Node mode (`ELECTRON_RUN_AS_NODE` set and not
-empty) runs a script, never a window, and is never taken for a desktop. Switches are read by a port of
-Chromium's `base::CommandLine` parsing, only to build the relaunch argv and to tell the main process
-from its children: each argument trimmed of ASCII whitespace, the last switch before a `--` winning;
-a cmdline Electron rewrote into one string is split back into argv first. A
-`stop()` that failed partway records what it really retired and did not bring back to ready. A desktop
-install records the version it was about to install as `target`. An installer that fails is checked
-again afterwards, so the row and the marker name what is really installed. A
-desktop install that fails clears that record once everything is back. An older runtime that can't report a
-plan is taken to have closed everything. A marker naming nothing
-is not a retry. A marker that names something is owed whatever version is installed now, so `update_cli`
-and `update_linux` route it to the bridge even with no daemon running. A CLI update that replaces the app
-and then fails also names a daemon still running the old binary. In fact the daemon is written to the
-marker before the CLI updater starts whether or not one runs then, since a proxy can start one on the
-old binary during the install, so a helper killed then still leaves it. The earlier marker comes back
-exactly if the update changes nothing, including an updater that fails or installs the wrong version
-while the installed version stays put, or an updater that fails with no daemon running afterwards; and
-`stop()`'s plan, made under the startup lock, settles it once the app is replaced. A plan that finds no
-daemon puts the earlier marker back. The intent is an install intent: it keeps the version the update
-began from and the marker from before it (`install.earlier`). So when a busy run, a `stop()` that fails
-before making its plan, or a helper killed during the install leaves it, the next click takes it as its
-own install's, not as a restart an earlier run left owed: its plan settles it, with no false "Codex
-did not restart" for a daemon that never ran, and only what the earlier marker owed is still owed.
-Once any attempt of an install has seen the version change (`install.changed`, or a version other
-than the one the install began from), only the stop plan settles it: a later attempt that returns to
-the starting version, or whose installer fails, never calls it current or puts the earlier marker back,
-however many attempts are killed.
-`update_cli` follows the same rule when no app server runs at its first scan and it runs the installer
-itself: on Ubuntu, for a native install with `~/.local/bin/codex`, it writes the same install intent
-first. After an install that changed the version, it hands over to the bridge if an app server (a daemon
-or a proxy) now runs this install or the binary it replaced, with the terminal sessions its first scan
-found; otherwise the earlier marker comes back exactly. An installer that fails and changes nothing
-owes nothing. Whether an install changed anything is judged on the whole version, a prerelease
-included (`0.50.0-alpha.1` to `0.50.0` is a change), on both routes; the numeric part is only for the
-row and for matching a marker to an install. A marker that isn't valid UTF-8 is carried along as it is. A retry that leaves anything owed is `restart_failed` with
-`restart_not_running`: any desktop an earlier run closed, and an owed daemon that does not pass
-`start()`'s own bounded readiness check. The
-daemon found afterwards must be the one that passed, by pid and start time, or it is checked itself. A first
-update is checked the same way once `start()` returns: if something it restarted is gone, the row is
-`restart_failed` and the marker stays, so the next click retries. While a live
-proxy could bring the daemon back, the retry waits up to 10 seconds for it. The marker is then cleared, so the next click reports the row as it stands.
+**Codex Desktop: a desktop restart that is owed is cleared only when AAC itself relaunched that desktop
+and saw the process it started come up** (owner decision, 2026-11-07): the pid its launch spawned, with
+that process's start time, or a process in the transient unit it made, read from `/proc/<pid>/cgroup`,
+with a live app server on this Codex home under it. AAC never matches other running desktops by profile
+folder. The runtime hands its stop plan to the bridge under the startup lock, before it signals
+anything, and the bridge writes it to the desktop marker then: how many `desktops` are closed and not
+seen back, with no path or profile, and as `target` the version a desktop install was about to put in
+place. A desktop an earlier run closed stays owed on a retry whatever runs then, since that run's launch
+snapshot is gone: the retry reports `restart_not_running` once and clears it; the worst case is one
+extra "reopen Codex Desktop" prompt. A desktop a failed `stop()` never closed still runs, by pid and
+start time, and is neither relaunched nor owed. A desktop install that fails clears the record once
+everything is back. Electron started in Node mode (`ELECTRON_RUN_AS_NODE` set and not empty) runs a
+script, never a window, and is never taken for a desktop. Switches are read by a port of Chromium's
+`base::CommandLine` parsing, only to build the relaunch argv and to tell the main process from its
+children: each argument trimmed of ASCII whitespace, the last switch before a `--` winning; a cmdline
+Electron rewrote into one string is split back into argv first.
 
 ## Deployment and setup
 

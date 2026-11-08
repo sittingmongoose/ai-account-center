@@ -21,7 +21,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from app_update_common import (
     APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
-    marker_owes_restart, pending_marker, powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
+    powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
 )
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, cli_instances, family, scan, terminate_cli
@@ -602,77 +602,6 @@ def perform_cli_update(install, deadline=None):
     command([path, "update"], timeout=180, env={"PATH": str(path.parent) + os.pathsep + os.environ.get("PATH", "")})
 
 
-def codex_shares_daemon(install):
-    """Whether a Codex CLI install runs the shared daemon the fixed bridge restarts: Ubuntu, native, and
-    the bridge's own ~/.local/bin/codex."""
-    return (install.app_id == "codex-cli" and install.platform == "ubuntu" and install.manager != "npm" and
-            (pathlib.Path.home() / ".local/bin/codex").exists())
-
-
-def executable_path(path):
-    return os.path.realpath(str(path).removesuffix(" (deleted)"))
-
-
-def codex_daemon_runs(install, processes, old_binary):
-    """Whether an app server (a daemon or a proxy that can start one) runs this install or the binary
-    it replaced: the family follows the new binary, so the old one is matched by its path."""
-    members = {item.pid for item in family(install, processes)}
-    return any("app-server" in item.args and (item.pid in members or executable_path(item.exe) == old_binary)
-               for item in processes)
-
-
-def put_back_marker(pending, earlier):
-    """The marker exactly as it was before the install intent, or none when there was none."""
-    if earlier is None:
-        pending.unlink(missing_ok=True)
-        return
-    temporary = pending.with_name(pending.name + "." + str(os.getpid()) + ".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "wb") as output:
-        output.write(earlier)
-    os.replace(temporary, pending)
-
-
-def settle_failed_codex_intent(install, before, pending, earlier, old_binary):
-    """After an installer that failed: nothing owed if the version is unchanged, or if no app server
-    runs that could hold the old binary. A version that can't be read keeps the intent."""
-    try:
-        refreshed = detect_cli(install.app_id, install.platform)
-        if refreshed is None or not refreshed.version:
-            return
-        if refreshed.version == before or not codex_daemon_runs(install, scan(install.platform), old_binary):
-            put_back_marker(pending, earlier)
-    except (UpdateFailure, OSError):
-        pass
-
-
-def run_codex_bridge(install, deadline, processes, pending, terminals=None):
-    """The fixed bridge's update for a native Ubuntu Codex CLI with its shared daemon, then terminals:
-    those given, already checked, or those `processes` shows."""
-    if terminals is None:
-        contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])
-        check_terminal(install.platform, contexts)
-    else:
-        contexts, targets = terminals
-    bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
-    seconds = max(30, min(CODEX_BRIDGE_SECONDS, int(deadline - time.monotonic())))
-    payload = json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "cli", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
-    if payload.get("status") == "updated" and contexts:
-        refreshed = detect_cli(install.app_id, install.platform)
-        if refreshed is None or not refreshed.version:
-            raise UpdateFailure("version_unknown")
-        write_private_json(pending, {"version": refreshed.version})
-        try:
-            forced = terminate_cli(install, targets)
-            sessions = restart_cli(refreshed, contexts)
-            payload["restartedProcesses"] = payload.get("restartedProcesses", 0) + len(contexts)
-            payload.update(restartTargets=sessions, forcedStops=forced)
-            pending.unlink(missing_ok=True)
-        except (UpdateFailure, OSError):
-            payload.update(status="restart_failed", messageCode="restart_failed")
-    return payload
-
-
 def update_cli(install, deadline, restart_managed=False):
     before = install.version
     attempted = False
@@ -715,14 +644,27 @@ def update_cli(install, deadline, restart_managed=False):
         # protocol, not an idle TUI/PTY restart. It is handled by the fixed bridge.
         # An npm-global Codex (Nas1) has no AAC shared daemon and is not covered by the
         # bridge's fixed ~/.local/bin/codex runtime: it takes the ordinary CLI path below.
-        # A marker that names something an earlier run closed comes here even with no daemon running:
-        # a daemon relaunch that failed leaves exactly that, and only the bridge can say it is still
-        # closed. A marker naming nothing owes no restart.
-        marker = pending_marker(pending)
         if (install.app_id == "codex-cli" and install.platform == "ubuntu" and install.manager != "npm" and
-                (any("app-server" in item.args for item in family(install, processes)) or
-                 (marker_owes_restart(marker) and (pathlib.Path.home() / ".local/bin/codex").exists()))):
-            return run_codex_bridge(install, deadline, processes, pending)
+                any("app-server" in item.args for item in family(install, processes))):
+            contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])
+            check_terminal(install.platform, contexts)
+            bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
+            seconds = max(30, min(CODEX_BRIDGE_SECONDS, int(deadline - time.monotonic())))
+            payload = json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "cli", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
+            if payload.get("status") == "updated" and contexts:
+                refreshed = detect_cli(install.app_id, install.platform)
+                if refreshed is None or not refreshed.version:
+                    raise UpdateFailure("version_unknown")
+                write_private_json(pending, {"version": refreshed.version})
+                try:
+                    forced = terminate_cli(install, targets)
+                    sessions = restart_cli(refreshed, contexts)
+                    payload["restartedProcesses"] = payload.get("restartedProcesses", 0) + len(contexts)
+                    payload.update(restartTargets=sessions, forcedStops=forced)
+                    pending.unlink(missing_ok=True)
+                except (UpdateFailure, OSError):
+                    payload.update(status="restart_failed", messageCode="restart_failed")
+            return payload
         if install.app_id == "muse-code" and install.platform == "windows":
             # T3's muse-acp adapter hosts `muse serve` from this folder: never stop or restart it.
             contexts, targets, background = [], [], []
@@ -781,44 +723,17 @@ def update_cli(install, deadline, restart_managed=False):
                     return outcome(result(install.app_id, install.platform, "failed", before, before, install.manager, "restart_context", False))
                 pre_stopped = True
         attempted = True
-        # The bridge's rule on its own route: a proxy can start the shared daemon on the old binary while
-        # the installer runs, and nothing else would record it. So the daemon is named first, whatever
-        # runs now. After the install, one running on the old binary or this install hands over to the
-        # bridge, whose stop() settles it under the startup lock; with none, the earlier marker comes
-        # back exactly.
-        shared = codex_shares_daemon(install)
-        if shared:
-            earlier = pending.read_bytes() if pending.exists() else None
-            old_binary = executable_path(install.path)
-            # The bridge's own install intent: it keeps the marker from before it, so the bridge treats
-            # it as this install's, not as a restart an earlier run left owed.
-            write_private_json(pending, {"version": before, "desktop": False, "daemon": True, "desktops": 0,
-                                         "install": {"earlier": None if earlier is None else earlier.decode("utf-8", "replace")}})
-        try:
-            perform_cli_update(install, deadline)
-        except BaseException:
-            if shared:
-                settle_failed_codex_intent(install, before, pending, earlier, old_binary)
-            raise
-        if shared:
-            current = scan(install.platform)
-            moved = detect_cli(install.app_id, install.platform)
-            # Only an install that changed the version can leave a daemon on the binary it replaced; an
-            # app server starting during a no-op runs the current one. The terminals to reopen are the
-            # first scan's: the scan after the swap no longer matches the old binary.
-            if moved is not None and moved.version and moved.version != before and codex_daemon_runs(install, current, old_binary):
-                payload = run_codex_bridge(install, deadline, current, pending, (contexts, targets))
-                payload["previousVersion"] = before
-                return payload
-            # A version that can't be read keeps the intent: the next click checks the daemon.
-            if moved is not None and moved.version:
-                put_back_marker(pending, earlier)
+        perform_cli_update(install, deadline)
         refreshed = detect_cli(install.app_id, install.platform)
         if refreshed is None or not refreshed.version:
             raise UpdateFailure("version_unknown")
         if newest and npm_version_key(refreshed.version) < npm_version_key(newest):
             raise UpdateFailure("version_unknown")
-        marker_version = pending_marker(pending).get("version")
+        marker_version = None
+        try:
+            marker_version = json.loads(pending.read_text(encoding="utf-8")).get("version")
+        except (OSError, ValueError):
+            pass
         needs_restart = marker_version == refreshed.version and marker_version != before
         if refreshed.version == before and not needs_restart:
             if install.app_id == "muse-code" and muse_update_busy(install.path.parent):

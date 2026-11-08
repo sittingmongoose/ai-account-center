@@ -69,24 +69,15 @@ function createUpdateRuntime(createRuntime, deps = {}, hooks = {}) {
     launch: (target, desktop, outside) => relaunch(target, desktop, outside, deps), ...hooks });
 }
 /**
- * What a marker says is owed: the daemon, and how many desktops. A desktop an earlier run closed stays
- * owed whatever runs now: only AAC's own relaunch of it, seen coming up, clears it, and that run's
- * launch snapshot is gone. An older marker listed desktops one entry each; one that names a desktop but
- * no count is one desktop.
+ * How many desktops an earlier Codex Desktop run closed and never saw back. Only AAC's own relaunch of a
+ * desktop, seen coming up, clears one, and that run's launch snapshot is gone, so a retry reports them
+ * once. An older marker listed desktops one entry each; one that names a desktop but no count is one.
  */
-function markerObligations(marker, legacyDesktop) {
+function desktopsOwed(marker, legacyDesktop) {
   const listed = Array.isArray(marker?.desktops) ? marker.desktops.filter((item) => typeof item === 'string').length
     : Number.isInteger(marker?.desktops) && marker.desktops > 0 ? marker.desktops : 0;
-  return { daemon: marker?.daemon === true, desktops: listed || (marker?.desktop === true || legacyDesktop ? 1 : 0) };
+  return listed || (marker?.desktop === true || legacyDesktop ? 1 : 0);
 }
-/** A marker's text read back, or null for none or one that can't be read. */
-function parseMarker(text) {
-  try { const value = text === null ? null : JSON.parse(text); return value && typeof value === 'object' ? value : null; } catch { return null; }
-}
-const addObligations = (prior, plan) => ({ daemon: prior.daemon || plan.daemon, desktops: prior.desktops + plan.desktops });
-const markerFields = (owed) => ({ desktop: owed.desktops > 0, daemon: owed.daemon, desktops: owed.desktops });
-/** Still owed: a daemon `live` doesn't show ready, or any desktop, since none is cleared by looking. */
-const stillOwed = (owed, live) => (owed.daemon && !live.daemon) || owed.desktops > 0;
 function run(binary, args, timeout = 10000) {
   return new Promise((resolve, reject) => execFile(binary, args, { timeout, maxBuffer: 65536, encoding: 'utf8',
     env: { ...cleanEnvironment(process.env), CODEX_NON_INTERACTIVE: '1', NO_UPDATE_NOTIFIER: '1', DEBIAN_FRONTEND: 'noninteractive' } },
@@ -141,10 +132,9 @@ function startTimeOf(pid) {
 function markerFile() { return path.join(home, '.ccs/app-updates', output.appId + '-pending-restart.json'); }
 function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'utf8')); } catch { return null; } }
 /**
- * `closed`: what a run's stop() has closed and not seen back: the `daemon`, and how many `desktops`
- * (`desktop` says whether any). It holds no path or profile. A marker without them, written before
- * stop(), says only that a restart is owed. `version` is what was installed
- * when it was written, and `target` the version a desktop install was about to put in place.
+ * A Codex Desktop run's marker: how many `desktops` it closed and has not seen back (`desktop` says
+ * whether any), with no path or profile. `version` is what was installed when it was written, and
+ * `target` the version a desktop install was about to put in place. The CLI keeps no marker.
  */
 const markerMatches = (marker, installed) => Boolean(installed) && [marker?.version, marker?.target].some((item) => version(item) === installed);
 function writeMarker(text, file = markerFile()) {
@@ -154,11 +144,6 @@ function writeMarker(text, file = markerFile()) {
   fs.renameSync(temporary, file);
 }
 function markPending(closed = {}) { writeMarker(JSON.stringify({ version: output.version, ...closed })); }
-/** The marker exactly as stored, to put back later byte for byte; null when there is none. */
-function markerSnapshot(file = markerFile()) {
-  try { return fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
-function restoreMarker(text, file = markerFile()) { writeMarker(text, file); }
 // An older runtime can't say what it closed, so it is taken to have closed a daemon and a desktop.
 const UNKNOWN_PLAN = { daemon: true, desktops: 1 };
 const counted = (plan) => ({ daemon: plan.daemon === true,
@@ -185,112 +170,57 @@ const verifiedState = async (runtime, deps, owed) => {
   return { ...after, daemon: false };
 };
 /**
- * What is owed once start() has run: what earlier runs closed, which only their own relaunches could
- * have cleared, and what this run closed and did not relaunch and see come up. An older runtime that
- * can't say rests on start()'s own checks, which fail when a desktop is not back.
+ * One Codex update. The CLI (owner decision 2026-11-08): each click stands alone. It runs the updater
+ * and, only if the installed version changed, restarts the daemon now and checks it came up; nothing is
+ * carried to a later click, and an update that fails or is cut off reports failed with the version
+ * installed now while the old daemon keeps running. Codex Desktop: the desktops a run closed are owed
+ * until AAC's own relaunch of each is seen coming up, kept in the marker for the next click.
  */
-async function owedAfterStart(runtime, deps, prior, closed) {
-  const left = typeof runtime.retiredPlan === 'function' ? (await runtimeRetired(runtime, deps)).desktops : 0;
-  return { daemon: closed.daemon, desktops: prior.desktops + left };
-}
 async function execute(deps) {
   const idle = Math.max(1, Math.min(seconds, deps.idleSeconds ?? IDLE_WAIT_SECONDS));
   const deadline = deps.now() + idle * 1000;
   const mode = deps.operation ?? operation;
   const expected = deps.expectedCandidate ?? flags['--expected-version'];
   const restartOnly = deps.restartOnly ?? flags['--restart-only'] === 'true';
-  let runtime, prior, closed, retried = false, stopped = false, installed = false, updating = false, nothingOwed = false, busy = false, stopFailed = false;
-  let earlierAtStop, intentWritten = false;
-  // Before the CLI updater: what was written, what was there before it, and what is installed now.
-  let intended = false, earlierAtInstall = null, pendingBefore = false, installedNow = null;
-  // The whole versions: the one this run began from, the one installed now, and whether they differ.
-  let fullPrevious = null, fullNow = null, fullInstalledNow = null;
-  // This attempt changed the version: against its own start, never the version an earlier attempt of
-  // the same install began from.
+  let runtime, closed = null, stopped = false, installed = false, updating = false, busy = false, stopFailed = false;
+  // Desktops an earlier desktop run left owed, and whether anything is owed after this one's failure.
+  let prior = 0, nothingOwed = false;
+  // The whole versions this run began from and has now, a prerelease included: what decides whether an
+  // install changed anything.
+  let fullPrevious = null, fullNow = null;
   const changed = () => fullNow !== fullPrevious;
-  // An install's whole history: the version it began from, and whether any attempt saw the version
-  // change. Once one has, only the stop plan, made under the startup lock, settles what it owes.
-  let fullFrom = null, changedSeen = false, intentFields = null;
+  const target = mode === 'desktop' && !restartOnly ? version(expected) : null;
+  // The desktop marker: desktops owed, or none.
+  const record = (desktops, withTarget = false) => {
+    if (mode !== 'desktop') return;
+    if (desktops > 0) deps.mark({ desktop: true, desktops, ...(withTarget && target ? { target } : {}) });
+    else deps.clear();
+  };
   try {
     const first = await deps.readVersion();
     output.previousVersion = output.version = version(first);
-    fullPrevious = fullNow = fullFrom = fullVersion(first);
+    fullPrevious = fullNow = fullVersion(first);
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
-    // A retry restarts only what its own stop() finds, because the launch snapshot of a failed
-    // earlier run is gone. The marker says what that run closed, and only a marker that names
-    // something is a retry: a run stopped by a busy Codex, or a marker the Python path wrote,
-    // closed nothing. What it names is owed whatever version is installed now, since a helper can be
-    // killed after replacing the app. A desktop marker from before these fields counts as a closed
-    // desktop if it is for this install: the old bridge wrote one after any stop(), even with no
-    // desktop running, so a host with only a daemon can see one false restart_not_running before the
-    // marker clears. Versions compare on their numeric part, since the Python path writes a
-    // prerelease in full.
-    const marker = deps.marked();
-    // An install intent: a CLI install, this bridge's or Python's own, named the daemon before it began
-    // and kept the marker from before it. It is that install's own intent, not something an earlier run
-    // left closed: what was owed is the marker it kept, the update began from the version it names, and
-    // stop()'s plan settles it, so a click after a kill in the install window owes nothing for a daemon
-    // that never ran.
-    const install = mode === 'cli' && marker && typeof marker.install === 'object' && marker.install !== null;
-    const earlierText = install && typeof marker.install.earlier === 'string' ? marker.install.earlier : null;
-    const base = install ? parseMarker(earlierText) : marker;
-    if (install && version(marker.version)) {
-      // The row names the version the install began from.
-      output.previousVersion = version(marker.version);
-      fullFrom = fullVersion(marker.version);
-      // A change an earlier attempt saw: on record, or shown by a version other than the one the install
-      // began from. An attempt that goes back to that version must not erase it.
-      changedSeen = marker.install.changed === true || fullFrom !== fullPrevious;
-    }
-    const unnamed = base && base.desktop === undefined && base.daemon === undefined;
-    prior = markerObligations(base, Boolean(mode === 'desktop' && unnamed && (restartOnly || markerMatches(base, output.previousVersion))));
-    retried = stillOwed(prior, { daemon: false });
-    if (mode === 'cli') {
+    if (mode === 'desktop') {
+      // A desktop marker from before these fields counts as one desktop when it is for this install.
+      const marker = deps.marked();
+      const unnamed = marker && marker.desktop === undefined && marker.daemon === undefined;
+      prior = desktopsOwed(marker, Boolean(unnamed && (restartOnly || markerMatches(marker, output.previousVersion))));
+    } else {
       output.updateAttempted = true;
-      // The updater can replace Codex under a daemon still running the old binary, a proxy can start one
-      // on the old binary while the updater runs, and the helper can be killed before anything else is
-      // written. Only stop(), under the startup lock, can say which daemon runs. So the daemon goes in
-      // the marker first whatever runs now; the earlier marker comes back exactly if the update turns out
-      // to change nothing, and stop()'s plan settles it otherwise.
-      pendingBefore = install ? false : deps.pending(output.previousVersion);
-      const intent = { ...prior, daemon: true };
-      intended = true;
-      earlierAtInstall = install ? earlierText : deps.markerSnapshot();
-      // The intent keeps the version the install began from, the marker from before it, and whether any
-      // attempt saw the version change, written before each installer runs.
-      intentFields = () => ({ ...markerFields(intent), version: fullFrom,
-        install: { earlier: earlierAtInstall, ...(changedSeen || changed() ? { changed: true } : {}) } });
-      deps.mark(intentFields());
       updating = true;
       await deps.update();
       updating = false;
       const read = await deps.readVersion();
-      output.version = installedNow = version(read);
-      fullNow = fullInstalledNow = fullVersion(read);
-      if (changed()) changedSeen = true;
+      output.version = version(read);
+      fullNow = fullVersion(read);
       if (!output.version) { output.messageCode = 'version_unknown'; return output; }
       if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
-      if (!changedSeen && !retried && !pendingBefore) {
-        if (intended) { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); }
-        output.status = 'current'; output.messageCode = 'current'; return output;
-      }
-      // Until stop() hands over its plan, the marker keeps naming the daemon.
-      deps.mark(intentFields());
+      if (!changed()) { output.status = 'current'; output.messageCode = 'current'; return output; }
     }
-    const target = mode === 'desktop' && !restartOnly ? version(expected) : null;
-    // The runtime hands over its plan under the startup lock, before it signals anything or waits on a
-    // recovery. Writing it there means a helper killed anywhere inside stop() still leaves what is owed.
-    // The marker as it was is kept, to put back once a failed stop() is shown to have recovered.
-    // The plan is made under the startup lock, so it says whether a daemon runs: with none, this run's
-    // CLI install intent is settled, and the marker from before it is what a failed stop() puts back.
-    const beforeStop = (plan) => {
-      const settled = mode === 'cli' && !counted(plan).daemon;
-      if (!intentWritten) { earlierAtStop = settled ? earlierAtInstall : deps.markerSnapshot(); intentWritten = true; }
-      const owed = addObligations(prior, counted(plan));
-      if (stillOwed(owed, { daemon: false })) deps.mark({ ...markerFields(owed), ...(target ? { target } : {}) });
-      else if (settled) { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); }
-    };
-    runtime = deps.runtime({ beforeStop });
+    // A desktop run records what stop() is about to close under its lock, before it signals anything,
+    // so a helper killed inside stop() still leaves it.
+    runtime = deps.runtime(mode === 'desktop' ? { beforeStop: (plan) => record(prior + counted(plan).desktops, true) } : {});
     while (true) {
       try { await runtime.stop(); stopped = true; break; }
       catch (error) {
@@ -299,11 +229,8 @@ async function execute(deps) {
         await deps.sleep(Math.min(5000, deadline - deps.now()));
       }
     }
-    // The runtime's own plan, captured under its lock: a process that appeared just before that lock
-    // is closed with the rest, so an earlier scan here could miss it. It goes in the marker at once, so
-    // a failed install or a killed helper still leaves a record of what is closed.
-    closed = addObligations(prior, runtimePlan(runtime, deps));
-    deps.mark({ ...markerFields(closed), ...(target ? { target } : {}) });
+    closed = runtimePlan(runtime);
+    record(prior + closed.desktops, true);
     if (mode === 'desktop') {
       output.updateAttempted = !restartOnly;
       updating = true;
@@ -314,125 +241,69 @@ async function execute(deps) {
       fullNow = fullVersion(read);
       if (!output.version || (!restartOnly && !changed()) || (expected && output.version !== version(expected))) throw new Error('Candidate not installed.');
       installed = true;
-      deps.mark(markerFields(closed));
+      record(prior + closed.desktops);
     }
     await deps.restartProxies?.();
     await runtime.start(); stopped = false;
     if (await deps.hasOldProxies()) throw new Error('An old proxy has no verified restart supervisor.');
-    // A desktop is back only once start() relaunched it and saw the process it started come up, so
-    // what an earlier run closed stays owed: its launch snapshot is gone. The daemon must be ready on a
-    // scan taken now. start() has just retired any daemon a proxy respawned too early, so while a live
-    // proxy could bring the daemon back it gets a short while. A first update keeps what it still owes,
-    // so the next click retries. A retry leaving owed what an earlier run closed says so once and clears
-    // it, since nothing here could ever finish it. A first update on an older runtime that can't be
-    // scanned rests on start()'s own checks.
-    const nothing = { daemon: false };
-    const owed = await owedAfterStart(runtime, deps, prior, closed);
-    if ((retried || typeof runtime.restartState === 'function') && stillOwed(owed, nothing)) {
+    // The daemon must be ready on a scan taken now: start() has just retired any daemon a proxy
+    // respawned too early, so while a live proxy could bring it back it gets a short while. A desktop
+    // is back only once start() relaunched it and saw the process it started come up, so what an
+    // earlier desktop run closed stays owed: a retry says so once and clears it. An older runtime
+    // that can't be scanned rests on start()'s own checks.
+    const left = typeof runtime.retiredPlan === 'function' ? (await runtimeRetired(runtime)).desktops : 0;
+    const owed = { daemon: closed.daemon, desktops: prior + left };
+    if (typeof runtime.restartState === 'function' || prior > 0) {
       const settleBy = deps.now() + (deps.settleMs ?? RESTART_SETTLE_MS);
-      let live = await runtimeState(runtime, deps);
+      let live = await runtimeState(runtime);
       while (owed.daemon && !live.daemon && live.proxy && deps.now() < settleBy) {
         await deps.sleep(250);
-        live = await runtimeState(runtime, deps);
+        live = await runtimeState(runtime);
       }
-      if (stillOwed(owed, await verifiedState(runtime, deps, owed))) {
-        if (retried) { deps.clear(); output.status = 'restart_failed'; output.messageCode = 'restart_not_running'; }
-        else { deps.mark(markerFields(owed)); output.status = 'restart_failed'; output.messageCode = 'restart_failed'; }
+      const daemonDown = owed.daemon && !(await verifiedState(runtime, deps, owed)).daemon;
+      if (daemonDown || owed.desktops > 0) {
+        if (prior > 0) { record(0); output.messageCode = 'restart_not_running'; }
+        else { record(left); output.messageCode = 'restart_failed'; }
+        output.status = 'restart_failed';
         return output;
       }
     }
-    deps.clear(); output.status = 'updated'; output.messageCode = 'updated';
+    record(0); output.status = 'updated'; output.messageCode = 'updated';
   } catch {
-    // start() does nothing once it has released the lock, so a launch that failed there is not
-    // retried here. The marker stays, and the next click reports what it finds (restart_not_running):
-    // the updaters send a matching marker here even with no daemon running.
-    // An installer that failed may still have replaced the app: what is installed now decides which
-    // version the row and the marker name. A CLI update stops nothing first, so a daemon still running
-    // the old binary is owed a restart too, or the next click would call it current.
+    // An installer that failed may still have replaced the app: the row names what is installed now.
     if (updating) {
       try {
         const read = await deps.readVersion();
-        const now = version(read);
-        installedNow = now;
-        fullInstalledNow = fullVersion(read);
-        if (now && fullInstalledNow !== fullPrevious) {
-          output.version = now;
-          fullNow = fullInstalledNow;
-          if (mode === 'cli') {
-            // An older runtime, one that can't be created, or a failed scan can't say, so there is
-            // taken to be one.
-            let running = true;
-            try {
-              const probe = deps.runtime();
-              if (probe.restartState) running = (await probe.restartState()).daemon;
-            } catch { /* Stays true. */ }
-            // The change goes on record, so only a stop plan settles it: the next click's stop() says
-            // what runs. With no daemon seen now, the row is a failed update rather than a restart.
-            changedSeen = true;
-            if (intentFields) deps.mark(intentFields());
-            if (!stillOwed({ ...prior, daemon: prior.daemon || running }, { daemon: false })) nothingOwed = true;
-          }
-        }
+        if (version(read)) { output.version = version(read); fullNow = fullVersion(read); }
       } catch { /* The version stays as it was read before the install. */ }
     }
-    // A CLI updater that failed, or installed a version other than expected, before anything stopped:
-    // if what is installed is the version this run started from and nothing was owed before, nothing
-    // changed, so the earlier marker comes back exactly and the row is a failed update. A version that
-    // can't be read keeps the intent.
-    if (mode === 'cli' && intended && !runtime && !retried && !pendingBefore && !changedSeen && installedNow !== null && fullInstalledNow === fullPrevious) {
-      try {
-        if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall);
-        nothingOwed = true;
-      } catch { /* The intent stays: the next click checks again. */ }
-    }
     if (stopped) {
-      try { await runtime.start(); } catch { /* Reported below as restart_failed. */ }
-      // With everything back, a failed install owes no restart. Otherwise the marker keeps what is
-      // still closed, against whichever version is installed now.
+      try { await runtime.start(); } catch { /* Reported below. */ }
+      // A desktop install that failed owes no restart once everything is back.
       if (mode === 'desktop' && !installed && closed) {
         try {
-          const owed = await owedAfterStart(runtime, deps, prior, closed);
-          if (!stillOwed(owed, await verifiedState(runtime, deps, owed))) { deps.clear(); nothingOwed = true; }
-          else if (output.version && changed()) deps.mark(markerFields(owed));
+          const left = (await runtimeRetired(runtime)).desktops;
+          const daemonDown = closed.daemon && !(await verifiedState(runtime, deps, closed)).daemon;
+          if (!daemonDown && prior + left === 0) { record(0); nothingOwed = true; }
+          else record(prior + left, true);
         } catch { /* The marker stays: the next click checks again. */ }
       }
     }
-    // A stop() that failed partway owes only what it really retired and did not bring back. A planned
-    // process it never reached, such as a proxy-only desktop still running, is not owed.
-    if (stopFailed) {
-      const nothing = { daemon: false };
-      try {
-        // Each desktop stop() closed and its recovery did not relaunch and see come up stays owed.
-        const retired = await runtimeRetired(runtime, deps);
-        const earlier = intentWritten ? earlierAtStop : deps.markerSnapshot();
-        // The readiness check can take about 40 seconds and a parent timeout can kill this helper
-        // during it, so what is owed goes in the marker first, and comes out if the daemon passes.
-        if (retired.daemon) deps.mark(markerFields(addObligations(prior, retired)));
-        // A replacement that fails the readiness check is not back, or the marker would name nothing.
-        const live = await verifiedState(runtime, deps, retired);
-        const lost = { daemon: retired.daemon && !live.daemon, desktops: retired.desktops };
-        if (stillOwed(lost, nothing)) deps.mark(markerFields(addObligations(prior, lost)));
-        else if (retired.daemon || intentWritten) {
-          // Exactly as it was: its own version and target, so it applies where it did before.
-          if (earlier === null) deps.clear();
-          else deps.restoreMarker(earlier);
-        }
-      } catch {
-        // A scan that fails can't say what came back. The plan is in memory, and the worst it costs is
-        // one false restart_not_running, where naming nothing would let the next click call it current.
-        try {
-          const planned = addObligations(prior, runtimePlan(runtime, deps));
-          if (stillOwed(planned, nothing)) deps.mark(markerFields(planned));
-        } catch { /* The row below still says the restart failed. */ }
-      }
+    // A desktop stop() that failed partway owes the desktops it closed and did not bring back.
+    if (stopFailed && mode === 'desktop') {
+      try { record(prior + (await runtimeRetired(runtime)).desktops, true); }
+      catch { try { record(prior + runtimePlan(runtime).desktops, true); } catch { /* The row says the restart failed. */ } }
     }
     if (busy) {
-      // Nothing was stopped. The CLI package may already be new (the pending
-      // marker stays, so the next click restarts the daemon once Codex is idle);
-      // the desktop package was not touched.
+      // Nothing was stopped. A CLI package may already be new; its daemon restarts on a later click.
       output.status = 'action_required'; output.messageCode = 'codex_busy';
+    } else if (mode === 'cli') {
+      // Installed but not restarted, or not installed: either way the old daemon keeps running.
+      const restartPhase = changed() && (stopFailed || stopped || closed !== null);
+      output.status = restartPhase ? 'restart_failed' : 'failed';
+      output.messageCode = restartPhase ? 'restart_failed' : 'update_failed';
     } else {
-      output.status = !nothingOwed && (retried || changed() || deps.pending(output.version)) ? 'restart_failed' : 'failed';
+      output.status = !nothingOwed && (prior > 0 || changed() || deps.pending(output.version)) ? 'restart_failed' : 'failed';
       output.messageCode = output.status === 'restart_failed' ? 'restart_failed' : 'update_failed';
     }
   } finally { await runtime?.dispose?.(); }
@@ -496,8 +367,6 @@ function bridgeDeps(createCodexActivationRuntime) {
     },
     runtime: (hooks) => createUpdateRuntime(createCodexActivationRuntime, {}, hooks),
     marked: readMarker,
-    markerSnapshot: () => markerSnapshot(),
-    restoreMarker: (text) => restoreMarker(text),
     };
 }
 async function main() {
@@ -517,5 +386,5 @@ async function main() {
     return await execute(bridgeDeps(createCodexActivationRuntime));
   } finally { await release(); }
 }
-module.exports = { bridgeDeps, cgroupUnit, createUpdateRuntime, execute, markerSnapshot, restoreMarker, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
+module.exports = { bridgeDeps, cgroupUnit, createUpdateRuntime, execute, insideServiceCgroup, loadRuntime, modules, output, relaunch, version };
 if (require.main === module) main().catch(() => output).then(() => process.stdout.write(JSON.stringify(output) + '\n'));
