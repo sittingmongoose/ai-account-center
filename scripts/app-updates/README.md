@@ -321,7 +321,7 @@ the coordinator. The socket is probed first, and the native is hashed once
 against the whole reviewed set. A native that cannot be read, or an unusable
 review list, is not proof of an unreviewed build: it keeps the coordinator.
 
-Owner decision (Jared, 2026-11-07): "No check, like Antigravity's own updater".
+Owner decision (2026-11-07): "No check, like Antigravity's own updater".
 
 Under the account lock, a pending managed recovery record stops the paused
 update. Otherwise AAC backs up the native to
