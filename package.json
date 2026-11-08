@@ -153,7 +153,7 @@
     "proper-lockfile": "^4.1.2",
     "smol-toml": "^1.6.1",
     "undici": "^5.29.0",
-    "ws": "^8.16.0"
+    "ws": "8.22.2"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.1.0",
@@ -165,7 +165,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.19.25",
     "@types/proper-lockfile": "^4.1.4",
-    "@types/ws": "^8.5.10",
+    "@types/ws": "8.18.2",
     "@typescript-eslint/eslint-plugin": "8.72.1",
     "@typescript-eslint/parser": "8.72.1",
     "binaryen": "132.0.0",
