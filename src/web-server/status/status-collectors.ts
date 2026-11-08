@@ -668,7 +668,7 @@ export const REMOTE_MACHINES: Readonly<Record<Exclude<MachineId, 'vm'>, HostOs>>
 
 const LINUX_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk / | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
-const MAC_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(sysctl -n hw.ncpu)"; printf 'load=%s\n' "$(sysctl -n vm.loadavg | awk '{print $2}')"; printf 'memTotalB=%s\n' "$(sysctl -n hw.memsize)"; vm_stat | awk '/page size of/{print "pageSize="$8} /^Pages (free|inactive|speculative|purgeable):/{v=$NF; sub(/\.$/,"",v); print "pagesAvail="v}'; c=$(ps -A -o %cpu=) && printf 'cpuPct=%s\n' "$(printf '%s\n' "$c" | awk '{s+=$1} END {print s+0}')"; d=/System/Volumes/Data; [ -d "$d" ] || d=/; df -Pk "$d" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
+const MAC_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(sysctl -n hw.ncpu)"; printf 'load=%s\n' "$(sysctl -n vm.loadavg | awk '{print $2}')"; printf 'memTotalB=%s\n' "$(sysctl -n hw.memsize)"; vm_stat | awk '/page size of/{print "pageSize="$8} /^Pages (free|inactive|speculative|purgeable):/{v=$NF; sub(/\.$/,"",v); print "pagesAvail="v}'; c=$(ps -A -o %cpu=) && p=$(printf '%s\n' "$c" | awk '$1 ~ /^[0-9]+([.][0-9]+)?$/ {s+=$1; n++} END {if (n) print s}') && [ -n "$p" ] && printf 'cpuPct=%s\n' "$p"; d=/System/Volumes/Data; [ -d "$d" ] || d=/; df -Pk "$d" | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
 const WINDOWS_PROBE_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
@@ -677,7 +677,8 @@ const WINDOWS_PROBE_SCRIPT = [
   '$cpu = @(Get-CimInstance Win32_Processor)',
   '$drive = $env:SystemDrive',
   '$disk = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID=\'" + $drive + "\'")',
-  '"cores=" + [int](($cpu | Measure-Object NumberOfLogicalProcessors -Sum).Sum)',
+  // One count per processor too: Measure-Object -Sum would count a missing one as 0.
+  'foreach ($p in $cpu) { "coreCount=" + $p.NumberOfLogicalProcessors }',
   // One line per processor; the server averages them. Measure-Object counts a null LoadPercentage
   // as 0, so averaging here could turn an unknown load into a measured 0%.
   'foreach ($p in $cpu) { "cpuLoad=" + $p.LoadPercentage }',
@@ -703,6 +704,23 @@ function linuxCpuTimes(line: string | undefined): MachineSample['cpuTimes'] {
   const total = values.slice(0, 8).reduce((sum, value) => sum + value, 0);
   const idle = values[3] + (values[4] ?? 0);
   return { busy: total - idle, total };
+}
+
+/**
+ * The logical core count: Windows prints one `coreCount=` per processor and any one without a
+ * value makes the total unknown; the others print `cores=`. No machine has zero cores.
+ */
+function probeCores(stdout: string, cores: number | null): number | null {
+  const counts = stdout
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('coreCount='))
+    .map((line) => line.slice('coreCount='.length).trim());
+  if (counts.length > 0) {
+    const values = counts.map((value) => (/^\d+$/.test(value) ? Number(value) : Number.NaN));
+    if (!values.every((value) => Number.isFinite(value) && value > 0)) return null;
+    return values.reduce((sum, value) => sum + value, 0);
+  }
+  return cores || null;
 }
 
 /**
@@ -747,8 +765,7 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
     const value = Number(raw);
     return Number.isFinite(value) && value >= 0 ? value : null;
   };
-  // No machine has zero cores: a 0 is a sum over missing values, not a count.
-  const cores = n('cores') || null;
+  const cores = probeCores(stdout, n('cores'));
   const kib = (key: string): number | null => {
     const value = n(key);
     return value === null ? null : value * 1024;

@@ -384,7 +384,7 @@ describe('status collectors', () => {
 
   it('a host probe whose CPU command fails reports no CPU, never 0% busy', () => {
     const mac = machineProbeCommand('mac');
-    expect(mac).toContain("c=$(ps -A -o %cpu=) && printf 'cpuPct=%s\\n'");
+    expect(mac).toContain('c=$(ps -A -o %cpu=) && p=$(');
     // The Mac probe as a shell runs it, with ps failing: no cpuPct line at all.
     const script = mac
       .replace(/"\$\(sysctl -n hw\.ncpu\)"/, '8')
@@ -412,6 +412,14 @@ describe('status collectors', () => {
     expect(noCores).toMatch(/^cores=$/m);
     expect(parseMachineProbe('mac', noCores)?.busyPct).toBeNull();
     expect(parseMachineProbe('mac', noCores)?.cpuError).toBe('The machine did not report its CPU.');
+    // ps that succeeds but prints nothing, or nothing numeric: no figure (awk would print 0).
+    for (const output of ["printf ''", "printf 'x\\n-\\n'"]) {
+      const empty = execFileSync('bash', ['-c', script.replace('c=$(false)', `c=$(${output})`)], {
+        encoding: 'utf8',
+      });
+      expect({ output, line: empty.includes('cpuPct=') }).toEqual({ output, line: false });
+      expect(parseMachineProbe('mac', empty)?.cpuError).toBe('The machine did not report its CPU.');
+    }
     // Control: the same script with a working ps sums its lines.
     const good = execFileSync(
       'bash',
@@ -452,6 +460,12 @@ describe('status collectors', () => {
     }
     // Windows prints raw values: a missing one is empty, never a cast 0 (checked on the PC).
     expect(windowsScript).not.toContain('[int64]');
+    expect(windowsScript).not.toContain('Measure-Object');
+    // One coreCount per processor: any without a value makes the total unknown, never a short sum.
+    const mem = 'memTotalKb=2\r\nmemAvailKb=1\r\ndiskTotalB=10\r\ndiskFreeB=5\r\ncpuLoad=40\r\n';
+    expect(parseMachineProbe('windows', `coreCount=4\r\ncoreCount=4\r\n${mem}`)?.cores).toBe(8);
+    expect(parseMachineProbe('windows', `coreCount=\r\ncoreCount=4\r\n${mem}`)?.cores).toBeNull();
+    expect(parseMachineProbe('windows', `coreCount=0\r\n${mem}`)?.cores).toBeNull();
     const winEmpty = parseMachineProbe(
       'windows',
       'cores=0\r\ncpuLoad=10\r\nmemTotalKb=2\r\nmemAvailKb=\r\ndiskTotalB=10\r\ndiskFreeB=\r\nmount=C:\r\n'
