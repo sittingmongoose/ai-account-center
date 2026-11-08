@@ -225,7 +225,7 @@ describe('secret search', () => {
       `{"note":"\\u0073${token.slice(1)}"}`,
       `{"note":"${token.slice(0, 3)}\\u0041${token.slice(4)}"}`,
       `{"pass\\u0077ord":"hunter2-hunter2"}`,
-      `{"x":"jared\\u0040mail.example.com"}`,
+      `{"x":"plum\\u0040mail.example.com"}`,
     ]) {
       expect(findSecret(json)).toBeNull();
       const parsed = jsonFromBytes(Buffer.from(json), 64 * 1024);
@@ -322,7 +322,7 @@ describe('secret search', () => {
   it('still finds real emails and tokens, and only those', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.abcdefghijklmnop';
     for (const [text, kind] of [
-      ['write to jared.smith+x@mail.example.com now', 'an email address'],
+      ['write to plum.smith+x@mail.example.com now', 'an email address'],
       ['a@b.co', 'an email address'],
       ['"from":"x%y@host-1.example.org"', 'an email address'],
       [jwt, 'a JSON web token'],
@@ -2114,16 +2114,16 @@ describe('round three', () => {
       'pw: Summer_2026',
       'pwd=summer_2026',
       'wifi pass: Summer_2026',
-      'user=jared pass=Summer_2026',
+      'user=plum pass=Summer_2026',
       // -p with a separate value after a login or sshpass
-      'docker login -u jared -p Summer_2026',
+      'docker login -u plum -p Summer_2026',
       'sshpass -p Summer_2026 ssh host',
-      'az acr login -n reg -u jared -p Summer_2026',
+      'az acr login -n reg -u plum -p Summer_2026',
       // values holding = are still judged; only a comma list of settings is read part by part
       'password: Summer=2026',
       'password=Passw0rd=1',
       'DB_PASSWORD=Hello=World2026',
-      'pw=jared=Summer2026',
+      'pw=plum=Summer2026',
       'pass: Summer=2026!',
       'API_KEY=abc=AbCd1234EfGh5678',
       'token=key=AbCd1234EfGh5678',
