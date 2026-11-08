@@ -345,8 +345,9 @@ export function createCodexActivationRuntime(
   let cliLaunchers: CodexProcessSnapshot[] = [];
   let confirmed = false;
   const restartedClis: CodexProcessSnapshot[] = [];
-  // The desktop launchers start() relaunched and saw come up: only these are back.
-  const relaunched = new Set<CodexProcessSnapshot>();
+  // The desktop launchers start() relaunched and saw come up, each with the process it started: only
+  // these are back, and only while a later stop() has not closed that process again.
+  const relaunched = new Map<CodexProcessSnapshot, CodexProcessSnapshot>();
   let stopped = false;
 
   const scan = async (): Promise<CodexProcessSnapshot[]> =>
@@ -427,20 +428,24 @@ export function createCodexActivationRuntime(
       }
       // A desktop is back only when AAC relaunched it and saw the process it started come up: the pid
       // it spawned or a process in the unit it made, with an app server on this home under it. One a
-      // failed stop() never closed still runs, by pid and start time, and is not relaunched.
+      // failed stop() never closed still runs, by pid and start time, and is not relaunched. One reopened
+      // before is skipped only while that process still runs: a rollback's stop() closes it again.
       for (const launcher of launchers.filter(isDesktop)) {
-        if (relaunched.has(launcher)) continue;
-        if ((await scan()).some((entry) => sameProcess(launcher, entry))) continue;
+        const running = await scan();
+        const replacement = relaunched.get(launcher);
+        if (replacement && running.some((entry) => sameProcess(replacement, entry))) continue;
+        relaunched.delete(launcher);
+        if (running.some((entry) => sameProcess(launcher, entry))) continue;
         const launch = await dependencies.launch(launcher, true, defaults.launch);
         const deadline = dependencies.now() + START_TIMEOUT;
         let ready = false;
         do {
           const processes = await scan();
-          ready = processes.some(
-            (main) =>
-              isDesktop(main) &&
-              startedBy(launch, main, processes) &&
-              descendants(main, processes).some(
+          const main = processes.find(
+            (entry) =>
+              isDesktop(entry) &&
+              startedBy(launch, entry, processes) &&
+              descendants(entry, processes).some(
                 (process) =>
                   isCodex(process) &&
                   usesHome(process, codexHome) &&
@@ -448,6 +453,8 @@ export function createCodexActivationRuntime(
                   !isProxy(process)
               )
           );
+          ready = main !== undefined;
+          if (main) relaunched.set(launcher, main);
           if (ready) break;
           await dependencies.sleep(250);
         } while (dependencies.now() < deadline);
@@ -456,7 +463,6 @@ export function createCodexActivationRuntime(
             'The VM Codex desktop app did not start its app server on the original display.'
           );
         }
-        relaunched.add(launcher);
       }
       for (const launcher of cliLaunchers) {
         const before = await scan();
@@ -600,6 +606,12 @@ export function createCodexActivationRuntime(
         await dependencies.beforeStop?.(restartPlan(launchers));
         mutationStarted = true;
         await retire(desktops, processes);
+        // A desktop start() reopened and this stop() closed again is not back any more.
+        for (const [launcher, replacement] of relaunched) {
+          if (desktops.some((desktop) => sameProcess(desktop, replacement))) {
+            relaunched.delete(launcher);
+          }
+        }
         await retire(daemons, processes);
         await retire(cliRoots, processes);
         // A daemon respawned by an SSH proxy is retired again in start(), after the swap.

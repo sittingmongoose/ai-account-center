@@ -1744,6 +1744,65 @@ function seeded(seed: number): () => number {
   };
 }
 
+describe('an activation rollback after start()', () => {
+  // The caller's rollback: stop() again, which closes the desktops start() reopened, then start().
+  const mainAt = (pid: number, folder: string) =>
+    processFixture(pid, ['/usr/lib/chatgpt/ChatGPT', `--user-data-dir=/fixture/${folder}`], {
+      env: { HOME: '/fixture', DISPLAY: ':8' },
+      exe: '/usr/lib/chatgpt/ChatGPT',
+    });
+  const serverOf = (pid: number, ppid: number) => ({
+    ...bundled,
+    pid,
+    ppid,
+    startTime: String(pid),
+  });
+
+  it.each([
+    { name: 'after a step that failed past a good start()', desktops: 1, failSecond: false },
+    { name: 'after a start() that reopened one of two', desktops: 2, failSecond: true },
+  ])('reopens every desktop it closed again, $name', async ({ desktops, failSecond }) => {
+    const initial = Array.from({ length: desktops }, (_, index) => [
+      mainAt(40 + index * 10, `profile-${index}`),
+      serverOf(41 + index * 10, 40 + index * 10),
+    ]).flat();
+    const fake = harness(initial);
+    let launches = 0;
+    const runtime = createCodexActivationRuntime(home, {
+      ...fake.deps,
+      launch: async (target, isDesktopLaunch) => {
+        if (failSecond && ++launches === 2) {
+          throw new CodexActivationRuntimeError('fixture second desktop launch failed');
+        }
+        return fake.deps.launch(target, isDesktopLaunch);
+      },
+    });
+    await runtime.stop();
+    if (failSecond) await expect(runtime.start()).rejects.toThrow();
+    else await runtime.start();
+
+    await runtime.stop();
+    // Each desktop is closed again, including one start() reopened, so each is owed again.
+    expect(fake.current().filter(isDesktop)).toHaveLength(0);
+    expect((await runtime.retiredPlan()).desktops).toBe(desktops);
+    await runtime.start();
+    expect(fake.current().filter(isDesktop)).toHaveLength(desktops);
+    expect((await runtime.retiredPlan()).desktops).toBe(0);
+  });
+
+  it('reopens a desktop whose reopened process exited before the rollback', async () => {
+    const fake = harness([mainAt(40, 'profile-0'), serverOf(41, 40)]);
+    const runtime = createCodexActivationRuntime(home, fake.deps);
+    await runtime.stop();
+    await runtime.start();
+    // The desktop start() reopened exits on its own, so the rollback's stop() has nothing to close.
+    for (const entry of fake.current().filter(isDesktop)) await fake.deps.signal(entry, 'SIGKILL');
+    await runtime.stop();
+    await runtime.start();
+    expect(fake.current().filter(isDesktop)).toHaveLength(1);
+  });
+});
+
 describe('desktop main process detection', () => {
   it('reads a descendant bare user-data-dir as the default folder, never the next word', async () => {
     const splitRenderer = {
