@@ -620,6 +620,14 @@ class UpdaterTests(unittest.TestCase):
                 self.assertEqual(bridged, [])
                 self.assertEqual(seen['final'], earlier)
 
+    def test_python_cli_install_carries_on_past_an_undecodable_earlier_marker(self):
+        earlier = b'\xff\xfe not a marker'
+        value, seen, bridged = self._ordinary_codex_click(earlier=earlier)
+        self.assertEqual(value['status'], 'updated')
+        self.assertTrue(json.loads(seen['during'])['daemon'])
+        # Python's own put-back is byte for byte.
+        self.assertEqual(seen['after'], earlier)
+
     def test_python_cli_install_names_no_daemon_where_there_is_no_shared_one(self):
         for options in ({'manager': 'npm'}, {'binary': False}):
             with self.subTest(**options):

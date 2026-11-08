@@ -24,6 +24,8 @@ const codexHome = path.join(home, '.codex');
 const markerFile = path.join(home, '.ccs/app-updates/codex-cli-pending-restart.json');
 
 const arrival = process.env.AAC_FIXTURE_ARRIVAL === '1';
+// AAC_FIXTURE_VERSIONS=from,to: the versions the install goes between, prereleases included.
+const [fromVersion, toVersion] = (process.env.AAC_FIXTURE_VERSIONS ?? '1.0.0,2.0.0').split(',');
 const retry = process.argv[2] === 'retry';
 const codex = (pid: number, args: string[], release = '1.0.0'): CodexProcessSnapshot => ({
   pid,
@@ -78,7 +80,7 @@ const read = (): Record<string, unknown> | null => {
   }
 };
 
-let installed = retry ? '2.0.0' : '1.0.0';
+let installed = retry ? toVersion : fromVersion;
 void (async () => {
   const result = await bridge.execute({
     now: () => 0,
@@ -90,7 +92,7 @@ void (async () => {
     update: async () => {
       if (retry) return;
       if (arrival) current.push(daemon);
-      installed = '2.0.0';
+      installed = toVersion;
       if (process.env.AAC_FIXTURE_NO_KILL === '1') return;
       process.kill(process.pid, 'SIGKILL');
       await new Promise(() => {});

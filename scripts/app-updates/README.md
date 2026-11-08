@@ -811,7 +811,9 @@ itself: on Ubuntu, for a native install with `~/.local/bin/codex`, it writes the
 first. After an install that changed the version, it hands over to the bridge if an app server (a daemon
 or a proxy) now runs this install or the binary it replaced, with the terminal sessions its first scan
 found; otherwise the earlier marker comes back exactly. An installer that fails and changes nothing
-owes nothing. A retry that leaves anything owed is `restart_failed` with
+owes nothing. Whether an install changed anything is judged on the whole version, a prerelease
+included (`0.50.0-alpha.1` to `0.50.0` is a change), on both routes; the numeric part is only for the
+row and for matching a marker to an install. A marker that isn't valid UTF-8 is carried along as it is. A retry that leaves anything owed is `restart_failed` with
 `restart_not_running`: any desktop an earlier run closed, and an owed daemon that does not pass
 `start()`'s own bounded readiness check. The
 daemon found afterwards must be the one that passed, by pid and start time, or it is checked itself. A first

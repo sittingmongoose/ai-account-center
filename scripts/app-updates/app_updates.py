@@ -793,7 +793,7 @@ def update_cli(install, deadline, restart_managed=False):
             # The bridge's own install intent: it keeps the marker from before it, so the bridge treats
             # it as this install's, not as a restart an earlier run left owed.
             write_private_json(pending, {"version": before, "desktop": False, "daemon": True, "desktops": 0,
-                                         "install": {"earlier": None if earlier is None else earlier.decode("utf-8")}})
+                                         "install": {"earlier": None if earlier is None else earlier.decode("utf-8", "replace")}})
         try:
             perform_cli_update(install, deadline)
         except BaseException:

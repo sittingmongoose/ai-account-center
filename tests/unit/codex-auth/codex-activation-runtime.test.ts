@@ -1233,31 +1233,34 @@ describe("A helper killed during stop()'s own recovery", () => {
     expect(routed.status).not.toBe('current');
   });
 
-  it('owes a daemon that arrived on the old binary while the updater ran, when killed then', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-arrival-'));
-    roots.push(root);
-    const env = { ...isolated(root), AAC_FIXTURE_ARRIVAL: '1' };
-    const fixture = path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts');
-    const spawn = (...args: string[]) =>
-      spawnSync(process.execPath, ['run', fixture, ...args], {
-        cwd: repo,
-        env,
-        encoding: 'utf8',
-        timeout: 60_000,
-      });
-    // No daemon ran when the update began, only a proxy; one started during the install.
-    expect(spawn().signal).toBe('SIGKILL');
-    const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
-    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toMatchObject({ daemon: true });
-    // The real Python routing sends the next click to the bridge.
-    const routed = JSON.parse(nextClick(root).stdout.trim());
-    expect(routed.bridged).toBe(true);
-    // That bridge restarts the daemon still running 1.0.0 instead of calling 2.0.0 current.
-    const retry = JSON.parse(spawn('retry').stdout.trim().split('\n').pop() as string);
-    expect(retry.status).toBe('updated');
-    expect(retry.signals).toBeGreaterThan(0);
-    expect(retry.marker).toBeNull();
-  });
+  it.each(['1.0.0,2.0.0', '0.50.0-alpha.1,0.50.0'])(
+    'owes a daemon that arrived on the old binary while the updater ran, when killed then (%s)',
+    (versions) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-arrival-'));
+      roots.push(root);
+      const env = { ...isolated(root), AAC_FIXTURE_ARRIVAL: '1', AAC_FIXTURE_VERSIONS: versions };
+      const fixture = path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts');
+      const spawn = (...args: string[]) =>
+        spawnSync(process.execPath, ['run', fixture, ...args], {
+          cwd: repo,
+          env,
+          encoding: 'utf8',
+          timeout: 60_000,
+        });
+      // No daemon ran when the update began, only a proxy; one started during the install.
+      expect(spawn().signal).toBe('SIGKILL');
+      const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
+      expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toMatchObject({ daemon: true });
+      // The real Python routing sends the next click to the bridge.
+      const routed = JSON.parse(nextClick(root).stdout.trim());
+      expect(routed.bridged).toBe(true);
+      // That bridge restarts the daemon still running 1.0.0 instead of calling 2.0.0 current.
+      const retry = JSON.parse(spawn('retry').stdout.trim().split('\n').pop() as string);
+      expect(retry.status).toBe('updated');
+      expect(retry.signals).toBeGreaterThan(0);
+      expect(retry.marker).toBeNull();
+    }
+  );
 
   it('restarts a daemon that arrived while the updater ran, when nothing is killed', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-arrival-'));

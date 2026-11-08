@@ -1211,6 +1211,23 @@ describe('Pending-marker retry', () => {
     expect(value.deps.marked()).toBeNull();
   });
 
+  it('keeps the daemon owed when a failed updater changed only the prerelease', async () => {
+    const value = fixture();
+    let installed = 'codex-cli 0.50.0-alpha.1';
+    const result = await bridge.execute(
+      failedUpdater(value, {
+        readVersion: async () => installed,
+        update: async () => {
+          installed = 'codex-cli 0.50.0-alpha.2';
+          throw new Error('network error');
+        },
+      })
+    );
+    // 0.50.0-alpha.2 is not the 0.50.0-alpha.1 the run began from, though their numbers match.
+    expect(result.status).toBe('restart_failed');
+    expect(value.deps.marked()?.daemon).toBe(true);
+  });
+
   it('keeps the daemon owed when the updater installed a version other than expected', async () => {
     const value = fixture();
     let installed = '1.0.0';
@@ -1308,6 +1325,48 @@ describe('Pending-marker retry', () => {
       expect([result.status, result.messageCode]).toEqual(['updated', 'updated']);
       expect(result.previousVersion).toBe('1.0.0');
       expect(value.deps.marked()).toBeNull();
+    }
+  );
+
+  it.each([
+    { from: '0.50.0-alpha.1', to: '0.50.0', changed: true },
+    { from: '0.50.0', to: '0.50.0-alpha.1', changed: true },
+    { from: '0.50.0-alpha.1', to: '0.50.0-alpha.2', changed: true },
+    { from: '0.50.0-alpha.1', to: '0.50.0-alpha.1', changed: false },
+  ])(
+    'judges whether a CLI install changed anything on the whole version: $from -> $to',
+    async ({ from, to, changed }) => {
+      for (const route of ['own', 'handed over']) {
+        const value = fixture();
+        let installed = route === 'own' ? from : to;
+        if (route === 'handed over') {
+          // Python installed it and handed over: its install intent names the version it began from.
+          value.deps.restoreMarker(
+            JSON.stringify({
+              version: from,
+              desktop: false,
+              daemon: true,
+              desktops: 0,
+              install: { earlier: null },
+            })
+          );
+        }
+        const result = await bridge.execute({
+          ...value.deps,
+          readVersion: async () => `codex-cli ${installed}`,
+          update: async () => {
+            installed = to;
+          },
+          pending: () => false,
+          operation: 'cli',
+          runtime: () => runtime({ daemon: true }, { daemon: true }),
+        });
+        // A changed prerelease is an update: the daemon on the old binary is restarted.
+        expect({ route, status: result.status }).toEqual({
+          route,
+          status: changed ? 'updated' : 'current',
+        });
+      }
     }
   );
 

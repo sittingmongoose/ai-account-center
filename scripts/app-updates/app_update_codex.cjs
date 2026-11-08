@@ -30,6 +30,9 @@ const output = { appId: operation === 'desktop' ? 'codex-desktop' : 'codex-cli',
   messageCode: 'update_failed', updateAttempted: false, restartedProcesses: 0, forcedStops: 0 };
 const cleanEnvironment = (env) => Object.fromEntries(Object.entries(env).filter(([key]) => !/^CCS_SESSION_SECRET$|^CCS_DASHBOARD_|_PASSWORD_HASH$/i.test(key)));
 const version = (text) => typeof text === 'string' ? text.match(/\d+\.\d+(?:\.\d+){0,3}/)?.[0] ?? null : null;
+// The whole version, a prerelease or build included: what decides whether an install changed anything,
+// as the Python helper compares it. The numeric part (version()) is for the row and marker matching.
+const fullVersion = (text) => typeof text === 'string' ? text.match(/\d+\.\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.+-]+)?/)?.[0] ?? null : null;
 // A process in a systemd user service's cgroup (the dashboard) charges whatever it starts to that
 // service: a relaunched Codex and everything it runs would count against the dashboard's MemoryMax,
 // and with KillMode=process would keep its cgroup, and so its memory.peak, alive across restarts.
@@ -200,8 +203,13 @@ async function execute(deps) {
   let earlierAtStop, intentWritten = false;
   // Before the CLI updater: what was written, what was there before it, and what is installed now.
   let intended = false, earlierAtInstall = null, pendingBefore = false, installedNow = null;
+  // The whole versions: the one this run began from, the one installed now, and whether they differ.
+  let fullPrevious = null, fullNow = null, fullInstalledNow = null;
+  const changed = () => fullNow !== fullPrevious;
   try {
-    output.previousVersion = output.version = version(await deps.readVersion());
+    const first = await deps.readVersion();
+    output.previousVersion = output.version = version(first);
+    fullPrevious = fullNow = fullVersion(first);
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
     // A retry restarts only what its own stop() finds, because the launch snapshot of a failed
     // earlier run is gone. The marker says what that run closed, and only a marker that names
@@ -221,7 +229,10 @@ async function execute(deps) {
     const install = mode === 'cli' && marker && typeof marker.install === 'object' && marker.install !== null;
     const earlierText = install && typeof marker.install.earlier === 'string' ? marker.install.earlier : null;
     const base = install ? parseMarker(earlierText) : marker;
-    if (install && version(marker.version)) output.previousVersion = version(marker.version);
+    if (install && version(marker.version)) {
+      output.previousVersion = version(marker.version);
+      fullPrevious = fullVersion(marker.version);
+    }
     const unnamed = base && base.desktop === undefined && base.daemon === undefined;
     prior = markerObligations(base, Boolean(mode === 'desktop' && unnamed && (restartOnly || markerMatches(base, output.previousVersion))));
     retried = stillOwed(prior, { daemon: false });
@@ -236,17 +247,19 @@ async function execute(deps) {
       const intent = { ...prior, daemon: true };
       intended = true;
       earlierAtInstall = install ? earlierText : deps.markerSnapshot();
-      const from = output.previousVersion;
+      const from = fullPrevious;
       // The intent keeps the version the update began from and the marker from before it.
       const intentFields = () => ({ ...markerFields(intent), version: from, install: { earlier: earlierAtInstall } });
       deps.mark(intentFields());
       updating = true;
       await deps.update();
       updating = false;
-      output.version = installedNow = version(await deps.readVersion());
+      const read = await deps.readVersion();
+      output.version = installedNow = version(read);
+      fullNow = fullInstalledNow = fullVersion(read);
       if (!output.version) { output.messageCode = 'version_unknown'; return output; }
       if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
-      if (output.version === output.previousVersion && !retried && !pendingBefore) {
+      if (!changed() && !retried && !pendingBefore) {
         if (intended) { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); }
         output.status = 'current'; output.messageCode = 'current'; return output;
       }
@@ -285,8 +298,10 @@ async function execute(deps) {
       updating = true;
       if (!restartOnly) await deps.update();
       updating = false;
-      output.version = version(await deps.readVersion());
-      if (!output.version || (!restartOnly && output.version === output.previousVersion) || (expected && output.version !== version(expected))) throw new Error('Candidate not installed.');
+      const read = await deps.readVersion();
+      output.version = version(read);
+      fullNow = fullVersion(read);
+      if (!output.version || (!restartOnly && !changed()) || (expected && output.version !== version(expected))) throw new Error('Candidate not installed.');
       installed = true;
       deps.mark(markerFields(closed));
     }
@@ -325,10 +340,13 @@ async function execute(deps) {
     // the old binary is owed a restart too, or the next click would call it current.
     if (updating) {
       try {
-        const now = version(await deps.readVersion());
+        const read = await deps.readVersion();
+        const now = version(read);
         installedNow = now;
-        if (now && now !== output.version) {
+        fullInstalledNow = fullVersion(read);
+        if (now && fullInstalledNow !== fullPrevious) {
           output.version = now;
+          fullNow = fullInstalledNow;
           if (mode === 'cli') {
             // An older runtime, one that can't be created, or a failed scan can't say, so there is
             // taken to be one.
@@ -352,7 +370,7 @@ async function execute(deps) {
     // if what is installed is the version this run started from and nothing was owed before, nothing
     // changed, so the earlier marker comes back exactly and the row is a failed update. A version that
     // can't be read keeps the intent.
-    if (mode === 'cli' && intended && !runtime && !retried && !pendingBefore && installedNow !== null && installedNow === output.previousVersion) {
+    if (mode === 'cli' && intended && !runtime && !retried && !pendingBefore && installedNow !== null && fullInstalledNow === fullPrevious) {
       try {
         if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall);
         nothingOwed = true;
@@ -366,7 +384,7 @@ async function execute(deps) {
         try {
           const owed = await owedAfterStart(runtime, deps, prior, closed);
           if (!stillOwed(owed, await verifiedState(runtime, deps, owed))) { deps.clear(); nothingOwed = true; }
-          else if (output.version && output.version !== output.previousVersion) deps.mark(markerFields(owed));
+          else if (output.version && changed()) deps.mark(markerFields(owed));
         } catch { /* The marker stays: the next click checks again. */ }
       }
     }
@@ -405,7 +423,7 @@ async function execute(deps) {
       // the desktop package was not touched.
       output.status = 'action_required'; output.messageCode = 'codex_busy';
     } else {
-      output.status = !nothingOwed && (retried || output.version !== output.previousVersion || deps.pending(output.version)) ? 'restart_failed' : 'failed';
+      output.status = !nothingOwed && (retried || changed() || deps.pending(output.version)) ? 'restart_failed' : 'failed';
       output.messageCode = output.status === 'restart_failed' ? 'restart_failed' : 'update_failed';
     }
   } finally { await runtime?.dispose?.(); }
