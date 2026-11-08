@@ -205,11 +205,16 @@ async function execute(deps) {
   let intended = false, earlierAtInstall = null, pendingBefore = false, installedNow = null;
   // The whole versions: the one this run began from, the one installed now, and whether they differ.
   let fullPrevious = null, fullNow = null, fullInstalledNow = null;
+  // This attempt changed the version: against its own start, never the version an earlier attempt of
+  // the same install began from.
   const changed = () => fullNow !== fullPrevious;
+  // An install's whole history: the version it began from, and whether any attempt saw the version
+  // change. Once one has, only the stop plan, made under the startup lock, settles what it owes.
+  let fullFrom = null, changedSeen = false, intentFields = null;
   try {
     const first = await deps.readVersion();
     output.previousVersion = output.version = version(first);
-    fullPrevious = fullNow = fullVersion(first);
+    fullPrevious = fullNow = fullFrom = fullVersion(first);
     if (!output.version) { output.messageCode = 'version_unknown'; return output; }
     // A retry restarts only what its own stop() finds, because the launch snapshot of a failed
     // earlier run is gone. The marker says what that run closed, and only a marker that names
@@ -230,8 +235,12 @@ async function execute(deps) {
     const earlierText = install && typeof marker.install.earlier === 'string' ? marker.install.earlier : null;
     const base = install ? parseMarker(earlierText) : marker;
     if (install && version(marker.version)) {
+      // The row names the version the install began from.
       output.previousVersion = version(marker.version);
-      fullPrevious = fullVersion(marker.version);
+      fullFrom = fullVersion(marker.version);
+      // A change an earlier attempt saw: on record, or shown by a version other than the one the install
+      // began from. An attempt that goes back to that version must not erase it.
+      changedSeen = marker.install.changed === true || fullFrom !== fullPrevious;
     }
     const unnamed = base && base.desktop === undefined && base.daemon === undefined;
     prior = markerObligations(base, Boolean(mode === 'desktop' && unnamed && (restartOnly || markerMatches(base, output.previousVersion))));
@@ -247,9 +256,10 @@ async function execute(deps) {
       const intent = { ...prior, daemon: true };
       intended = true;
       earlierAtInstall = install ? earlierText : deps.markerSnapshot();
-      const from = fullPrevious;
-      // The intent keeps the version the update began from and the marker from before it.
-      const intentFields = () => ({ ...markerFields(intent), version: from, install: { earlier: earlierAtInstall } });
+      // The intent keeps the version the install began from, the marker from before it, and whether any
+      // attempt saw the version change, written before each installer runs.
+      intentFields = () => ({ ...markerFields(intent), version: fullFrom,
+        install: { earlier: earlierAtInstall, ...(changedSeen || changed() ? { changed: true } : {}) } });
       deps.mark(intentFields());
       updating = true;
       await deps.update();
@@ -257,9 +267,10 @@ async function execute(deps) {
       const read = await deps.readVersion();
       output.version = installedNow = version(read);
       fullNow = fullInstalledNow = fullVersion(read);
+      if (changed()) changedSeen = true;
       if (!output.version) { output.messageCode = 'version_unknown'; return output; }
       if (expected && output.version !== version(expected)) throw new Error('Candidate not installed.');
-      if (!changed() && !retried && !pendingBefore) {
+      if (!changedSeen && !retried && !pendingBefore) {
         if (intended) { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); }
         output.status = 'current'; output.messageCode = 'current'; return output;
       }
@@ -355,13 +366,11 @@ async function execute(deps) {
               const probe = deps.runtime();
               if (probe.restartState) running = (await probe.restartState()).daemon;
             } catch { /* Stays true. */ }
-            // The new binary is in place, so a daemon started from here on runs it: one seen now is all.
-            const owed = { ...prior, daemon: prior.daemon || running };
-            if (stillOwed(owed, { daemon: false })) deps.mark(markerFields(owed));
-            else {
-              nothingOwed = true;
-              try { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); } catch { /* The intent stays. */ }
-            }
+            // The change goes on record, so only a stop plan settles it: the next click's stop() says
+            // what runs. With no daemon seen now, the row is a failed update rather than a restart.
+            changedSeen = true;
+            if (intentFields) deps.mark(intentFields());
+            if (!stillOwed({ ...prior, daemon: prior.daemon || running }, { daemon: false })) nothingOwed = true;
           }
         }
       } catch { /* The version stays as it was read before the install. */ }
@@ -370,7 +379,7 @@ async function execute(deps) {
     // if what is installed is the version this run started from and nothing was owed before, nothing
     // changed, so the earlier marker comes back exactly and the row is a failed update. A version that
     // can't be read keeps the intent.
-    if (mode === 'cli' && intended && !runtime && !retried && !pendingBefore && installedNow !== null && fullInstalledNow === fullPrevious) {
+    if (mode === 'cli' && intended && !runtime && !retried && !pendingBefore && !changedSeen && installedNow !== null && fullInstalledNow === fullPrevious) {
       try {
         if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall);
         nothingOwed = true;

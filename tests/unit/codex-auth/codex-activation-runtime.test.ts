@@ -1262,6 +1262,41 @@ describe("A helper killed during stop()'s own recovery", () => {
     }
   );
 
+  it.each(['1.0.0,2.0.0', '0.50.0-alpha.1,0.50.0'])(
+    'keeps a seen version change owed when a killed retry returns to the version it began from (%s)',
+    (versions) => {
+      const [from, to] = versions.split(',');
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-killed-cycle-'));
+      roots.push(root);
+      const env = { ...isolated(root), AAC_FIXTURE_ARRIVAL: '1', AAC_FIXTURE_VERSIONS: versions };
+      const fixture = path.join(repo, 'tests/unit/codex-auth/fixtures/killed-install.ts');
+      const spawn = (extra: Record<string, string>, ...args: string[]) =>
+        spawnSync(process.execPath, ['run', fixture, ...args], {
+          cwd: repo,
+          env: { ...env, ...extra },
+          encoding: 'utf8',
+          timeout: 60_000,
+        });
+      // A to B, a daemon arriving on B, killed. Then a retry whose installer goes B to A, killed too.
+      expect(spawn({}).signal).toBe('SIGKILL');
+      expect(
+        spawn({ AAC_FIXTURE_RETRY_TO: from, AAC_FIXTURE_RETRY_KILL: '1' }, 'retry').signal
+      ).toBe('SIGKILL');
+      const marker = path.join(root, '.ccs/app-updates/codex-cli-pending-restart.json');
+      expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toMatchObject({
+        daemon: true,
+        install: { changed: true },
+      });
+      // The next click finds A installed, as at the start, and still restarts the daemon left on B.
+      const last = spawn({ AAC_FIXTURE_INSTALLED: from }, 'retry');
+      const result = JSON.parse(last.stdout.trim().split('\n').pop() as string);
+      expect(result.status).toBe('updated');
+      expect(result.signals).toBeGreaterThan(0);
+      expect(result.marker).toBeNull();
+      expect(to).not.toBe(from);
+    }
+  );
+
   it('restarts a daemon that arrived while the updater ran, when nothing is killed', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-arrival-'));
     roots.push(root);

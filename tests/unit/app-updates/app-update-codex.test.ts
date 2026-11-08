@@ -683,11 +683,23 @@ describe('Pending-marker retry', () => {
     });
     expect(atStop).toEqual([
       { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      {
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        version: '1.0.0',
+        install: { earlier: null, changed: true },
+      },
     ]);
     expect(first.marks).toEqual([
       { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      {
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        version: '1.0.0',
+        install: { earlier: null, changed: true },
+      },
       { desktop: true, daemon: false, desktops: 2 },
     ]);
   });
@@ -732,7 +744,13 @@ describe('Pending-marker retry', () => {
     // stop() never ran its plan, so the install intent stands: the next click checks the daemon.
     expect(value.marks).toEqual([
       { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      {
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        version: '1.0.0',
+        install: { earlier: null, changed: true },
+      },
     ]);
   });
 
@@ -870,6 +888,8 @@ describe('Pending-marker retry', () => {
       desktop: false,
       daemon: true,
       desktops: 0,
+      version: '1.0.0',
+      install: { earlier: null, changed: true },
     });
   });
 
@@ -914,6 +934,8 @@ describe('Pending-marker retry', () => {
       desktop: false,
       daemon: true,
       desktops: 0,
+      version: '1.0.0',
+      install: { earlier: null, changed: true },
     });
   });
 
@@ -922,10 +944,19 @@ describe('Pending-marker retry', () => {
     const result = await bridge.execute(partialCli(value, false));
     expect(result.status).toBe('failed');
     expect(result.version).toBe('2.0.0');
+    // The installer replaced the app, so the change stays on record for the next click's stop plan to
+    // settle; with no daemon seen now, the row is a failed update, not a restart.
     expect(value.marks).toEqual([
       { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      {
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        version: '1.0.0',
+        install: { earlier: null, changed: true },
+      },
     ]);
-    expect(value.deps.marked()).toBeNull();
+    expect(value.deps.marked()).toMatchObject({ daemon: true, install: { changed: true } });
   });
 
   it('takes a failed scan to mean a daemon after a partial first CLI update', async () => {
@@ -944,6 +975,8 @@ describe('Pending-marker retry', () => {
       desktop: false,
       daemon: true,
       desktops: 0,
+      version: '1.0.0',
+      install: { earlier: null, changed: true },
     });
   });
 
@@ -960,6 +993,8 @@ describe('Pending-marker retry', () => {
       desktop: false,
       daemon: true,
       desktops: 0,
+      version: '1.0.0',
+      install: { earlier: null, changed: true },
     });
   });
 
@@ -973,6 +1008,8 @@ describe('Pending-marker retry', () => {
       desktop: false,
       daemon: true,
       desktops: 0,
+      version: '1.0.0',
+      install: { earlier: null, changed: true },
     });
   });
 
@@ -1370,6 +1407,114 @@ describe('Pending-marker retry', () => {
     }
   );
 
+  it.each([
+    { name: 'back to A', from: '1.0.0', middle: '2.0.0', to: '1.0.0' },
+    {
+      name: 'back to A, prereleases',
+      from: '0.50.0-alpha.1',
+      middle: '0.50.0',
+      to: '0.50.0-alpha.1',
+    },
+    { name: 'on to C', from: '1.0.0', middle: '2.0.0', to: '3.0.0' },
+    { name: 'staying on B', from: '1.0.0', middle: '2.0.0', to: '2.0.0' },
+  ])(
+    "settles an earlier attempt's version change only by the stop plan: $name",
+    async ({ from, middle, to }) => {
+      // An earlier attempt went from A to B and was killed. This click finds B and installs `to`.
+      for (const recorded of [{ earlier: null }, { earlier: null, changed: true }]) {
+        const value = fixture();
+        let installed = middle;
+        let atUpdate: Record<string, unknown> | null = null;
+        let stops = 0;
+        value.deps.restoreMarker(
+          JSON.stringify({
+            version: from,
+            desktop: false,
+            daemon: true,
+            desktops: 0,
+            install: recorded,
+          })
+        );
+        const result = await bridge.execute({
+          ...value.deps,
+          readVersion: async () => `codex-cli ${installed}`,
+          update: async () => {
+            // What a kill right after this installer would leave: the change is already on record.
+            atUpdate = value.deps.marked();
+            installed = to;
+          },
+          pending: () => false,
+          operation: 'cli',
+          runtime: () => ({
+            ...runtime({ daemon: true }, { daemon: true }),
+            stop: async () => {
+              stops++;
+            },
+          }),
+        });
+        expect((atUpdate as { install?: { changed?: boolean } } | null)?.install?.changed).toBe(
+          true
+        );
+        // The daemon left on B is stopped and restarted: never `current` with it still running.
+        expect(stops).toBe(1);
+        expect(result.status).toBe('updated');
+      }
+    }
+  );
+
+  it('keeps a seen version change owed when the retry installer fails having changed nothing', async () => {
+    // A to B was seen and killed; this retry's installer fails with B still installed.
+    const value = fixture();
+    value.deps.restoreMarker(
+      JSON.stringify({
+        version: '1.0.0',
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        install: { earlier: null },
+      })
+    );
+    const result = await bridge.execute({
+      ...value.deps,
+      readVersion: async () => '2.0.0',
+      update: async () => {
+        throw new Error('network error');
+      },
+      pending: () => false,
+      operation: 'cli',
+      runtime: () => runtime({}, { daemon: true }),
+    });
+    expect(result.status).not.toBe('current');
+    expect(value.deps.marked()).toMatchObject({ daemon: true, install: { changed: true } });
+  });
+
+  it('keeps a seen version change owed when the retry installer fails after returning to A', async () => {
+    const value = fixture();
+    let installed = '2.0.0';
+    value.deps.restoreMarker(
+      JSON.stringify({
+        version: '1.0.0',
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        install: { earlier: null, changed: true },
+      })
+    );
+    const result = await bridge.execute({
+      ...value.deps,
+      readVersion: async () => installed,
+      update: async () => {
+        installed = '1.0.0';
+        throw new Error('network error');
+      },
+      pending: () => false,
+      operation: 'cli',
+      runtime: () => runtime({}, { daemon: true }),
+    });
+    expect(result.status).toBe('restart_failed');
+    expect(value.deps.marked()).toMatchObject({ daemon: true, install: { changed: true } });
+  });
+
   it('puts back the marker from before an install intent once the update is a no-op', async () => {
     // Killed before the installer replaced anything: the next click installs nothing new.
     const value = fixture();
@@ -1481,7 +1626,7 @@ describe('Pending-marker retry', () => {
       desktop: false,
       daemon: true,
       desktops: 0,
-      install: { earlier: null },
+      install: { earlier: null, changed: true },
     });
   });
 
@@ -1639,7 +1784,13 @@ describe('Pending-marker retry', () => {
     // Not the desktop; the install intent stands, since stop() failed before it made its plan.
     expect(value.marks).toEqual([
       { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      {
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        version: '1.0.0',
+        install: { earlier: null, changed: true },
+      },
     ]);
   });
 
@@ -1693,7 +1844,7 @@ describe('Pending-marker retry', () => {
         desktop: false,
         daemon: true,
         desktops: 0,
-        install: { earlier: null },
+        install: { earlier: null, changed: true },
       }),
     ]);
     expect(value.deps.marked()?.daemon).toBe(true);
@@ -1843,7 +1994,13 @@ describe('Pending-marker retry', () => {
     });
     expect(value.marks).toEqual([
       { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      {
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        version: '1.0.0',
+        install: { earlier: null, changed: true },
+      },
     ]);
   });
 
@@ -1862,19 +2019,19 @@ describe('Pending-marker retry', () => {
       }),
     });
     expect(checks).toBe(0);
-    // Only the intent from before the updater: nothing retired, nothing more recorded.
+    // Only the install intent, before and after the updater: nothing retired, nothing more recorded.
     expect(
-      value.marks.every(
-        (mark) =>
-          JSON.stringify(mark) ===
-          JSON.stringify({
-            desktop: false,
-            daemon: true,
-            desktops: 0,
-            version: '1.0.0',
-            install: { earlier: null },
-          })
-      )
+      value.marks.every((mark) => {
+        const { install, ...rest } = mark as { install: { earlier: null } } & Record<
+          string,
+          unknown
+        >;
+        return (
+          JSON.stringify(rest) ===
+            JSON.stringify({ desktop: false, daemon: true, desktops: 0, version: '1.0.0' }) &&
+          install.earlier === null
+        );
+      })
     ).toBe(true);
   });
 
@@ -1893,7 +2050,7 @@ describe('Pending-marker retry', () => {
         desktop: false,
         daemon: true,
         desktops: 0,
-        install: { earlier: null },
+        install: { earlier: null, changed: true },
       }),
     ]);
     expect(value.deps.marked()?.daemon).toBe(true);
@@ -1905,7 +2062,13 @@ describe('Pending-marker retry', () => {
     // stop() failed before it made its plan, so the install intent stands.
     expect(value.marks).toEqual([
       { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
-      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      {
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        version: '1.0.0',
+        install: { earlier: null, changed: true },
+      },
     ]);
   });
 
@@ -2118,7 +2281,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       desktop: false,
       daemon: true,
       desktops: 0,
-      install: { earlier: null },
+      install: { earlier: null, changed: true },
     });
     expect(read(marker)).toEqual({
       version: '3.0.0',
@@ -2167,7 +2330,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       desktop: false,
       daemon: true,
       desktops: 0,
-      install: { earlier: null },
+      install: { earlier: null, changed: true },
     });
   });
 
@@ -2218,7 +2381,7 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       desktop: false,
       daemon: true,
       desktops: 0,
-      install: { earlier: null },
+      install: { earlier: null, changed: true },
     });
     expect(result.status).toBe('restart_failed');
   });

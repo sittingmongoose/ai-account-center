@@ -806,6 +806,10 @@ began from and the marker from before it (`install.earlier`). So when a busy run
 before making its plan, or a helper killed during the install leaves it, the next click takes it as its
 own install's, not as a restart an earlier run left owed: its plan settles it, with no false "Codex
 did not restart" for a daemon that never ran, and only what the earlier marker owed is still owed.
+Once any attempt of an install has seen the version change (`install.changed`, or a version other
+than the one the install began from), only the stop plan settles it: a later attempt that returns to
+the starting version, or whose installer fails, never calls it current or puts the earlier marker back,
+however many attempts are killed.
 `update_cli` follows the same rule when no app server runs at its first scan and it runs the installer
 itself: on Ubuntu, for a native install with `~/.local/bin/codex`, it writes the same install intent
 first. After an install that changed the version, it hands over to the bridge if an app server (a daemon

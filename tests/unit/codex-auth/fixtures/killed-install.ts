@@ -80,7 +80,9 @@ const read = (): Record<string, unknown> | null => {
   }
 };
 
-let installed = retry ? toVersion : fromVersion;
+// A retry starts from AAC_FIXTURE_INSTALLED when an earlier retry left another version installed, and
+// its own installer moves to AAC_FIXTURE_RETRY_TO, dying right after when AAC_FIXTURE_RETRY_KILL=1.
+let installed = retry ? (process.env.AAC_FIXTURE_INSTALLED ?? toVersion) : fromVersion;
 void (async () => {
   const result = await bridge.execute({
     now: () => 0,
@@ -90,7 +92,13 @@ void (async () => {
     // The updater has replaced the binary when the helper dies; with an arrival, the proxy has
     // started a daemon on the old binary first.
     update: async () => {
-      if (retry) return;
+      if (retry) {
+        if (!process.env.AAC_FIXTURE_RETRY_TO) return;
+        installed = process.env.AAC_FIXTURE_RETRY_TO;
+        if (process.env.AAC_FIXTURE_RETRY_KILL !== '1') return;
+        process.kill(process.pid, 'SIGKILL');
+        await new Promise(() => {});
+      }
       if (arrival) current.push(daemon);
       installed = toVersion;
       if (process.env.AAC_FIXTURE_NO_KILL === '1') return;
