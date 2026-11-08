@@ -822,3 +822,22 @@ real history and archive.
 - **L6. Device scope (approved).** Paired device tokens may also `GET /api/store/status`,
   `/api/usage/*` and `/api/cost/*` (`api-request-guard.ts`); every write and every other route stays
   refused.
+
+### Final review integrity and read guarantees
+
+Backup publication verifies each live sealed segment's decoded SHA-256 against its manifest
+(raw and zstd). Corrupt or missing segments refuse the backup. Existing pooled files, including
+mirrors, are immutable: a differing copy refuses publication and leaves older sets restorable.
+
+Long burn uses complete hourly buckets only in the interior of the requested interval. Partial
+hours use retained reading spans for consumption and coverage; usage before the interval is
+excluded. A change straddling the lower boundary without a measured baseline is unknown, not
+an estimated number. Unknown history remains null.
+
+Hourly and daily share exports enumerate all series and fetch bounded pages, checking each
+page's truncation flag. A truncated page is split at a bucket boundary. If completeness cannot
+be established, export generation fails before publication, preserving the last complete files.
+
+Unreadable segments classify rebuild status as degraded with their sequence loss bounds.
+Repeated integrity checks include known loss findings, so a later CLI check cannot print an
+all-clear for previously detected corruption.

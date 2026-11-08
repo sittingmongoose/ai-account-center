@@ -93,9 +93,47 @@ export async function buildRollupExports(
   projected: AgentUsageAccount[],
   now: number
 ): Promise<{ hourly: RollupExportFile; daily: RollupExportFile }> {
+  // Enumerate metadata first so a capped point query cannot hide entire accounts.
+  async function complete(resolution: 'hour' | 'day', days: number): Promise<StoreSeriesPoints> {
+    const step = resolution === 'hour' ? HOUR_MS : DAY_MS;
+    const fromMs = Math.floor((now - days * DAY_MS) / step) * step;
+    const all: StoreSeriesPoints = { resolution, columns: [], series: [], truncated: false };
+    const series = await store.seriesList({ fromMs, toMs: now });
+    for (const meta of series) {
+      const points: StoreSeriesPoints['series'][number]['points'] = [];
+      async function page(from: number, to: number): Promise<void> {
+        const result = await store.seriesPoints({
+          identities: [meta.identity],
+          windowKey: meta.window.key,
+          fromMs: from,
+          toMs: to,
+          resolution,
+        });
+        if (result.truncated) {
+          const buckets = Math.floor(to / step) - Math.floor(from / step) + 1;
+          if (buckets <= 1)
+            throw new Error('History export incomplete: a single bucket exceeds the query cap');
+          const middle = (Math.floor(from / step) + Math.floor(buckets / 2)) * step;
+          await page(from, middle - 1);
+          await page(middle, to);
+          return;
+        }
+        all.columns = result.columns;
+        for (const item of result.series) {
+          if (item.window.identity === meta.window.identity) points.push(...item.points);
+        }
+      }
+      // Pages contain at most 1,000 buckets for the selected account/window.
+      for (let from = fromMs; from <= now; from += 1000 * step) {
+        await page(from, Math.min(now, from + 1000 * step - 1));
+      }
+      if (points.length) all.series.push({ ...meta, points });
+    }
+    return all;
+  }
   const [hours, days] = await Promise.all([
-    store.seriesPoints({ fromMs: now - HOURLY_DAYS * DAY_MS, toMs: now, resolution: 'hour' }),
-    store.seriesPoints({ fromMs: now - DAILY_DAYS * DAY_MS, toMs: now, resolution: 'day' }),
+    complete('hour', HOURLY_DAYS),
+    complete('day', DAILY_DAYS),
   ]);
   return {
     hourly: toFile(hours, 'hour', rows, projected, now),

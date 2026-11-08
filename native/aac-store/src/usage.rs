@@ -2241,6 +2241,8 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
         let read = db.begin_read()?;
         let rev = read.open_table(db::DICT_REV)?;
         let hours = read.open_table(db::ROLLUP_HOURS)?;
+        let readings = read.open_table(db::READING_DAY)?;
+        let latest = read.open_table(db::LATEST)?;
         let mut out = Vec::new();
         for s in series {
             let ids = (
@@ -2255,15 +2257,76 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
                 };
                 let from = now.saturating_sub(span);
                 let (mut consumed, mut covered, mut any) = (0.0, 0u64, false);
-                visit_hours(&hours, (a, w), (from / HOUR_MS, now / HOUR_MS), |_, r| {
-                    consumed += r.consumed;
-                    covered += r.covered_ms;
-                    any |= r.first_used.is_some();
-                    Ok(true)
-                })?;
+                let interior_start = from / HOUR_MS + 1;
+                let interior_end = now.saturating_sub(1) / HOUR_MS;
+                if interior_start < interior_end {
+                    visit_hours(&hours, (a, w), (interior_start, interior_end - 1), |_, r| {
+                        consumed += r.consumed;
+                        covered += r.covered_ms;
+                        any |= r.first_used.is_some();
+                        Ok(true)
+                    })?;
+                }
+                let open = open_spans_for(&latest, [(a, w)])?;
+                let mut uncertain = false;
+                let mut boundaries = vec![(from, now.min(interior_start * HOUR_MS))];
+                if interior_start * HOUR_MS < now {
+                    boundaries.push((interior_end * HOUR_MS, now));
+                }
+                // Only partial buckets use raw spans. Never scale a whole bucket's
+                // consumption into an interval it did not measure.
+                for (lo, hi) in boundaries {
+                    if hi <= lo {
+                        continue;
+                    }
+                    let last = if hi == now { hi } else { hi - 1 };
+                    let mut rows = Vec::new();
+                    if let Some(before) = lo.checked_sub(1)
+                        && let Some(row) = span_at(&readings, &open, (a, w), before)?
+                    {
+                        rows.push(row);
+                    }
+                    visit_spans(&readings, &open, (a, w), (lo, last), |t, row| {
+                        rows.push((t, row));
+                        Ok(true)
+                    })?;
+                    let mut previous: Option<(u64, Row)> = None;
+                    for (t, row) in rows {
+                        let end = row.last_seen.min(hi);
+                        if !row.vals.cached && row.vals.used_pct.is_some() && end >= lo {
+                            any = true;
+                            covered += end.saturating_sub(t.max(lo));
+                        }
+                        if let Some((_, prev)) = &previous {
+                            let pt = prev.last_seen;
+                            if t >= lo && t <= hi && t.saturating_sub(pt) <= COVER_GAP_MS {
+                                covered += t.min(hi).saturating_sub(pt.max(lo));
+                            }
+                            if t > from
+                                && t >= lo
+                                && t <= hi
+                                && !prev.vals.cached
+                                && !row.vals.cached
+                                && let (Some(up), Some(u)) = (prev.vals.used_pct, row.vals.used_pct)
+                            {
+                                let added = if is_reset(pt as i64, &prev.vals, t as i64, &row.vals) {
+                                    u.max(0.0)
+                                } else {
+                                    (u - up).max(0.0)
+                                };
+                                if pt >= from {
+                                    consumed += added;
+                                } else if added > 0.0 {
+                                    uncertain = true;
+                                }
+                            }
+                        }
+                        previous = Some((t, row));
+                    }
+                }
                 let coverage = (covered as f64 / span.max(1) as f64).min(1.0);
                 // Without a reading in the span, consumption is unknown, not zero (7.2).
-                let (consumed, rate) = if any {
+                let (consumed, rate) = if any && !uncertain {
                     (
                         Some(round2(consumed)),
                         Some(round2(consumed / (span as f64 / HOUR_MS as f64))),

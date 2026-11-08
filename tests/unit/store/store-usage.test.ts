@@ -12,6 +12,7 @@ import express from 'express';
 import type { Server } from 'http';
 import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
+import { buildRollupExports } from '../../../src/store/usage-exports';
 import { backfillUsageHistory } from '../../../src/store/usage-backfill';
 import { storeObservationFromAccount } from '../../../src/store/usage-observations';
 import {
@@ -477,6 +478,12 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
         }
         await store.record(observations as never);
       }
+      const capped = await store.seriesPoints({ fromMs: START, toMs: end - 1, resolution: 'hour' });
+      expect(capped.truncated).toBe(true);
+      const exports = await buildRollupExports(store, [], [], end - 1);
+      expect(exports.hourly.series).toHaveLength(11);
+      expect(exports.hourly.series.reduce((n, s) => n + s.points.length, 0)).toBe(23_760);
+      expect(exports.hourly.series.every((s) => s.points.length === 2160)).toBe(true);
       const app = express();
       app.use((req, _res, next) => {
         Object.assign(req, { auth: { kind: 'device' } });
@@ -501,6 +508,37 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       await store.close();
     }
   }, 60_000);
+
+  it('later CLI checks continue to report known segment corruption', async () => {
+    const home = fs.mkdtempSync(path.join(sandbox, 'check-corruption-'));
+    const previous = process.env.CCS_HOME;
+    process.env.CCS_HOME = home;
+    try {
+      const dir = path.join(home, 'store');
+      const store = await openStore(dir);
+      await store.record([storeObservationFromAccount(accountsAt(START)[0], START, HOUR)] as never);
+      await store.close();
+      const log = path.join(dir, 'log', 'readings');
+      const segment = fs.readdirSync(log).find((name) => name.endsWith('.seglog'))!;
+      const file = path.join(log, segment);
+      const bytes = fs.readFileSync(file);
+      bytes[Math.floor(bytes.length / 2)] ^= 1;
+      fs.writeFileSync(file, bytes);
+      for (let pass = 0; pass < 2; pass++) {
+        const out: string[] = [];
+        await handleStoreCommand(['check'], {
+          out: (text) => out.push(text),
+          err: () => undefined,
+          env: { AAC_STORE_MODULE: MODULE },
+        });
+        expect(out.join('')).toContain('failed their hash');
+        expect(out.join('')).not.toContain('[OK]');
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CCS_HOME;
+      else process.env.CCS_HOME = previous;
+    }
+  });
 
   it('imports the JSON history and every readable archive file, counting the rest', async () => {
     const home = fs.mkdtempSync(path.join(sandbox, 'backfill-'));

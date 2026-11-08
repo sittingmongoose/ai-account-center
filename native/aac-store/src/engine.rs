@@ -780,6 +780,12 @@ impl Engine {
             self.findings.lock().unwrap().extend(found.iter().cloned());
         }
         self.set_meta("last_verify_ms", &now_ms().to_string())?;
+        // A later check must still disclose previously detected loss.
+        for known in self.findings.lock().unwrap().iter().filter(|f| is_loss(&f.kind)) {
+            if !found.iter().any(|f| finding_key(f) == finding_key(known)) {
+                found.push(known.clone());
+            }
+        }
         Ok(json!({ "findings": found }))
     }
 
@@ -859,17 +865,31 @@ impl Engine {
                 let log = logs.peek(log_id);
                 let pool = primary.join("pool").join(log_id.name());
                 fsx::private_dir(&pool)?;
+                // Verify decoded bytes against the sealed manifest, even for degraded logs.
+                for entry in &log.manifest().segments {
+                    if entry.state == "missing" {
+                        fail!("backup_unverified", "live segment is missing");
+                    }
+                    let valid = crate::log::read_segment_bytes(&self.dir.join("log").join(log_id.name()), entry)
+                        .map(|bytes| fsx::sha256_hex(&bytes) == entry.raw_sha256)
+                        .unwrap_or(false);
+                    if !valid {
+                        fail!("backup_unverified", "live segment does not match its sealed hash");
+                    }
+                }
                 let (sealed, active) = log.backup_files();
                 let mut segments = Vec::new();
                 for (name, path, _raw_sha, _) in sealed {
                     let dest = pool.join(&name);
-                    if !dest.exists() {
-                        fsx::copy_atomic(&path, &dest)?;
-                    }
-                    let (sha, bytes) = fsx::sha256_file(&dest)?;
-                    let (source_sha, _) = fsx::sha256_file(&path)?;
-                    if sha != source_sha {
-                        // A pooled copy that no longer matches is replaced.
+                    let (source_sha, bytes) = fsx::sha256_file(&path)?;
+                    if dest.exists() {
+                        if fsx::sha256_file(&dest)?.0 != source_sha {
+                            fail!(
+                                "backup_unverified",
+                                "pooled segment differs; existing backup left intact"
+                            );
+                        }
+                    } else {
                         fsx::copy_atomic(&path, &dest)?;
                     }
                     let rel = format!("pool/{}/{}", log_id.name(), name);
@@ -1017,7 +1037,7 @@ impl Batch<'_> {
 /// A finding that means history is missing: disclosed in the ledger, and the store
 /// reports itself degraded.
 pub fn is_loss(kind: &str) -> bool {
-    kind.contains("degraded") || kind.contains("missing")
+    kind.contains("degraded") || kind.contains("missing") || kind == "segment_unreadable"
 }
 
 pub fn finding(kind: &str, detail: &str) -> Finding {
@@ -1186,6 +1206,12 @@ fn mirror_backup(primary: &Path, root: &Path, id: &str, manifest: &Json) -> Resu
         }
         let present = dest.exists() && fsx::sha256_file(&dest).map(|(s, _)| s == sha).unwrap_or(false);
         if !present {
+            if dest.exists() {
+                fail!(
+                    "backup_unverified",
+                    "mirror segment differs; existing backup left intact"
+                );
+            }
             fsx::copy_atomic(&source, &dest)?;
             if fsx::sha256_file(&dest)?.0 != sha {
                 fail!("backup_unverified", "mirror copy of {rel} does not match");

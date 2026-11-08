@@ -538,11 +538,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 744,
+      "totalThrows": 745,
       "typedThrows": 212,
-      "plainThrows": 72,
+      "plainThrows": 73,
       "otherThrows": 460,
-      "adoptionRatio": 0.2849,
+      "adoptionRatio": 0.2846,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",

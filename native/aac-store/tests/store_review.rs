@@ -1136,3 +1136,124 @@ fn set_meta_refuses_credentials() {
     }
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn final_review_burn_excludes_consumption_before_partial_hour() {
+    let dir = temp_dir("final-burn-boundary");
+    let engine = open(&dir);
+    let mut readings: Vec<Json> = (0..=115)
+        .step_by(5)
+        .map(|m| obs(T0 + m * MIN, m.min(55) as f64))
+        .collect();
+    readings.push(obs(T0 + 119 * MIN, 55.0));
+    record(&engine, readings);
+    let burn = call(
+        &engine,
+        "burnLong",
+        json!({
+            "series": [{"identity": format!("{:064x}", 1), "window": "[\"five_hour\",\"rate_limit\",null]"}],
+            "spansMs": [HOUR], "nowMs": T0 + 119 * MIN
+        }),
+    );
+    assert_eq!(burn[0]["spans"][0]["consumed"], 0.0, "{burn}");
+    assert_eq!(burn[0]["spans"][0]["coverage"], 0.93, "{burn}");
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+fn final_review_corrupt_backup(compressed: bool) {
+    let base = temp_dir("final-backup-corrupt");
+    let dir = base.join("store");
+    let primary = base.join("primary");
+    let mirror = base.join("mirror");
+    let engine = open(&dir);
+    record(
+        &engine,
+        vec![obs(T0, 10.0), obs(T0 + 5 * MIN, 20.0), obs(T0 + 10 * MIN, 30.0)],
+    );
+    engine.close().unwrap();
+    drop(engine);
+    let engine = open(&dir);
+    if compressed {
+        engine.seal_and_compress(now_ms() + 2 * DAY as u64).unwrap();
+    }
+    let backup = call(
+        &engine,
+        "backup",
+        json!({"roots": [primary, mirror], "withRedb": false}),
+    );
+    assert_eq!(backup["mirrors"][0]["ok"], true);
+    let suffix = if compressed { ".seglog.zst" } else { ".seglog" };
+    let segment = find(&dir.join("log/readings"), suffix).remove(0);
+    let name = segment.file_name().unwrap();
+    let pooled = primary.join("pool/readings").join(name);
+    let mirrored = mirror.join("pool/readings").join(name);
+    let good = fs::read(&pooled).unwrap();
+    let mut bad = fs::read(&segment).unwrap();
+    let at = bad.len() / 2;
+    bad[at] ^= 1;
+    fs::write(&segment, bad).unwrap();
+    let result = ops::call(
+        &engine,
+        "backup",
+        &json!({"roots": [primary, mirror], "withRedb": false}).to_string(),
+    );
+    assert_eq!(result.err().map(|e| e.code), Some("backup_unverified"));
+    assert_eq!(fs::read(pooled).unwrap(), good);
+    assert_eq!(fs::read(mirrored).unwrap(), good);
+    engine.close().unwrap();
+    drop(engine);
+    for (i, root) in [primary, mirror].iter().enumerate() {
+        let restored = base.join(format!("restore-{i}"));
+        restore(&restored, &root.join("sets").join(backup["id"].as_str().unwrap())).unwrap();
+        let engine = open(&restored);
+        assert_eq!(raw_starts(&engine).len(), 3);
+        engine.close().unwrap();
+    }
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn final_review_raw_backup_preserves_older_sets() {
+    final_review_corrupt_backup(false);
+}
+#[test]
+fn final_review_zstd_backup_preserves_older_sets() {
+    final_review_corrupt_backup(true);
+}
+
+#[test]
+fn final_review_unreadable_rebuild_and_repeated_check_disclose_loss() {
+    let dir = temp_dir("final-unreadable");
+    let engine = open(&dir);
+    record(
+        &engine,
+        vec![obs(T0, 10.0), obs(T0 + MIN, 20.0), obs(T0 + 2 * MIN, 30.0)],
+    );
+    engine.close().unwrap();
+    drop(engine);
+    let engine = open(&dir);
+    engine.seal_and_compress(now_ms() + 2 * DAY as u64).unwrap();
+    engine.close().unwrap();
+    drop(engine);
+    let segment = find(&dir.join("log/readings"), ".zst").remove(0);
+    fs::write(segment, b"corrupt zstd").unwrap();
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let engine = open(&dir);
+    let status = engine.status().unwrap();
+    assert_eq!(status["state"], "degraded", "{status}");
+    assert!(
+        status["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["kind"] == "segment_unreadable" && f["start_seq"] == 1 && f["end_seq"] == 3),
+        "{status}"
+    );
+    engine.verify().unwrap();
+    assert!(!engine.verify().unwrap()["findings"].as_array().unwrap().is_empty());
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
