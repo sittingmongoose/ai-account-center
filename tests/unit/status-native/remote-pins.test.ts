@@ -31,7 +31,13 @@ describe('remotePinsCommand', () => {
   it('mac and linux run the fixed sqlite3 read-only, with the same query as the local read', () => {
     for (const hostOs of ['mac', 'linux'] as const) {
       const command = remotePinsCommand(hostOs);
-      expect(command).toStartWith('/usr/bin/sqlite3 -readonly -json ');
+      expect(command).toStartWith(
+        'for s in /usr/bin/sqlite3 /usr/local/bin/sqlite3 /opt/homebrew/bin/sqlite3 "$(command -v sqlite3)"; do '
+      );
+      expect(command).toContain(
+        'exec "$s" -readonly -json "file:$HOME/.t3/userdata/statev2.sqlite?mode=ro" '
+      );
+      expect(command).toEndWith('; done; exit 127');
       expect(command).toContain('file:$HOME/.t3/userdata/statev2.sqlite?mode=ro');
       expect(command).toContain('orchestration_v2_projection_threads');
       expect(command).toContain(PINNED_THREADS_QUERY);

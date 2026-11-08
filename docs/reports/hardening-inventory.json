@@ -800,7 +800,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1005
+          "loc": 1007
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",

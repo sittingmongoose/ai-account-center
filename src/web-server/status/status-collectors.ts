@@ -964,7 +964,9 @@ export function remotePinsCommand(hostOs: HostOs): string {
       'utf16le'
     ).toString('base64')}`;
   }
-  return `${SQLITE.posix} -readonly -json "file:$HOME/.t3/userdata/statev2.sqlite?mode=ro" "${PINNED_THREADS_QUERY}"`;
+  // The usual places first, then the account's own PATH: Nas1 has no /usr/bin/sqlite3 and only the
+  // copy that ships with the Android SDK on its PATH. Exit 127 when there is none (did not answer).
+  return `for s in ${SQLITE.posix} /usr/local/bin/sqlite3 /opt/homebrew/bin/sqlite3 "$(command -v sqlite3)"; do [ -n "$s" ] && [ -x "$s" ] && exec "$s" -readonly -json "file:$HOME/.t3/userdata/statev2.sqlite?mode=ro" "${PINNED_THREADS_QUERY}"; done; exit 127`;
 }
 
 /**
