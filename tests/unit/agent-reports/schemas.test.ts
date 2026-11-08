@@ -6,7 +6,7 @@ const rootDir = join(import.meta.dir, '../../../docs/agent-reports');
 const schemasDir = join(rootDir, 'schemas');
 const examplesDir = join(rootDir, 'examples');
 
-const KINDS = ['thread', 'tasks', 'card', 'answer', 'run'] as const;
+const KINDS = ['thread', 'tasks', 'card', 'answer', 'run', 'status'] as const;
 
 const ALLOWED_KEYWORDS = new Set([
   '$schema',

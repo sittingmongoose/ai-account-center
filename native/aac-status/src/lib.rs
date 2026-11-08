@@ -9,6 +9,9 @@
 pub mod error;
 pub mod ops;
 pub mod pins;
+pub mod secret;
+pub mod status_doc;
+pub mod validate;
 
 #[cfg(feature = "node")]
 mod node;

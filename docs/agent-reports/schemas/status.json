@@ -1,0 +1,174 @@
+{
+  "$defs": {
+    "blocker": {
+      "additionalProperties": false,
+      "description": "One thing this thread waits on.",
+      "properties": {
+        "text": {
+          "description": "What is waited on.",
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "waitingOn": {
+          "description": "Who it waits on.",
+          "enum": [
+            "agent",
+            "lock",
+            "owner",
+            "quota",
+            "resource",
+            "review"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "waitingOn"
+      ],
+      "type": "object"
+    },
+    "item": {
+      "additionalProperties": false,
+      "description": "One work item, named as in the stream's task list when it has one.",
+      "properties": {
+        "id": {
+          "description": "Item id, e.g. F-08.",
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "description": "Item title.",
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "looping": {
+      "additionalProperties": false,
+      "description": "The thread's own answer to 'is anything looping?' (the same task keeps coming back without getting better), or null when it gives none.",
+      "properties": {
+        "state": {
+          "description": "yes, no, or unsure (say unsure rather than no when a fix is on its third try).",
+          "enum": [
+            "no",
+            "unsure",
+            "yes"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "description": "What is looping and how it shows, when the state says more than no.",
+          "maxLength": 500,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "timestamp": {
+      "description": "ISO 8601 UTC, e.g. 2026-11-06T16:00:00Z.",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+      "type": "string"
+    }
+  },
+  "$id": "agent-reports/status@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One thread's own status update: its words, percent estimate, done and left lists, blockers and looping answer. Size cap: 64 KB (see spec).",
+  "properties": {
+    "blockers": {
+      "description": "What this thread waits on.",
+      "items": {
+        "$ref": "#/$defs/blocker"
+      },
+      "maxItems": 50,
+      "type": "array"
+    },
+    "done": {
+      "description": "Items landed or done, newest first.",
+      "items": {
+        "$ref": "#/$defs/item"
+      },
+      "maxItems": 200,
+      "type": "array"
+    },
+    "left": {
+      "description": "Items not yet landed or done.",
+      "items": {
+        "$ref": "#/$defs/item"
+      },
+      "maxItems": 200,
+      "type": "array"
+    },
+    "looping": {
+      "$ref": "#/$defs/looping",
+      "description": "The thread's own looping answer, or null."
+    },
+    "percent": {
+      "description": "The thread's own percent-done estimate, 0-100, or null when it gives none.",
+      "maximum": 100,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "schema": {
+      "const": "agent-reports/status@1",
+      "description": "Schema id of this document."
+    },
+    "seq": {
+      "description": "Increases on every write by this writer.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "summary": {
+      "description": "One or two sentences, as when the owner asks for a status update.",
+      "maxLength": 500,
+      "minLength": 1,
+      "type": "string"
+    },
+    "t3Thread": {
+      "description": "T3 thread id this update belongs to.",
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    },
+    "writer": {
+      "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.tools-lead.",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "type": "string"
+    },
+    "writtenAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When this version was written."
+    }
+  },
+  "required": [
+    "schema",
+    "seq",
+    "summary",
+    "t3Thread",
+    "writer",
+    "writtenAt"
+  ],
+  "type": "object"
+}

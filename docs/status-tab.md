@@ -30,7 +30,7 @@ Test servers also set `AAC_PM_MAIL_REGISTRY_DIR` (default `/mnt/Cursor/Inbox/reg
 `v1/keys/`, `v1/schemas/`, `v1/catalog/` when missing, but never the reports root itself (an unmounted share must not
 grow a local folder). Writers are `<machine>.<pm-mail name>`, or `<machine>.t3-<first 8 hex of sha256(T3 thread
 id)>` for a T3 thread with no pm-mail name. After creating the folders AAC publishes the JSON Schemas it ships
-(`docs/agent-reports/schemas/<kind>.json`: answer, card, run, tasks, thread; packaged with the server) into
+(`docs/agent-reports/schemas/<kind>.json`: answer, card, run, status, tasks, thread; packaged with the server) into
 `v1/schemas/`, replacing a file only when it is missing or different (temporary file and rename).
 
 **Unknowns stay null.** Thread, run and card `project` and `stream`; thread `doing` and every `agent.*` field; run

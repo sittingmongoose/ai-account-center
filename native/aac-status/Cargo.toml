@@ -19,6 +19,7 @@ node = ["dep:napi", "dep:napi-derive"]
 [dependencies]
 napi = { version = "3", optional = true }
 napi-derive = { version = "3", optional = true }
+base64 = "0.22"
 rusqlite = { version = "0.37", features = ["bundled"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
