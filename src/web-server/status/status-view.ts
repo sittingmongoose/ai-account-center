@@ -713,6 +713,8 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     },
     sources,
     cards,
+    // Pass-through only: the pinned panel's own words, or its unavailability (pinned-threads.ts).
+    ...(inputs.pinned ? { pinned: inputs.pinned } : {}),
     projects,
     threads: { source: 'agent-reports', also: ['pm-mail'], rows: threads },
     machines: { source: 'machines', also: ['browsers'], rows: machineRows },

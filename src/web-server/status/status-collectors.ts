@@ -5,7 +5,11 @@
  * - `simlock status --json` (phone capacity and leases; never tokens);
  * - a machine reading (CPU, memory, system disk): the local computer from /proc and statfs, the
  *   Mac, Windows and Nas1 with one short read-only command over the dashboard's existing ssh
- *   aliases (the app-update hosts).
+ *   aliases (the app-update hosts);
+ * - the Mac's, Windows' and Nas1's pinned T3 threads: one short read-only `sqlite3 -json`
+ *   command over the same ssh aliases (the VM's own pins are read from its database directly,
+ *   in the aac-status native module). The native module checks the answer's shape; this file
+ *   only runs the command.
  * Parsers are pure and exported for tests; nothing here writes anywhere.
  */
 import { execFile, type ChildProcess } from 'child_process';
@@ -929,4 +933,73 @@ export async function readRemoteMachine(
   const sample = parseMachineProbe(REMOTE_MACHINES[machine], result.stdout);
   if (!sample) throw new NetworkError('The machine answered without a reading.');
   return sample;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Remote pinned threads (one sqlite3 -json command per machine; the native module parses it)
+
+/**
+ * The pinned-threads query, the same predicate and order the aac-status native module's local
+ * read uses: top-level (no parent), unarchived, undeleted, `pinnedAt` set, in `pinOrderKey`
+ * order. Only `orchestration_v2_projection_threads` is touched; a database of any size reads
+ * the same one table.
+ */
+export const PINNED_THREADS_QUERY = `SELECT thread_id, title, json_extract(payload_json, '$.pinnedAt') AS pinnedAt, json_type(payload_json, '$.pinnedAt') AS pinnedType, json_extract(payload_json, '$.pinOrderKey') AS pinOrderKey, json_type(payload_json, '$.pinOrderKey') AS orderType, json_type(payload_json) AS rootType FROM orchestration_v2_projection_threads WHERE archived_at IS NULL AND deleted_at IS NULL AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL AND json_extract(payload_json, '$.lineage.parentThreadId') IS NULL ORDER BY json_extract(payload_json, '$.pinOrderKey') ASC, thread_id ASC`;
+
+/** The sqlite3 that answers the pins query on each host. Mac first on PATH is an Android SDK
+ * copy, so the fixed /usr/bin one; Windows has chocolatey's, in ProgramData. */
+const SQLITE = {
+  posix: '/usr/bin/sqlite3',
+  windows: 'C:\\ProgramData\\chocolatey\\bin\\sqlite3.exe',
+} as const;
+
+/** The one read-only command a host runs for its pinned threads. */
+export function remotePinsCommand(hostOs: HostOs): string {
+  if (hostOs === 'windows') {
+    // Through the same powershell route as the machine probe (the ssh shell is cmd or
+    // powershell; both run this). The query's single quotes double inside a PS literal.
+    const script = `& '${SQLITE.windows}' -readonly -json (Join-Path $env:USERPROFILE '.t3\\userdata\\statev2.sqlite') '${PINNED_THREADS_QUERY.replace(/'/g, "''")}'`;
+    return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(
+      script,
+      'utf16le'
+    ).toString('base64')}`;
+  }
+  return `${SQLITE.posix} -readonly -json "file:$HOME/.t3/userdata/statev2.sqlite?mode=ro" "${PINNED_THREADS_QUERY}"`;
+}
+
+/**
+ * One machine's pinned threads as the `sqlite3 -json` text it printed, over the dashboard's
+ * existing ssh route. Empty text means the machine has no pinned threads. Throws a fixed-word
+ * Error when the machine does not answer (ssh failed, timed out, or sqlite exited nonzero);
+ * a machine that answers in an unknown shape is the native module's `shape` refusal, not
+ * this one's to judge.
+ */
+export async function readRemotePins(
+  machine: Exclude<MachineId, 'vm'>,
+  run: CommandRunner = runCommand
+): Promise<string> {
+  const alias = machineSshAlias(machine);
+  if (!alias) throw new ValidationError('No ssh host is configured for this machine.');
+  const result = await run(
+    'ssh',
+    [
+      '-T',
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'ConnectTimeout=5',
+      '-o',
+      'ConnectionAttempts=1',
+      '-o',
+      'ServerAliveInterval=5',
+      '-o',
+      'ServerAliveCountMax=2',
+      '--',
+      alias,
+      remotePinsCommand(REMOTE_MACHINES[machine]),
+    ],
+    { timeoutMs: 30_000, maxBytes: 1024 * 1024 }
+  );
+  if (result.code !== 0) throw new NetworkError(commandFailure('ssh', result));
+  return result.stdout;
 }

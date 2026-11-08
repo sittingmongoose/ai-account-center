@@ -1,0 +1,311 @@
+/**
+ * The `agent-reports/status@1` documents agents write at `writers/<writer>/status.json`: one
+ * optional file per reporting thread, holding what `thread@1` and `tasks.json` lack for a
+ * status update (PINNED-THREADS.md section 4). This reader owns the share scan under the
+ * same rules as the agent-reports reader (list first, never read an unlisted file, size cap,
+ * last good copy, `seq` ordering, NUL refused by the validator); the document itself is
+ * validated in the aac-status native module (`parseStatus`), not here.
+ */
+import type fs from 'fs';
+import type { NativeStatusHandle } from '../../status-native/native-loader';
+import {
+  MISSING_GRACE_MS,
+  isTransientShareError,
+  newestFolders,
+  nodeReaderFs,
+  type ReaderFs,
+} from './agent-reports-reader';
+import { STATUS_SIZE_CAP } from './status-size';
+
+/** One writer's status document: the last good copy, and its current problem if any. */
+export interface SeenStatus {
+  writer: string;
+  doc: Record<string, unknown>;
+  sha256: string;
+  /** The document's own `seq`, kept out of the record for ordering. */
+  seq: number;
+  /** When this version was written (`writtenAt` in the document), epoch ms. */
+  writtenAtMs: number;
+  problem: { reason: string; since: number } | null;
+}
+
+export interface StatusDocsState {
+  /** missing: no `v1/writers` folder; error: the folder could not be listed. */
+  state: 'ok' | 'missing' | 'error';
+  scannedAt: number | null;
+  docs: SeenStatus[];
+  /** Every current problem, sorted by file. */
+  problems: Array<{ file: string; reason: string; since: number }>;
+}
+
+/** As many writers as the agent-reports reader reads. */
+export const STATUS_DOCS_LIMITS = { writers: 200 };
+
+/** A handle to the native module, or null when it is not available (the caller says so). */
+export type StatusHandle = () => NativeStatusHandle | null;
+
+interface Entry extends SeenStatus {
+  /** `mtimeMs:size` of the file the good copy was read from; null after a refused read. */
+  statKey: string | null;
+  /** When the file stopped appearing in its folder listing; null while listed. */
+  missingSince: number | null;
+}
+
+export class StatusDocsReader {
+  private readonly entries = new Map<string, Entry>();
+  private readonly misses = new Map<string, number>();
+  private state: StatusDocsState['state'] = 'missing';
+  private scannedAt: number | null = null;
+  private scanning: Promise<boolean> | null = null;
+
+  constructor(
+    private readonly options: {
+      root?: () => string;
+      now?: () => number;
+      fs?: ReaderFs;
+      handle?: StatusHandle;
+    } = {}
+  ) {}
+
+  private get root(): string {
+    return this.options.root?.() ?? '';
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private get fs(): ReaderFs {
+    return this.options.fs ?? nodeReaderFs;
+  }
+
+  /** One rescan; resolves whether anything changed. Overlapping calls share one scan. */
+  scan(): Promise<boolean> {
+    if (!this.scanning)
+      this.scanning = this.runScan()
+        .catch(() => false)
+        .finally(() => {
+          this.scanning = null;
+        });
+    return this.scanning;
+  }
+
+  private async runScan(): Promise<boolean> {
+    const now = this.now();
+    const handle = this.options.handle?.() ?? null;
+    const writers = await this.listWriters();
+    if (!handle || !writers) {
+      // Without the native module there is nothing to validate against; without a writers
+      // folder there are no documents. Either way this scan only stamps its time.
+      this.scannedAt = now;
+      return false;
+    }
+    let changed = false;
+    for (const writer of writers) {
+      if (await this.scanWriter(writer, handle, now)) changed = true;
+    }
+    this.scannedAt = now;
+    this.state = 'ok';
+    return changed;
+  }
+
+  /** One writer's `status.json`. Resolves whether anything the view shows changed. */
+  private async scanWriter(
+    writer: string,
+    handle: NativeStatusHandle,
+    now: number
+  ): Promise<boolean> {
+    const rel = `writers/${writer}/status.json`;
+    let listed: fs.Dirent[];
+    try {
+      listed = await this.fs.readdir(`${this.root}/v1/writers/${writer}`);
+    } catch {
+      return false; // A writer folder that cannot be listed: its last copy stays as it was.
+    }
+    const held = this.entries.get(rel) ?? null;
+    if (!listed.some((entry) => entry.name === 'status.json')) {
+      // Not listed is not withdrawn until the grace passes (the share's rename-over race).
+      if (!held) return false;
+      held.missingSince ??= now;
+      if (now - held.missingSince > MISSING_GRACE_MS) {
+        this.entries.delete(rel);
+        return true;
+      }
+      return false;
+    }
+    if (held) held.missingSince = null;
+    const file = `${this.root}/v1/writers/${writer}/status.json`;
+
+    let problem: string | null = null;
+    let problemSince = now;
+    let raced = false;
+    let statKey: string | null = null;
+    let bytes: Buffer | null = null;
+    try {
+      const stat = await this.fs.stat(file);
+      if (!stat.isFile()) problem = 'is not a regular file';
+      else {
+        statKey = `${stat.mtimeMs}:${stat.size}`;
+        if (held && held.statKey === statKey && !held.problem) {
+          this.misses.delete(rel);
+          return false; // Unchanged since the last good read.
+        }
+        if (stat.size > STATUS_SIZE_CAP) problem = 'is over the size cap';
+        else bytes = await this.fs.readFile(file, STATUS_SIZE_CAP);
+      }
+    } catch (error) {
+      // ENOENT or ESTALE once is the share's race and says nothing; the same error on the
+      // scan before too is a file this reader cannot read (the agent-reports reader's rule).
+      if (isTransientShareError(error)) {
+        const first = this.misses.get(rel);
+        if (first === undefined) {
+          this.misses.set(rel, now);
+          raced = true;
+        } else {
+          problem = 'could not be read on two scans in a row';
+          problemSince = first;
+        }
+      } else {
+        problem = 'could not be read';
+      }
+    }
+    if (raced) return false;
+    if (problem) {
+      this.misses.delete(rel);
+      return this.recordProblem(rel, writer, held, problem, problemSince);
+    }
+    this.misses.delete(rel);
+
+    const parsed = await parseStatus(handle, bytes as Buffer, writer);
+    if (!parsed.ok)
+      return this.recordProblem(rel, writer, held, `status.json ${parsed.reason}`, now);
+
+    // A copy older than one already read is not the document; the scan keeps the higher seq.
+    if (held && parsed.seq < held.seq && !held.problem) return false;
+    if (held && held.sha256 === parsed.sha256 && !held.problem) return false;
+    this.entries.set(rel, {
+      writer,
+      doc: parsed.doc,
+      sha256: parsed.sha256,
+      seq: parsed.seq,
+      writtenAtMs: parsed.writtenAtMs ?? now,
+      problem: null,
+      statKey,
+      missingSince: null,
+    });
+    return true;
+  }
+
+  private recordProblem(
+    rel: string,
+    writer: string,
+    held: Entry | null,
+    reason: string,
+    since: number
+  ): boolean {
+    const problem = { reason, since };
+    const changed = held?.problem?.reason !== reason;
+    if (held) {
+      held.problem = problem;
+      held.statKey = null; // Retry the read next scan.
+    } else {
+      // Nothing good to keep: a refused file with no last copy is a problem alone.
+      this.entries.set(rel, {
+        writer,
+        doc: {},
+        sha256: '',
+        seq: 0,
+        writtenAtMs: 0,
+        problem,
+        statKey: null,
+        missingSince: null,
+      });
+    }
+    return changed;
+  }
+
+  private async listWriters(): Promise<string[] | null> {
+    let names: fs.Dirent[];
+    try {
+      names = await this.fs.readdir(`${this.root}/v1/writers`);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      this.state = code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'error';
+      this.scannedAt = this.now();
+      return null;
+    }
+    const writers = names
+      .filter((entry) => entry.isDirectory() && /^[a-z0-9][a-z0-9.-]*$/i.test(entry.name))
+      .map((entry) => entry.name);
+    return newestFolders(writers, STATUS_DOCS_LIMITS.writers, (name) =>
+      this.fs.stat(`${this.root}/v1/writers/${name}`)
+    );
+  }
+
+  snapshot(): StatusDocsState {
+    const entries = [...this.entries.values()].sort((a, b) => a.writer.localeCompare(b.writer));
+    const docs = entries
+      .filter((entry) => entry.sha256 !== '')
+      .map((entry) => ({
+        writer: entry.writer,
+        doc: entry.doc,
+        sha256: entry.sha256,
+        seq: entry.seq,
+        writtenAtMs: entry.writtenAtMs,
+        problem: entry.problem,
+      }));
+    const problems = entries
+      .filter((entry) => entry.problem)
+      .map((entry) => ({
+        file: `writers/${entry.writer}/status.json`,
+        reason: entry.problem?.reason ?? '',
+        since: entry.problem?.since ?? 0,
+      }));
+    return { state: this.state, scannedAt: this.scannedAt, docs, problems };
+  }
+}
+
+/** The document's parse through the native module, with the bytes intact (base64). */
+async function parseStatus(
+  handle: NativeStatusHandle,
+  bytes: Buffer,
+  writer: string
+): Promise<
+  | {
+      ok: true;
+      doc: Record<string, unknown>;
+      sha256: string;
+      seq: number;
+      writtenAtMs: number | null;
+    }
+  | { ok: false; reason: string }
+> {
+  let raw: string;
+  try {
+    raw = await handle.call(
+      'parseStatus',
+      JSON.stringify({ writer, contentBase64: bytes.toString('base64') })
+    );
+  } catch {
+    return { ok: false, reason: 'could not be validated' };
+  }
+  let answer: unknown;
+  try {
+    answer = JSON.parse(raw) as unknown;
+  } catch {
+    return { ok: false, reason: 'could not be validated' };
+  }
+  const record = answer as Record<string, unknown>;
+  if (record.ok !== true || !record.doc || typeof record.sha256 !== 'string') {
+    return { ok: false, reason: typeof record.reason === 'string' ? record.reason : 'was refused' };
+  }
+  const doc = record.doc as Record<string, unknown>;
+  const writtenAtMs = typeof doc.writtenAt === 'string' ? Date.parse(doc.writtenAt) : NaN;
+  return {
+    ok: true,
+    doc,
+    sha256: record.sha256,
+    seq: typeof doc.seq === 'number' ? doc.seq : 0,
+    writtenAtMs: Number.isFinite(writtenAtMs) ? writtenAtMs : null,
+  };
+}

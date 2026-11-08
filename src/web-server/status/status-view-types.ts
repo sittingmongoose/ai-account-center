@@ -71,6 +71,8 @@ export interface StatusInputs {
   hiddenThreadNames?: readonly string[];
   /** quota-watch's share copy; absent when the server does not read it (shown as unconfigured). */
   quota?: QuotaReportState;
+  /** The pinned-threads panel (pass-through: the composer's own output, or its unavailability). */
+  pinned?: PinnedPanel;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -256,6 +258,43 @@ export interface ThreadView {
   registrySource: SourceRef | null;
 }
 
+/** The pinned-threads panel (PINNED-THREADS.md section 1): the composer's output, passed
+ * through untouched, or why there is none. Every word is decided in native/aac-status. */
+export type PinnedPanel = PinnedView | { unavailable: string };
+
+export interface PinnedView {
+  asOfMs: number;
+  /** The section head's count line, e.g. "5 pinned in T3 · 1 looping · 2 waiting on you". */
+  head: string;
+  counts: { pinned: number; looping: number; waitingOnYou: number };
+  machineProblems: Array<{ machine: string; label: string; text: string }>;
+  updates: PinnedUpdateView[];
+}
+
+export interface PinnedUpdateView {
+  id: string;
+  title: string;
+  /** The machine whose T3 holds the pin: vm, mac, windows or nas1. */
+  machine: string;
+  /** "Puppet Master · pm7-build · Opus 5.5 xhigh", or null with no report to build it from. */
+  who: string | null;
+  /** fresh | stale | unreadable | none (the report cases of PINNED-THREADS.md section 1). */
+  reportState: 'fresh' | 'stale' | 'unreadable' | 'none';
+  percent: { text: string; done: number | null; of: number | null } | null;
+  /** The sentence beside the percent: the estimate fallback, the disagreement, "No task list." */
+  percentNote: string | null;
+  now: string | null;
+  blocked: { text: string; waitingOnYou: boolean };
+  looping: { answer: 'yes' | 'no' | 'cantTell'; text: string };
+  left: Array<{ id: string; title: string }>;
+  done: Array<{ id: string; title: string }>;
+  updated: { text: string; at: string; ageSeconds: number } | null;
+  reportNote: string | null;
+  staleNote: string | null;
+  unreadableNote: string | null;
+  summary: string | null;
+}
+
 export interface MachineView {
   id: MachineId;
   label: string;
@@ -332,6 +371,9 @@ export interface StatusView {
      */
     complete: boolean;
   };
+  /** The pinned threads' updates (PINNED-THREADS.md), composed in the aac-status native
+   * module and passed through; absent only when the service has not provided it. */
+  pinned?: PinnedPanel;
   projects: ProjectView[];
   /** `also`: the panel's secondary sources; their failures are shown on the panel and its rows. */
   threads: { source: 'agent-reports'; also: ['pm-mail']; rows: ThreadView[] };

@@ -50,6 +50,7 @@ import {
   type SimlockStatus,
 } from './status-collectors';
 import { buildStatusView, type Collected, type StatusView, type UsageInput } from './status-view';
+import { PinnedThreadsCollector } from './pinned-threads';
 
 const logger = createLogger('status-service');
 
@@ -96,18 +97,23 @@ export interface StatusServiceDeps {
   localMachine?: () => MachineId;
   readLocalMachine?: () => Promise<MachineSample>;
   readRemoteMachine?: (machine: Exclude<MachineId, 'vm'>) => Promise<MachineSample>;
+  /** One remote machine's `sqlite3 -json` pins answer (the pinned panel's ssh route). */
+  readRemotePins?: (machine: Exclude<MachineId, 'vm'>, run: CommandRunner) => Promise<string>;
   timeZone?: () => string;
   now?: () => number;
   /** Sends the `/ws` hint; defaults to browser-session clients. */
   notify?: () => void;
   subscribeUsage?: (listener: AccountAnalyticsSampleListener) => () => void;
   refreshSeconds?: () => number;
+  /** The pinned-threads collector, built fresh when absent (tests inject one). */
+  pinned?: PinnedThreadsCollector;
 }
 
 export class StatusService {
   readonly reader: AgentReportsReader;
   readonly quotaReader: QuotaReportReader;
   readonly answers: StatusAnswers;
+  readonly pinned: PinnedThreadsCollector;
   private readonly registryReader: PmMailRegistryReader;
   private registry: Collected<RegistryThread[]> = empty();
   private machines: Record<MachineId, Collected<MachineSample>> = {
@@ -135,6 +141,15 @@ export class StatusService {
       new StatusAnswers({
         readCard: (id) => this.reader.readCardNow(id),
         onChange: () => this.changed(),
+      });
+    this.pinned =
+      deps.pinned ??
+      new PinnedThreadsCollector({
+        run: deps.run,
+        readRemote: deps.readRemotePins,
+        now: () => this.now(),
+        timeZone: () => this.timeZone(),
+        reportsRoot: () => this.reader.root,
       });
   }
 
@@ -183,6 +198,22 @@ export class StatusService {
       if (await this.quotaReader.scan()) this.changed();
     } catch {
       /* The reader keeps its own state; the source shows stale. */
+    }
+    // The pinned panel recomposes from whatever the scans just read.
+    try {
+      await this.pinned.scanStatusDocs();
+      await this.pinned.compose(this.reader.snapshot(), this.listAnswersSafe());
+      this.changed();
+    } catch {
+      /* The panel keeps its last composed view. */
+    }
+  }
+
+  private listAnswersSafe(): ReturnType<StatusAnswers['list']> {
+    try {
+      return this.answers.list();
+    } catch {
+      return [];
     }
   }
 
@@ -341,7 +372,7 @@ export class StatusService {
     this.changed();
   }
 
-  /** Machines, browsers and Simlock together; overlapping calls share one run. */
+  /** Machines, browsers, Simlock and the pinned threads together; overlapping calls share one run. */
   collect(): Promise<void> {
     if (!this.collecting) {
       this.lastCollect = this.now();
@@ -349,6 +380,7 @@ export class StatusService {
         this.collectMachines(),
         this.collectBrowsers(),
         this.collectSimlock(),
+        this.collectPins(),
       ])
         .then(() => undefined)
         .catch(() => undefined)
@@ -357,6 +389,17 @@ export class StatusService {
         });
     }
     return this.collecting;
+  }
+
+  /** Every machine's T3 pins re-read, then the updates recomposed. */
+  async collectPins(): Promise<void> {
+    try {
+      await this.pinned.collect();
+      await this.pinned.compose(this.reader.snapshot(), this.listAnswersSafe());
+      this.changed();
+    } catch {
+      /* The panel keeps its last good pins and its last composed view. */
+    }
   }
 
   private wanted(): boolean {
@@ -412,6 +455,7 @@ export class StatusService {
       answerHistoryProblem,
       hiddenThreadNames: [DOORBELL_SENDER],
       quota: this.quotaReader.snapshot(),
+      pinned: this.pinned.view(),
     });
   }
 

@@ -169,6 +169,7 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
   "sources": [ Source ],
   "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ],
              "complete": true },
+  "pinned": PinnedPanel,
   "projects": [ Project ],
   "threads": { "source": "...", "also": [ "pm-mail" ], "rows": [ Thread ] },
   "machines": { "source": "...", "also": [ "browsers" ], "rows": [ Machine ] },
@@ -376,6 +377,38 @@ unknown), not only when the sample was taken: such a row has `resetPassed: true`
 `usedPct` as history (never an assumed 0), and has no `atLimit`, projection or warning. **UsageWarning**: `{ tone,
 text }`, worst first, only from current readings: `bad` "claude main (7-day): at its limit until its Nov 12 4:00 PM
 reset", `warn` "claude main (7-day): full in 1d 11h, before its Nov 12 reset".
+
+**Pinned** (`pinned`): the threads pinned in T3, each as the status update its owner would get by asking
+"status?" (PINNED-THREADS.md section 1). Composed in the `aac-status` native module from every machine's T3 pins
+(the VM's database read locally, the Mac's, Windows' and Nas1's fetched with one short read-only `sqlite3 -json`
+command over the dashboard's ssh aliases) plus the agent reports above and the `agent-reports/status@1` documents
+(`writers/<writer>/status.json`, read with the agent-reports rules); the TypeScript side passes the module's answer
+through. A machine that does not answer keeps its last good pins for one scan, then the panel names it in
+`machineProblems` while the other machines' pins still show. Every word is the module's; a missing piece is said in
+words ("No task list.", "Can't tell."), never invented.
+```jsonc
+{ "asOfMs": 1762608600000, "head": "5 pinned in T3 · 1 looping · 2 waiting on you",
+  "counts": { "pinned": 5, "looping": 1, "waitingOnYou": 2 },
+  "machineProblems": [ { "machine": "mac", "label": "the Mac", "text": "Pinned threads unavailable on the Mac: it did not answer." } ],
+  "updates": [ { "id": "<t3 thread id>", "title": "Build PMConcept7 and Background Activity", "machine": "mac",
+                 "who": "Puppet Master · pm7-build · Opus 5.5 xhigh" | null,
+                 "reportState": "fresh" | "stale" | "unreadable" | "none",
+                 "percent": { "text": "58%", "done": 14, "of": 24 } | { "text": "70%", "done": null, "of": null } | null,
+                 "percentNote": "About 70%, by its own estimate." | "Its task list says 14 of 24 (58%); the thread estimates 70%." | "No task list." | null,
+                 "now": "Windows 10 sweep for stream F, batch 9." | null,
+                 "blocked": { "text": "Waiting on you: pick the reviewers for B09.", "waitingOnYou": true },
+                 "looping": { "answer": "yes" | "no" | "cantTell", "text": "Yes. F-07 has gone back for fixes 5 times without a passing review." },
+                 "left": [ { "id": "F-07", "title": "Tray icon sharp at 125% scale" } ],
+                 "done": [ { "id": "F-08", "title": "Sticker block landed" } ],
+                 "updated": { "text": "Updated 6 min ago", "at": "ISO", "ageSeconds": 360 } | null,
+                 "reportNote": "This thread doesn't report its status yet." | null,
+                 "staleNote": "No status update for 25 days. If it is finished, unpin it in T3." | null,
+                 "unreadableNote": "Could not be read since 1:12 PM." | null,
+                 "summary": "One or two sentences." | null } ] }
+```
+Without the native module (or before the first read) the field is `{ "unavailable": "the aac-status native module
+is disabled" }` style, with the reason. `status@1` documents are optional: a pinned thread without one still gets
+its update from `thread@1` and `tasks.json`.
 
 **Spend** (source `quota-watch`): quota-watch's per-stream estimates of how much of each account meter a stream used,
 from `<reports>/v1/quota/report.json` (`quota-report@1`, one writer, rewritten whole every 10 minutes, 512 KB cap;
