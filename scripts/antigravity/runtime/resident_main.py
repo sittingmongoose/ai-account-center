@@ -38,6 +38,24 @@ def verify_parser_environment():
         raise ContinuityError('runtime-parser-package-mismatch')
 
 
+def exit_cause(error):
+    """A journal-safe cause: a fixed code such as native-publisher-changed, or an errno name.
+
+    Never the exception text of an OSError, which can carry paths or arguments.
+    """
+    import errno
+    import re
+    if isinstance(error,OSError):
+        name=errno.errorcode.get(error.errno or 0)
+        return 'runtime-os-error' if name is None else 'runtime-os-error %s'%name
+    text=str(error)
+    if re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}',text):
+        # native-publisher-changed means the installed native is not the reviewed
+        # pin: switching is paused until that build is reviewed.
+        return text
+    return 'runtime-value-error'
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True)
@@ -73,5 +91,5 @@ if __name__ == '__main__':
         raise SystemExit('Managed Antigravity runtime failed: %s (runtime-parser-missing).'%error) from None
     except (ContinuityError, StatusError) as error:
         raise SystemExit('Managed Antigravity runtime is unavailable (%s).'%error) from None
-    except (OSError, ValueError):
-        raise SystemExit('Managed Antigravity runtime is unavailable.') from None
+    except (OSError, ValueError) as error:
+        raise SystemExit('Managed Antigravity runtime is unavailable (%s).'%exit_cause(error)) from None
