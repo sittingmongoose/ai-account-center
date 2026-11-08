@@ -2243,6 +2243,7 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
         let hours = read.open_table(db::ROLLUP_HOURS)?;
         let readings = read.open_table(db::READING_DAY)?;
         let latest = read.open_table(db::LATEST)?;
+        let series_table = read.open_table(db::SERIES)?;
         let mut out = Vec::new();
         for s in series {
             let ids = (
@@ -2270,9 +2271,18 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
                 let open = open_spans_for(&latest, [(a, w)])?;
                 // A delta after a gap can belong partly before the requested start,
                 // even when its later reading falls in a complete interior bucket.
-                let mut uncertain = span_at(&readings, &open, (a, w), from)?
-                    .map(|(_, row)| row.last_seen < from)
-                    .unwrap_or(false);
+                let mut uncertain = match span_at(&readings, &open, (a, w), from)? {
+                    Some((_, row)) => row.last_seen < from,
+                    // No kept reading at or before `from`. Retention removes only spans that
+                    // ended before its cutoff, which is never later than `from` for a span within
+                    // retention, so the start fell in a gap: unknown, as it was before pruning,
+                    // while the hourly rollups still hold the crossing delta (7.2). A series that
+                    // began after `from` has no earlier reading to lose.
+                    None => match series_table.get(Key::new().u32(a).u32(w).as_slice())? {
+                        Some(v) => (db::unpack::<SeriesMeta>(v.value())?.first_ms.max(0) as u64) < from,
+                        None => true,
+                    },
+                };
                 let mut boundaries = vec![(from, now.min(interior_start * HOUR_MS))];
                 if interior_start * HOUR_MS < now {
                     boundaries.push((interior_end * HOUR_MS, now));

@@ -1138,6 +1138,83 @@ fn set_meta_refuses_credentials() {
 }
 
 #[test]
+fn final_review_burn_stays_unknown_after_retention_prunes_the_baseline() {
+    // Astra max 28e75e2d R1: maintenance pruned the reading before the span's start while the
+    // hourly rollup kept the delta that crossed it, turning an unknown burn into a measured one.
+    let dir = temp_dir("final-burn-retention");
+    let engine = ops::open_engine(dir.to_str().unwrap(), None, Some(7)).unwrap();
+    let base = {
+        let b = now_ms() as i64 - 8 * DAY;
+        b - b % HOUR
+    };
+    let end = base + 7 * DAY + 55 * MIN;
+    let now = base + 7 * DAY + 59 * MIN;
+    // One reset time for every reading, after the last one, so no reading looks like a reset.
+    let at = |n: u32, t: i64, used: f64| {
+        obs_with(t, used, |o| {
+            o["account"]["identity"] = json!(format!("{:064x}", n));
+            o["account"]["account_id"] = json!(format!("claude:a{n}"));
+            o["windows"][0]["reset_at_ms"] = json!(end + 4 * HOUR);
+        })
+    };
+    // 1: the witness. 10% just before the start, 55% after a gap, then unchanged.
+    let mut readings = vec![at(1, base + 55 * MIN, 10.0)];
+    let mut t = base + 100 * MIN;
+    while t <= end {
+        readings.push(at(1, t, 55.0));
+        t += 5 * MIN;
+    }
+    // 2: a series that began inside the span: measured, nothing earlier to lose.
+    readings.push(at(2, base + 2 * HOUR, 10.0));
+    let mut t = base + 2 * HOUR + 5 * MIN;
+    while t <= end {
+        readings.push(at(2, t, 20.0));
+        t += 5 * MIN;
+    }
+    // 3: an old series, unchanged across the start: a measured zero survives pruning.
+    let mut t = base + 30 * MIN;
+    while t <= end {
+        readings.push(at(3, t, 55.0));
+        t += 5 * MIN;
+    }
+    readings.sort_by_key(|o| o["sampled_at_ms"].as_i64().unwrap());
+    record(&engine, readings);
+    let burn = |engine: &Engine| {
+        let args = json!({
+            "series": (1..=3).map(|n| json!({"identity": format!("{:064x}", n), "window": "[\"five_hour\",\"rate_limit\",null]"})).collect::<Vec<_>>(),
+            "spansMs": [7 * DAY], "nowMs": now
+        });
+        call(engine, "burnLong", args)
+    };
+    let check = |b: &Json, when: &str| {
+        assert!(b[0]["spans"][0]["consumed"].is_null(), "witness {when}: {b}");
+        assert!(b[0]["spans"][0]["rate"].is_null(), "witness {when}: {b}");
+        assert_eq!(b[1]["spans"][0]["consumed"], 10.0, "began inside the span, {when}: {b}");
+        assert_eq!(b[2]["spans"][0]["consumed"], 0.0, "unchanged old series, {when}: {b}");
+    };
+    check(&burn(&engine), "before maintenance");
+    for _ in 0..3 {
+        call(&engine, "maintain", json!({ "nowMs": now as u64 }));
+    }
+    let early = call(
+        &engine,
+        "seriesPoints",
+        json!({ "fromMs": base, "toMs": base + 59 * MIN, "resolution": "raw", "identities": [format!("{:064x}", 1)] }),
+    );
+    let early_points: usize = early["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["points"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(
+        early_points, 0,
+        "retention removed the reading before the start: {early}"
+    );
+    check(&burn(&engine), "after maintenance");
+}
+
+#[test]
 fn final_review_burn_excludes_consumption_before_partial_hour() {
     let dir = temp_dir("final-burn-boundary");
     let engine = open(&dir);
