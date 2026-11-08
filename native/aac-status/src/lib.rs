@@ -8,6 +8,7 @@
 
 pub mod error;
 pub mod ops;
+pub mod pinned;
 pub mod pins;
 pub mod secret;
 pub mod status_doc;
