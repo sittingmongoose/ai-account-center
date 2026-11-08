@@ -1,15 +1,19 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
 import {
+  main as managedUpdateMain,
   createManagedNativeUpdate,
   managedUpdateArguments,
   runManagedAntigravityUpdateCommand,
   type ManagedNativeCommand,
 } from '../../../src/antigravity/managed-update-command';
-import { updateManagedAntigravity } from '../../../src/antigravity/managed-updater';
+import {
+  routeManagedAntigravityUpdate,
+  updateManagedAntigravity,
+} from '../../../src/antigravity/managed-updater';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import type { AntigravitySwitchDriver, ProcessPlan } from '../../../src/antigravity/types';
 
@@ -181,9 +185,37 @@ describe('managed Antigravity native updater: public files and injected commands
         return '';
       },
     });
-    expect(Object.keys(native)).toEqual(['version', 'backup', 'update', 'rollback']);
+    expect(Object.keys(native)).toEqual([
+      'version',
+      'backup',
+      'unchangedSinceBackup',
+      'update',
+      'rollback',
+    ]);
     expect(fs.readdirSync(root)).toEqual([]);
     expect(calls).toEqual([]);
+  });
+
+  test('the quick identity check compares one stat and never reads the native', async () => {
+    for (const change of ['none', 'same-bytes-rename', 'append', 'removed'] as const) {
+      const value = fixture();
+      expect(value.native.unchangedSinceBackup?.(true)).toBe(false);
+      await value.native.backup();
+      const reads = spyOn(fs, 'readFileSync');
+      try {
+        if (change === 'same-bytes-rename') {
+          const incoming = path.join(value.binDirectory, 'incoming');
+          fs.writeFileSync(incoming, ORIGINAL, { mode: 0o700 });
+          fs.renameSync(incoming, value.nativeBinary);
+        }
+        if (change === 'append') fs.appendFileSync(value.nativeBinary, REPLACEMENT);
+        if (change === 'removed') fs.rmSync(value.nativeBinary);
+        expect(value.native.unchangedSinceBackup?.(true)).toBe(change === 'none');
+        expect(reads).not.toHaveBeenCalled();
+      } finally {
+        reads.mockRestore();
+      }
+    }
   });
 
   for (const relative of ['nativeBinary', 'ccsDirectory'] as const) {
@@ -592,6 +624,49 @@ describe('managed Antigravity native updater: public files and injected commands
     expect(fs.readFileSync(backupPath(value))).toEqual(ORIGINAL);
   });
 
+  test('the entry point hands the runner exactly the parsed idleOnly, and nothing for refused arguments', async () => {
+    const seen: unknown[][] = [];
+    const run = (async (...args: unknown[]) => {
+      seen.push(args);
+      return failedCommandResult(false);
+    }) as unknown as Parameters<typeof managedUpdateMain>[1];
+    await managedUpdateMain(['--idle-only'], run);
+    await managedUpdateMain([], run);
+    expect(seen).toStrictEqual([
+      [os.homedir(), { idleOnly: true }],
+      [os.homedir(), { idleOnly: false }],
+    ]);
+    for (const refused of [['--release-file', 'x'], ['--idle-only', '--release-file=x'], ['x']]) {
+      seen.length = 0;
+      expect(await managedUpdateMain(refused, run)).toEqual(failedCommandResult(false));
+      expect(seen).toEqual([]);
+    }
+    const throwing = (async () => {
+      throw new Error(RAW_FAILURE);
+    }) as unknown as Parameters<typeof managedUpdateMain>[1];
+    expect(await managedUpdateMain([], throwing)).toEqual(failedCommandResult(false));
+  });
+
+  test('routing keeps idle-only past main: a running process is in_use only when idleOnly is set', async () => {
+    for (const idleOnly of [true, false]) {
+      const value = fixture();
+      const { driver, actions } = driverFixture([residentPlan()]);
+      const result = await routeManagedAntigravityUpdate({
+        registry: new AntigravityProfileRegistry(value.ccsDirectory),
+        driver,
+        native: value.native,
+        idleOnly,
+        nativeReview: () => 'unreviewed',
+        runtimeSocket: async () => 'listening',
+      });
+      // idle-only stops at the census; otherwise it goes on to the release gate.
+      expect(result.status).toBe(idleOnly ? 'in_use' : 'failed');
+      expect(actions).toEqual(idleOnly ? ['inspect'] : ['inspect', 'release-gate-false']);
+      expect(fs.existsSync(backupPath(value))).toBe(false);
+      expect(value.calls.map((call) => call.args)).toEqual([['--version']]);
+    }
+  });
+
   test('the command accepts only no argument or exactly --idle-only', () => {
     expect(managedUpdateArguments([])).toEqual({ idleOnly: false });
     expect(managedUpdateArguments(['--idle-only'])).toEqual({ idleOnly: true });
@@ -600,6 +675,7 @@ describe('managed Antigravity native updater: public files and injected commands
       ['--idle-only=false'],
       ['--restart'],
       ['--idle-only', 'x'],
+      ['--release-file', 'x'],
       [''],
     ])
       expect(managedUpdateArguments(args)).toBeNull();

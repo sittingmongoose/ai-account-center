@@ -66,7 +66,7 @@ modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
 | --- | --- |
-| Antigravity CLI | Active native `agy update`; on a managed switching installation an unreviewed newest build installs only while no Antigravity process runs (see below) |
+| Antigravity CLI | Active native `agy update`; on a managed switching installation a paused unreviewed runtime updates without checking running copies (see below) |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
@@ -295,10 +295,10 @@ run reads the packaged release file):
   sessions and reopen them on the new build;
 - newest build not reviewed, or the review list or manifest unreadable: the
   managed update runs idle-only (`managed-update-command.js --idle-only`). With
-  no Antigravity process running it installs the build and reports
+  a running coordinator, no managed session may be running; the update reports
   `updated_unreviewed` ("Updated, but this Antigravity version has no switching
   review yet; Antigravity switching is paused until it is reviewed."). A running
-  Antigravity process is never stopped: the runtime could not restart a managed
+  managed session is never stopped: the runtime could not restart a managed
   session on an unreviewed build, so the row is `action_required` / `in_use` and
   nothing changes until Antigravity is closed;
 - an update that lands outside the list in any other way (a release published
@@ -307,6 +307,54 @@ run reads the packaged release file):
   manifest named a reviewed build, `agy update` installed a newer unreviewed one)
   still ends as before: the sessions cannot restart on it, so the row is
   `restart_failed` and the runtime keeps its recovery record.
+
+Once an unreviewed build is installed (by Update all or by the CLI's own
+background update), the resident runtime refuses to start: the native no longer
+matches its pin, so `ai-account-center-antigravity.service` exits with
+`Managed Antigravity runtime is unavailable (native-publisher-changed).`
+A stopped runtime holds no managed session, so the bridge does not need it to
+update. When nothing listens on the runtime socket
+(`~/.ccs/antigravity-runtime/control.sock` absent, or a leftover socket file
+that refuses connections) and the installed native was read in full and matches
+no reviewed build, `managed-update-command.js` takes the paused path instead of
+the coordinator. The socket is probed first, and the native is hashed once
+against the whole reviewed set. A native that cannot be read, or an unusable
+review list, is not proof of an unreviewed build: it keeps the coordinator.
+
+Owner decision (Jared, 2026-11-07): "No check, like Antigravity's own updater".
+
+Under the account lock, a pending managed recovery record stops the paused
+update. Otherwise AAC backs up the native to
+`antigravity-switching/native-backups/<sha256>`, then rechecks that the selected
+native identity and digest still match the backup and the build is still
+unreviewed. After hashing, it probes the runtime socket again and synchronously
+checks pending recovery before granting permission. This slow recheck runs last,
+with nothing awaited between it and `agy update`.
+
+The paused path does not look for running Antigravity processes and stops
+nothing. Antigravity's own background updater already replaces the binary
+while copies are running. Copies already open keep the old version until they
+restart. A successful changed version reports `updated` (or
+`updated_unreviewed` if the new build also has no review), with that restart
+note; an unchanged version reports `current`.
+
+A pending recovery, failed backup, unreadable version, or a runtime or build
+that changes before the final recheck reports `failed` / `runtime_paused_blocked`
+before the updater runs. A failed `agy update` reports `failed` /
+`runtime_paused` and records the attempt.
+
+Known issue, not fixed here: the runtime's process guard can refuse an owned
+identity worker that exits just as it is checked, which loses that worker's
+result. The race predates the paused path and is on `main` too; its fix is on
+its own branch, `fix/antigravity-worker-exit-race`.
+
+A listening (or unclear) runtime socket keeps the coordinator, as do a reviewed
+build and an unreadable native whose runtime is down. The coordinator's
+idle-only rule for managed sessions is unchanged: a running managed session
+reports `action_required` / `in_use` when the newest build is unreviewed.
+A coordinator that cannot reach its runtime reports `failed` /
+`runtime_unavailable` and installs nothing. Until 2026-11-06 the paused case
+failed this way too, preventing later updates once an unreviewed build landed.
 
 `agy` keeps working on an unreviewed build: the managed launcher runs the native
 CLI directly when its hash does not match the reviewed pin. Switching resumes

@@ -63,23 +63,34 @@ function safeNativeFile(value: fs.BigIntStats, uid: number): boolean {
 export function verifyOwnedAntigravityNativePin(
   nativeBinary: string,
   expectedSha256: string,
+  reader?: NativePinReader
+): boolean {
+  if (!/^[a-f0-9]{64}$/.test(expectedSha256)) return false;
+  return hashOwnedAntigravityNative(nativeBinary, reader) === expectedSha256;
+}
+
+/**
+ * The sha256 of the owned native, read once through one fd with the same
+ * identity checks as the pin proof; null when it cannot be read safely.
+ */
+export function hashOwnedAntigravityNative(
+  nativeBinary: string,
   reader: NativePinReader = (fd, buffer, offset, length, position) =>
     fs.readSync(fd, buffer, offset, length, position)
-): boolean {
+): string | null {
   const uid = process.getuid?.();
-  if (!Number.isSafeInteger(uid) || (uid as number) < 0 || !/^[a-f0-9]{64}$/.test(expectedSha256))
-    return false;
+  if (!Number.isSafeInteger(uid) || (uid as number) < 0) return null;
   let descriptor: number | null = null;
-  let verified = false;
+  let digest: string | null = null;
   try {
     const before = fs.lstatSync(nativeBinary, { bigint: true });
-    if (!safeNativeFile(before, uid as number)) return false;
+    if (!safeNativeFile(before, uid as number)) return null;
     descriptor = fs.openSync(
       nativeBinary,
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
     );
     const opened = fs.fstatSync(descriptor, { bigint: true });
-    if (!safeNativeFile(opened, uid as number) || !sameNativeFile(before, opened)) return false;
+    if (!safeNativeFile(opened, uid as number) || !sameNativeFile(before, opened)) return null;
     const size = Number(opened.size);
     const buffer = Buffer.alloc(Math.min(size, 64 * 1024));
     const hash = createHash('sha256');
@@ -87,11 +98,11 @@ export function verifyOwnedAntigravityNativePin(
     while (position < size) {
       const length = Math.min(buffer.length, size - position);
       const count = reader(descriptor, buffer, 0, length, position);
-      if (!Number.isSafeInteger(count) || count < 1 || count > length) return false;
+      if (!Number.isSafeInteger(count) || count < 1 || count > length) return null;
       hash.update(buffer.subarray(0, count));
       position += count;
     }
-    if (reader(descriptor, buffer, 0, 1, size) !== 0) return false;
+    if (reader(descriptor, buffer, 0, 1, size) !== 0) return null;
     const finalDescriptor = fs.fstatSync(descriptor, { bigint: true });
     const finalLeaf = fs.lstatSync(nativeBinary, { bigint: true });
     if (
@@ -100,20 +111,20 @@ export function verifyOwnedAntigravityNativePin(
       !sameNativeFile(before, finalDescriptor) ||
       !sameNativeFile(before, finalLeaf)
     )
-      return false;
-    verified = hash.digest('hex') === expectedSha256;
+      return null;
+    digest = hash.digest('hex');
   } catch {
-    return false;
+    return null;
   } finally {
     if (descriptor !== null) {
       try {
         fs.closeSync(descriptor);
       } catch {
-        verified = false;
+        digest = null;
       }
     }
   }
-  return verified;
+  return digest;
 }
 
 interface InstalledRuntime {

@@ -6,7 +6,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1343 |
+| Sync fs occurrences (all) | 1344 |
 | Sync fs files affected (all) | 134 |
 | Sync fs occurrences (runtime hotpaths) | 698 |
 | Sync fs files affected (runtime hotpaths) | 79 |
@@ -53,14 +53,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 27.7% (195/704) |
+| typed-error adoption (typed/total throws) | 27.7% (195/705) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 42/453 |
+| files with createLogger | 42/456 |
 | subdomains with zero createLogger | 21 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, targets, types) |
-| files > 400 LOC | 61 |
-| files > 600 LOC | 23 |
+| files > 400 LOC | 62 |
+| files > 600 LOC | 24 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -93,12 +93,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/codex-auth/codex-activation-runtime.ts` | 1066 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 995 |
 | `src/web-server/services/usage-failover-service.ts` | 993 |
-| `src/web-server/services/account-dashboard-service.ts` | 931 |
+| `src/web-server/services/account-dashboard-service.ts` | 938 |
 | `src/web-server/services/analytics-remote-sources.ts` | 918 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
+| `src/web-server/agent-usage/agent-usage-snapshot.ts` | 865 |
 | `src/web-server/usage/native-quota-collector.ts` | 848 |
 | `src/auth/profile-detector.ts` | 767 |
 | `src/web-server/usage/aggregator.ts` | 767 |
-| `src/web-server/agent-usage/agent-usage-snapshot.ts` | 762 |
 

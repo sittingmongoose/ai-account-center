@@ -1,3 +1,4 @@
+import { LEGACY_MESSAGES } from './app-update-messages';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -560,7 +561,13 @@ export class AppUpdateService {
         const appId = row.appId as UpdateAppId;
         const code =
           (Object.keys(MESSAGES) as MessageCode[]).find(
-            (candidate) => rowMessage(row, appId, candidate) === row.message
+            (candidate) =>
+              rowMessage(row, appId, candidate) === row.message ||
+              (appId === 'antigravity-cli' &&
+                candidate === 'updated' &&
+                MESSAGES.updated === row.message) ||
+              (LEGACY_MESSAGES[candidate] !== undefined &&
+                LEGACY_MESSAGES[candidate] === row.message)
           ) ?? 'helper_invalid';
         const restored = normalizeAppUpdateResults(
           JSON.stringify({ results: [{ ...row, messageCode: code }] }),

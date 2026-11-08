@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1343,
+    "totalOccurrences": 1344,
     "filesAffected": 134,
     "hotpathOccurrences": 698,
     "hotpathFilesAffected": 79,
@@ -533,11 +533,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 704,
+      "totalThrows": 705,
       "typedThrows": 195,
       "plainThrows": 72,
-      "otherThrows": 437,
-      "adoptionRatio": 0.277,
+      "otherThrows": 438,
+      "adoptionRatio": 0.2766,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -547,7 +547,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 164,
+          "count": 165,
           "typed": 0,
           "plain": 0
         },
@@ -615,8 +615,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 42,
-      "totalSourceFiles": 453,
-      "coverageRatio": 0.0927,
+      "totalSourceFiles": 456,
+      "coverageRatio": 0.0921,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -643,7 +643,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 182,
+          "count": 184,
           "withLogger": 26
         },
         {
@@ -653,7 +653,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 37,
+          "count": 38,
           "withLogger": 0
         },
         {
@@ -762,8 +762,8 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 61,
-      "countOver600": 23,
+      "countOver400": 62,
+      "countOver600": 24,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
@@ -795,7 +795,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 931
+          "loc": 938
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
@@ -810,6 +810,10 @@
           "loc": 871
         },
         {
+          "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
+          "loc": 865
+        },
+        {
           "file": "src/web-server/usage/native-quota-collector.ts",
           "loc": 848
         },
@@ -820,10 +824,6 @@
         {
           "file": "src/web-server/usage/aggregator.ts",
           "loc": 767
-        },
-        {
-          "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
-          "loc": 762
         }
       ]
     }
