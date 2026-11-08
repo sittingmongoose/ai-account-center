@@ -541,16 +541,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 745,
-      "typedThrows": 213,
+      "totalThrows": 747,
+      "typedThrows": 215,
       "plainThrows": 72,
       "otherThrows": 460,
-      "adoptionRatio": 0.2859,
+      "adoptionRatio": 0.2878,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 381,
-          "typed": 147,
+          "count": 383,
+          "typed": 149,
           "plain": 10
         },
         {
@@ -623,8 +623,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 45,
-      "totalSourceFiles": 499,
-      "coverageRatio": 0.0902,
+      "totalSourceFiles": 502,
+      "coverageRatio": 0.0896,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -652,7 +652,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 219,
+          "count": 222,
           "withLogger": 28
         },
         {
@@ -799,6 +799,10 @@
           "loc": 1104
         },
         {
+          "file": "src/web-server/status/status-collectors.ts",
+          "loc": 1005
+        },
+        {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
           "loc": 995
         },
@@ -809,10 +813,6 @@
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
           "loc": 938
-        },
-        {
-          "file": "src/web-server/status/status-collectors.ts",
-          "loc": 932
         },
         {
           "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",

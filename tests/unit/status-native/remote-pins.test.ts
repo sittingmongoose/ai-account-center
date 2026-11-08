@@ -5,6 +5,7 @@ import {
   remotePinsCommand,
   type CommandRunner,
 } from '../../../src/web-server/status/status-collectors';
+import { APP_UPDATE_SSH_HOSTS } from '../../../src/web-server/services/app-update-hosts';
 
 /** A runner that records the invocation and answers a fixed result. */
 function fakeRun(result: {
@@ -58,7 +59,7 @@ describe('readRemotePins', () => {
     const json = await readRemotePins('mac', run);
     expect(json).toBe('[{"thread_id":"t1"}]');
     expect(calls[0].file).toBe('ssh');
-    expect(calls[0].args).toContain('jared-mac');
+    expect(calls[0].args).toContain(APP_UPDATE_SSH_HOSTS.mac);
     expect(calls[0].args.at(-1)).toBe(remotePinsCommand('mac'));
 
     const empty = await readRemotePins('windows', fakeRun({ code: 0, stdout: '' }).run);
@@ -77,10 +78,8 @@ describe('readRemotePins', () => {
   });
 
   it('uses the fixed alias of each machine', async () => {
-    for (const [machine, alias] of [
-      ['mac', 'jared-mac'],
-      ['windows', 'jared-windows'],
-    ] as const) {
+    for (const machine of ['mac', 'windows'] as const) {
+      const alias = APP_UPDATE_SSH_HOSTS[machine];
       const { run, calls } = fakeRun({ code: 0, stdout: '' });
       await readRemotePins(machine, run);
       expect(calls[0].args).toContain(alias);

@@ -53,11 +53,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 28.6% (213/745) |
+| typed-error adoption (typed/total throws) | 28.8% (215/747) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 70 (277 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 17 |
-| files with createLogger | 45/499 |
+| files with createLogger | 45/502 |
 | subdomains with zero createLogger | 22 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, status-native, targets, types) |
 | files > 400 LOC | 71 |
 | files > 600 LOC | 29 |
@@ -92,10 +92,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/codex-auth/codex-activation-runtime.ts` | 1340 |
 | `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1104 |
+| `src/web-server/status/status-collectors.ts` | 1005 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 995 |
 | `src/web-server/services/usage-failover-service.ts` | 993 |
 | `src/web-server/services/account-dashboard-service.ts` | 938 |
-| `src/web-server/status/status-collectors.ts` | 932 |
 | `src/web-server/agent-usage/agent-usage-snapshot.ts` | 924 |
 | `src/web-server/services/analytics-remote-sources.ts` | 918 |
 | `src/cliproxy/model-catalog.ts` | 895 |
