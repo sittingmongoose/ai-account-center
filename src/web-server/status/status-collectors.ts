@@ -678,8 +678,9 @@ const WINDOWS_PROBE_SCRIPT = [
   '$drive = $env:SystemDrive',
   '$disk = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID=\'" + $drive + "\'")',
   '"cores=" + [int](($cpu | Measure-Object NumberOfLogicalProcessors -Sum).Sum)',
-  '$load = ($cpu | Measure-Object LoadPercentage -Average).Average',
-  'if ($null -ne $load) { "cpuPct=" + [int]$load }',
+  // One line per processor; the server averages them. Measure-Object counts a null LoadPercentage
+  // as 0, so averaging here could turn an unknown load into a measured 0%.
+  'foreach ($p in $cpu) { "cpuLoad=" + $p.LoadPercentage }',
   '"memTotalKb=" + [int64]$os.TotalVisibleMemorySize',
   '"memAvailKb=" + [int64]$os.FreePhysicalMemory',
   '"diskTotalB=" + [int64]$disk.Size',
@@ -701,6 +702,35 @@ function linuxCpuTimes(line: string | undefined): MachineSample['cpuTimes'] {
   const total = values.slice(0, 8).reduce((sum, value) => sum + value, 0);
   const idle = values[3] + (values[4] ?? 0);
   return { busy: total - idle, total };
+}
+
+/**
+ * The busy percent a Mac or Windows probe reported, or null when it is not known. Windows prints
+ * one `cpuLoad=` per processor: any processor without a value makes the figure unknown. A Mac
+ * sums `ps` over all cores, so without its core count the figure cannot be divided (it was capped
+ * to a made-up 100%).
+ */
+function remoteBusyPct(
+  hostOs: HostOs,
+  stdout: string,
+  cpuPct: number | null,
+  cores: number | null
+): number | null {
+  if (hostOs === 'windows') {
+    const loads = stdout
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('cpuLoad='))
+      .map((line) => line.slice('cpuLoad='.length).trim());
+    if (loads.length > 0) {
+      const values = loads.map((value) => (value === '' ? Number.NaN : Number(value)));
+      if (!values.every((value) => Number.isFinite(value) && value >= 0)) return null;
+      const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+      return Math.min(100, Math.round(average));
+    }
+  }
+  if (cpuPct === null) return null;
+  if (hostOs === 'mac') return cores ? Math.min(100, Math.round(cpuPct / cores)) : null;
+  return Math.min(100, Math.round(cpuPct));
 }
 
 /** A probe's `key=value` lines -> a sample; null when the essentials are missing. */
@@ -739,15 +769,13 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
   if (cores === null && memTotal === null && diskTotal === null) return null;
   const cpuPct = n('cpuPct');
   const cpuTimes = hostOs === 'linux' ? linuxCpuTimes(values.get('cpu')) : null;
-  const cpuRead = hostOs === 'linux' ? cpuTimes !== null : cpuPct !== null;
+  const busyPct = remoteBusyPct(hostOs, stdout, cpuPct, cores);
+  const cpuRead = hostOs === 'linux' ? cpuTimes !== null : busyPct !== null;
   const diskRead = diskTotal !== null && diskFree !== null && diskTotal > 0;
   return {
     cores,
     load1: n('load'),
-    busyPct:
-      cpuPct === null
-        ? null
-        : Math.min(100, Math.round(hostOs === 'mac' && cores ? cpuPct / cores : cpuPct)),
+    busyPct,
     memAvailableBytes: memAvail,
     memTotalBytes: memTotal,
     disk: diskRead

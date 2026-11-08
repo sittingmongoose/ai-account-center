@@ -397,6 +397,21 @@ describe('status collectors', () => {
         "printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/x 100 50 50 50%% /\\n'; true"
       );
     const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    // The Mac probe with `sysctl -n hw.ncpu` failing: an empty core count, so no busy figure.
+    const noCores = execFileSync(
+      'bash',
+      [
+        '-c',
+        script
+          .replace("cores=%s\\n' 8", 'cores=%s\\n\' "$(false)"')
+          .replace('c=$(false)', "c=$(printf '320\\n')"),
+      ],
+      { encoding: 'utf8' }
+    );
+    expect(noCores).toContain('cpuPct=320');
+    expect(noCores).toMatch(/^cores=$/m);
+    expect(parseMachineProbe('mac', noCores)?.busyPct).toBeNull();
+    expect(parseMachineProbe('mac', noCores)?.cpuError).toBe('The machine did not report its CPU.');
     // Control: the same script with a working ps sums its lines.
     const good = execFileSync(
       'bash',
@@ -412,10 +427,36 @@ describe('status collectors', () => {
     expect(sample?.busyPct).toBeNull();
     expect(sample?.cpuError).toBe('The machine did not report its CPU.');
     expect(sample?.memoryError).toBeUndefined();
-    // Windows prints cpuPct only when LoadPercentage has a value.
-    expect(
-      Buffer.from(machineProbeCommand('windows').split(' ').pop()!, 'base64').toString('utf16le')
-    ).toContain('if ($null -ne $load) { "cpuPct=" + [int]$load }');
+    // Windows prints each processor's load; the server averages them (PowerShell's Measure-Object
+    // would count a null LoadPercentage as 0). "cpuLoad=" + $null is the bare "cpuLoad=".
+    const windowsScript = Buffer.from(
+      machineProbeCommand('windows').split(' ').pop()!,
+      'base64'
+    ).toString('utf16le');
+    expect(windowsScript).toContain('foreach ($p in $cpu) { "cpuLoad=" + $p.LoadPercentage }');
+    expect(windowsScript).not.toContain('Measure-Object LoadPercentage');
+    const base = 'cores=8\r\nmemTotalKb=2\r\nmemAvailKb=1\r\ndiskTotalB=10\r\ndiskFreeB=5\r\n';
+    const winGood = parseMachineProbe('windows', `${base}cpuLoad=30\r\ncpuLoad=50\r\n`);
+    expect(winGood?.busyPct).toBe(40);
+    expect(winGood?.cpuError).toBeUndefined();
+    const winIdle = parseMachineProbe('windows', `${base}cpuLoad=0\r\n`);
+    expect(winIdle?.busyPct).toBe(0);
+    expect(winIdle?.cpuError).toBeUndefined();
+    for (const lines of ['cpuLoad=\r\ncpuLoad=50\r\n', 'cpuLoad=\r\n', '']) {
+      const unknown = parseMachineProbe('windows', `${base}${lines}`);
+      expect({ lines, busy: unknown?.busyPct, error: unknown?.cpuError }).toEqual({
+        lines,
+        busy: null,
+        error: 'The machine did not report its CPU.',
+      });
+    }
+    // A Mac answer without its core count cannot divide the summed ps: no figure, named.
+    const macNoCores = parseMachineProbe(
+      'mac',
+      'cores=\nmemTotalB=17179869184\npageSize=16384\npagesAvail=1000\ncpuPct=320\ndiskTotalKb=10\ndiskFreeKb=5\n'
+    );
+    expect(macNoCores?.busyPct).toBeNull();
+    expect(macNoCores?.cpuError).toBe('The machine did not report its CPU.');
     const linux = parseMachineProbe(
       'linux',
       'cores=6\nmemTotalKb=2\nmemAvailKb=1\ndiskTotalKb=10\ndiskFreeKb=5\n'
