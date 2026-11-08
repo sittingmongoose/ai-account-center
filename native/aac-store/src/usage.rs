@@ -2268,7 +2268,11 @@ pub fn burn_long(engine: &Engine, series: &[SeriesRef], spans_ms: &[u64], now: u
                     })?;
                 }
                 let open = open_spans_for(&latest, [(a, w)])?;
-                let mut uncertain = false;
+                // A delta after a gap can belong partly before the requested start,
+                // even when its later reading falls in a complete interior bucket.
+                let mut uncertain = span_at(&readings, &open, (a, w), from)?
+                    .map(|(_, row)| row.last_seen < from)
+                    .unwrap_or(false);
                 let mut boundaries = vec![(from, now.min(interior_start * HOUR_MS))];
                 if interior_start * HOUR_MS < now {
                     boundaries.push((interior_end * HOUR_MS, now));

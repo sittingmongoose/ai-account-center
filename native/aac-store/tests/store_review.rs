@@ -1195,6 +1195,30 @@ fn final_review_burn_excludes_consumption_before_partial_hour() {
         interior[0]["spans"][0]["consumed"].is_null(),
         "a crossing change cannot enter the interior bucket: {interior}"
     );
+    record(
+        &engine,
+        [55, 100]
+            .into_iter()
+            .map(|m| {
+                obs_with(T0 + m * MIN, m as f64, |o| {
+                    o["account"]["identity"] = json!(format!("{:064x}", 3));
+                    o["account"]["account_id"] = json!("claude:a3");
+                })
+            })
+            .collect(),
+    );
+    let gap = call(
+        &engine,
+        "burnLong",
+        json!({
+            "series": [{"identity": format!("{:064x}", 3), "window": "[\"five_hour\",\"rate_limit\",null]"}],
+            "spansMs": [2 * HOUR], "nowMs": T0 + 179 * MIN
+        }),
+    );
+    assert!(
+        gap[0]["spans"][0]["consumed"].is_null(),
+        "no measured baseline across a gap: {gap}"
+    );
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(dir).unwrap();
