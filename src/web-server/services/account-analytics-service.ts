@@ -646,13 +646,14 @@ export class AccountAnalyticsService {
     const interval = Number.isFinite(configured)
       ? Math.min(3_600_000, Math.max(30_000, configured))
       : 60_000;
+    // Node's Timeout and Bun's Timer are both real timers. One annotation covers the call.
     this.timer = (this.deps.schedule ?? setTimeout)(() => {
       if (!this.running || generation !== this.generation) return;
       this.timer = undefined;
       void this.sample()
         .catch(() => {})
         .finally(() => this.schedule(generation));
-    }, interval);
+    }, interval) as ReturnType<typeof setTimeout>;
     this.timer.unref?.();
   }
 

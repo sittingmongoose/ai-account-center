@@ -85,8 +85,8 @@
     "docs/agent-reports/catalog/"
   ],
   "engines": {
-    "node": ">=18.0.0",
-    "bun": ">=1.0.0"
+    "node": ">=22.13.0",
+    "bun": ">=1.4.4"
   },
   "packageManager": "bun@1.4.4",
   "os": [
@@ -163,7 +163,7 @@
     "@types/express": "5.0.6",
     "@types/express-session": "^1.18.2",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20.19.25",
+    "@types/node": "26.6.6",
     "@types/proper-lockfile": "^4.1.4",
     "@types/ws": "8.18.2",
     "@typescript-eslint/eslint-plugin": "8.72.1",

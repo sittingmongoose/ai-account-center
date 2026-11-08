@@ -404,7 +404,9 @@ export function loadUsageInWorker(
         );
       }
     });
-    worker.once('error', (error) => finish(error));
+    worker.once('error', (error: unknown) => {
+      finish(error instanceof Error ? error : new CCSError('Usage worker failed'));
+    });
     worker.once('exit', (code) =>
       finish(new CCSError(`Usage worker exited before returning a result (code ${code})`))
     );

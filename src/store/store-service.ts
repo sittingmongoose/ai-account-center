@@ -341,9 +341,10 @@ export function startAacStoreMaintenance(
   };
   const loop = (delay: number): void => {
     if (stopped) return;
+    // Node's Timeout and Bun's Timer are both real timers. One annotation covers the call.
     timer = (deps.schedule ?? setTimeout)(() => {
       void run().finally(() => loop(MAINTAIN_EVERY_MS));
-    }, delay);
+    }, delay) as ReturnType<typeof setTimeout>;
     timer.unref?.();
   };
   // The first pass waits a few minutes, so a restart never competes with the first samples.

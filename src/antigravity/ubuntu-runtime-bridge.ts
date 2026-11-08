@@ -351,7 +351,7 @@ export function createPrivateUnixRequest(socketPath: string, timeoutMs = 15000):
           .catch(() => finish(undefined, true));
       });
       socket.on('data', (chunk) => {
-        pending = Buffer.concat([pending, chunk]);
+        pending = Buffer.concat([pending, Buffer.from(chunk)]);
         if (pending.length > MAX_FRAME_BYTES + 4) {
           finish(undefined, true);
           return;
