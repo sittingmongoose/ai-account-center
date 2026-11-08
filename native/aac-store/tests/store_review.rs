@@ -1354,6 +1354,41 @@ fn final_review_corrupt_backup(compressed: bool) {
 }
 
 #[test]
+fn final_review_damage_before_seal_is_disclosed_after_restore() {
+    // Sol max 28e75e2d M1: a byte flipped in the active log before the daily seal was hashed into
+    // the seal, so the backup verified it and a log-only restore lost a reading while ready.
+    let base = temp_dir("final-seal-damaged");
+    let dir = base.join("store");
+    let primary = base.join("primary");
+    let engine = open(&dir);
+    record(
+        &engine,
+        (0..5).map(|i| obs(T0 + i * MIN, 10.0 + 2.0 * i as f64)).collect(),
+    );
+    let active = find(&dir.join("log/readings"), ".active").remove(0);
+    let mut bytes = fs::read(&active).unwrap();
+    let at = bytes.len() / 2;
+    bytes[at] ^= 1;
+    fs::write(&active, bytes).unwrap();
+    engine.seal_and_compress(now_ms() + 2 * DAY as u64).unwrap();
+    assert!(
+        find(&dir.join("log/readings"), ".active").is_empty(),
+        "the damaged active log sealed"
+    );
+    let backup = call(&engine, "backup", json!({"roots": [primary], "withRedb": false}));
+    engine.close().unwrap();
+    drop(engine);
+    let restored = base.join("restore");
+    restore(&restored, &primary.join("sets").join(backup["id"].as_str().unwrap())).unwrap();
+    let engine = open(&restored);
+    let status = call(&engine, "status", json!({}));
+    assert_eq!(status["state"], "degraded", "a lost reading is disclosed: {status}");
+    assert!(raw_starts(&engine).len() < 5, "the damaged frame is gone");
+    engine.close().unwrap();
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn final_review_raw_backup_preserves_older_sets() {
     final_review_corrupt_backup(false);
 }

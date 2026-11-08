@@ -971,8 +971,17 @@ impl Log {
             }
         };
         if entry.state == "sealed" && fsx::sha256_hex(&bytes) == entry.raw_sha256 {
-            let frames = walk(&bytes).unwrap_or_else(|| salvage(&bytes).0);
-            return (bytes, frames, None);
+            // A matching hash proves only that the bytes are the ones sealed. If the active log
+            // was damaged before its seal, the hash covers the damage: frames that do not walk
+            // are loss, disclosed, never a silent salvage.
+            return match walk(&bytes) {
+                Some(frames) => (bytes, frames, None),
+                None => {
+                    let frames = salvage(&bytes).0;
+                    let finding = Finding::new("segment_degraded", "sealed frames do not validate", range);
+                    (bytes, frames, Some(finding))
+                }
+            };
         }
         let finding =
             (entry.state == "sealed").then(|| Finding::new("segment_degraded", "hash mismatch on read", range));
