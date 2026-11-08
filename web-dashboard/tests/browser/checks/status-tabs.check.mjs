@@ -45,7 +45,7 @@ async function useApp(t, { scoreboardBroken = false } = {}) {
 		if (stub) return route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: STUB });
 		return route.continue();
 	});
-	t.record('app pages', true, stub ? 'stand-in page (no /app/status on this server, or appStub=1)' : 'the real /app pages');
+	await t.record('app pages', true, stub ? 'stand-in page (no /app/status on this server, or appStub=1)' : 'the real /app pages');
 	return stub;
 }
 
@@ -73,13 +73,13 @@ async function frameFits(t, label, page) {
 	const [top, bottom] = expectedBand(s.iw, s.ih);
 	const f = s.frame;
 	const shell = await t.page.evaluate(() => JSON.stringify(window.__aacFrames ? __aacFrames.snapshot() : null));
-	t.check(`${label}: iframe in the content area`, !!f && f.x === 0 && f.w === s.iw && f.y === top && f.y + f.h === bottom,
+	await t.check(`${label}: iframe in the content area`, !!f && f.x === 0 && f.w === s.iw && f.y === top && f.y + f.h === bottom,
 		f ? `iframe ${f.x},${f.y} ${f.w}x${f.h} (bottom ${f.y + f.h}); content area 0,${top} ${s.iw}x${bottom - top}; shell ${shell}` : `no iframe; shell ${shell}`);
 	const hits = await t.page.evaluate(([y0, y1, w]) => {
 		const at = (x, y) => { const el = document.elementFromPoint(x, y); return el ? el.tagName.toLowerCase() : null; };
 		return { above: at(w / 2, y0 - 2), inside: at(w / 2, y0 + 2), insideBottom: at(w / 2, y1 - 2), below: y1 < innerHeight ? at(w / 2, y1 + 2) : 'canvas' };
 	}, [top, bottom, s.iw]);
-	t.check(`${label}: header and tab bar stay the canvas's`, hits.above === 'canvas' && hits.inside === 'iframe' && hits.insideBottom === 'iframe' && hits.below === 'canvas',
+	await t.check(`${label}: header and tab bar stay the canvas's`, hits.above === 'canvas' && hits.inside === 'iframe' && hits.insideBottom === 'iframe' && hits.below === 'canvas',
 		`above ${hits.above}, inside ${hits.inside}/${hits.insideBottom}, below ${hits.below}`);
 	return s;
 }
@@ -149,7 +149,7 @@ export const tests = {
 					// the tab bar's own probes start exactly where the iframe ends
 					const tab = await t.app.rect('tab-status');
 					const s = await frameState(t, 'status');
-					t.check(`${label}: iframe ends at the tab bar`, !!tab && Math.round(tab.y) === s.frame.y + s.frame.h, `tab bar top ${tab && tab.y}, iframe bottom ${s.frame.y + s.frame.h}`);
+					await t.check(`${label}: iframe ends at the tab bar`, !!tab && Math.round(tab.y) === s.frame.y + s.frame.h, `tab bar top ${tab && tab.y}, iframe bottom ${s.frame.y + s.frame.h}`);
 				}
 				await t.app.noProbeOverflow(`${label}: no control past the edge`);
 				// every canvas control (the header status line included) still has room and a usable size
@@ -172,7 +172,7 @@ export const tests = {
 					if (stub) {
 						let seen = null;
 						for (let i = 0; i < 20 && seen !== mode; i++) { seen = await stubTheme(t, page); if (seen !== mode) await t.page.waitForTimeout(150); }
-						t.equal(`${label} ${mode}: aac-theme`, seen, mode);
+						await t.equal(`${label} ${mode}: aac-theme`, seen, mode);
 					}
 					await t.audit(`${label} ${mode} ${page}`, { controls: ['update-apps'], ignore: KNOWN_SMALL });
 					await t.shot(`${page}-${label}-${mode}`, `${page} tab at ${w}x${h} ${mode}: tab selected, the page box exactly between header and ${w < 600 ? 'tab bar' : 'window bottom'}, nothing over the tab bar`);
@@ -189,28 +189,28 @@ export const tests = {
 		await t.app.open({ page: 'accounts' });
 		await tapTab(t, 'tab-status');
 		await frameFits(t, 'tapped Status', 'status');
-		t.equal('tapped Status: path', (await frameState(t, 'status')).path, '/status');
+		await t.equal('tapped Status: path', (await frameState(t, 'status')).path, '/status');
 		if (stub) {
 			// a live theme change reaches the page
 			await t.page.evaluate(() => window.ccsDashboardAction('theme', 'dark'));
 			let seen = null;
 			for (let i = 0; i < 20 && seen !== 'dark'; i++) { seen = await stubTheme(t, 'status'); if (seen !== 'dark') await t.page.waitForTimeout(150); }
-			t.equal('live theme change: aac-theme dark', seen, 'dark');
+			await t.equal('live theme change: aac-theme dark', seen, 'dark');
 			await t.page.evaluate(() => window.ccsDashboardAction('theme', 'light'));
 			// the page links to another tab
 			const frame = t.page.frames().find((f) => new URL(f.url()).pathname === '/app/status');
 			await frame.evaluate(() => parent.postMessage({ type: 'aac-navigate', page: 'home' }, location.origin));
 			await t.until('aac-navigate: Home opened', () => location.pathname === '/', null, { timeout: 5000 });
-			t.equal('aac-navigate: iframe hidden', (await frameState(t, 'status')).visibility, 'hidden');
+			await t.equal('aac-navigate: iframe hidden', (await frameState(t, 'status')).visibility, 'hidden');
 			// junk and wrong types are ignored
 			await frame.evaluate(() => { parent.postMessage({ type: 'aac-navigate', page: 'nowhere' }, location.origin); parent.postMessage('aac-ready', location.origin); });
 			await t.page.waitForTimeout(300);
-			t.equal('junk messages ignored', (await frameState(t, 'status')).path, '/');
+			await t.equal('junk messages ignored', (await frameState(t, 'status')).path, '/');
 		}
 		// returning is instant: the same iframe, already loaded
 		await tapTab(t, 'tab-status');
 		await frameFits(t, 'back to Status', 'status');
-		t.equal('one Status iframe', await t.page.evaluate(() => document.querySelectorAll('iframe.aac-frame[src^="/app/status"]').length), 1);
+		await t.equal('one Status iframe', await t.page.evaluate(() => document.querySelectorAll('iframe.aac-frame[src^="/app/status"]').length), 1);
 		// Scoreboard's page lands outside /app (a redirect to the shell): the shell's note, never a blank area
 		await tapTab(t, 'tab-scoreboard');
 		await t.until('Scoreboard unavailable note', () => {
@@ -218,8 +218,8 @@ export const tests = {
 			return !!n && getComputedStyle(n).display !== 'none' && /Scoreboard page unavailable/.test(n.textContent);
 		}, null, { timeout: 10000 });
 		const s = await frameState(t, 'scoreboard');
-		t.equal('broken Scoreboard iframe stays hidden', s.visibility, 'hidden');
-		t.equal('the shell inside the iframe did not start a dashboard', await t.page.evaluate(() => {
+		await t.equal('broken Scoreboard iframe stays hidden', s.visibility, 'hidden');
+		await t.equal('the shell inside the iframe did not start a dashboard', await t.page.evaluate(() => {
 			const f = document.querySelector('iframe.aac-frame[src^="/app/scoreboard"]');
 			try { return f.contentDocument.querySelector('#loading')?.textContent ?? null; } catch { return 'unreadable'; }
 		}), 'This page is unavailable here.');
