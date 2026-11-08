@@ -53,8 +53,11 @@ async function relaunch(target, desktop, outside, deps = {}) {
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new Error('Launch failed.'))); });
     child.unref();
     output.restartedProcesses++;
-    // The pid it spawned, so start() can know the process it started from any other.
-    return { pid: child.pid };
+    // The pid it spawned and that process's start time, so start() can know the process it started
+    // from any other, and never from a later one given the same pid. Without the start time the pid
+    // names nothing start() will count.
+    const startTime = (deps.startTimeOf ?? startTimeOf)(child.pid);
+    return { pid: child.pid, ...(startTime ? { startTime } : {}) };
   }
 }
 /** The update bridge's process runtime: its launches stay outside the dashboard cgroup. */
@@ -120,6 +123,13 @@ function cgroupUnit(text) {
 }
 function processUnit(directory) {
   try { return cgroupUnit(fs.readFileSync(path.join(directory, 'cgroup'), 'utf8')); } catch { return undefined; }
+}
+/** A process's start time, as /proc/<pid>/stat gives it and the scans record it; else undefined. */
+function startTimeOf(pid) {
+  try {
+    const stat = fs.readFileSync(path.join('/proc', String(pid), 'stat'), 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  } catch { return undefined; }
 }
 function markerFile() { return path.join(home, '.ccs/app-updates', output.appId + '-pending-restart.json'); }
 function readMarker() { try { return JSON.parse(fs.readFileSync(markerFile(), 'utf8')); } catch { return null; } }

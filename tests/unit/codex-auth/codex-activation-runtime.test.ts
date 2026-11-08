@@ -111,7 +111,7 @@ function harness(initial: CodexProcessSnapshot[]) {
       if (isDesktop)
         current.push({ ...bundled, pid: nextPid++, ppid: started.pid, startTime: String(nextPid) });
       // The pid it spawned, as a real launch reports it.
-      return { pid: started.pid };
+      return { pid: started.pid, startTime: started.startTime };
     },
     prepareCli: async () => {
       events.push('prepare-cli');
@@ -1996,6 +1996,9 @@ describe('desktop main process detection', () => {
     },
     { name: 'its own pid', token: 'pid', unit: undefined, ready: true },
     { name: 'a process under its pid', token: 'parent', unit: undefined, ready: true },
+    // The pid came back, but a different process has it now: never the one AAC started.
+    { name: 'its pid reused by another process', token: 'reused', unit: undefined, ready: false },
+    { name: 'a pid with no start time', token: 'bare-pid', unit: undefined, ready: false },
     { name: 'no identity', token: undefined, unit: undefined, ready: false },
   ])(
     'counts a relaunched desktop back only by what its launch started: $name',
@@ -2012,8 +2015,11 @@ describe('desktop main process detection', () => {
             // The launch spawned a wrapper, and the desktop main runs under it.
             fake.inject(processFixture(700, ['/bin/sh', '-c', 'exec app'], { exe: '/bin/sh' }));
             started.ppid = 700;
-            return { pid: 700 };
+            return { pid: 700, startTime: '700' };
           }
+          const pid = (own as { pid: number }).pid;
+          if (token === 'reused') return { pid, startTime: 'an-earlier-process' };
+          if (token === 'bare-pid') return { pid };
           return token === 'pid' ? own : token;
         },
       });

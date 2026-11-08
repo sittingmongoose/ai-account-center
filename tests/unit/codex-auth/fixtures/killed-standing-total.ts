@@ -105,7 +105,7 @@ const dependencies: CodexActivationRuntimeDependencies = {
     save('next-pid.json', pid + 10);
     const fresh = { ...target, pid, ppid: 1, startTime: `fresh-${pid}` };
     save('processes.json', [...processes(), fresh, ...(desktop ? [server(pid)] : [])]);
-    return { pid };
+    return { pid, startTime: fresh.startTime };
   },
   verifyDaemon: async () => {
     // The first check is stop()'s recovery; the second is the bridge's own, after a failed stop().

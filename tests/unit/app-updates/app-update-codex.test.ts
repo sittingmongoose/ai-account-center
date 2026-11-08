@@ -383,8 +383,10 @@ describe('Codex relaunch after an update', () => {
         unref: () => {},
       }),
       inside: () => false,
+      startTimeOf: (pid: number) => (pid === 4242 ? '777' : undefined),
     });
-    expect(direct).toEqual({ pid: 4242 });
+    // With its start time, so a later process given the same pid is never taken for it.
+    expect(direct).toEqual({ pid: 4242, startTime: '777' });
   });
 
   it('reports a failed outside launch instead of falling back into the cgroup', async () => {

@@ -36,11 +36,13 @@ export interface CodexRestartPlan {
 }
 
 /**
- * What a launch started, so start() can tell its own process from any other: the pid it spawned, or
- * the transient systemd unit it started it in.
+ * What a launch started, so start() can tell its own process from any other: the pid it spawned with
+ * that process's start time, so a later process given the same pid is never taken for it, or the
+ * transient systemd unit it started it in.
  */
 export interface CodexLaunch {
   pid?: number;
+  startTime?: string;
   unit?: string;
 }
 
@@ -690,9 +692,9 @@ function startedBy(
   if (launch.unit && (main.unit === launch.unit || main.unit === `${launch.unit}.service`)) {
     return true;
   }
-  if (launch.pid === undefined) return false;
+  if (launch.pid === undefined || launch.startTime === undefined) return false;
   for (let entry: CodexProcessSnapshot | undefined = main, hops = 0; entry && hops < 64; hops++) {
-    if (entry.pid === launch.pid) return true;
+    if (entry.pid === launch.pid) return entry.startTime === launch.startTime;
     const parent: number = entry.ppid;
     entry = processes.find((process) => process.pid === parent);
   }
@@ -765,6 +767,16 @@ function desktopLauncher(
     );
   }
   return { ...desktop, args, env };
+}
+
+/** A process's start time, as /proc/<pid>/stat gives it and the scans record it; else undefined. */
+function processStartTime(pid: number): string | undefined {
+  try {
+    const stat = fs.readFileSync(path.join('/proc', String(pid), 'stat'), 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  } catch {
+    return undefined;
+  }
 }
 
 /** The systemd service whose cgroup a process runs in, from its /proc cgroup text; else undefined. */
@@ -1092,9 +1104,10 @@ export async function launchCodexProcess(
       env: target.env,
       ...(logFile === undefined ? {} : { logFile }),
     });
+    const startTime = started.pid ? processStartTime(started.pid) : undefined;
     return {
       ...(started.unit ? { unit: started.unit } : {}),
-      ...(started.pid ? { pid: started.pid } : {}),
+      ...(started.pid && startTime ? { pid: started.pid, startTime } : {}),
     };
   } catch {
     throw new CodexActivationRuntimeError('Could not launch Codex.');

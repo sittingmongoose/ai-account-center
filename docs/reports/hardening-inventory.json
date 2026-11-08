@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1347,
+    "totalOccurrences": 1348,
     "filesAffected": 134,
     "hotpathOccurrences": 698,
     "hotpathFilesAffected": 79,
@@ -297,6 +297,25 @@
         "markers": []
       },
       {
+        "file": "src/codex-auth/codex-activation-runtime.ts",
+        "count": 26,
+        "calls": [
+          "closeSync",
+          "fstatSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "readlinkSync",
+          "readSync",
+          "renameSync",
+          "statSync",
+          "unlinkSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/antigravity/auto-switch/store.ts",
         "count": 25,
         "calls": [
@@ -329,25 +348,6 @@
           "renameSync",
           "rmSync",
           "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/codex-auth/codex-activation-runtime.ts",
-        "count": 25,
-        "calls": [
-          "closeSync",
-          "fstatSync",
-          "lstatSync",
-          "mkdirSync",
-          "openSync",
-          "readdirSync",
-          "readFileSync",
-          "readlinkSync",
-          "readSync",
-          "renameSync",
-          "statSync",
-          "unlinkSync"
         ],
         "markers": []
       }
@@ -777,12 +777,12 @@
           "loc": 1734
         },
         {
-          "file": "src/web-server/model-pricing.ts",
-          "loc": 1322
+          "file": "src/codex-auth/codex-activation-runtime.ts",
+          "loc": 1328
         },
         {
-          "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1315
+          "file": "src/web-server/model-pricing.ts",
+          "loc": 1322
         },
         {
           "file": "src/antigravity/registry.ts",
