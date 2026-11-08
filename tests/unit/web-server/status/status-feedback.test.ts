@@ -471,7 +471,14 @@ describe('published schemas', () => {
       .readdirSync(packagedSchemasDir())
       .filter((n) => n.endsWith('.json'))
       .sort();
-    expect(names).toEqual(['answer.json', 'card.json', 'run.json', 'tasks.json', 'thread.json']);
+    expect(names).toEqual([
+      'answer.json',
+      'card.json',
+      'run.json',
+      'status.json',
+      'tasks.json',
+      'thread.json',
+    ]);
     expect(await publishSchemas(root)).toEqual(names);
     expect(await publishSchemas(root)).toEqual([]);
     const card = path.join(root, 'v1', 'schemas', 'card.json');
