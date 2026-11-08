@@ -132,6 +132,17 @@ fn walk(buf: &[u8]) -> Option<Vec<Scanned>> {
     Some(frames)
 }
 
+/// The frames of a sealed segment, only when they decode and run from its first sequence to its
+/// last. A matching hash proves only that the bytes are the ones sealed: the active log can be
+/// damaged or shortened before its seal, and the seal then hashes what is left.
+fn sealed_frames(entry: &SegmentEntry, bytes: &[u8]) -> Option<Vec<Scanned>> {
+    let frames = walk(bytes)?;
+    let ends = (frames.first().map(|f| f.seq), frames.last().map(|f| f.seq));
+    (ends == (Some(entry.start_seq), Some(entry.end_seq))).then_some(frames)
+}
+
+const SEALED_INCOMPLETE: &str = "sealed frames are damaged or incomplete";
+
 pub fn scan(buf: &[u8]) -> Scan {
     let mut frames = Vec::new();
     let mut offset = 0usize;
@@ -698,10 +709,17 @@ impl Log {
         let result = self.write_inner(events);
         if result.is_err() {
             self.failed = true;
+            let (offset, seq) = self
+                .manifest
+                .active
+                .as_ref()
+                .map(|a| (a.watermark_offset, a.watermark_seq))
+                .unwrap_or((0, 0));
             if let Some(active) = self.active.as_mut() {
-                let _ = active
-                    .file
-                    .set_len(self.manifest.active.as_ref().map(|a| a.watermark_offset).unwrap_or(0));
+                let _ = active.file.set_len(offset);
+                // Only acknowledged frames remain, so a later seal names what the file holds.
+                active.len = offset;
+                active.last_seq = (offset > 0).then_some(seq);
             }
         }
         result
@@ -911,15 +929,18 @@ impl Log {
             if entry.state != "sealed" {
                 continue;
             }
-            let ok = read_segment_bytes(&self.dir, &entry)
-                .map(|b| fsx::sha256_hex(&b) == entry.raw_sha256)
-                .unwrap_or(false);
-            if !ok {
+            let problem = match read_segment_bytes(&self.dir, &entry) {
+                Ok(b) if fsx::sha256_hex(&b) != entry.raw_sha256 => Some("hash mismatch"),
+                Ok(b) if sealed_frames(&entry, &b).is_none() => Some(SEALED_INCOMPLETE),
+                Ok(_) => None,
+                Err(_) => Some("hash mismatch"),
+            };
+            if let Some(problem) = problem {
                 self.manifest.segments[i].state = "degraded".into();
-                self.manifest.segments[i].loss = Some("hash mismatch".into());
+                self.manifest.segments[i].loss = Some(problem.into());
                 findings.push(Finding::new(
                     "segment_degraded",
-                    "hash mismatch",
+                    problem,
                     Some((entry.start_seq, entry.end_seq)),
                 ));
                 changed = true;
@@ -971,14 +992,13 @@ impl Log {
             }
         };
         if entry.state == "sealed" && fsx::sha256_hex(&bytes) == entry.raw_sha256 {
-            // A matching hash proves only that the bytes are the ones sealed. If the active log
-            // was damaged before its seal, the hash covers the damage: frames that do not walk
-            // are loss, disclosed, never a silent salvage.
-            return match walk(&bytes) {
+            // Frames that do not decode or do not reach the segment's ends are loss, disclosed,
+            // never a silent salvage (see `sealed_frames`).
+            return match sealed_frames(entry, &bytes) {
                 Some(frames) => (bytes, frames, None),
                 None => {
                     let frames = salvage(&bytes).0;
-                    let finding = Finding::new("segment_degraded", "sealed frames do not validate", range);
+                    let finding = Finding::new("segment_degraded", SEALED_INCOMPLETE, range);
                     (bytes, frames, Some(finding))
                 }
             };

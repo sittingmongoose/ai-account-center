@@ -1388,6 +1388,55 @@ fn final_review_damage_before_seal_is_disclosed_after_restore() {
     fs::remove_dir_all(base).unwrap();
 }
 
+fn final_review_truncated_before_seal(keep_frames: usize) {
+    // Astra max 7609cd4d R2: the active log shortened at a frame boundary before its seal walks
+    // cleanly, so a log-only restore lost the tail while ready.
+    let base = temp_dir("final-seal-truncated");
+    let dir = base.join("store");
+    let primary = base.join("primary");
+    let engine = open(&dir);
+    record(
+        &engine,
+        (0..5).map(|i| obs(T0 + i * MIN, 10.0 + 2.0 * i as f64)).collect(),
+    );
+    let active = find(&dir.join("log/readings"), ".active").remove(0);
+    let bytes = fs::read(&active).unwrap();
+    let scanned = aac_store::log::scan(&bytes);
+    assert_eq!(scanned.frames.len(), 5);
+    let cut = scanned.frames.get(keep_frames).map_or(bytes.len(), |f| f.offset);
+    fs::write(&active, &bytes[..cut]).unwrap();
+    engine.seal_and_compress(now_ms() + 2 * DAY as u64).unwrap();
+    assert!(
+        find(&dir.join("log/readings"), ".active").is_empty(),
+        "the shortened active log sealed"
+    );
+    let check = call(&engine, "maintain", json!({ "verify": true }));
+    assert!(
+        check.to_string().contains("damaged or incomplete"),
+        "the live check discloses the short segment: {check}"
+    );
+    let backup = call(&engine, "backup", json!({"roots": [primary], "withRedb": false}));
+    engine.close().unwrap();
+    drop(engine);
+    let restored = base.join("restore");
+    restore(&restored, &primary.join("sets").join(backup["id"].as_str().unwrap())).unwrap();
+    let engine = open(&restored);
+    let status = call(&engine, "status", json!({}));
+    assert_eq!(status["state"], "degraded", "the lost tail is disclosed: {status}");
+    assert_eq!(raw_starts(&engine).len(), keep_frames);
+    engine.close().unwrap();
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn final_review_truncated_to_three_frames_before_seal_is_disclosed() {
+    final_review_truncated_before_seal(3);
+}
+#[test]
+fn final_review_truncated_to_nothing_before_seal_is_disclosed() {
+    final_review_truncated_before_seal(0);
+}
+
 #[test]
 fn final_review_raw_backup_preserves_older_sets() {
     final_review_corrupt_backup(false);
