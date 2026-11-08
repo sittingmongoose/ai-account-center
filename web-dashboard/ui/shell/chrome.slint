@@ -88,6 +88,8 @@ component TabCell inherits Rectangle {
     in property <string> name: root.label;
     in property <string> probe;
     in property <bool> selected;
+    // 11 px below 72 px cells (five cells at 320-359 px), so "Scoreboard" never elides.
+    in property <length> label-size: 12px;
     callback tapped();
 
     Icon {
@@ -106,7 +108,7 @@ component TabCell inherits Rectangle {
         height: 16px;
         horizontal-alignment: center;
         text: root.label;
-        font-size: 12px;
+        font-size: root.label-size;
         font-weight: root.selected ? 600 : 500;
         color: root.selected ? Theme.ink : Theme.ink-3;
         overflow: elide;
@@ -127,7 +129,7 @@ component TabCell inherits Rectangle {
     }
 }
 
-// The P bottom tab bar (DESIGN-MOBILE.md 3.1): three equal cells, a 32 x 3 accent indicator that
+// The P bottom tab bar (DESIGN-MOBILE.md 3.1): five equal cells, a 32 x 3 accent indicator that
 // glides between them, and the whole cell as the hit area. The bar is 52 px of cells plus
 // max(safe-bottom, 8) of background under the home indicator; the page scroll ends above it.
 export component TabBar inherits Rectangle {
@@ -143,14 +145,17 @@ export component TabBar inherits Rectangle {
         height: 1px;
         background: Theme.rule;
     }
-    property <length> cell-w: root.width / 3;
+    property <length> cell-w: root.width / 5;
+    property <length> label-size: root.cell-w < 72px ? 11px : 12px;
+    property <int> index: root.page == "analytics" ? 1 : root.page == "accounts" ? 2 : root.page == "status" ? 3
+        : root.page == "scoreboard" ? 4 : 0;
     indicator := Rectangle {
         y: 0px;
         width: 32px;
         height: 3px;
         border-radius: 1.5px;
         background: Theme.accent;
-        x: (root.page == "analytics" ? root.cell-w : root.page == "accounts" ? 2 * root.cell-w : 0px) + (root.cell-w - 32px) / 2;
+        x: root.index * root.cell-w + (root.cell-w - 32px) / 2;
         animate x { duration: Motion.on ? Motion.tab-glide : 0ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
     }
     cells := HorizontalLayout {
@@ -160,6 +165,7 @@ export component TabBar inherits Rectangle {
             icon: "home";
             label: "Home";
             probe: "tab-home";
+            label-size: root.label-size;
             selected: root.page == "home";
             tapped => { root.navigate("home"); }
         }
@@ -167,16 +173,35 @@ export component TabBar inherits Rectangle {
             icon: "chart";
             label: "Analytics";
             probe: "tab-analytics";
+            label-size: root.label-size;
             selected: root.page == "analytics";
             tapped => { root.navigate("analytics"); }
         }
         TabCell {
             icon: "users";
-            label: Breakpoints.width < 384px ? "Accounts" : "Accounts & Settings";
+            // a fifth of a phone is never wide enough for the full name; it stays the accessible name
+            label: "Accounts";
             name: "Accounts & Settings";
             probe: "tab-accounts";
+            label-size: root.label-size;
             selected: root.page == "accounts";
             tapped => { root.navigate("accounts"); }
+        }
+        TabCell {
+            icon: "activity";
+            label: "Status";
+            probe: "tab-status";
+            label-size: root.label-size;
+            selected: root.page == "status";
+            tapped => { root.navigate("status"); }
+        }
+        TabCell {
+            icon: "trophy";
+            label: "Scoreboard";
+            probe: "tab-scoreboard";
+            label-size: root.label-size;
+            selected: root.page == "scoreboard";
+            tapped => { root.navigate("scoreboard"); }
         }
     }
 }
@@ -198,6 +223,13 @@ export component MobileHeader inherits Rectangle {
     callback status-tapped(Point, length, length);
     callback theme-tapped(Point, length, length);
     callback account-tapped(Point, length, length);
+
+    // The status line is a control (it opens the status detail): the tabs step down before it drops under
+    // the width of its short form ("Updated 59m ago", measured in the StatusLine's fonts). A fixed sample, so a
+    // changing age never re-fits the tabs.
+    m-status-room := Text { x: 0px; y: 0px; width: 0px; height: 0px; opacity: 0; text: "Updated"; font-family: Type.tab; font-size: Type.small; }
+    m-status-room-age := Text { x: 0px; y: 0px; width: 0px; height: 0px; opacity: 0; text: "59m ago"; font-family: Type.tab; font-size: Type.small; font-weight: 580; }
+    property <length> status-room: ceil((m-status-room.preferred-width + m-status-room-age.preferred-width + 8px) / 1px) * 1px;
 
     height: Device.safe-top + (Breakpoints.short ? 48px : Breakpoints.tier-p ? 52px : Breakpoints.tier-f ? 108px : 60px);
     background: Theme.paper;
@@ -408,7 +440,12 @@ export component MobileHeader inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     horizontal-stretch: 0;
-                    nav-f := NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
+                    nav-f := NavBar {
+                        page: root.page;
+                        // the row less its paddings, the two 12 px gaps and the status line's least room
+                        max-w: row2.width - 40px - Device.safe-left - Device.safe-right - 24px - root.status-room;
+                        navigate(p) => { root.navigate(p); }
+                    }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 StatusLine {
@@ -457,14 +494,24 @@ export component MobileHeader inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                nav-t := NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
+                nav-t := NavBar {
+                    page: root.page;
+                    // the row less its paddings, the brand, the fixed boxes, the buttons, nine 6 px gaps and the
+                    // status line's least room
+                    max-w: trow.width - 48px - Device.safe-left - Device.safe-right - brand-row-t.preferred-width - 16px
+                        - refresh-t.width - update-t.min-width - theme-btn-t.width
+                        - account-btn-t.width - 54px - root.status-room;
+                    navigate(p) => { root.navigate(p); }
+                }
             }
             Rectangle { horizontal-stretch: 1; }
             StatusLine {
                 horizontal-stretch: 0;
                 chrome: root.chrome;
-                // What the row leaves the line (spec max 320): brand, tabs, buttons, pads, gaps off.
-                max-w: min(320px, max(0px, trow.width - brand-row-t.preferred-width - nav-t.preferred-width - refresh-t.preferred-width - update-t.preferred-width - theme-btn-t.preferred-width - account-btn-t.preferred-width - Device.safe-left - Device.safe-right - 118px));
+                // What the row leaves the line (spec max 320): brand, tabs, buttons, pads, gaps off. The buttons count
+            // by `width` (IconButton fixes its width and reports no preferred width) and the update pill by its
+            // `min-width`.
+                max-w: min(320px, max(0px, trow.width - brand-row-t.preferred-width - nav-t.preferred-width - refresh-t.width - update-t.min-width - theme-btn-t.width - account-btn-t.width - Device.safe-left - Device.safe-right - 118px));
                 tapped(anchor, w, h) => { root.status-tapped(anchor, w, h); }
             }
             Rectangle { width: 6px; }
@@ -540,14 +587,22 @@ export component MobileHeader inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 0;
-                nav-s := NavBar { compact: true; page: root.page; navigate(p) => { root.navigate(p); } }
+                nav-s := NavBar {
+                    compact: true;
+                    page: root.page;
+                    // the row less its paddings, the logo box, the buttons, six 6 px gaps and the status line's room
+                    max-w: srow.width - 2 * Breakpoints.gutter - Device.safe-left - Device.safe-right - 40px
+                        - refresh-s.width - update-s.min-width - account-btn-s.width - 36px
+                        - root.status-room;
+                    navigate(p) => { root.navigate(p); }
+                }
             }
             Rectangle { horizontal-stretch: 1; }
             StatusLine {
                 horizontal-stretch: 0;
                 chrome: root.chrome;
                 // What the row leaves the line: logo, tabs, buttons, pads, gaps come off.
-                max-w: max(0px, srow.width - nav-s.preferred-width - refresh-s.preferred-width - update-s.preferred-width - account-btn-s.preferred-width - 2 * Breakpoints.gutter - Device.safe-left - Device.safe-right - 76px);
+                max-w: max(0px, srow.width - nav-s.preferred-width - refresh-s.width - update-s.min-width - account-btn-s.width - 2 * Breakpoints.gutter - Device.safe-left - Device.safe-right - 76px);
                 tapped(anchor, w, h) => { root.status-tapped(anchor, w, h); }
             }
             VerticalLayout {

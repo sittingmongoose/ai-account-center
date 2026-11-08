@@ -1,0 +1,1053 @@
+{
+  "$defs": {
+    "sectionCallout": {
+      "additionalProperties": false,
+      "description": "Callout section.",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tone": {
+          "enum": [
+            "crit",
+            "info",
+            "warn"
+          ],
+          "type": "string"
+        },
+        "type": {
+          "const": "callout"
+        }
+      },
+      "required": [
+        "body",
+        "tone",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionCompare": {
+      "additionalProperties": false,
+      "description": "Compare section: what others do.",
+      "properties": {
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "does": {
+                "type": "string"
+              },
+              "link": {
+                "additionalProperties": false,
+                "properties": {
+                  "label": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "url"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "problem": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "does",
+              "link",
+              "name",
+              "problem",
+              "version"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "compare"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionFacts": {
+      "additionalProperties": false,
+      "description": "Facts section: short label/value pairs.",
+      "properties": {
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "rows": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "value"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "facts"
+        }
+      },
+      "required": [
+        "rows",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionLinks": {
+      "additionalProperties": false,
+      "description": "Links section. Web links open in a new tab; share paths are shown to copy.",
+      "properties": {
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "url"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "links"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionList": {
+      "additionalProperties": false,
+      "description": "List section.",
+      "properties": {
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ordered": {
+          "type": "boolean"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "list"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionMedia": {
+      "additionalProperties": false,
+      "description": "Media section.",
+      "properties": {
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/media"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "media"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionNotCopying": {
+      "additionalProperties": false,
+      "description": "Not-copying section: what we deliberately don't take from others.",
+      "properties": {
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "what": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "what",
+              "why"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "notCopying"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionTable": {
+      "additionalProperties": false,
+      "description": "Table section: scrolls sideways on a phone; keep it small.",
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "table"
+        }
+      },
+      "required": [
+        "columns",
+        "rows",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionTerms": {
+      "additionalProperties": false,
+      "description": "Terms section: plain meanings of words the card can't avoid.",
+      "properties": {
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "meaning": {
+                "type": "string"
+              },
+              "term": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "meaning",
+              "term"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "terms"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionText": {
+      "additionalProperties": false,
+      "description": "Text section: plain sentences, no markup; a blank line starts a new paragraph.",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "text"
+        }
+      },
+      "required": [
+        "body",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionUnknown": {
+      "additionalProperties": true,
+      "description": "Catch-all for section types the page can't show yet; shown with their title, never dropped.",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "sectionUnknowns": {
+      "additionalProperties": false,
+      "description": "Unknowns section.",
+      "properties": {
+        "fold": {
+          "description": "True starts the section collapsed.",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short heading, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "unknowns"
+        }
+      },
+      "required": [
+        "items",
+        "type"
+      ],
+      "type": "object"
+    },
+    "sections": {
+      "description": "Ordered list of optional card sections. Unknown types validate via the catch-all.",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/sectionText"
+          },
+          {
+            "$ref": "#/$defs/sectionList"
+          },
+          {
+            "$ref": "#/$defs/sectionFacts"
+          },
+          {
+            "$ref": "#/$defs/sectionTable"
+          },
+          {
+            "$ref": "#/$defs/sectionCompare"
+          },
+          {
+            "$ref": "#/$defs/sectionNotCopying"
+          },
+          {
+            "$ref": "#/$defs/sectionUnknowns"
+          },
+          {
+            "$ref": "#/$defs/sectionTerms"
+          },
+          {
+            "$ref": "#/$defs/sectionCallout"
+          },
+          {
+            "$ref": "#/$defs/sectionLinks"
+          },
+          {
+            "$ref": "#/$defs/sectionMedia"
+          },
+          {
+            "$ref": "#/$defs/sectionUnknown"
+          }
+        ]
+      },
+      "type": "array"
+    },
+    "media": {
+      "additionalProperties": false,
+      "description": "One image or video in the writer's own folder. Images PNG, JPEG or WebP up to 2 MB; videos MP4 (H.264) or WebM up to 50 MB.",
+      "properties": {
+        "caption": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "image",
+            "video"
+          ],
+          "type": "string"
+        },
+        "label": {
+          "description": "Built or mockup, or null.",
+          "enum": [
+            "built",
+            "mockup",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "poster": {
+          "description": "Path of a still for a video, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "caption",
+        "kind",
+        "path"
+      ],
+      "type": "object"
+    },
+    "timestamp": {
+      "description": "ISO 8601 UTC, e.g. 2026-11-06T16:00:00Z.",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+      "type": "string"
+    }
+  },
+  "$id": "agent-reports/card@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One question for the owner. Size cap: 64 KB (see spec).",
+  "properties": {
+    "askedAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When the card was first asked."
+    },
+    "askedBy": {
+      "description": "Agent that asked, e.g. pm-fo-lead.",
+      "type": "string"
+    },
+    "batch": {
+      "description": "Batch id this card belongs to, if any.",
+      "type": "string"
+    },
+    "blocks": {
+      "description": "What waits on the answer, or null for nothing waits on this.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "evidence": {
+      "description": "Supporting evidence links.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "path"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "exception": {
+      "additionalProperties": false,
+      "description": "Rule of the owner this card loosens, or null. Shown before anything else.",
+      "properties": {
+        "rule": {
+          "description": "The owner's rule this loosens.",
+          "type": "string"
+        },
+        "text": {
+          "description": "How this card loosens it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "text"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "Card id: <writer>--<local id>, e.g. vm.pm-fo-lead--Q3.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Card kind. Omitted means question.",
+      "enum": [
+        "action",
+        "objection",
+        "question",
+        "judgement",
+        "sample"
+      ],
+      "type": "string"
+    },
+    "label": {
+      "description": "Short id the owner can quote; never reused or relabelled.",
+      "type": "string"
+    },
+    "multiple": {
+      "description": "Whether the owner may pick more than one option.",
+      "type": "boolean"
+    },
+    "neededBy": {
+      "additionalProperties": false,
+      "description": "Deadline for the answer, or null.",
+      "properties": {
+        "at": {
+          "description": "When the answer is needed by, or null when there is no date.",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ifNoAnswer": {
+          "description": "What happens or starts costing without an answer.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "ifNoAnswer"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "now": {
+      "description": "The situation today, in plain words.",
+      "type": "string"
+    },
+    "nowAsOf": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When the counts in now were true."
+    },
+    "oldAnswer": {
+      "additionalProperties": false,
+      "description": "Any earlier answer quoted because the premise moved, or null.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the earlier answer was given."
+        },
+        "text": {
+          "description": "The earlier answer.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "text"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "options": {
+      "description": "2 to 4 options, each with what the owner gets and what it costs.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "sections": {
+            "$ref": "#/$defs/sections",
+            "description": "Sections specific to this option."
+          },
+          "costs": {
+            "description": "What the option costs.",
+            "type": "string"
+          },
+          "gets": {
+            "description": "What the owner gets from the option.",
+            "type": "string"
+          },
+          "key": {
+            "description": "Option key, e.g. A.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Option label.",
+            "type": "string"
+          },
+          "media": {
+            "description": "Images or video for this option.",
+            "items": {
+              "$ref": "#/$defs/media"
+            },
+            "type": "array"
+          },
+          "stance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "keep",
+              "borrow",
+              "own",
+              null
+            ],
+            "description": "keep = the plan as written, borrow = take the outside approach, own = our own fix."
+          }
+        },
+        "required": [
+          "costs",
+          "gets",
+          "key",
+          "label"
+        ],
+        "type": "object"
+      },
+      "maxItems": 4,
+      "minItems": 2,
+      "type": "array"
+    },
+    "project": {
+      "description": "Project id, e.g. puppet-master.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "description": "Why the card was withdrawn, e.g. Settled by your note.",
+      "type": "string"
+    },
+    "recommendation": {
+      "additionalProperties": false,
+      "description": "The agent's recommended option, or null.",
+      "properties": {
+        "confidence": {
+          "description": "Recommendation confidence, or null.",
+          "enum": [
+            "high",
+            "low",
+            "medium",
+            null
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "flip": {
+          "description": "What would change this recommendation, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Recommended option key.",
+          "type": "string"
+        },
+        "why": {
+          "description": "Why this option is recommended.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "why"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "replies": {
+      "description": "The agent's replies to the owner's notes on this card.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "replyTo": {
+      "additionalProperties": false,
+      "description": "How to reach the asker.",
+      "properties": {
+        "pmMail": {
+          "description": "Asker's pm-mail name: lowercase letters, digits, - or _, and never all (the broadcast).",
+          "pattern": "^(?!all$)[a-z0-9][a-z0-9_-]{0,63}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "t3Thread": {
+          "description": "Asker's T3 thread id, or null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "pmMail",
+        "t3Thread"
+      ],
+      "type": "object"
+    },
+    "reversible": {
+      "additionalProperties": false,
+      "description": "Whether the decision is reversible, or null.",
+      "properties": {
+        "how": {
+          "type": "string"
+        },
+        "yes": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "how",
+        "yes"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "schema": {
+      "const": "agent-reports/card@1",
+      "description": "Schema id of this document."
+    },
+    "sections": {
+      "$ref": "#/$defs/sections",
+      "description": "Ordered list of optional card sections."
+    },
+    "seq": {
+      "description": "Increases on every write by this writer and never restarts: once the owner has answered seq N, a lower seq for this card is refused; to start over, use a higher seq or a new card id.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state": {
+      "description": "Card state. Answered comes only from answers/.",
+      "enum": [
+        "open",
+        "superseded",
+        "withdrawn"
+      ],
+      "type": "string"
+    },
+    "stream": {
+      "description": "Stream id within the project, e.g. F.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "supersededBy": {
+      "description": "Card id that supersedes this one.",
+      "type": "string"
+    },
+    "title": {
+      "description": "The question itself.",
+      "type": "string"
+    },
+    "urgency": {
+      "description": "How soon the answer is needed; the spec shows today.",
+      "type": "string"
+    },
+    "whatChanged": {
+      "description": "What changed since the earlier asking, or null.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "writer": {
+      "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-fo-lead.",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "type": "string"
+    },
+    "writtenAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When this version was written."
+    },
+    "verdict": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "A short badge for the card's proposed outcome (Scout: adopt, adapt, keep ours, reject). The deck can filter on it."
+    },
+    "group": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "A group within the batch (Scout: the capability), for grouping and per-group recommendations."
+    },
+    "agreement": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "same": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "Whether the models or judges that produced the recommendation agreed."
+    },
+    "doubt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "A reviewer's doubt about this card, in one line."
+    },
+    "appliesTo": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "description": "A rule card: one answer settles a whole class of items."
+    },
+    "changesCanon": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "what": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "what"
+        ]
+      },
+      "description": "Plans units or decisions the answer would reverse or change."
+    },
+    "related": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Ids of related cards."
+    }
+  },
+  "required": [
+    "askedAt",
+    "askedBy",
+    "id",
+    "label",
+    "now",
+    "nowAsOf",
+    "project",
+    "replyTo",
+    "schema",
+    "seq",
+    "state",
+    "stream",
+    "title",
+    "writer",
+    "writtenAt"
+  ],
+  "type": "object"
+}

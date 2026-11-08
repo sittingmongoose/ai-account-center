@@ -594,12 +594,14 @@ at most 60 seconds, then reported as `codex_busy` (see above). SSH proxies use v
 Mac/Windows desktop transports recreate `exec codex app-server proxy` after exit.
 The updater stops only captured proxies with SSH ancestry, then verifies old PIDs
 are gone and replacement proxies execute the updated active binary. Unknown
-unsupervised proxies yield an explicit restart failure. A private **version-only**
-pending-restart marker permits a subsequent explicit click to retry after timeout.
-For real desktop upgrades, the bridge verifies the requested candidate and a
-changed installed version before claiming success. An explicit pending-restart
-recovery may reuse the installed version without another upgrade. No account
-authentication is changed.
+unsupervised proxies yield an explicit restart failure. For the Codex CLI and its
+daemon nothing carries over between clicks: a failed or interrupted update reports
+failed with the installed version, and the next click is a fresh update (owner
+decision 2026-11-08; see the CLI section below). Only Codex Desktop keeps a private
+pending-restart record (the number of desktops owed a restart and the install
+target), which AAC's own relaunch clears. For real desktop upgrades, the bridge
+verifies the requested candidate and a changed installed version before claiming
+success. No account authentication is changed.
 
 An npm global Codex CLI (Codex CLI row above, as on Nas1) never takes this bridge: that host has
 no AAC shared daemon, and the bridge's stop/start runtime is built around the fixed

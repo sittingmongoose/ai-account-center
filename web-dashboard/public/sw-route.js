@@ -21,6 +21,13 @@
   var VERSIONED_PKG = /^\/pkg\/[a-f0-9]{12}\//;
   /** Never cached or intercepted: APIs, the usage hub, the socket, in any letter case. */
   var NEVER_CACHED = [/^\/api(\/|$)/, /^\/v0(\/|$)/, /^\/ws$/];
+  /**
+   * The Leptos pages the shell shows in its Status and Scoreboard iframes (/app/status, /app/scoreboard and
+   * their assets). They are not the dashboard shell: an /app page offline falls back only to its own cached
+   * copy, is never mirrored to the start URL, and never answers another navigation as "any shell" (each way
+   * would put one page inside the other).
+   */
+  var APP_PAGES = /^\/app(\/|$)/i;
   /** A navigation waits this long for the network before reading the cache. */
   var NAVIGATION_TIMEOUT_MS = 3000;
   /** The offline fallback answers navigations only when neither network nor cache has the shell. */
@@ -36,6 +43,11 @@
   function cacheName(buildId) {
     if (!BUILD_ID_PATTERN.test(buildId || '')) throw new Error('Invalid service worker build id.');
     return 'aac-shell-' + buildId;
+  }
+
+  /** Whether this pathname is one of the Leptos /app pages or their assets (never a dashboard shell). */
+  function isAppPage(pathname) {
+    return APP_PAGES.test(String(pathname || ''));
   }
 
   /** Whether this pathname must pass through untouched (compared in lower case). */
@@ -100,6 +112,7 @@
    */
   function navigationFallbackLookups(request) {
     if (route(request) !== 'network-first') return [];
+    if (isAppPage(request.pathname)) return [{ lookup: SAME_URL_IGNORE_SEARCH }];
     return [
       { lookup: SAME_URL_IGNORE_SEARCH },
       { lookup: START_URL, pathname: START_URL_PATHNAME },
@@ -120,6 +133,7 @@
     if (!request || request.isNavigation !== true) return false;
     if (!isHtmlDocument(response)) return false;
     if (route(request) !== 'network-first') return false;
+    if (isAppPage(request.pathname)) return false;
     return String(request.pathname || '/') !== START_URL_PATHNAME;
   }
 
@@ -145,6 +159,7 @@
     START_URL_PATHNAME: START_URL_PATHNAME,
     cacheName: cacheName,
     isNeverCached: isNeverCached,
+    isAppPage: isAppPage,
     route: route,
     navigationTimeoutMs: navigationTimeoutMs,
     cacheable: cacheable,

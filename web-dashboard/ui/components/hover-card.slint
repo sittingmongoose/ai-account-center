@@ -128,6 +128,12 @@ export component HoverLayer inherits Rectangle {
     in property <length> view-h;
 
     property <bool> shown: false;
+    // Where the card is, for the shell's iframe (a hover card over the Status page cuts through it).
+    out property <bool> card-shown: root.shown && card.visible;
+    out property <length> card-x: card.x;
+    out property <length> card-y: card.y;
+    out property <length> card-width: card.width;
+    out property <length> card-height: card.height;
     // Touch clamps the card inside the gutters and safe areas; D keeps the 8 px edges.
     property <length> edge-l: Breakpoints.tier-d ? 8px : Breakpoints.gutter + Device.safe-left;
     property <length> edge-r: Breakpoints.tier-d ? 8px : Breakpoints.gutter + Device.safe-right;

@@ -156,7 +156,8 @@ function anyCachedShell() {
           } catch {
             return false;
           }
-          return keyUrl.origin === self.location.origin;
+          // the /app pages (the Status iframe's Leptos pages) are documents too, never the shell
+          return keyUrl.origin === self.location.origin && !AacSwRoute.isAppPage(keyUrl.pathname);
         });
         var chain = Promise.resolve(undefined);
         documents.forEach(function (key) {

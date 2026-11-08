@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1349,
-    "filesAffected": 134,
-    "hotpathOccurrences": 698,
-    "hotpathFilesAffected": 79,
+    "totalOccurrences": 1400,
+    "filesAffected": 138,
+    "hotpathOccurrences": 749,
+    "hotpathFilesAffected": 83,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -124,6 +124,43 @@
         "markers": []
       },
       {
+        "file": "src/web-server/status/answer-signing.ts",
+        "count": 18,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "fsyncSync",
+          "linkSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "renameSync",
+          "rmSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/status/writer-lock.ts",
+        "count": 18,
+        "calls": [
+          "closeSync",
+          "fsyncSync",
+          "mkdirSync",
+          "openSync",
+          "readFileSync",
+          "rmSync",
+          "statSync",
+          "unlinkSync",
+          "utimesSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/cliproxy/accounts/registry.ts",
         "count": 17,
         "calls": [
@@ -132,38 +169,6 @@
           "readFileSync",
           "renameSync",
           "statSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/web-server/services/app-update-service.ts",
-        "count": 17,
-        "calls": [
-          "chmodSync",
-          "closeSync",
-          "mkdirSync",
-          "openSync",
-          "readFileSync",
-          "renameSync",
-          "statSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/management/shared-manager/shared-dir-linker.ts",
-        "count": 16,
-        "calls": [
-          "copyFileSync",
-          "existsSync",
-          "lstatSync",
-          "mkdirSync",
-          "readlinkSync",
-          "rmSync",
-          "symlinkSync",
-          "unlinkSync",
           "writeFileSync"
         ],
         "markers": []
@@ -536,16 +541,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 705,
-      "typedThrows": 195,
+      "totalThrows": 744,
+      "typedThrows": 212,
       "plainThrows": 72,
-      "otherThrows": 438,
-      "adoptionRatio": 0.2766,
+      "otherThrows": 460,
+      "adoptionRatio": 0.2849,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 342,
-          "typed": 130,
+          "count": 381,
+          "typed": 147,
           "plain": 10
         },
         {
@@ -617,9 +622,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 42,
-      "totalSourceFiles": 456,
-      "coverageRatio": 0.0921,
+      "filesWithCreateLogger": 44,
+      "totalSourceFiles": 490,
+      "coverageRatio": 0.0898,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -646,8 +651,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 184,
-          "withLogger": 26
+          "count": 218,
+          "withLogger": 28
         },
         {
           "subdomain": "utils",
@@ -765,12 +770,16 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 62,
-      "countOver600": 24,
+      "countOver400": 71,
+      "countOver600": 28,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
           "loc": 3724
+        },
+        {
+          "file": "src/web-server/status/answers.ts",
+          "loc": 1737
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
@@ -801,6 +810,10 @@
           "loc": 938
         },
         {
+          "file": "src/web-server/status/status-collectors.ts",
+          "loc": 932
+        },
+        {
           "file": "src/web-server/services/analytics-remote-sources.ts",
           "loc": 918
         },
@@ -819,14 +832,6 @@
         {
           "file": "src/web-server/usage/native-quota-collector.ts",
           "loc": 848
-        },
-        {
-          "file": "src/auth/profile-detector.ts",
-          "loc": 767
-        },
-        {
-          "file": "src/web-server/usage/aggregator.ts",
-          "loc": 767
         }
       ]
     }

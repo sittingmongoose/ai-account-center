@@ -93,6 +93,8 @@ component Header inherits Rectangle {
     callback update-apps();
     callback theme-picked(int);
     callback sign-out();
+    // A header menu is open: the Status iframe steps aside so a click outside the menu reaches it.
+    out property <bool> menu-open: theme-pop.is-open || account-pop.is-open;
 
     height: 62px;
     background: Theme.paper;
@@ -140,7 +142,14 @@ component Header inherits Rectangle {
         VerticalLayout {
             alignment: center;
             horizontal-stretch: 0;
-            NavBar { page: root.page; navigate(p) => { root.navigate(p); } }
+            NavBar {
+                page: root.page;
+                // The bar less its paddings, the brand, the controls and the three gaps. The status line counts
+                // as a fixed 220 px, so a changing "Updated 2m ago" never re-fits the tabs.
+                max-w: bar.width - 2 * Breakpoints.gutter - brand-row.preferred-width
+                    - (right.preferred-width - status.min-width + 220px) - 3 * (Breakpoints.compact ? 16px : 24px);
+                navigate(p) => { root.navigate(p); }
+            }
         }
         Rectangle { horizontal-stretch: 1; }
         // the concept's .chrome-right: the status line and the controls 8 px apart (the bar keeps 24 px between
@@ -445,6 +454,49 @@ export component Dashboard inherits Window {
     // conditional and cannot be referenced from outside its `if`.
     property <bool> tab-bar-shown: Breakpoints.tier-p && !Breakpoints.short && Device.keyboard == 0px;
     property <length> tab-bar-h: tab-bar-shown ? 52px + max(Device.safe-bottom, 8px) : 0px;
+
+    // ---------- the Status and Scoreboard iframe (docs/status-tab.md, Shell iframe) ----------
+    // Those pages are Leptos pages that bridge.js shows in an iframe over the canvas; the shell draws only the
+    // background under it. `content-rect` is the content area in CSS px ("x,y,w,h"): below the header, above the
+    // tab bar, the keyboard and the bottom safe area, inside the side safe areas. `content-cover` says what the
+    // canvas draws over that area: "all" while a menu, sheet, dialog or Details is open (the iframe hides, so a
+    // click outside the overlay reaches the canvas), else the toast stack and the hover card as "x,y,w,h" rects
+    // joined by ";" (the iframe is cut around them), or "". Both are sent when they change; the cover is "" away
+    // from those pages.
+    property <bool> frame-page: root.current-page == "status" || root.current-page == "scoreboard";
+    property <bool> desk-menu: false;
+    property <length> frame-bottom: max(root.tab-bar-h, max(Device.keyboard, Device.safe-bottom));
+    out property <string> content-rect: (Device.safe-left / 1px) + "," + (root.chrome-h / 1px) + ","
+        + (max(0px, root.width - Device.safe-left - Device.safe-right) / 1px) + ","
+        + (max(0px, root.height - root.chrome-h - root.frame-bottom) / 1px);
+    property <bool> frame-covered: root.pop != 0 || root.account-sheet || root.confirmation.open || root.details-open
+        || Overlays.pops > 0 || (Breakpoints.tier-d && root.desk-menu);
+    // shadows reach past the boxes: the cut keeps 16 px around toasts and 12 px around the hover card
+    property <string> toast-cut: root.toasts.length > 0 && toast-stack.height > 0px
+        ? ((toast-stack.x - 16px) / 1px) + "," + ((toast-stack.y - 16px) / 1px) + "," + ((toast-stack.width + 32px) / 1px) + ","
+            + ((toast-stack.height + 32px) / 1px) : "";
+    property <string> tip-cut: hover-layer.card-shown
+        ? ((hover-layer.card-x - 12px) / 1px) + "," + ((hover-layer.card-y - 12px) / 1px) + ","
+            + ((hover-layer.card-width + 24px) / 1px) + "," + ((hover-layer.card-height + 24px) / 1px) : "";
+    out property <string> content-cover: !root.frame-page ? "" : root.frame-covered ? "all"
+        : root.toast-cut + (root.toast-cut != "" && root.tip-cut != "" ? ";" : "") + root.tip-cut;
+    changed content-rect => { root.action("content-rect", self.content-rect); }
+    // bridge.js asks as well (lib.rs report_content_area): a push alone was seen to go missing on some loads.
+    public function report-content() {
+        root.action("content-rect", root.content-rect);
+        root.action("content-cover", root.content-cover);
+    }
+    changed content-cover => { root.action("content-cover", self.content-cover); }
+    // The first report: `changed` fires only on a change, and the bridge needs the rect before any.
+    frame-report := Timer {
+        interval: 50ms;
+        running: true;
+        triggered => {
+            self.running = false;
+            root.action("content-rect", root.content-rect);
+            root.action("content-cover", root.content-cover);
+        }
+    }
 
     // A focused page field stays in the band between the chrome and the on-screen keyboard (2.5), 12 px
     // clear of each: on focus and whenever the keyboard's height changes. The pages' bottom padding already
@@ -751,6 +803,7 @@ export component Dashboard inherits Window {
                 root.action("theme", mode == 1 ? "light" : mode == 2 ? "dark" : "auto");
             }
             sign-out() => { root.action("logout", ""); }
+            changed menu-open => { root.desk-menu = self.menu-open; }
         }
         if !Breakpoints.tier-d: MobileHeader {
             x: 0px;
@@ -1074,7 +1127,7 @@ export component Dashboard inherits Window {
             }
         }
 
-        ToastStack {
+        toast-stack := ToastStack {
             // P: full width above the tab bar (or the keyboard); F/T and short: bottom right;
             // D: exactly today's spot, stepping aside for the slide-over.
             card-w: Breakpoints.tier-p && !Breakpoints.short ? min(480px, root.width - 24px - Device.safe-left - Device.safe-right)
@@ -1091,7 +1144,7 @@ export component Dashboard inherits Window {
             dismissed(id) => { root.toast-dismissed(id); }
         }
 
-        HoverLayer {
+        hover-layer := HoverLayer {
             width: root.width;
             height: root.height;
             view-w: root.width;

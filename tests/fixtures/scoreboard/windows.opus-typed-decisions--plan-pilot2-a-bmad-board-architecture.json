@@ -1,0 +1,76 @@
+{
+ "schema": "agent-reports/run@1",
+ "id": "windows.opus-typed-decisions--plan-pilot2-a-bmad-board-architecture",
+ "writer": "windows.opus-typed-decisions",
+ "seq": 34,
+ "writtenAt": "2026-11-06T18:13:32Z",
+ "source": "benchmark",
+ "benchmark": "plan-pilot2",
+ "project": "puppet-master",
+ "stream": null,
+ "task": {
+  "id": "bmad-board-architecture",
+  "type": "plan",
+  "title": "Reading A: section extraction (INSTRUCTIONS-A): bmad-board-architecture (aispec)",
+  "size": {
+   "words": 1429
+  }
+ },
+ "model": {
+  "id": "openai/gpt-6.1-sol",
+  "provider": "openai",
+  "harness": "codex",
+  "effort": "medium",
+  "account": "account-a"
+ },
+ "startedAt": null,
+ "endedAt": "2026-10-31T02:01:44Z",
+ "outcome": "done",
+ "cost": {
+  "usd": null,
+  "credits": null,
+  "quota": null,
+  "tokens": {
+   "in": null,
+   "out": null,
+   "cached": null
+  }
+ },
+ "scope": {},
+ "process": {
+  "id": "a",
+  "version": "consult5-pilot2/run_a2.py",
+  "sha256": "7bc56da63d2226032c03b38e27ca59af6469e7b3fcdf9e42af2294fb5ee5c43f"
+ },
+ "metrics": {
+  "modelSeconds": 66.9,
+  "calls": 1,
+  "modelSecondsPer1kWords": 52.3,
+  "singleRun": 1,
+  "answerKeyFinal": 0,
+  "obligations": 77,
+  "unaccountedPieces": 0,
+  "goldAgreed": 66,
+  "right": 62,
+  "rightFlagged": 0,
+  "wrongFlagged": 0,
+  "silent": 4,
+  "silentRate": 0.0606,
+  "configModelSecondsPer1kWords": 52.3
+ },
+ "imported": {
+  "from": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\runs\\a\\bmad-board-architecture.json",
+  "at": "2026-11-06T18:13:32Z"
+ },
+ "evidence": [
+  {
+   "label": "pilot-2 results (preliminary, before the owner's cards)",
+   "path": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\RESULTS.md"
+  },
+  {
+   "label": "preregistration and amendments",
+   "path": "\\\\TRUENAS\\Cursor\\archive\\PM-Experiments\\conv11-20261027\\consult5\\pilot2\\PREREG.md"
+  }
+ ],
+ "wallSeconds": 68
+}

@@ -44,18 +44,19 @@ export function isApiRequestPath(requestPath: string): boolean {
 }
 
 /**
- * `/api/accounts` and `/api/auth` and below, in any letter case
- * (CONTRACT-registry-lifecycle section 1, CONTRACT-auth-devices section 2).
+ * `/api/accounts`, `/api/auth`, `/api/status` and `/api/scoreboard` and below, in any letter case
+ * (CONTRACT-registry-lifecycle section 1, CONTRACT-auth-devices section 2, docs/status-tab.md and
+ * docs/scoreboard.md).
  */
 function isCodedApiPath(requestPath: string): boolean {
   const pathLower = requestPath.toLowerCase();
-  return ['/api/accounts', '/api/auth'].some(
+  return ['/api/accounts', '/api/auth', '/api/status', '/api/scoreboard'].some(
     (prefix) => pathLower === prefix || pathLower.startsWith(`${prefix}/`)
   );
 }
 
 /**
- * A 401 is never cached. Under /api/accounts and /api/auth it also carries the
+ * A 401 is never cached. Under the coded API paths above it also carries the
  * stable code `auth_required`; elsewhere the body stays as it was.
  * `fullPath` is the request path including the /api mount.
  */
