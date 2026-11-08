@@ -302,7 +302,7 @@ export function createUsageHubRouter(deps: UsageHubRouterDeps = {}): Router {
     );
   });
 
-  router.all('*', (_req: Request, res: Response) => {
+  router.all('/{*splat}', (_req: Request, res: Response) => {
     refuse(
       res,
       404,

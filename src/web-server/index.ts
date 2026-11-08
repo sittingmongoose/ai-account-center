@@ -129,6 +129,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const app = express();
   // Routes answer only to their canonical spelling; set before the first app.use.
   app.set('case sensitive routing', true);
+  // Express 5 defaults to the simple query parser. Keep the Express 4 parser so
+  // repeated and bracketed query keys stay the same shape.
+  app.set('query parser', 'extended');
   // The stack's name and version in every answer help no legitimate client.
   app.disable('x-powered-by');
   // Trusted TLS proxy hop (off unless dashboard_tls.trusted_proxy is set).
@@ -231,7 +234,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     })
   );
   // Slint owns the account dashboard and login state; no React portal is served.
-  app.get('*', pageRouteHandler(staticUi, new Set(DASHBOARD_PROVIDER_IDS)));
+  app.get('/{*splat}', pageRouteHandler(staticUi, new Set(DASHBOARD_PROVIDER_IDS)));
   // Last: whatever failed above answers in JSON, never with a stack trace.
   app.use(
     (

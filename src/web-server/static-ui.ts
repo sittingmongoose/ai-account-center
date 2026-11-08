@@ -407,7 +407,7 @@ export function resolvePageRoute(
   return { kind: 'redirect', status: 302, location: '/' };
 }
 
-/** The app.get('*') fallback: page routes get index.html, the rest are redirected. */
+/** The app.get('/{*splat}') fallback: page routes get index.html, the rest are redirected. */
 export function pageRouteHandler(ui: StaticUi, providerIds: ReadonlySet<string>): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
     const appPath =
