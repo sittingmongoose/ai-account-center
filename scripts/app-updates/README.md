@@ -753,8 +753,13 @@ old binary during the install, so a helper killed then still leaves it. The earl
 exactly if the update changes nothing, including an updater that fails or installs the wrong version
 while the installed version stays put, or an updater that fails with no daemon running afterwards; and
 `stop()`'s plan, made under the startup lock, settles it once the app is replaced. A plan that finds no
-daemon puts the earlier marker back. A busy run, or a `stop()` that fails before making its plan, keeps
-it: the next click checks the daemon, at worst with one `restart_not_running`. A retry that leaves anything owed is `restart_failed` with
+daemon puts the earlier marker back. A busy run, a `stop()` that fails before making its plan, or a
+helper killed during the install keeps it: the next click checks the daemon, and with no daemon ever
+running that costs one false `restart_not_running` ("Codex did not restart"). `update_cli` follows the
+same rule when no app server runs at its first scan and it runs the installer itself: on Ubuntu, for a
+native install with `~/.local/bin/codex`, it names the daemon first, and after the install it hands over
+to the bridge if an app server (a daemon or a proxy) now runs this install or the binary it replaced;
+otherwise the earlier marker comes back exactly. An installer that fails and changes nothing owes nothing. A retry that leaves anything owed is `restart_failed` with
 `restart_not_running`: any desktop an earlier run closed, and an owed daemon that does not pass
 `start()`'s own bounded readiness check. The
 daemon found afterwards must be the one that passed, by pid and start time, or it is checked itself. A first

@@ -502,6 +502,99 @@ class UpdaterTests(unittest.TestCase):
             expected = ["--user-data-dir=" + folder] if folder else []
             self.assertEqual((argv, desktop_arguments(mock.Mock(args=argv, cwd="/fixture"), "linux")), (argv, expected))
 
+    def _ordinary_codex_click(self, arrive=False, fail=False, earlier=None, manager='native', binary=True):
+        """Python's own update_cli path for a native Ubuntu Codex: no app-server at its first scan."""
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            releases = home / '.codex/packages/standalone/releases'
+            for value in ('1.0.0', '2.0.0'):
+                (releases / value).mkdir(parents=True)
+                (releases / value / 'codex').write_text('')
+            path = home / '.local/bin/codex'
+            path.parent.mkdir(parents=True)
+            if binary:
+                path.symlink_to(releases / '1.0.0' / 'codex')
+            else:
+                path = releases / '1.0.0' / 'codex'
+            pending = home / '.ccs/app-updates/codex-cli-pending-restart.json'
+            if earlier is not None:
+                pending.parent.mkdir(parents=True)
+                pending.write_bytes(earlier)
+            inventory, seen, bridged = [], {}, []
+            installed = {'version': '1.0.0'}
+            uid = os.getuid()
+            old = str(releases / '1.0.0' / 'codex')
+
+            def perform(install, deadline=None):
+                seen['during'] = pending.read_bytes() if pending.exists() else None
+                if arrive:
+                    # A Mac or Windows Codex app connects: its proxy starts a daemon on the old binary.
+                    inventory.append(processes.Process(15, 1, uid, old, '15', [old, 'app-server', 'proxy']))
+                    inventory.append(processes.Process(20, 1, uid, old, '20', [old, 'app-server', '--listen', 'unix://']))
+                if fail:
+                    raise common.UpdateFailure('update_failed')
+                if binary:
+                    path.unlink()
+                    path.symlink_to(releases / '2.0.0' / 'codex')
+                installed['version'] = '2.0.0'
+
+            def detect(app, platform):
+                seen.setdefault('after', pending.read_bytes() if pending.exists() else None)
+                return common.Install('codex-cli', 'ubuntu', path, installed['version'], manager)
+
+            def run(argv, **kwargs):
+                bridged.append([str(item) for item in argv])
+                return json.dumps({'appId': 'codex-cli', 'platform': 'ubuntu', 'status': 'updated', 'previousVersion': '2.0.0',
+                                   'version': '2.0.0', 'manager': 'native', 'messageCode': 'updated', 'updateAttempted': True,
+                                   'restartedProcesses': 1, 'forcedStops': 0})
+
+            install = common.Install('codex-cli', 'ubuntu', path, '1.0.0', manager)
+            with mock.patch.object(pathlib.Path, 'home', return_value=home), \
+                    mock.patch.object(updater, 'scan', side_effect=lambda platform: list(inventory)), \
+                    mock.patch.object(updater, 'command', side_effect=run), \
+                    mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
+                    mock.patch.object(updater, 'cli_instances', return_value=([], [], [])), \
+                    mock.patch.object(updater, 'check_terminal'), \
+                    mock.patch.object(updater, 'perform_cli_update', side_effect=perform), \
+                    mock.patch.object(updater, 'detect_cli', side_effect=detect), \
+                    mock.patch.object(updater, 'restart_cli', return_value=[]), \
+                    mock.patch.object(updater, 'terminate_cli', return_value=0):
+                value = updater.update_cli(install, time.monotonic() + 600)
+            seen['final'] = pending.read_bytes() if pending.exists() else None
+            return value, seen, bridged
+
+    def test_python_cli_install_names_the_daemon_and_hands_an_arrival_to_the_bridge(self):
+        value, seen, bridged = self._ordinary_codex_click(arrive=True)
+        # The daemon was named before the installer ran, whatever ran then.
+        self.assertTrue(json.loads(seen['during'])['daemon'])
+        # A proxy and a daemon on the old binary appeared during the install: the bridge restarts them.
+        self.assertEqual(len(bridged), 1)
+        self.assertTrue(bridged[0][1].endswith('app_update_codex.cjs'))
+        self.assertEqual((value['status'], value['previousVersion'], value['version']), ('updated', '1.0.0', '2.0.0'))
+
+    def test_python_cli_install_puts_the_earlier_marker_back_when_nothing_arrived(self):
+        for earlier in (None, b'{"version": "0.9.0"}'):
+            with self.subTest(earlier=earlier):
+                value, seen, bridged = self._ordinary_codex_click(earlier=earlier)
+                self.assertTrue(json.loads(seen['during'])['daemon'])
+                self.assertEqual(bridged, [])
+                self.assertEqual(seen['after'], earlier)
+                self.assertEqual(value['status'], 'updated')
+
+    def test_python_cli_install_that_fails_and_changes_nothing_owes_nothing(self):
+        for earlier in (None, b'{"version": "0.9.0"}'):
+            with self.subTest(earlier=earlier):
+                value, seen, bridged = self._ordinary_codex_click(fail=True, earlier=earlier)
+                self.assertEqual(value['status'], 'failed')
+                self.assertEqual(bridged, [])
+                self.assertEqual(seen['final'], earlier)
+
+    def test_python_cli_install_names_no_daemon_where_there_is_no_shared_one(self):
+        for options in ({'manager': 'npm'}, {'binary': False}):
+            with self.subTest(**options):
+                value, seen, bridged = self._ordinary_codex_click(**options)
+                self.assertIsNone(seen['during'])
+
     def test_desktop_arguments_take_the_folder_chromium_takes(self):
         from app_update_processes import desktop_arguments
         cases = {
