@@ -128,15 +128,19 @@ export function machineView(inputs: StatusInputs, id: MachineId, browsers: Sourc
     state = 'stale';
     detail = `No new reading since ${clockText(collected.asOf, timeZone)}.`;
   }
-  // A disk read that failed while CPU and memory were read: the machine is not current as a whole.
-  const diskProblem = collected.problems?.find((problem) => problem.item === 'disk') ?? null;
-  if (diskProblem) {
+  // A part (disk, memory) that failed while the rest was read: the machine is not current as a whole.
+  for (const [item, label, at, held] of [
+    ['disk', 'Disk', sample?.diskReadAt, Boolean(sample?.disk)],
+    ['memory', 'Memory', sample?.memoryReadAt, typeof sample?.memAvailableBytes === 'number'],
+  ] as const) {
+    const problem = collected.problems?.find((p) => p.item === item);
+    if (!problem) continue;
     if (state === 'ok') state = 'stale';
     const kept =
-      sample?.disk && sample.diskReadAt !== null && sample.diskReadAt !== undefined
-        ? ` Showing the disk reading from ${clockText(sample.diskReadAt, timeZone)}.`
-        : ' No earlier disk reading.';
-    const words = `Disk: ${diskProblem.reason.replace(/\.$/, '')} (since ${clockText(diskProblem.since, timeZone)}).${kept}`;
+      held && at !== null && at !== undefined
+        ? ` Showing the ${item} reading from ${clockText(at, timeZone)}.`
+        : ` No earlier ${item} reading.`;
+    const words = `${label}: ${problem.reason.replace(/\.$/, '')} (since ${clockText(problem.since, timeZone)}).${kept}`;
     detail = detail ? `${detail} ${words}` : words;
   }
   const browser = (inputs.browsers.data ?? []).find((row) => row.machine === id) ?? null;

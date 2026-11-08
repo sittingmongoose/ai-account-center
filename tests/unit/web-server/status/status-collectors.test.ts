@@ -257,6 +257,15 @@ describe('status collectors', () => {
     expect(noDisk?.disk).toBeNull();
     expect(noDisk?.diskError).toBe('The machine did not report its system disk.');
     expect(linux?.diskError).toBeUndefined();
+    expect(noDisk?.memoryError).toBeUndefined();
+    for (const machine of [linux, mac, windows]) expect(machine?.memoryError).toBeUndefined();
+    const noMemory = parseMachineProbe(
+      'windows',
+      'cores=32\r\ndiskTotalB=100\r\ndiskFreeB=50\r\nmount=C:\r\n'
+    );
+    expect(noMemory?.memAvailableBytes).toBeNull();
+    expect(noMemory?.memoryError).toBe('The machine did not report its memory.');
+    expect(noMemory?.diskError).toBeUndefined();
     expect(machineProbeCommand('windows')).toStartWith(
       'powershell.exe -NoProfile -NonInteractive -EncodedCommand '
     );

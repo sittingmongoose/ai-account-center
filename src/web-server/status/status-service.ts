@@ -300,24 +300,26 @@ export class StatusService {
           ...sample,
           busyPct: busy ?? sample.busyPct,
           diskReadAt: sample.disk ? now : null,
+          memoryReadAt: sample.memoryError ? null : now,
         };
-        if (sample.disk || !sample.diskError) {
-          this.machines[id] = succeeded(data, now);
-          return;
+        // A part (disk, memory) that failed while the rest was read: keep its earlier reading with
+        // its own time, and name the failure on the machine until that part reads again.
+        const problems: ReadProblem[] = [];
+        const earlier = (item: string) => held.problems?.find((problem) => problem.item === item);
+        if (!sample.disk && sample.diskError) {
+          data.disk = before?.disk ?? null;
+          data.diskReadAt = before?.disk ? (before.diskReadAt ?? held.asOf) : null;
+          problems.push(nextProblem(earlier('disk'), 'disk', sample.diskError, now));
         }
-        // CPU and memory are this read's; the disk is not. Keep the earlier disk reading with its
-        // own time, and name the failure on the machine until a disk read works again.
-        const earlier = held.problems?.find((problem) => problem.item === 'disk');
-        this.machines[id] = {
-          data: {
-            ...data,
-            disk: before?.disk ?? null,
-            diskReadAt: before?.disk ? (before.diskReadAt ?? held.asOf) : null,
-          },
-          asOf: now,
-          error: null,
-          problems: [nextProblem(earlier, 'disk', sample.diskError, now)],
-        };
+        if (sample.memoryError) {
+          // The held reading already carries the last good memory forward, with its time.
+          data.memAvailableBytes = before?.memAvailableBytes ?? null;
+          data.memTotalBytes = before?.memTotalBytes ?? null;
+          data.memoryReadAt = before?.memoryReadAt ?? null;
+          problems.push(nextProblem(earlier('memory'), 'memory', sample.memoryError, now));
+        }
+        this.machines[id] =
+          problems.length === 0 ? succeeded(data, now) : { data, asOf: now, error: null, problems };
       } catch (error) {
         this.machines[id] = failed(
           this.machines[id],

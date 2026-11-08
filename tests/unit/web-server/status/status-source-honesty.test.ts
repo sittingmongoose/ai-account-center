@@ -47,6 +47,8 @@ function setup(options: { registryDir?: string } = {}) {
     windows: false,
     /** The machine read's system disk: plenty free, under the 50 GB floor, or a failed read. */
     disk: 'ok' as 'ok' | 'low' | 'error',
+    /** The machine read's memory: plenty, under the 6 GB floor, or left out of the answer. */
+    memory: 'ok' as 'ok' | 'low' | 'missing',
   };
   const registryReader = {
     scan: async () => {
@@ -69,8 +71,9 @@ function setup(options: { registryDir?: string } = {}) {
     cores: 8,
     load1: 1,
     busyPct: 12,
-    memAvailableBytes: 16 * GIB,
-    memTotalBytes: 32 * GIB,
+    memAvailableBytes: fail.memory === 'missing' ? null : (fail.memory === 'low' ? 4 : 16) * GIB,
+    memTotalBytes: fail.memory === 'missing' ? null : 32 * GIB,
+    ...(fail.memory === 'missing' ? { memoryError: 'The machine did not report its memory.' } : {}),
     disk:
       fail.disk === 'error'
         ? null
@@ -243,6 +246,60 @@ describe('secondary sources on their panels', () => {
     expect(vm.detail).toBeNull();
     expect(vm.disk).toEqual([{ mount: '/', freeGb: 200, totalGb: 500 }]);
     expect(vm.warnings).toEqual([]);
+  });
+
+  it('a reading without its memory keeps the earlier memory, named, and the machine is not current', async () => {
+    const { service, clock, fail } = setup();
+    fail.memory = 'low';
+    await warm(service);
+    let vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('ok');
+    expect(vm.warnings).toEqual(['Memory 4.0 GB available, under the 6 GB floor']);
+
+    fail.memory = 'missing';
+    for (const step of [1, 2]) {
+      clock.now += 60_000;
+      await service.collect();
+      vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+      expect({ step, state: vm.state }).toEqual({ step, state: 'stale' });
+      expect(vm.detail).toBe(
+        'Memory: The machine did not report its memory (since 10:01 AM). Showing the memory reading from 10:00 AM.'
+      );
+      expect(vm.memory).toEqual({ availableGb: 4, totalGb: 32 });
+      expect(vm.disk).toEqual([{ mount: '/', freeGb: 200, totalGb: 500 }]);
+      expect(vm.warnings).toEqual(['Memory 4.0 GB available, under the 6 GB floor']);
+    }
+    // Both parts failing at once: each named with its own time.
+    fail.disk = 'error';
+    clock.now += 60_000;
+    await service.collect();
+    vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.detail).toBe(
+      'Disk: The system disk could not be read (since 10:03 AM). Showing the disk reading from 10:02 AM. ' +
+        'Memory: The machine did not report its memory (since 10:01 AM). Showing the memory reading from 10:00 AM.'
+    );
+
+    fail.memory = 'ok';
+    fail.disk = 'ok';
+    clock.now += 60_000;
+    await service.collect();
+    vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('ok');
+    expect(vm.detail).toBeNull();
+    expect(vm.memory).toEqual({ availableGb: 16, totalGb: 32 });
+  });
+
+  it('a memory that never read well is named, never shown as a reading', async () => {
+    const { service, fail } = setup();
+    fail.memory = 'missing';
+    await warm(service);
+    const vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('stale');
+    expect(vm.memory).toEqual({ availableGb: null, totalGb: null });
+    expect(vm.warnings).toEqual([]);
+    expect(vm.detail).toBe(
+      'Memory: The machine did not report its memory (since 10:00 AM). No earlier memory reading.'
+    );
   });
 
   it('a disk that never read well is named as failed, never shown as a reading', async () => {

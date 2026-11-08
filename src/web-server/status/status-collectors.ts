@@ -646,6 +646,10 @@ export interface MachineSample {
    * read failed and the service kept the earlier disk reading.
    */
   diskReadAt?: number | null;
+  /** The same for memory: why it was not reported this time, in fixed words. */
+  memoryError?: string;
+  /** Set by the service: when the memory numbers were read (epoch ms). */
+  memoryReadAt?: number | null;
   /** /proc/stat totals, for the busy percent between two readings. */
   cpuTimes: { busy: number; total: number } | null;
 }
@@ -746,8 +750,11 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
           totalBytes: diskTotal,
         }
       : null,
-    // Every probe prints the system disk: an answer without it is a partial reading, not "no disk".
+    // Every probe prints the system disk and memory: an answer without one is a partial reading.
     ...(diskRead ? {} : { diskError: 'The machine did not report its system disk.' }),
+    ...(memTotal !== null && memAvail !== null
+      ? {}
+      : { memoryError: 'The machine did not report its memory.' }),
     cpuTimes: hostOs === 'linux' ? linuxCpuTimes(values.get('cpu')) : null,
   };
 }
