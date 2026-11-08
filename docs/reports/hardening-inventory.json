@@ -798,12 +798,12 @@
           "loc": 1104
         },
         {
-          "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
-          "loc": 995
-        },
-        {
           "file": "src/web-server/services/usage-failover-service.ts",
           "loc": 993
+        },
+        {
+          "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
+          "loc": 990
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
@@ -811,7 +811,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 932
+          "loc": 931
         },
         {
           "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
