@@ -294,9 +294,9 @@ describe('Codex Desktop update retry on the real runtime', () => {
           return;
         }
         fake.inject(
-          processFixture(pid, [helper === 'node' ? '/usr/bin/node' : exe, '/fixture/helper.js'], {
+          processFixture(pid, [helper === 'node' ? '/fixture/bin/node' : exe, '/fixture/helper.js'], {
             ppid: mainPid,
-            exe: helper === 'node' ? '/usr/bin/node' : exe,
+            exe: helper === 'node' ? '/fixture/bin/node' : exe,
             env: { HOME: '/fixture', DISPLAY: ':8', ELECTRON_RUN_AS_NODE: '1' },
           })
         );
