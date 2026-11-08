@@ -2,13 +2,32 @@ import { AntigravityError } from './errors';
 import type { AntigravitySwitchDriver, StopReceipt } from './types';
 import { checkedPlan, planFingerprint } from './confirmation';
 import { AntigravityProfileRegistry, credentialFingerprint, identityKey } from './registry';
+import type { RuntimeSocketState } from './runtime-socket-probe';
 
 export interface ManagedNativeUpdate {
   version(): Promise<string>;
   backup(): Promise<void>;
   update(): Promise<void>;
+  /**
+   * Synchronously compares the selected/backed-up native identity and digest.
+   * quick compares one stat of the native file only (no hash), for the last
+   * check before update. The paused path refuses a native without this method.
+   */
+  unchangedSinceBackup?(quick?: boolean): boolean;
   /** Refuses every native executable replacement not owned by this update. */
   rollback(): Promise<boolean>;
+}
+
+export type NativeReviewState = 'reviewed' | 'unreviewed' | 'unknown';
+
+export interface ManagedUpdateResult {
+  status: 'current' | 'updated' | 'failed' | 'restart_failed' | 'in_use';
+  previousVersion: string;
+  version: string;
+  restartedProcesses: number;
+  updateAttempted: boolean;
+  /** Set only by the paused-runtime path (updatePausedAntigravity). */
+  runtimePaused?: true;
 }
 
 /**
@@ -24,13 +43,7 @@ export async function updateManagedAntigravity(deps: {
   native: ManagedNativeUpdate;
   idleOnly?: boolean;
   now?: () => number;
-}): Promise<{
-  status: 'current' | 'updated' | 'failed' | 'restart_failed' | 'in_use';
-  previousVersion: string;
-  version: string;
-  restartedProcesses: number;
-  updateAttempted: boolean;
-}> {
+}): Promise<ManagedUpdateResult> {
   const { driver, registry, native } = deps;
   const before = await native.version();
   return registry.withLock(async () => {
@@ -193,5 +206,107 @@ export async function updateManagedAntigravity(deps: {
         return { ...failed, status: 'restart_failed', updateAttempted: updated };
       }
     }
+  });
+}
+
+/**
+ * The managed update while switching is paused: the installed native build
+ * has no switching review, so the resident runtime refuses to start and holds
+ * no managed session. Like Antigravity's own updater, it replaces the native
+ * without checking for running copies; those keep their old binary until restart.
+ * The native is backed up and `agy update` runs under the account lock.
+ * Failures carry runtimePaused, so the row can say why.
+ */
+export async function updatePausedAntigravity(deps: {
+  registry: AntigravityProfileRegistry;
+  native: ManagedNativeUpdate;
+  /** True only while the runtime certainly is not running and the build is still unreviewed. */
+  stillPaused: () => Promise<boolean>;
+}): Promise<ManagedUpdateResult> {
+  const { registry, native } = deps;
+  let before: string;
+  try {
+    before = await native.version();
+  } catch {
+    throw new AntigravityError('update-runtime-paused');
+  }
+  const unchanged = {
+    previousVersion: before,
+    version: before,
+    restartedProcesses: 0,
+    updateAttempted: false,
+  };
+  const failed = { ...unchanged, status: 'failed' as const, runtimePaused: true as const };
+  const unchangedSinceBackup = native.unchangedSinceBackup?.bind(native);
+  // Without an identity check the backup cannot be bound to the updated native.
+  if (!unchangedSinceBackup) return failed;
+  try {
+    return await registry.withLock(async () => {
+      // A pending managed recovery record needs the runtime; never replace its native.
+      if (registry.hasRecovery()) return failed;
+      let attempted = false;
+      try {
+        await native.backup();
+        if (!unchangedSinceBackup()) return failed;
+        if (!(await deps.stillPaused()) || registry.hasRecovery()) return failed;
+        // Recheck last: nothing is awaited between these checks and the native
+        // update. The stat-only check catches a native renamed over during the
+        // final socket probe; a re-hash here would reopen the probe window.
+        if (!unchangedSinceBackup(true)) return failed;
+        attempted = true;
+        await native.update();
+        const after = await native.version();
+        return {
+          status: after === before ? ('current' as const) : ('updated' as const),
+          previousVersion: before,
+          version: after,
+          restartedProcesses: 0,
+          updateAttempted: true,
+        };
+      } catch {
+        return { ...failed, updateAttempted: attempted };
+      }
+    });
+  } catch {
+    return failed;
+  }
+}
+
+/**
+ * Chooses the managed coordinator or the paused-runtime path. The paused path
+ * runs only when nothing listens on the runtime socket AND the installed build
+ * was read and matches no reviewed native (a read failure is not proof). A live (or unclear) runtime always keeps the
+ * coordinator, and a reviewed build with a stopped runtime still fails there
+ * (runtime unavailable) instead of updating without it.
+ */
+export async function routeManagedAntigravityUpdate(deps: {
+  registry: AntigravityProfileRegistry;
+  driver: AntigravitySwitchDriver;
+  native: ManagedNativeUpdate;
+  idleOnly?: boolean;
+  /** Hashes the native once; only 'unreviewed' can take the paused path. */
+  nativeReview: () => NativeReviewState;
+  runtimeSocket: () => Promise<RuntimeSocketState>;
+}): Promise<ManagedUpdateResult> {
+  // The cheap socket probe runs before the hash, which is skipped for a live runtime.
+  const paused = async () =>
+    (await deps.runtimeSocket()) === 'stopped' && deps.nativeReview() === 'unreviewed';
+  if (await paused())
+    return updatePausedAntigravity({
+      registry: deps.registry,
+      native: deps.native,
+      stillPaused: async () => {
+        if (!(await paused())) return false;
+        if (!deps.native.unchangedSinceBackup?.()) return false;
+        // Hashing can outlast runtime startup. Probe again after every slow
+        // native check; the caller then checks recovery synchronously.
+        return (await deps.runtimeSocket()) === 'stopped';
+      },
+    });
+  return updateManagedAntigravity({
+    registry: deps.registry,
+    driver: deps.driver,
+    native: deps.native,
+    idleOnly: deps.idleOnly,
   });
 }

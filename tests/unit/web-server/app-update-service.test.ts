@@ -252,6 +252,71 @@ describe('fixed app update service', () => {
     expect(unreviewed.message).toContain('switching is paused');
     expect(unreviewed.heldVersion).toBeUndefined();
   });
+  it('names a stopped or paused Antigravity runtime instead of a generic update failure', () => {
+    const base = {
+      appId: 'antigravity-cli',
+      status: 'failed',
+      manager: 'native',
+      restartedProcesses: 0,
+    };
+    const unavailable = normalizeAppUpdateRow(
+      { ...base, messageCode: 'runtime_unavailable', updateAttempted: false },
+      'antigravity-cli',
+      'ubuntu'
+    );
+    expect(unavailable).toMatchObject({ status: 'failed', updateAttempted: false });
+    expect(unavailable.message).toBe(MESSAGES.runtime_unavailable);
+    expect(unavailable.message).not.toBe(MESSAGES.update_failed);
+    const paused = normalizeAppUpdateRow(
+      { ...base, messageCode: 'runtime_paused', previousVersion: '1.4.12', updateAttempted: true },
+      'antigravity-cli',
+      'ubuntu'
+    );
+    expect(paused).toMatchObject({ status: 'failed', previousVersion: '1.4.12' });
+    expect(paused.message).toBe(MESSAGES.runtime_paused);
+    // A refusal before agy update ran has its own wording.
+    const blocked = normalizeAppUpdateRow(
+      { ...base, messageCode: 'runtime_paused_blocked', updateAttempted: false },
+      'antigravity-cli',
+      'ubuntu'
+    );
+    expect(blocked.message).toBe(MESSAGES.runtime_paused_blocked);
+    expect(blocked.message).toContain('pending switch recovery');
+    expect(blocked.message).toContain('nothing was installed');
+    // Only the Ubuntu managed Antigravity bridge reports them, and only as failures;
+    // a runtime that did not answer never ran the updater.
+    for (const [row, appId, platform] of [
+      [
+        { ...base, messageCode: 'runtime_paused', updateAttempted: false },
+        'antigravity-cli',
+        'mac',
+      ],
+      [{ ...base, appId: 'codex-cli', messageCode: 'runtime_unavailable' }, 'codex-cli', 'ubuntu'],
+      [
+        { ...base, status: 'updated', version: '1.5.2', messageCode: 'runtime_paused' },
+        'antigravity-cli',
+        'ubuntu',
+      ],
+      [
+        { ...base, messageCode: 'runtime_unavailable', updateAttempted: true },
+        'antigravity-cli',
+        'ubuntu',
+      ],
+      [
+        { ...base, messageCode: 'runtime_paused', updateAttempted: false },
+        'antigravity-cli',
+        'ubuntu',
+      ],
+      [
+        { ...base, messageCode: 'runtime_paused_blocked', updateAttempted: true },
+        'antigravity-cli',
+        'ubuntu',
+      ],
+    ] as const)
+      expect(normalizeAppUpdateRow({ ...row }, appId, platform).message).toBe(
+        MESSAGES.helper_invalid
+      );
+  });
   it('completes a job with a held row and restores the held build from disk', async () => {
     const root = directory();
     const rows = JSON.parse(payload()).results;

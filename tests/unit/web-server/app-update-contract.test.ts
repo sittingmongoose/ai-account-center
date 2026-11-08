@@ -764,3 +764,73 @@ describe('Update apps contract for held ACP adapter parts', () => {
     });
   });
 });
+
+describe('paused Antigravity update messages', () => {
+  it('carries the restart note on both success codes', () => {
+    for (const code of ['updated', 'updated_unreviewed'] as const) {
+      const row = normalizeAppUpdateRow(
+        {
+          status: 'updated',
+          messageCode: code,
+          manager: 'native',
+          previousVersion: '1.4.12',
+          version: '1.5.2',
+          updateAttempted: true,
+          restartedProcesses: 0,
+        },
+        'antigravity-cli',
+        'ubuntu'
+      );
+      expect(row.message).toContain('Copies already open keep the old version until restarted.');
+    }
+    expect(MESSAGES.runtime_paused_blocked).not.toContain('process check');
+  });
+});
+
+describe('older saved paused Antigravity rows', () => {
+  it('restores older success, blocked and coordinator in_use words', () => {
+    const root = directory();
+    const original = [
+      { status: 'updated', message: MESSAGES.updated, updateAttempted: true },
+      {
+        status: 'updated',
+        message:
+          'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
+        updateAttempted: true,
+      },
+      {
+        status: 'failed',
+        message:
+          'Antigravity switching is paused on an unreviewed build and its runtime is stopped; the update could not safely start without it (a pending switch recovery, a process check that could not finish, or a failed backup), so nothing was installed.',
+        updateAttempted: false,
+      },
+      {
+        status: 'action_required',
+        message: `Antigravity CLI ${IN_USE_WORDS}`,
+        updateAttempted: false,
+      },
+    ];
+    for (const item of original) {
+      saveJob(root, {
+        expectedResults: null,
+        results: [
+          {
+            appId: 'antigravity-cli',
+            platform: 'ubuntu',
+            manager: 'native',
+            previousVersion: '1.4.12',
+            version: item.status === 'updated' ? '1.5.2' : '1.4.12',
+            restartedProcesses: 0,
+            forcedStops: 0,
+            restartTargets: [],
+            ...item,
+          },
+        ],
+      });
+      const service = new AppUpdateService({ ccsDir: root });
+      const result = service.getStatus().job?.results[0];
+      expect(result?.status).toBe(item.status);
+      expect(result?.message).not.toBe(MESSAGES.helper_invalid);
+    }
+  });
+});
