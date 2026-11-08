@@ -45,6 +45,8 @@ function setup(options: { registryDir?: string } = {}) {
     nas1Extra: {} as Record<string, unknown>,
     /** Adds a Windows row with browser-check's `phones: null` (no Simlock worker there). */
     windows: false,
+    /** The machine read's system disk: plenty free, under the 50 GB floor, or a failed read. */
+    disk: 'ok' as 'ok' | 'low' | 'error',
   };
   const registryReader = {
     scan: async () => {
@@ -69,7 +71,11 @@ function setup(options: { registryDir?: string } = {}) {
     busyPct: 12,
     memAvailableBytes: 16 * GIB,
     memTotalBytes: 32 * GIB,
-    disk: { mount: '/', freeBytes: 200 * GIB, totalBytes: 500 * GIB },
+    disk:
+      fail.disk === 'error'
+        ? null
+        : { mount: '/', freeBytes: (fail.disk === 'low' ? 20 : 200) * GIB, totalBytes: 500 * GIB },
+    ...(fail.disk === 'error' ? { diskError: 'The system disk could not be read.' } : {}),
     cpuTimes: null,
   });
   const good = {
@@ -86,7 +92,12 @@ function setup(options: { registryDir?: string } = {}) {
       rows: [
         { machine: { name: 'vm', label: 'Ubuntu VM' }, state: good },
         ...(fail.windows
-          ? [{ machine: { name: 'windows', label: 'Windows PC' }, state: { ...good, phones: null } }]
+          ? [
+              {
+                machine: { name: 'windows', label: 'Windows PC' },
+                state: { ...good, phones: null },
+              },
+            ]
           : []),
         ...(fail.nas1 === 'absent'
           ? []
@@ -191,6 +202,59 @@ describe('secondary sources on their panels', () => {
       detail: browsers.detail,
     });
     expect(vm.slotsSource.detail).toContain('Showing the reading from 10:00 AM.');
+  });
+
+  it('a failed disk read keeps the earlier disk reading, named, and the machine is not current', async () => {
+    const { service, clock, fail } = setup();
+    fail.disk = 'low';
+    await warm(service);
+    let vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('ok');
+    expect(vm.warnings).toEqual(['Disk 20.0 GB free, under the 50 GB floor']);
+
+    fail.disk = 'error';
+    for (const step of [1, 2]) {
+      clock.now += 60_000;
+      await service.collect();
+      const view = service.view();
+      vm = view.machines.rows.find((r) => r.id === 'vm')!;
+      // CPU and memory are this read's; the disk is the 10:00 AM reading, said so, warning kept.
+      expect({ step, state: vm.state, age: vm.ageSeconds }).toEqual({
+        step,
+        state: 'stale',
+        age: 0,
+      });
+      expect(vm.detail).toBe(
+        'Disk: The system disk could not be read (since 10:01 AM). Showing the disk reading from 10:00 AM.'
+      );
+      expect(vm.disk).toEqual([{ mount: '/', freeGb: 20, totalGb: 500 }]);
+      expect(vm.memory).toEqual({ availableGb: 16, totalGb: 32 });
+      expect(vm.warnings).toEqual(['Disk 20.0 GB free, under the 50 GB floor']);
+      const machines = view.sources.find((s) => s.id === 'machines')!;
+      expect(machines.state).not.toBe('ok');
+      expect(machines.detail).toContain('Disk: The system disk could not be read');
+    }
+
+    fail.disk = 'ok';
+    clock.now += 60_000;
+    await service.collect();
+    vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('ok');
+    expect(vm.detail).toBeNull();
+    expect(vm.disk).toEqual([{ mount: '/', freeGb: 200, totalGb: 500 }]);
+    expect(vm.warnings).toEqual([]);
+  });
+
+  it('a disk that never read well is named as failed, never shown as a reading', async () => {
+    const { service, fail } = setup();
+    fail.disk = 'error';
+    await warm(service);
+    const vm = service.view().machines.rows.find((r) => r.id === 'vm')!;
+    expect(vm.state).toBe('stale');
+    expect(vm.disk).toEqual([]);
+    expect(vm.detail).toBe(
+      'Disk: The system disk could not be read (since 10:00 AM). No earlier disk reading.'
+    );
   });
 
   it('a failing pm-mail registry marks its rows while the agent reports stay healthy', async () => {

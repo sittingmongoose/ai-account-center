@@ -202,7 +202,11 @@ word, never 0. Times are ISO UTC; the page shows them as relative ages ("2m ago"
 A panel whose source is not `ok` draws its last good data greyed with the source's `detail` on top, or only the
 detail when there is no data. Nothing is ever shown as live when its source is stale.
 
-A partial read is never a clean success. When the folder listing or the command worked but named parts of it failed,
+A partial read is never a clean success. A machine read whose system disk failed (local `statfs` throws, or a remote
+probe answers without its disk lines) keeps CPU and memory current, keeps the earlier disk reading and its low-disk
+warning, and marks the machine `stale` with "Disk: The system disk could not be read (since 10:01 AM). Showing the
+disk reading from 10:00 AM." (or "No earlier disk reading."), so Machines is not `ok` until a disk read works again.
+When the folder listing or the command worked but named parts of it failed,
 the source is not `ok` and its `detail` names each part with its reason and since when, then "The rest read <time>.":
 a pm-mail registry file that can't be read, isn't JSON, is over 64 KB or isn't a regular file makes the registry
 `unreadable` ("1 registry file unreadable since 10:01 AM: registry-worker.json (could not be read). ..."); a host

@@ -128,6 +128,17 @@ export function machineView(inputs: StatusInputs, id: MachineId, browsers: Sourc
     state = 'stale';
     detail = `No new reading since ${clockText(collected.asOf, timeZone)}.`;
   }
+  // A disk read that failed while CPU and memory were read: the machine is not current as a whole.
+  const diskProblem = collected.problems?.find((problem) => problem.item === 'disk') ?? null;
+  if (diskProblem) {
+    if (state === 'ok') state = 'stale';
+    const kept =
+      sample?.disk && sample.diskReadAt !== null && sample.diskReadAt !== undefined
+        ? ` Showing the disk reading from ${clockText(sample.diskReadAt, timeZone)}.`
+        : ' No earlier disk reading.';
+    const words = `Disk: ${diskProblem.reason.replace(/\.$/, '')} (since ${clockText(diskProblem.since, timeZone)}).${kept}`;
+    detail = detail ? `${detail} ${words}` : words;
+  }
   const browser = (inputs.browsers.data ?? []).find((row) => row.machine === id) ?? null;
   return {
     id,

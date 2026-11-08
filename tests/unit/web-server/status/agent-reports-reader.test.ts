@@ -319,6 +319,31 @@ describe('agent reports reader', () => {
     }
   });
 
+  it('a card read before that turns into a non-regular file keeps its row, named and unanswerable', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const r = reader(root);
+    await r.scan();
+    const file = path.join(root, 'v1', 'writers', 'vm.lead', 'cards', 'vm.lead--Q1.json');
+    const bytes = fs.readFileSync(file);
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+    await r.scan();
+    let state = r.snapshot();
+    expect(state.cards).toHaveLength(1);
+    expect(state.cards[0].problem?.reason).toBe('is not a regular file');
+    expect(state.problems.map((p) => [p.file, p.reason])).toEqual([
+      ['writers/vm.lead/cards/vm.lead--Q1.json', 'is not a regular file'],
+    ]);
+    expect(state.complete).toBe(false);
+    fs.rmdirSync(file);
+    fs.writeFileSync(file, bytes);
+    await r.scan();
+    state = r.snapshot();
+    expect(state.cards[0].problem).toBeNull();
+    expect(state.problems).toEqual([]);
+  });
+
   it('accepts T3 writers without a pm-mail name, and quiet threads without a heartbeat', async () => {
     const root = dirs.make();
     writeReport(

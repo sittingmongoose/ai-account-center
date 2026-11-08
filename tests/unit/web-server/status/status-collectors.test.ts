@@ -9,6 +9,7 @@ import {
   parseRegistryEntry,
   parseSimlockStatus,
   PmMailRegistryReader,
+  readLocalMachine,
   readRemoteMachine,
   registryMachine,
   sessionUrl,
@@ -248,6 +249,14 @@ describe('status collectors', () => {
       totalBytes: 1999342923776,
     });
     expect(parseMachineProbe('linux', 'garbage')).toBeNull();
+    // An answer without its disk lines is a partial reading: named, never "no disk".
+    const noDisk = parseMachineProbe(
+      'linux',
+      'cores=6\nmemTotalKb=20210000\nmemAvailKb=13245000\n'
+    );
+    expect(noDisk?.disk).toBeNull();
+    expect(noDisk?.diskError).toBe('The machine did not report its system disk.');
+    expect(linux?.diskError).toBeUndefined();
     expect(machineProbeCommand('windows')).toStartWith(
       'powershell.exe -NoProfile -NonInteractive -EncodedCommand '
     );
@@ -315,6 +324,20 @@ describe('status collectors', () => {
     await expect(new PmMailRegistryReader(() => path.join(dir, 'nope')).scan()).rejects.toThrow(
       'missing'
     );
+  });
+
+  it('a local disk read that fails leaves the rest of the reading and names the disk', async () => {
+    const sample = await readLocalMachine({
+      statfs: async () => {
+        throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      },
+    });
+    expect(sample.disk).toBeNull();
+    expect(sample.diskError).toBe('The system disk could not be read.');
+    expect(sample.memTotalBytes).toBeGreaterThan(0);
+    const good = await readLocalMachine();
+    expect(good.disk?.mount).toBe('/');
+    expect(good.diskError).toBeUndefined();
   });
 
   it('keeps a registry row through one ENOENT race and names a listed file gone twice in a row', async () => {

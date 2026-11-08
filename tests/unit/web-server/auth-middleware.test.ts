@@ -273,6 +273,18 @@ describe('Dashboard Auth', () => {
       expect(runGuard(apiAuthMiddleware, '/accountsx').body).toEqual({
         error: 'Authentication required',
       });
+      // The Status and Scoreboard APIs document the same coded 401 (docs/status-tab.md, docs/scoreboard.md).
+      for (const requestPath of ['/status', '/status/answers', '/Scoreboard', '/scoreboard/runs']) {
+        const outcome = runGuard(apiAuthMiddleware, requestPath);
+        expect({ requestPath, status: outcome.status, body: outcome.body }).toEqual({
+          requestPath,
+          status: 401,
+          body: { error: 'Authentication required', code: 'auth_required' },
+        });
+      }
+      expect(runGuard(apiAuthMiddleware, '/statusx').body).toEqual({
+        error: 'Authentication required',
+      });
     });
 
     it('passes every request when dashboard auth is disabled', () => {

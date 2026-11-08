@@ -478,7 +478,13 @@ export class AgentReportsReader {
         if (!card.isFile()) {
           // A FIFO or a link where a card belongs: it may stand for an open card nobody can read.
           this.scanPartial = true;
-          folderProblem(rel, 'is not a regular file');
+          const held = this.entries.get(rel);
+          if (held) {
+            // A card read before: its own row says so and cannot be answered until it reads again.
+            seen.add(rel);
+            this.misses.clear(rel);
+            if (this.setProblem(rel, held.kind, name, 'is not a regular file')) changed = true;
+          } else folderProblem(rel, 'is not a regular file');
           continue;
         }
         if (cardsVisited >= limits.cards) {

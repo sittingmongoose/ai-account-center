@@ -636,6 +636,16 @@ export interface MachineSample {
   memAvailableBytes: number | null;
   memTotalBytes: number | null;
   disk: { mount: string; freeBytes: number; totalBytes: number } | null;
+  /**
+   * Why the system disk could not be read this time, in fixed words; the rest of the reading
+   * stands. Absent when the disk was read.
+   */
+  diskError?: string;
+  /**
+   * Set by the service: when `disk` was read (epoch ms). Older than the sample when the last disk
+   * read failed and the service kept the earlier disk reading.
+   */
+  diskReadAt?: number | null;
   /** /proc/stat totals, for the busy percent between two readings. */
   cpuTimes: { busy: number; total: number } | null;
 }
@@ -719,6 +729,7 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
   if (memTotal === 0) memTotal = null;
   if (cores === null && memTotal === null && diskTotal === null) return null;
   const cpuPct = n('cpuPct');
+  const diskRead = diskTotal !== null && diskFree !== null && diskTotal > 0;
   return {
     cores,
     load1: n('load'),
@@ -728,14 +739,15 @@ export function parseMachineProbe(hostOs: HostOs, stdout: string): MachineSample
         : Math.min(100, Math.round(hostOs === 'mac' && cores ? cpuPct / cores : cpuPct)),
     memAvailableBytes: memAvail,
     memTotalBytes: memTotal,
-    disk:
-      diskTotal !== null && diskFree !== null && diskTotal > 0
-        ? {
-            mount: shortText(values.get('mount'), 80) ?? '/',
-            freeBytes: diskFree,
-            totalBytes: diskTotal,
-          }
-        : null,
+    disk: diskRead
+      ? {
+          mount: shortText(values.get('mount'), 80) ?? '/',
+          freeBytes: diskFree,
+          totalBytes: diskTotal,
+        }
+      : null,
+    // Every probe prints the system disk: an answer without it is a partial reading, not "no disk".
+    ...(diskRead ? {} : { diskError: 'The machine did not report its system disk.' }),
     cpuTimes: hostOs === 'linux' ? linuxCpuTimes(values.get('cpu')) : null,
   };
 }
@@ -762,7 +774,9 @@ export function localMachineId(
 }
 
 /** This computer, read directly (no process). */
-export async function readLocalMachine(): Promise<MachineSample> {
+export async function readLocalMachine(
+  options: { statfs?: (target: string) => Promise<fs.StatsFs> } = {}
+): Promise<MachineSample> {
   let memAvail: number | null = os.freemem();
   let cpuTimes: MachineSample['cpuTimes'] = null;
   try {
@@ -775,15 +789,18 @@ export async function readLocalMachine(): Promise<MachineSample> {
     /* Not Linux: the os module's numbers stand. */
   }
   let disk: MachineSample['disk'] = null;
+  let diskError: string | undefined;
   try {
-    const stats = await fs.promises.statfs('/');
+    const stats = await (options.statfs ?? fs.promises.statfs)('/');
     disk = {
       mount: '/',
       freeBytes: Number(stats.bavail) * Number(stats.bsize),
       totalBytes: Number(stats.blocks) * Number(stats.bsize),
     };
   } catch {
+    // The rest of the reading stands; the service keeps the earlier disk reading, named as failed.
     disk = null;
+    diskError = 'The system disk could not be read.';
   }
   return {
     cores: os.cpus().length || null,
@@ -792,6 +809,7 @@ export async function readLocalMachine(): Promise<MachineSample> {
     memAvailableBytes: memAvail,
     memTotalBytes: os.totalmem(),
     disk,
+    ...(diskError ? { diskError } : {}),
     cpuTimes,
   };
 }

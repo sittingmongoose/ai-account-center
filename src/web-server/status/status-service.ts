@@ -292,9 +292,32 @@ export class StatusService {
             : await (this.deps.readRemoteMachine ?? ((m) => readRemoteMachine(m, this.run())))(
                 id as Exclude<MachineId, 'vm'>
               );
-        const before = this.machines[id].data;
+        const held = this.machines[id];
+        const before = held.data;
         const busy = busyBetween(before?.cpuTimes ?? null, sample.cpuTimes);
-        this.machines[id] = succeeded({ ...sample, busyPct: busy ?? sample.busyPct }, this.now());
+        const now = this.now();
+        const data: MachineSample = {
+          ...sample,
+          busyPct: busy ?? sample.busyPct,
+          diskReadAt: sample.disk ? now : null,
+        };
+        if (sample.disk || !sample.diskError) {
+          this.machines[id] = succeeded(data, now);
+          return;
+        }
+        // CPU and memory are this read's; the disk is not. Keep the earlier disk reading with its
+        // own time, and name the failure on the machine until a disk read works again.
+        const earlier = held.problems?.find((problem) => problem.item === 'disk');
+        this.machines[id] = {
+          data: {
+            ...data,
+            disk: before?.disk ?? null,
+            diskReadAt: before?.disk ? (before.diskReadAt ?? held.asOf) : null,
+          },
+          asOf: now,
+          error: null,
+          problems: [nextProblem(earlier, 'disk', sample.diskError, now)],
+        };
       } catch (error) {
         this.machines[id] = failed(
           this.machines[id],
