@@ -1085,10 +1085,38 @@ fn merge_findings(into: &mut Vec<Finding>, more: impl IntoIterator<Item = Findin
 }
 
 fn quarantine(dir: &Path, path: &Path, reason: &str) -> Result<()> {
-    let target = dir
-        .join("quarantine")
-        .join(format!("{}-{reason}", iso_compact(now_ms())));
-    fsx::private_dir(&target)?;
+    let parent = dir.join("quarantine");
+    fsx::private_dir(&parent)?;
+    let base = format!("{}-{reason}", iso_compact(now_ms()));
+    // Each recovery gets its own folder, created exclusively: a second
+    // recovery in the same second must never reuse (and overwrite) the
+    // first quarantined copy, so retry with a fresh suffix on collision.
+    let mut attempt = 0u32;
+    let target = loop {
+        let name = if attempt == 0 {
+            base.clone()
+        } else {
+            format!("{base}-{attempt}-{}", fsx::random_hex(4))
+        };
+        let candidate = parent.join(name);
+        match fs::create_dir(&candidate) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&candidate, fs::Permissions::from_mode(0o700))?;
+                }
+                break candidate;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempt += 1;
+                if attempt >= 100 {
+                    return Err(e.into());
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
     if path.exists() {
         fs::rename(path, target.join(path.file_name().unwrap()))?;
     }
