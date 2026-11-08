@@ -13,8 +13,9 @@ first working trial. Section 2.7 lists what is mirrored and what is left out.
 **Boundary.** The store is a storage library: a small Rust crate (`native/aac-store/`) loaded by the
 TypeScript server as a native Node module (napi-rs). It appends, projects, queries and maintains, and
 nothing else. Routes, authentication, collectors, provider parsing, switching, signing and every product
-rule stay in TypeScript. The crate makes no network or provider calls. This is not a Rust backend
-rewrite; AGENTS.md's rule still holds.
+rule stay in TypeScript. The crate makes no network or provider calls. The TypeScript server
+stays; a new server piece is a native module like this one, and existing TypeScript is not ported
+unless the owner asks (AGENTS.md).
 
 ## 1. Scope
 

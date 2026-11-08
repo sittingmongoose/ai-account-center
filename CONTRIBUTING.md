@@ -59,7 +59,9 @@ Oct 20 Muse fallback).
 | Maintainer guides | [docs/README.md](docs/README.md) |
 
 The root builder produces the dashboard at `dist/ui/`. There is no React/Vite
-workspace to install or run. The backend remains TypeScript; native clients
+workspace to install or run. The TypeScript server stays. Every new server
+piece is written in Rust as a native module like `native/aac-store`. Existing
+TypeScript modules are not ported unless the owner asks. Native clients
 retain their platform toolchains.
 
 ## Preserve account state

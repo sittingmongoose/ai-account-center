@@ -12,7 +12,9 @@ Slint browser / native Mac or Windows bar
 ```
 
 The web dashboard is Slint 1.18.1 compiled through Rust to WebAssembly. The
-backend remains TypeScript; native bars remain Swift/WPF. The primary CLI command
+TypeScript server stays (new server pieces are Rust native modules such as
+`native/aac-store`; existing TypeScript is not ported unless the owner asks);
+native bars remain Swift/WPF. The primary CLI command
 is `ai-account-center dashboard`, with `ccs config` compatibility.
 
 ## Computers
