@@ -6,6 +6,7 @@
 import { accountAnalyticsIdentity } from '../web-server/services/account-analytics-history';
 import type { DashboardAccount } from '../web-server/services/account-dashboard-types';
 import type { AgentUsageAccount } from '../web-server/agent-usage/agent-usage-projection';
+import { CCSError } from '../errors/error-types';
 import type { AacStore, StoreSeriesPoints } from './store-service';
 
 export const SNAPSHOT_HISTORY_HOURLY = 'history-hourly.json';
@@ -112,7 +113,7 @@ export async function buildRollupExports(
         if (result.truncated) {
           const buckets = Math.floor(to / step) - Math.floor(from / step) + 1;
           if (buckets <= 1)
-            throw new Error('History export incomplete: a single bucket exceeds the query cap');
+            throw new CCSError('History export incomplete: a single bucket exceeds the query cap');
           const middle = (Math.floor(from / step) + Math.floor(buckets / 2)) * step;
           await page(from, middle - 1);
           await page(middle, to);

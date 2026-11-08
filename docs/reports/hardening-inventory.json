@@ -542,10 +542,10 @@
   "maintainability": {
     "typedErrors": {
       "totalThrows": 745,
-      "typedThrows": 212,
-      "plainThrows": 73,
+      "typedThrows": 213,
+      "plainThrows": 72,
       "otherThrows": 460,
-      "adoptionRatio": 0.2846,
+      "adoptionRatio": 0.2859,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
