@@ -8,6 +8,7 @@
 
 pub mod error;
 pub mod ops;
+pub mod pins;
 
 #[cfg(feature = "node")]
 mod node;
