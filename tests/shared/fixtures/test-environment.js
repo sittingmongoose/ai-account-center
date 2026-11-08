@@ -32,6 +32,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// A server started by a test runs the Status collectors, which publish schemas and seeds into the
+// reports share. Point them at a folder that does not exist (AAC never creates the root), so no
+// test can read or write the real share.
+process.env.AAC_AGENT_REPORTS_DIR ||= path.join(os.tmpdir(), `ccs-test-no-reports-${process.pid}`);
+process.env.AAC_PM_MAIL_REGISTRY_DIR ||= path.join(os.tmpdir(), `ccs-test-no-registry-${process.pid}`);
+process.env.AAC_STATUS_DOORBELL ||= 'off';
+
 let bootstrappedTestHome;
 const originalHomedir = os.homedir;
 let homedirPatched = false;

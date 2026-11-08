@@ -69,11 +69,20 @@
     "web-dashboard/src/",
     "web-dashboard/ui/",
     "web-dashboard/public/",
+    "web-dashboard/leptos/Cargo.toml",
+    "web-dashboard/leptos/Cargo.lock",
+    "web-dashboard/leptos/.cargo/config.toml",
+    "web-dashboard/leptos/index.html",
+    "web-dashboard/leptos/build/",
+    "web-dashboard/leptos/src/",
+    "web-dashboard/leptos/style/",
     "VERSION",
     "README.md",
     "assets/screenshots/README.md",
     "LICENSE",
-    "docs/antigravity-runtime.md"
+    "docs/antigravity-runtime.md",
+    "docs/agent-reports/schemas/",
+    "docs/agent-reports/catalog/"
   ],
   "engines": {
     "node": ">=18.0.0",

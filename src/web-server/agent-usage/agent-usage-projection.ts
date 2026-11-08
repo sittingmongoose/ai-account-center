@@ -211,15 +211,19 @@ function windowOf(
 }
 
 /** The dashboard's rule: the reset is due and the reading predates it (or its time is unknown). */
+export function readingPredatesReset(resetAt: unknown, sampledAt: unknown, now: number): boolean {
+  const reset = Date.parse(iso(resetAt) ?? '');
+  if (!Number.isFinite(reset) || reset > now) return false;
+  const sampled = Date.parse(iso(sampledAt) ?? '');
+  return !Number.isFinite(sampled) || sampled < reset;
+}
+
 function resetPassedAt(
   window: DashboardAccountWindow,
   now: number,
   accountSampledAt: string | null
 ): boolean {
-  const reset = Date.parse(iso(window.resetAt) ?? '');
-  if (!Number.isFinite(reset) || reset > now) return false;
-  const sampled = Date.parse(iso(window.sampledAt) ?? accountSampledAt ?? '');
-  return !Number.isFinite(sampled) || sampled < reset;
+  return readingPredatesReset(window.resetAt, iso(window.sampledAt) ?? accountSampledAt, now);
 }
 
 function accountOf(account: DashboardAccount, now: number): AgentUsageAccount | null {

@@ -11,6 +11,8 @@ const {
   readBuildCommit,
   assertSlintPin,
   assertLockedSlint,
+  assertLockedLeptos,
+  leptosFingerprint,
   BRIDGE_IMPORT_ERROR,
   SW_BUILD_ID_ERROR,
 } = require('../../../scripts/build-ui.js');
@@ -135,6 +137,160 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
+/** A Leptos pages crate beside the Slint one; the fake wasm-pack "builds" it by writing a module with a name section. */
+function addLeptosCrate(root: string): Buffer {
+  const crate = path.join(root, 'web-dashboard');
+  const leptos = path.join(crate, 'leptos');
+  for (const dir of ['src', 'style', 'build', 'pkg'])
+    fs.mkdirSync(path.join(leptos, dir), { recursive: true });
+  fs.writeFileSync(path.join(leptos, 'Cargo.toml'), '[package]\nname = "aac-web"\n');
+  fs.writeFileSync(
+    path.join(leptos, 'Cargo.lock'),
+    'version = 4\n\n[[package]]\nname = "leptos"\nversion = "0.9.0-rc1"\n'
+  );
+  fs.writeFileSync(path.join(leptos, 'src', 'lib.rs'), '// fixture\n');
+  fs.writeFileSync(path.join(leptos, 'style', 'app.css'), 'body{margin:0}\n'.repeat(80));
+  fs.writeFileSync(
+    path.join(leptos, 'index.html'),
+    `<!doctype html><link rel="stylesheet" href="{{CSS}}"><script type="module">import init from '{{PKG}}/aac_web.js'; init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' });</script>${'<!-- page -->'.repeat(80)}`
+  );
+  fs.copyFileSync(
+    path.join(__dirname, '../../../web-dashboard/leptos/build/strip-names.cjs'),
+    path.join(leptos, 'build', 'strip-names.cjs')
+  );
+  fs.mkdirSync(path.join(crate, 'ui', 'fonts'), { recursive: true });
+  fs.writeFileSync(path.join(crate, 'ui', 'fonts', 'MartianMono.ttf'), 'font');
+  fs.writeFileSync(path.join(crate, 'ui', 'fonts', 'OFL-MartianMono.txt'), 'license');
+  // A module: header, one code-ish custom section to keep, and a big "name" section to strip.
+  const section = (name: string, body: Buffer) => {
+    const payload = Buffer.concat([Buffer.from([name.length]), Buffer.from(name), body]);
+    return Buffer.concat([
+      Buffer.from([0, (payload.length & 0x7f) | 0x80, payload.length >> 7]),
+      payload,
+    ]);
+  };
+  const kept = section('target_features', Buffer.from('leptos-fixture-'.repeat(20)));
+  const stripped = Buffer.concat([Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]), kept]);
+  const module = Buffer.concat([stripped, section('name', Buffer.alloc(900, 7))]);
+  fs.writeFileSync(path.join(leptos, 'pkg', 'aac_web_bg.wasm'), module);
+  fs.writeFileSync(
+    path.join(leptos, 'pkg', 'aac_web.js'),
+    `export default async function init() {}\n${'// glue\n'.repeat(80)}`
+  );
+  fs.writeFileSync(path.join(leptos, 'pkg', '.gitignore'), '*');
+  return stripped;
+}
+
+describe('Leptos pages in the UI build', () => {
+  it('builds, strips and content-addresses the Leptos pages beside the Slint runtime', () => {
+    const root = fixture();
+    const stripped = addLeptosCrate(root);
+    const calls: Array<[string, string[]]> = [];
+    const manifest = build({ repoRoot: root, run: runner(calls) });
+    const leptosCall = calls.find(
+      ([, args]) => args[0] === 'build' && args[1].endsWith(path.join('web-dashboard', 'leptos'))
+    );
+    expect(leptosCall?.[1]).toEqual([
+      'build',
+      path.join(root, 'web-dashboard', 'leptos'),
+      '--release',
+      '--target',
+      'web',
+      '--out-dir',
+      'pkg',
+      '--out-name',
+      'aac_web',
+      '--',
+      '--locked',
+    ]);
+    const id = sha256(stripped).slice(0, 12);
+    expect(manifest.leptos).toMatchObject({
+      framework: 'leptos',
+      version: '0.9.0-rc1',
+      entry: 'app/index.html',
+      buildId: id,
+      wasm: { path: `pkg/${id}/aac_web_bg.wasm`, bytes: stripped.length, sha256: sha256(stripped) },
+    });
+    expect(manifest.leptos.buildId).not.toBe(manifest.buildId);
+    const ui = path.join(root, 'dist', 'ui');
+    // The debug name section is gone and nothing else changed.
+    expect(fs.readFileSync(path.join(ui, manifest.leptos.wasm.path)).equals(stripped)).toBe(true);
+    const page = fs.readFileSync(path.join(ui, 'app', 'index.html'), 'utf8');
+    expect(page).toContain(`'/pkg/${id}/aac_web.js'`);
+    expect(page).not.toContain('{{PKG}}');
+    expect(page).not.toContain('{{CSS}}');
+    expect(page).toMatch(/href="\/app\/app\.css\?v=[0-9a-f]{12}"/);
+    for (const file of [
+      'app/app.css',
+      'app/MartianMono.ttf',
+      'app/OFL-MartianMono.txt',
+      `pkg/${id}/aac_web.js`,
+    ]) {
+      expect(fs.existsSync(path.join(ui, file))).toBe(true);
+    }
+    expect(fs.existsSync(path.join(ui, 'pkg', id, '.gitignore'))).toBe(false);
+    // Compressed like the rest, with the usual modes, and the bundle still verifies.
+    expect(
+      manifest.precompressed.some((entry: { path: string }) => entry.path === 'app/index.html')
+    ).toBe(true);
+    expect(mode(path.join(ui, 'app'))).toBe(0o755);
+    expect(mode(path.join(ui, 'app', 'index.html'))).toBe(0o644);
+    expect(() => verifyBundle(ui)).not.toThrow();
+  });
+
+  it('refuses a page source change after the build, like the Slint fingerprint', () => {
+    const root = fixture();
+    addLeptosCrate(root);
+    build({ repoRoot: root, run: runner([]) });
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
+    fs.appendFileSync(
+      path.join(root, 'web-dashboard', 'leptos', 'style', 'app.css'),
+      'p{color:red}\n'
+    );
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow(
+      'Leptos page source changed after the build'
+    );
+  });
+
+  it('requires Cargo.lock to resolve the pinned Leptos version', () => {
+    expect(() =>
+      assertLockedLeptos({ package: [{ name: 'leptos', version: '0.9.0-rc1' }] })
+    ).not.toThrow();
+    expect(() => assertLockedLeptos({ package: [{ name: 'leptos', version: '0.9.0' }] })).toThrow(
+      'must resolve leptos to 0.9.0-rc1'
+    );
+    expect(() => assertLockedLeptos({ package: [] })).toThrow('must resolve leptos');
+  });
+
+  it('refuses a linked crate root, a linked parent folder and a dangling link among the inputs', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-leptos-links-'));
+    roots.push(root);
+    const real = path.join(root, 'real');
+    for (const dir of ['src', 'elsewhere']) fs.mkdirSync(path.join(real, dir), { recursive: true });
+    fs.writeFileSync(path.join(real, 'Cargo.toml'), '[package]\n');
+    fs.writeFileSync(path.join(real, 'src', 'lib.rs'), '// page\n');
+    fs.writeFileSync(path.join(real, 'elsewhere', 'config.toml'), '[build]\n');
+    expect(leptosFingerprint(real).files).toBe(2);
+    // the crate folder itself is a link
+    fs.symlinkSync(real, path.join(root, 'linked'));
+    expect(() => leptosFingerprint(path.join(root, 'linked'))).toThrow('must be a real folder');
+    // .cargo is a link to another folder: path.join would follow it to .cargo/config.toml
+    fs.symlinkSync(path.join(real, 'elsewhere'), path.join(real, '.cargo'));
+    expect(() => leptosFingerprint(real)).toThrow('must not be symlinks');
+    fs.unlinkSync(path.join(real, '.cargo'));
+    // a dangling link is refused, not skipped
+    fs.symlinkSync(path.join(root, 'nowhere.rs'), path.join(real, 'src', 'gone.rs'));
+    expect(() => leptosFingerprint(real)).toThrow('must not be symlinks');
+  });
+
+  it('builds no pages and adds nothing to the manifest when the crate is absent', () => {
+    const root = fixture();
+    const manifest = build({ repoRoot: root, run: runner([]) });
+    expect(manifest.leptos).toBeUndefined();
+    expect(fs.existsSync(path.join(root, 'dist', 'ui', 'app'))).toBe(false);
+  });
+});
+
 describe('Slint browser build integration', () => {
   it('requires exact Slint runtime and compiler pins', () => {
     expect(() =>
@@ -225,6 +381,14 @@ describe('Slint browser build integration', () => {
     };
     expect(() => build({ repoRoot: root, run: pinnedRun })).not.toThrow();
     expect(() => validateUi({ repoRoot: root, run: pinnedRun })).not.toThrow();
+  });
+
+  it('refuses a dangling link where the Leptos crate should be instead of skipping the pages', () => {
+    const root = fixture();
+    build({ repoRoot: root, run: runner([]) });
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
+    fs.symlinkSync(path.join(root, 'nowhere'), path.join(root, 'web-dashboard', 'leptos'));
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow();
   });
 
   it('invalidates packaged output when Wasm compiler features change', () => {

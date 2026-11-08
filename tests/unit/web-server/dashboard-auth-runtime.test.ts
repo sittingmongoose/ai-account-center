@@ -366,7 +366,20 @@ describe('/api/auth error answers from the server', () => {
     });
     const other = await malformed('/api/health');
     expect(other.status).toBe(400);
-    expect(await other.json()).toEqual({ error: 'Invalid JSON in request body' });
+    expect(await other.json()).toEqual({
+      error: 'Invalid JSON in request body',
+      code: 'invalid_json',
+    });
+    const big = await fetch(`${base}/api/health`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ padding: 'x'.repeat(200 * 1024) }),
+    });
+    expect(big.status).toBe(413);
+    expect(await big.json()).toEqual({
+      error: 'Request body is too large.',
+      code: 'body_too_large',
+    });
 
     const login = await fetch(`${base}/api/auth/login`, {
       method: 'POST',

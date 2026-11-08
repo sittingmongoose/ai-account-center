@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ECF0F3" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0C1217" media="(prefers-color-scheme: dark)" />
+    <title>AI Account Center</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="{{CSS}}" />
+    <link rel="modulepreload" href="{{PKG}}/aac_web.js" />
+  </head>
+  <body>
+    <noscript>This page needs JavaScript.</noscript>
+    <script type="module">
+      import init from '{{PKG}}/aac_web.js';
+      init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' }).catch(() => {
+        document.body.textContent = 'This page could not start. Reload it, or update the browser.';
+      });
+    </script>
+  </body>
+</html>

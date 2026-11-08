@@ -12,6 +12,7 @@ const {
   cacheable,
   navigationFallbackLookups,
   shouldMirrorStartUrl,
+  isAppPage,
   isHtmlDocument,
 } = routeModule;
 
@@ -227,4 +228,21 @@ test('only plain same-origin 200s the server did not mark no-store are stored', 
     }),
     false
   );
+});
+
+test('the /app pages (the Status iframe) are never the shell and never get a shell fallback', () => {
+  const same = { method: 'GET', sameOrigin: true };
+  for (const pathname of ['/app/status', '/app/scoreboard', '/APP/status', '/app', '/app/pkg/x.wasm']) {
+    assert.equal(isAppPage(pathname), true, pathname);
+    // they are still cached network-first, so a page seen online opens offline as its own copy
+    assert.equal(route({ ...same, pathname }), 'network-first');
+    assert.deepEqual(navigationFallbackLookups({ ...same, pathname }), [{ lookup: 'same-url-ignore-search' }]);
+    assert.equal(shouldMirrorStartUrl(nav(pathname), html()), false);
+  }
+  for (const pathname of ['/', '/status', '/scoreboard', '/apps', '/application', '/accounts/app']) {
+    assert.equal(isAppPage(pathname), false, pathname);
+  }
+  // the shell routes for the two tabs fall back like every page route
+  assert.equal(navigationFallbackLookups({ ...same, pathname: '/status' }).length, 3);
+  assert.equal(shouldMirrorStartUrl(nav('/scoreboard'), html()), true);
 });

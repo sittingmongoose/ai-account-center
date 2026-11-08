@@ -1,6 +1,7 @@
 {
   "source": "Lucide 0.460.0 geometry (ISC), stroke 1.75 on a 24 grid, as used by the Daylight Atlas concept",
   "icons": {
+    "activity": "activity",
     "alert": "triangle-alert",
     "alert-circle": "circle-alert",
     "app-window": "app-window",
@@ -52,6 +53,7 @@
     "timer": "timer",
     "trash": "trash",
     "trend-up": "trending-up",
+    "trophy": "trophy",
     "user": "circle-user",
     "users": "users",
     "wallet": "wallet",

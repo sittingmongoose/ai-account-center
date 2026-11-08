@@ -303,6 +303,9 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     const index = await raw('GET', '/index.html');
     expect(index.headers['x-content-type-options']).toBe('nosniff');
     expect(index.headers['referrer-policy']).toBe('same-origin');
+    // Only AAC's own shell may frame it.
+    expect(index.headers['content-security-policy']).toBe("frame-ancestors 'self'");
+    expect(index.headers['x-frame-options']).toBe('SAMEORIGIN');
   });
 
   it('never serves the build manifest (commit and source hash) to anyone', async () => {
@@ -366,26 +369,65 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
   });
 });
 
-describe('page routes and deep links', () => {
-  it.each(['/', '/login', '/analytics', '/accounts', '/accounts/zai', '/accounts/kimi-code'])(
-    'serves index.html for %s with the page headers',
-    async (route) => {
-      for (const encoding of [undefined, 'br']) {
-        const response = await raw('GET', route, encoding ? { 'Accept-Encoding': encoding } : {});
+describe('the Leptos pages', () => {
+  it('answers /app/status and /app/scoreboard with app/index.html once a build has them', async () => {
+    const entry = path.join(staticDir, 'app', 'index.html');
+    const page =
+      '<!doctype html><title>AI Account Center</title><script type="module">/* leptos */</script>';
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(entry, page);
+    try {
+      for (const route of ['/app/status', '/app/scoreboard']) {
+        const response = await raw('GET', route);
         expect(response.status).toBe(200);
-        const body =
-          response.headers['content-encoding'] === 'br'
-            ? zlib.brotliDecompressSync(response.body)
-            : response.body;
-        expect(body.toString()).toBe(INDEX);
+        expect(response.body.toString()).toBe(page);
         expect(response.headers['content-type']).toBe('text/html; charset=utf-8');
         expect(response.headers['cache-control']).toBe('no-cache');
         expect(response.headers['x-content-type-options']).toBe('nosniff');
-        expect(response.headers['referrer-policy']).toBe('same-origin');
-        expect(response.headers.etag).toBeTruthy();
+        expect(response.headers['content-security-policy']).toBe("frame-ancestors 'self'");
+        expect(response.headers['x-frame-options']).toBe('SAMEORIGIN');
       }
+      const slash = await raw('GET', '/app/status/');
+      expect(slash.status).toBe(301);
+      expect(slash.headers.location).toBe('/app/status');
+    } finally {
+      fs.rmSync(path.dirname(entry), { recursive: true, force: true });
     }
-  );
+  });
+
+  it('says plainly when the build has no Status page instead of showing the dashboard', async () => {
+    const response = await raw('GET', '/app/status');
+    expect(response.status).toBe(404);
+    expect(response.body.toString()).toBe('This build has no Status page.');
+  });
+});
+
+describe('page routes and deep links', () => {
+  it.each([
+    '/',
+    '/login',
+    '/analytics',
+    '/accounts',
+    '/accounts/zai',
+    '/accounts/kimi-code',
+    '/status',
+    '/scoreboard',
+  ])('serves index.html for %s with the page headers', async (route) => {
+    for (const encoding of [undefined, 'br']) {
+      const response = await raw('GET', route, encoding ? { 'Accept-Encoding': encoding } : {});
+      expect(response.status).toBe(200);
+      const body =
+        response.headers['content-encoding'] === 'br'
+          ? zlib.brotliDecompressSync(response.body)
+          : response.body;
+      expect(body.toString()).toBe(INDEX);
+      expect(response.headers['content-type']).toBe('text/html; charset=utf-8');
+      expect(response.headers['cache-control']).toBe('no-cache');
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['referrer-policy']).toBe('same-origin');
+      expect(response.headers.etag).toBeTruthy();
+    }
+  });
 
   it('answers HEAD on a page route without a body and ignores the query', async () => {
     const head = await raw('HEAD', '/analytics');

@@ -34,6 +34,7 @@ const slowTests = [
   'tests/unit/web-server/app-update-helper-sync.test.ts',
   'tests/unit/web-server/app-update-nas1.test.ts',
   'tests/unit/app-updates/codex-update-runtime-bundle.test.ts',
+  'tests/unit/web-server/status/status-routes.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
 // module cache or process state. Opt them into `test:fast` only after they are
