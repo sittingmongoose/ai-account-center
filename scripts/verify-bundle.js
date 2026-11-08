@@ -227,6 +227,31 @@ const CODEX_RUNTIME_FORBIDDEN = ['activate-codex-profile', 'activateCodexProfile
  * account activation code and no path of the checkout that built it.
  */
 /**
+ * The history store's native module for this computer (docs/store.md 9.2). Absent is allowed
+ * (the dashboard runs without stored history); present, it must match the note it was built
+ * with and load in Node with the expected binding version.
+ */
+function verifyStoreModule(dir = path.join(__dirname, '../dist/native')) {
+  const name = `aac-store.${process.platform}-${process.arch}.node`;
+  const file = path.join(dir, name);
+  if (!fs.existsSync(file)) return { present: false, name };
+  const notePath = `${file}.json`;
+  if (fs.existsSync(notePath)) {
+    const note = JSON.parse(fs.readFileSync(notePath, 'utf8'));
+    if (note.sha256 !== sha256(fs.readFileSync(file)))
+      throw new Error(`${name} does not match the build note beside it.`);
+  }
+  const { spawnSync } = require('child_process');
+  const probe = spawnSync(
+    process.execPath,
+    ['-e', `process.exit(require(${JSON.stringify(file)}).bindingVersion() === 1 ? 0 : 3)`],
+    { encoding: 'utf8' }
+  );
+  if (probe.status !== 0) throw new Error(`${name} does not load in Node.`);
+  return { present: true, name, bytes: fs.statSync(file).size };
+}
+
+/**
  * The status readers' native module for this computer. Absent is allowed (the dashboard runs
  * without the readers); present, it must match the note it was built with and load in Node
  * with the expected binding version. After the history store's verifyStoreModule.
@@ -324,6 +349,22 @@ if (require.main === module) {
     process.exitCode = 1;
   }
   try {
+    const result = verifyStoreModule();
+    if (result.present)
+      console.log(
+        `[OK] History store module ${result.name}: ${(result.bytes / 1024).toFixed(1)}KB.`
+      );
+    else
+      console.warn(
+        `[!] No history store module for this computer (${result.name}): the dashboard runs without stored history. Build it with: bun run store:build`
+      );
+  } catch (error) {
+    console.error(
+      `[X] ${error instanceof Error ? error.message : 'History store module verification failed.'}`
+    );
+    process.exitCode = 1;
+  }
+  try {
     const result = verifyStatusModule();
     if (result.present)
       console.log(
@@ -345,5 +386,6 @@ module.exports = {
   CODEX_RUNTIME_FILE,
   verifyBundle,
   verifyCodexUpdateRuntime,
+  verifyStoreModule,
   verifyStatusModule,
 };

@@ -38,6 +38,17 @@ import {
   type AccountAnalyticsHistoryStore,
   type AccountAnalyticsObservation,
 } from './account-analytics-history';
+import {
+  openAacStore,
+  STORE_RETENTION_DAYS,
+  type AacStore,
+  type LongBurnSpan,
+} from '../../store/store-service';
+import {
+  MAX_ACCOUNTS_PER_SAMPLE,
+  storeObservationFromAccount,
+} from '../../store/usage-observations';
+import { backfillUsageHistory } from '../../store/usage-backfill';
 
 export interface AccountAnalyticsDeps {
   getDashboard?: typeof getAccountDashboard;
@@ -55,6 +66,17 @@ export interface AccountAnalyticsDeps {
   samplingIntervalMs?: () => number;
   schedule?: (callback: () => void, intervalMs: number) => ReturnType<typeof setTimeout>;
   cancelSchedule?: (timer: ReturnType<typeof setTimeout> | undefined) => void;
+  /**
+   * The history store for this scope, or null for the JSON history file. By default the
+   * process's store (docs/store.md) serves the default scope unless a JSON store is injected.
+   */
+  usageStore?: (scope: string) => Promise<AacStore | null>;
+}
+
+/** Long-period burn of one window: 7 and 30 days across resets, from the store's rollups. */
+export interface AccountAnalyticsLongBurn {
+  last7Days: LongBurnSpan;
+  last30Days: LongBurnSpan;
 }
 
 /**
@@ -66,6 +88,28 @@ export interface AccountAnalyticsSampleEvent {
   accounts: DashboardAccount[];
   history: AccountAnalyticsHistoryData | null;
   sampledAt: number;
+  /**
+   * With the store: each live window's 7- and 30-day burn, keyed by `longBurnKey`. Absent
+   * without the store.
+   */
+  longBurn?: Map<string, AccountAnalyticsLongBurn>;
+}
+
+const DAY_MS = 86_400_000;
+const STORE_RETENTION_MS = STORE_RETENTION_DAYS * DAY_MS;
+/** The 7-day rolling history the agent snapshot publishes. */
+const SNAPSHOT_HISTORY_MS = 7 * DAY_MS;
+
+/** The key of `AccountAnalyticsSampleEvent.longBurn`: account identity and window identity. */
+export function longBurnKey(account: DashboardAccount, window: DashboardAccountWindow): string {
+  return JSON.stringify([accountAnalyticsIdentity(account), analyticsWindowIdentity(window)]);
+}
+
+async function defaultUsageStore(scope: string): Promise<AacStore | null> {
+  // The store lives under the default CCS folder; another scope keeps its JSON file.
+  if (scope !== getCcsDir()) return null;
+  const opened = await openAacStore();
+  return opened.store;
 }
 export type AccountAnalyticsSampleListener = (event: AccountAnalyticsSampleEvent) => unknown;
 
@@ -95,6 +139,9 @@ interface HistoryState {
   data: AccountAnalyticsHistoryData | null;
   available: boolean;
   store: AccountAnalyticsHistoryStore;
+  /** The history store, when this scope uses it; then `data` is not kept in memory. */
+  usageStore: AacStore | null;
+  backfilled: boolean;
 }
 
 /** 31 days of 3-hour buckets plus the partial one at the start. */
@@ -213,6 +260,35 @@ function accountSeries(
   };
 }
 
+/** 7- and 30-day burn for every live percent window, from the store's hourly rollups. */
+async function longBurnFor(
+  store: AacStore,
+  accounts: DashboardAccount[],
+  now: number
+): Promise<Map<string, AccountAnalyticsLongBurn>> {
+  const refs: Array<{ identity: string; window: string; key: string }> = [];
+  for (const account of accounts)
+    for (const window of account.windows ?? [])
+      if (typeof window.usedPercent === 'number' && (window.kind ?? 'rate_limit') === 'rate_limit')
+        refs.push({
+          identity: accountAnalyticsIdentity(account),
+          window: analyticsWindowIdentity(window),
+          key: longBurnKey(account, window),
+        });
+  const result = new Map<string, AccountAnalyticsLongBurn>();
+  if (refs.length === 0) return result;
+  const answer = await store.burnLong(
+    refs.map(({ identity, window }) => ({ identity, window })),
+    [7 * DAY_MS, 30 * DAY_MS],
+    now
+  );
+  answer.forEach((entry, index) => {
+    const [last7Days, last30Days] = entry.spans;
+    if (last7Days && last30Days) result.set(refs[index].key, { last7Days, last30Days });
+  });
+  return result;
+}
+
 /** Independent snapshot history keeps quotas separate from billed/token activity. */
 export class AccountAnalyticsService {
   private readonly histories = new Map<string, HistoryState>();
@@ -235,6 +311,8 @@ export class AccountAnalyticsService {
           this.deps.createHistoryStore ??
           ((directory) => new FileAccountAnalyticsHistoryStore(directory))
         )(scope),
+        usageStore: null,
+        backfilled: false,
       };
       this.histories.set(scope, state);
       // Configuration scopes are few; this bound also prevents test/dev scopes
@@ -248,18 +326,32 @@ export class AccountAnalyticsService {
     return state;
   }
 
+  private usageStoreFor(scope: string): Promise<AacStore | null> {
+    if (this.deps.usageStore) return this.deps.usageStore(scope);
+    // An injected JSON history store (tests, other scopes) keeps the JSON path.
+    if (this.deps.createHistoryStore) return Promise.resolve(null);
+    return defaultUsageStore(scope);
+  }
+
   private async record(accounts: DashboardAccount[], scope: string): Promise<HistoryState> {
     const state = this.state(scope);
     state.queue = state.queue
       .then(async () => {
         if (!state.loaded) {
-          try {
-            state.data = await state.store.read();
-            state.available = true;
-          } catch {
-            state.available = false;
+          state.usageStore = await this.usageStoreFor(scope).catch(() => null);
+          if (!state.usageStore) {
+            try {
+              state.data = await state.store.read();
+              state.available = true;
+            } catch {
+              state.available = false;
+            }
           }
           state.loaded = true;
+        }
+        if (state.usageStore) {
+          await this.recordInStore(state, accounts, scope);
+          return;
         }
         // Never overwrite an unreadable/unknown history file. Current snapshots
         // remain visible while persistence explicitly reports unavailable.
@@ -292,6 +384,62 @@ export class AccountAnalyticsService {
       });
     await state.queue;
     return state;
+  }
+
+  /** The store decides which readings are new; the JSON history is imported once, first. */
+  private async recordInStore(
+    state: HistoryState,
+    accounts: DashboardAccount[],
+    scope: string
+  ): Promise<void> {
+    const store = state.usageStore as AacStore;
+    if (!state.backfilled) {
+      const providers = new Map(
+        accounts.map((account) => [accountAnalyticsIdentity(account), account.provider])
+      );
+      // A failed import is retried at the next sample; live readings wait for it, so the
+      // older history is never refused as older than the latest reading.
+      await backfillUsageHistory(store, scope, providers);
+      state.backfilled = true;
+    }
+    const now = (this.deps.now ?? Date.now)();
+    const observations = accounts.slice(0, MAX_ACCOUNTS_PER_SAMPLE).flatMap((account) => {
+      const observation = storeObservationFromAccount(account, now, STORE_RETENTION_MS);
+      return observation ? [observation] : [];
+    });
+    try {
+      await store.record(observations);
+      state.available = true;
+    } catch {
+      state.available = false;
+    }
+  }
+
+  /** The history for a time range: from the store (thinned there) or the in-memory JSON. */
+  private async historyFor(
+    state: HistoryState,
+    fromMs: number,
+    toMs: number,
+    nowMs: number,
+    bucketMs: number | null
+  ): Promise<AccountAnalyticsHistoryData | null> {
+    if (!state.usageStore) return state.data;
+    try {
+      const records = await state.usageStore.historyRecords({
+        fromMs: Math.max(0, Math.floor(fromMs)),
+        toMs: Math.max(0, Math.ceil(toMs)),
+        nowMs,
+        thinning: bucketMs === null ? { kind: 'history' } : { kind: 'bucket', bucketMs },
+      });
+      return {
+        schemaVersion: 1,
+        collectedSince: records[0]?.sampledAt ?? new Date(nowMs).toISOString(),
+        records,
+      };
+    } catch {
+      state.available = false;
+      return null;
+    }
   }
 
   async get(requested: AccountAnalyticsQuery): Promise<AccountAnalytics> {
@@ -328,9 +476,14 @@ export class AccountAnalyticsService {
     );
     const { coverage, ...activity } = activityResult;
     let oldestQuota = Infinity;
-    for (const record of state.data?.records ?? []) {
-      const sampled = Date.parse(record.sampledAt);
-      if (Number.isFinite(sampled) && sampled < oldestQuota) oldestQuota = sampled;
+    if (state.usageStore) {
+      const stored = await state.usageStore.oldest().catch(() => null);
+      if (stored !== null && Number.isFinite(stored)) oldestQuota = stored;
+    } else {
+      for (const record of state.data?.records ?? []) {
+        const sampled = Date.parse(record.sampledAt);
+        if (Number.isFinite(sampled) && sampled < oldestQuota) oldestQuota = sampled;
+      }
     }
     const oldest = Math.min(oldestQuota, coverage?.oldestHourAt ?? Infinity);
     const availableFrom = Number.isFinite(oldest)
@@ -339,6 +492,8 @@ export class AccountAnalyticsService {
     const range =
       query.range === 'all' ? resolveAccountAnalyticsRange(query, now, availableFrom) : provisional;
     const { from, to } = range;
+    const history = await this.historyFor(state, from, to, now, range.bucketMinutes * 60_000);
+    const stored = state.usageStore !== null;
 
     const registry = dashboardRegistryFacts(
       dashboard,
@@ -350,7 +505,7 @@ export class AccountAnalyticsService {
         (query.account === 'all' || query.account === account.id)
     );
     const series = accounts.map((account) =>
-      accountSeries(account, state.data, from, to, range.bucketMinutes, {
+      accountSeries(account, history, from, to, range.bucketMinutes, {
         switchable: registry.switchable(account),
         hidden: registry.hidden(account),
       })
@@ -365,7 +520,7 @@ export class AccountAnalyticsService {
       registry,
       accounts: dashboard.accounts,
       account: query.account,
-      records: state.data?.records ?? [],
+      records: history?.records ?? [],
       from,
       to,
       providersWithActivity: coverage?.providersWithActivity ?? [],
@@ -394,8 +549,11 @@ export class AccountAnalyticsService {
       filters: { platform: query.platform, provider: query.provider, account: query.account },
       history: {
         status: state.available ? 'ok' : 'unavailable',
-        retentionDays: 30,
-        collectedSince: state.data?.collectedSince ?? null,
+        retentionDays: stored ? STORE_RETENTION_DAYS : 30,
+        collectedSince:
+          (stored && Number.isFinite(oldestQuota) ? new Date(oldestQuota).toISOString() : null) ??
+          history?.collectedSince ??
+          null,
         oldestSampleAt: stamps[0] ?? null,
         newestSampleAt: stamps[stamps.length - 1] ?? null,
         sampleCount,
@@ -403,7 +561,9 @@ export class AccountAnalyticsService {
           ? 'Quota history could not be saved or read. Current account usage remains available.'
           : sampleCount === 0
             ? 'No measured quota history is available for this selection yet.'
-            : 'Quota observations are retained for up to 30 days, with older readings downsampled hourly. Missing readings remain gaps; percentages and balances are not added or averaged.',
+            : stored
+              ? 'Every changed quota reading is kept for 90 days, and hourly and daily summaries are kept after that. Missing readings remain gaps; percentages and balances are not added or averaged.'
+              : 'Quota observations are retained for up to 30 days, with older readings downsampled hourly. Missing readings remain gaps; percentages and balances are not added or averaged.',
       },
       summary: {
         accountCount: accounts.length,
@@ -453,12 +613,27 @@ export class AccountAnalyticsService {
           }
       const accounts = [...unique.values()];
       const state = await this.record(accounts, scope);
-      if (sampleListeners.size > 0)
+      if (sampleListeners.size > 0) {
+        const sampledAt = (this.deps.now ?? Date.now)();
+        const history = state.usageStore
+          ? await this.historyFor(
+              state,
+              sampledAt - SNAPSHOT_HISTORY_MS,
+              sampledAt,
+              sampledAt,
+              null
+            )
+          : state.data;
+        const longBurn = state.usageStore
+          ? await longBurnFor(state.usageStore, accounts, sampledAt).catch(() => undefined)
+          : undefined;
         notifySample({
           accounts,
-          history: state.available ? state.data : null,
-          sampledAt: (this.deps.now ?? Date.now)(),
+          history: state.available ? history : null,
+          sampledAt,
+          ...(longBurn ? { longBurn } : {}),
         });
+      }
     })().finally(() => {
       this.pendingSample = null;
     });

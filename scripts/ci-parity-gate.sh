@@ -66,6 +66,17 @@ bun run lint
 bun run format:check
 bun run build:all
 bun run ui:validate
+# The history store's Rust crate (docs/store.md 9.4): format, lints, the crash-cut and
+# corruption suites, then this computer's module into dist/native. AAC_STORE_RUST=off skips it
+# on a machine that may not run Rust builds; the dashboard then builds without the module.
+if [[ "${AAC_STORE_RUST:-on}" == "off" ]]; then
+  echo "[!] AAC_STORE_RUST=off: skipping the history store's Rust checks."
+elif command -v cargo >/dev/null 2>&1; then
+  bun run store:check
+  bun run store:build
+else
+  echo "[!] cargo is not installed: skipping the history store's Rust checks."
+fi
 
 # Child tests and Python imports must start inside a private home with no
 # inherited provider credentials, config overrides, or production executables.

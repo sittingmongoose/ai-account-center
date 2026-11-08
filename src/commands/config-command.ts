@@ -53,6 +53,13 @@ const CONFIG_SUBCOMMAND_ROUTES: readonly NamedCommandRoute[] = [
       process.exitCode = await handleProxyCommand(args);
     },
   },
+  {
+    name: 'store',
+    handle: async (args) => {
+      const { handleStoreCommand } = await import('./store-command');
+      process.exitCode = await handleStoreCommand(args);
+    },
+  },
 ];
 
 interface ConfigCommandDependencies {

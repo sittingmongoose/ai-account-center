@@ -65,7 +65,8 @@ import {
   stopAccountLifecycleMaintenance,
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
-import { startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
+import { openAacStore, startAacStoreMaintenance } from '../store/store-service';
 import { startScoreboardService } from './scoreboard/scoreboard-service';
 import { startStatusService } from './status/status-service';
 import { getSignInHealth } from './services/signin-health-service';
@@ -296,6 +297,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let httpsServer: https.Server | null = null;
   let stopCgroupForeignCheck: (() => void) | null = null;
   let stopAgentUsageSnapshot: (() => void) | null = null;
+  let stopStoreMaintenance: (() => void) | null = null;
   let stopStatusService: (() => void) | null = null;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
@@ -320,6 +322,8 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopAccountAnalyticsSampling();
     stopAgentUsageSnapshot?.();
     stopAgentUsageSnapshot = null;
+    stopStoreMaintenance?.();
+    stopStoreMaintenance = null;
     stopStatusService?.();
     stopStatusService = null;
     stopCgroupForeignCheck?.();
@@ -406,6 +410,18 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
               }
             : null;
         },
+      });
+      // The history store (docs/store.md): opened before the first sample, which waits for it;
+      // without the native module the dashboard runs as before, without stored history.
+      void openAacStore().then((opened) => {
+        if (opened.store)
+          stopStoreMaintenance = startAacStoreMaintenance({
+            snapshotDirectory: async () => (await readSnapshotSettings())?.directory ?? null,
+          });
+        else if (opened.reason && opened.reason !== 'missing' && opened.reason !== 'disabled')
+          logger.warn('store.unavailable', 'The history store is unavailable', {
+            reason: opened.reason,
+          });
       });
       // Status tab readers and collectors (read-only; process collectors run only while viewed).
       stopStatusService = startStatusService();

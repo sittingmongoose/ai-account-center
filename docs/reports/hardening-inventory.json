@@ -1,8 +1,8 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1401,
-    "filesAffected": 139,
+    "totalOccurrences": 1408,
+    "filesAffected": 142,
     "hotpathOccurrences": 749,
     "hotpathFilesAffected": 83,
     "topHotpathFiles": [
@@ -541,11 +541,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 744,
-      "typedThrows": 212,
+      "totalThrows": 745,
+      "typedThrows": 213,
       "plainThrows": 72,
       "otherThrows": 460,
-      "adoptionRatio": 0.2849,
+      "adoptionRatio": 0.2859,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -622,9 +622,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 44,
-      "totalSourceFiles": 492,
-      "coverageRatio": 0.0894,
+      "filesWithCreateLogger": 45,
+      "totalSourceFiles": 499,
+      "coverageRatio": 0.0902,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -652,7 +652,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 218,
+          "count": 219,
           "withLogger": 28
         },
         {
@@ -672,7 +672,7 @@
         },
         {
           "subdomain": "commands",
-          "count": 35,
+          "count": 36,
           "withLogger": 1
         },
         {
@@ -772,7 +772,7 @@
     },
     "largeFiles": {
       "countOver400": 71,
-      "countOver600": 28,
+      "countOver600": 29,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
@@ -815,6 +815,10 @@
           "loc": 932
         },
         {
+          "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
+          "loc": 924
+        },
+        {
           "file": "src/web-server/services/analytics-remote-sources.ts",
           "loc": 918
         },
@@ -825,10 +829,6 @@
         {
           "file": "src/cliproxy/accounts/registry.ts",
           "loc": 871
-        },
-        {
-          "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
-          "loc": 865
         },
         {
           "file": "src/web-server/usage/native-quota-collector.ts",

@@ -20,6 +20,7 @@ export const ROOT_COMMAND_ROUTES: readonly NamedCommandRoute[] = [
         args[0] !== 'usage-hub' &&
         args[0] !== 'usage-snapshot' &&
         args[0] !== 'proxy' &&
+        args[0] !== 'store' &&
         (hasAnyFlag(args, ['--help', '-h']) || args[0] === 'help')
       ) {
         const { showConfigCommandHelp } = await import('./config-command-options');
@@ -129,6 +130,12 @@ export async function requiresRuntimeServices(args: string[]): Promise<boolean> 
     if (subcommand === 'usage-snapshot') {
       return (
         ['status', 'set', 'off'].includes(rest[0]) &&
+        !rest.some((arg) => ['help', '--help', '-h'].includes(arg))
+      );
+    }
+    if (subcommand === 'store') {
+      return (
+        ['status', 'check', 'backup', 'restore'].includes(rest[0]) &&
         !rest.some((arg) => ['help', '--help', '-h'].includes(arg))
       );
     }

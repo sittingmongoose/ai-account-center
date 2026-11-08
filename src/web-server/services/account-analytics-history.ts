@@ -124,14 +124,17 @@ export function analyticsWindowIdentity(window: DashboardAccountWindow): string 
   return JSON.stringify(identity);
 }
 
-function sourcePlatform(account: DashboardAccount): DashboardPlatform {
+export function sourcePlatform(account: DashboardAccount): DashboardPlatform {
   // Live Claude quota can come from Windows while the launch selector is Mac.
   if (account.source.includes('on Windows')) return 'windows';
   if (account.source.includes('on Mac')) return 'mac';
   return account.platform;
 }
 
-function observation(value: unknown): AccountAnalyticsObservation | null {
+/** One stored observation, validated field by field; null when it is not one. */
+export function decodeAccountAnalyticsObservation(
+  value: unknown
+): AccountAnalyticsObservation | null {
   if (!object(value)) return null;
   const sampledAt = analyticsTimestamp(value.sampledAt);
   const observedAt = analyticsTimestamp(value.observedAt);
@@ -177,7 +180,7 @@ export function decodeAccountAnalyticsHistory(value: unknown): AccountAnalyticsH
     schemaVersion: 1,
     collectedSince: analyticsTimestamp(value.collectedSince) as string,
     records: value.records.flatMap((record) => {
-      const safe = observation(record);
+      const safe = decodeAccountAnalyticsObservation(record);
       return safe ? [safe] : [];
     }),
   };

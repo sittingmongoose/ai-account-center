@@ -277,7 +277,8 @@ export interface AccountAnalytics {
   filters: Pick<AccountAnalyticsQuery, 'platform' | 'provider' | 'account'>;
   history: {
     status: 'ok' | 'unavailable';
-    retentionDays: 30;
+    /** 30 for the JSON history file, 90 with the history store (docs/store.md). */
+    retentionDays: number;
     collectedSince: string | null;
     oldestSampleAt: string | null;
     newestSampleAt: string | null;

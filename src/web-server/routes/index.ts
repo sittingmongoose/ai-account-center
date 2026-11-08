@@ -33,6 +33,7 @@ import antigravityRoutes from './antigravity-routes';
 import authRoutes from './auth-routes';
 import claudeDesktopRoutes from './claude-desktop-routes';
 import barRoutes from './bar-routes';
+import { storeRoutes, usageRoutes } from './store-routes';
 import scoreboardRoutes from './scoreboard-routes';
 import statusRoutes from './status-routes';
 
@@ -104,6 +105,9 @@ apiRoutes.use('/claude', claudeDesktopRoutes);
 apiRoutes.use('/codex', codexRoutes);
 apiRoutes.use('/antigravity', antigravityRoutes);
 apiRoutes.use('/bar', barRoutes);
+// The history store (docs/store.md 8.1): read-only, sessions and paired devices.
+apiRoutes.use('/store', storeRoutes);
+apiRoutes.use('/usage', usageRoutes);
 apiRoutes.use('/status', statusRoutes);
 apiRoutes.use('/scoreboard', scoreboardRoutes);
 

@@ -62,6 +62,9 @@ _serve*.log
 __pycache__/
 *.pyc
 
+# History store crate (docs/store.md): build output and machine-specific prebuilt modules
+native/aac-store/target/
+native/aac-store/prebuilt/
 # Status readers crate: build output and machine-specific prebuilt modules
 native/aac-status/target/
 native/aac-status/prebuilt/
