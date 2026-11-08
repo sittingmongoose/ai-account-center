@@ -7,7 +7,7 @@ authorship, copyright, license and repository history are retained.
 
 ## Source setup
 
-Use Node.js 22, matching CI, Bun, Rust 1.98.0 with
+Use Node.js 22, matching CI, Bun, Rust 1.99.1 with
 `wasm32-unknown-unknown`, and wasm-pack **0.15.0**. Slint/runtime compiler are pinned to
 **1.18.1** in the dashboard manifest and lockfile.
 Install the build tool with `cargo install wasm-pack --version 0.15.0 --locked`.

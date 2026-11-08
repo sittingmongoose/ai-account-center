@@ -53,7 +53,7 @@ function fixture(): string {
   );
   fs.writeFileSync(
     path.join(crate, 'Cargo.lock'),
-    '[[package]]\nname = "slint"\nversion = "1.18.1"\n[[package]]\nname = "slint-build"\nversion = "1.18.1"\n'
+    '[[package]]\nname = "slint"\nversion = "1.18.1"\n[[package]]\nname = "slint-build"\nversion = "1.18.1"\n[[package]]\nname = "wasm-bindgen"\nversion = "0.2.130"\n[[package]]\nname = "wasm-bindgen-futures"\nversion = "0.4.80"\n[[package]]\nname = "js-sys"\nversion = "0.3.107"\n[[package]]\nname = "web-sys"\nversion = "0.3.107"\n'
   );
   fs.writeFileSync(
     path.join(crate, 'public', 'index.html'),
@@ -97,7 +97,7 @@ function fixture(): string {
   return root;
 }
 
-function runner(calls: Array<[string, string[]]>, rust = 'rustc 1.98.0 (fixture)') {
+function runner(calls: Array<[string, string[]]>, rust = 'rustc 1.99.1 (fixture)') {
   return (command: string, args: string[]) => {
     calls.push([command, args]);
     if (command.includes('rustc')) return rust;
@@ -146,7 +146,7 @@ function addLeptosCrate(root: string): Buffer {
   fs.writeFileSync(path.join(leptos, 'Cargo.toml'), '[package]\nname = "aac-web"\n');
   fs.writeFileSync(
     path.join(leptos, 'Cargo.lock'),
-    'version = 4\n\n[[package]]\nname = "leptos"\nversion = "0.9.0-rc1"\n'
+    'version = 4\n\n[[package]]\nname = "leptos"\nversion = "0.9.0-rc1"\n[[package]]\nname = "wasm-bindgen"\nversion = "0.2.130"\n[[package]]\nname = "wasm-bindgen-futures"\nversion = "0.4.80"\n[[package]]\nname = "js-sys"\nversion = "0.3.107"\n[[package]]\nname = "web-sys"\nversion = "0.3.107"\n'
   );
   fs.writeFileSync(path.join(leptos, 'src', 'lib.rs'), '// fixture\n');
   fs.writeFileSync(path.join(leptos, 'style', 'app.css'), 'body{margin:0}\n'.repeat(80));
@@ -344,7 +344,7 @@ describe('Slint browser build integration', () => {
     fs.mkdirSync(oldUi, { recursive: true });
     fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
     expect(() => build({ repoRoot: root, run: runner(calls, 'rustc 1.91.0 (fixture)') })).toThrow(
-      '1.98'
+      '1.99.1'
     );
     expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
   });

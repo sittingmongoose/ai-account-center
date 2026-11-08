@@ -12,7 +12,17 @@ const { runWithUiBuildLock, wasmTargetDir } = require('./ui-build-lock');
 
 const SLINT_VERSION = '1.18.1';
 const WASM_PACK_VERSION = '0.15.0';
-const MINIMUM_RUST_MINOR = 98;
+const MINIMUM_RUST_MINOR = 99;
+/**
+ * wasm-pack installs the wasm-bindgen CLI at the version in Cargo.lock. These pins are the
+ * newest release of each crate (2026-11-08); the CLI and the lockfile must be the same version.
+ */
+const WASM_BINDGEN_PINS = {
+  'wasm-bindgen': '0.2.130',
+  'wasm-bindgen-futures': '0.4.80',
+  'js-sys': '0.3.107',
+  'web-sys': '0.3.107',
+};
 const WASM_NAME = 'ccs_account_dashboard';
 /** The one import of the wasm-bindgen glue that the packaged bridge.js rewrites. */
 const BRIDGE_IMPORT = `'./pkg/${WASM_NAME}.js'`;
@@ -79,7 +89,7 @@ function assertToolchain(run, env, cargoBin, crate) {
     (Number(version[1]) === 1 && Number(version[2]) < MINIMUM_RUST_MINOR)
   ) {
     throw new Error(
-      'The Slint dashboard requires Rust 1.98 or newer. Install the pinned browser toolchain with rustup toolchain install 1.98.0.'
+      'The Slint dashboard requires Rust 1.99.1 or newer. Install the pinned browser toolchain with rustup toolchain install 1.99.1.'
     );
   }
   const targets = run(toolPath('rustup', cargoBin), ['target', 'list', '--installed'], {
@@ -99,6 +109,20 @@ function assertToolchain(run, env, cargoBin, crate) {
     throw new Error(
       `The dashboard requires wasm-pack ${WASM_PACK_VERSION}. Run cargo install wasm-pack --version ${WASM_PACK_VERSION} --locked.`
     );
+  }
+}
+
+/** One version of each wasm-bindgen crate, so the CLI wasm-pack downloads matches the lockfile. */
+function assertLockedWasmBindgen(lock, label) {
+  const packages = lock.package ?? [];
+  for (const [name, version] of Object.entries(WASM_BINDGEN_PINS)) {
+    const entries = packages.filter((entry) => entry.name === name);
+    if (entries.length !== 1 || entries[0].version !== version) {
+      const found = entries.map((entry) => entry.version).join(', ') || 'missing';
+      throw new Error(
+        `${label} Cargo.lock must resolve ${name} to ${version} so the wasm-bindgen CLI matches the lockfile (found ${found}).`
+      );
+    }
   }
 }
 
@@ -211,7 +235,9 @@ function buildLeptosPages({ crate, repoRoot, run, env, cargoBin, lock }) {
   // refuse a linked or incomplete crate, and a lock that drifted from the pinned version, before building anything
   leptosFingerprint(leptosCrate);
   if (!fs.existsSync(path.join(leptosCrate, 'Cargo.toml'))) return null;
-  assertLockedLeptos(parse(fs.readFileSync(path.join(leptosCrate, 'Cargo.lock'), 'utf8')));
+  const leptosLock = parse(fs.readFileSync(path.join(leptosCrate, 'Cargo.lock'), 'utf8'));
+  assertLockedLeptos(leptosLock);
+  assertLockedWasmBindgen(leptosLock, 'Leptos');
   const pkg = path.join(leptosCrate, 'pkg');
   runWithUiBuildLock(
     toolPath('wasm-pack', cargoBin),
@@ -437,7 +463,9 @@ function buildUi(options = {}) {
   const packagedUi = path.join(repoRoot, 'dist', 'ui');
 
   assertSlintPin(parse(fs.readFileSync(path.join(crate, 'Cargo.toml'), 'utf8')));
-  assertLockedSlint(parse(fs.readFileSync(path.join(crate, 'Cargo.lock'), 'utf8')));
+  const dashboardLock = parse(fs.readFileSync(path.join(crate, 'Cargo.lock'), 'utf8'));
+  assertLockedSlint(dashboardLock);
+  assertLockedWasmBindgen(dashboardLock, 'Dashboard');
   assertToolchain(run, env, cargoBin, crate);
   // wasm-pack writes into this worktree's own web-dashboard/pkg (--out-dir is crate-relative),
   // even though the cargo target folder is shared.
@@ -569,6 +597,7 @@ module.exports = {
   assertSlintPin,
   assertLockedSlint,
   assertLockedLeptos,
+  assertLockedWasmBindgen,
   assertBridgeImport,
   versionedBridgeSource,
   stampedSwSource,

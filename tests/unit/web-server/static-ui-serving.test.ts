@@ -55,7 +55,7 @@ function buildFixtureUi(root: string): typeof manifest {
   );
   fs.writeFileSync(
     path.join(crate, 'Cargo.lock'),
-    '[[package]]\nname = "slint"\nversion = "1.18.1"\n[[package]]\nname = "slint-build"\nversion = "1.18.1"\n'
+    '[[package]]\nname = "slint"\nversion = "1.18.1"\n[[package]]\nname = "slint-build"\nversion = "1.18.1"\n[[package]]\nname = "wasm-bindgen"\nversion = "0.2.130"\n[[package]]\nname = "wasm-bindgen-futures"\nversion = "0.4.80"\n[[package]]\nname = "js-sys"\nversion = "0.3.107"\n[[package]]\nname = "web-sys"\nversion = "0.3.107"\n'
   );
   fs.writeFileSync(path.join(crate, 'public', 'index.html'), INDEX);
   fs.writeFileSync(
@@ -75,7 +75,7 @@ function buildFixtureUi(root: string): typeof manifest {
     repoRoot: root,
     run: (command: string, args: string[]) =>
       command.includes('rustc')
-        ? 'rustc 1.98.0 (fixture)'
+        ? 'rustc 1.99.1 (fixture)'
         : command.includes('rustup')
           ? 'wasm32-unknown-unknown\n'
           : command.includes('wasm-pack')

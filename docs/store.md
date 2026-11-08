@@ -519,7 +519,7 @@ whole and atomically:
 
 ```
 native/aac-store/
-  Cargo.toml, Cargo.lock, rust-toolchain.toml (1.98.0, the web dashboard's pin), build.rs (napi-build)
+  Cargo.toml, Cargo.lock, rust-toolchain.toml (1.99.1, the web dashboard's pin), build.rs (napi-build)
   registry.json             value registry (2.7)
   src/lib.rs                napi exports only
   src/log/                  frame, canonical msgpack, segment, manifest, writer, reader, recovery, compress
@@ -796,7 +796,7 @@ or older glibc than the VM):
 bun run store:build
 ```
 
-It needs cargo with rustup (the crate's `rust-toolchain.toml` pins 1.98.0 and installs it), a C
+It needs cargo with rustup (the crate's `rust-toolchain.toml` pins 1.99.1 and installs it), a C
 compiler for zstd (`build-essential`), and glibc no newer than the VM's. No napi CLI is needed: cargo
 builds the cdylib and the script copies it as `.node`. Copy `native/aac-store/prebuilt/` to the VM's
 checkout when built elsewhere; the next `bun run build` puts it in `dist/native/`. Until then the VM's

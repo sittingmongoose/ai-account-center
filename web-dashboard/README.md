@@ -29,7 +29,7 @@ constraints; browser resize and fullscreen requests update both layout and canva
 
 ## Build
 
-Rust **1.98.0** with `wasm32-unknown-unknown`, and wasm-pack **0.15.0**:
+Rust **1.99.1** with `wasm32-unknown-unknown`, and wasm-pack **0.15.0**:
 
 ```sh
 cargo install wasm-pack --version 0.15.0 --locked
@@ -39,7 +39,7 @@ wasm-pack build web-dashboard --release --target web --out-dir pkg --out-name cc
 Both `slint` and `slint-build` are pinned to **=1.18.1** in Cargo.toml and locked
 in Cargo.lock. The repository builder checks the wasm-pack version before replacing
 the packaged UI. wasm-pack 0.15.0 still downloads Binaryen v117, which cannot
-validate the installed Rust 1.98 output, so its optional wasm-opt pass is disabled.
+validate the installed Rust 1.99 output, so its optional wasm-opt pass is disabled.
 Rust release optimization and LTO remain enabled. The repository builder uses
 the pinned Binaryen 132 JavaScript API for a final compatibility transform;
 it does not run Binaryen's general optimizer.
@@ -61,7 +61,7 @@ The final build replaces tail calls to imports and indirect tail calls with
 ordinary calls followed by explicit returns. This avoids the boundary path in
 [WebKit bug 325447](https://bugs.webkit.org/show_bug.cgi?id=325447), which can
 crash iOS 27 WebContent with `EXC_ARM_PAC_FAIL` while authenticating a Wasm return
-address. Rust 1.98, release optimization, SIMD, and direct internal tail calls
+address. Rust 1.99, release optimization, SIMD, and direct internal tail calls
 remain enabled. Indirect calls can use additional stack frames, so the transform
 is specific to this dashboard; it is not a general tail-call polyfill. The
 builder validates both modules, records transformed/retained counts in the build
@@ -215,7 +215,7 @@ event.
 
 On 2026-10-21, six balanced fixture runs per configuration in hardware-accelerated
 Chrome on the Quadro P1000 (1440 x 900, DPR 1) compared the deployed UI with Rust
-1.98.0/wasm-pack 0.15.0 cross-builds. Medians, excluding warm-up runs:
+1.99.1/wasm-pack 0.15.0 cross-builds. Medians, excluding warm-up runs:
 
 | Measurement | Deployed UI | SIMD + tail calls, `s` | SIMD + tail calls, `2` |
 | --- | ---: | ---: | ---: |
