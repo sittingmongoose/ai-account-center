@@ -682,12 +682,12 @@ describe('Pending-marker retry', () => {
       }),
     });
     expect(atStop).toEqual([
-      { desktop: false, daemon: true, desktops: 0 },
-      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
     ]);
     expect(first.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0 },
-      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
       { desktop: true, daemon: false, desktops: 2 },
     ]);
   });
@@ -700,7 +700,14 @@ describe('Pending-marker retry', () => {
     );
     await bridge.execute(deps);
     // The intent before the updater, naming the daemon, the same on to stop(), then what stop() closed.
-    expect(value.marks[0]).toEqual({ desktop: true, daemon: true, desktops: 1 });
+    expect(value.marks[0]).toEqual({
+      desktop: true,
+      daemon: true,
+      desktops: 1,
+      version: '1.0.0',
+      // retry()'s stored marker, as the fixture keeps it.
+      install: { earlier: JSON.stringify({ version: '1.0.0' }) },
+    });
     expect(value.marks[value.marks.length - 1]).toEqual({
       desktop: true,
       daemon: true,
@@ -724,8 +731,8 @@ describe('Pending-marker retry', () => {
     expect(result.messageCode).toBe('codex_busy');
     // stop() never ran its plan, so the install intent stands: the next click checks the daemon.
     expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0 },
-      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
     ]);
   });
 
@@ -877,7 +884,9 @@ describe('Pending-marker retry', () => {
     });
     expect(result.status).toBe('failed');
     // The intent, then the marker from before it put back exactly: there was none.
-    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: 0 }]);
+    expect(value.marks).toEqual([
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+    ]);
     expect(value.deps.marked()).toBeNull();
   });
 
@@ -913,7 +922,9 @@ describe('Pending-marker retry', () => {
     const result = await bridge.execute(partialCli(value, false));
     expect(result.status).toBe('failed');
     expect(result.version).toBe('2.0.0');
-    expect(value.marks).toEqual([{ desktop: false, daemon: true, desktops: 0 }]);
+    expect(value.marks).toEqual([
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+    ]);
     expect(value.deps.marked()).toBeNull();
   });
 
@@ -1131,7 +1142,13 @@ describe('Pending-marker retry', () => {
       operation: 'cli',
       runtime: () => runtime({}, { daemon: true }),
     });
-    expect(atUpdate).toEqual({ version: '1.0.0', desktop: false, daemon: true, desktops: 0 });
+    expect(atUpdate).toEqual({
+      version: '1.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: 0,
+      install: { earlier: null },
+    });
   });
 
   it('puts the earlier marker back exactly when the updater turns out a no-op', async () => {
@@ -1258,6 +1275,91 @@ describe('Pending-marker retry', () => {
     expect(value.deps.marked()).toBeNull();
   });
 
+  it.each([
+    { name: 'Python handed over after its own install', version: '2.0.0', updated: false },
+    { name: 'a helper was killed during its own install', version: '1.0.0', updated: true },
+  ])(
+    'settles an install intent as its own when $name',
+    async ({ version: installedAtStart, updated }) => {
+      // The intent names the daemon and keeps the marker from before it. With no daemon found under the
+      // lock (a proxy only, or none ever), nothing is owed: never a false restart_not_running.
+      const value = fixture();
+      let installed = installedAtStart;
+      const earlier = JSON.stringify({ version: '0.9.0' });
+      value.deps.restoreMarker(
+        JSON.stringify({
+          version: '1.0.0',
+          desktop: false,
+          daemon: true,
+          desktops: 0,
+          install: { earlier },
+        })
+      );
+      const result = await bridge.execute({
+        ...value.deps,
+        readVersion: async () => installed,
+        update: async () => {
+          if (updated) installed = '2.0.0';
+        },
+        pending: () => false,
+        operation: 'cli',
+        runtime: () => runtime({}, {}),
+      });
+      expect([result.status, result.messageCode]).toEqual(['updated', 'updated']);
+      expect(result.previousVersion).toBe('1.0.0');
+      expect(value.deps.marked()).toBeNull();
+    }
+  );
+
+  it('puts back the marker from before an install intent once the update is a no-op', async () => {
+    // Killed before the installer replaced anything: the next click installs nothing new.
+    const value = fixture();
+    const earlier = JSON.stringify({ version: '0.9.0' });
+    value.deps.restoreMarker(
+      JSON.stringify({
+        version: '1.0.0',
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        install: { earlier },
+      })
+    );
+    const result = await bridge.execute({
+      ...value.deps,
+      readVersion: async () => '1.0.0',
+      update: async () => {},
+      pending: () => false,
+      operation: 'cli',
+      runtime: () => runtime({}, {}),
+    });
+    expect(result.status).toBe('current');
+    expect(value.restored[value.restored.length - 1]).toBe(earlier);
+  });
+
+  it('keeps what the marker from before an install intent owed', async () => {
+    const value = fixture();
+    const earlier = JSON.stringify({ version: '0.9.0', desktop: true, daemon: false, desktops: 1 });
+    value.deps.restoreMarker(
+      JSON.stringify({
+        version: '1.0.0',
+        desktop: true,
+        daemon: true,
+        desktops: 1,
+        install: { earlier },
+      })
+    );
+    const result = await bridge.execute({
+      ...value.deps,
+      readVersion: async () => '2.0.0',
+      update: async () => {},
+      pending: () => false,
+      operation: 'cli',
+      runtime: () => runtime({}, {}),
+    });
+    // A desktop an earlier run closed is still owed, and said once.
+    expect([result.status, result.messageCode]).toEqual(['restart_failed', 'restart_not_running']);
+  });
+
   it('settles the intent on the stop plan once an update replaced the app', async () => {
     const value = fixture();
     const marks: unknown[] = [];
@@ -1293,7 +1395,13 @@ describe('Pending-marker retry', () => {
         },
       }),
     });
-    expect(atUpdate).toEqual({ version: '1.0.0', desktop: false, daemon: true, desktops: 0 });
+    expect(atUpdate).toEqual({
+      version: '1.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: 0,
+      install: { earlier: null },
+    });
   });
 
   it('keeps the intent on the marker until stop() hands over its plan', async () => {
@@ -1309,7 +1417,13 @@ describe('Pending-marker retry', () => {
         },
       }),
     });
-    expect(atStop).toEqual({ version: '1.0.0', desktop: false, daemon: true, desktops: 0 });
+    expect(atStop).toEqual({
+      version: '1.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: 0,
+      install: { earlier: null },
+    });
   });
 
   it('does not run the readiness check when no daemon is owed', async () => {
@@ -1465,8 +1579,8 @@ describe('Pending-marker retry', () => {
     });
     // Not the desktop; the install intent stands, since stop() failed before it made its plan.
     expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0 },
-      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
     ]);
   });
 
@@ -1515,7 +1629,13 @@ describe('Pending-marker retry', () => {
     // The earlier marker is the intent written before the updater: the daemon still runs the old
     // binary, so it stays owed.
     expect(value.restored).toEqual([
-      JSON.stringify({ version: '1.0.0', desktop: false, daemon: true, desktops: 0 }),
+      JSON.stringify({
+        version: '1.0.0',
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        install: { earlier: null },
+      }),
     ]);
     expect(value.deps.marked()?.daemon).toBe(true);
   });
@@ -1554,7 +1674,14 @@ describe('Pending-marker retry', () => {
     await bridge.execute(deps);
     expect(value.restored.map((text) => JSON.parse(text))).toEqual([
       // With the intent written before the updater, the running daemon is owed as well.
-      { version: '1.0.0', desktop: true, daemon: true, desktops: 1 },
+      {
+        version: '1.0.0',
+        desktop: true,
+        daemon: true,
+        desktops: 1,
+        // retry()'s stored marker, as the fixture keeps it.
+        install: { earlier: JSON.stringify({ version: '1.0.0' }) },
+      },
     ]);
   });
 
@@ -1656,8 +1783,8 @@ describe('Pending-marker retry', () => {
       runtime: () => ({ ...failingStop({}, {}), retiredPlan: scanFails }),
     });
     expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0 },
-      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
     ]);
   });
 
@@ -1680,7 +1807,14 @@ describe('Pending-marker retry', () => {
     expect(
       value.marks.every(
         (mark) =>
-          JSON.stringify(mark) === JSON.stringify({ desktop: false, daemon: true, desktops: 0 })
+          JSON.stringify(mark) ===
+          JSON.stringify({
+            desktop: false,
+            daemon: true,
+            desktops: 0,
+            version: '1.0.0',
+            install: { earlier: null },
+          })
       )
     ).toBe(true);
   });
@@ -1695,7 +1829,13 @@ describe('Pending-marker retry', () => {
     // The earlier marker is the intent written before the updater: the daemon still runs the old
     // binary, so it stays owed.
     expect(value.restored).toEqual([
-      JSON.stringify({ version: '1.0.0', desktop: false, daemon: true, desktops: 0 }),
+      JSON.stringify({
+        version: '1.0.0',
+        desktop: false,
+        daemon: true,
+        desktops: 0,
+        install: { earlier: null },
+      }),
     ]);
     expect(value.deps.marked()?.daemon).toBe(true);
   });
@@ -1705,8 +1845,8 @@ describe('Pending-marker retry', () => {
     await bridge.execute({ ...value.deps, operation: 'cli', runtime: () => failingStop({}, {}) });
     // stop() failed before it made its plan, so the install intent stands.
     expect(value.marks).toEqual([
-      { desktop: false, daemon: true, desktops: 0 },
-      { desktop: false, daemon: true, desktops: 0 },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
+      { desktop: false, daemon: true, desktops: 0, version: '1.0.0', install: { earlier: null } },
     ]);
   });
 
@@ -1912,8 +2052,15 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       procs: running,
     });
     expect(result.status).toBe('restart_failed');
-    // The intent written before the updater ran: the daemon on the old binary.
-    expect(read(atStop)).toEqual({ version: '3.0.0', desktop: false, daemon: true, desktops: 0 });
+    // The intent written before the updater ran: the daemon on the old binary, and the version the
+    // update began from, so a click after a kill never takes 3.0.0 for a no-op.
+    expect(read(atStop)).toEqual({
+      version: '2.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: 0,
+      install: { earlier: null },
+    });
     expect(read(marker)).toEqual({
       version: '3.0.0',
       desktop: true,
@@ -1956,7 +2103,13 @@ exports.createCodexActivationRuntime = (home, overrides) => {
       procs: running,
     });
     // Recovery brought the old daemon back, still on the old binary: it is still owed.
-    expect(read(marker)).toEqual({ version: '3.0.0', desktop: false, daemon: true, desktops: 0 });
+    expect(read(marker)).toEqual({
+      version: '2.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: 0,
+      install: { earlier: null },
+    });
   });
 
   it('reads a marker the Python path wrote for a prerelease as a retry', () => {
@@ -2001,7 +2154,13 @@ exports.createCodexActivationRuntime = (home, overrides) => {
     });
     expect(read(atVerify).daemon).toBe(true);
     // Put back as it was before stop(): the update intent naming the daemon.
-    expect(read(marker)).toEqual({ version: '3.0.0', desktop: false, daemon: true, desktops: 0 });
+    expect(read(marker)).toEqual({
+      version: '2.0.0',
+      desktop: false,
+      daemon: true,
+      desktops: 0,
+      install: { earlier: null },
+    });
     expect(result.status).toBe('restart_failed');
   });
 

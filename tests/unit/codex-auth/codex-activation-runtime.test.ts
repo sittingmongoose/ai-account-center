@@ -1224,6 +1224,7 @@ describe("A helper killed during stop()'s own recovery", () => {
       desktop: false,
       daemon: true,
       desktops: 0,
+      install: { earlier: null },
     });
     const next = nextClick(root);
     expect(next.status).toBe(0);

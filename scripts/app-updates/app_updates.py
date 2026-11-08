@@ -646,10 +646,14 @@ def settle_failed_codex_intent(install, before, pending, earlier, old_binary):
         pass
 
 
-def run_codex_bridge(install, deadline, processes, pending):
-    """The fixed bridge's update for a native Ubuntu Codex CLI with its shared daemon, then terminals."""
-    contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])
-    check_terminal(install.platform, contexts)
+def run_codex_bridge(install, deadline, processes, pending, terminals=None):
+    """The fixed bridge's update for a native Ubuntu Codex CLI with its shared daemon, then terminals:
+    those given, already checked, or those `processes` shows."""
+    if terminals is None:
+        contexts, targets = cli_contexts(install, [item for item in processes if "app-server" not in item.args])
+        check_terminal(install.platform, contexts)
+    else:
+        contexts, targets = terminals
     bridge = pathlib.Path(__file__).with_name("app_update_codex.cjs")
     seconds = max(30, min(CODEX_BRIDGE_SECONDS, int(deadline - time.monotonic())))
     payload = json.loads(command([shutil.which("node") or "/usr/bin/node", bridge, "--operation", "cli", "--timeout-seconds", str(seconds)], timeout=seconds + 15, capture=True))
@@ -786,7 +790,10 @@ def update_cli(install, deadline, restart_managed=False):
         if shared:
             earlier = pending.read_bytes() if pending.exists() else None
             old_binary = executable_path(install.path)
-            write_private_json(pending, {"version": before, "desktop": False, "daemon": True, "desktops": 0})
+            # The bridge's own install intent: it keeps the marker from before it, so the bridge treats
+            # it as this install's, not as a restart an earlier run left owed.
+            write_private_json(pending, {"version": before, "desktop": False, "daemon": True, "desktops": 0,
+                                         "install": {"earlier": None if earlier is None else earlier.decode("utf-8")}})
         try:
             perform_cli_update(install, deadline)
         except BaseException:
@@ -795,11 +802,17 @@ def update_cli(install, deadline, restart_managed=False):
             raise
         if shared:
             current = scan(install.platform)
-            if codex_daemon_runs(install, current, old_binary):
-                payload = run_codex_bridge(install, deadline, current, pending)
+            moved = detect_cli(install.app_id, install.platform)
+            # Only an install that changed the version can leave a daemon on the binary it replaced; an
+            # app server starting during a no-op runs the current one. The terminals to reopen are the
+            # first scan's: the scan after the swap no longer matches the old binary.
+            if moved is not None and moved.version and moved.version != before and codex_daemon_runs(install, current, old_binary):
+                payload = run_codex_bridge(install, deadline, current, pending, (contexts, targets))
                 payload["previousVersion"] = before
                 return payload
-            put_back_marker(pending, earlier)
+            # A version that can't be read keeps the intent: the next click checks the daemon.
+            if moved is not None and moved.version:
+                put_back_marker(pending, earlier)
         refreshed = detect_cli(install.app_id, install.platform)
         if refreshed is None or not refreshed.version:
             raise UpdateFailure("version_unknown")

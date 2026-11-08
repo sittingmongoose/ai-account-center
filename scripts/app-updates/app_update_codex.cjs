@@ -76,6 +76,10 @@ function markerObligations(marker, legacyDesktop) {
     : Number.isInteger(marker?.desktops) && marker.desktops > 0 ? marker.desktops : 0;
   return { daemon: marker?.daemon === true, desktops: listed || (marker?.desktop === true || legacyDesktop ? 1 : 0) };
 }
+/** A marker's text read back, or null for none or one that can't be read. */
+function parseMarker(text) {
+  try { const value = text === null ? null : JSON.parse(text); return value && typeof value === 'object' ? value : null; } catch { return null; }
+}
 const addObligations = (prior, plan) => ({ daemon: prior.daemon || plan.daemon, desktops: prior.desktops + plan.desktops });
 const markerFields = (owed) => ({ desktop: owed.desktops > 0, daemon: owed.daemon, desktops: owed.desktops });
 /** Still owed: a daemon `live` doesn't show ready, or any desktop, since none is cleared by looking. */
@@ -209,8 +213,17 @@ async function execute(deps) {
     // marker clears. Versions compare on their numeric part, since the Python path writes a
     // prerelease in full.
     const marker = deps.marked();
-    const unnamed = marker && marker.desktop === undefined && marker.daemon === undefined;
-    prior = markerObligations(marker, Boolean(mode === 'desktop' && unnamed && (restartOnly || markerMatches(marker, output.previousVersion))));
+    // An install intent: a CLI install, this bridge's or Python's own, named the daemon before it began
+    // and kept the marker from before it. It is that install's own intent, not something an earlier run
+    // left closed: what was owed is the marker it kept, the update began from the version it names, and
+    // stop()'s plan settles it, so a click after a kill in the install window owes nothing for a daemon
+    // that never ran.
+    const install = mode === 'cli' && marker && typeof marker.install === 'object' && marker.install !== null;
+    const earlierText = install && typeof marker.install.earlier === 'string' ? marker.install.earlier : null;
+    const base = install ? parseMarker(earlierText) : marker;
+    if (install && version(marker.version)) output.previousVersion = version(marker.version);
+    const unnamed = base && base.desktop === undefined && base.daemon === undefined;
+    prior = markerObligations(base, Boolean(mode === 'desktop' && unnamed && (restartOnly || markerMatches(base, output.previousVersion))));
     retried = stillOwed(prior, { daemon: false });
     if (mode === 'cli') {
       output.updateAttempted = true;
@@ -219,11 +232,14 @@ async function execute(deps) {
       // written. Only stop(), under the startup lock, can say which daemon runs. So the daemon goes in
       // the marker first whatever runs now; the earlier marker comes back exactly if the update turns out
       // to change nothing, and stop()'s plan settles it otherwise.
-      pendingBefore = deps.pending(output.previousVersion);
+      pendingBefore = install ? false : deps.pending(output.previousVersion);
       const intent = { ...prior, daemon: true };
       intended = true;
-      earlierAtInstall = deps.markerSnapshot();
-      deps.mark(markerFields(intent));
+      earlierAtInstall = install ? earlierText : deps.markerSnapshot();
+      const from = output.previousVersion;
+      // The intent keeps the version the update began from and the marker from before it.
+      const intentFields = () => ({ ...markerFields(intent), version: from, install: { earlier: earlierAtInstall } });
+      deps.mark(intentFields());
       updating = true;
       await deps.update();
       updating = false;
@@ -234,8 +250,8 @@ async function execute(deps) {
         if (intended) { if (earlierAtInstall === null) deps.clear(); else deps.restoreMarker(earlierAtInstall); }
         output.status = 'current'; output.messageCode = 'current'; return output;
       }
-      // Until stop() hands over its plan, the marker keeps naming the daemon on the new version.
-      deps.mark(intended ? markerFields(intent) : undefined);
+      // Until stop() hands over its plan, the marker keeps naming the daemon.
+      deps.mark(intentFields());
     }
     const target = mode === 'desktop' && !restartOnly ? version(expected) : null;
     // The runtime hands over its plan under the startup lock, before it signals anything or waits on a
