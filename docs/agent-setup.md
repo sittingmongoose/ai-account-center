@@ -22,7 +22,7 @@ works from macOS or Windows too. Other computers are reached over SSH for their 
 Plan for it, and tell the person before you start: **a source build of about 30 minutes and 5 GB** on a 4-core
 computer (most of it one Rust compile), with four toolchains.
 
-1. **Toolchains,** the versions in the README's **What you need**: Node.js 22, Bun 1.3.9, Rust 1.99.1 with
+1. **Toolchains,** the versions in the README's **What you need**: Node.js 22, Bun 1.4.4, Rust 1.99.1 with
    `wasm32-unknown-unknown`, and wasm-pack 0.15.0. On a Mac, Homebrew's `node` is the newest release, not 22:
    `brew install node@22` and put `$(brew --prefix node@22)/bin` first on `PATH`. A fresh Mac needs the Command Line
    Tools first, and Homebrew asks for the person's password in a terminal: those are their steps.
