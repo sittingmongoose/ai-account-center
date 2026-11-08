@@ -514,7 +514,7 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
     const previous = process.env.CCS_HOME;
     process.env.CCS_HOME = home;
     try {
-      const dir = path.join(home, 'store');
+      const dir = path.join(home, '.ccs', 'store');
       const store = await openStore(dir);
       await store.record([storeObservationFromAccount(accountsAt(START)[0], START, HOUR)] as never);
       await store.close();
