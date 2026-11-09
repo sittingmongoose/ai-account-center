@@ -282,6 +282,9 @@ public sealed class QuotaWindow
     public bool? Enabled { get; set; }
     /// <summary>F6 from the server (MISC): the reset has passed and the reading predates it. Only ever true when sent.</summary>
     public bool? ResetPassed { get; set; }
+    /// <summary>A reset grant's refill targets: the limit windows one grant refills (e.g. five_hour, seven_day).
+    /// Absent without <c>clears</c>; deserializes to null then.</summary>
+    public List<string>? Clears { get; set; }
     [JsonIgnore] public double? DisplayPercent => UsedPercent is double used
         ? double.IsFinite(used) && used >= 0 ? used : null
         : RemainingPercent is >= 0 and <= 100 ? 100 - RemainingPercent : null;
@@ -462,6 +465,8 @@ public static class Formatting
     public static QuotaWindow[] VisibleWindows(DashboardAccount account) => account.Windows.Where(window =>
     {
         var key = Normalize(window.Key); var label = Normalize(window.Label);
+        // The exact global Fable window alone gates on Max (and on having a reading); a surface-scoped
+        // window (seven_day_fable_*) stays a visible scoped meter on every plan and never feeds the Fable cell.
         if (account.Provider == "claude" && IsFable(window) && (!account.IsMaxPlanAccount || window.DisplayPercent is null)) return false;
         if (account.Provider == "codex")
         {
@@ -484,6 +489,15 @@ public static class Formatting
     public static string WindowLabel(DashboardAccount account, QuotaWindow window)
     {
         if (account.Provider == "codex") return window.Key switch { "seven_day" => "Weekly", "five_hour" => "5-hour", _ => window.Label };
+        // Scoped weeklies shorten like the dashboard ("Weekly Opus usage" reads "Opus"); the label's surface
+        // suffix survives, so "Weekly Fable (Code) usage" keeps its "(Code)". The aggregate windows keep
+        // their full labels; the exact global Fable reads "Fable".
+        if (account.Provider == "claude")
+        {
+            if (IsFable(window)) return "Fable";
+            if (IsWeeklyScoped(window)) return ScopedModelLabel(window);
+            return window.Label;
+        }
         if (account.Provider != "qwen") return window.Label;
         return Normalize(window.Key) switch
         {
@@ -542,7 +556,54 @@ public static class Formatting
     public static bool IsMaxPlan(string? plan) => System.Text.RegularExpressions.Regex.IsMatch(
         (plan ?? "").Replace('_', ' ').Replace('-', ' ').Trim(), @"(?:^|\s)max(?:\s*(?:5|20)\s*x)?(?:$|\s)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-    public static bool IsFable(QuotaWindow window) => window.Key == "seven_day_fable" || window.Label.Contains("Fable", StringComparison.OrdinalIgnoreCase);
+    /// <summary>The global Fable weekly, by exact key only. A surface-scoped window such as
+    /// <c>seven_day_fable_code</c> ("Weekly Fable (Code) usage") carried Fable in its label but is a separate
+    /// scoped meter: keying on the label bound it to this gate and hid it from cheaper plans.</summary>
+    public static bool IsFable(QuotaWindow window) => window.Key == "seven_day_fable";
+
+    /// <summary>A weekly limit scoped to one model family (<c>seven_day_opus</c> and friends) or Fable, never
+    /// the all-models <c>seven_day</c>. Scoped meters stay visible on every plan as their own meters.</summary>
+    public static bool IsWeeklyScoped(QuotaWindow window) => (window.Key ?? "").StartsWith("seven_day_", StringComparison.Ordinal);
+
+    /// <summary>The short model name of a scoped window: from "Weekly Opus usage", else from its key slug
+    /// (<c>seven_day_opus</c> maps to "Opus"). The label's surface suffix survives ("Weekly Fable (Code) usage"
+    /// reads "Fable (Code)"). Mirrors the dashboard's <c>scopedModelLabel</c>.</summary>
+    public static string ScopedModelLabel(QuotaWindow window)
+    {
+        var label = (window.Label ?? "").Trim();
+        var match = System.Text.RegularExpressions.Regex.Match(label, @"^weekly\s+(.+?)\s+usage$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (match.Success) return string.Join(" ", WordsOf(match.Groups[1].Value).Select(TitleWord));
+        var slug = IsWeeklyScoped(window) ? (window.Key ?? "").Substring("seven_day_".Length) : window.Key ?? "";
+        var fromSlug = string.Join(" ", WordsOf(slug).Select(TitleWord));
+        return fromSlug.Length > 0 ? fromSlug : label.Length > 0 ? label : "Usage";
+    }
+
+    private static string[] WordsOf(string? value) => (value ?? "").Replace('_', ' ').Replace('-', ' ').Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+
+    private static string TitleWord(string word) => word.Length == 0 ? "" : char.ToUpperInvariant(word[0]) + word.Substring(1);
+
+    private static string ClearWord(string? target)
+    {
+        var name = target ?? "";
+        if (name == "five_hour") return "session";
+        if (name == "seven_day") return "weekly";
+        // The overage bucket is the Fable included-usage allowance, never a bare Fable refill.
+        if (name == "seven_day_overage_included") return "Fable included usage";
+        // No seven_day_fable clears key exists: a grant never refills Fable itself.
+        if (name == "seven_day_fable") return "";
+        if (name.StartsWith("seven_day_", StringComparison.Ordinal))
+            return string.Join(" ", WordsOf(name.Substring("seven_day_".Length)).Select(TitleWord)) + " weekly";
+        return string.Join(" ", WordsOf(name));
+    }
+
+    /// <summary>Words for a reset grant's refill targets: "refills session + weekly", "" without <c>clears</c>.
+    /// Mirrors the dashboard's <c>clearsText</c> (visible-usage.mjs).</summary>
+    public static string ClearsText(QuotaWindow window)
+    {
+        if (window.Clears is null) return "";
+        var words = window.Clears.Select(ClearWord).Where(word => word.Length > 0).ToArray();
+        return words.Length == 0 ? "" : "refills " + string.Join(" + ", words);
+    }
 
     /// <summary>Claude, Codex and Antigravity first, then the known usage providers, then any other provider the
     /// server reports, in the order it first appears. Nothing is filtered out by name.</summary>
@@ -623,6 +684,14 @@ public static class Formatting
         return "Resets " + reset.ToLocalTime().ToString("ddd, MMM d, h:mm tt", CultureInfo.CurrentCulture) + " · " + (left <= TimeSpan.Zero ? "due" : Duration(left));
     }
 
+    /// <summary>Next-available form for the session reset allowance: "Next available Oct 4, 3:15 PM".
+    /// Empty when no ResetAt is reported. Mirrors the dashboard's <c>exact(resetAt, 'Next available ')</c>.</summary>
+    public static string NextAvailable(string? timestamp)
+    {
+        if (!DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var next)) return "";
+        return "Next available " + next.ToLocalTime().ToString("MMM d, h:mm tt", CultureInfo.CurrentCulture);
+    }
+
     /// <summary>
     /// F6: once a window's reset has passed, a reading sampled before it no longer describes the window. Returns the
     /// reset time when <c>resetAt</c> is in the past and the reading was sampled before it, or when its sample time is
@@ -631,6 +700,9 @@ public static class Formatting
     /// </summary>
     public static DateTimeOffset? PendingReset(DashboardAccount account, QuotaWindow window)
     {
+        // The session reset allowance is an amount (its ResetAt is when the next reset is available),
+        // never a meter reading that a passed reset makes stale.
+        if (window.Key == "session_reset_allowance") return null;
         if (window.Unlimited || window.Enabled == false || window.Kind is "balance" or "extra_usage" or "spend") return null;
         if (!DateTimeOffset.TryParse(window.ResetAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var reset)) return null;
         // The server's own mark (MISC's resetPassed) is honoured even when this computer's clock is behind it.

@@ -81,7 +81,70 @@ public static partial class Checks
         var claude = new DashboardAccount { Provider = "claude", Plan = "max", Windows = new List<QuotaWindow> { new() { Key = "seven_day_fable", Label = "Weekly Fable usage", Kind = "rate_limit", WindowMinutes = 10080, UsedPercent = 0, ResetAt = "2026-10-08T12:00:00Z" }, new() { Key = "seven_day_opus", Label = "Weekly Opus usage", UsedPercent = 32 } } };
         report.Checks["max_fable_retains_actual_zero_percentage_and_reset"] = Formatting.VisibleWindows(claude).Any(window => window.Key == "seven_day_fable" && window.DisplayPercent == 0 && window.ResetAt == "2026-10-08T12:00:00Z");
         claude.Plan = "pro";
-        report.Checks["fable_does_not_invent_pro_placeholder_or_opus_alias"] = Formatting.VisibleWindows(claude).Select(window => window.Key).SequenceEqual(new[] { "seven_day_opus" }) && Formatting.WindowLabel(claude, claude.Windows[1]) == "Weekly Opus usage";
+        // Scoped details now shorten like the dashboard ("Weekly Opus usage" reads "Opus"); the full label
+        // this asserted before is the label-substring era. The intent is unchanged: the opus window is
+        // visible on Pro and is never the Fable meter, which stays hidden there.
+        report.Checks["fable_does_not_invent_pro_placeholder_or_opus_alias"] = Formatting.VisibleWindows(claude).Select(window => window.Key).SequenceEqual(new[] { "seven_day_opus" })
+            && !Formatting.IsFable(claude.Windows[1]) && Formatting.IsWeeklyScoped(claude.Windows[1])
+            && Formatting.WindowLabel(claude, claude.Windows[1]) == "Opus";
+        var fiveHour = new QuotaWindow { Key = "five_hour", Label = "Five-hour usage", Kind = "rate_limit", WindowMinutes = 300, UsedPercent = 5 };
+        var weekly = new QuotaWindow { Key = "seven_day", Label = "Weekly usage", Kind = "rate_limit", WindowMinutes = 10080, UsedPercent = 18 };
+        var surfaceWindow = new QuotaWindow { Key = "seven_day_fable_code", Label = "Weekly Fable (Code) usage", Kind = "rate_limit", WindowMinutes = 10080, UsedPercent = 90 };
+        var globalFable = new QuotaWindow { Key = "seven_day_fable", Label = "Weekly Fable usage", Kind = "rate_limit", WindowMinutes = 10080, UsedPercent = 10 };
+        bool SurfaceAndGlobalSeparated(DashboardAccount account)
+        {
+            var visible = Formatting.VisibleWindows(account);
+            var fablePick = visible.FirstOrDefault(Formatting.IsFable);
+            var surface = visible.FirstOrDefault(window => window.Key == "seven_day_fable_code");
+            if (surface is null || fablePick is null) return false;
+            return visible.Any(window => window.Key == "seven_day_fable" && window.DisplayPercent == 10)
+                && surface.DisplayPercent == 90
+                && fablePick.Key == "seven_day_fable" && fablePick.DisplayPercent == 10
+                && !Formatting.IsFable(surface) && Formatting.IsWeeklyScoped(surface) && Formatting.IsWeeklyScoped(globalFable)
+                && Formatting.WindowLabel(account, surface) == "Fable (Code)" && Formatting.WindowLabel(account, globalFable) == "Fable"
+                && MainWindow.ClaudeWindow(account, "seven_day")?.DisplayPercent == 18 && MainWindow.ClaudeWindow(account, "five_hour")?.DisplayPercent == 5;
+        }
+        // The surface-scoped Fable (90%) never replaces the global Fable (10%) nor the aggregate weekly (18%),
+        // in either report order; the compact cells read the exact keys only.
+        report.Checks["scoped_fable_surface_and_global_stay_separate_in_either_order"] =
+            SurfaceAndGlobalSeparated(new DashboardAccount { Provider = "claude", Plan = "max", Windows = new List<QuotaWindow> { fiveHour, weekly, surfaceWindow, globalFable } })
+            && SurfaceAndGlobalSeparated(new DashboardAccount { Provider = "claude", Plan = "max", Windows = new List<QuotaWindow> { fiveHour, weekly, globalFable, surfaceWindow } });
+        var proSurfaceOnly = new DashboardAccount { Provider = "claude", Plan = "pro", Windows = new List<QuotaWindow> { weekly, new() { Key = "seven_day_fable_code", Label = "Weekly Fable (Code) usage", Kind = "rate_limit", WindowMinutes = 10080, UsedPercent = 90 } } };
+        var proSurface = proSurfaceOnly.Windows[1];
+        // Surface-only on Pro stays a visible scoped meter; no global Fable meter is invented.
+        report.Checks["scoped_fable_surface_only_on_pro_stays_visible_no_fable_invented"] =
+            Formatting.VisibleWindows(proSurfaceOnly).Select(window => window.Key).SequenceEqual(new[] { "seven_day", "seven_day_fable_code" })
+            && Formatting.VisibleWindows(proSurfaceOnly).FirstOrDefault(Formatting.IsFable) is null
+            && !Formatting.IsFable(proSurface) && Formatting.IsWeeklyScoped(proSurface)
+            && Formatting.WindowLabel(proSurfaceOnly, proSurface) == "Fable (Code)";
+        var scopedOnly = new DashboardAccount { Provider = "claude", Plan = "pro", Windows = new List<QuotaWindow> { new() { Key = "seven_day_opus", Label = "Weekly Opus usage", Kind = "rate_limit", WindowMinutes = 10080, UsedPercent = 92 } } };
+        report.Checks["claude_core_cells_never_borrow_scoped_weekly"] = MainWindow.ClaudeWindow(scopedOnly, "seven_day") is null && MainWindow.ClaudeWindow(scopedOnly, "five_hour") is null;
+        var grant = JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"reset_credit_session_grant_1\",\"label\":\"Session rate-limit reset grant 1\",\"kind\":\"balance\",\"unit\":\"resets\",\"used\":1,\"limit\":2,\"remaining\":1,\"clears\":[\"five_hour\",\"seven_day\"]}", Formatting.Json)!;
+        var overageGrant = JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"reset_credit_session_grant_1\",\"kind\":\"balance\",\"unit\":\"resets\",\"clears\":[\"seven_day_overage_included\"]}", Formatting.Json)!;
+        var opusGrant = JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"reset_credit_session_grant_1\",\"kind\":\"balance\",\"unit\":\"resets\",\"clears\":[\"seven_day_opus\"]}", Formatting.Json)!;
+        var oauthGrant = JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"reset_credit_session_grant_1\",\"kind\":\"balance\",\"unit\":\"resets\",\"clears\":[\"seven_day_oauth_apps\"]}", Formatting.Json)!;
+        var unknownGrant = JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"reset_credit_session_grant_1\",\"kind\":\"balance\",\"unit\":\"resets\",\"clears\":[\"future_reset\"]}", Formatting.Json)!;
+        var fableGrant = JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"reset_credit_session_grant_1\",\"kind\":\"balance\",\"unit\":\"resets\",\"clears\":[\"seven_day_fable\"]}", Formatting.Json)!;
+        var noClears = JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"reset_credit_session_grant_1\",\"kind\":\"balance\",\"unit\":\"resets\",\"remaining\":1}", Formatting.Json)!;
+        // The grants append the dashboard's refill words: session and weekly, Fable included usage for the
+        // overage bucket, "<Slug> weekly" for a scoped slug, humanised for an unknown key; no Fable refill.
+        report.Checks["reset_grant_clears_decode_and_refill_text"] = grant.Clears is not null && grant.Clears.Count == 2 && grant.Clears[0] == "five_hour" && grant.Clears[1] == "seven_day"
+            && Formatting.ClearsText(grant) == "refills session + weekly"
+            && Formatting.ClearsText(overageGrant) == "refills Fable included usage"
+            && Formatting.ClearsText(opusGrant) == "refills Opus weekly"
+            && Formatting.ClearsText(oauthGrant) == "refills Oauth Apps weekly"
+            && Formatting.ClearsText(unknownGrant) == "refills future reset"
+            && Formatting.ClearsText(fableGrant) == "" && noClears.Clears is null && Formatting.ClearsText(noClears) == "";
+        var allowance = JsonSerializer.Deserialize<QuotaWindow>("{\"key\":\"session_reset_allowance\",\"label\":\"Weekly session reset\",\"kind\":\"balance\",\"unit\":\"resets\",\"remaining\":1,\"limit\":2,\"used\":1,\"resetAt\":\"2026-10-04T15:15:00Z\"}", Formatting.Json)!;
+        var allowanceAccount = new DashboardAccount { Provider = "claude", Plan = "max", SampledAt = "2026-10-01T00:00:00Z", Windows = new List<QuotaWindow> { allowance } };
+        var allowanceNoKind = new QuotaWindow { Key = "session_reset_allowance", Label = "Weekly session reset", ResetAt = "2026-10-04T15:15:00Z", Remaining = 1, Unit = "resets" };
+        // The allowance is an amount with next-available text from its ResetAt, never a stale meter reading.
+        report.Checks["session_reset_allowance_is_an_amount_with_next_available"] = allowance.Kind == "balance" && allowance.Unit == "resets"
+            && Formatting.VisibleWindows(allowanceAccount).Any(window => window.Key == "session_reset_allowance")
+            && !Formatting.IsFable(allowance) && !Formatting.IsWeeklyScoped(allowance) && Formatting.ClearsText(allowance) == ""
+            && Formatting.NextAvailable(allowance.ResetAt).StartsWith("Next available ", StringComparison.Ordinal)
+            && Formatting.PendingReset(allowanceAccount, allowance) is null
+            && Formatting.PendingReset(allowanceAccount, allowanceNoKind) is null && Formatting.NextAvailable(null) == "";
         var qwen = new DashboardAccount { Provider = "qwen", Windows = new List<QuotaWindow> { rawQuota, new() { Key = "subscription", Label = "Plan subscription" }, new() { Key = "plan_subscription", Label = "Plan subscription" } } };
         report.Checks["qwen_usage_retains_numeric_quota_without_subscription"] = Formatting.VisibleWindows(qwen).Length == 1 && Formatting.WindowLabel(qwen, rawQuota) == "Monthly";
         qwen.Windows.AddRange(new[] { new QuotaWindow { Key = "addon-pack-a", Remaining = 10, ExpiresAt = "2027-01-01T00:00:00Z" }, new QuotaWindow { Key = "addon-pack-b", Remaining = 0 }, new QuotaWindow { Key = "addon-pack-c", Remaining = 9, ExpiresAt = "2025-01-01T00:00:00Z" }, new QuotaWindow { Key = "addon-pack-d" }, new QuotaWindow { Key = "addon-listed-packs", Remaining = 4 } });
