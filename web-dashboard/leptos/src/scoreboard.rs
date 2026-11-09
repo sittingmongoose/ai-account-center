@@ -4,8 +4,9 @@
 //! lays them out. Observed work and planned benchmarks stay in separate columns, every value shows how many runs are
 //! behind it, and a row without enough runs is shown apart, unranked.
 
-use crate::api::{FetchError, Link, Refresh, nullable, send};
+use crate::api::{FetchError, Link, Refresh, Run, nullable, send};
 use crate::fmt;
+use crate::ui::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Deserialize;
@@ -13,7 +14,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub const SCOREBOARD_VIEW_VERSION: u32 = 1;
-const USE_KEY: &str = "aac.scoreboard.use.v1";
+const VIEW_KEY: &str = "aac.scoreboard.view.v1";
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -29,6 +30,158 @@ pub struct ScoreboardView {
     pub uses: Vec<Use>,
     #[serde(deserialize_with = "nullable")]
     pub recent: Vec<RunSummary>,
+    /// Models by effort with verdicts per job (CONTRACT-spend-bymodel.md). Absent until the server sends it: the page
+    /// says so and invents nothing.
+    pub by_model: Option<ByModel>,
+}
+
+/// The by-model view: one row per model at one effort. Every word and number is decided on the server.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ByModel {
+    pub default_view: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub intro: String,
+    #[serde(deserialize_with = "nullable")]
+    pub read_note: Vec<Run>,
+    pub read_link: Option<ReadLink>,
+    #[serde(deserialize_with = "nullable")]
+    pub band_summary: String,
+    #[serde(deserialize_with = "nullable")]
+    pub views: Vec<ModelsView>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ReadLink {
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelsView {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub short: String,
+    #[serde(deserialize_with = "nullable")]
+    pub meta: Vec<Run>,
+    #[serde(deserialize_with = "nullable")]
+    pub picks: Vec<Pick>,
+    #[serde(deserialize_with = "nullable")]
+    pub jobs: Vec<Job>,
+    #[serde(deserialize_with = "nullable")]
+    pub models: Vec<ModelRow>,
+    #[serde(deserialize_with = "nullable")]
+    pub foot: Vec<Run>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Pick {
+    #[serde(deserialize_with = "nullable")]
+    pub job_label: String,
+    pub model: Option<PickModel>,
+    pub none_label: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub why: Vec<Run>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PickModel {
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    pub effort: Option<String>,
+    pub mark: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Job {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelRow {
+    #[serde(deserialize_with = "nullable")]
+    pub key: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub effort_text: String,
+    #[serde(deserialize_with = "nullable")]
+    pub runtime: String,
+    pub mark: Option<String>,
+    pub runs: Option<u32>,
+    #[serde(deserialize_with = "nullable")]
+    pub head: String,
+    #[serde(deserialize_with = "nullable")]
+    pub head_runs: Vec<Run>,
+    #[serde(deserialize_with = "nullable")]
+    pub sheet_head: String,
+    #[serde(deserialize_with = "nullable")]
+    pub cells: BTreeMap<String, Option<ModelCell>>,
+    #[serde(deserialize_with = "nullable")]
+    pub report: Vec<JobReport>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelCell {
+    /// recommended, fine, avoid or not-enough-data.
+    #[serde(deserialize_with = "nullable")]
+    pub verdict: String,
+    #[serde(deserialize_with = "nullable")]
+    pub word: String,
+    #[serde(deserialize_with = "nullable")]
+    pub sub: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct JobReport {
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub verdict: String,
+    #[serde(deserialize_with = "nullable")]
+    pub word: String,
+    #[serde(deserialize_with = "nullable")]
+    pub basis: String,
+    #[serde(deserialize_with = "nullable")]
+    pub measures: Vec<JobMeasure>,
+    #[serde(deserialize_with = "nullable")]
+    pub compare: Vec<Run>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct JobMeasure {
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub value: String,
+    #[serde(deserialize_with = "nullable")]
+    pub sub: String,
+    #[serde(deserialize_with = "nullable")]
+    pub note: String,
+    pub range: Option<MeasureRange>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MeasureRange {
+    pub low: f64,
+    pub high: f64,
+    pub value: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -192,12 +345,6 @@ pub struct Rate {
     pub n: Option<u32>,
 }
 
-/// "n = 4", or "n unknown" when the server sent no count.
-fn n_words(n: Option<u32>) -> String {
-    n.map(|n| format!("n = {n}"))
-        .unwrap_or_else(|| "n unknown".into())
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Flag {
@@ -270,158 +417,30 @@ pub async fn fetch_scoreboard() -> Result<ScoreboardView, FetchError> {
     Ok(view)
 }
 
-// ---- Words for values --------------------------------------------------------------------------------------------
+// ---- Page --------------------------------------------------------------------------------------------------------
 
-/// "s/item" -> "item"; "credits/word" -> "word".
-fn per_unit(unit: &str) -> &str {
-    unit.split_once('/').map(|(_, per)| per).unwrap_or("")
-}
-
-fn seconds(v: f64) -> String {
-    if v < 10.0 {
-        format!("{v:.1} s")
-    } else if v < 120.0 {
-        format!("{v:.0} s")
-    } else {
-        format!("{:.1} min", v / 60.0)
-    }
-}
-
-fn share(v: f64) -> String {
-    let p = v * 100.0;
-    if p > 0.0 && p < 1.0 {
-        "<1%".into()
-    } else {
-        format!("{p:.0}%")
-    }
-}
-
-fn credits(v: f64) -> String {
-    if v >= 10.0 {
-        format!("{v:.0}")
-    } else if v >= 1.0 {
-        format!("{v:.1}")
-    } else {
-        format!("{v:.2}")
-    }
-}
-
-/// The main words for a value and the line under it (interval and n). Missing stays missing, never zero.
-pub fn measure_words(m: &MeasureValue) -> (String, String) {
-    let n = n_words(m.n);
-    let Some(v) = m.value else {
-        if let Some(e) = m.estimate.as_ref().and_then(|e| e.credits.as_ref()) {
-            if let Some(ev) = e.value {
-                return (
-                    format!("≈ {} credits per {}", credits(ev), per_unit(&e.unit)),
-                    format!("estimate · {}", n_words(e.n)),
-                );
-            }
-        }
-        return (
-            if m.n == Some(0) {
-                "No data".into()
-            } else {
-                "Not measured".into()
-            },
-            n,
-        );
-    };
-    let (main, bounds) = if m.unit == "share" {
-        (
-            share(v),
-            m.low
-                .zip(m.high)
-                .map(|(l, h)| format!("{}–{}", share(l), share(h))),
-        )
-    } else if m.unit.starts_with("s/") {
-        (
-            format!("{} per {}", seconds(v), per_unit(&m.unit)),
-            m.low
-                .zip(m.high)
-                .map(|(l, h)| format!("{}–{}", seconds(l), seconds(h))),
-        )
-    } else if m.unit.starts_with("credits/") {
-        (
-            format!("{} credits per {}", credits(v), per_unit(&m.unit)),
-            m.low
-                .zip(m.high)
-                .map(|(l, h)| format!("{}–{}", credits(l), credits(h))),
-        )
-    } else {
-        (
-            format!("{v:.2} {}", m.unit),
-            m.low.zip(m.high).map(|(l, h)| format!("{l:.2}–{h:.2}")),
-        )
-    };
-    let bounds = match (bounds, m.interval.as_deref()) {
-        (Some(b), Some("wilson90")) => Some(format!("90%: {b}")),
-        (Some(b), Some("range")) => Some(format!("range {b}")),
-        (b, _) => b,
-    };
-    let mut detail = vec![n];
-    if let Some(b) = bounds {
-        detail.push(b);
-    }
-    if let Some(d) = m.disputed.filter(|d| *d > 0) {
-        detail.push(format!("{d} disputed"));
-    }
-    (main, detail.join(" · "))
-}
-
-fn verdict_tone(verdict: &str) -> &'static str {
-    match verdict {
-        "recommended" => "good",
-        "avoid" => "crit",
-        "fine" => "info",
-        _ => "muted",
-    }
-}
-
-fn flag_words(kind: &str) -> &'static str {
-    match kind {
-        "cheating" => "Cheating",
-        "fabricated" => "Made up",
-        "false-claim" => "False claim",
-        "incomplete-read" => "Didn't read it all",
-        "scope-cut" => "Cut the scope",
-        "shortcut" => "Shortcut",
-        "test-weakened" => "Weakened a test",
-        _ => "Flag",
-    }
-}
-
-fn row_place(row: &Row) -> String {
-    [
-        row.runtime.clone(),
-        row.effort.clone(),
-        row.process.as_ref().map(|p| match &p.version {
-            Some(v) => format!("{} {v}", p.id),
-            None => p.id.clone(),
-        }),
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|s| !s.is_empty())
-    .collect::<Vec<_>>()
-    .join(" · ")
-}
-
-fn stored_use() -> Option<String> {
+fn stored_view() -> Option<String> {
     window()
         .local_storage()
         .ok()
         .flatten()
-        .and_then(|s| s.get_item(USE_KEY).ok().flatten())
+        .and_then(|s| s.get_item(VIEW_KEY).ok().flatten())
 }
 
-fn store_use(id: &str) {
+fn store_view(id: &str) {
     if let Some(s) = window().local_storage().ok().flatten() {
-        let _ = s.set_item(USE_KEY, id);
+        let _ = s.set_item(VIEW_KEY, id);
     }
 }
 
-// ---- Page --------------------------------------------------------------------------------------------------------
+fn verdict_class(verdict: &str) -> &'static str {
+    match verdict {
+        "recommended" => "v-rec",
+        "fine" => "v-fine",
+        "avoid" => "v-avoid",
+        _ => "v-nd",
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Board {
@@ -494,7 +513,6 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         },
         Duration::from_secs(15),
     );
-
     // Shown again by the shell, or back online: read at once.
     for event in [crate::SHOWN_EVENT, "online"] {
         let again = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
@@ -508,319 +526,371 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         );
         again.forget();
     }
-    let chosen = RwSignal::new(stored_use());
-    let current_use = Memo::new(move |_| {
-        board.view.with(|v| {
-            let v = v.as_ref()?;
-            let pick = chosen.get();
-            v.uses
+    let by_model = Memo::new(move |_| {
+        board
+            .view
+            .with(|v| v.as_ref().and_then(|v| v.by_model.clone()))
+    });
+    let chosen = RwSignal::new(stored_view());
+    let current = Memo::new(move |_| {
+        by_model.with(|b| {
+            let b = b.as_ref()?;
+            let pick = chosen.get().or_else(|| b.default_view.clone());
+            b.views
                 .iter()
-                .find(|u| Some(&u.id) == pick.as_ref())
-                .or_else(|| v.uses.first())
+                .find(|v| Some(&v.id) == pick.as_ref())
+                .or(b.views.first())
                 .cloned()
         })
     });
-    let measures = Memo::new(move |_| {
-        board.view.with(|v| {
-            v.as_ref()
-                .map(|v| {
-                    v.catalog
-                        .measures
-                        .iter()
-                        .map(|m| (m.id.clone(), m.clone()))
-                        .collect::<BTreeMap<_, _>>()
-                })
-                .unwrap_or_default()
-        })
+    let selected_id = Signal::derive(move || {
+        current.with(|c| c.as_ref().map(|v| v.id.clone()).unwrap_or_default())
     });
+    let select_view = Callback::new(move |id: String| {
+        store_view(&id);
+        chosen.set(Some(id));
+    });
+    let info = ChromeInfo {
+        updated: Signal::derive(move || {
+            if board.view.with(|v| v.is_none()) {
+                String::new()
+            } else {
+                fmt::age(board.elapsed_seconds())
+            }
+        }),
+        live: Signal::derive(move || board.error.with(|e| e.is_none())),
+        summary: Signal::derive(move || {
+            let text = by_model.with(|b| {
+                b.as_ref()
+                    .map(|b| b.band_summary.clone())
+                    .unwrap_or_default()
+            });
+            vec![Run {
+                text,
+                ..Default::default()
+            }]
+        }),
+        refresh: Callback::new(move |_| board.reload()),
+    };
     let banner = move || {
         let error = board.error.get()?;
-        let old = board
-            .view
-            .with(|v| v.is_some())
-            .then(|| {
-                format!(
-                    " Showing the reading from {}.",
-                    fmt::age(board.elapsed_seconds())
-                )
-            })
-            .unwrap_or_default();
-        Some(
-            view! { <div class="banner" role="status" data-tone="crit">{error.sentence()}{old}</div> },
-        )
+        let old = if board.view.with(|v| v.is_some()) {
+            format!(
+                " Showing the reading from {}.",
+                fmt::age(board.elapsed_seconds())
+            )
+        } else {
+            String::new()
+        };
+        Some(view! { <p class="banner" role="status">{error.sentence()}{old}</p> })
     };
-
+    let sources_open = RwSignal::new(false);
+    let sheet = RwSignal::new(None::<ModelRow>);
+    let open_sheet = Callback::new(move |m: ModelRow| sheet.set(Some(m)));
+    let close_sheet = Callback::new(move |_: ()| sheet.set(None));
+    let selected = RwSignal::new(None::<String>);
+    let on_row = Callback::new(move |key: String| selected.set(Some(key)));
     view! {
-        <main class="page scoreboard" data-embedded=embedded.then_some("1")>
-            <Show when=move || !embedded>
-                <header class="page-head"><h1>"Model Scoreboard"</h1></header>
-            </Show>
-            {banner}
-            <Show
-                when=move || board.view.with(|v| v.is_some())
-                fallback=move || view! {
-                    <p class="empty">{move || if board.error.with(|e| e.is_some()) { "" } else { "Reading the scoreboard..." }}</p>
-                }
-            >
-                <p class="sb-intro">
-                    {move || {
-                        let min = board.view.with(|v| v.as_ref().and_then(|v| v.catalog.min_runs)).unwrap_or(5);
-                        format!("Real work and planned benchmarks are kept apart. A model is ranked only after {min} runs of one kind of task; every number says how many runs are behind it.")
-                    }}
-                </p>
-                <Sources board=board/>
-                <div class="sb-uses" role="tablist" aria-label="What the models are for">
-                    {move || board.view.with(|v| v.as_ref().map(|v| v.uses.clone()).unwrap_or_default()).into_iter().map(|u| {
-                        let id = u.id.clone();
-                        let selected = Signal::derive({ let id = id.clone(); move || current_use.with(|c| c.as_ref().map(|c| &c.id) == Some(&id)) });
-                        view! {
-                            <button role="tab" class="chip-btn" aria-selected=move || selected.get().to_string()
-                                on:click=move |_| { store_use(&id); chosen.set(Some(id.clone())); }>{u.label.clone()}</button>
-                        }
-                    }).collect_view()}
-                </div>
-                {move || current_use.get().map(|u| view! {
-                    <section class="sb-use">
-                        {u.description.clone().filter(|d| !d.is_empty()).map(|d| view! { <p class="muted sb-use-desc">{d}</p> })}
-                        {u.task_types.into_iter().map(|t| view! { <TaskTypeView task=t measures=measures/> }).collect_view()}
-                    </section>
-                })}
-                <Recent board=board/>
-            </Show>
-        </main>
-    }
-}
-
-#[component]
-fn Sources(board: Board) -> impl IntoView {
-    move || {
-        let sources = board
-            .view
-            .with(|v| v.as_ref().map(|v| v.sources.clone()).unwrap_or_default());
-        let elapsed = board.elapsed_seconds();
-        view! {
-            <ul class="sb-sources">
-                {sources.into_iter().map(|s| {
-                    let age = fmt::live_age(s.age_seconds, elapsed).map(fmt::age);
-                    let ok = s.state == "ok";
-                    view! {
-                        <li data-state=s.state.clone()>
-                            <span class="dot" aria-hidden="true"></span>
-                            <strong>{s.label.clone()}</strong>
-                            {age.map(|a| format!(" · {a}"))}
-                            {(!ok || !s.detail.is_empty()).then(|| view! { <span class="sb-source-detail">{format!(" {}", s.detail)}</span> })}
-                        </li>
-                    }
-                }).collect_view()}
-            </ul>
-        }
-    }
-}
-
-#[component]
-fn TaskTypeView(task: TaskType, measures: Memo<BTreeMap<String, CatalogMeasure>>) -> impl IntoView {
-    let (ranked, thin): (Vec<Row>, Vec<Row>) = task.rows.iter().cloned().partition(|r| r.ranked);
-    let thin_count = thin.len();
-    let ids = task.measures.clone();
-    let ids_thin = ids.clone();
-    let empty = task.rows.is_empty();
-    view! {
-        <section class="panel sb-task" data-task=task.id.clone()>
-            <header class="panel-head">
-                <h2>{task.label.clone()}</h2>
-                <span class="src">{format!("per {}", task.unit)}</span>
-            </header>
-            {task.description.clone().filter(|d| !d.is_empty()).map(|d| view! { <p class="muted sb-task-desc">{d}</p> })}
-            {empty.then(|| view! { <p class="empty">"No runs of this kind yet."</p> })}
-            <div class="sb-rows">
-                {ranked.into_iter().map(|r| view! { <RowView row=r ids=ids.clone() measures=measures/> }).collect_view()}
-            </div>
-            {(thin_count > 0).then(|| view! {
-                <details class="sb-thin">
-                    <summary>{format!("Too little data yet ({thin_count})")}</summary>
-                    <div class="sb-rows">
-                        {thin.into_iter().map(|r| view! { <RowView row=r ids=ids_thin.clone() measures=measures/> }).collect_view()}
+        <Shell embedded=embedded page="Scoreboard" title="Model Scoreboard" info=info>
+            <div class="page" data-stale=move || board.error.with(|e| e.is_some()).then_some("1")>
+                <div class="page-head sb-head">
+                    <div class="sb-title">
+                        <h1 class="page-title">"Model Scoreboard"</h1>
+                        {move || by_model.get().map(|b| {
+                            let options: Vec<(String, AnyView)> = b.views.iter().map(|v| (v.id.clone(), view! {
+                                <span class="lbl-long">{v.label.clone()}</span><span class="lbl-short">{v.short.clone()}</span>
+                            }.into_any())).collect();
+                            view! { <SwitchSeg options=options selected=selected_id on_select=select_view/> }
+                        })}
                     </div>
-                </details>
-            })}
-        </section>
-    }
-}
-
-#[component]
-fn RowView(
-    row: Row,
-    ids: Vec<String>,
-    measures: Memo<BTreeMap<String, CatalogMeasure>>,
-) -> impl IntoView {
-    let place = row_place(&row);
-    let columns: Vec<Column> = row
-        .observed
-        .clone()
-        .into_iter()
-        .chain(row.benchmarks.clone())
-        .collect();
-    view! {
-        <article class="sb-row" data-verdict=row.verdict.clone()>
-            <div class="sb-row-head">
-                {row.rank.filter(|_| row.ranked).map(|r| view! { <span class="sb-rank">{format!("#{r}")}</span> })}
-                <span class="sb-model">{row.label.clone()}</span>
-                <span class="chip" data-tone=verdict_tone(&row.verdict)>{row.verdict_label.clone()}</span>
+                    <p class="page-sub">{move || by_model.with(|b| b.as_ref().map(|b| b.intro.clone())).unwrap_or_default()}</p>
+                </div>
+                {banner}
+                <Show
+                    when=move || board.view.with(|v| v.is_some())
+                    fallback=move || view! {
+                        <p class="empty">{move || if board.error.with(|e| e.is_some()) { "" } else { "Reading the scoreboard..." }}</p>
+                    }
+                >
+                    <div class="sb-stack">
+                        {move || match current.get() {
+                            None => view! { <section class="plate"><p class="sb-unavail">"The by-model scoreboard isn't available from this server yet. Every model's runs are still recorded."</p></section> }.into_any(),
+                            Some(v) => view! { <ModelsSections view=v selected=selected on_row=on_row on_sheet=open_sheet board=board/> }.into_any(),
+                        }}
+                        <p class="sb-read">
+                            {move || by_model.get().map(|b| {
+                                let link = b.read_link.clone().map(|l| l.label);
+                                view! {
+                                    {runs_view(b.read_note)}" "
+                                    {link.map(|l| view! { <a class="link" href="#sources" on:click=move |e| { e.prevent_default(); sources_open.update(|o| *o = !*o); }>{l}</a> })}
+                                }
+                            })}
+                        </p>
+                        <SourcesList board=board open=sources_open/>
+                    </div>
+                </Show>
+                {move || sheet.get().map(|m| view! { <ModelSheet model=m on_close=close_sheet/> })}
             </div>
-            {(!place.is_empty()).then(|| view! { <p class="sb-place muted">{place}</p> })}
-            <p class="sb-why">{row.why.clone()}</p>
-            {columns.into_iter().map(|c| view! { <ColumnView column=c ids=ids.clone() measures=measures/> }).collect_view()}
-        </article>
+        </Shell>
     }
 }
 
+/// The title-line switch. Its buttons carry a long and a short label; the page shows the one that fits.
 #[component]
-fn ColumnView(
-    column: Column,
-    ids: Vec<String>,
-    measures: Memo<BTreeMap<String, CatalogMeasure>>,
+fn SwitchSeg(
+    options: Vec<(String, AnyView)>,
+    selected: Signal<String>,
+    on_select: Callback<String>,
 ) -> impl IntoView {
-    let title = if column.source == "benchmark" {
-        format!(
-            "Benchmark: {}",
-            column
-                .benchmark_label
-                .clone()
-                .unwrap_or_else(|| "planned".into())
-        )
-    } else {
-        "Observed in real work".to_string()
+    view! {
+        <div class="seg" role="tablist" aria-label="Whose verdicts">
+            {options.into_iter().map(|(id, text)| {
+                let current = id.clone();
+                let click = id.clone();
+                view! {
+                    <button role="tab" class:on=move || selected.get() == current
+                        aria-selected={let id = id.clone(); move || (selected.get() == id).to_string()}
+                        on:click=move |_| on_select.run(click.clone())>{text}</button>
+                }
+            }).collect_view()}
+        </div>
+    }
+}
+
+fn pick_card(pick: Pick) -> impl IntoView {
+    let none = pick.model.is_none();
+    view! {
+        <div class="pick" class:none=none>
+            <span class="cap">{pick.job_label.clone()}</span>
+            {match pick.model.clone() {
+                Some(m) => view! {
+                    <div class="pick-model">
+                        <Mark name=m.mark.clone() size=18/>
+                        {m.label.clone()}
+                        {m.effort.clone().map(|e| view! { <span class="eff">{format!(" · {e}")}</span> })}
+                    </div>
+                }.into_any(),
+                None => view! { <div class="pick-model">{pick.none_label.clone().unwrap_or_else(|| "No pick yet".into())}</div> }.into_any(),
+            }}
+            <p class="pick-why">{runs_view(pick.why.clone())}</p>
+        </div>
+    }
+}
+
+fn model_name(m: &ModelRow, sub: bool, chevron: bool) -> impl IntoView + use<> {
+    let eff = m.effort_text.clone();
+    let runtime = m.runtime.clone();
+    view! {
+        <div class="mname">
+            <Mark name=m.mark.clone()/>
+            <div>
+                <div class="t">{m.label.clone()}<span class="eff">{format!(" · {eff}")}</span></div>
+                {sub.then(|| view! { <div class="r">{runtime}</div> })}
+            </div>
+            {chevron.then(|| view! { <Icon name="chev-right" class="chev"/> })}
+        </div>
+    }
+}
+
+/// A verdict cell's note: each piece stays whole, breaks fall only between them.
+fn sub_chunks(sub: &[String]) -> impl IntoView + use<> {
+    let last = sub.len().saturating_sub(1);
+    let parts: Vec<(String, bool)> = sub
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.clone(), i < last))
+        .collect();
+    parts
+        .into_iter()
+        .map(|(text, more)| {
+            view! {
+                <span class="nw">{text}{more.then_some(" ·")}</span>{more.then_some(" ")}
+            }
+        })
+        .collect_view()
+}
+
+#[component]
+fn ModelsSections(
+    view: ModelsView,
+    selected: RwSignal<Option<String>>,
+    on_row: Callback<String>,
+    on_sheet: Callback<ModelRow>,
+    board: Board,
+) -> impl IntoView {
+    let how_open = RwSignal::new(false);
+    let runs_open = RwSignal::new(false);
+    let measures = move || {
+        board.view.with(|v| {
+            v.as_ref()
+                .map(|v| v.catalog.measures.clone())
+                .unwrap_or_default()
+        })
     };
-    let mut facts = vec![n_words(column.n)];
-    if let Some(r) = column.reviews.filter(|r| *r > 0) {
-        facts.push(format!("{r} reviewed"));
-    }
-    if let Some(i) = column.imported.filter(|i| *i > 0) {
-        facts.push(format!("{i} imported"));
-    }
-    let runs = column.runs.clone();
-    let run_count = runs.len();
-    let runs_label = if let Some(total) = column.n.filter(|n| (run_count as u32) < *n) {
-        format!("Latest {run_count} of {total} runs")
-    } else {
-        format!("Runs ({run_count})")
+    let recent = move || {
+        board
+            .view
+            .with(|v| v.as_ref().map(|v| v.recent.clone()).unwrap_or_default())
+    };
+    let jobs = view.jobs.clone();
+    let first_key = view.models.first().map(|m| m.key.clone());
+    let models = StoredValue::new(view.models.clone());
+    let selected_key = Signal::derive({
+        let first = first_key.clone();
+        move || {
+            selected
+                .get()
+                .filter(|k| models.with_value(|list| list.iter().any(|m| &m.key == k)))
+                .or_else(|| first.clone())
+        }
+    });
+    let meta = view.meta.clone();
+    let foot = view.foot.clone();
+    let detail = move || {
+        let key = selected_key.get()?;
+        models.with_value(|list| list.iter().find(|m| m.key == key).cloned())
     };
     view! {
-        <section class="sb-col" data-source=column.source.clone()>
-            <h3>
-                {title}
-                <span class="muted">{format!(" · {}", facts.join(" · "))}</span>
-                {column.preliminary.then(|| view! { <span class="chip" data-tone="warn">"Preliminary"</span> })}
-            </h3>
-            <dl class="sb-measures">
-                {ids.into_iter().filter_map(|id| {
-                    let m = column.measures.get(&id)?.clone();
-                    let info = measures.with_untracked(|all| all.get(&id).cloned());
-                    let label = info.as_ref().map(|i| i.label.clone()).unwrap_or_else(|| id.clone());
-                    let hint = info.map(|i| format!("{} ({} is better)", i.description, i.better)).unwrap_or_default();
-                    let (main, detail) = measure_words(&m);
-                    Some(view! {
-                        <div title=hint data-empty=(m.value.is_none() && m.estimate.as_ref().and_then(|e| e.credits.as_ref()).and_then(|c| c.value).is_none()).then_some("1")>
-                            <dt>{label}</dt>
-                            <dd>
-                                <span class="sb-value">{main}</span>
-                                {m.preliminary.then(|| view! { <span class="chip" data-tone="warn">"Preliminary"</span> })}
-                                <span class="sb-detail">{detail}</span>
-                            </dd>
-                        </div>
-                    })
-                }).collect_view()}
-            </dl>
-            {(!column.flags.is_empty()).then(|| view! {
-                <ul class="sb-flags">
-                    {column.flags.iter().map(|f| view! {
-                        <li><strong>{flag_words(&f.kind)}</strong>{format!(": {}", f.detail)}<code>{f.evidence.clone()}</code></li>
+        <section class="plate">
+            <div class="plate-head"><h2>"Best pick for each job"</h2><span class="plate-meta">"From real work unless it says benchmark"</span></div>
+            <div class="picks">{view.picks.clone().into_iter().map(pick_card).collect_view()}</div>
+        </section>
+        <section class="plate">
+            <div class="plate-head">
+                <h2>"By model and effort"</h2>
+                <span class="plate-meta">{runs_view(meta)}</span>
+                <div class="plate-tools only-d"><Disclosure open=how_open label="How verdicts work".to_string()/></div>
+            </div>
+            <Show when=move || how_open.get()>
+                <ul class="sb-how">
+                    {move || measures().into_iter().map(|m| {
+                        let better = if m.better == "lower" { "lower is better" } else { "higher is better" };
+                        view! { <li><b>{m.label.clone()}</b>{format!(": {} ({better}).", m.description.trim_end_matches('.'))}</li> }
                     }).collect_view()}
                 </ul>
-            })}
-            {(run_count > 0).then(|| view! {
-                <details class="sb-runs">
-                    <summary>{runs_label}</summary>
-                    <ul>{runs.into_iter().map(|r| view! { <li><RunLine run=r/></li> }).collect_view()}</ul>
-                </details>
+            </Show>
+            <div class="sb-matrix">
+                <table>
+                    <thead>
+                        <tr>
+                            <th><span class="cap">"Model · effort"</span></th>
+                            {jobs.iter().map(|j| view! { <th><span class="cap">{j.label.clone()}</span></th> }).collect_view()}
+                            <th style="text-align:right"><span class="cap">"Runs"</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {view.models.clone().into_iter().map(|m| {
+                            let key = m.key.clone();
+                            let k2 = m.key.clone();
+                            let cells = jobs.iter().map(|j| {
+                                match m.cells.get(&j.id).cloned().flatten() {
+                                    Some(c) => view! { <td><span class=format!("verdict {}", verdict_class(&c.verdict))>{c.word.clone()}</span><span class="vsub">{sub_chunks(&c.sub)}</span></td> }.into_any(),
+                                    None => view! { <td><span class="verdict v-none">"–"</span></td> }.into_any(),
+                                }
+                            }).collect_view();
+                            view! {
+                                <tr data-row="1" class:sel=move || selected_key.get().as_ref() == Some(&k2) on:click=move |_| on_row.run(key.clone())>
+                                    <td>{model_name(&m, true, false)}</td>
+                                    {cells}
+                                    <td class="runs-col">{m.runs.map(|r| r.to_string()).unwrap_or_else(|| "–".into())}</td>
+                                </tr>
+                            }
+                        }).collect_view()}
+                    </tbody>
+                </table>
+            </div>
+            <div class="sb-models">
+                {view.models.clone().into_iter().map(|m| {
+                    let open = m.clone();
+                    let job_rows = jobs.iter().filter_map(|j| {
+                        let c = m.cells.get(&j.id).cloned().flatten()?;
+                        Some(view! { <div class="sbm-job"><span class="k">{j.label.clone()}</span><span><span class=verdict_class(&c.verdict)>{c.word.clone()}</span></span></div> })
+                    }).collect_view();
+                    view! {
+                        <button class="sbm" class:sel={let k = m.key.clone(); move || selected_key.get().as_ref() == Some(&k)} on:click=move |_| { on_row.run(open.key.clone()); on_sheet.run(open.clone()); }>
+                            {model_name(&m, true, true)}
+                            <div class="sbm-jobs">{job_rows}</div>
+                        </button>
+                    }
+                }).collect_view()}
+            </div>
+            <div class="plate-foot note"><Icon name="info"/><span>{runs_view(foot)}</span></div>
+        </section>
+        <section class="plate only-wide">
+            {move || detail().map(|m| view! {
+                <div class="plate-head">
+                    <Mark name=m.mark.clone() size=22/>
+                    <h2>{format!("{} · {}", m.label, m.effort_text)}</h2>
+                    <span class="plate-meta">{m.head.clone()}{runs_view(m.head_runs.clone())}</span>
+                    <div class="plate-tools"><button class="link" style="font-size:12.5px" on:click=move |_| runs_open.update(|o| *o = !*o)>"Latest runs and evidence"</button></div>
+                </div>
+                <Show when=move || runs_open.get()>
+                    <ul class="sb-how">
+                        {move || recent().into_iter().take(20).map(|r| {
+                            let who = [r.label.clone().or(r.model.clone()), r.effort.clone()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+                            let meta = [Some(if r.source == "benchmark" { "benchmark".to_string() } else { "real work".to_string() }), Some(fmt::clock(&r.ended_at)).filter(|s| !s.is_empty()), Some(r.outcome.clone()).filter(|s| !s.is_empty())].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                            view! { <li><b>{who}</b>{format!(" · {} · {meta}", r.task.title)}{r.evidence.first().map(|e| view! { <code class="sb-ev">{e.path.clone()}</code> })}</li> }
+                        }).collect_view()}
+                    </ul>
+                </Show>
+                <DetailGrid report=m.report.clone()/>
             })}
         </section>
     }
 }
 
 #[component]
-fn RunLine(run: RunSummary) -> impl IntoView {
-    let review = run.review.as_ref().map(|r| {
-        let mut w = format!("review {}", r.verdict);
-        if r.overturned {
-            w.push_str(", overturned");
-        }
-        if r.disputed {
-            w.push_str(", disputed");
-        }
-        w
-    });
-    let line = [
-        Some(fmt::clock(&run.ended_at)).filter(|s| !s.is_empty()),
-        Some(run.outcome.clone()).filter(|s| !s.is_empty()),
-        run.wall_seconds.map(seconds),
-        review,
-        (run.flags > 0).then(|| {
-            format!(
-                "{} flag{}",
-                run.flags,
-                if run.flags == 1 { "" } else { "s" }
-            )
-        }),
-        run.imported.as_ref().map(|_| "imported".to_string()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" · ");
+fn DetailGrid(report: Vec<JobReport>) -> impl IntoView {
     view! {
-        <div class="sb-run">
-            <span class="sb-run-title">{run.task.title.clone()}</span>
-            <span class="muted">{line}</span>
-            {run.evidence.first().map(|e| view! { <code>{e.path.clone()}</code> })}
+        <div class="detail-grid">
+            {report.into_iter().map(|j| view! {
+                <div class="job">
+                    <h3>{j.label.clone()}" "<span class=verdict_class(&j.verdict)>{j.word.clone()}</span></h3>
+                    <p class="basis">{j.basis.clone()}</p>
+                    {j.measures.iter().map(|m| {
+                        let note = m.note.clone();
+                        view! {
+                            <div class="measure">
+                                <div class="mt"><span class="ml">{m.label.clone()}</span><span class="mv">{m.value.clone()}" "<small>{m.sub.clone()}</small></span></div>
+                                {m.range.map(|r| view! { <RangeBar low=r.low high=r.high value=r.value/> })}
+                                {(!note.is_empty()).then(|| view! { <p class="mn">{note}</p> })}
+                            </div>
+                        }
+                    }).collect_view()}
+                    {(!j.compare.is_empty()).then(|| view! { <p class="cmp">{runs_view(j.compare.clone())}</p> })}
+                </div>
+            }).collect_view()}
         </div>
     }
 }
 
 #[component]
-fn Recent(board: Board) -> impl IntoView {
-    let runs = move || {
-        board
-            .view
-            .with(|v| v.as_ref().map(|v| v.recent.clone()).unwrap_or_default())
-    };
+fn ModelSheet(model: ModelRow, on_close: Callback<()>) -> impl IntoView {
     view! {
-        <section class="panel sb-recent">
-            <header class="panel-head"><h2>"Latest runs"</h2></header>
-            {move || {
-                let list = runs();
-                if list.is_empty() {
-                    view! { <p class="empty">"No runs reported yet."</p> }.into_any()
-                } else {
-                    view! {
-                        <ul class="sb-recent-list">
-                            {list.into_iter().map(|r| {
-                                let who = [r.label.clone().or(r.model.clone()), r.effort.clone()].into_iter().flatten().collect::<Vec<_>>().join(" ");
-                                let kind = if r.source == "benchmark" { "benchmark" } else { "observed" };
-                                view! {
-                                    <li>
-                                        <span class="chip" data-tone=if kind == "benchmark" { "info" } else { "muted" }>{kind}</span>
-                                        <strong>{who}</strong>
-                                        <span class="muted">{format!(" · {}", r.task.kind.clone().unwrap_or_else(|| "no task type".into()))}</span>
-                                        <RunLine run=r/>
-                                    </li>
-                                }
-                            }).collect_view()}
-                        </ul>
-                    }.into_any()
-                }
-            }}
-        </section>
+        <div class="sheet-host" role="dialog" aria-modal="true">
+            <button class="sheet-scrim" aria-label="Close" on:click=move |_| on_close.run(())></button>
+            <div class="sheet">
+                <div class="grabber"></div>
+                <button class="icon-btn bare sheet-close" aria-label="Close" on:click=move |_| on_close.run(())><Icon name="close"/></button>
+                <div class="sheet-title">
+                    <Mark name=model.mark.clone() size=24/>
+                    <div><div class="t">{format!("{} · {}", model.label, model.effort_text)}</div><div class="s">{model.sheet_head.clone()}</div></div>
+                </div>
+                <DetailGrid report=model.report/>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn SourcesList(board: Board, open: RwSignal<bool>) -> impl IntoView {
+    view! {
+        <ul class="sb-sources" id="sources" hidden=move || !open.get()>
+            {move || board.view.with(|v| v.as_ref().map(|v| v.sources.clone()).unwrap_or_default()).into_iter().map(|s| {
+                let age = fmt::live_age(s.age_seconds, board.elapsed_seconds()).map(fmt::age);
+                view! { <li><b>{s.label.clone()}</b>{age.map(|a| format!(" · {a}"))}{format!(": {}", s.detail)}</li> }
+            }).collect_view()}
+        </ul>
     }
 }
 
@@ -834,71 +904,33 @@ mod tests {
         let view: ScoreboardView = serde_json::from_str(text).expect("example parses");
         assert_eq!(view.version, SCOREBOARD_VIEW_VERSION);
         assert_eq!(view.uses.len(), 3);
-        let scout = &view.uses[0].task_types[0];
-        assert_eq!(scout.id, "scout");
-        let row = &scout.rows[0];
-        assert!(row.ranked && row.observed.is_some());
-        assert!(!view.catalog.measures.is_empty());
-        assert!(!view.recent.is_empty());
+        assert!(view.by_model.is_none());
     }
 
     #[test]
-    fn values_read_plainly_and_missing_stays_missing() {
-        let share_m = MeasureValue {
-            value: Some(0.9291),
-            unit: "share".into(),
-            n: Some(5),
-            low: Some(0.9105),
-            high: Some(0.9441),
-            interval: Some("wilson90".into()),
-            ..Default::default()
-        };
+    fn by_model_is_read_and_a_cells_null_stays_empty() {
+        let text = include_str!("../fixtures/scoreboard-by-model.json");
+        let by: ByModel = serde_json::from_str(text).expect("by-model parses");
+        assert_eq!(by.default_view.as_deref(), Some("pipeline"));
+        let pipeline = &by.views[0];
+        assert_eq!(pipeline.picks.len(), 5);
+        let opus = &pipeline.models[0];
+        assert_eq!(opus.label, "Opus 5.5");
+        assert_eq!(opus.effort_text, "xhigh");
+        assert!(opus.cells.contains_key("mechanical"));
+        assert_eq!(opus.cells["mechanical"], None);
+        let cell = opus.cells["worknode-build"].clone().unwrap();
+        assert_eq!(cell.word, "Recommended");
         assert_eq!(
-            measure_words(&share_m),
-            ("93%".into(), "n = 5 · 90%: 91%–94%".into())
+            cell.sub,
+            vec!["7 runs".to_string(), "passed review 6 of 6".to_string()]
         );
-        let speed = MeasureValue {
-            value: Some(4.866),
-            unit: "s/item".into(),
-            n: Some(5),
-            low: Some(4.85),
-            high: Some(4.882),
-            interval: Some("range".into()),
-            ..Default::default()
-        };
-        assert_eq!(measure_words(&speed).0, "4.9 s per item");
-        let none = MeasureValue {
-            unit: "credits/item".into(),
-            n: Some(0),
-            ..Default::default()
-        };
-        assert_eq!(measure_words(&none), ("No data".into(), "n = 0".into()));
-        // a count the server didn't send is unknown, not zero
-        let unknown = MeasureValue {
-            unit: "credits/item".into(),
-            ..Default::default()
-        };
-        assert_eq!(
-            measure_words(&unknown),
-            ("Not measured".into(), "n unknown".into())
-        );
-        let column: Column = serde_json::from_str(r#"{"source":"observed"}"#).unwrap();
-        assert_eq!(
-            (column.n, column.reviews, column.imported),
-            (None, None, None)
-        );
-        let estimated = MeasureValue {
-            unit: "credits/item".into(),
-            n: Some(3),
-            estimate: Some(Estimate {
-                credits: Some(Rate {
-                    value: Some(1.25),
-                    unit: "credits/item".into(),
-                    n: Some(3),
-                }),
-            }),
-            ..Default::default()
-        };
-        assert_eq!(measure_words(&estimated).1, "estimate · n = 3");
+    }
+
+    #[test]
+    fn verdicts_are_words_with_one_class_each() {
+        assert_eq!(verdict_class("recommended"), "v-rec");
+        assert_eq!(verdict_class("avoid"), "v-avoid");
+        assert_eq!(verdict_class("not-enough-data"), "v-nd");
     }
 }

@@ -20,6 +20,28 @@ pub fn age(seconds: i64) -> String {
     }
 }
 
+/// "47 min ago", "2 h ago", "3 d ago", as the question list and cards say it. Empty when the time can't be read.
+pub fn age_words_since(iso: &str, now_ms: f64) -> String {
+    let at = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(iso)).get_time();
+    if at.is_nan() {
+        return String::new();
+    }
+    long_age(((now_ms - at) / 1000.0).floor() as i64)
+}
+
+pub fn long_age(seconds: i64) -> String {
+    let s = seconds.max(0);
+    if s < 45 {
+        "just now".into()
+    } else if s < 3_600 {
+        format!("{} min ago", ((s + 30) / 60).max(1))
+    } else if s < 86_400 {
+        format!("{} h ago", s / 3_600)
+    } else {
+        format!("{} d ago", s / 86_400)
+    }
+}
+
 /// A length of time: "40s", "4m", "2h 5m", "3d".
 pub fn span(seconds: i64) -> String {
     let s = seconds.max(0);
@@ -58,6 +80,21 @@ pub fn clock(iso: &str) -> String {
         set("month", "short");
         set("day", "numeric");
     }
+    date.to_locale_string("en-US", &options).into()
+}
+
+/// "Nov 4" in the device's own time zone. Empty when unreadable.
+pub fn short_date(iso: &str) -> String {
+    if iso.is_empty() {
+        return String::new();
+    }
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(iso));
+    if date.get_time().is_nan() {
+        return String::new();
+    }
+    let options = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&options, &"month".into(), &"short".into());
+    let _ = js_sys::Reflect::set(&options, &"day".into(), &"numeric".into());
     date.to_locale_string("en-US", &options).into()
 }
 

@@ -1,0 +1,1107 @@
+{
+  "state": "ok",
+  "unavailable": null,
+  "defaultPeriod": "week",
+  "asOf": "2026-11-08T18:02:00.000Z",
+  "asOfText": "Read 1:02 PM",
+  "periods": [
+    {
+      "id": "day",
+      "label": "Today",
+      "lead": [
+        {
+          "text": "Today "
+        },
+        {
+          "text": "gap-fixer",
+          "strong": true
+        },
+        {
+          "text": " used the most: about "
+        },
+        {
+          "text": "7%",
+          "strong": true
+        },
+        {
+          "text": " of Claude gmail’s weekly limit"
+        },
+        {
+          "text": "."
+        },
+        {
+          "text": " Next are "
+        },
+        {
+          "text": "E",
+          "strong": true
+        },
+        {
+          "text": " and "
+        },
+        {
+          "text": "F",
+          "strong": true
+        },
+        {
+          "text": ", at about "
+        },
+        {
+          "text": "5%",
+          "strong": true
+        },
+        {
+          "text": " and "
+        },
+        {
+          "text": "4%",
+          "strong": true
+        },
+        {
+          "text": " of Claude team’s week."
+        }
+      ],
+      "summary": [
+        {
+          "text": "gap-fixer",
+          "strong": true
+        },
+        {
+          "text": " used the most today: about 7% of Claude gmail’s weekly limit."
+        }
+      ],
+      "columns": [
+        {
+          "id": "claude:me|seven_day",
+          "account": "claude:me",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "me",
+          "short": "Claude me",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:team|seven_day",
+          "account": "claude:team",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "team",
+          "short": "Claude team",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:gmail|seven_day",
+          "account": "claude:gmail",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "gmail",
+          "short": "Claude gmail, wk",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:gmail|five_hour",
+          "account": "claude:gmail",
+          "meter": "five_hour",
+          "label": "Claude 5-hour",
+          "accountLabel": "gmail",
+          "short": "Claude gmail, 5-h",
+          "hue": "claude"
+        },
+        {
+          "id": "codex:gmail|seven_day",
+          "account": "codex:gmail",
+          "meter": "seven_day",
+          "label": "Codex weekly",
+          "accountLabel": "gmail",
+          "short": "Codex gmail",
+          "hue": "codex"
+        }
+      ],
+      "credits": {
+        "label": "Codex credits",
+        "accountLabel": "by account"
+      },
+      "rows": [
+        {
+          "stream": "gap-fixer",
+          "label": "a thread with no stream",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.0054,
+              "text": "0.5%"
+            },
+            null,
+            {
+              "share": 0.0678,
+              "text": "7%"
+            },
+            {
+              "share": 0.5196999999999999,
+              "text": "52%"
+            },
+            null
+          ],
+          "credits": [],
+          "blockOrder": [
+            2,
+            3,
+            0
+          ]
+        },
+        {
+          "stream": "E",
+          "label": "Stream E",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.0149,
+              "text": "1%"
+            },
+            {
+              "share": 0.0472,
+              "text": "5%"
+            },
+            null,
+            null,
+            {
+              "share": 0.0067,
+              "text": "0.7%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "22"
+            }
+          ],
+          "blockOrder": [
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "stream": "F",
+          "label": "PM7 follow-ups",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.021,
+              "text": "2%"
+            },
+            {
+              "share": 0.044000000000000004,
+              "text": "4%"
+            },
+            null,
+            null,
+            {
+              "share": 0.025,
+              "text": "3%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "82"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "270"
+            }
+          ],
+          "blockOrder": [
+            1,
+            4,
+            0
+          ]
+        },
+        {
+          "stream": "TOOLS",
+          "label": "Agent tools",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.0322,
+              "text": "3%"
+            },
+            {
+              "share": 0.0101,
+              "text": "1%"
+            },
+            {
+              "share": 0.0019,
+              "text": "0.2%"
+            },
+            {
+              "share": 0.0149,
+              "text": "1%"
+            },
+            {
+              "share": 0.0016,
+              "text": "0.2%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "6"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "21"
+            }
+          ],
+          "blockOrder": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "stream": "C",
+          "label": "C closure",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.0059,
+              "text": "0.6%"
+            },
+            {
+              "share": 0.011699999999999999,
+              "text": "1%"
+            },
+            null,
+            null,
+            {
+              "share": 0.005600000000000001,
+              "text": "0.6%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "19"
+            }
+          ],
+          "blockOrder": [
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "stream": "coordinator",
+          "label": "a thread with no stream",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.005600000000000001,
+              "text": "0.6%"
+            },
+            null,
+            null,
+            null,
+            null
+          ],
+          "credits": [],
+          "blockOrder": [
+            0
+          ]
+        },
+        {
+          "stream": "P",
+          "label": "Stream P",
+          "bucket": false,
+          "cells": [
+            null,
+            {
+              "share": 0.0013,
+              "text": "0.1%"
+            },
+            null,
+            null,
+            null
+          ],
+          "credits": [],
+          "blockOrder": [
+            1
+          ]
+        },
+        {
+          "stream": "Not tied to a stream",
+          "label": "sessions no stream rule claims",
+          "bucket": true,
+          "cells": [
+            {
+              "share": 0.0286,
+              "text": "3%"
+            },
+            {
+              "share": 0.023399999999999997,
+              "text": "2%"
+            },
+            {
+              "share": 0.0166,
+              "text": "2%"
+            },
+            {
+              "share": 0.128,
+              "text": "13%"
+            },
+            {
+              "share": 0.0154,
+              "text": "2%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "51"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "130"
+            }
+          ],
+          "blockOrder": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      ],
+      "key": [
+        "Each figure is the share of that account’s limit the stream used today.",
+        "Credits are never added across accounts."
+      ],
+      "foot": "Estimates: each account’s measured use is split between threads by their share of its tokens. quota-watch has watched 92% of today. Nas1 missed 6 of 37 scans and the Mac 1, so some of their sessions are missing. No stream budgets are set.",
+      "more": "3 more streams, and use not tied to a stream"
+    },
+    {
+      "id": "week",
+      "label": "This week",
+      "lead": [
+        {
+          "text": "This week "
+        },
+        {
+          "text": "gap-fixer",
+          "strong": true
+        },
+        {
+          "text": " used the most: about "
+        },
+        {
+          "text": "42%",
+          "strong": true
+        },
+        {
+          "text": " of Claude gmail’s weekly limit"
+        },
+        {
+          "text": ", plus "
+        },
+        {
+          "text": "3.2",
+          "strong": true
+        },
+        {
+          "text": " full 5-hour windows on the same account"
+        },
+        {
+          "text": "."
+        },
+        {
+          "text": " Next are "
+        },
+        {
+          "text": "E",
+          "strong": true
+        },
+        {
+          "text": " and "
+        },
+        {
+          "text": "F",
+          "strong": true
+        },
+        {
+          "text": ", at about "
+        },
+        {
+          "text": "30%",
+          "strong": true
+        },
+        {
+          "text": " and "
+        },
+        {
+          "text": "28%",
+          "strong": true
+        },
+        {
+          "text": " of Claude team’s week."
+        }
+      ],
+      "summary": [
+        {
+          "text": "gap-fixer",
+          "strong": true
+        },
+        {
+          "text": " used the most this week: about 42% of Claude gmail’s weekly limit."
+        }
+      ],
+      "columns": [
+        {
+          "id": "claude:me|seven_day",
+          "account": "claude:me",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "me",
+          "short": "Claude me",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:team|seven_day",
+          "account": "claude:team",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "team",
+          "short": "Claude team",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:gmail|seven_day",
+          "account": "claude:gmail",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "gmail",
+          "short": "Claude gmail, wk",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:gmail|five_hour",
+          "account": "claude:gmail",
+          "meter": "five_hour",
+          "label": "Claude 5-hour",
+          "accountLabel": "gmail",
+          "short": "Claude gmail, 5-h",
+          "hue": "claude"
+        },
+        {
+          "id": "codex:gmail|seven_day",
+          "account": "codex:gmail",
+          "meter": "seven_day",
+          "label": "Codex weekly",
+          "accountLabel": "gmail",
+          "short": "Codex gmail",
+          "hue": "codex"
+        }
+      ],
+      "credits": {
+        "label": "Codex credits",
+        "accountLabel": "by account"
+      },
+      "rows": [
+        {
+          "stream": "gap-fixer",
+          "label": "a thread with no stream",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.034,
+              "text": "3%"
+            },
+            null,
+            {
+              "share": 0.424,
+              "text": "42%"
+            },
+            {
+              "share": 3.248,
+              "text": "3.2×"
+            },
+            null
+          ],
+          "credits": [],
+          "blockOrder": [
+            2,
+            3,
+            0
+          ]
+        },
+        {
+          "stream": "E",
+          "label": "Stream E",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.09300000000000001,
+              "text": "9%"
+            },
+            {
+              "share": 0.295,
+              "text": "30%"
+            },
+            null,
+            null,
+            {
+              "share": 0.042,
+              "text": "4%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "140"
+            }
+          ],
+          "blockOrder": [
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "stream": "F",
+          "label": "PM7 follow-ups",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.131,
+              "text": "13%"
+            },
+            {
+              "share": 0.275,
+              "text": "28%"
+            },
+            null,
+            null,
+            {
+              "share": 0.156,
+              "text": "16%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "515"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "1,685"
+            }
+          ],
+          "blockOrder": [
+            1,
+            4,
+            0
+          ]
+        },
+        {
+          "stream": "TOOLS",
+          "label": "Agent tools",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.201,
+              "text": "20%"
+            },
+            {
+              "share": 0.063,
+              "text": "6%"
+            },
+            {
+              "share": 0.012,
+              "text": "1%"
+            },
+            {
+              "share": 0.09300000000000001,
+              "text": "9%"
+            },
+            {
+              "share": 0.01,
+              "text": "1%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "35"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "130"
+            }
+          ],
+          "blockOrder": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "stream": "C",
+          "label": "C closure",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.037000000000000005,
+              "text": "4%"
+            },
+            {
+              "share": 0.073,
+              "text": "7%"
+            },
+            null,
+            null,
+            {
+              "share": 0.035,
+              "text": "4%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "116"
+            }
+          ],
+          "blockOrder": [
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "stream": "coordinator",
+          "label": "a thread with no stream",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.035,
+              "text": "4%"
+            },
+            null,
+            null,
+            null,
+            null
+          ],
+          "credits": [],
+          "blockOrder": [
+            0
+          ]
+        },
+        {
+          "stream": "P",
+          "label": "Stream P",
+          "bucket": false,
+          "cells": [
+            null,
+            {
+              "share": 0.008,
+              "text": "0.8%"
+            },
+            null,
+            null,
+            null
+          ],
+          "credits": [],
+          "blockOrder": [
+            1
+          ]
+        },
+        {
+          "stream": "Not tied to a stream",
+          "label": "sessions no stream rule claims",
+          "bucket": true,
+          "cells": [
+            {
+              "share": 0.179,
+              "text": "18%"
+            },
+            {
+              "share": 0.146,
+              "text": "15%"
+            },
+            {
+              "share": 0.10400000000000001,
+              "text": "10%"
+            },
+            {
+              "share": 0.8,
+              "text": "80%"
+            },
+            {
+              "share": 0.096,
+              "text": "10%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "319"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "810"
+            }
+          ],
+          "blockOrder": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      ],
+      "key": [
+        "Each figure is the share of that account’s limit the stream used this week.",
+        "3.2× means 3.2 full 5-hour windows.",
+        "Credits are never added across accounts."
+      ],
+      "foot": "Estimates: each account’s measured use is split between threads by their share of its tokens. quota-watch has watched 36% of this week, since early Friday. Nas1 missed 6 of 37 scans and the Mac 1, so some of their sessions are missing. No stream budgets are set.",
+      "more": "3 more streams, and use not tied to a stream"
+    },
+    {
+      "id": "window",
+      "label": "Last 6 hours",
+      "lead": [
+        {
+          "text": "In the last 6 hours "
+        },
+        {
+          "text": "gap-fixer",
+          "strong": true
+        },
+        {
+          "text": " used the most: about "
+        },
+        {
+          "text": "2%",
+          "strong": true
+        },
+        {
+          "text": " of Claude gmail’s weekly limit"
+        },
+        {
+          "text": "."
+        },
+        {
+          "text": " Next are "
+        },
+        {
+          "text": "E",
+          "strong": true
+        },
+        {
+          "text": " and "
+        },
+        {
+          "text": "F",
+          "strong": true
+        },
+        {
+          "text": ", at about "
+        },
+        {
+          "text": "1%",
+          "strong": true
+        },
+        {
+          "text": " and "
+        },
+        {
+          "text": "1%",
+          "strong": true
+        },
+        {
+          "text": " of Claude team’s week."
+        }
+      ],
+      "summary": [
+        {
+          "text": "gap-fixer",
+          "strong": true
+        },
+        {
+          "text": " used the most in the last 6 hours: about 2% of Claude gmail’s weekly limit."
+        }
+      ],
+      "columns": [
+        {
+          "id": "claude:me|seven_day",
+          "account": "claude:me",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "me",
+          "short": "Claude me",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:team|seven_day",
+          "account": "claude:team",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "team",
+          "short": "Claude team",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:gmail|seven_day",
+          "account": "claude:gmail",
+          "meter": "seven_day",
+          "label": "Claude weekly",
+          "accountLabel": "gmail",
+          "short": "Claude gmail, wk",
+          "hue": "claude"
+        },
+        {
+          "id": "claude:gmail|five_hour",
+          "account": "claude:gmail",
+          "meter": "five_hour",
+          "label": "Claude 5-hour",
+          "accountLabel": "gmail",
+          "short": "Claude gmail, 5-h",
+          "hue": "claude"
+        },
+        {
+          "id": "codex:gmail|seven_day",
+          "account": "codex:gmail",
+          "meter": "seven_day",
+          "label": "Codex weekly",
+          "accountLabel": "gmail",
+          "short": "Codex gmail",
+          "hue": "codex"
+        }
+      ],
+      "credits": {
+        "label": "Codex credits",
+        "accountLabel": "by account"
+      },
+      "rows": [
+        {
+          "stream": "gap-fixer",
+          "label": "a thread with no stream",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.0017000000000000001,
+              "text": "0.2%"
+            },
+            null,
+            {
+              "share": 0.0212,
+              "text": "2%"
+            },
+            {
+              "share": 0.1624,
+              "text": "16%"
+            },
+            null
+          ],
+          "credits": [],
+          "blockOrder": [
+            2,
+            3,
+            0
+          ]
+        },
+        {
+          "stream": "E",
+          "label": "Stream E",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.004699999999999999,
+              "text": "0.5%"
+            },
+            {
+              "share": 0.0148,
+              "text": "1%"
+            },
+            null,
+            null,
+            {
+              "share": 0.0021,
+              "text": "0.2%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "7"
+            }
+          ],
+          "blockOrder": [
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "stream": "F",
+          "label": "PM7 follow-ups",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.0066,
+              "text": "0.7%"
+            },
+            {
+              "share": 0.0138,
+              "text": "1%"
+            },
+            null,
+            null,
+            {
+              "share": 0.0078000000000000005,
+              "text": "0.8%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "26"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "84"
+            }
+          ],
+          "blockOrder": [
+            1,
+            4,
+            0
+          ]
+        },
+        {
+          "stream": "TOOLS",
+          "label": "Agent tools",
+          "bucket": false,
+          "cells": [
+            {
+              "share": 0.0101,
+              "text": "1%"
+            },
+            {
+              "share": 0.0032,
+              "text": "0.3%"
+            },
+            {
+              "share": 0.0006,
+              "text": "0.1%"
+            },
+            {
+              "share": 0.004699999999999999,
+              "text": "0.5%"
+            },
+            {
+              "share": 0.0005,
+              "text": "0.1%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "2"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "7"
+            }
+          ],
+          "blockOrder": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "stream": "Not tied to a stream",
+          "label": "sessions no stream rule claims",
+          "bucket": true,
+          "cells": [
+            {
+              "share": 0.009000000000000001,
+              "text": "0.9%"
+            },
+            {
+              "share": 0.0073,
+              "text": "0.7%"
+            },
+            {
+              "share": 0.0052,
+              "text": "0.5%"
+            },
+            {
+              "share": 0.04,
+              "text": "4%"
+            },
+            {
+              "share": 0.0048,
+              "text": "0.5%"
+            }
+          ],
+          "credits": [
+            {
+              "account": "codex:gmail",
+              "accountLabel": "gmail",
+              "text": "16"
+            },
+            {
+              "account": "codex:party",
+              "accountLabel": "party",
+              "text": "41"
+            }
+          ],
+          "blockOrder": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      ],
+      "key": [
+        "Each figure is the share of that account’s limit the stream used in the last 6 hours.",
+        "Credits are never added across accounts."
+      ],
+      "foot": "Estimates: each account’s measured use is split between threads by their share of its tokens. Nas1 missed 6 of 37 scans and the Mac 1, so some of their sessions are missing. No stream budgets are set.",
+      "more": "Use not tied to a stream"
+    }
+  ]
+}
