@@ -7,7 +7,7 @@
 // and per account `actions` and `removeRefusal` in GET /api/accounts/registry. A control is "coming" only where
 // the server has no flow for it yet (`not_implemented`, or a route that does not exist on this server); any other
 // reason it is off is said in plain words. Nothing here ever shows an example value as real data.
-import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, hostLabel, planLabel, relative, intervalLabel, run, statusWord, duration, claudeSignInNeeded, updateTotal } from './view-model.mjs';
+import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, hostLabel, planLabel, relative, intervalLabel, run, statusWord, duration, claudeSignInNeeded, updateTotal, isCatalogPending } from './view-model.mjs';
 import { antigravityView } from './antigravity-data.mjs';
 import { visibleUsageWindows } from './visible-usage.mjs';
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
@@ -789,6 +789,7 @@ const actionWord = (row) => {
 const rowWord = (row, label) => row.status === 'unknown'
   ? [unknownWord(row, label), /timed out/i.test(text(row.message)) ? 'warn' : '']
   : row.status === 'action_required' ? [actionWord(row), 'warn']
+    : isCatalogPending(row) ? [row.status === 'restart_failed' ? 'Updated, models not registered yet' : 'Models not registered yet', 'warn']
     : (RESULT[row.status] || ['Unknown result', '']);
 // How long a computer has been on its current step ("45s", "3m 05s"); '' below the
 // threshold or when the step's start is unknown, so short steps stay calm.
@@ -823,6 +824,8 @@ export function updateResultsView(job, now = Date.now()) {
     const parts = [`${results.length} ${results.length === 1 ? 'result' : 'results'}`];
     if (failed) parts.push(`${failed} failed`);
     if (count('action_required')) parts.push(`${count('action_required')} need action`);
+    const catalog = results.filter(isCatalogPending).length;
+    if (catalog) parts.push(`${catalog} ${catalog === 1 ? 'model' : 'models'} not yet registered`);
     if (count('held')) parts.push(`${count('held')} held`);
     if (count('skipped')) parts.push(`${count('skipped')} skipped`);
     if (count('unknown')) parts.push(`${count('unknown')} unknown`);

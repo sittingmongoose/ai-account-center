@@ -721,6 +721,24 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
   });
   assert.equal(held.summary, '2 results · 1 held');
   assert.match(held.tip, /2 results, 1 held\./);
+  // a Muse row whose catalog lagged the binary is named, never folded into clean success
+  const catalog = updateViewModel({
+    state: 'failed',
+    results: [
+      { status: 'updated' },
+      {
+        status: 'restart_failed',
+        message:
+          'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.',
+      },
+    ],
+  });
+  assert.equal(catalog.summary, '2 results · 1 failed · 1 model not yet registered');
+  assert.match(catalog.tip, /Last run failed: 2 results, 1 failed, 1 model not yet registered\./);
+  assert.equal(
+    updateViewModel({ state: 'completed', results: [{ status: 'updated' }] }).summary,
+    '1 results'
+  );
 });
 
 test('Home headers, footer and the inline confirmation read the data truthfully (W2)', () => {

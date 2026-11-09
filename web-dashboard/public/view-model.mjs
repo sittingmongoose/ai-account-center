@@ -1455,6 +1455,21 @@ export function updateRunningHosts(job) {
   return job.activePlatform ? [job.activePlatform] : [];
 }
 
+/**
+ * A Muse row whose model catalog did not refresh: the helper reports
+ * restart_failed (binary moved, sessions restarted) or failed (already
+ * current, warm failed), never a clean updated/current. The DTO carries words,
+ * never a message code, so the words are the signal, the same way unknown and
+ * action-required rows are read in accounts-view.mjs.
+ */
+export function isCatalogPending(row) {
+  return (
+    (row?.status === 'restart_failed' || row?.status === 'failed') &&
+    typeof row?.message === 'string' &&
+    row.message.includes('not registered yet')
+  );
+}
+
 /** Update apps button state from /api/app-updates/status. */
 export function updateViewModel(job, { done = false } = {}) {
   const results = Array.isArray(job?.results) ? job.results : [];
@@ -1463,12 +1478,14 @@ export function updateViewModel(job, { done = false } = {}) {
   ).length;
   const action = results.filter((row) => row.status === 'action_required').length;
   const held = results.filter((row) => row.status === 'held').length;
+  const catalog = results.filter(isCatalogPending).length;
+  const catalogWords = catalog ? `${catalog} model${catalog === 1 ? '' : 's'} not yet registered` : '';
   const running = job?.state === 'running';
   const where = listWords(updateRunningHosts(job).map((id) => platformLabel(id)));
   const tip = running
     ? `Updating apps on ${where || 'your computers'} · running apps may restart`
     : job
-      ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}${held ? `, ${held} held` : ''}. Details under Accounts & Settings.`
+      ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}${held ? `, ${held} held` : ''}${catalogWords ? `, ${catalogWords}` : ''}. Details under Accounts & Settings.`
       : 'Update the Claude and Codex apps and CLIs on Mac, Windows, Ubuntu and Nas1';
   return {
     running,
@@ -1477,7 +1494,7 @@ export function updateViewModel(job, { done = false } = {}) {
     total: updateTotal(job),
     tip,
     summary: job
-      ? `${results.length} results${failed ? ` · ${failed} failed` : ''}${action ? ` · ${action} need action` : ''}${held ? ` · ${held} held` : ''}`
+      ? `${results.length} results${failed ? ` · ${failed} failed` : ''}${action ? ` · ${action} need action` : ''}${held ? ` · ${held} held` : ''}${catalogWords ? ` · ${catalogWords}` : ''}`
       : '',
   };
 }

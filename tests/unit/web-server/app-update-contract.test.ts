@@ -497,6 +497,52 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     expect(job.results).toEqual([kept, legacy]);
   });
 
+  it('keeps a Muse update whose model catalog did not refresh as an honest non-success', () => {
+    const row = (messageCode: string, appId: UpdateAppId = 'muse-code', status = 'restart_failed') =>
+      normalizeAppUpdateRow(
+        {
+          appId,
+          status,
+          messageCode,
+          previousVersion: '1.2.3',
+          version: '1.2.4',
+          manager: 'native',
+          updateAttempted: true,
+          restartedProcesses: 0,
+        },
+        appId,
+        'ubuntu'
+      );
+    // The binary moved: the helper reports restart_failed, never clean updated.
+    const pending = row('model_catalog_unrefreshed');
+    expect(pending).toMatchObject({ status: 'restart_failed', version: '1.2.4' });
+    expect(pending.message).toBe(MESSAGES.model_catalog_unrefreshed);
+    expect(pending.message).toContain('not registered yet');
+    expect(pending.message).toContain('Open Muse once');
+    // Already current for the binary, but the warm failed: honest failed.
+    const stale = row('model_catalog_unrefreshed', 'muse-code', 'failed');
+    expect(stale).toMatchObject({ status: 'failed' });
+    expect(stale.message).toBe(MESSAGES.model_catalog_unrefreshed);
+    // Only Muse Code rows may say so, and only on those two outcomes: never a
+    // clean updated/current row in disguise.
+    for (const status of ['updated', 'current', 'not_installed', 'skipped'])
+      expect(row('model_catalog_unrefreshed', 'muse-code', status).message).toBe(
+        MESSAGES.helper_invalid
+      );
+    for (const appId of ['claude-code', 'codex-cli', 'omp', 'antigravity-cli'] as const)
+      for (const status of ['restart_failed', 'failed'])
+        expect(row('model_catalog_unrefreshed', appId, status).message).toBe(
+          MESSAGES.helper_invalid
+        );
+    // Unknown codes still fail closed; a saved row restores as itself.
+    expect(row('made_up_code', 'muse-code').message).toBe(MESSAGES.helper_invalid);
+    const root = directory();
+    saveJob(root, { results: [pending, stale], expectedResults: 40 });
+    const job = new AppUpdateService({ ccsDir: root, runHost: async () => payload() }).getStatus()
+      .job!;
+    expect(job.results).toEqual([pending, stale]);
+  });
+
   it('limits forced-session messages to Windows Codex and truthful outcomes', () => {
     const row = (messageCode: string, status: string, appId: UpdateAppId = 'codex-cli') => ({
       appId,
