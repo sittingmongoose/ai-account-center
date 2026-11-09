@@ -336,7 +336,39 @@ public struct AccountQuotaWindow: Decodable, Identifiable, Sendable {
   public let poolId: String?
   /// F6 from the dashboard: present (always true) when `resetAt` has passed and the reading was sampled before it.
   public let resetPassed: Bool?
+  /// Reset-grant refill targets (limit types `clears`): `five_hour`, `seven_day`, `seven_day_overage_included`,
+  /// `seven_day_opus`/`seven_day_sonnet`/etc. Ignored on non-grant windows; absent decodes as nil and a malformed
+  /// value is skipped rather than failing the dashboard.
+  public let clears: [String]?
   public var id: String { key }
+
+  private enum CodingKeys: String, CodingKey {
+    case key, label, usedPercent, remainingPercent, resetAt, windowMinutes, used, limit, unit, kind, remaining, expiresAt, unlimited, enabled, status, sampledAt, poolId, resetPassed, clears
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    key = try container.decode(String.self, forKey: .key)
+    label = try container.decode(String.self, forKey: .label)
+    usedPercent = try container.decodeIfPresent(Double.self, forKey: .usedPercent)
+    remainingPercent = try container.decodeIfPresent(Double.self, forKey: .remainingPercent)
+    resetAt = try container.decodeIfPresent(String.self, forKey: .resetAt)
+    windowMinutes = try container.decodeIfPresent(Double.self, forKey: .windowMinutes)
+    used = try container.decodeIfPresent(Double.self, forKey: .used)
+    limit = try container.decodeIfPresent(Double.self, forKey: .limit)
+    unit = try container.decodeIfPresent(String.self, forKey: .unit)
+    kind = try container.decodeIfPresent(String.self, forKey: .kind)
+    remaining = try container.decodeIfPresent(Double.self, forKey: .remaining)
+    expiresAt = try container.decodeIfPresent(String.self, forKey: .expiresAt)
+    unlimited = try container.decodeIfPresent(Bool.self, forKey: .unlimited)
+    enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+    status = try container.decodeIfPresent(String.self, forKey: .status)
+    sampledAt = try container.decodeIfPresent(String.self, forKey: .sampledAt)
+    poolId = try container.decodeIfPresent(String.self, forKey: .poolId)
+    resetPassed = try container.decodeIfPresent(Bool.self, forKey: .resetPassed)
+    // Lenient: string items are kept, any other item is skipped, and a value that is not an array reads as nil.
+    clears = (try? container.decodeIfPresent(LenientStringList.self, forKey: .clears))?.values
+  }
 
   public var clampedUsedPercent: Double? {
     // Preserve real over-budget usage for text; only bar geometry is capped.
