@@ -6,7 +6,7 @@
 // Truthfulness: quota observations are snapshots per account and window, never added, averaged or merged
 // across accounts; a missing reading is a gap, never zero; a reset is never bridged by a line; projections are
 // labelled as projections; at most two decimals.
-import { visibleUsageWindows } from './visible-usage.mjs';
+import { visibleUsageWindows, isWeeklyScoped, scopedModelLabel } from './visible-usage.mjs';
 import { usedPercent, currentUsedPercent, isFable, isMeterWindow, period, windowLabel, planLabel, valueText, hiddenProviders } from './view-model.mjs';
 import { H, D, clockTxt, hourTxt, mdTxt, wmdTxt, wdTxt, timeTxt, duration, untilTxt, dayStart, addDays, bucketStart, nextBucket, dashLine, dashPolyline } from './analytics-usage.mjs';
 import { zonedAddDays, zonedHour, zonedHourStart } from './time-format.mjs';
@@ -38,13 +38,23 @@ const unitAmount = (value, unit) => {
 // ---------------------------------------------------------------- accounts
 const MAIN_WINDOW = { codex: 'seven_day', claude: 'seven_day', antigravity: 'gemini-weekly' };
 /** The window a quota-history row summarises: the canonical weekly window, else the first weekly rate limit,
- *  else the first rate limit with a reading, else the first rate limit; never Fable, never an amount. */
+ *  else the first rate limit with a reading, else the first rate limit; never a weekly-scoped
+ *  (Fable/Opus/...) window and never an amount, so a scoped weekly is never mistaken for the account weekly. */
 export function mainWindow(account) {
-  const windows = (Array.isArray(account?.windows) ? account.windows : []).filter(window => window && !['balance', 'extra_usage', 'spend'].includes(window.kind) && !/fable/i.test(`${text(window.key)} ${text(window.label)}`));
+  const windows = (Array.isArray(account?.windows) ? account.windows : []).filter(window => window && !['balance', 'extra_usage', 'spend'].includes(window.kind) && !isWeeklyScoped(window));
   return windows.find(window => window.key === MAIN_WINDOW[account?.provider])
     || windows.find(window => period(window) === 'week' && usedPercent(window) !== null)
     || windows.find(window => usedPercent(window) !== null)
     || windows[0] || null;
+}
+/** The binding weekly constraint: the tightest (highest-used) weekly meter among the account-wide
+ *  window and every weekly-scoped window (Fable, Opus, ...), so a scoped limit is never lost
+ *  behind the aggregate. Pace math itself stays per-window by key. */
+export function bindingWeekly(account) {
+  const windows = (Array.isArray(account?.windows) ? account.windows : []).filter(window => window && !['balance', 'extra_usage', 'spend'].includes(window.kind) && period(window) === 'week' && usedPercent(window) !== null);
+  let best = null;
+  for (const window of windows) if (!best || usedPercent(window) > usedPercent(best)) best = window;
+  return best;
 }
 /**
  * One merged history per account and window key, from every analytics series with that key (a renamed label is
@@ -79,7 +89,7 @@ export function quotaAccounts(payload, ctx = {}) {
   const hiddenIds = new Set(Array.isArray(ctx.dashboard?.settings?.hiddenAccountIds) ? ctx.dashboard.settings.hiddenAccountIds : []);
   return current.filter(a => known.has(a.provider) && !hidden.has(a.provider) && a.hidden !== true && !hiddenIds.has(a.id)).map(a => {
     const windows = visibleUsageWindows(a.provider, a.windows).map(w => ({
-      key: text(w.key), label: text(w.label), short: windowLabel(a.provider, w), period: period(w), fable: isFable(w),
+      key: text(w.key), label: text(w.label), short: windowLabel(a.provider, w), period: period(w), fable: isFable(w), scoped: isWeeklyScoped(w),
       // a reading from before a reset that has passed is no current reading (F6)
       used: isMeterWindow(w) && w.unlimited !== true ? currentUsedPercent(a, w, now) : null, meter: isMeterWindow(w),
       resetAt: validDate(w.resetAt) ? Date.parse(w.resetAt) : null, expiresAt: validDate(w.expiresAt) ? Date.parse(w.expiresAt) : null,
@@ -177,7 +187,7 @@ function focusWindows(acc) {
   const ms = meters(acc);
   if (acc.provider === 'antigravity') return ms;
   const order = { '5h': 0, week: 1, month: 2, other: 3 };
-  return ms.slice().sort((a, b) => order[a.period] - order[b.period] || a.fable - b.fable).slice(0, 3);
+  return ms.slice().sort((a, b) => order[a.period] - order[b.period] || a.scoped - b.scoped).slice(0, 3);
 }
 const tagOf = acc => acc.email.split('@')[0];
 /**
@@ -203,7 +213,7 @@ export function focusChart(acc, payload, ctx) {
   let series;
   if (cmp && prim) {
     series = peers.map((a, i) => {
-      const w = a.windows.find(x => x.key === prim.key && x.meter) || (acc.provider !== 'cursor' && meters(a).find(x => !x.fable && x.period === prim.period));
+      const w = a.windows.find(x => x.key === prim.key && x.meter) || (acc.provider !== 'cursor' && meters(a).find(x => !x.scoped && x.period === prim.period));
       return w ? { acc: a, w, shade: shadeOf(i), dash: i % 3, width: a.id === acc.id ? 2.4 : 1.9, name: tagOf(a) + (a.active ? ' (active)' : ''), tag: tagOf(a) } : null;
     }).filter(Boolean);
   } else {
@@ -466,7 +476,7 @@ export function focusChart(acc, payload, ctx) {
   };
 }
 function fullName(provider, w) {
-  if (w.fable) return 'Fable weekly';
+  if (w.scoped) return `${scopedModelLabel(w)} weekly`;
   if (provider === 'codex') return { week: 'Weekly', '5h': '5-hour' }[w.label] || w.label || w.short;
   if (provider === 'claude') return { 'Five-hour usage': '5-hour usage' }[w.label] || w.label || w.short;
   return w.label || w.short;
@@ -513,7 +523,7 @@ export function quotaView(payload, ctx = {}) {
 const PERIOD_ORDER = { '5h': 0, week: 1, month: 2, other: 3 };
 function resetName(a, w, first) {
   if (w.kind === 'spend') return first ? 'Spend' : 'spend';
-  if (w.fable) return 'Fable';
+  if (w.scoped) return scopedModelLabel(w);
   if (['antigravity', 'cursor', 'zai'].includes(a.provider)) return w.short || w.label;
   const p = { '5h': '5-hour', week: 'Weekly', month: 'Monthly' }[w.period];
   if (!p) return w.label || 'Usage';
@@ -522,7 +532,7 @@ function resetName(a, w, first) {
 function resetWhat(a, wins) {
   if (wins.length === 1) {
     const w = wins[0];
-    if (w.fable) return 'Weekly Fable limit resets';
+    if (w.scoped) return `Weekly ${scopedModelLabel(w)} limit resets`;
     if (w.kind === 'spend') return 'Spend limit resets';
     if (['antigravity', 'cursor', 'zai'].includes(a.provider)) return `${w.short} limit resets`;
     return ({ '5h': '5-hour limit resets', week: 'Weekly limit resets', month: 'Monthly limit resets' }[w.period]) || `${w.label} resets`;
@@ -546,7 +556,7 @@ export function agendaEvents(accounts, now) {
       if (w.kind === 'spend' && w.resetAt && w.resetAt > now) addReset(w);
     }
     for (const ws of resets.values()) {
-      ws.sort((x, y) => (x.kind === 'spend') - (y.kind === 'spend') || x.fable - y.fable || (PERIOD_ORDER[x.period] ?? 3) - (PERIOD_ORDER[y.period] ?? 3));
+      ws.sort((x, y) => (x.kind === 'spend') - (y.kind === 'spend') || x.scoped - y.scoped || (PERIOD_ORDER[x.period] ?? 3) - (PERIOD_ORDER[y.period] ?? 3));
       const vals = ws.filter(w => w.kind !== 'spend' && finite(w.used)).map(w => ({ name: resetName(a, w, true), v: w.used }));
       ev.push({ t: Math.min(...ws.map(w => w.resetAt)), a, what: resetWhat(a, ws), vals, kind: 'reset' });
     }

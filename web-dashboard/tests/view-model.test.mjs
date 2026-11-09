@@ -189,16 +189,17 @@ test('Claude shows a Fable meter only for Max plans: real when reported, "Not re
   assert.equal(pro.cells[2].key, '');
   assert.equal(pro.cells[2].hasValue, false);
   assert.equal(pro.cells[2].naText, '');
-  // a missing 5-hour reading is unavailable, not zero
+  // a missing 5-hour reading beside a shown column is an empty cell, not a missing-data meter
+  assert.equal(missing.cells[0].key, '');
   assert.equal(missing.cells[0].hasValue, false);
-  assert.equal(missing.cells[0].naText, 'Unavailable');
-  // no Max account: no Fable column at all
+  assert.equal(missing.cells[0].naText, '');
+  // no Max account: no Fable column at all; no five_hour window: no 5-hour column either
   assert.deepEqual(
     section(
       dashboardViewModel(data([claude('pro', 'pro', [window()])]), { now }),
       'claude'
     ).columns.map((c) => c.key),
-    ['five', 'weekly']
+    ['weekly']
   );
 });
 
@@ -1433,16 +1434,19 @@ test('resetClock compares calendar days in the display zone across browser midni
   }
 });
 
-test('Claude Weekly uses only the aggregate seven_day window; model windows remain in Details', () => {
-  const a = claude('models', 'pro', [window({ key: 'seven_day_opus', label: 'Opus weekly', usedPercent: 44 }),
-    window({ key: 'seven_day_sonnet', label: 'Sonnet weekly', usedPercent: 22 })]);
+test('Claude model-scoped weeklies get their own columns; the Weekly column is the aggregate only', () => {
+  const a = claude('models', 'pro', [window({ key: 'seven_day_opus', label: 'Weekly Opus usage', usedPercent: 44 }),
+    window({ key: 'seven_day_sonnet', label: 'Weekly Sonnet usage', usedPercent: 22 })]);
   let dto = data([a]);
-  const weekly = section(dashboardViewModel(dto, { now }), 'claude').rows[0].cells[1];
-  assert.equal(weekly.hasValue, false);
-  assert.equal(weekly.naText, 'Unavailable');
+  const sec = section(dashboardViewModel(dto, { now }), 'claude');
+  assert.deepEqual(sec.columns.map((c) => c.label), ['Opus', 'Sonnet']);
+  assert.equal(sec.rows[0].cells[0].valueText, '44');
+  assert.equal(sec.rows[0].cells[1].valueText, '22');
   assert.equal(detailsViewModel(dto, a.id, { now }).meters.length, 2);
   dto = data([{ ...a, windows: [...a.windows, window({ usedPercent: 18 })] }]);
-  assert.equal(section(dashboardViewModel(dto, { now }), 'claude').rows[0].cells[1].value, 18);
+  const wide = section(dashboardViewModel(dto, { now }), 'claude');
+  assert.deepEqual(wide.columns.map((c) => c.label), ['Weekly', 'Opus', 'Sonnet']);
+  assert.equal(wide.rows[0].cells[0].value, 18);
 });
 
 test('Antigravity short labels abbreviate only canonical quota keys', () => {
@@ -1471,4 +1475,91 @@ test('the entitlement class decides the Max gate before the display name', () =>
     'a null class falls back to the name, and Ultra is not Max');
   assert.equal(isMaxPlan({ provider: 'codex', plan: 'Pro', planClass: 'max' }), false,
     'only Claude rows gate');
+});
+
+test('Claude columns are dynamic: no 5-hour column without a five_hour window, scoped weeklies get columns, missing cells are empty', () => {
+  const weeklyOnly = claude('weekly-only', 'pro', [window()]);
+  let vm = dashboardViewModel(data([weeklyOnly]), { now });
+  assert.deepEqual(section(vm, 'claude').columns.map((c) => c.key), ['weekly']);
+  // mixed accounts: one reports five_hour, the other does not; the other gets an empty cell, not "Unavailable"
+  const withFive = claude('with-five', 'pro', [
+    window({ key: 'five_hour', label: 'Five-hour usage', windowMinutes: 300 }),
+    window(),
+  ]);
+  vm = dashboardViewModel(data([withFive, claude('without-five', 'pro', [window()])]), { now });
+  const sec = section(vm, 'claude');
+  assert.deepEqual(sec.columns.map((c) => c.key), ['five', 'weekly']);
+  assert.equal(sec.rows[0].cells[0].hasValue, true);
+  assert.equal(sec.rows[1].cells[0].key, '');
+  assert.equal(sec.rows[1].cells[0].hasValue, false);
+  assert.equal(sec.rows[1].cells[0].naText, '');
+  // weekly-scoped models reported across accounts, first-seen order, short labels from window labels
+  const scoped = claude('scoped', 'pro', [
+    window(),
+    window({ key: 'seven_day_opus', label: 'Weekly Opus usage', usedPercent: 44, remainingPercent: 56 }),
+    window({ key: 'seven_day_sonnet', label: 'Weekly Sonnet usage', usedPercent: 22, remainingPercent: 78 }),
+  ]);
+  const plain = claude('plain', 'pro', [window()]);
+  vm = dashboardViewModel(data([scoped, plain]), { now });
+  const sec2 = section(vm, 'claude');
+  assert.deepEqual(sec2.columns.map((c) => c.label), ['Weekly', 'Opus', 'Sonnet']);
+  assert.deepEqual(sec2.columns.map((c) => c.key), ['weekly', 'seven_day_opus', 'seven_day_sonnet']);
+  assert.equal(sec2.rows[0].cells[1].valueText, '44');
+  assert.equal(sec2.rows[0].cells[1].key, 'claude:scoped|seven_day_opus');
+  assert.equal(sec2.rows[0].cells[2].valueText, '22');
+  // an account missing a shown scoped column gets an empty cell, never a missing-data meter
+  assert.equal(sec2.rows[1].cells[1].key, '');
+  assert.equal(sec2.rows[1].cells[1].naText, '');
+  // total meter columns are capped at 6
+  const many = ['opus', 'sonnet', 'haiku', 'fablex', 'model3', 'model4'].map((slug) =>
+    window({ key: `seven_day_${slug}`, label: `Weekly ${slug[0].toUpperCase()}${slug.slice(1)} usage` })
+  );
+  const wide = claude('wide', 'pro', [window(), ...many]);
+  const capped = section(dashboardViewModel(data([wide]), { now }), 'claude');
+  assert.equal(capped.columns.length, 6);
+});
+
+test('reset grants append refill targets from clears; session_reset_allowance is an amount with next-available text', () => {
+  const acct = claude('grants', 'max', [window()]);
+  const grant = (clears) => ({
+    key: 'reset_credit_session_grant_1',
+    label: 'Session reset grant 1',
+    kind: 'balance',
+    unit: 'resets',
+    used: 1,
+    limit: 2,
+    remaining: 1,
+    expiresAt: at(60 * 24 * 20),
+    clears,
+  });
+  // summary line (value + suffix) is unchanged; refill targets append in dynamic words
+  const both = amountView(acct, grant(['five_hour', 'seven_day']), now);
+  assert.equal(both.value, '1');
+  assert.equal(both.unit, 'of 2 resets used');
+  assert.match(both.sub, /refills session \+ weekly/);
+  const opus = amountView(acct, grant(['seven_day_opus']), now);
+  assert.match(opus.sub, /refills Opus weekly/);
+  const overage = amountView(acct, grant(['seven_day_overage_included']), now);
+  assert.match(overage.sub, /refills Fable included usage/);
+  // no Fable clears key exists: a grant never reads as refilling Fable itself
+  const fableGrant = amountView(acct, grant(['seven_day_fable']), now);
+  assert.doesNotMatch(fableGrant.sub, /Fable/);
+  const without = amountView(acct, grant(undefined), now);
+  assert.doesNotMatch(without.sub, /refills/);
+  // session_reset_allowance: an amount (never a meter) carrying the next-available reset
+  const allowance = {
+    key: 'session_reset_allowance',
+    label: 'Weekly session reset',
+    kind: 'balance',
+    unit: 'resets',
+    remaining: 1,
+    limit: 2,
+    resetAt: at(60 * 24 * 3),
+  };
+  const view = amountView(acct, allowance, now);
+  assert.equal(view.value, '1 reset');
+  assert.match(view.sub, /Next available/);
+  const details = detailsViewModel(data([{ ...acct, windows: [...acct.windows, allowance] }]), acct.id, { now });
+  assert.equal(details.meters.some((m) => m.key === `${acct.id}|session_reset_allowance`), false);
+  assert.equal(details.amounts.some((a) => a.key === `${acct.id}|session_reset_allowance`), true);
 });

@@ -169,3 +169,39 @@ test('phone focus charts (350x180, 600x220): labels never overlap and the lookup
     assert.ok(f.stops.length > 0 && f.lut.every(i => i >= 0 && i < f.stops.length));
   }
 });
+
+test('scoped weeklies: model names in rows and agenda, binding considers aggregate plus scoped', async () => {
+  const { bindingWeekly } = await import('../public/analytics-quota.mjs');
+  const scopedDash = { accounts: [account('claude:scoped', 'claude', 's@example.test', [
+    win('seven_day', 'Weekly usage', 20, { resetAt: iso(now + 10 * H) }),
+    win('seven_day_opus', 'Weekly Opus usage', 90, { resetAt: iso(now + 10 * H) }),
+    win('seven_day_sonnet', 'Weekly Sonnet usage', 40, { resetAt: iso(now + 30 * H) }),
+  ]) ] };
+  const emptyAnalytics = { history: { oldestSampleAt: iso(now - 24 * H) }, accounts: [] };
+  const accounts = quotaAccounts(emptyAnalytics, { now, dashboard: scopedDash });
+  const opusShort = accounts[0].windows.find(w => w.key === 'seven_day_opus').short;
+  assert.equal(opusShort, 'Opus');
+  // the binding weekly is the tightest of aggregate + scoped, not only Fable
+  const raw = scopedDash.accounts[0];
+  assert.equal(bindingWeekly(raw)?.key, 'seven_day_opus');
+  const agenda = agendaView(emptyAnalytics, { now, dashboard: scopedDash });
+  const lines = [...agenda.a, ...agenda.b].filter(r => r.kind === 'line');
+  // same-minute aggregate + opus reset is named from the window labels
+  assert.equal(lines.some(r => r.what === 'Weekly and Opus limits reset'), true);
+  assert.equal(lines.some(r => /Opus/.test(r.what)), true);
+  // a separate sonnet reset stands on its own with its own name
+  assert.equal(lines.some(r => r.what === 'Weekly Sonnet limit resets'), true);
+  // windowMinutes null: key-declared cadence stays honest, label-only claims do not invent one
+  const nullDash = { accounts: [account('claude:null', 'claude', 'n@example.test', [
+    win('seven_day_opus', 'Weekly Opus usage', 50, { windowMinutes: null, resetAt: iso(now + 10 * H) }),
+    win('custom', 'Weekly Custom usage', 10, { windowMinutes: null, resetAt: iso(now + 10 * H) }),
+  ]) ] };
+  const nullAccounts = quotaAccounts(emptyAnalytics, { now, dashboard: nullDash });
+  assert.equal(nullAccounts[0].windows.find(w => w.key === 'seven_day_opus').period, 'week');
+  assert.equal(nullAccounts[0].windows.find(w => w.key === 'seven_day_opus').short, 'Opus');
+  assert.equal(nullAccounts[0].windows.find(w => w.key === 'custom').period, 'other');
+  // main window never mistakes a scoped weekly for the account weekly, Fable included
+  const scopedOnly = { provider: 'claude', windows: [win('seven_day_opus', 'Weekly Opus usage', 90)] };
+  const { mainWindow } = await import('../public/analytics-quota.mjs');
+  assert.equal(mainWindow(scopedOnly), null);
+});

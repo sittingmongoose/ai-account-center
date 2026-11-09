@@ -3,7 +3,7 @@
 // lives here or in the modules it builds on: a missing reading is unavailable, never zero; nothing is
 // added or averaged across accounts or windows; at most two decimals; the product visibility rules of
 // visible-usage.mjs; Fable only for Claude Max plans, from the seven_day_fable window.
-import { visibleUsageWindows } from './visible-usage.mjs';
+import { visibleUsageWindows, isWeeklyScoped, scopedModelLabel, clearsText } from './visible-usage.mjs';
 import { claudeSignInFacts, claudeSignInLine, claudeSignInNote, needsFor } from './claude-signins.mjs';
 import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
@@ -214,7 +214,9 @@ export const isFable = (w) => w?.key === 'seven_day_fable' || /\bfable\b/i.test(
 export const isMeterWindow = (w) =>
   !['balance', 'extra_usage', 'spend'].includes(w?.kind) && w?.unlimited !== true;
 export function period(w) {
-  const d = description(w);
+  // An explicit null duration degrades honestly: only the window key (which names its
+  // cadence) can settle the period, never the free-text label.
+  const d = w?.windowMinutes === null ? text(w?.key) : description(w);
   if (w?.windowMinutes === 300 || /five.?hour|5.?hour|\b5h\b|5 hours|rolling/i.test(d)) return '5h';
   if (w?.windowMinutes === 10080 || /seven.?day|weekly|\bweek\b|7.?day/i.test(d)) return 'week';
   if (/month/i.test(d)) return 'month';
@@ -230,6 +232,7 @@ export const isMaxPlan = (account) =>
 const PERIOD_LABEL = { '5h': '5-hour', week: 'Weekly', month: 'Monthly' };
 export function windowLabel(provider, w) {
   if (isFable(w)) return 'Fable';
+  if (isWeeklyScoped(w)) return scopedModelLabel(w);
   const p = period(w);
   if (provider === 'antigravity') return antigravityWindowLabel(w);
   if (provider === 'cursor')
@@ -495,7 +498,14 @@ export function amountView(account, w, now = Date.now(), { noExpiry = false } = 
       value = nf2.format(w.used);
       suffix = `of ${unitAmount(w.limit, 'resets')} used`;
     } else value = unitAmount(w.remaining, 'resets') || 'Unavailable';
-    sub = expires;
+    // The summary (value + suffix) stays; refill targets and the next-available time ride in `sub`.
+    sub = [
+      expires,
+      clearsText(w),
+      w.key === 'session_reset_allowance' ? exact(w.resetAt, 'Next available ') : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
   } else if (unit === 'packs') {
     icon = 'pack';
     value = unitAmount(w.remaining, 'packs') || 'Unavailable';
@@ -712,32 +722,48 @@ function openLine(openProgress, profileId) {
 }
 function claudeSection(accounts, profiles, platform, now, openProgress, data = null) {
   const anyMax = accounts.some(isMaxPlan);
+  const byAccount = accounts.map((account) => visibleMeters(account));
+  const hasFive = accounts.some((_, index) =>
+    byAccount[index].some((w) => !isFable(w) && !isWeeklyScoped(w) && period(w) === '5h')
+  );
+  const hasWeekly = accounts.some((_, index) =>
+    byAccount[index].some((w) => w.key === 'seven_day')
+  );
+  // Weekly-scoped models (Opus, Sonnet, ...) in first-seen order, Fable apart: Fable's column
+  // follows anyMax and is never shown on Pro rows, like before.
+  const scopedKeys = [];
+  for (const meters of byAccount)
+    for (const w of meters)
+      if (isWeeklyScoped(w) && !isFable(w) && !scopedKeys.includes(w.key)) scopedKeys.push(w.key);
   const columns = [
-    { key: 'five', label: '5-hour' },
-    { key: 'weekly', label: 'Weekly' },
-    ...(anyMax ? [{ key: 'fable', label: 'Fable' }] : []),
-  ];
-  const rows = accounts.map((account) => {
-    const meters = visibleMeters(account);
-    const five = meters.find((w) => !isFable(w) && period(w) === '5h');
+    ...(hasFive ? [{ key: 'five', label: '5-hour' }] : []),
+    ...(hasWeekly ? [{ key: 'weekly', label: 'Weekly' }] : []),
+    ...scopedKeys.map((key) => {
+      const sample = byAccount.flat().find((w) => w.key === key);
+      return { key, label: scopedModelLabel(sample) };
+    }),
+    ...(anyMax ? [{ key: 'seven_day_fable', label: 'Fable' }] : []),
+  ].slice(0, 6);
+  const rows = accounts.map((account, index) => {
+    const meters = byAccount[index];
+    const five = meters.find((w) => !isFable(w) && !isWeeklyScoped(w) && period(w) === '5h');
     const weekly = meters.find((w) => w.key === 'seven_day');
     const fable = meters.find(isFable);
     const launcher = (Array.isArray(profiles) ? profiles : []).find(
       (profile) => profile.id === account.capabilities?.claudeProfileId
     );
-    const cells = [
-      meterView(account, five, { now, label: '5-hour' }),
-      meterView(account, weekly, { now, label: 'Weekly' }),
-    ];
-    if (anyMax)
-      cells.push(
-        isMaxPlan(account)
+    const cells = columns.map((col) => {
+      if (col.key === 'five')
+        return five ? meterView(account, five, { now, label: '5-hour' }) : emptyCell(account, 'five_hour');
+      if (col.key === 'weekly')
+        return weekly ? meterView(account, weekly, { now, label: 'Weekly' }) : emptyCell(account, 'seven_day');
+      if (col.key === 'seven_day_fable')
+        return isMaxPlan(account)
           ? meterView(account, fable, { now, label: 'Fable', naText: 'Not reported yet' })
-          : emptyCell(account, 'fable')
-      );
-    if (!five) cells[0].key = `${account.id}|five_hour`;
-    if (!weekly) cells[1].key = `${account.id}|seven_day`;
-    if (anyMax && isMaxPlan(account) && !fable) cells[2].key = `${account.id}|seven_day_fable`;
+          : emptyCell(account, 'seven_day_fable');
+      const scoped = meters.find((w) => w.key === col.key);
+      return scoped ? meterView(account, scoped, { now, label: col.label }) : emptyCell(account, col.key);
+    });
     const opening = openLine(openProgress, account.capabilities?.claudeProfileId);
     const signIn = claudeSignInNeeded(account);
     const renewal = claudeSignInLine(data, account.email, now);

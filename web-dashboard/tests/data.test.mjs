@@ -281,3 +281,18 @@ test('cache provenance neither fabricates dates nor replaces an unknown usage va
   assert.equal(live.meta, '');
   assert.equal(usageView({ remaining: 0, unit: 'credits', enabled: false, status: 'cached' }).meta, 'Disabled · Cached');
 });
+test('reset grant clears refill targets survive in usage views; weekly never borrows a scoped window', () => {
+  const grant = usageView({ key: 'reset_credit_session_grant_1', label: 'Session reset grant 1', kind: 'balance', unit: 'resets', used: 1, limit: 2, remaining: 1, clears: ['five_hour', 'seven_day'] });
+  assert.match(grant.amount, /refills session \+ weekly/);
+  const opus = usageView({ key: 'reset_credit_opus_grant_1', label: 'Opus reset grant 1', kind: 'balance', unit: 'resets', remaining: 1, unit: 'resets' });
+  assert.equal(opus.hasPercent, false);
+  // a scoped window listed first must not stand in for the aggregate weekly
+  const account = { id: 'claude:scoped', provider: 'claude', plan: 'pro', windows: [
+    { key: 'seven_day_opus', label: 'Weekly Opus usage', kind: 'rate_limit', windowMinutes: 10080, usedPercent: 75 },
+    { key: 'seven_day', label: 'Weekly usage', kind: 'rate_limit', windowMinutes: 10080, usedPercent: 24 },
+  ] };
+  const row = dashboardView({ accounts: [account] }).claude[0];
+  assert.equal(row.weekly.amount, '24% used');
+  const scoped = usageView({ key: 'reset_credit_opus_grant_1', label: 'Opus reset grant 1', kind: 'balance', unit: 'resets', remaining: 1, clears: ['seven_day_opus', 'seven_day_overage_included'] });
+  assert.match(scoped.amount, /refills Opus weekly \+ Fable included usage/);
+});
