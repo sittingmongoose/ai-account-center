@@ -190,7 +190,7 @@ def _stop_group(process):
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
-def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False):
+def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False, cwd=None):
     """Run one fixed command with no TTY and no stdin, killed at its timeout.
 
     A new session means the child has no controlling terminal, so a prompt that
@@ -205,7 +205,7 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False)
         options = {"start_new_session": True}
     process = subprocess.Popen(
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture or merge_errors else subprocess.DEVNULL,
-        stderr=subprocess.STDOUT if merge_errors else subprocess.DEVNULL, env=env, **options,
+        stderr=subprocess.STDOUT if merge_errors else subprocess.DEVNULL, env=env, cwd=cwd, **options,
     )
     try:
         stdout, _ = process.communicate(timeout=timeout)
@@ -218,13 +218,13 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False)
     return process.returncode, stdout or b""
 
 
-def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False):
+def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None):
     """Run one fixed command; a non-zero exit raises UpdateFailure. errors keeps the run's stderr,
     merged with its stdout, in the exception's output for in-memory classification only."""
     try:
         returncode, data = _run_bounded(
             [str(arg) for arg in argv], timeout,
-            strip_dashboard_secrets(env) if preserve_env and env is not None else environment(env), capture, visible, errors,
+            strip_dashboard_secrets(env) if preserve_env and env is not None else environment(env), capture, visible, errors, cwd,
         )
     except subprocess.TimeoutExpired:
         raise UpdateFailure("timeout") from None

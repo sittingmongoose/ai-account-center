@@ -901,12 +901,17 @@ class WindowsMuseUpdateTests(unittest.TestCase):
         _fixture_file(self.lock / 'pid', '4242')
         with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal'), \
                 mock.patch.object(updater, 'perform_cli_update') as installer, mock.patch.object(updater, 'detect_cli', return_value=self.install), \
-                mock.patch.object(updater, '_pid_alive', return_value=True) as alive:
+                mock.patch.object(updater, 'command') as run, mock.patch.object(updater, '_pid_alive', return_value=True) as alive:
             value = updater.update_cli(self.install, time.monotonic() + 60)
         installer.assert_called_once()
+        run.assert_not_called()  # never warm while the launcher updater holds the lock
         alive.assert_called_once_with(4242)
         self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('failed', 'busy', True))
         self.assertTrue((self.lock / 'pid').is_file())  # the launcher owns the lock; AAC never removes it
+
+    def _warmed_catalog(self):
+        """A catalog entry refreshed during the mocked install (mtime after the install start)."""
+        return _fixture_file(self.root / 'Home/.local/share/muse/model-catalog/deadbeef.json', '{"source": "provider_catalog"}')
 
     def test_mac_and_linux_muse_same_version_while_its_launcher_updates_reports_busy(self):
         # The POSIX launcher keeps the same lock beside ~/.local/bin/muse; a held lock is busy, not current.
@@ -914,32 +919,45 @@ class WindowsMuseUpdateTests(unittest.TestCase):
         folder = self.root / 'Home/.local/bin'
         exited = subprocess.Popen([sys.executable, '-c', 'pass'])
         exited.wait()
+        warmed = self._warmed_catalog()
+        # Every run here writes the catalog again during the mocked install, so its
+        # mtime is after that run's install start: the current path never warms.
         for holder, expected in ((os.getpid(), ('failed', 'busy')), (exited.pid, ('current', 'current'))):
             _fixture_file(folder / '.muse-update-lock' / 'pid', str(holder))
             for platform in ('mac', 'ubuntu'):
                 with self.subTest(platform=platform, holder=holder):
                     install = common.Install('muse-code', platform, folder / 'muse', '1.4.8', 'native')
+                    def install_step(item, deadline=None):
+                        self._warmed_catalog()
                     with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
-                            mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update'), \
-                            mock.patch.object(updater, 'detect_cli', return_value=install):
+                            mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update', side_effect=install_step), \
+                            mock.patch.object(updater, 'command') as run, mock.patch.object(updater, 'detect_cli', return_value=install):
                         value = updater.update_cli(install, time.monotonic() + 60)
+                    run.assert_not_called()  # busy and catalog-fresh paths never warm
                     self.assertEqual((value['status'], value['messageCode']), expected)
         self.assertTrue((folder / '.muse-update-lock' / 'pid').is_file())
 
     def test_windows_muse_same_version_without_a_lock_stays_current(self):
+        def install_step(item, deadline=None):
+            self._warmed_catalog()
         with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), mock.patch.object(updater, 'check_terminal'), \
-                mock.patch.object(updater, 'perform_cli_update'), mock.patch.object(updater, 'detect_cli', return_value=self.install), \
+                mock.patch.object(updater, 'perform_cli_update', side_effect=install_step), mock.patch.object(updater, 'command') as run, \
+                mock.patch.object(updater, 'detect_cli', return_value=self.install), \
                 mock.patch.object(updater, '_pid_alive', return_value=True) as alive:
             value = updater.update_cli(self.install, time.monotonic() + 60)
+        run.assert_not_called()  # a fresh catalog needs no warm
         alive.assert_not_called()
         self.assertEqual((value['status'], value['messageCode'], value['updateAttempted']), ('current', 'current', True))
 
     def test_windows_muse_update_never_stops_or_restarts_its_running_binary(self):
         # The installer writes the new muse-bin beside the running one; its host keeps the old version.
         refreshed = common.Install('muse-code', 'windows', self.folder / 'muse.cmd', '1.5.0', 'native')
+        _fixture_file(self.folder / 'muse.cmd')
+        _fixture_file(self.folder / '.muse-launcher.ps1')
         with mock.patch.object(updater, 'scan', return_value=[self.host]), mock.patch.object(updater, 'cli_instances', return_value=processes.CliInstances([self.host], [self.host], [])), \
                 mock.patch.object(updater, 'check_terminal', side_effect=self.refuse_running_instances), mock.patch.object(updater, 'perform_cli_update') as installer, \
                 mock.patch.object(updater, 'detect_cli', return_value=refreshed), mock.patch.object(updater, 'terminate_cli') as stop, \
+                mock.patch.object(updater, 'command', side_effect=lambda argv, **kwargs: self._warmed_catalog()) as run, \
                 mock.patch.object(updater, 'restart_cli', return_value=[]) as restart:
             value = updater.update_cli(self.install, time.monotonic() + 60)
         installer.assert_called_once()
@@ -951,6 +969,115 @@ class WindowsMuseUpdateTests(unittest.TestCase):
         with mock.patch.object(updater, 'scan', return_value=[self.host]), mock.patch.object(updater, 'cli_contexts', return_value=([self.host], [self.host])), \
                 mock.patch.object(updater, 'check_terminal', side_effect=self.refuse_running_instances):
             self.assertIsNone(updater.check_readiness(self.install))
+
+
+class MuseCatalogWarmTests(unittest.TestCase):
+    """After a Muse install runs, one headless session refreshes the model catalog."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix='ccs-update-muse-warm-')
+        self.addCleanup(self.directory.cleanup)
+        self.home = pathlib.Path(self.directory.name).resolve()
+        self.folder = self.home / '.local/bin'
+        self.binary = _fixture_file(self.folder / 'muse')
+        self.catalog = self.home / '.local/share/muse/model-catalog'
+        patcher = mock.patch.object(pathlib.Path, 'home', return_value=self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.install = common.Install('muse-code', 'ubuntu', self.binary, '1.4.2', 'native')
+        self.refreshed = common.Install('muse-code', 'ubuntu', self.binary, '1.5.0', 'native')
+
+    def _warmed(self):
+        """A catalog entry refreshed by the warm session."""
+        return _fixture_file(self.catalog / 'deadbeef.json', '{"source": "provider_catalog"}')
+
+    def _update(self, refreshed, command_side_effect=None, perform_side_effect=None):
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
+                mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update', side_effect=perform_side_effect), \
+                mock.patch.object(updater, 'detect_cli', return_value=refreshed), \
+                mock.patch.object(updater, 'command', side_effect=command_side_effect) as run, \
+                mock.patch.object(updater, 'terminate_cli', return_value=0), mock.patch.object(updater, 'restart_cli', return_value=[]):
+            return updater.update_cli(self.install, time.monotonic() + 60), run
+
+    def test_changed_update_warms_and_completes_only_when_catalog_is_fresh(self):
+        seen = {}
+        def warm(argv, **kwargs):
+            seen['cwd_existed'] = pathlib.Path(kwargs['cwd']).is_dir()
+            self._warmed()
+        value, run = self._update(self.refreshed, warm)
+        run.assert_called_once()
+        argv, kwargs = run.call_args.args[0], run.call_args.kwargs
+        self.assertEqual(argv, [str(self.binary), 'exec', '--contributor-mode', 'off', 'Reply with the word: ok'])
+        self.assertTrue(str(kwargs['cwd']).startswith(str(self.home / '.ccs' / 'app-updates')))
+        self.assertTrue(seen['cwd_existed'])
+        self.assertTrue(30 <= kwargs['timeout'] <= 60)
+        self.assertEqual((value['status'], value['version'], value['messageCode']), ('updated', '1.5.0', 'updated'))
+
+    def test_changed_update_with_failing_warm_is_not_updated(self):
+        value, run = self._update(self.refreshed, common.UpdateFailure())
+        run.assert_called_once()
+        self.assertEqual((value['status'], value['messageCode'], value['updateAttempted'], value['version']),
+                         ('restart_failed', 'model_catalog_unrefreshed', True, '1.5.0'))
+
+    def test_changed_update_with_no_fresh_catalog_is_not_updated(self):
+        value, run = self._update(self.refreshed, lambda argv, **kwargs: '')
+        run.assert_called_once()
+        self.assertEqual((value['status'], value['messageCode']), ('restart_failed', 'model_catalog_unrefreshed'))
+
+    def test_current_with_fresh_catalog_skips_the_warm(self):
+        value, run = self._update(self.install, lambda argv, **kwargs: self.fail('warm must not run'),
+                                   lambda item, deadline=None: self._warmed())
+        run.assert_not_called()
+        self.assertEqual((value['status'], value['messageCode']), ('current', 'current'))
+
+    def test_current_with_stale_catalog_warms_and_heals(self):
+        self._warmed()  # stale: written before the install start
+        value, run = self._update(self.install, lambda argv, **kwargs: self._warmed())
+        run.assert_called_once()
+        self.assertEqual((value['status'], value['messageCode']), ('current', 'current'))
+
+    def test_current_with_failing_warm_is_honest_failure_not_current(self):
+        self._warmed()  # stale
+        value, _run = self._update(self.install, common.UpdateFailure())
+        self.assertEqual((value['status'], value['messageCode']), ('failed', 'model_catalog_unrefreshed'))
+
+    def test_warm_never_runs_when_the_install_or_version_check_did_not(self):
+        for cause, expected in ((common.UpdateFailure('unsupported'), ('failed', 'unsupported')),
+                                (common.UpdateFailure('version_unknown'), ('failed', 'version_unknown'))):
+            with self.subTest(code=cause.code):
+                if cause.code == 'version_unknown':
+                    value, run = self._update(None)  # detect finds nothing: version_unknown first
+                else:
+                    value, run = self._update(self.install, None, cause)
+                run.assert_not_called()
+                self.assertEqual((value['status'], value['messageCode']), expected)
+
+    def test_warm_skipped_when_the_new_binary_is_missing(self):
+        missing = common.Install('muse-code', 'ubuntu', self.folder / 'muse-missing', '1.5.0', 'native')
+        value, run = self._update(missing, lambda argv, **kwargs: self._warmed())
+        run.assert_not_called()
+        self.assertEqual((value['status'], value['messageCode']), ('restart_failed', 'model_catalog_unrefreshed'))
+
+    def test_windows_warm_runs_through_the_launcher_script(self):
+        folder = self.home / 'AppData/Local/Programs/muse'
+        _fixture_file(folder / 'muse.cmd')
+        _fixture_file(folder / '.muse-launcher.ps1')
+        install = common.Install('muse-code', 'windows', folder / 'muse.cmd', '1.4.2', 'native')
+        refreshed = common.Install('muse-code', 'windows', folder / 'muse.cmd', '1.5.0', 'native')
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
+                mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update'), \
+                mock.patch.object(updater, 'detect_cli', return_value=refreshed), \
+                mock.patch.object(updater, 'command', side_effect=lambda argv, **kwargs: self._warmed()) as run, \
+                mock.patch.object(updater, 'terminate_cli', return_value=0), mock.patch.object(updater, 'restart_cli', return_value=[]):
+            value = updater.update_cli(install, time.monotonic() + 60)
+        run.assert_called_once()
+        argv, kwargs = run.call_args.args[0], run.call_args.kwargs
+        self.assertEqual(argv[0], 'powershell.exe')
+        self.assertIn('-File', argv)
+        self.assertEqual(argv[argv.index('-File') + 1], str(folder / '.muse-launcher.ps1'))
+        self.assertEqual(argv[-4:], ['exec', '--contributor-mode', 'off', 'Reply with the word: ok'])
+        self.assertTrue(30 <= kwargs['timeout'] <= 60)
+        self.assertEqual((value['status'], value['version']), ('updated', '1.5.0'))
 
 
 def _script(path, body):
