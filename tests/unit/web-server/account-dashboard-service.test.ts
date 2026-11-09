@@ -903,7 +903,7 @@ describe('consolidated account dashboard', () => {
             },
             {
               key: 'session_reset_allowance',
-              label: 'Weekly session reset allowance',
+              label: 'Weekly session reset',
               usedPercent: null,
               remainingPercent: null,
               resetAt: '2026-10-09T12:00:00Z',

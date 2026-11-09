@@ -1229,7 +1229,7 @@ describe('identity-bound Claude Desktop live usage', () => {
     const first = await getLiveClaudeDesktopUsage('gmail');
     expect(first?.windows[1]).toMatchObject({
       key: 'session_reset_allowance',
-      label: 'Weekly session reset allowance',
+      label: 'Weekly session reset',
       kind: 'balance',
       remaining: 2,
       used: 1,

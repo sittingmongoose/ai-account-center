@@ -234,7 +234,7 @@ describe('agent usage projection', () => {
         }),
         window({
           key: 'session_reset_allowance',
-          label: 'Weekly session reset allowance',
+          label: 'Weekly session reset',
           usedPercent: null,
           remainingPercent: null,
           windowMinutes: null,

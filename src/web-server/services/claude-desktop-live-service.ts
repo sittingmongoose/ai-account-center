@@ -244,7 +244,7 @@ function normalizeSample(
       }
       windows.push({
         key: 'session_reset_allowance',
-        label: 'Weekly session reset allowance',
+        label: 'Weekly session reset',
         kind: 'balance',
         usedPercent: null,
         remainingPercent: null,
