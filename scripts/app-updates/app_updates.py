@@ -594,13 +594,21 @@ def muse_warm_catalog(refreshed, deadline, started_at):
 
     Runs `muse exec --contributor-mode off "Reply with the word: ok"` with no
     --model (the host's configured default), in a neutral temporary working
-    directory, bounded by the update deadline. Contributor off avoids the
-    missing-contributor-deployment 404 class. Auto-update stays disabled
-    (command's own NO_AUTO_UPDATE), so the warm cannot self-update. The call is
-    synchronous and killed at its timeout, so no process lingers for a later
-    process scan to classify as a session to stop or restart. On Windows the
-    launcher script is the entry point: CreateProcess cannot run .cmd, exactly
-    as detection reaches the binary for --version.
+    directory, bounded by min(60 s, the deadline's remaining time). Contributor
+    off avoids the missing-contributor-deployment 404 class. Auto-update stays
+    disabled (command's own NO_AUTO_UPDATE), so the warm cannot self-update. The
+    call is synchronous and its whole owned process tree is killed at its
+    timeout, so no process lingers for a later process scan to classify as a
+    session to stop or restart. On Windows the launcher script is the entry
+    point: CreateProcess cannot run .cmd, exactly as detection reaches the
+    binary for --version.
+
+    When the deadline has already passed (remaining <= 0) the warm never
+    starts. Starting one anyway would overrun the platform budget the helper
+    promised callers: the 30 s floor in _clamp exists for callers that must
+    make progress, never for this best-effort refresh. Otherwise the warm
+    gets min(60, remaining) with no floor, so a tight deadline still gets the
+    short remaining time it has.
     """
     binary = refreshed.path
     if binary is None or not binary.is_file():
@@ -613,9 +621,21 @@ def muse_warm_catalog(refreshed, deadline, started_at):
                 "-File", str(launcher), "exec", "--contributor-mode", "off", MUSE_WARM_PROMPT]
     else:
         argv = [str(binary), "exec", "--contributor-mode", "off", MUSE_WARM_PROMPT]
+    if deadline is None:
+        timeout = 60
+    else:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        timeout = min(60, remaining)
     try:
         with private_temporary() as cwd:
-            command(argv, timeout=_clamp(60, deadline), cwd=str(cwd))
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                timeout = min(60, remaining)
+            command(argv, timeout=timeout, cwd=str(cwd))
     except UpdateFailure:
         return False
     return muse_catalog_fresh(refreshed.platform, started_at)
@@ -855,8 +875,11 @@ def update_cli(install, deadline, restart_managed=False):
         if not catalog_ok:
             # The binary changed but the warm session did not refresh the
             # catalog: say so, never "updated". Sessions above were still
-            # restarted; the next click heals the catalog on the current path.
-            return outcome(result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "model_catalog_unrefreshed", attempted))
+            # restarted; keep their counts and targets and let the next click
+            # heal the catalog on the current path.
+            value["status"] = "restart_failed"
+            value["messageCode"] = "model_catalog_unrefreshed"
+            return outcome(value)
         return outcome(value)
     except UpdateFailure as error:
         if changed:

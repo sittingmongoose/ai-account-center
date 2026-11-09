@@ -164,16 +164,255 @@ def in_service_cgroup():
         return False
 
 
+def _posix_process_table():
+    """pid -> (ppid, start ticks) for this user's /proc entries, for owned-tree walks."""
+    table = {}
+    for entry in pathlib.Path("/proc").glob("[0-9]*"):
+        if not entry.is_dir():
+            continue
+        try:
+            text = (entry / "stat").read_text()
+            parts = text[text.rfind(")") + 2:].split()
+            if len(parts) < 20:
+                continue
+            table[int(entry.name)] = (int(parts[1]), parts[19])
+        except (OSError, ValueError, IndexError):
+            continue
+    return table
+
+
+def _posix_process_identity(pid):
+    try:
+        text = pathlib.Path("/proc/%d/stat" % pid).read_text()
+        return text[text.rfind(")") + 2:].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _posix_descendants(root_pid, table=None):
+    """(pid, start) descendants of root_pid, deepest first, from one /proc snapshot.
+
+    Only processes whose whole parent chain leads to root_pid are returned, so a
+    pre-existing host that is merely a sibling is never returned. The start ticks
+    pin each PID at snapshot time; callers re-check them before signalling, so a
+    reused PID that happens to have the same number is never signalled.
+    """
+    table = _posix_process_table() if table is None else table
+    children = {}
+    for pid, (ppid, _start) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    from collections import deque
+
+    queue = deque((pid, 1) for pid in children.get(root_pid, []))
+    seen = {root_pid}
+    found = []
+    while queue:
+        pid, depth = queue.popleft()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        entry = table.get(pid)
+        found.append((depth, pid, entry[1] if entry else None))
+        for child in children.get(pid, []):
+            queue.append((child, depth + 1))
+    found.sort(reverse=True)
+    return [(pid, start) for _depth, pid, start in found]
+
+
+def _kill_posix_tree(process):
+    import signal
+
+    root = process.pid
+    try:
+        descendants = _posix_descendants(root)
+    except Exception:
+        descendants = []
+    for pid, start in descendants:
+        try:
+            if _posix_process_identity(pid) != start:
+                continue
+            os.kill(pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            continue
+    try:
+        os.killpg(root, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _windows_process_table():
+    """pid -> ppid for every process in the Toolhelp snapshot, or {} on failure."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.windll.kernel32
+    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_ulonglong),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_char * 260),
+        ]
+
+    kernel.Process32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32)]
+    kernel.Process32First.restype = wintypes.BOOL
+    kernel.Process32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32)]
+    kernel.Process32Next.restype = wintypes.BOOL
+
+    TH32CS_SNAPPROCESS = 0x2
+    snapshot = kernel.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+        return {}
+    table = {}
+    try:
+        entry = PROCESSENTRY32()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+        ok = kernel.Process32First(snapshot, ctypes.byref(entry))
+        while ok:
+            table[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            ok = kernel.Process32Next(snapshot, ctypes.byref(entry))
+    finally:
+        kernel.CloseHandle(snapshot)
+    return table
+
+
+def _windows_filetime():
+    import ctypes
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
+
+    return FILETIME
+
+
+def _windows_process_identity(pid):
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.windll.kernel32
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    FILETIME = _windows_filetime()
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(FILETIME)] * 4
+    kernel.GetProcessTimes.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        created, exited, system, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+        if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                      ctypes.byref(system), ctypes.byref(user)):
+            return None
+        return str((created.high << 32) | created.low)
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _terminate_windows_process(pid, expected=None):
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.windll.kernel32
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    handle = kernel.OpenProcess(0x1001, False, pid)  # PROCESS_TERMINATE | QUERY_LIMITED
+    if not handle:
+        return
+    try:
+        if expected is not None:
+            FILETIME = _windows_filetime()
+            kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(FILETIME)] * 4
+            kernel.GetProcessTimes.restype = wintypes.BOOL
+            created, exited, system, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+            if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                          ctypes.byref(system), ctypes.byref(user)):
+                return
+            if str((created.high << 32) | created.low) != expected:
+                return  # PID was reused; never kill a new occupant
+        kernel.TerminateProcess(handle, 0)
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _windows_descendants(root_pid, table=None):
+    """(pid, creation filetime) descendants of root_pid, deepest first.
+
+    Same ancestry rule as the POSIX walk: only processes whose parent chain
+    leads to root_pid are returned, so pre-existing muse serve hosts and other
+    unrelated processes are never touched. The filetime pins each PID.
+    """
+    table = _windows_process_table() if table is None else table
+    children = {}
+    for pid, ppid in table.items():
+        children.setdefault(ppid, []).append(pid)
+    from collections import deque
+
+    queue = deque((pid, 1) for pid in children.get(root_pid, []))
+    seen = {root_pid}
+    found = []
+    while queue:
+        pid, depth = queue.popleft()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        found.append((depth, pid))
+        for child in children.get(pid, []):
+            queue.append((child, depth + 1))
+    found.sort(reverse=True)
+    result = []
+    for _depth, pid in found:
+        result.append((pid, _windows_process_identity(pid)))
+    return result
+
+
+def _kill_windows_tree(process):
+    try:
+        root = process.pid
+        descendants = _windows_descendants(root)
+    except Exception:
+        descendants = []
+    for pid, identity in descendants:
+        try:
+            _terminate_windows_process(pid, identity)
+        except Exception:
+            continue
+    try:
+        process.kill()
+    except (OSError, ProcessLookupError):
+        pass
+
+
 def _stop_group(process):
-    """Stop a timed-out child. On POSIX the child leads its own session, so the
-    whole group goes (an installer's helpers included); a detached app relaunch
-    always starts its own session and is never part of it."""
+    """Stop a timed-out child and its whole owned process tree.
+
+    Every bounded command leads its own session/group on POSIX (start_new_session)
+    and is the only process in its own tree on Windows, so the entire owned tree
+    must stop. A detached app relaunch always starts its own session (systemd-run
+    escapes this cgroup, start_new_session on POSIX, its own process group on
+    Windows) and is never part of the tree this snapshot walks. Only descendants
+    of the Popp's root pid in the snapshot are stopped, so pre-existing serve
+    hosts and unrelated processes are never touched. Each descendant is pinned
+    by its creation identity (POSIX start ticks, Windows filetime) before it is
+    signalled, so a reused PID is never killed.
+    """
     try:
         if os.name == "nt":
-            process.kill()
+            _kill_windows_tree(process)
         else:
-            import signal
-            os.killpg(process.pid, signal.SIGKILL)
+            _kill_posix_tree(process)
     except (OSError, ProcessLookupError):
         pass
     if process.stdout is not None:

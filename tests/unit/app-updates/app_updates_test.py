@@ -1079,6 +1079,63 @@ class MuseCatalogWarmTests(unittest.TestCase):
         self.assertTrue(30 <= kwargs['timeout'] <= 60)
         self.assertEqual((value['status'], value['version']), ('updated', '1.5.0'))
 
+    def test_expired_deadline_warm_never_starts(self):
+        # An already-expired deadline must not start the warm at all: the 30 s
+        # floor in _clamp must not make it run 30 s past its budget.
+        with mock.patch.object(updater, 'command') as run:
+            started = updater.muse_warm_catalog(self.refreshed, time.monotonic() - 1, time.time())
+        self.assertFalse(started)
+        run.assert_not_called()
+
+    def test_expired_deadline_warm_inside_update_never_runs_command(self):
+        # The same gate through update_cli: catalog_ok stays False, the row is
+        # restart_failed, and no warm command is ever issued.
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \
+                mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update'), \
+                mock.patch.object(updater, 'detect_cli', return_value=self.refreshed), \
+                mock.patch.object(updater, 'command') as run, \
+                mock.patch.object(updater, 'muse_catalog_fresh', return_value=False), \
+                mock.patch.object(updater, 'terminate_cli', return_value=0), mock.patch.object(updater, 'restart_cli', return_value=[]):
+            value = updater.update_cli(self.install, time.monotonic() - 1)
+        run.assert_not_called()
+        self.assertEqual((value['status'], value['messageCode']), ('restart_failed', 'model_catalog_unrefreshed'))
+
+    def test_tight_deadline_warm_gets_the_short_remaining_timeout(self):
+        # With 7 s left the warm gets ~7 s, not the 30 s floor _clamp imposes
+        # on other callers.
+        with mock.patch.object(updater, 'command', side_effect=lambda argv, **kwargs: self._warmed()) as run:
+            deadline = time.monotonic() + 7
+            self.assertTrue(updater.muse_warm_catalog(self.refreshed, deadline, time.time() - 60))
+        timeout = run.call_args.kwargs['timeout']
+        self.assertLess(timeout, 30, timeout)
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, 7)
+
+    def test_changed_update_catalog_failure_keeps_restart_results(self):
+        # A changed binary whose sessions restarted but whose warm/catalog
+        # failed must keep the restarted count, targets and forced stops,
+        # only changing status/code to restart_failed / model_catalog_unrefreshed.
+        contexts = [mock.Mock(pid=501), mock.Mock(pid=502)]
+        targets = [mock.Mock(pid=501), mock.Mock(pid=502)]
+        sessions = [{'kind': 'tmux', 'server': 's1'}, {'kind': 'tmux', 'server': 's2'}]
+        with mock.patch.object(updater, 'scan', return_value=[]), \
+                mock.patch.object(updater, 'cli_instances', return_value=processes.CliInstances(contexts, targets, [])), \
+                mock.patch.object(updater, 'check_terminal'), \
+                mock.patch.object(updater, 'perform_cli_update'), \
+                mock.patch.object(updater, 'detect_cli', return_value=self.refreshed), \
+                mock.patch.object(updater, 'command', side_effect=common.UpdateFailure('timeout')) as run, \
+                mock.patch.object(updater, 'terminate_cli', return_value=3) as terminate, \
+                mock.patch.object(updater, 'restart_cli', return_value=sessions) as restart:
+            value = updater.update_cli(self.install, time.monotonic() + 60)
+        run.assert_called_once()
+        terminate.assert_called_once()
+        restart.assert_called_once_with(self.refreshed, contexts)
+        self.assertEqual((value['status'], value['messageCode'], value['version'], value['updateAttempted']),
+                         ('restart_failed', 'model_catalog_unrefreshed', '1.5.0', True))
+        self.assertEqual(value['restartedProcesses'], 2)
+        self.assertEqual(value['restartTargets'], sessions)
+        self.assertEqual(value['forcedStops'], 3)
+
 
 def _script(path, body):
     """A fixture executable (never a real app)."""
@@ -1125,6 +1182,89 @@ class BoundedUpdateTests(unittest.TestCase):
             time.sleep(.05)
         else:
             self.fail('the timed-out command left its helper process running')
+
+    def test_windows_warm_timeout_kills_the_owned_tree_only(self):
+        # The Windows warm's powershell parent spawns the muse child; on
+        # timeout the child must die with it, while a pre-existing muse serve
+        # host started by T3 is left alone. Mocked runners only: no real
+        # process is ever started or killed.
+        # Tree: powershell 100 -> muse 101 -> helper 102; unrelated: T3 99 -> serve 77.
+        table = {100: 1, 101: 100, 102: 101, 99: 50, 77: 99, 50: 4, 1: 0, 4: 0}
+        killed = []
+        root_killed = []
+
+        def fake_identity(pid):
+            return {100: '100-start', 101: '101-start', 102: '102-start',
+                    99: '99-start', 77: '77-start', 50: '50-start', 1: '1-start', 4: '4-start'}[pid]
+
+        def fake_terminate(pid, expected=None):
+            if expected != fake_identity(pid):
+                killed.append(('mismatch', pid))
+            else:
+                killed.append(pid)
+
+        proc = mock.Mock(pid=100)
+        proc.stdout = None
+        proc.wait = mock.Mock(return_value=0)
+        proc.kill = mock.Mock(side_effect=lambda: root_killed.append(100))
+        with mock.patch.object(common, '_windows_process_table', return_value=table), \
+                mock.patch.object(common, '_windows_process_identity', side_effect=fake_identity), \
+                mock.patch.object(common, '_terminate_windows_process', side_effect=fake_terminate), \
+                mock.patch.object(common.os, 'name', 'nt'):
+            common._stop_group(proc)
+        # Both owned descendants died, deepest first; the pre-existing serve host and T3 did not.
+        self.assertEqual(killed, [102, 101])
+        self.assertEqual(root_killed, [100])
+        self.assertNotIn(77, killed)
+        self.assertNotIn(99, killed)
+        proc.kill.assert_called_once()
+        proc.wait.assert_called_once()
+
+    def test_windows_tree_kill_never_touches_a_reused_pid(self):
+        # A PID that was reused after the snapshot (different creation filetime)
+        # must not be terminated: creation time pins the identity. The mock
+        # below stands in for the real _terminate_windows_process GetProcessTimes
+        # re-check: it kills only when the snapshot identity still matches.
+        table = {100: 1, 101: 100, 102: 101}
+        killed = []
+        current = {101: 'reused', 102: '102-start'}  # 101 was reused after the snapshot
+
+        def fake_identity(pid):
+            # Snapshot time for the walk; terminate re-check uses current[].
+            return {101: 'orig', 102: '102-start', 100: 'root'}[pid]
+
+        def fake_terminate(pid, expected=None):
+            if expected != current.get(pid, expected):
+                return  # reused: skip, like the real Win32 path does
+            killed.append(pid)
+
+        proc = mock.Mock(pid=100)
+        proc.stdout = None
+        proc.wait = mock.Mock(return_value=0)
+        proc.kill = mock.Mock()
+        with mock.patch.object(common, '_windows_process_table', return_value=table), \
+                mock.patch.object(common, '_windows_process_identity', side_effect=fake_identity), \
+                mock.patch.object(common, '_terminate_windows_process', side_effect=fake_terminate), \
+                mock.patch.object(common.os, 'name', 'nt'):
+            common._stop_group(proc)
+        self.assertEqual(killed, [102])  # 101 reused, so only 102 was terminated
+        self.assertNotIn(101, killed)
+
+    def test_posix_descendants_includes_only_the_owned_tree(self):
+        # On POSIX the /proc walk returns only the spawned tree, never a
+        # sibling host that merely shares the machine.
+        table = {
+            100: (1, '100'),   # warm root (powershell/bin)
+            101: (100, '101'),  # muse child
+            102: (101, '102'),  # helper
+            99: (1, '99'),     # unrelated updater
+            77: (99, '77'),    # pre-existing muse serve host under T3
+        }
+        found = [pid for pid, _start in common._posix_descendants(100, table)]
+        self.assertEqual(set(found), {101, 102})
+        self.assertEqual(found, [102, 101])  # deepest first
+        self.assertNotIn(77, found)
+        self.assertNotIn(99, found)
 
     def test_short_timeouts_report_timeout_not_a_generic_failure(self):
         with self.assertRaises(common.UpdateFailure) as raised:
