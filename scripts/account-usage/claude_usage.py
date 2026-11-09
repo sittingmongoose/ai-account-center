@@ -45,6 +45,12 @@ MAX_CAPSULE_BYTES = 65536
 CHROMIUM_EPOCH = 11644473600000000
 MAX_RESET_GRANTS = 20
 MAX_SCOPED_LIMITS = 64
+# Same gateway the desktop-live normalizeSample enforces: any window whose
+# completed key or label exceeds these bounds invalidates the whole sample
+# downstream. Never truncate (truncation can collide); omit only that window.
+WINDOWS_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
+MAX_WINDOW_KEY_LEN = 64
+MAX_WINDOW_LABEL_LEN = 80
 UTC = dt.timezone.utc
 
 
@@ -404,6 +410,27 @@ def _scoped_surface(scope):
     return None, None
 
 
+def _window_bounds_ok(key, label):
+    """Gateway normalizeSample enforces: safe key and short label."""
+    return (isinstance(key, str) and len(key) <= MAX_WINDOW_KEY_LEN
+            and WINDOWS_KEY_PATTERN.fullmatch(key) is not None
+            and isinstance(label, str) and len(label) <= MAX_WINDOW_LABEL_LEN)
+
+
+def _is_weekly_scoped_allowed(kind, group):
+    """A model/surface-scoped entry may only take a seven_day_* weekly
+    identity when its group is weekly and it is weekly_scoped or an unknown
+    kind with group weekly. Anything else is skipped, never given a weekly
+    key it did not name."""
+    if group != "weekly":
+        return False
+    if kind == "weekly_scoped":
+        return True
+    if kind in ("session", "weekly_all"):
+        return False
+    return isinstance(kind, str) and re.fullmatch(r"[a-z0-9_]+", kind) is not None
+
+
 def _limits_window(entry, used):
     """One self-describing limits[] entry as a window, or None when unsafe.
 
@@ -436,14 +463,24 @@ def _limits_window(entry, used):
     # a genuine model quota, including an unused zero-percent window.
     minutes = _group_minutes(group) if kind != "weekly_scoped" else 10080 if group == "weekly" else None
     if model_slug is not None:
+        if not _is_weekly_scoped_allowed(kind, group):
+            return None
         key = "seven_day_" + model_slug
         label = "Weekly " + display + " usage"
         if surface_slug is not None:
             key += "_" + surface_slug
             label += " (" + surface_words + ")"
+        if not _window_bounds_ok(key, label):
+            return None
         return window(key, label, minutes)
     if surface_slug is not None:
-        return window("seven_day_" + surface_slug, "Weekly " + surface_words + " usage", minutes)
+        if not _is_weekly_scoped_allowed(kind, group):
+            return None
+        key = "seven_day_" + surface_slug
+        label = "Weekly " + surface_words + " usage"
+        if not _window_bounds_ok(key, label):
+            return None
+        return window(key, label, minutes)
     if kind == "weekly_scoped":
         return None
     if not isinstance(kind, str) or re.fullmatch(r"[a-z0-9_]+", kind) is None:
@@ -453,7 +490,10 @@ def _limits_window(entry, used):
         parts.pop()
     if not parts:
         return None
-    return window(kind, " ".join(part.capitalize() for part in parts) + " usage", minutes)
+    label = " ".join(part.capitalize() for part in parts) + " usage"
+    if not _window_bounds_ok(kind, label):
+        return None
+    return window(kind, label, minutes)
 
 
 def normalize_limits(usage):
@@ -522,8 +562,11 @@ def normalize_windows(usage):
         used = number(value.get("utilization"))
         if used is None:
             continue
+        label = "Weekly " + _words(key[len("seven_day_"):]) + " usage"
+        if not _window_bounds_ok(key, label):
+            continue
         windows.append({
-            "key": key, "label": "Weekly " + _words(key[len("seven_day_"):]) + " usage",
+            "key": key, "label": label,
             "kind": "rate_limit", "usedPercent": used,
             "remainingPercent": max(0, 100 - used),
             "resetAt": reset_at(value.get("resets_at")),
@@ -561,7 +604,10 @@ def normalize_windows(usage):
         if isinstance(extra.get("is_unlimited"), bool):
             window["unlimited"] = extra["is_unlimited"]
         windows.append(window)
-    return windows
+    # Final gateway: normalize_windows must never emit a window that the
+    # desktop-live normalizeSample would reject wholesale for key/label reasons.
+    return [window for window in windows
+            if _window_bounds_ok(window.get("key"), window.get("label"))]
 
 
 def balance_window(key, label, remaining, unit, limit=None, used=None, expires=None, enabled=None):

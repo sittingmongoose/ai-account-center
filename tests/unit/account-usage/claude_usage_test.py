@@ -689,6 +689,101 @@ class WindowTests(unittest.TestCase):
                          [("seven_day_fable", "Weekly Fable usage", 12),
                           ("seven_day_haiku", "Weekly Haiku usage", 7)])
 
+    def test_session_group_scoped_skipped_while_weekly_sibling_kept(self):
+        windows = usage.normalize_windows({"limits": [
+            {"kind": "custom_scoped", "group": "session", "percent": 50,
+             "resets_at": "2026-10-08T00:00:00Z",
+             "scope": {"model": {"display_name": "Opus"}, "surface": None}},
+            {"kind": "weekly_scoped", "group": "session", "percent": 60,
+             "resets_at": "2026-10-08T00:00:00Z",
+             "scope": {"model": {"display_name": "Sonnet"}, "surface": None}},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 40,
+             "resets_at": "2026-10-08T00:00:00Z",
+             "scope": {"model": {"display_name": "Fable"}, "surface": None}},
+            {"kind": "weekly_scoped", "group": "session", "percent": 30,
+             "resets_at": "2026-10-08T00:00:00Z",
+             "scope": {"model": None, "surface": {"display_name": "Claude Code"}}},
+        ]})
+        self.assertEqual([(window["key"], window["label"], window["windowMinutes"])
+                          for window in windows],
+                         [("seven_day_fable", "Weekly Fable usage", 10080)])
+
+    def test_long_display_label_omitted_while_core_windows_kept(self):
+        windows = usage.normalize_windows({
+            "five_hour": {"utilization": 5},
+            "seven_day": {"utilization": 6},
+            "limits": [
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+                 "resets_at": "2026-10-08T00:00:00Z",
+                 "scope": {"model": {"display_name": "A" * 70}, "surface": None}},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 20,
+                 "resets_at": "2026-10-08T00:00:00Z",
+                 "scope": {"model": {"display_name": "Opus"}, "surface": None}},
+            ]})
+        self.assertEqual([window["key"] for window in windows],
+                         ["five_hour", "seven_day", "seven_day_opus"])
+        for window in windows:
+            self.assertLessEqual(len(window["key"]), 64)
+            self.assertLessEqual(len(window["label"]), 80)
+            self.assertRegex(window["key"], r"^[a-z0-9][a-z0-9_]{0,63}$")
+
+    def test_long_model_surface_key_omitted_while_sibling_kept(self):
+        windows = usage.normalize_windows({"limits": [
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+             "resets_at": "2026-10-08T00:00:00Z",
+             "scope": {"model": {"display_name": "M" * 40},
+                       "surface": {"id": "s" * 40, "display_name": "S" * 40}}},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 20,
+             "resets_at": "2026-10-08T00:00:00Z",
+             "scope": {"model": {"display_name": "Opus"}, "surface": None}},
+        ]})
+        # The 91-char model+surface key must be omitted, never truncated into
+        # a colliding key; the short sibling stays.
+        self.assertEqual([window["key"] for window in windows], ["seven_day_opus"])
+
+    def test_long_unknown_kind_and_top_level_keys_omitted_while_siblings_kept(self):
+        # Unknown-kind limits key of 65 chars exceeds the 64-char gateway.
+        long_kind = "a" * 65
+        windows = usage.normalize_windows({"limits": [
+            {"kind": long_kind, "group": "monthly", "percent": 10,
+             "resets_at": "2026-10-08T00:00:00Z"},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 20,
+             "resets_at": "2026-10-08T00:00:00Z",
+             "scope": {"model": {"display_name": "Opus"}, "surface": None}},
+        ]})
+        self.assertEqual([window["key"] for window in windows], ["seven_day_opus"])
+        # Top-level seven_day_<slug> with a 70-char total key is likewise omitted.
+        long_top = "seven_day_" + "b" * 60
+        windows = usage.normalize_windows({
+            "five_hour": {"utilization": 5},
+            long_top: {"utilization": 10},
+            "seven_day_opus": {"utilization": 20},
+        })
+        self.assertEqual([window["key"] for window in windows], ["five_hour", "seven_day_opus"])
+        for window in windows:
+            self.assertLessEqual(len(window["key"]), 64)
+            self.assertRegex(window["key"], r"^[a-z0-9][a-z0-9_]{0,63}$")
+
+    def test_boundary_exactly_64_key_and_80_label_kept(self):
+        # Unknown-kind key exactly 64 chars stays (label 71 <= 80).
+        key_64 = "a" * 64
+        windows = usage.normalize_windows({"limits": [
+            {"kind": key_64, "group": "monthly", "percent": 10,
+             "resets_at": "2026-10-08T00:00:00Z"},
+        ]})
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(len(windows[0]["key"]), 64)
+        self.assertLessEqual(len(windows[0]["label"]), 80)
+        # Scoped label exactly 80 chars stays: "Weekly " (7) + 67 + " usage" (6).
+        windows = usage.normalize_windows({"limits": [
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+             "resets_at": "2026-10-08T00:00:00Z",
+             "scope": {"model": {"display_name": "B" * 67}, "surface": None}},
+        ]})
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(len(windows[0]["label"]), 80)
+        self.assertLessEqual(len(windows[0]["key"]), 64)
+
     def test_model_id_codenames_and_unsafe_names_never_name_windows(self):
         cases = [
             {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
