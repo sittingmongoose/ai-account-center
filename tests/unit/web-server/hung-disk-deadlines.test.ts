@@ -75,7 +75,9 @@ describe('analytics threads on a hung disk', () => {
       fs.writeFileSync(healthy, "require('worker_threads').parentPort.postMessage('answered');\n");
 
       const started = Date.now();
-      await expect(runAnalyticsThread(stuck, { fifo }, 20, 'fixture-logs', 50)).rejects.toThrow(
+      // The timeout must outlast the worker's start-up, so the thread is already blocked in openSync
+      // when it fires; with 20 ms a slow start (Bun 1.4 under a full run) let it stop cleanly instead.
+      await expect(runAnalyticsThread(stuck, { fifo }, 750, 'fixture-logs', 50)).rejects.toThrow(
         'did not stop'
       );
       expect(Date.now() - started).toBeLessThan(2_000);
