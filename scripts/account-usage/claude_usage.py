@@ -350,41 +350,172 @@ class Client:
             raise UsageUnavailable("error")
 
 
-def normalize_fable_limit(usage):
-    """Read the reported global Fable weekly cap, never infer it from other models."""
+def _slug(value):
+    """Lowercase machine slug: non-alphanumeric runs become one underscore,
+    edges are stripped, length is capped at 40, and an empty result is unsafe."""
+    if not isinstance(value, str):
+        return None
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    slug = slug[:40].rstrip("_")
+    return slug or None
+
+
+def _words(slug):
+    return " ".join(part.capitalize() for part in slug.split("_") if part)
+
+
+def _group_minutes(group):
+    if group == "weekly":
+        return 10080
+    if group == "session":
+        return 300
+    return None
+
+
+def _scoped_model(scope):
+    """A limit's model is its display name only; an id codename never names a window."""
+    model = scope.get("model") if isinstance(scope, dict) else None
+    display = _plan_name(model.get("display_name")) if isinstance(model, dict) else None
+    if display is None:
+        return None, None
+    slug = _slug(display)
+    if slug is None:
+        return None, None
+    return slug, display
+
+
+def _scoped_surface(scope):
+    """A limit's surface names the key suffix and the parenthesized label words."""
+    surface = scope.get("surface") if isinstance(scope, dict) else None
+    candidates = []
+    if isinstance(surface, dict):
+        candidates.append(surface.get("id"))
+        candidates.append(surface.get("display_name"))
+    elif isinstance(surface, str):
+        candidates.append(surface)
+    for raw in candidates:
+        name = _plan_name(raw)
+        if name is None:
+            continue
+        slug = _slug(name)
+        if slug is None:
+            continue
+        return slug, _words(slug)
+    return None, None
+
+
+def _limits_window(entry, used):
+    """One self-describing limits[] entry as a window, or None when unsafe.
+
+    The provider names every quota itself: known kinds map directly, scoped
+    entries take a screened model (and optional surface) name, and an unknown
+    kind with a screened model scope is treated as scoped. An unknown kind
+    without a scope keeps its own lowercase kind as the key; the label is the
+    kind's words minus a trailing all/scoped, title-cased, plus " usage".
+    Minutes for unknown kinds come from the group: weekly 10080, session 300,
+    anything else None.
+    """
+    kind, group = entry.get("kind"), entry.get("group")
+
+    def window(key, label, minutes):
+        return {
+            "key": key, "label": label, "kind": "rate_limit",
+            "usedPercent": used, "remainingPercent": max(0, 100 - used),
+            "resetAt": reset_at(entry.get("resets_at")), "expiresAt": None,
+            "windowMinutes": minutes, "used": None, "limit": None, "unit": None,
+        }
+
+    if kind == "session":
+        return window("five_hour", "Five-hour usage", 300)
+    if kind == "weekly_all":
+        return window("seven_day", "Weekly usage", 10080)
+    scope = entry.get("scope") if isinstance(entry.get("scope"), dict) else None
+    model_slug, display = _scoped_model(scope)
+    surface_slug, surface_words = _scoped_surface(scope)
+    # is_active selects the provider's current limiting bucket. False is still
+    # a genuine model quota, including an unused zero-percent window.
+    minutes = _group_minutes(group) if kind != "weekly_scoped" else 10080 if group == "weekly" else None
+    if model_slug is not None:
+        key = "seven_day_" + model_slug
+        label = "Weekly " + display + " usage"
+        if surface_slug is not None:
+            key += "_" + surface_slug
+            label += " (" + surface_words + ")"
+        return window(key, label, minutes)
+    if surface_slug is not None:
+        return window("seven_day_" + surface_slug, "Weekly " + surface_words + " usage", minutes)
+    if kind == "weekly_scoped":
+        return None
+    if not isinstance(kind, str) or re.fullmatch(r"[a-z0-9_]+", kind) is None:
+        return None
+    parts = kind.split("_")
+    while parts and parts[-1] in ("all", "scoped"):
+        parts.pop()
+    if not parts:
+        return None
+    return window(kind, " ".join(part.capitalize() for part in parts) + " usage", minutes)
+
+
+def normalize_limits(usage):
+    """Every limits[] quota the provider names, deduped by key.
+
+    Identical duplicates collapse; conflicting duplicates for one key drop
+    that key entirely rather than silently picking one account quota.
+    """
     limits = usage.get("limits")
     if not isinstance(limits, list) or len(limits) > MAX_SCOPED_LIMITS:
         return []
-    window = None
+    windows = {}
     for entry in limits:
-        if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped" or entry.get("group") != "weekly":
-            continue
-        scope = entry.get("scope")
-        model = scope.get("model") if isinstance(scope, dict) else None
-        if (not isinstance(model, dict) or model.get("display_name") != "Fable"
-            or scope.get("surface") is not None):
+        if not isinstance(entry, dict):
             continue
         used = number(entry.get("percent"))
         if used is None:
-            return []
-        candidate = {
-            "key": "seven_day_fable", "label": "Weekly Fable usage", "kind": "rate_limit",
-            "usedPercent": used, "remainingPercent": max(0, 100 - used),
-            "resetAt": reset_at(entry.get("resets_at")), "expiresAt": None,
-            "windowMinutes": 10080, "used": None, "limit": None, "unit": None,
-        }
-        if window is not None and candidate != window:
-            # Conflicting scopes must not silently pick one account quota.
-            return []
-        window = candidate
-    # is_active selects the provider's current limiting bucket. False is still
-    # a genuine model quota, including an unused zero-percent Fable window.
-    return [window] if window is not None else []
+            continue
+        candidate = _limits_window(entry, used)
+        if candidate is None:
+            continue
+        key = candidate["key"]
+        if key in windows:
+            if windows[key] != candidate:
+                windows[key] = None
+            continue
+        windows[key] = candidate
+    return [window for window in windows.values() if window is not None]
+
+
+def _legacy_window(key, value):
+    label, minutes = WINDOWS[key]
+    used = number(value.get("utilization"))
+    if used is None:
+        return None
+    return {
+        "key": key, "label": label, "kind": "rate_limit",
+        "usedPercent": used, "remainingPercent": max(0, 100 - used),
+        "resetAt": reset_at(value.get("resets_at")),
+        "expiresAt": reset_at(value.get("expires_at")),
+        "windowMinutes": minutes, "used": None, "limit": None, "unit": None,
+    }
 
 
 def normalize_windows(usage):
-    windows = []
-    for key, (label, minutes) in WINDOWS.items():
+    windows, seen = [], set()
+    # Legacy top-level windows win over limits[] for the same key: a valid
+    # top-level value is authoritative even when limits names the quota too.
+    for key in WINDOWS:
+        value = usage.get(key)
+        if not isinstance(value, dict):
+            continue
+        window = _legacy_window(key, value)
+        if window is None:
+            continue
+        windows.append(window)
+        seen.add(key)
+    # Unknown seven_day_<slug> top-level windows fill in for future models;
+    # bare codename keys (nimbus_quill and the like) are never windows.
+    for key in sorted(k for k in usage if isinstance(k, str)):
+        if key in seen or key in WINDOWS or re.fullmatch(r"seven_day_[a-z0-9_]+", key) is None:
+            continue
         value = usage.get(key)
         if not isinstance(value, dict):
             continue
@@ -392,19 +523,18 @@ def normalize_windows(usage):
         if used is None:
             continue
         windows.append({
-            "key": key,
-            "label": label,
-            "kind": "rate_limit",
-            "usedPercent": used,
+            "key": key, "label": "Weekly " + _words(key[len("seven_day_"):]) + " usage",
+            "kind": "rate_limit", "usedPercent": used,
             "remainingPercent": max(0, 100 - used),
             "resetAt": reset_at(value.get("resets_at")),
             "expiresAt": reset_at(value.get("expires_at")),
-            "windowMinutes": minutes,
-            "used": None,
-            "limit": None,
-            "unit": None,
+            "windowMinutes": 10080, "used": None, "limit": None, "unit": None,
         })
-    windows.extend(normalize_fable_limit(usage))
+        seen.add(key)
+    for window in normalize_limits(usage):
+        if window["key"] not in seen:
+            windows.append(window)
+            seen.add(window["key"])
     extra = usage.get("extra_usage")
     if isinstance(extra, dict) and isinstance(extra.get("is_enabled"), bool):
         used, limit = number(extra.get("used_credits")), number(extra.get("monthly_limit"))
@@ -445,7 +575,10 @@ def balance_window(key, label, remaining, unit, limit=None, used=None, expires=N
 
 
 def normalize_reset_credits(value, now=None):
-    if (not isinstance(value, dict) or not isinstance(value.get("eligible"), bool) or
+    # Grants listed while eligible is not true are UNKNOWN inventory, never a
+    # confirmed zero: the provider withholds grant detail for ineligible
+    # accounts, so an empty list there carries no count at all.
+    if (not isinstance(value, dict) or value.get("eligible") is not True or
         not isinstance(value.get("grants"), list) or len(value["grants"]) > MAX_RESET_GRANTS):
         return []
     now = time.time() if now is None else now
@@ -461,6 +594,20 @@ def normalize_reset_credits(value, now=None):
         start, end = reset_at(grant.get("starts_at")), reset_at(grant.get("ends_at"))
         if (grant.get("starts_at") is not None and start is None) or (grant.get("ends_at") is not None and end is None):
             return []
+        # clears names the limit windows one grant refills. Anything outside
+        # the bounded machine-key shape fails the whole inventory closed.
+        clears = None
+        if "clears" in grant:
+            raw_clears = grant["clears"]
+            if (not isinstance(raw_clears, list) or len(raw_clears) > 8 or
+                any(not isinstance(item, str) or re.fullmatch(r"[a-z0-9_]{1,40}", item) is None
+                    for item in raw_clears)):
+                return []
+            clears, seen_clears = [], set()
+            for item in raw_clears:
+                if item not in seen_clears:
+                    seen_clears.add(item)
+                    clears.append(item)
         started = start is None or dt.datetime.fromisoformat(start.replace("Z", "+00:00")).timestamp() <= now
         expired = end is not None and dt.datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() <= now
         usable = value["eligible"] and not grant["paused"] and started and not expired and left > 0
@@ -471,10 +618,33 @@ def normalize_reset_credits(value, now=None):
         # A used grant's historical end belongs to its own row, never to the
         # summary of currently available resets. usable_now gates redemption,
         # not whether an otherwise valid reset remains in saved inventory.
-        grants.append(balance_window("reset_credit_" + category + "_grant_" + str(index),
+        window = balance_window("reset_credit_" + category + "_grant_" + str(index),
             category.capitalize() + " rate-limit reset grant " + str(index), left, "resets",
-            limit=total, used=total - left if total is not None else None, expires=end))
+            limit=total, used=total - left if total is not None else None, expires=end)
+        if clears:
+            window["clears"] = clears
+        grants.append(window)
     return [balance_window("reset_credits_available", "Rate-limit resets available", available, "resets")] + grants
+
+
+def normalize_session_reset_allowance(value):
+    """One weekly session-reset allowance: availability gates the remaining count."""
+    if not isinstance(value, dict) or value.get("eligible") is not True:
+        return []
+    if not isinstance(value.get("available"), bool):
+        return []
+    per_week = value.get("resets_per_week")
+    if isinstance(per_week, bool) or not isinstance(per_week, int) or not 1 <= per_week <= 50:
+        return []
+    remaining = per_week if value["available"] else 0
+    window = balance_window("session_reset_allowance", "Weekly session reset", remaining, "resets",
+        limit=per_week, used=per_week - remaining)
+    window["resetAt"] = reset_at(value.get("next_available_at"))
+    return [window]
+
+
+# The upstream program name this normalizes; kept as an alias for readers.
+normalize_juniper_tide = normalize_session_reset_allowance
 
 
 def normalize_prepaid(value):
@@ -625,6 +795,7 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
         if availability is not None:
             availability["resetCredits"] = "ok"
         windows.extend(normalize_reset_credits(usage.get("cedar_ember")))
+        windows.extend(normalize_session_reset_allowance(usage.get("juniper_tide")))
     except Exception as error:
         if rate_limited(error):
             return windows
