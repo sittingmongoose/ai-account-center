@@ -12,6 +12,13 @@
 //! liberty taken against the reference: a measure the reference would crash on (a scout
 //! row without its facts-kept measure, a null where a median is divided) is refused the
 //! same way instead of panicking.
+//!
+//! Amendments of 2026-11-09 (fix round 1, after blind review), kept in step with the
+//! reference: a measure whose value — or, where the words quote bounds, whose low or
+//! high — is null is omitted, never printed as a measured 0%; an Avoid row without a
+//! cheating measure falls back to the "N runs" cell; a value outside the ±2^53 safe
+//! integer range refuses the view instead of printing a saturated number; ties order by
+//! plain Unicode code points.
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -148,6 +155,13 @@ impl MeasureIn {
 
     fn has_value(&self) -> bool {
         self.value.as_f64().is_some()
+    }
+
+    /// The measure is known enough to print: its value and, where the words quote the
+    /// likely range, its low and high bounds are numbers. A null among them omits the
+    /// measure — it is never formatted as a measured zero (2026-11-09 amendment, A2).
+    fn span_known(&self) -> bool {
+        self.value.as_f64().is_some() && self.low.as_f64().is_some() && self.high.as_f64().is_some()
     }
 }
 
@@ -372,56 +386,83 @@ fn js_round(value: f64) -> f64 {
     (value + 0.5).floor()
 }
 
+/// JavaScript's largest safe integer (2^53): the range within which every figure this
+/// view prints is an honest whole number. Beyond it the float-to-integer casts saturate,
+/// so the input is refused instead (`range`).
+const SAFE_INTEGER: f64 = 9_007_199_254_740_992.0;
+
+fn out_of_range(_value: f64) -> Error {
+    Error::new(
+        "range",
+        "a figure outside the safe integer range; refused rather than printed",
+    )
+}
+
+/// A rounded figure that must survive the cast to an integer; outside the safe integer
+/// range the text would be a fabricated number, so the input is refused.
+fn checked_round(value: f64) -> Result<i64> {
+    if value.is_finite() && value.abs() <= SAFE_INTEGER {
+        Ok(js_round(value) as i64)
+    } else {
+        Err(out_of_range(value))
+    }
+}
+
 /// JavaScript's `toFixed(places)` for non-negative values: the integer n whose n/10^places
 /// is closest to the value (ties to the larger n), with the decimals kept. The comparison
 /// divides, as the ECMAScript spec does — multiplying instead turns 4.85 into "4.9" where
-/// every JavaScript engine prints "4.8".
-fn to_fixed(value: f64, places: u32) -> String {
+/// every JavaScript engine prints "4.8". Scaled units outside the safe integer range
+/// refuse the input.
+fn to_fixed(value: f64, places: u32) -> Result<String> {
     let scale = 10f64.powi(places as i32);
     let low = (value * scale).floor();
     let below = (low / scale - value).abs();
     let above = ((low + 1.0) / scale - value).abs();
-    let units = (if above <= below { low + 1.0 } else { low }) as i64;
+    let units = if above <= below { low + 1.0 } else { low };
+    if !units.is_finite() || units.abs() > SAFE_INTEGER {
+        return Err(out_of_range(units));
+    }
+    let units = units as i64;
     let whole = units / 10i64.pow(places);
     let part = units % 10i64.pow(places);
-    format!("{whole}.{part:0places$}", places = places as usize)
+    Ok(format!("{whole}.{part:0places$}", places = places as usize))
 }
 
-fn pct(value: f64) -> String {
-    format!("{}%", js_round(value * 100.0) as i64)
+fn pct(value: f64) -> Result<String> {
+    Ok(format!("{}%", checked_round(value * 100.0)?))
 }
 
-/// A percent of a JSON number field: JavaScript's coercions where the reference prints
-/// one (`null` reads 0%), so a null bound never crashes the compose.
-fn pct_json(value: &Json) -> String {
+/// A percent of a JSON number field. A null or non-number is never formatted as a
+/// measured zero: the caller shows the measure only when its figures are known, and a
+/// stray non-number refuses the compose (2026-11-09 amendment, A2).
+fn pct_json(value: &Json) -> Result<String> {
     match value.as_f64() {
         Some(number) => pct(number),
-        None if value.is_null() => "0%".to_string(),
-        None => "NaN%".to_string(),
+        None => Err(shape("a percent of a measure value that is not a number")),
     }
 }
 
 /// A duration the `minutes` helper writes: whole seconds under two minutes, else minutes.
-fn minutes(seconds: f64) -> String {
+fn minutes(seconds: f64) -> Result<String> {
     if seconds < 120.0 {
-        format!("{} s", js_round(seconds) as i64)
+        Ok(format!("{} s", checked_round(seconds)?))
     } else {
-        format!("{} min", js_round(seconds / 60.0) as i64)
+        Ok(format!("{} min", checked_round(seconds / 60.0)?))
     }
 }
 
-fn seconds(value: f64) -> String {
+fn seconds(value: f64) -> Result<String> {
     if value < 5.0 {
-        format!("{} s", to_fixed(value, 1))
+        Ok(format!("{} s", to_fixed(value, 1)?))
     } else if value < 120.0 {
-        format!("{} s", js_round(value) as i64)
+        Ok(format!("{} s", checked_round(value)?))
     } else {
-        format!("{} min", js_round(value / 60.0) as i64)
+        Ok(format!("{} min", checked_round(value / 60.0)?))
     }
 }
 
 /// One decimal from 1 up, two below it.
-fn round1(value: f64) -> String {
+fn round1(value: f64) -> Result<String> {
     if value >= 1.0 {
         to_fixed(value, 1)
     } else {
@@ -502,11 +543,11 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
     let quality = c.measures.get("quality");
     let n = c.n;
     if row.verdict == "avoid" {
-        let cheating = c
-            .measures
-            .get("cheating")
-            .ok_or_else(|| shape("an avoid row with no cheating measure"))?;
-        if cheating.number(&cheating.value).is_some_and(|v| v >= 0.2) {
+        // A missing cheating measure is unknown, not zero: the row may be Avoid on another
+        // measure, and the cell then says how many runs there were (2026-11-09, A3).
+        if let Some(cheating) = c.measures.get("cheating")
+            && cheating.number(&cheating.value).is_some_and(|v| v >= 0.2)
+        {
             return Ok(CellOut {
                 verdict: "avoid".to_string(),
                 word,
@@ -591,12 +632,12 @@ fn over_words(n: i64) -> String {
     format!("Over {n} {}", if n == 1 { "run" } else { "runs" })
 }
 
-fn likely_between(measure: &MeasureIn) -> String {
-    format!(
+fn likely_between(measure: &MeasureIn) -> Result<String> {
+    Ok(format!(
         "Likely between {} and {}.",
-        pct_json(&measure.low),
-        pct_json(&measure.high)
-    )
+        pct_json(&measure.low)?,
+        pct_json(&measure.high)?
+    ))
 }
 
 /// The measures shown in a job's report block, in the contract's order, each only when
@@ -619,46 +660,51 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
         let drift = m
             .get("verdict-drift")
             .ok_or_else(|| shape("a scout row with no verdict-drift measure"))?;
+        // Each scout measure shows only when its value and both bounds are known; a null
+        // among them omits the measure rather than printing a zero (2026-11-09, A2).
         for (label, measure) in [("Facts kept", facts), ("Verdicts changed on a re-check", drift)] {
+            if !measure.span_known() {
+                continue;
+            }
             out.push(MeasureOut {
                 label: label.to_string(),
-                value: pct_json(&measure.value),
+                value: pct_json(&measure.value)?,
                 sub: src.to_string(),
                 note: format!(
                     "{}; likely between {} and {}.",
                     over_words(measure.n),
-                    pct_json(&measure.low),
-                    pct_json(&measure.high)
+                    pct_json(&measure.low)?,
+                    pct_json(&measure.high)?
                 ),
                 range: Some(band(measure)),
             });
         }
     } else if job.id == "review" {
-        if let Some(q) = m.get("quality").filter(|q| q.has_value()) {
+        if let Some(q) = m.get("quality").filter(|q| q.span_known()) {
             let per = q.per.unwrap_or(0);
             let thin = per < min_runs;
             out.push(MeasureOut {
                 label: "Its reviews held up".to_string(),
-                value: pct_json(&q.value),
+                value: pct_json(&q.value)?,
                 sub: format!("{} of {}", fmt_opt(q.of), fmt_opt(q.per)),
                 note: if thin {
                     format!(
                         "Only {per} of its reviews {} re-checked, so this says little yet (likely {} to {}).",
                         if per == 1 { "was" } else { "were" },
-                        pct_json(&q.low),
-                        pct_json(&q.high)
+                        pct_json(&q.low)?,
+                        pct_json(&q.high)?
                     )
                 } else {
-                    likely_between(q)
+                    likely_between(q)?
                 },
                 range: Some(band(q)),
             });
         }
     } else if job.id == "plan" {
-        if let Some(s) = m.get("silent-misses").filter(|s| s.has_value()) {
+        if let Some(s) = m.get("silent-misses").filter(|s| s.span_known()) {
             out.push(MeasureOut {
                 label: "Planned facts missed".to_string(),
-                value: pct_json(&s.value),
+                value: pct_json(&s.value)?,
                 sub: (if row.basis.as_deref() == Some("benchmark") {
                     "benchmark"
                 } else {
@@ -668,33 +714,33 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
                 note: format!(
                     "{}; likely between {} and {}.",
                     over_words(s.n),
-                    pct_json(&s.low),
-                    pct_json(&s.high)
+                    pct_json(&s.low)?,
+                    pct_json(&s.high)?
                 ),
                 range: Some(band(s)),
             });
         }
     } else {
-        if let Some(q) = m.get("quality").filter(|q| q.has_value()) {
+        if let Some(q) = m.get("quality").filter(|q| q.span_known()) {
             out.push(MeasureOut {
                 label: "Passed review".to_string(),
-                value: pct_json(&q.value),
+                value: pct_json(&q.value)?,
                 sub: format!("{} of {}", fmt_opt(q.of), fmt_opt(q.per)),
                 note: format!(
                     "With {} reviews the true rate is likely between {} and {}.",
                     fmt_opt(q.per),
-                    pct_json(&q.low),
-                    pct_json(&q.high)
+                    pct_json(&q.low)?,
+                    pct_json(&q.high)?
                 ),
                 range: Some(band(q)),
             });
         }
-        if let Some(o) = m.get("overclaim").filter(|o| o.has_value()) {
+        if let Some(o) = m.get("overclaim").filter(|o| o.span_known()) {
             out.push(MeasureOut {
                 label: "Said done, reviewer disagreed".to_string(),
-                value: pct_json(&o.value),
+                value: pct_json(&o.value)?,
                 sub: format!("{} of {}", fmt_opt(o.of), fmt_opt(o.per)),
-                note: likely_between(o),
+                note: likely_between(o)?,
                 range: Some(band(o)),
             });
         }
@@ -704,14 +750,15 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
     if let Some(sp) = speed.filter(|sp| sp.has_value()) {
         let per_task = sp.per_task.as_ref().filter(|_| job.unit == "task");
         let value = match per_task {
-            Some(stat) => minutes(stat.value.ok_or_else(|| shape("a per-task speed with no value"))?),
-            None => seconds(sp.value.as_f64().unwrap_or(0.0)),
+            Some(stat) => minutes(stat.value.ok_or_else(|| shape("a per-task speed with no value"))?)?,
+            None => seconds(sp.value.as_f64().ok_or_else(|| shape("a speed with no usable value"))?)?,
         };
         let note = if let Some(stat) = per_task {
+            // A missing bound is not zero: the reference's number check refuses it.
             format!(
                 "Fastest {}, slowest {}, over {} runs.",
-                minutes(stat.low.unwrap_or(0.0)),
-                minutes(stat.high.unwrap_or(0.0)),
+                minutes(stat.low.ok_or_else(|| shape("a per-task speed with no value"))?)?,
+                minutes(stat.high.ok_or_else(|| shape("a per-task speed with no value"))?)?,
                 stat.n
             )
         } else if job.id == "scout"
@@ -721,8 +768,11 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
         {
             format!(
                 "Range {} to {} s.",
-                to_fixed(sp.low.as_f64().unwrap_or(0.0), 1),
-                to_fixed(sp.high.as_f64().unwrap_or(0.0), 1)
+                to_fixed(sp.low.as_f64().ok_or_else(|| shape("a speed with no usable value"))?, 1)?,
+                to_fixed(
+                    sp.high.as_f64().ok_or_else(|| shape("a speed with no usable value"))?,
+                    1
+                )?
             )
         } else {
             format!("Over {} runs.", sp.n)
@@ -745,7 +795,7 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
         };
         out.push(MeasureOut {
             label,
-            value: round1(co.value.as_f64().unwrap_or(0.0)),
+            value: round1(co.value.as_f64().unwrap_or(0.0))?,
             sub: "credits".to_string(),
             note: format!("All {} runs had a known cost.", co.n),
             range: None,
@@ -757,7 +807,7 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
     {
         out.push(MeasureOut {
             label: format!("Cost per {unit}"),
-            value: format!("≈ {}", round1(credits.value.unwrap_or(0.0))),
+            value: format!("≈ {}", round1(credits.value.unwrap_or(0.0))?),
             sub: "credits, estimated".to_string(),
             note: format!("From {} runs; an estimate, not a measured cost.", credits.n),
             range: None,
@@ -844,17 +894,21 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
             && job.id == "scout"
         {
             let peer_bench = peer.benchmarks.iter().find(|b| b.ranked);
-            let kept = bench.measures.get("facts-kept");
-            let peer_kept = peer_bench.and_then(|b| b.measures.get("facts-kept"));
-            runs.push(run(format!(
-                " In the {} benchmark it kept {} of facts; {} kept {}.",
-                job.label,
-                kept.map(|m| pct_json(&m.value)).unwrap_or_else(|| "0%".to_string()),
-                name(&peer.label, &peer.effort),
-                peer_kept
-                    .map(|m| pct_json(&m.value))
-                    .unwrap_or_else(|| "0%".to_string()),
-            )));
+            // Both facts-kept figures must be known: an unknown one omits the sentence,
+            // never prints a zero (2026-11-09 amendment, A2).
+            let kept = bench.measures.get("facts-kept").filter(|m| m.span_known());
+            let peer_kept = peer_bench
+                .and_then(|b| b.measures.get("facts-kept"))
+                .filter(|m| m.span_known());
+            if let (Some(kept), Some(peer_kept)) = (kept, peer_kept) {
+                runs.push(run(format!(
+                    " In the {} benchmark it kept {} of facts; {} kept {}.",
+                    job.label,
+                    pct_json(&kept.value)?,
+                    name(&peer.label, &peer.effort),
+                    pct_json(&peer_kept.value)?,
+                )));
+            }
         }
         let older = job
             .rows
@@ -907,7 +961,7 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
                         "passed {} of {} ({})",
                         fmt_opt(q.of),
                         fmt_opt(q.per),
-                        pct_json(&q.value)
+                        pct_json(&q.value)?
                     ));
                 }
                 if let Some(sp) = oc
@@ -916,7 +970,7 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
                     .filter(|_| job.unit == "task")
                     .filter(|stat| stat.value.is_some())
                 {
-                    parts.push(format!("{} per task", minutes(sp.value.unwrap_or(0.0))));
+                    parts.push(format!("{} per task", minutes(sp.value.unwrap_or(0.0))?));
                 }
                 runs.push(run(format!(
                     " {}{}.",
@@ -1041,9 +1095,9 @@ fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
         if missed && next_missed {
             why.push(run(format!(
                 " Missed {} of planned facts; {} missed {}.",
-                pct_json(&miss.unwrap().value),
+                pct_json(&miss.unwrap().value)?,
                 name(&next.unwrap().label, &next.unwrap().effort),
-                pct_json(&next_miss.unwrap().value)
+                pct_json(&next_miss.unwrap().value)?
             )));
         } else if let Some(next) = next {
             why.push(run(format!(" {} is next.", name(&next.label, &next.effort))));

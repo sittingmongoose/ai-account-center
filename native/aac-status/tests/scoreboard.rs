@@ -3,7 +3,7 @@
 //! a job with nothing but not-enough-data rows) and the schema-drift refusals.
 
 use aac_status::ops;
-use aac_status::scoreboard::{ViewIn, by_model};
+use aac_status::scoreboard::{ByModel, ViewIn, by_model};
 use serde_json::{Value, json};
 
 fn fixture(name: &str) -> String {
@@ -224,4 +224,136 @@ fn the_read_note_comes_from_the_runs_source_detail() {
     assert!(view.intro.starts_with(
         "Which model to use for which job. Each row is one model at one effort. A verdict needs at least 5 runs"
     ));
+}
+
+// The reviewer's repro inputs (2026-11-09 spend/byModel recheck), plus the two refusals
+// the review accepted and asked to lock.
+
+fn facts_kept(view: &ByModel) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for panel in &view.views {
+        for model in &panel.models {
+            for report in &model.report {
+                for measure in &report.measures {
+                    if measure.label == "Facts kept" {
+                        out.push((model.label.clone(), measure.value.clone(), measure.note.clone()));
+                    }
+                }
+                for run in &report.compare {
+                    if run.text.contains("kept 0%") {
+                        out.push((model.label.clone(), "compare".to_string(), run.text.clone()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn edit_objects(value: &mut Value, visit: &mut dyn FnMut(&mut serde_json::Map<String, Value>)) {
+    match value {
+        Value::Array(items) => {
+            for child in items {
+                edit_objects(child, visit);
+            }
+        }
+        Value::Object(map) => {
+            visit(map);
+            let names: Vec<String> = map.keys().cloned().collect();
+            for name in names {
+                if let Some(child) = map.get_mut(&name) {
+                    edit_objects(child, visit);
+                }
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+#[test]
+fn a_null_scout_value_is_omitted_not_printed_as_zero() {
+    // repro/scout-null.json: facts-kept.value is null, the bounds are still numbers. A2.
+    let parsed: ViewIn = serde_json::from_str(&fixture("repro/scout-null.json")).unwrap();
+    let view = by_model(&parsed).expect("a null scout measure is left out, not a refusal");
+    let facts = facts_kept(&view);
+    assert!(facts.is_empty(), "a null facts-kept was printed: {facts:?}");
+    let drift = view.views.iter().any(|panel| {
+        panel.models.iter().any(|model| {
+            model.report.iter().any(|report| {
+                report
+                    .measures
+                    .iter()
+                    .any(|m| m.label == "Verdicts changed on a re-check")
+            })
+        })
+    });
+    assert!(drift, "a known verdict-drift measure must stay");
+}
+
+#[test]
+fn a_null_scout_bound_is_omitted_not_printed_as_zero() {
+    // Same repro, with a known value and a null low bound: the note must not say 0%.
+    let mut doc: Value = serde_json::from_str(&fixture("repro/scout-null.json")).unwrap();
+    edit_objects(&mut doc, &mut |map| {
+        if let Some(Value::Object(facts)) = map.get_mut("facts-kept") {
+            facts.insert("value".to_string(), json!(0.93));
+            facts.insert("low".to_string(), Value::Null);
+        }
+    });
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let view = by_model(&parsed).expect("a null scout bound is left out, not a refusal");
+    let facts = facts_kept(&view);
+    assert!(facts.is_empty(), "a null facts-kept bound was printed: {facts:?}");
+}
+
+#[test]
+fn an_avoid_row_without_cheating_says_how_many_runs() {
+    // repro/avoid-no-cheating.json: GLM 5.3 is Avoid on quality, with no cheating measure. A3.
+    let parsed: ViewIn = serde_json::from_str(&fixture("repro/avoid-no-cheating.json")).unwrap();
+    let view = by_model(&parsed).expect("a missing cheating measure is not a refusal of byModel");
+    let mut subs = Vec::new();
+    for panel in &view.views {
+        for model in &panel.models {
+            if model.label == "GLM 5.3" && model.effort.as_deref() == Some("max") {
+                let cell = model
+                    .cells
+                    .get("worknode-build")
+                    .and_then(|cell| cell.as_ref())
+                    .unwrap();
+                assert_eq!(cell.verdict, "avoid");
+                assert_eq!(cell.word, "Avoid");
+                subs.push(cell.sub.clone());
+            }
+        }
+    }
+    assert_eq!(subs, vec![vec!["5 runs".to_string()], vec!["5 runs".to_string()]]);
+}
+
+#[test]
+fn a_scout_row_missing_its_facts_kept_measure_is_still_refused() {
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    edit_objects(&mut doc, &mut |map| {
+        map.remove("facts-kept");
+    });
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let err = by_model(&parsed).unwrap_err();
+    assert_eq!(err.code, "shape");
+    assert!(
+        err.to_string().contains("a scout row with no facts-kept measure"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_per_task_speed_with_no_value_is_still_refused() {
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    edit_objects(&mut doc, &mut |map| {
+        if let Some(Value::Object(per_task)) = map.get_mut("perTask") {
+            per_task.insert("value".to_string(), Value::Null);
+        }
+    });
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let err = by_model(&parsed).unwrap_err();
+    assert_eq!(err.code, "shape");
+    assert!(err.to_string().contains("a per-task speed with no value"), "{err}");
 }

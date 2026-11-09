@@ -312,8 +312,11 @@ fn the_week_is_the_default_period_and_the_clock_reads_the_dashboard_zone() {
     assert_eq!(view.default_period.as_deref(), Some("week"));
     assert_eq!(view.as_of.as_deref(), Some("2026-11-08T18:02:00.000Z"));
     assert_eq!(view.as_of_text.as_deref(), Some("Read 1:02 PM"));
-    // The foot's "since" words name the calendar start quota-watch reports.
-    assert!(view.periods[1].foot.contains(", since early Friday."));
+    // The week foot names how much was watched. It does not name the period start:
+    // that timestamp is the calendar boundary, not the first reading.
+    let week = view.periods.iter().find(|period| period.id == "week").unwrap();
+    assert!(week.foot.contains("quota-watch has watched 36% of this week."));
+    assert!(!week.foot.contains("since"), "foot was: {}", week.foot);
 }
 
 #[test]
@@ -342,4 +345,112 @@ fn unknown_fields_are_ignored_and_a_missing_required_field_refuses() {
     no_budgets["spend"].as_object_mut().unwrap().remove("budgets");
     assert!(ops::dispatch("composeSpend", &no_budgets.to_string()).is_err());
     assert!(ops::dispatch("composeSpend", "not json").is_err());
+}
+
+// The reviewer's repro inputs (2026-11-09 spend/byModel recheck). Each one failed on
+// 7c54292b6 and is locked here.
+
+fn repro_input(name: &str) -> SpendInput {
+    serde_json::from_str(&fixture(&format!("repro/{name}"))).unwrap()
+}
+
+fn assert_unavailable(view: &aac_status::spend::SpendByStream) {
+    assert_eq!(view.state, "unavailable");
+    assert_eq!(view.unavailable.as_deref(), Some(UNAVAILABLE_SENTENCE));
+    assert!(view.periods.is_empty());
+    assert_eq!(view.default_period, None);
+    assert_eq!(view.as_of, None);
+    assert_eq!(view.as_of_text, None);
+}
+
+#[test]
+fn a_non_percent_meter_is_unknown_not_zero_percent() {
+    // repro/credits-meter.json: 30 credits on weekly_credits, no percentage. A1.
+    let raw = fixture("repro/credits-meter.json");
+    let view = compose(&repro_input("credits-meter.json"));
+    assert_unavailable(&view);
+    let text = serde_json::to_string(&view).unwrap();
+    assert!(!text.contains("0.0%"), "{text}");
+    assert!(!text.contains("\"share\":0"), "{text}");
+    let answer = ops::dispatch("composeSpend", &raw).unwrap();
+    let parsed: Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(parsed["state"], "unavailable");
+}
+
+#[test]
+fn a_finite_value_past_the_safe_integer_range_is_unavailable() {
+    // repro/large-finite.json: a percent cell of 1e30. A4. No saturated i64.
+    let view = compose(&repro_input("large-finite.json"));
+    assert_unavailable(&view);
+    let text = serde_json::to_string(&view).unwrap();
+    assert!(!text.contains("9223372036854775807"), "{text}");
+
+    // Two in-range percents whose sum is past 2^53 are the same refusal.
+    let summed = json!([stream(
+        "only",
+        "only",
+        false,
+        json!([
+            row("claude:me", "seven_day", json!(6_000_000_000_000_000.0)),
+            row("claude:me", "seven_day", json!(6_000_000_000_000_000.0))
+        ])
+    )]);
+    let summed = compose(&view_of(spend_doc(json!([week(summed)]), json!([]))));
+    assert_unavailable(&summed);
+}
+
+#[test]
+fn equal_shares_tie_by_unicode_code_point() {
+    // repro/collation.json: Zebra and alpha used the same share. Code points put 'Z'
+    // before 'a'. The old reference's localeCompare put alpha first.
+    let view = compose(&repro_input("collation.json"));
+    let rows = &view.periods[0].rows;
+    assert_eq!(rows[0].stream, "Zebra");
+    assert_eq!(rows[1].stream, "alpha");
+    let named: Vec<&str> = view.periods[0]
+        .lead
+        .iter()
+        .filter(|run| run.strong == Some(true))
+        .map(|run| run.text.as_str())
+        .collect();
+    assert_eq!(named.first().copied(), Some("Zebra"));
+    assert!(named.contains(&"alpha"));
+}
+
+#[test]
+fn a_minute_precision_iso_time_is_a_real_clock_reading() {
+    // repro/minute-iso.json's week start is 2026-11-02T00:00Z. The old parser required
+    // seconds and left the clock blank. Seconds count as zero, in Z and offset forms. A6.
+    let raw: Value = serde_json::from_str(&fixture("repro/minute-iso.json")).unwrap();
+    assert_eq!(raw["spend"]["periods"][1]["start"], "2026-11-02T00:00Z");
+    for (as_of, expected) in [
+        ("2026-11-02T00:00Z", "Read 7:00 PM"),
+        ("2026-11-02T00:00-05:00", "Read 12:00 AM"),
+        ("2026-11-02T00:00+00:00", "Read 7:00 PM"),
+    ] {
+        let mut doc = raw.clone();
+        doc["spend"]["asOf"] = json!(as_of);
+        let view = compose(&serde_json::from_value(doc).unwrap());
+        assert_eq!(view.state, "ok", "{as_of}");
+        assert_eq!(view.as_of_text.as_deref(), Some(expected), "{as_of}");
+    }
+}
+
+#[test]
+fn the_coverage_sentence_does_not_name_a_calendar_start() {
+    // The same minute-iso week, with the seconds the old parser needed so it would
+    // attach "since Sunday evening". That start is quota-watch's calendar boundary,
+    // not its first reading, so the sentence names only the share watched.
+    let mut doc: Value = serde_json::from_str(&fixture("repro/minute-iso.json")).unwrap();
+    let week = doc["spend"]["periods"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|period| period["id"] == "week")
+        .unwrap();
+    week["start"] = json!("2026-11-02T00:00:00Z");
+    let view = compose(&serde_json::from_value(doc).unwrap());
+    let foot = &view.periods.iter().find(|period| period.id == "week").unwrap().foot;
+    assert!(foot.contains("quota-watch has watched 36% of this week."), "{foot}");
+    assert!(!foot.contains("since"), "{foot}");
 }

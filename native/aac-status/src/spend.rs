@@ -8,16 +8,39 @@
 //! (`buildSpend` in src/web-server/status/status-view-quota.ts) plus `nowMs`,
 //! `utcOffsetMinutes` and `accountOrder`. Nothing is recomputed from raw reports, and an
 //! unknown stays unknown: a share that was not read is `{ share: null, "not read" }`,
-//! never a guessed figure. With no accepted quota report (`periods` empty) the whole
-//! field is the contract's unavailable shape.
+//! never a guessed figure. With no accepted quota report (`periods` empty), or when no
+//! row carries a usable percentage at all, the whole field is the contract's unavailable
+//! shape.
 //!
-//! The period `start` the foot's "since" clause names is quota-watch's calendar start of
-//! the period (qw_core.py `period_bounds`: local midnight for the day, local Monday for
-//! the week), not the first reading; the reference and the golden output keep the clause,
-//! so this port keeps it too.
+//! Amendments of 2026-11-09 (fix round 1, after blind review), kept in step with the
+//! reference: a meter row whose `unit` is not `percent` is not a share (no column, no
+//! ranking); a value or column sum outside the ±2^53 safe integer range refuses the field
+//! instead of printing a saturated number; ties order by plain Unicode code points; the
+//! foot's "since" clause is gone — the period `start` quota-watch reports is its calendar
+//! start (qw_core.py `period_bounds`), not the first reading, so naming it would claim a
+//! watch that did not happen.
 
+use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
+
+/// JavaScript's largest safe integer (2^53): the range within which every figure this
+/// view prints is an honest whole number. Beyond it the float-to-integer casts saturate,
+/// so the input is refused instead (`range`).
+const SAFE_INTEGER: f64 = 9_007_199_254_740_992.0;
+
+fn out_of_range(_value: f64) -> Error {
+    Error::new(
+        "range",
+        "a figure outside the safe integer range; refused rather than printed",
+    )
+}
+
+/// True when `value` cannot be printed as an honest integer: not finite, or past
+/// JavaScript's safe integer range (2^53), where a cast would saturate or round away.
+fn beyond_safe(value: f64) -> bool {
+    !value.is_finite() || value.abs() > SAFE_INTEGER
+}
 
 /// The fixed sentence for every way the field can be unavailable (no report, no module,
 /// input this port refuses): the contract's unavailable shape, never a guessed figure.
@@ -250,44 +273,59 @@ fn js_round(value: f64) -> f64 {
     (value + 0.5).floor()
 }
 
+/// A rounded figure that must survive the cast to an integer; outside the safe integer
+/// range the text would be a fabricated number, so the input is refused.
+fn checked_round(value: f64) -> Result<i64> {
+    if beyond_safe(value) {
+        Err(out_of_range(value))
+    } else {
+        Ok(js_round(value) as i64)
+    }
+}
+
 /// JavaScript's `toFixed(places)` for non-negative values: the integer n whose n/10^places
 /// is closest to the value (ties to the larger n), with the decimals kept ("0.0", not "0").
 /// The comparison divides, as the ECMAScript spec does — multiplying instead turns 4.85
-/// into "4.9" where every JavaScript engine prints "4.8".
-fn to_fixed(value: f64, places: u32) -> String {
+/// into "4.9" where every JavaScript engine prints "4.8". Scaled units outside the safe
+/// integer range refuse the input.
+fn to_fixed(value: f64, places: u32) -> Result<String> {
     let scale = 10f64.powi(places as i32);
     let low = (value * scale).floor();
     let below = (low / scale - value).abs();
     let above = ((low + 1.0) / scale - value).abs();
-    let units = (if above <= below { low + 1.0 } else { low }) as i64;
+    let units = if above <= below { low + 1.0 } else { low };
+    if beyond_safe(units) {
+        return Err(out_of_range(units));
+    }
+    let units = units as i64;
     let whole = units / 10i64.pow(places);
     let part = units % 10i64.pow(places);
-    format!("{whole}.{part:0places$}", places = places as usize)
+    Ok(format!("{whole}.{part:0places$}", places = places as usize))
 }
 
-fn pct_text(share: f64) -> String {
+fn pct_text(share: f64) -> Result<String> {
     let p = share * 100.0;
     if p < 1.0 {
-        format!("{}%", to_fixed(p, 1))
+        Ok(format!("{}%", to_fixed(p, 1)?))
     } else {
-        format!("{}%", js_round(p) as i64)
+        Ok(format!("{}%", checked_round(p)?))
     }
 }
 
-fn cell_of(share: Option<f64>, meter: &str) -> Cell {
+fn cell_of(share: Option<f64>, meter: &str) -> Result<Cell> {
     match share {
-        None => Cell {
+        None => Ok(Cell {
             share: None,
             text: "not read".to_string(),
-        },
-        Some(share) if is_five(meter) && share >= 1.0 => Cell {
+        }),
+        Some(share) if is_five(meter) && share >= 1.0 => Ok(Cell {
             share: Some(share),
-            text: format!("{}×", to_fixed(share, 1)),
-        },
-        Some(share) => Cell {
+            text: format!("{}×", to_fixed(share, 1)?),
+        }),
+        Some(share) => Ok(Cell {
             share: Some(share),
-            text: pct_text(share),
-        },
+            text: pct_text(share)?,
+        }),
     }
 }
 
@@ -304,8 +342,8 @@ fn thousands(value: i64) -> String {
     out
 }
 
-fn credits_text(value: f64) -> String {
-    thousands(js_round(value) as i64)
+fn credits_text(value: f64) -> Result<String> {
+    Ok(thousands(checked_round(value)?))
 }
 
 fn capitalize(text: &str) -> String {
@@ -330,43 +368,52 @@ fn machine_name(machine: &str) -> String {
 // The dashboard-zone clock: epoch math over the UTC offset the caller passed, so no
 // time-zone database is needed and the words match the TypeScript clock exactly.
 
-/// Milliseconds since the epoch from an ISO-8601 moment; None when it is not one (then no
-/// clock time is invented; the field stays null).
+/// Milliseconds since the epoch from an ISO-8601 moment, reading exactly the grammar the
+/// quota validator accepts (`ISO` in schema-helpers.ts):
+/// `YYYY-MM-DDTHH:MM[:SS[.f{1,9}]](Z|±HH:MM)`. Omitted seconds count as zero; anything
+/// else is None, and then no clock time is invented (the field stays null).
 fn parse_iso(text: &str) -> Option<i64> {
     let bytes = text.as_bytes();
-    if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
+    let digits = |from: usize, count: usize| -> Option<i64> {
+        let span = bytes.get(from..from + count)?;
+        if span.iter().all(|c| c.is_ascii_digit()) {
+            std::str::from_utf8(span).ok()?.parse().ok()
+        } else {
+            None
+        }
+    };
+    // "YYYY-MM-DDTHH:MMZ" is the shortest accepted form (17 bytes).
+    if bytes.len() < 17 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' || bytes[13] != b':' {
         return None;
     }
-    let year: i64 = text[0..4].parse().ok()?;
-    let month: i64 = text[5..7].parse().ok()?;
-    let day: i64 = text[8..10].parse().ok()?;
-    let hour: i64 = text[11..13].parse().ok()?;
-    let minute: i64 = text[14..16].parse().ok()?;
-    let second: i64 = text[17..19].parse().ok()?;
-    let mut rest = &text[19..];
+    let year = digits(0, 4)?;
+    let month = digits(5, 2)?;
+    let day = digits(8, 2)?;
+    let hour = digits(11, 2)?;
+    let minute = digits(14, 2)?;
+    let mut at = 16;
+    let mut second = 0i64;
     let mut milli = 0i64;
-    if rest.starts_with('.') {
-        let digits: String = rest[1..].chars().take_while(|c| c.is_ascii_digit()).collect();
-        if digits.is_empty() {
-            return None;
+    if bytes.get(at) == Some(&b':') {
+        second = digits(at + 1, 2)?;
+        at += 3;
+        if bytes.get(at) == Some(&b'.') {
+            let start = at + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() && end - start < 9 {
+                end += 1;
+            }
+            let fraction = &bytes[start..end];
+            if fraction.is_empty() || bytes.get(end).is_some_and(|c| c.is_ascii_digit()) {
+                return None; // no digits at all, or past the grammar's nine
+            }
+            let scaled = format!("{:0<3}", std::str::from_utf8(fraction).ok()?);
+            milli = scaled[..3].parse().unwrap_or(0);
+            at = end;
         }
-        let scaled = format!("{digits:0<3}");
-        milli = scaled[..3].parse().unwrap_or(0);
-        rest = &rest[1 + digits.len()..];
     }
-    let offset_minutes = if rest.starts_with('Z') || rest.is_empty() {
-        0
-    } else {
-        let digits = rest.strip_prefix(['+', '-'])?;
-        let sign = if rest.starts_with('-') { -1 } else { 1 };
-        let hh: i64 = digits.get(0..2).and_then(|s| s.parse().ok()).unwrap_or(0);
-        let mm: i64 = if digits.len() >= 5 {
-            digits[3..5].parse().unwrap_or(0)
-        } else {
-            0
-        };
-        sign * (hh * 60 + mm)
-    };
+    let rest = std::str::from_utf8(bytes.get(at..)?).ok()?;
+    let offset_minutes = offset_of(rest)?;
     // Days from the civil calendar (Howard Hinnant's days_from_civil), proleptic Gregorian:
     // months count March..February so a year's leap day lands at its end.
     let (y, m) = (
@@ -379,22 +426,34 @@ fn parse_iso(text: &str) -> Option<i64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
     let epoch_seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offset_minutes * 60;
-    Some(epoch_seconds * 1000 + milli)
+    Some(epoch_seconds.checked_mul(1000)? + milli)
 }
 
-/// (year, month, day) of a moment shifted into the dashboard's zone.
-fn civil(shifted_ms: i64) -> (i64, i64, i64) {
-    let days = shifted_ms.div_euclid(86_400_000);
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
+/// The offset of a grammar tail: `Z`, or `±HH:MM` with two-digit hours and minutes.
+/// `Z`, or `±HH:MM` with exactly two digits on each side of the colon — the quota
+/// validator's offset, and nothing looser (`+5:000` is not that grammar).
+fn offset_of(rest: &str) -> Option<i64> {
+    if rest == "Z" {
+        return Some(0);
+    }
+    let sign = match rest.as_bytes().first() {
+        Some(b'+') => 1,
+        Some(b'-') => -1,
+        _ => return None,
+    };
+    let bytes = rest.as_bytes().get(1..)?;
+    if bytes.len() != 5 || bytes[2] != b':' {
+        return None;
+    }
+    let digits = |from: usize| -> Option<i64> {
+        let span = bytes.get(from..from + 2)?;
+        if span.iter().all(|c| c.is_ascii_digit()) {
+            std::str::from_utf8(span).ok()?.parse().ok()
+        } else {
+            None
+        }
+    };
+    Some(sign * (digits(0)? * 60 + digits(3)?))
 }
 
 /// "1:12 PM" in the dashboard's zone, from the UTC offset the caller passed.
@@ -411,48 +470,12 @@ fn clock_text(epoch_ms: i64, offset_minutes: i64) -> String {
     format!("{hour}:{minute:02} {half}")
 }
 
-const DAYS: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
-
-/// The weekday of a moment shifted into the dashboard's zone (0 is Sunday).
-fn weekday(shifted_ms: i64) -> usize {
-    let days = shifted_ms.div_euclid(86_400_000);
-    (days + 4).rem_euclid(7) as usize
-}
-
-/// "1:12 PM" the same local day, "early Friday" / "Friday afternoon" / "Friday evening" on
-/// an earlier one: how the foot names the moment quota-watch's watching began.
-fn since_phrase(iso: &str, now_ms: i64, offset_minutes: i64) -> Option<String> {
-    let epoch = parse_iso(iso)?;
-    let shifted = epoch + offset_minutes * 60_000;
-    let now_shifted = now_ms + offset_minutes * 60_000;
-    if civil(shifted) == civil(now_shifted) {
-        return Some(clock_text(epoch, offset_minutes));
-    }
-    let hour = shifted.div_euclid(3_600_000) % 24;
-    let day = DAYS[weekday(shifted)];
-    Some(if hour < 12 {
-        format!("early {day}")
-    } else if hour < 18 {
-        format!("{day} afternoon")
-    } else {
-        format!("{day} evening")
-    })
-}
-
 // ---------------------------------------------------------------------------------------------
 // The composer
 
 /// One period's view: the table, its order and its sentences. A port of the reference's
 /// `periodView`, decision for decision.
-fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> PeriodOut {
+fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Result<PeriodOut> {
     let noun = match period.id.as_str() {
         "day" => "day",
         "week" => "week",
@@ -466,12 +489,14 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
     };
 
     // Columns: every account limit a row uses. Claude weekly, Claude 5-hour, then other
-    // providers, each by the account order the input gives (else by account id).
+    // providers, each by the account order the input gives (else by account id). Only a
+    // `percent` row speaks for a limit: a credits amount on another meter has no
+    // denominator here, so it is no column at all (2026-11-09 amendment, A1).
     let mut keys: Vec<RowIn> = Vec::new();
     let mut seen_keys: Vec<String> = Vec::new();
     for stream in &period.streams {
         for row in &stream.rows {
-            if is_credits(&row.meter) {
+            if is_credits(&row.meter) || row.unit != "percent" {
                 continue;
             }
             let id = format!("{}|{}", row.account, row.meter);
@@ -536,18 +561,12 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
     }
     let has_credits = !credits_accounts.is_empty();
 
-    // A share of one account's limit; `percent` rows only, never a credits figure.
-    let share_of = |row: &RowIn| -> Option<f64> {
-        if row.unit == "percent" {
-            row.value.map(|value| value / 100.0)
-        } else {
-            None
-        }
-    };
     // The cells of one row (one stream) or of every bucket merged: added within one column
     // only, never across accounts or units. A cell where any part was not read keeps the
-    // parts it has and says so with a leading `>=`; all parts missing reads "not read".
-    let build_cells = |streams: &[&StreamIn]| -> Vec<Option<Cell>> {
+    // parts it has and says so with a leading `>=`; all parts missing reads "not read". A
+    // row whose unit is not `percent` is no reading of this limit at all: it neither adds
+    // nor marks the cell (2026-11-09 amendment, A1).
+    let build_cells = |streams: &[&StreamIn]| -> Result<Vec<Option<Cell>>> {
         columns
             .iter()
             .map(|col| {
@@ -556,56 +575,78 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
                 let mut seen = false;
                 for stream in streams {
                     for row in &stream.rows {
-                        if format!("{}|{}", row.account, row.meter) != col.id {
+                        if row.unit != "percent" || format!("{}|{}", row.account, row.meter) != col.id {
                             continue;
                         }
                         seen = true;
                         match row.value {
                             None => partial = true,
-                            Some(_) => total += share_of(row).unwrap_or(0.0),
+                            Some(value) => {
+                                // The figure as supplied, and the running sum of this column,
+                                // must both stay inside the safe integer range (2026-11-09, A4).
+                                if beyond_safe(value) {
+                                    return Err(out_of_range(value));
+                                }
+                                total += value / 100.0;
+                                if beyond_safe(total * 100.0) {
+                                    return Err(out_of_range(total * 100.0));
+                                }
+                            }
                         }
                     }
                 }
                 if !seen {
-                    return None;
+                    return Ok(None);
                 }
                 if partial && total == 0.0 {
-                    return Some(Cell {
+                    return Ok(Some(Cell {
                         share: None,
                         text: "not read".to_string(),
-                    });
+                    }));
                 }
-                let cell = cell_of(Some(total), &col.meter);
-                Some(if partial {
+                let cell = cell_of(Some(total), &col.meter)?;
+                Ok(Some(if partial {
                     Cell {
                         share: Some(total),
                         text: format!("≥{}", cell.text),
                     }
                 } else {
                     cell
-                })
+                }))
             })
             .collect()
     };
     // Credits: per account, whole number with thousands comma; never added across accounts.
-    let credits_of = |streams: &[&StreamIn]| -> Vec<CreditsCell> {
+    let credits_of = |streams: &[&StreamIn]| -> Result<Vec<CreditsCell>> {
         let mut per: Vec<(String, f64)> = Vec::new();
         for stream in streams {
             for row in &stream.rows {
-                if is_credits(&row.meter) && row.value.is_some() {
+                if is_credits(&row.meter)
+                    && let Some(value) = row.value
+                {
+                    if beyond_safe(value) {
+                        return Err(out_of_range(value));
+                    }
                     match per.iter_mut().find(|(account, _)| account == &row.account) {
-                        Some(entry) => entry.1 += row.value.unwrap_or(0.0),
-                        None => per.push((row.account.clone(), row.value.unwrap_or(0.0))),
+                        Some(entry) => {
+                            entry.1 += value;
+                            if beyond_safe(entry.1) {
+                                return Err(out_of_range(entry.1));
+                            }
+                        }
+                        None => per.push((row.account.clone(), value)),
                     }
                 }
             }
         }
         per.sort_by(|a, b| a.0.cmp(&b.0));
         per.into_iter()
-            .map(|(account, value)| CreditsCell {
-                account_label: account_label(&account).to_string(),
-                text: credits_text(value),
-                account,
+            .map(|(account, value)| {
+                Ok(CreditsCell {
+                    account_label: account_label(&account).to_string(),
+                    text: credits_text(value)?,
+                    account,
+                })
             })
             .collect()
     };
@@ -679,9 +720,9 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
     let real: Vec<&StreamIn> = period.streams.iter().filter(|s| !s.bucket).collect();
     let mut rows: Vec<RowWork> = real
         .iter()
-        .map(|stream| {
-            let cells = build_cells(&[stream]);
-            RowWork {
+        .map(|stream| -> Result<RowWork> {
+            let cells = build_cells(&[stream])?;
+            Ok(RowWork {
                 label: if stream.label == stream.stream {
                     "a thread with no stream".to_string()
                 } else {
@@ -689,13 +730,13 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
                 },
                 peak: peak(&cells),
                 block_order: block_order(&cells),
-                credits: credits_of(&[stream]),
+                credits: credits_of(&[stream])?,
                 cells,
                 stream: stream.stream.clone(),
                 bucket: false,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     rows.sort_by(|a, b| {
         let a_peak = a.peak.as_ref().map(|p| p.1).unwrap_or(-1.0);
         let b_peak = b.peak.as_ref().map(|p| p.1).unwrap_or(-1.0);
@@ -703,13 +744,13 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
     });
     let buckets: Vec<&StreamIn> = period.streams.iter().filter(|s| s.bucket).collect();
     if !buckets.is_empty() {
-        let cells = build_cells(&buckets);
+        let cells = build_cells(&buckets)?;
         rows.push(RowWork {
             stream: "Not tied to a stream".to_string(),
             label: "sessions no stream rule claims".to_string(),
             bucket: true,
             block_order: block_order(&cells),
-            credits: credits_of(&buckets),
+            credits: credits_of(&buckets)?,
             cells,
             peak: None,
         });
@@ -735,7 +776,7 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
         lead.push(run(format!("{phrase} ")));
         lead.push(strong(first.stream.clone()));
         lead.push(run(" used the most: about "));
-        lead.push(strong(pct_text(peak_share)));
+        lead.push(strong(pct_text(peak_share)?));
         lead.push(run(format!(
             " of {}",
             of_account(
@@ -746,7 +787,7 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
         summary.push(strong(first.stream.clone()));
         summary.push(run(format!(
             " used the most {lower}: about {} of {}.",
-            pct_text(peak_share),
+            pct_text(peak_share)?,
             of_account(
                 col,
                 &format!("{} limit", if is_five(&col.meter) { "5-hour" } else { "weekly" })
@@ -764,7 +805,7 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
         {
             let share = first.cells[five].as_ref().unwrap().share.unwrap();
             lead.push(run(", plus "));
-            lead.push(strong(to_fixed(share, 1)));
+            lead.push(strong(to_fixed(share, 1)?));
             lead.push(run(" full 5-hour windows on the same account"));
         }
         lead.push(run("."));
@@ -775,7 +816,7 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
             lead.push(run(" Next is "));
             lead.push(strong(next[0].stream.clone()));
             lead.push(run(", at about "));
-            lead.push(strong(pct_text(share)));
+            lead.push(strong(pct_text(share)?));
             lead.push(run(format!(" of {}.", tail(&columns[i]))));
         } else if next.len() == 2 {
             let (ai, ashare) = next[0].peak.unwrap();
@@ -787,19 +828,19 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
                 lead.push(run(" and "));
                 lead.push(strong(next[1].stream.clone()));
                 lead.push(run(", at about "));
-                lead.push(strong(pct_text(ashare)));
+                lead.push(strong(pct_text(ashare)?));
                 lead.push(run(" and "));
-                lead.push(strong(pct_text(bshare)));
+                lead.push(strong(pct_text(bshare)?));
                 lead.push(run(format!(" of {}.", tail(ca))));
             } else {
                 lead.push(run(" Next are "));
                 lead.push(strong(next[0].stream.clone()));
                 lead.push(run(", at about "));
-                lead.push(strong(pct_text(ashare)));
+                lead.push(strong(pct_text(ashare)?));
                 lead.push(run(format!(" of {}, and ", tail(ca))));
                 lead.push(strong(next[1].stream.clone()));
                 lead.push(run(", at about "));
-                lead.push(strong(pct_text(bshare)));
+                lead.push(strong(pct_text(bshare)?));
                 lead.push(run(format!(" of {}.", tail(cb))));
             }
         }
@@ -836,23 +877,18 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
     match period.coverage {
         None => foot.push(format!("How much of the {noun} quota-watch watched is not known.")),
         Some(coverage) if coverage < 1.0 => {
-            let mut sentence = format!(
-                "quota-watch has watched {}% of {}",
-                js_round(coverage * 100.0) as i64,
+            // No "since" clause: the period start the report carries is its calendar
+            // boundary, not the first reading, so it would name a watch that did not
+            // happen (dropped 2026-11-09, fix round 1).
+            foot.push(format!(
+                "quota-watch has watched {}% of {}.",
+                checked_round(coverage * 100.0)?,
                 if period.id == "day" {
                     "today".to_string()
                 } else {
                     format!("this {noun}")
                 }
-            );
-            if period.id != "day"
-                && let Some(start) = period.start.as_deref()
-                && let Some(since) = since_phrase(start, input.now_ms, input.utc_offset_minutes)
-            {
-                sentence.push_str(&format!(", since {since}"));
-            }
-            sentence.push('.');
-            foot.push(sentence);
+            ));
         }
         _ => {}
     }
@@ -940,7 +976,7 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
         None
     };
 
-    PeriodOut {
+    Ok(PeriodOut {
         id: period.id.clone(),
         label: period.label.clone(),
         lead,
@@ -968,7 +1004,7 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Period
         key,
         foot: foot.join(" "),
         more,
-    }
+    })
 }
 
 /// How a null count prints in the reference's sentences (JavaScript's `null`).
@@ -976,20 +1012,49 @@ fn fmt_opt(value: Option<i64>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string())
 }
 
-/// The composed `spendByStream` field: every period's table and sentences, or the
-/// contract's unavailable shape when no accepted quota report has periods. Pure: the same
-/// input gives the same words.
-pub fn compose(input: &SpendInput) -> SpendByStream {
-    if input.spend.periods.is_empty() {
-        return SpendByStream {
-            state: "unavailable",
-            unavailable: Some(UNAVAILABLE_SENTENCE.to_string()),
-            default_period: None,
-            as_of: None,
-            as_of_text: None,
-            periods: Vec::new(),
-        };
+/// The contract's unavailable panel: no periods, no clock, the one fixed sentence.
+fn unavailable_panel() -> SpendByStream {
+    SpendByStream {
+        state: "unavailable",
+        unavailable: Some(UNAVAILABLE_SENTENCE.to_string()),
+        default_period: None,
+        as_of: None,
+        as_of_text: None,
+        periods: Vec::new(),
     }
+}
+
+/// The composed `spendByStream` field: every period's table and sentences, or the
+/// contract's unavailable shape when no accepted quota report has periods, when no row
+/// carries a percent row at all (a null percent stays "not read"; a non-percent amount
+/// does not count), or when a figure or a column sum is outside the safe integer range
+/// (2026-11-09 amendments, A1 and A4). Pure: the same input gives the
+/// same words. A range problem is the unavailable shape, matching the reference, never a
+/// saturated integer.
+pub fn compose(input: &SpendInput) -> SpendByStream {
+    let usable = input.spend.periods.iter().any(|period| {
+        period.streams.iter().any(|stream| {
+            stream
+                .rows
+                .iter()
+                .any(|row| !is_credits(&row.meter) && row.unit == "percent")
+        })
+    });
+    if input.spend.periods.is_empty() || !usable {
+        return unavailable_panel();
+    }
+    let periods = match input
+        .spend
+        .periods
+        .iter()
+        .map(|period| period_view(period, input, &input.spend))
+        .collect::<Result<Vec<_>>>()
+    {
+        Ok(periods) => periods,
+        // period_view fails only when a figure or a sum is outside the safe integer
+        // range. That input is the unavailable shape, the same answer the reference prints.
+        Err(_) => return unavailable_panel(),
+    };
     let default_period = if input.spend.periods.iter().any(|p| p.id == "week") {
         "week".to_string()
     } else {
@@ -1004,11 +1069,6 @@ pub fn compose(input: &SpendInput) -> SpendByStream {
         default_period: Some(default_period),
         as_of: input.spend.as_of.clone(),
         as_of_text,
-        periods: input
-            .spend
-            .periods
-            .iter()
-            .map(|period| period_view(period, input, &input.spend))
-            .collect(),
+        periods,
     }
 }

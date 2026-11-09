@@ -785,7 +785,7 @@
         "3.2× means 3.2 full 5-hour windows.",
         "Credits are never added across accounts."
       ],
-      "foot": "Estimates: each account’s measured use is split between threads by their share of its tokens. quota-watch has watched 36% of this week, since early Friday. Nas1 missed 6 of 37 scans and the Mac 1, so some of their sessions are missing. No stream budgets are set.",
+      "foot": "Estimates: each account’s measured use is split between threads by their share of its tokens. quota-watch has watched 36% of this week. Nas1 missed 6 of 37 scans and the Mac 1, so some of their sessions are missing. No stream budgets are set.",
       "more": "3 more streams, and use not tied to a stream"
     },
     {
