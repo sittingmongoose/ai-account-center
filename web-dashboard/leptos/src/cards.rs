@@ -8,7 +8,7 @@ use crate::drafts::{self, Drafts, Standing};
 use crate::fmt;
 use crate::live::Live;
 use crate::media::MediaList;
-use crate::status::Panel;
+use crate::ui::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -45,13 +45,40 @@ fn narrow() -> bool {
         .is_some_and(|w| w < 600.0)
 }
 
-fn urgency_label(u: &str) -> &'static str {
-    match u {
-        "now" => "Now",
-        "today" => "Today",
-        "this-week" => "This week",
-        _ => "Whenever",
+fn confidence_words(c: &str) -> Option<&'static str> {
+    match c {
+        "high" => Some("Very sure."),
+        "medium" => Some("Fairly sure."),
+        "low" => Some("Not sure."),
+        _ => None,
     }
+}
+
+fn sentence_case(text: &str) -> String {
+    let mut c = text.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
+}
+
+/// The card guide's last sentence, when a card has it ("You won't see any change in the app either way."): it is
+/// reassurance, so it sits with the facts, not in the problem.
+fn split_calm(text: &str) -> (String, Option<String>) {
+    match text.trim().rsplit_once("\n\n") {
+        Some((body, last)) if last.trim_start().starts_with("You won't see") => {
+            (body.to_string(), Some(last.trim().to_string()))
+        }
+        _ => (text.to_string(), None),
+    }
+}
+
+fn paragraphs(text: &str) -> impl IntoView + use<> {
+    text.split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| view! { <p class="q-now">{p.to_string()}</p> })
+        .collect_view()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,7 +137,6 @@ pub fn CardsPanel() -> impl IntoView {
     let drafts = RwSignal::new(drafts::load());
     let at = RwSignal::new(0usize);
     let deck_view = RwSignal::new(DeckView::Cards);
-    let show_answered = RwSignal::new(false);
     // While answers are on their way the deck stays on its review screen: no second send, no moving away. Both live
     // here, above the deck, so a read that empties the cards mid-send can't take the result with it.
     let sending = RwSignal::new(false);
@@ -174,10 +200,15 @@ pub fn CardsPanel() -> impl IntoView {
         }
     });
 
+    let answered_open = RwSignal::new(false);
+    let history_problem = move || {
+        live.view.with(|v| {
+            v.as_ref()
+                .and_then(|v| v.cards.answer_history_problem.clone())
+        })
+    };
     view! {
-        <Panel title="Questions for you" source=source id="cards">
-            {move || live.view.with(|v| v.as_ref().and_then(|v| v.cards.answer_history_problem.clone()))
-                .map(|message| view! { <p class="warn" role="status">{message}</p> })}
+        <section class="plate sec-questions" id="cards">
             <Show
                 // A send's result outlives the cards: while a send runs, after it fails and on the sent screen the deck
                 // stays even when a read empties the cards under it. An idle review with no cards gives way.
@@ -187,21 +218,26 @@ pub fn CardsPanel() -> impl IntoView {
                         || sending.get()
                         || problem.with(|p| p.is_some())
                 }
-                fallback=|| view! { <p class="empty">"No questions waiting."</p> }
+                fallback=move || view! {
+                    <div class="plate-head"><h2>"Questions for you"</h2><span class="plate-meta">"None waiting"</span></div>
+                    {source_note(source.get(), "No reading from the agent reports yet.")}
+                    {history_problem().map(|m| view! { <p class="plate-note problem" role="status">{m}</p> })}
+                    <p class="q-empty">"No questions waiting."</p>
+                }
             >
-                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem/>
+                <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem source=source history_problem=Signal::derive(history_problem)/>
             </Show>
             <Show when=move || !answered().is_empty()>
-                <button class="link" aria-expanded=move || show_answered.get().to_string() on:click=move |_| show_answered.update(|s| *s = !*s)>
-                    {move || format!("{} answered ({})", if show_answered.get() { "Hide" } else { "Show" }, answered().len())}
-                </button>
-                <Show when=move || show_answered.get()>
+                <div class="q-foot-actions">
+                    <Disclosure open=answered_open label=format!("Answered ({})", answered().len())/>
+                </div>
+                <Show when=move || answered_open.get()>
                     <ul class="answered">
                         {move || answered().into_iter().map(|a| view! { <AnsweredView answered=a/> }).collect_view()}
                     </ul>
                 </Show>
             </Show>
-        </Panel>
+        </section>
     }
 }
 
@@ -213,14 +249,18 @@ fn Deck(
     deck_view: RwSignal<DeckView>,
     sending: RwSignal<bool>,
     problem: RwSignal<Option<String>>,
+    source: Signal<Option<Source>>,
+    history_problem: Signal<Option<String>>,
 ) -> impl IntoView {
+    let live = expect_context::<Live>();
+    let list_open = RwSignal::new(false);
     // After the new card or the review screen is in place, bring the deck's top back into view when the owner had
     // scrolled past it (a long card). A deck already in view does not move. A plain browser timer on purpose:
     // Leptos 0.9 cancels its own `set_timeout` when the owner that started it is cleaned up, and this click redraws
     // the very branch that owns it (see NOTES.md).
     let to_top = move || {
         let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
-            if let Some(el) = document().query_selector(".deck").ok().flatten() {
+            if let Some(el) = document().query_selector(".sec-questions").ok().flatten() {
                 if el.get_bounding_client_rect().top() < 0.0 {
                     el.scroll_into_view();
                 }
@@ -367,72 +407,140 @@ fn Deck(
     });
     // The deck can be unmounted (no questions left); its key listener goes with it.
     on_cleanup(move || keys.remove());
-    view! {
-        <div class="deck">
-            <div class="deck-sub">
-                <span>{move || format!("{} open · {} ready to send", open.with(|o| o.len()), ready())}</span>
-                <Show when=move || deck_view.get() == DeckView::Cards && open.with(|cards| cards.iter().any(|c| c.recommendation.is_some() && c.can_answer() && c.is_question()))>
-                    <button class="link" on:click=move |_| { open.with_untracked(|cards| drafts.update(|d| { drafts::use_recommendations(d, cards); })); }>
-                        "Use recommendations"
+    // One line for a question in the list: what it holds up (or that nothing waits), then how the owner left it.
+    let item_meta = move |card: &Card| -> AnyView {
+        let draft = drafts.with(|d| drafts::standing(d, card));
+        let first = if card.kind == "action" {
+            view! { <span>"Only you can do this"</span> }.into_any()
+        } else if let Some(b) = card.blocks.clone().filter(|b| !b.is_empty()) {
+            view! { <span data-tone="warn">{format!("Holds up {b}")}</span> }.into_any()
+        } else {
+            view! { <span>{sentence_case(card.stream.as_deref().unwrap_or("Nothing waits on it"))}</span> }.into_any()
+        };
+        let second = match draft {
+            Standing::Ready if card.kind == "action" => {
+                view! { <span data-tone="good">"marked done"</span> }.into_any()
+            }
+            Standing::Ready => {
+                view! { <span data-tone="good">"answered, not sent"</span> }.into_any()
+            }
+            Standing::Changed | Standing::NeedsWords => {
+                view! { <span data-tone="warn">"look again"</span> }.into_any()
+            }
+            Standing::Empty
+                if card.blocks.as_deref().unwrap_or("").is_empty() && card.stream.is_some() =>
+            {
+                view! { <span>"nothing waits on it"</span> }.into_any()
+            }
+            Standing::Empty => {
+                view! { <span>{fmt::age_words_since(&card.asked_at, live.now_ms.get())}</span> }
+                    .into_any()
+            }
+        };
+        view! { {first}" · "{second} }.into_any()
+    };
+    let list_items =
+        move || {
+            shown.get().into_iter().enumerate().map(|(i, card)| {
+            let ready = drafts.with(|d| drafts::standing(d, &card) == Standing::Ready);
+            let meta = item_meta(&card);
+            view! {
+                <li>
+                    <button
+                        class="q-item"
+                        class:sel=move || deck_view.get() == DeckView::Cards && at.get() == i
+                        class:done=ready
+                        data-label=card.short()
+                        data-state=ready.then_some("ready")
+                        on:click=move |_| { list_open.set(false); go_card(i) }
+                    >
+                        <span class="q-n">{(i + 1).to_string()}</span>
+                        <span class="q-t">{card.title.clone()}</span>
+                        <span class="q-m">{meta}</span>
                     </button>
-                </Show>
-            </div>
-            <Show when=move || deck_view.get() == DeckView::Cards && !verdicts.with(|v| v.is_empty())>
-                <div class="verdicts" role="group" aria-label="Show cards by verdict">
-                    <button class="chip-btn" aria-pressed=move || verdict.with(|v| v.is_none()).to_string()
-                        on:click=move |_| { current_id.set(None); at.set(0); verdict.set(None); }>"All"</button>
-                    {move || verdicts.get().into_iter().map(|v| {
-                        let label = verdict_label(&v);
-                        let pick = v.clone();
-                        let counted = v.clone();
-                        let count = move || open.with(|cards| cards.iter().filter(|c| c.verdict.as_deref() == Some(counted.as_str())).count());
-                        view! {
-                            <button class="chip-btn" data-verdict=v.clone() aria-pressed=move || verdict.with(|x| x.as_deref() == Some(pick.as_str())).to_string()
-                                on:click=move |_| { current_id.set(None); at.set(0); verdict.set(Some(v.clone())); }>{move || format!("{label} ({})", count())}</button>
-                        }
-                    }).collect_view()}
+                </li>
+            }
+        }).collect_view()
+        };
+    let review_label = move || format!("Review and send ({})", ready());
+    let at_end = move || at.get() + 1 >= shown.with(|o| o.len());
+    let next_label = move || if at_end() { "Review" } else { "Next" };
+    let back_disabled = move || at.get() == 0 || deck_view.get() != DeckView::Cards;
+    let can_use_rec = move || {
+        deck_view.get() == DeckView::Cards
+            && open.with(|cards| {
+                cards
+                    .iter()
+                    .any(|c| c.recommendation.is_some() && c.can_answer() && c.is_question())
+            })
+    };
+    let use_rec = move |_| {
+        open.with_untracked(|cards| {
+            drafts.update(|d| {
+                drafts::use_recommendations(d, cards);
+            })
+        });
+    };
+    view! {
+        <div class="plate-head">
+            <h2>"Questions for you"</h2>
+            <span class="plate-meta"><b>{move || open.with(|o| o.len()).to_string()}</b>" open · "<b>{move || ready().to_string()}</b>" answered, not sent yet"</span>
+            <Show when=can_use_rec>
+                <div class="plate-tools only-d"><button class="btn sm" on:click=use_rec>"Use my recommendations"</button></div>
+            </Show>
+            // The deck's navigation in the head; the review screen has its own Send and Back.
+            <Show when=move || deck_view.get() == DeckView::Cards>
+                <div class="plate-tools only-land">
+                    <button class="btn sm" disabled=back_disabled on:click=move |_| back()>"Back"</button>
+                    <button class="btn sm" on:click=move |_| next()>{next_label}</button>
+                    <button class="btn sm primary" on:click=move |_| go_review()>{review_label}</button>
                 </div>
             </Show>
+        </div>
+        {move || source_note(source.get(), "No reading from the agent reports yet.")}
+        {move || history_problem.get().map(|m| view! { <p class="plate-note problem" role="status">{m}</p> })}
+        <Show when=move || !verdicts.with(|v| v.is_empty())>
+            <div class="q-seg">
+                <Segmented
+                    options={std::iter::once(("all".to_string(), "All".to_string())).chain(verdicts.get().into_iter().map(|v| {
+                        let n = open.with(|cards| cards.iter().filter(|c| c.verdict.as_deref() == Some(v.as_str())).count());
+                        (v.clone(), format!("{} ({n})", verdict_label(&v)))
+                    })).collect::<Vec<_>>()}
+                    selected={Signal::derive(move || verdict.get().unwrap_or_else(|| "all".to_string()))}
+                    on_select={Callback::new(move |v: String| { current_id.set(None); at.set(0); verdict.set((v != "all").then_some(v)); })}
+                    label="Show cards by verdict"
+                />
+            </div>
+        </Show>
+        <Show when=move || !matches!(deck_view.get(), DeckView::Sent(_))>
+            <div class="q-step">
+                <span>"Question "<b>{move || (at.get() + 1).min(shown.with(|o| o.len())).to_string()}</b>{move || format!(" of {}", shown.with(|o| o.len()))}</span>
+                <Disclosure open=list_open label="All questions".to_string()/>
+            </div>
+            <Show when=move || list_open.get()>
+                <ol class="q-list-phone">{list_items}</ol>
+            </Show>
+        </Show>
+        <div class="q-wrap">
             <Show when=move || !matches!(deck_view.get(), DeckView::Sent(_))>
-                <div class="jump" role="tablist" aria-label="Questions">
-                    {move || shown.get().into_iter().enumerate().map(|(i, card)| {
-                        let label = card.short();
-                        let state = move || drafts.with(|d| match drafts::standing(d, &card) {
-                            Standing::Ready => "done",
-                            Standing::Changed | Standing::NeedsWords => "changed",
-                            Standing::Empty => "",
-                        });
-                        view! {
-                            <button
-                                role="tab"
-                                data-state=state
-                                aria-selected=move || (deck_view.get() == DeckView::Cards && at.get() == i).to_string()
-                                on:click=move |_| go_card(i)
-                            >{label}</button>
-                        }
-                    }).collect_view()}
-                    <button role="tab" aria-selected=move || (deck_view.get() == DeckView::Review).to_string() on:click=move |_| go_review()>"Review"</button>
-                </div>
+                <ol class="q-list">{list_items}</ol>
             </Show>
             {move || match deck_view.get() {
                 DeckView::Cards => view! {
                     {move || current.get().map(|card| view! { <CardBody card=card drafts=drafts open=open/> })}
-                    <Show when=move || { ready() > 0 && at.get() + 1 < shown.with(|o| o.len()) }>
-                        <button class="link early" on:click=move |_| go_review()>{move || format!("Send current selections ({})", ready())}</button>
-                    </Show>
-                    <p class="fine">"Nothing is sent until you review and send."</p>
-                    <div class="deck-nav">
-                        <button class="secondary" disabled=move || at.get() == 0 on:click=move |_| back()>"‹ Back"</button>
-                        <span class="count">{move || format!("{} of {}", at.get() + 1, shown.with(|o| o.len()))}</span>
-                        <button class="primary" on:click=move |_| next()>
-                            {move || if at.get() + 1 >= shown.with(|o| o.len()) { "Review" } else { "Next ›" }}
-                        </button>
-                    </div>
                 }.into_any(),
                 DeckView::Review => view! { <Review open=open drafts=drafts deck_view=deck_view go_card=go_open sending=sending problem=problem/> }.into_any(),
                 DeckView::Sent(summary) => view! { <Sent summary=summary back=move || go_card(0)/> }.into_any(),
             }}
         </div>
+        <Show when=move || deck_view.get() == DeckView::Cards>
+            <div class="q-send q-deck-nav">
+                <button class="btn" disabled=back_disabled on:click=move |_| back()>"Back"</button>
+                <span class="count">{move || format!("{} of {}", at.get() + 1, shown.with(|o| o.len()))}</span>
+                <button class="btn" on:click=move |_| next()>{next_label}</button>
+                <div class="right"><button class="btn primary" on:click=move |_| go_review()>{review_label}</button></div>
+            </div>
+        </Show>
     }
 }
 
@@ -483,7 +591,14 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
     };
     let place = [
         Some(c.project.clone()).filter(|p| !p.is_empty()),
-        c.stream.clone().map(|s| format!("stream {s}")),
+        // A short stream id reads as "stream C"; a named one stands on its own ("upkeep").
+        c.stream.clone().map(|s| {
+            if s.len() <= 5 {
+                format!("stream {s}")
+            } else {
+                s
+            }
+        }),
     ]
     .into_iter()
     .flatten()
@@ -511,12 +626,15 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
         ),
         _ => None,
     };
+    let live = expect_context::<Live>();
+    // The facts line under the question, in the card guide's terms.
     let mut facts: Vec<(&'static str, String)> = Vec::new();
     facts.push((
-        "Holding up",
+        "Waiting on it",
         c.blocks
             .clone()
-            .unwrap_or_else(|| "Nothing waits on this".into()),
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| "nothing".into()),
     ));
     if let Some(n) = c.needed_by.clone() {
         let when = n.at.as_deref().map(fmt::clock).unwrap_or_default();
@@ -532,13 +650,21 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
     }
     if let Some(r) = c.reversible.clone() {
         let words = match (r.yes, r.how) {
-            (true, Some(how)) if !how.is_empty() => format!("Yes: {how}"),
-            (true, _) => "Yes".to_string(),
-            (false, Some(how)) if !how.is_empty() => format!("No: {how}"),
-            (false, _) => "No".to_string(),
+            (true, Some(how)) if !how.is_empty() => how,
+            (true, _) => "yes".to_string(),
+            (false, Some(how)) if !how.is_empty() => format!("no: {how}"),
+            (false, _) => "no".to_string(),
         };
-        facts.push(("Reversible", words));
+        facts.push(("Undo", words));
     }
+    facts.push((
+        "Rules loosened",
+        c.exception
+            .clone()
+            .map(|e| e.rule)
+            .filter(|r| !r.is_empty())
+            .unwrap_or_else(|| "none".into()),
+    ));
     if let Some(a) = c.applies_to.clone() {
         let words = match a.count {
             Some(n) => format!("{n} cases · {}", a.description),
@@ -562,91 +688,100 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
     let note_hint = match c.kind.as_str() {
         "objection" => "Say why you object, or leave a note. It goes to the agent word for word.",
         "action" => "Note for the agent (optional). It goes word for word.",
-        _ => "Note, a different answer or a question. It goes to the agent word for word.",
+        _ => "Add a note (optional). It goes to the agent word for word.",
     };
 
     view! {
-        <article class="card" data-urgency=c.urgency.clone() data-kind=c.kind.clone()>
-            {(c.kind == "sample").then(|| view! {
-                <p class="sample-banner">"Format sample · no answer wanted. Nothing on this card is sent."</p>
-            })}
-            {(c.kind != "sample" && (locked || c.problem.is_some())).then(|| view! {
-                <p class="item-note" data-tone="warn">
-                    {if locked { "Can't be answered right now. " } else { "" }}
-                    {c.problem.clone().unwrap_or_else(|| "The card could not be checked.".into())}
-                    {locked.then_some(" The last good version is shown; it can be answered once the agent rewrites it.")}
-                </p>
-            })}
-            {c.exception.clone().map(|e| view! {
-                <p class="exception"><strong>{format!("Exception to your rule: {}", e.rule)}</strong>{(!e.text.is_empty()).then(|| format!(". {}", e.text))}</p>
-            })}
-            <div class="card-meta">
-                <span class="card-label">{c.short()}</span>
-                <span class="chip" data-urgency=c.urgency.clone()>{urgency_label(&c.urgency)}</span>
-                {c.verdict.clone().map(|v| view! { <span class="chip" data-verdict=v.clone()>{verdict_label(&v)}</span> })}
-                {group.clone().map(|g| view! { <span class="muted">{format!("group {g}")}</span> })}
-                <span>{place}</span>
-                <span class="asked">{[asker.clone(), fmt::clock(&c.asked_at)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")}</span>
+        <article class="q-card" data-urgency=c.urgency.clone() data-kind=c.kind.clone()>
+            <div class="q-kicker">
+                <span class="cap">{if place.is_empty() { c.short() } else { place.clone() }}</span>
+                <span class="when" title=fmt::clock(&c.asked_at)>
+                    <span class="nw">{let asked_at = c.asked_at.clone(); move || format!("{} ·", fmt::age_words_since(&asked_at, live.now_ms.get()))}</span>
+                    " "<span class="nw">{format!("from {asker}")}</span>
+                </span>
             </div>
-            {kind_word.map(|w| view! { <p class="kind-word">{w}</p> })}
-            <h3 class="card-title">{c.title.clone()}</h3>
-            {(!c.now.is_empty()).then(|| view! {
-                <p class="now">
-                    {c.now.clone()}
-                    {c.now_as_of.as_deref().map(|t| view! { <span class="asof">{format!(" As of {}.", fmt::clock(t))}</span> })}
-                </p>
-            })}
-            {(c.old_answer.is_some() || c.what_changed.is_some()).then(|| view! {
-                <div class="old">
-                    {c.old_answer.clone().map(|o| view! {
-                        <p><strong>"Your earlier answer: "</strong>{o.text}{o.at.as_deref().map(|t| format!(" ({})", fmt::clock(t)))}</p>
-                    })}
-                    {c.what_changed.clone().map(|w| view! { <p><strong>"What changed: "</strong>{w}</p> })}
+            <h3 class="q-title">{c.title.clone()}</h3>
+            <div class="q-why">
+                {(c.kind == "sample").then(|| view! {
+                    <p class="sample-banner">"Format sample · no answer wanted. Nothing on this card is sent."</p>
+                })}
+                {(c.kind != "sample" && (locked || c.problem.is_some())).then(|| view! {
+                    <p class="q-problem">
+                        {if locked { "Can't be answered right now. " } else { "" }}
+                        {c.problem.clone().unwrap_or_else(|| "The card could not be checked.".into())}
+                        {locked.then_some(" The last good version is shown; it can be answered once the agent rewrites it.")}
+                    </p>
+                })}
+                {c.exception.clone().map(|e| view! {
+                    <p class="q-rule">{format!("This bends one of your rules: {}.{}", e.rule, if e.text.is_empty() { String::new() } else { format!(" {}", e.text) })}</p>
+                })}
+                {kind_word.map(|w| view! { <p class="q-kind">{w}</p> })}
+                {(c.verdict.is_some() || group.is_some()).then(|| view! {
+                    <p class="q-kind">
+                        {c.verdict.clone().map(|v| view! { <span data-tone="acc">{verdict_label(&v)}</span> })}
+                        {group.clone().map(|g| view! { <span class="q3">{format!(" · group {g}")}</span> })}
+                    </p>
+                })}
+                {(!c.now.is_empty()).then(|| view! {
+                    <p class="cap q-sub">"What is wrong today"</p>
+                    {paragraphs(&split_calm(&c.now).0)}
+                    {c.now_as_of.as_deref().map(|t| view! { <p class="q-calm">{format!("As of {}.", fmt::clock(t))}</p> })}
+                })}
+                {(c.old_answer.is_some() || c.what_changed.is_some()).then(|| view! {
+                    <div class="q-old">
+                        {c.old_answer.clone().map(|o| view! {
+                            <p><b>"Your earlier answer: "</b>{o.text}{o.at.as_deref().map(|t| format!(" ({})", fmt::clock(t)))}</p>
+                        })}
+                        {c.what_changed.clone().map(|w| view! { <p><b>"What changed: "</b>{w}</p> })}
+                    </div>
+                })}
+                {c.agreement.clone().and_then(|a| match a.same {
+                    Some(false) => Some(view! { <p class="q-problem"><b>"The judges split. "</b>{a.note.unwrap_or_default()}</p> }.into_any()),
+                    Some(true) => Some(view! { <p class="q-old">{format!("The judges agreed.{}", a.note.map(|n| format!(" {n}")).unwrap_or_default())}</p> }.into_any()),
+                    None => a.note.map(|n| view! { <p class="q-old">{n}</p> }.into_any()),
+                })}
+                {c.doubt.clone().filter(|d| !d.is_empty()).map(|d| view! { <p class="q-old"><b>"Unsure: "</b>{d}</p> })}
+                {(!fold_sections).then(|| view! { <Blocks blocks=c.sections.clone()/> })}
+                {fold_sections.then(|| view! { <Blocks blocks=c.sections.clone() fold_all=true/> })}
+            </div>
+            <div class="q-meta">
+                {split_calm(&c.now).1.map(|calm| view! { <p class="q-calm">{calm}</p> })}
+                <div class="q-facts">
+                    {facts.into_iter().map(|(k, v)| view! { <span>{format!("{k}: ")}<b>{v}</b></span> }).collect_view()}
                 </div>
-            })}
-            {c.agreement.clone().and_then(|a| match a.same {
-                Some(false) => Some(view! { <p class="item-note" data-tone="warn"><strong>"The judges split. "</strong>{a.note.unwrap_or_default()}</p> }.into_any()),
-                Some(true) => Some(view! { <p class="item-note muted">{format!("The judges agreed.{}", a.note.map(|n| format!(" {n}")).unwrap_or_default())}</p> }.into_any()),
-                None => a.note.map(|n| view! { <p class="item-note muted">{n}</p> }.into_any()),
-            })}
-            {c.doubt.clone().filter(|d| !d.is_empty()).map(|d| view! { <p class="item-note muted"><strong>"Unsure: "</strong>{d}</p> })}
-            <dl class="card-facts">
-                {facts.into_iter().map(|(k, v)| view! { <div><dt>{k}</dt><dd>{v}</dd></div> }).collect_view()}
-            </dl>
-            {(!fold_sections).then(|| view! { <Blocks blocks=c.sections.clone()/> })}
-            <Show when=move || standing() == Standing::Changed>
-                <p class="item-note" data-tone="warn">{move || match drafts.with(|d| drafts::stale_parts(d, &card.get_value())) {
-                    (true, true) => "This question changed after you answered. Nothing is sent until you tap an option again and edit your note.",
-                    (true, false) => "This question changed after you chose. Nothing is sent until you tap an option again.",
-                    _ => "This question changed after you wrote your note. Nothing is sent until you edit the note.",
-                }}</p>
-            </Show>
-
+            </div>
             {match c.kind.as_str() {
                 "action" => view! {
-                    <button class="toggle" disabled=locked aria-pressed=move || chosen("done").to_string()
-                        on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), "done"))>
-                        {move || if chosen("done") { "Marked done (sent when you review)" } else { "Mark done" }}
-                    </button>
+                    <div class="q-actions">
+                        <button class="btn" disabled=locked aria-pressed=move || chosen("done").to_string()
+                            on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), "done"))>
+                            {move || if chosen("done") { "Marked done (sent when you review)" } else { "Mark done" }}
+                        </button>
+                    </div>
                 }.into_any(),
                 "objection" => view! {
-                    <button class="toggle" data-tone="warn" disabled=locked aria-pressed=move || chosen("object").to_string()
-                        on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), "object"))>
-                        {move || if chosen("object") { "You object: say why below" } else { "Object" }}
-                    </button>
-                    <Show when=move || standing() == Standing::NeedsWords>
-                        <p class="item-note" data-tone="warn">"An objection needs a reason before it can be sent."</p>
-                    </Show>
+                    <div class="q-actions">
+                        <button class="btn" data-tone="warn" disabled=locked aria-pressed=move || chosen("object").to_string()
+                            on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), "object"))>
+                            {move || if chosen("object") { "You object: say why below" } else { "Object" }}
+                        </button>
+                        <Show when=move || standing() == Standing::NeedsWords>
+                            <span class="q-problem">"An objection needs a reason before it can be sent."</span>
+                        </Show>
+                    </div>
                 }.into_any(),
                 _ => view! {
-                    <div class="options" role=if c.multiple { "group" } else { "radiogroup" }>
+                    <div class="opts" role=if c.multiple { "group" } else { "radiogroup" }>
                         {c.options.clone().into_iter().map(|o| {
                             let key = o.key.clone();
                             let key_state = key.clone();
+                            let key_sel = key.clone();
+                            let key_radio = key.clone();
                             let key_click = key.clone();
                             let is_rec = key == recommended;
+                            let has_extra = !o.media.is_empty() || !o.sections.is_empty();
                             view! {
-                                <div class="option" data-checked=move || chosen(&key_state).then_some("1")>
+                                <div class="opt" class:sel=move || chosen(&key_sel) data-checked=move || chosen(&key_state).then_some("1")>
                                     <button
                                         class="opt-pick"
                                         disabled=locked
@@ -654,72 +789,95 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                                         aria-checked={let k = key.clone(); move || chosen(&k).to_string()}
                                         on:click=move |_| drafts.update(|d| drafts::toggle(d, &card.get_value(), &key_click))
                                     >
-                                        <span class="opt-top">
+                                        <span class="radio" class:on=move || chosen(&key_radio)></span>
+                                        <span class="opt-head">
                                             <span class="opt-key">{key.clone()}</span>
-                                            {o.stance.as_deref().and_then(stance_label).map(|w| view! { <span class="stance-tag">{w}</span> })}
-                                            {is_rec.then(|| view! { <span class="rec-tag">"Recommended"</span> })}
+                                            <span class="opt-label">{o.label.clone()}
+                                                {o.stance.as_deref().and_then(stance_label).map(|w| view! { <span class="q3">{format!(" · {w}")}</span> })}
+                                                {is_rec.then(|| view! { <span class="opt-rec" data-tone="acc">" Recommended"</span> })}
+                                            </span>
                                         </span>
-                                        <span class="opt-label">{o.label.clone()}</span>
-                                        {(!o.gets.is_empty()).then(|| view! { <span class="gc"><strong>"Gets "</strong>{o.gets.clone()}</span> })}
-                                        {(!o.costs.is_empty()).then(|| view! { <span class="gc"><strong>"Costs "</strong>{o.costs.clone()}</span> })}
+                                        <dl class="opt-gc">
+                                            {(!o.gets.is_empty()).then(|| view! { <dt>"You get"</dt><dd>{o.gets.clone()}</dd> })}
+                                            {(!o.costs.is_empty()).then(|| view! { <dt>"It costs"</dt><dd>{o.costs.clone()}</dd> })}
+                                        </dl>
                                     </button>
-                                    <MediaList items=o.media.clone()/>
-                                    <Blocks blocks=o.sections.clone()/>
+                                    {has_extra.then(|| view! {
+                                        <div class="opt-extra">
+                                            <MediaList items=o.media.clone()/>
+                                            <Blocks blocks=o.sections.clone()/>
+                                        </div>
+                                    })}
                                 </div>
                             }
                         }).collect_view()}
                     </div>
-                    {(group_size > 1 && c.can_answer() && recommendation.is_some()).then(|| view! {
-                        <button class="link" on:click=use_group.clone()>{format!("Use the recommendations for this group ({group_size})")}</button>
-                    })}
-                    {recommendation.clone().map(|r| view! {
-                        <div class="why">
-                            <p><strong>{format!("Why {}: ", r.key)}</strong>{r.why}
-                                {r.confidence.filter(|x| !x.is_empty()).map(|x| view! { <span class="muted">{format!(" Confidence: {x}.")}</span> })}
-                            </p>
-                            {r.flip.filter(|x| !x.is_empty()).map(|f| view! { <p class="muted"><strong>"What would change it: "</strong>{f}</p> })}
-                        </div>
-                    })}
                 }.into_any(),
             }}
-
-            {fold_sections.then(|| view! { <Blocks blocks=c.sections.clone() fold_all=true/> })}
-            {(!c.evidence.is_empty()).then(|| view! {
-                <details class="evidence">
-                    <summary>"Evidence"</summary>
-                    <ul>{c.evidence.iter().map(|e| view! { <li><span class="muted">{format!("{}: ", e.label)}</span><code>{e.path.clone()}</code></li> }).collect_view()}</ul>
-                </details>
-            })}
-            {(!c.notes.is_empty() || !c.replies.is_empty()).then(|| view! {
-                <ul class="talk">
-                    {c.notes.iter().map(|n| view! {
-                        <li class="mine" data-kind=n.kind.clone() data-delivery=n.delivery.state.clone()>
-                            <span class="who">{format!(
-                                "{} · {}{}",
-                                if n.kind == "object" { "You objected" } else { "You" },
-                                n.at.as_deref().map(fmt::clock).unwrap_or_default(),
-                                n.delivery.not_told().map(|t| format!(" · {t}")).unwrap_or_default(),
-                            )}</span>
-                            {n.note.clone()}
-                            <DeliveryWarnings delivery=n.delivery.clone()/>
-                        </li>
-                    }).collect_view()}
-                    {c.replies.iter().map(|r| view! {
-                        <li class="theirs"><span class="who">{format!("{} · {}", asker, r.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{r.text.clone()}</li>
-                    }).collect_view()}
-                </ul>
-            })}
-            <label class="note">
-                <span class="sr">"Note to the agent"</span>
-                <textarea
-                    rows="2"
-                    maxlength="4000"
-                    disabled=locked
-                    placeholder=note_hint
-                    prop:value=note_text
-                    on:input=move |ev| { let text = event_target_value(&ev); drafts.update(|d| drafts::set_note(d, &card.get_value(), text)); }
-                ></textarea>
-            </label>
+            <div class="q-after">
+                {recommendation.clone().map(|r| {
+                    let sure = r.confidence.as_deref().and_then(confidence_words);
+                    let why = r.why.clone();
+                    let key = r.key.clone();
+                    view! {
+                        <p class="rec"><span data-tone="acc">{format!("We recommend {key}.")}</span>" "{why}{sure.map(|w| view! { <span class="q3">{format!(" {w}")}</span> })}</p>
+                        {r.flip.filter(|x| !x.is_empty()).map(|f| view! { <p class="q-calm">{format!("What would change it: {f}")}</p> })}
+                    }
+                })}
+                {(group_size > 1 && c.can_answer() && recommendation.is_some()).then(|| view! {
+                    <button class="link" on:click=use_group.clone()>{format!("Use the recommendations for this group ({group_size})")}</button>
+                })}
+                <Show when=move || standing() == Standing::Changed>
+                    <p class="q-problem">{move || match drafts.with(|d| drafts::stale_parts(d, &card.get_value())) {
+                        (true, true) => "This question changed after you answered. Nothing is sent until you tap an option again and edit your note.",
+                        (true, false) => "This question changed after you chose. Nothing is sent until you tap an option again.",
+                        _ => "This question changed after you wrote your note. Nothing is sent until you edit the note.",
+                    }}</p>
+                </Show>
+                {(!c.notes.is_empty() || !c.replies.is_empty()).then(|| view! {
+                    <ul class="talk">
+                        {c.notes.iter().map(|n| view! {
+                            <li data-kind=n.kind.clone() data-delivery=n.delivery.state.clone()>
+                                <span class="who">{format!(
+                                    "{} · {}{}",
+                                    if n.kind == "object" { "You objected" } else { "You" },
+                                    n.at.as_deref().map(fmt::clock).unwrap_or_default(),
+                                    n.delivery.not_told().map(|t| format!(" · {t}")).unwrap_or_default(),
+                                )}</span>
+                                {n.note.clone()}
+                                <DeliveryWarnings delivery=n.delivery.clone()/>
+                            </li>
+                        }).collect_view()}
+                        {c.replies.iter().map(|r| view! {
+                            <li><span class="who">{format!("{} · {}", asker, r.at.as_deref().map(fmt::clock).unwrap_or_default())}</span>{r.text.clone()}</li>
+                        }).collect_view()}
+                    </ul>
+                })}
+                <div class="q-more">
+                    {(!c.evidence.is_empty()).then(|| {
+                        let tech = RwSignal::new(false);
+                        let items = c.evidence.clone();
+                        view! {
+                            <Disclosure open=tech label="Technical detail for agents".to_string()/>
+                            <Show when=move || tech.get()>
+                                <ul class="q-tech">{items.iter().map(|e| view! { <li><span class="q3">{format!("{}: ", e.label)}</span><code>{e.path.clone()}</code></li> }).collect_view()}</ul>
+                            </Show>
+                        }
+                    })}
+                    <label class="q-note-label">
+                        <span class="sr">"Note to the agent"</span>
+                        <textarea
+                            class="note"
+                            rows="2"
+                            maxlength="4000"
+                            disabled=locked
+                            placeholder=note_hint
+                            prop:value=note_text
+                            on:input=move |ev| { let text = event_target_value(&ev); drafts.update(|d| drafts::set_note(d, &card.get_value(), text)); }
+                        ></textarea>
+                    </label>
+                </div>
+            </div>
         </article>
     }
 }
@@ -809,14 +967,14 @@ fn Review(
                     let (what, tone) = drafts.with(|d| {
                         let draft = d.get(&c.id).cloned().unwrap_or_default();
                         match drafts::standing(d, &c) {
-                            _ if c.kind == "sample" => ("Format sample · no answer wanted".to_string(), "muted"),
+                            _ if c.kind == "sample" => ("Format sample · no answer wanted".to_string(), ""),
                             _ if !c.can_answer() => ("Can't be answered right now · nothing is sent".to_string(), "warn"),
                             Standing::Changed => ("Changed since you chose · look again".to_string(), "warn"),
                             Standing::NeedsWords => ("Objection without a reason · add one to send it".to_string(), "warn"),
-                            Standing::Empty if c.kind == "objection" => ("No objection · nothing is sent".to_string(), "muted"),
-                            Standing::Empty if c.kind == "action" => ("Not done yet · stays open".to_string(), "muted"),
-                            Standing::Empty => ("Not answered · stays open for later".to_string(), "muted"),
-                            Standing::Ready if draft.choice.is_empty() => ("Note only · the question stays open".to_string(), "note"),
+                            Standing::Empty if c.kind == "objection" => ("No objection · nothing is sent".to_string(), ""),
+                            Standing::Empty if c.kind == "action" => ("Not done yet · stays open".to_string(), ""),
+                            Standing::Empty => ("Not answered · stays open for later".to_string(), ""),
+                            Standing::Ready if draft.choice.is_empty() => ("Note only · the question stays open".to_string(), ""),
                             Standing::Ready if c.kind == "action" => ("Done".to_string(), "good"),
                             Standing::Ready if c.kind == "objection" => ("You object".to_string(), "warn"),
                             Standing::Ready => {
@@ -832,25 +990,26 @@ fn Review(
                     view! {
                         <li>
                             <button class="review-row" on:click=move |_| go_card(i)>
-                                <span class="card-label">{c.short()}</span>
                                 <span class="review-title">{c.title.clone()}</span>
-                                <span class="review-what" data-tone=tone>{what}</span>
+                                <span class="review-what" data-tone=(!tone.is_empty()).then_some(tone)>{what}</span>
                                 {(!note.is_empty()).then(|| view! { <span class="review-note">{format!("\u{201c}{note}\u{201d}")}</span> })}
                             </button>
                         </li>
                     }
                 }).collect_view()}
             </ul>
-            <div class="review-actions">
-                <button class="primary" disabled=move || count() == 0 || sending.get() on:click=move |_| send()>
-                    {move || match (sending.get(), count()) {
-                        (true, _) => "Sending...".to_string(),
-                        (false, 0) => "Nothing to send yet".to_string(),
-                        (false, 1) => "Send 1 answer".to_string(),
-                        (false, n) => format!("Send {n} answers"),
-                    }}
-                </button>
-                <button class="secondary" disabled=move || sending.get() on:click=move |_| deck_view.set(DeckView::Cards)>"Back to the cards"</button>
+            <div class="q-send">
+                <button class="btn" disabled=move || sending.get() on:click=move |_| deck_view.set(DeckView::Cards)>"Back to the questions"</button>
+                <div class="right">
+                    <button class="btn primary" disabled=move || count() == 0 || sending.get() on:click=move |_| send()>
+                        {move || match (sending.get(), count()) {
+                            (true, _) => "Sending...".to_string(),
+                            (false, 0) => "Nothing to send yet".to_string(),
+                            (false, 1) => "Send 1 answer".to_string(),
+                            (false, n) => format!("Send {n} answers"),
+                        }}
+                    </button>
+                </div>
             </div>
             // once the drafts the failure speaks of are gone (their cards closed), say so instead of offering a resend
             {move || problem.get().map(|p| {
@@ -859,9 +1018,9 @@ fn Review(
                 } else {
                     p
                 };
-                view! { <p class="item-note" data-tone="crit" role="alert">{words}</p> }
+                view! { <p class="plate-note crit" role="alert">{words}</p> }
             })}
-            <p class="fine">
+            <p class="review-fine">
                 {move || {
                     // Answers and "done" close their cards; notes, objections and samples stay open.
                     let closing = open.with(|cards| drafts.with(|d| {
@@ -891,12 +1050,12 @@ fn Sent(summary: SentSummary, back: impl Fn() + Copy + Send + Sync + 'static) ->
         <div class="sent">
             <p class="ok" data-tone="good">{format!("Sent {} at {}.{told}", summary.recorded, summary.at)}</p>
             {(!summary.changed.is_empty()).then(|| view! {
-                <p class="item-note" data-tone="warn">{format!("Not sent, the question changed after you opened it: {}. Your choice is kept; look again.", summary.changed.join(", "))}</p>
+                <p class="plate-note problem">{format!("Not sent, the question changed after you opened it: {}. Your choice is kept; look again.", summary.changed.join(", "))}</p>
             })}
             {(!summary.refused.is_empty()).then(|| view! {
-                <ul class="item-note" data-tone="crit">{summary.refused.iter().map(|r| view! { <li>{r.clone()}</li> }).collect_view()}</ul>
+                <ul class="plate-note crit">{summary.refused.iter().map(|r| view! { <li>{r.clone()}</li> }).collect_view()}</ul>
             })}
-            <button class="secondary" on:click=move |_| back()>"Back to the questions"</button>
+            <button class="btn" on:click=move |_| back()>"Back to the questions"</button>
         </div>
     }
 }
@@ -921,11 +1080,11 @@ fn AnsweredView(answered: AnsweredCard) -> impl IntoView {
         .join(", ");
     let delivery = a.delivery.told();
     view! {
-        <li class="answered-row" data-delivery=a.delivery.state.clone()>
-            <div class="card-title-sm"><span class="card-label">{c.short()}</span>" "{c.title.clone()}</div>
+        <li data-delivery=a.delivery.state.clone()>
+            <div><b>{c.title.clone()}</b></div>
             <div>{a.label(&labels)}{(a.via == "recommended").then_some(" (recommended)")}</div>
             {a.note.clone().filter(|n| !n.is_empty()).map(|n| view! { <blockquote>{n}</blockquote> })}
-            <div class="muted">{format!("{} · {} · {delivery}", c.asked_by, fmt::clock(&a.answered_at))}</div>
+            <div class="q3">{format!("{} · {} · {delivery}", c.asked_by, fmt::clock(&a.answered_at))}</div>
             <DeliveryWarnings delivery=a.delivery.clone()/>
         </li>
     }
@@ -937,6 +1096,6 @@ fn DeliveryWarnings(delivery: Delivery) -> impl IntoView {
     delivery
         .warnings()
         .into_iter()
-        .map(|w| view! { <div class="item-note" data-tone="warn">{w}</div> })
+        .map(|w| view! { <div data-tone="warn">{w}</div> })
         .collect_view()
 }

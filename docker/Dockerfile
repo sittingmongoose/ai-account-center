@@ -4,14 +4,14 @@
 # Build the checked-out AI Account Center source and pinned Slint browser UI.
 # Both build and runtime dependencies resolve from the committed bun.lock.
 # =============================================================================
-FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
+FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS build
 
 SHELL ["/bin/bash", "-lc"]
 
 # Pin bun version for reproducible builds
 ARG BUN_VERSION=1.4.4
 ARG RUST_VERSION=1.99.1
-ARG WASM_PACK_VERSION=0.15.0
+ARG WASM_PACK_VERSION=0.15.1
 ENV BUN_INSTALL=/usr/local/bun
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
@@ -53,7 +53,7 @@ RUN --mount=type=cache,target=/root/.bun \
 # =============================================================================
 # Runtime stage: dashboard server and collector prerequisites, without Bun
 # =============================================================================
-FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS runtime
+FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS runtime
 
 SHELL ["/bin/bash", "-lc"]
 

@@ -29,7 +29,8 @@ opt-level = 2
 strip = true
 
 [package.metadata.wasm-pack.profile.release]
-# wasm-pack 0.15.0 still downloads Binaryen v117, which cannot process Rust 1.99 output.
+# wasm-pack 0.15.1 downloads Binaryen v130; only v133 (N9 below) is shown to
+# process Rust 1.99 output.
 # Rust release optimization and LTO remain enabled.
 # N9 (2026-10-05): binaryen v133 with explicit --enable-* flags does run, but the wire
 # bytes grow (br11 2.268 -> 2.359 MB, +4.0%; -Oz: +4.4%) while raw shrinks, so serving

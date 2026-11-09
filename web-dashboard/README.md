@@ -29,17 +29,18 @@ constraints; browser resize and fullscreen requests update both layout and canva
 
 ## Build
 
-Rust **1.99.1** with `wasm32-unknown-unknown`, and wasm-pack **0.15.0**:
+Rust **1.99.1** with `wasm32-unknown-unknown`, and wasm-pack **0.15.1**:
 
 ```sh
-cargo install wasm-pack --version 0.15.0 --locked
+cargo install wasm-pack --version 0.15.1 --locked
 wasm-pack build web-dashboard --release --target web --out-dir pkg --out-name ccs_account_dashboard -- --locked
 ```
 
 Both `slint` and `slint-build` are pinned to **=1.18.1** in Cargo.toml and locked
 in Cargo.lock. The repository builder checks the wasm-pack version before replacing
-the packaged UI. wasm-pack 0.15.0 still downloads Binaryen v117, which cannot
-validate the installed Rust 1.99 output, so its optional wasm-opt pass is disabled.
+the packaged UI. wasm-pack 0.15.1 downloads Binaryen v130; only v133 has been
+shown to validate the installed Rust 1.99 output, so its optional wasm-opt pass
+stays disabled.
 Rust release optimization and LTO remain enabled. The repository builder uses
 the pinned Binaryen 132 JavaScript API for a final compatibility transform;
 it does not run Binaryen's general optimizer.

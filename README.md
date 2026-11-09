@@ -257,7 +257,7 @@ The setup it was built for: a **Linux server** runs the dashboard, and a **Mac**
 
 | For | You need |
 | --- | --- |
-| The dashboard | Node.js 22.13+ or 26 (CI uses 26), [Bun](https://bun.sh/docs/installation) 1.4.4, [Rust](https://rust-lang.org/tools/install/) 1.99.1 with `wasm32-unknown-unknown` and [wasm-pack](https://github.com/wasm-bindgen/wasm-pack#installation) 0.15.0 |
+| The dashboard | Node.js 22.13+ or 26 (CI uses 26), [Bun](https://bun.sh/docs/installation) 1.4.4, [Rust](https://rust-lang.org/tools/install/) 1.99.1 with `wasm32-unknown-unknown` and [wasm-pack](https://github.com/wasm-bindgen/wasm-pack#installation) 0.15.1 |
 | Usage readings | Your existing provider sign-ins on the computer that owns them, and Python 3 there (`/usr/bin/python3` on Linux and Mac, `python.exe` on Windows) |
 | Mac / Windows features | SSH access from the dashboard computer, and Python 3 on the remote computer |
 | Codex / Antigravity switching | The dashboard on Linux (activation refuses other platforms) |
@@ -272,7 +272,7 @@ git clone https://github.com/sittingmongoose/ai-account-center.git
 cd ai-account-center
 bun install --frozen-lockfile
 rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown --component rustfmt
-cargo install wasm-pack --version 0.15.0 --locked
+cargo install wasm-pack --version 0.15.1 --locked
 bun run build:all
 ```
 

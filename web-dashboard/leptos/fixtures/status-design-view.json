@@ -1,0 +1,1088 @@
+{
+ "version": 1,
+ "generatedAt": "2026-11-08T18:00:00.000Z",
+ "refresh": {
+  "pollSeconds": 30
+ },
+ "headline": {
+  "tone": "warn",
+  "runs": [
+   {
+    "text": "2 questions",
+    "strong": true,
+    "tone": "warn"
+   },
+   {
+    "text": " wait for you. "
+   },
+   {
+    "text": "1 pinned thread is looping",
+    "strong": true,
+    "tone": "crit"
+   },
+   {
+    "text": " (PMConcept7, task F-07). Nas1 is unreachable."
+   }
+  ],
+  "counts": {
+   "openCards": 3,
+   "blockedItems": 2,
+   "workingThreads": 5,
+   "staleSources": 0
+  }
+ },
+ "sources": [
+  {
+   "id": "agent-reports",
+   "label": "Agent reports",
+   "state": "ok",
+   "asOf": "2026-11-08T17:59:00.000Z",
+   "ageSeconds": 12,
+   "staleAfterSeconds": 180,
+   "detail": ""
+  },
+  {
+   "id": "machines",
+   "label": "Machines",
+   "state": "ok",
+   "asOf": "2026-11-08T17:59:00.000Z",
+   "ageSeconds": 12,
+   "staleAfterSeconds": 180,
+   "detail": ""
+  },
+  {
+   "id": "browsers",
+   "label": "Browsers and recordings",
+   "state": "ok",
+   "asOf": "2026-11-08T17:59:00.000Z",
+   "ageSeconds": 12,
+   "staleAfterSeconds": 180,
+   "detail": ""
+  },
+  {
+   "id": "simlock",
+   "label": "Simlock",
+   "state": "ok",
+   "asOf": "2026-11-08T17:59:00.000Z",
+   "ageSeconds": 12,
+   "staleAfterSeconds": 180,
+   "detail": ""
+  },
+  {
+   "id": "quota-watch",
+   "label": "Quota watch (estimates)",
+   "state": "ok",
+   "asOf": "2026-11-08T17:59:00.000Z",
+   "ageSeconds": 12,
+   "staleAfterSeconds": 180,
+   "detail": ""
+  },
+  {
+   "id": "usage",
+   "label": "Account usage",
+   "state": "ok",
+   "asOf": "2026-11-08T17:59:00.000Z",
+   "ageSeconds": 12,
+   "staleAfterSeconds": 180,
+   "detail": ""
+  }
+ ],
+ "cards": {
+  "source": "agent-reports",
+  "open": [
+   {
+    "id": "mac-signin",
+    "kind": "action",
+    "label": "Q1",
+    "seq": 1,
+    "cardSha256": "sha-mac-signin",
+    "project": "AI Account Center",
+    "stream": null,
+    "askedBy": "the AAC status lead",
+    "title": "Sign in to the second Claude account on the Mac",
+    "now": "The second Claude account on the Mac has been signed out since this morning, so its usage can't be read.",
+    "options": [],
+    "recommendation": null,
+    "multiple": false,
+    "urgency": "whenever",
+    "blocks": null,
+    "reversible": null,
+    "evidence": [],
+    "sections": [],
+    "related": [],
+    "replies": [],
+    "notes": [],
+    "writer": "vm.fixture",
+    "answerable": true,
+    "askedAgo": 9000
+   },
+   {
+    "id": "u3-startup",
+    "kind": "question",
+    "label": "U3",
+    "seq": 1,
+    "cardSha256": "sha-u3-startup",
+    "project": "AI Account Center",
+    "stream": "upkeep",
+    "askedBy": "the AAC status lead",
+    "title": "Remove a hidden start-up order from the dashboard server?",
+    "now": "In five places, two parts of the dashboard server each need the other in order to start. It works, but only because they happen to load in the right order. If a later change shuffles that order, the server could fail to start, or a sign-in check could run before it is ready.\n\nSeparately, the description of what the Mac and Windows bars show is kept inside the web-address code, so an unrelated web change could break the bars.\n\nYou won't see any change in the app either way. This is upkeep.",
+    "options": [
+     {
+      "key": "A",
+      "label": "Leave it as it is",
+      "gets": "No work. Nothing changes today.",
+      "costs": "The hidden order stays. The next change that moves a file could break sign-in or the bars, and it would be hard to see why."
+     },
+     {
+      "key": "B",
+      "label": "Move the shared pieces into files that already exist, and add a check",
+      "gets": "The five circles are gone, and an automatic check stops new ones. Nothing in the app changes.",
+      "costs": "About 2 to 4 hours of agent time. Around 8 files and 150 lines move; no logic is rewritten. The sign-in tests run to prove nothing moved."
+     },
+     {
+      "key": "C",
+      "label": "Same as B, but in three new files",
+      "gets": "The same result as B.",
+      "costs": "3 to 5 hours, and three extra files where good homes already exist."
+     }
+    ],
+    "recommendation": {
+     "key": "B",
+     "why": "It gets the same result as C in less time, with fewer new files.",
+     "confidence": "medium"
+    },
+    "multiple": false,
+    "urgency": "whenever",
+    "blocks": null,
+    "reversible": {
+     "yes": true,
+     "how": "one revert"
+    },
+    "evidence": [
+     {
+      "label": "The original text",
+      "path": "reports/u3-original.txt"
+     }
+    ],
+    "sections": [],
+    "related": [],
+    "replies": [],
+    "notes": [],
+    "writer": "vm.fixture",
+    "answerable": true,
+    "askedAgo": 2820
+   },
+   {
+    "id": "b09-reviewers",
+    "kind": "question",
+    "label": "Q3",
+    "seq": 1,
+    "cardSha256": "sha-b09-reviewers",
+    "project": "Puppet Master",
+    "stream": "C",
+    "askedBy": "the closure lead",
+    "title": "Which two models should re-check closure batch B09?",
+    "now": "Batch B09 needs two more reviewers before stream C can finish. Two models that have not reviewed it yet would keep the check independent.",
+    "options": [
+     {
+      "key": "A",
+      "label": "Opus 5.5 and Sol 6.1",
+      "gets": "The strongest reviewers we have.",
+      "costs": "About 3 hours of agent time."
+     },
+     {
+      "key": "B",
+      "label": "Sol 6.1 and Astra",
+      "gets": "Two reviewers from the same family, faster.",
+      "costs": "Both could miss the same thing."
+     }
+    ],
+    "recommendation": {
+     "key": "A",
+     "why": "Two different families are less likely to miss the same bug.",
+     "confidence": "medium"
+    },
+    "multiple": false,
+    "urgency": "whenever",
+    "blocks": "stream C",
+    "reversible": null,
+    "evidence": [],
+    "sections": [],
+    "related": [],
+    "replies": [],
+    "notes": [],
+    "writer": "vm.fixture",
+    "answerable": true,
+    "askedAgo": 7320
+   }
+  ],
+  "answered": [],
+  "answerHistoryProblem": null,
+  "batches": [],
+  "complete": true
+ },
+ "projects": [
+  {
+   "id": "aac",
+   "label": "AI Account Center",
+   "counts": {
+    "total": 25,
+    "landed": 0,
+    "done": 19,
+    "ready": 0,
+    "review": 1,
+    "fixing": 0,
+    "working": 1,
+    "blocked": 0,
+    "todo": 4,
+    "dropped": 0
+   },
+   "streams": [
+    {
+     "id": "Status",
+     "label": "Status and Scoreboard tabs",
+     "owner": "",
+     "goal": "",
+     "board": null,
+     "source": "tasks",
+     "stale": false,
+     "counts": {
+      "total": 12,
+      "landed": 0,
+      "done": 9,
+      "ready": 0,
+      "review": 0,
+      "fixing": 0,
+      "working": 1,
+      "blocked": 0,
+      "todo": 2,
+      "dropped": 0
+     },
+     "completion": {
+      "done": 9,
+      "of": 12
+     },
+     "items": [],
+     "problem": null
+    },
+    {
+     "id": "Store",
+     "label": "Storage engine",
+     "owner": "",
+     "goal": "",
+     "board": null,
+     "source": "tasks",
+     "stale": false,
+     "counts": {
+      "total": 10,
+      "landed": 0,
+      "done": 7,
+      "ready": 0,
+      "review": 1,
+      "fixing": 0,
+      "working": 0,
+      "blocked": 0,
+      "todo": 2,
+      "dropped": 0
+     },
+     "completion": {
+      "done": 7,
+      "of": 10
+     },
+     "items": [],
+     "problem": null
+    },
+    {
+     "id": "Signin",
+     "label": "Sign-in renewal",
+     "owner": "",
+     "goal": "",
+     "board": null,
+     "source": "tasks",
+     "stale": false,
+     "counts": {
+      "total": 3,
+      "landed": 0,
+      "done": 3,
+      "ready": 0,
+      "review": 0,
+      "fixing": 0,
+      "working": 0,
+      "blocked": 0,
+      "todo": 0,
+      "dropped": 0
+     },
+     "completion": {
+      "done": 3,
+      "of": 3
+     },
+     "items": [
+      {
+       "id": "SR-3",
+       "title": "Renew sign-in tokens",
+       "state": "landed",
+       "landed": {
+        "sha": "abc1234",
+        "at": "2026-11-04T15:00:00.000Z"
+       },
+       "reviews": []
+      }
+     ],
+     "problem": null
+    }
+   ]
+  },
+  {
+   "id": "pm",
+   "label": "Puppet Master",
+   "counts": {
+    "total": 41,
+    "landed": 0,
+    "done": 23,
+    "ready": 1,
+    "review": 3,
+    "fixing": 1,
+    "working": 3,
+    "blocked": 2,
+    "todo": 8,
+    "dropped": 0
+   },
+   "streams": [
+    {
+     "id": "F",
+     "label": "PM7 follow-ups",
+     "owner": "",
+     "goal": "",
+     "board": null,
+     "source": "tasks",
+     "stale": false,
+     "counts": {
+      "total": 11,
+      "landed": 0,
+      "done": 4,
+      "ready": 1,
+      "review": 1,
+      "fixing": 1,
+      "working": 1,
+      "blocked": 1,
+      "todo": 2,
+      "dropped": 0
+     },
+     "completion": {
+      "done": 4,
+      "of": 11
+     },
+     "items": [],
+     "problem": null
+    },
+    {
+     "id": "Tools",
+     "label": "Agent tools",
+     "owner": "",
+     "goal": "",
+     "board": null,
+     "source": "tasks",
+     "stale": false,
+     "counts": {
+      "total": 12,
+      "landed": 0,
+      "done": 6,
+      "ready": 0,
+      "review": 1,
+      "fixing": 0,
+      "working": 2,
+      "blocked": 1,
+      "todo": 2,
+      "dropped": 0
+     },
+     "completion": {
+      "done": 6,
+      "of": 12
+     },
+     "items": [],
+     "problem": null
+    },
+    {
+     "id": "E",
+     "label": "Stream E",
+     "owner": "",
+     "goal": "",
+     "board": null,
+     "source": "tasks",
+     "stale": false,
+     "counts": {
+      "total": 8,
+      "landed": 0,
+      "done": 5,
+      "ready": 0,
+      "review": 1,
+      "fixing": 0,
+      "working": 0,
+      "blocked": 0,
+      "todo": 2,
+      "dropped": 0
+     },
+     "completion": {
+      "done": 5,
+      "of": 8
+     },
+     "items": [],
+     "problem": null
+    },
+    {
+     "id": "P",
+     "label": "Stream P",
+     "owner": "",
+     "goal": "",
+     "board": null,
+     "source": "tasks",
+     "stale": false,
+     "counts": {
+      "total": 10,
+      "landed": 0,
+      "done": 8,
+      "ready": 0,
+      "review": 0,
+      "fixing": 0,
+      "working": 0,
+      "blocked": 0,
+      "todo": 2,
+      "dropped": 0
+     },
+     "completion": {
+      "done": 8,
+      "of": 10
+     },
+     "items": [],
+     "problem": null
+    },
+    {
+     "id": "C",
+     "label": "C closure",
+     "owner": "",
+     "goal": "",
+     "board": {
+      "path": "boards/c.md",
+      "ageSeconds": 10800
+     },
+     "source": "board",
+     "stale": false,
+     "counts": null,
+     "completion": null,
+     "items": [],
+     "problem": null
+    }
+   ]
+  }
+ ],
+ "threads": {
+  "source": "agent-reports",
+  "also": [],
+  "rows": []
+ },
+ "machines": {
+  "source": "machines",
+  "also": [
+   "browsers"
+  ],
+  "rows": [
+   {
+    "id": "vm",
+    "label": "Ubuntu VM",
+    "state": "ok",
+    "asOf": "2026-11-08T17:59:00.000Z",
+    "cpu": {
+     "cores": 56,
+     "load1": 19.0,
+     "busyPct": 35
+    },
+    "memory": {
+     "availableGb": 16,
+     "totalGb": 38
+    },
+    "disk": [
+     {
+      "mount": "/",
+      "freeGb": 114,
+      "totalGb": 250
+     }
+    ],
+    "browsers": {
+     "running": 3,
+     "max": 12
+    },
+    "recordings": {
+     "running": 0,
+     "max": 5
+    },
+    "gpuPct": 9,
+    "warnings": [],
+    "ageSeconds": 12,
+    "detail": null,
+    "sessions": []
+   },
+   {
+    "id": "mac",
+    "label": "Mac",
+    "state": "ok",
+    "asOf": "2026-11-08T17:59:00.000Z",
+    "cpu": {
+     "cores": 8,
+     "load1": 1.1,
+     "busyPct": 13
+    },
+    "memory": {
+     "availableGb": 6.1,
+     "totalGb": 16
+    },
+    "disk": [
+     {
+      "mount": "/",
+      "freeGb": 41,
+      "totalGb": 460
+     }
+    ],
+    "browsers": {
+     "running": 0,
+     "max": 12
+    },
+    "recordings": {
+     "running": 0,
+     "max": 4
+    },
+    "gpuPct": null,
+    "warnings": [
+     "Disk 41 GB free, under the 50 GB floor"
+    ],
+    "ageSeconds": 12,
+    "detail": null,
+    "sessions": []
+   },
+   {
+    "id": "windows",
+    "label": "Windows PC",
+    "state": "ok",
+    "asOf": "2026-11-08T17:59:00.000Z",
+    "cpu": {
+     "cores": 32,
+     "load1": 21.8,
+     "busyPct": 68
+    },
+    "memory": {
+     "availableGb": 14,
+     "totalGb": 64
+    },
+    "disk": [
+     {
+      "mount": "C:",
+      "freeGb": 230,
+      "totalGb": 930
+     }
+    ],
+    "browsers": {
+     "running": 4,
+     "max": 16
+    },
+    "recordings": {
+     "running": 1,
+     "max": 4
+    },
+    "gpuPct": 19,
+    "warnings": [],
+    "ageSeconds": 12,
+    "detail": null,
+    "sessions": []
+   },
+   {
+    "id": "nas1",
+    "label": "Nas1",
+    "state": "unreachable",
+    "asOf": "2026-11-08T17:10:00.000Z",
+    "cpu": {
+     "cores": 6,
+     "load1": 3.7,
+     "busyPct": 61
+    },
+    "memory": {
+     "availableGb": 14,
+     "totalGb": 32
+    },
+    "disk": [
+     {
+      "mount": "/",
+      "freeGb": 504,
+      "totalGb": 2000
+     }
+    ],
+    "browsers": {
+     "running": 1,
+     "max": 4
+    },
+    "recordings": {
+     "running": 1,
+     "max": 3
+    },
+    "gpuPct": null,
+    "warnings": [],
+    "ageSeconds": 3000,
+    "detail": "Unreachable since 1:12 PM. Showing its reading from 1:10 PM.",
+    "sessions": []
+   }
+  ]
+ },
+ "simlock": {
+  "source": "simlock",
+  "capacity": [
+   {
+    "platform": "ios",
+    "running": 1,
+    "max": 2,
+    "reserved": 0,
+    "overLimit": false
+   },
+   {
+    "platform": "android",
+    "running": 0,
+    "max": 3,
+    "reserved": 0,
+    "overLimit": false
+   },
+   {
+    "platform": "other",
+    "running": 0,
+    "max": 1,
+    "reserved": 0,
+    "overLimit": false
+   }
+  ],
+  "leases": [
+   {
+    "device": "iPhone 17 Pro simulator on the Mac",
+    "platform": "ios",
+    "holder": "browser-check for fo-qa-selbuild",
+    "sinceClock": "14:04",
+    "expiresClock": "14:34",
+    "lastKnown": false
+   }
+  ]
+ },
+ "usage": {
+  "source": "usage",
+  "warnings": [],
+  "accounts": []
+ },
+ "pinned": {
+  "asOfMs": 1794247320000,
+  "head": "5 pinned in T3 · 1 looping · 2 waiting on you",
+  "counts": {
+   "pinned": 5,
+   "looping": 1,
+   "waitingOnYou": 2
+  },
+  "machineProblems": [],
+  "updates": [
+   {
+    "id": "Build PMConcept7 and Background Activity",
+    "title": "Build PMConcept7 and Background Activity",
+    "machine": "vm",
+    "who": "Puppet Master · pm7-build · Opus 5.5 xhigh",
+    "reportState": "fresh",
+    "percent": {
+     "text": "58%",
+     "done": 14,
+     "of": 24
+    },
+    "percentNote": null,
+    "now": "Windows 10 sweep for stream F, batch 9.",
+    "blocked": {
+     "text": "Waiting on you: pick the reviewers for batch B09 (question 3).",
+     "waitingOnYou": true
+    },
+    "looping": {
+     "answer": "yes",
+     "text": "Yes. F-07 has gone back for fixes 5 times; every review finds the tray icon blurry at 125% scale."
+    },
+    "left": [
+     {
+      "id": "F-07",
+      "title": "Tray icon sharp at 125% scale"
+     },
+     {
+      "id": "F-09",
+      "title": "Re-check closure batch B09"
+     },
+     {
+      "id": "F-11",
+      "title": "Windows 10 sweep, batch 9"
+     },
+     {
+      "id": "E-04",
+      "title": "Onboarding re-check"
+     },
+     {
+      "id": "F-12",
+      "title": "Tray menu keyboard order"
+     },
+     {
+      "id": "F-13",
+      "title": "Installer sign check"
+     },
+     {
+      "id": "E-05",
+      "title": "Onboarding copy pass"
+     },
+     {
+      "id": "E-06",
+      "title": "Mac sign-in screenshots"
+     },
+     {
+      "id": "F-14",
+      "title": "Release notes"
+     },
+     {
+      "id": "F-15",
+      "title": "Owner sign-off"
+     }
+    ],
+    "done": [
+     {
+      "id": "F-08",
+      "title": "Sticker block landed"
+     },
+     {
+      "id": "F-06",
+      "title": "Solid block landed"
+     },
+     {
+      "id": "F-05",
+      "title": "Groups 7 and 8 integration"
+     },
+     {
+      "id": "F-04",
+      "title": "QA-7 fixes pushed"
+     },
+     {
+      "id": "F-03",
+      "title": "Earlier task 3"
+     },
+     {
+      "id": "F-02",
+      "title": "Earlier task 2"
+     },
+     {
+      "id": "F-01",
+      "title": "Earlier task 1"
+     },
+     {
+      "id": "X-0",
+      "title": "Earlier task 0"
+     },
+     {
+      "id": "X-1",
+      "title": "Earlier task 1"
+     },
+     {
+      "id": "X-2",
+      "title": "Earlier task 2"
+     },
+     {
+      "id": "X-3",
+      "title": "Earlier task 3"
+     },
+     {
+      "id": "X-4",
+      "title": "Earlier task 4"
+     },
+     {
+      "id": "X-5",
+      "title": "Earlier task 5"
+     },
+     {
+      "id": "X-6",
+      "title": "Earlier task 6"
+     }
+    ],
+    "updated": {
+     "text": "Updated 6 min ago",
+     "at": "2026-11-08T17:00:00.000Z",
+     "ageSeconds": 360
+    },
+    "reportNote": null,
+    "staleNote": null,
+    "unreadableNote": null,
+    "summary": null
+   },
+   {
+    "id": "Build two new tabs in AI Account Center",
+    "title": "Build two new tabs in AI Account Center",
+    "machine": "vm",
+    "who": "AI Account Center · aac-status-lead · Opus 5.5 xhigh",
+    "reportState": "fresh",
+    "percent": {
+     "text": "75%",
+     "done": 9,
+     "of": 12
+    },
+    "percentNote": null,
+    "now": "Waiting for your approval of the Leptos redesign.",
+    "blocked": {
+     "text": "Waiting on you: approve this redesign.",
+     "waitingOnYou": true
+    },
+    "looping": {
+     "answer": "no",
+     "text": "No."
+    },
+    "left": [
+     {
+      "id": "ST-10",
+      "title": "Approve the Leptos redesign"
+     },
+     {
+      "id": "ST-11",
+      "title": "Port Home, Analytics, Accounts"
+     },
+     {
+      "id": "ST-12",
+      "title": "Retire the Slint canvas"
+     }
+    ],
+    "done": [
+     {
+      "id": "ST-09",
+      "title": "Status and Scoreboard landed"
+     },
+     {
+      "id": "ST-08",
+      "title": "Dashboard memory fix landed"
+     },
+     {
+      "id": "ST-07",
+      "title": "Earlier task 7"
+     },
+     {
+      "id": "ST-06",
+      "title": "Earlier task 6"
+     },
+     {
+      "id": "ST-05",
+      "title": "Earlier task 5"
+     },
+     {
+      "id": "ST-04",
+      "title": "Earlier task 4"
+     },
+     {
+      "id": "ST-03",
+      "title": "Earlier task 3"
+     },
+     {
+      "id": "ST-02",
+      "title": "Earlier task 2"
+     },
+     {
+      "id": "ST-01",
+      "title": "Earlier task 1"
+     }
+    ],
+    "updated": {
+     "text": "Updated 12 min ago",
+     "at": "2026-11-08T17:00:00.000Z",
+     "ageSeconds": 360
+    },
+    "reportNote": null,
+    "staleNote": null,
+    "unreadableNote": null,
+    "summary": null
+   },
+   {
+    "id": "Tool improvements 1-12",
+    "title": "Tool improvements 1-12",
+    "machine": "vm",
+    "who": "Puppet Master · tools-lead · Sol 6.1 high",
+    "reportState": "fresh",
+    "percent": {
+     "text": "50%",
+     "done": 6,
+     "of": 12
+    },
+    "percentNote": null,
+    "now": "Blind pre-check of browser-check 2.1.",
+    "blocked": {
+     "text": "Waiting for a browser: stream F holds all 12 slots on the VM.",
+     "waitingOnYou": false
+    },
+    "looping": {
+     "answer": "no",
+     "text": "No."
+    },
+    "left": [
+     {
+      "id": "T-07",
+      "title": "browser-check 2.1 pre-check"
+     },
+     {
+      "id": "T-08",
+      "title": "Simlock lease timeouts"
+     },
+     {
+      "id": "T-09",
+      "title": "long-job resume on Mac"
+     },
+     {
+      "id": "T-10",
+      "title": "pm-mail digest wording"
+     },
+     {
+      "id": "T-11",
+      "title": "Tool 11"
+     },
+     {
+      "id": "T-12",
+      "title": "Tool 12"
+     }
+    ],
+    "done": [
+     {
+      "id": "T-06",
+      "title": "aac-usage burn rates"
+     },
+     {
+      "id": "T-05",
+      "title": "browser-check slots JSON"
+     },
+     {
+      "id": "T-04",
+      "title": "Earlier tool 4"
+     },
+     {
+      "id": "T-03",
+      "title": "Earlier tool 3"
+     },
+     {
+      "id": "T-02",
+      "title": "Earlier tool 2"
+     },
+     {
+      "id": "T-01",
+      "title": "Earlier tool 1"
+     }
+    ],
+    "updated": {
+     "text": "Updated 9 min ago",
+     "at": "2026-11-08T17:00:00.000Z",
+     "ageSeconds": 360
+    },
+    "reportNote": null,
+    "staleNote": null,
+    "unreadableNote": null,
+    "summary": null
+   },
+   {
+    "id": "Redesign Project Management",
+    "title": "Redesign Project Management",
+    "machine": "vm",
+    "who": "Puppet Master · pm-redesign · Opus 5.5 high",
+    "reportState": "fresh",
+    "percent": {
+     "text": "30%",
+     "done": 3,
+     "of": 10
+    },
+    "percentNote": null,
+    "now": "Writing the board layout concepts.",
+    "blocked": {
+     "text": "None.",
+     "waitingOnYou": false
+    },
+    "looping": {
+     "answer": "no",
+     "text": "No."
+    },
+    "left": [
+     {
+      "id": "R-04",
+      "title": "Board layout concepts"
+     },
+     {
+      "id": "R-05",
+      "title": "Owner review of concepts"
+     },
+     {
+      "id": "R-06",
+      "title": "Plan the move"
+     },
+     {
+      "id": "R-07",
+      "title": "Build the board"
+     },
+     {
+      "id": "R-08",
+      "title": "Migrate"
+     },
+     {
+      "id": "R-09",
+      "title": "Sign-off"
+     },
+     {
+      "id": "R-10",
+      "title": "Retire old"
+     }
+    ],
+    "done": [
+     {
+      "id": "R-03",
+      "title": "Interview notes summarised"
+     },
+     {
+      "id": "R-02",
+      "title": "Current board audit"
+     },
+     {
+      "id": "R-01",
+      "title": "Kick-off"
+     }
+    ],
+    "updated": {
+     "text": "Updated 22 min ago",
+     "at": "2026-11-08T17:00:00.000Z",
+     "ageSeconds": 360
+    },
+    "reportNote": null,
+    "staleNote": null,
+    "unreadableNote": null,
+    "summary": null
+   },
+   {
+    "id": "flash",
+    "title": "Continue Flash Research Workflow (Phase 15)",
+    "machine": "vm",
+    "who": "Flash research · t3 thread, no mail name",
+    "reportState": "stale",
+    "percent": null,
+    "percentNote": null,
+    "now": null,
+    "blocked": {
+     "text": "None.",
+     "waitingOnYou": false
+    },
+    "looping": {
+     "answer": "cantTell",
+     "text": "Can't tell."
+    },
+    "left": [],
+    "done": [],
+    "updated": {
+     "text": "Updated 25 days ago",
+     "at": "2026-10-14T11:22:00.000Z",
+     "ageSeconds": 2160000
+    },
+    "reportNote": null,
+    "staleNote": "No status update for 25 days.",
+    "unreadableNote": null,
+    "summary": "Phase 15, batch 3 running, 41 of 60 items done."
+   }
+  ]
+ }
+}

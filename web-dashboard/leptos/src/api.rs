@@ -39,6 +39,213 @@ pub struct StatusView {
     pub usage: Usage,
     /// Estimated spend per work stream from quota-watch; absent from servers that don't read it yet.
     pub spend: Option<Spend>,
+    /// The pinned threads' updates (composed in native/aac-status), or why there are none.
+    pub pinned: Option<PinnedPanel>,
+    /// Spend by stream, worded for the page (CONTRACT-spend-bymodel.md). Absent until the server sends it: the page
+    /// says so and shows nothing guessed.
+    pub spend_by_stream: Option<SpendByStream>,
+}
+
+/// The pinned threads (PINNED-THREADS.md), every word decided by the server. `unavailable` says why there are none.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedPanel {
+    pub unavailable: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub head: String,
+    pub counts: PinnedCounts,
+    #[serde(deserialize_with = "nullable")]
+    pub machine_problems: Vec<PinnedMachineProblem>,
+    #[serde(deserialize_with = "nullable")]
+    pub updates: Vec<PinnedUpdate>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedCounts {
+    pub pinned: u32,
+    pub looping: u32,
+    pub waiting_on_you: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedMachineProblem {
+    #[serde(deserialize_with = "nullable")]
+    pub machine: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedUpdate {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub title: String,
+    #[serde(deserialize_with = "nullable")]
+    pub machine: String,
+    pub who: Option<String>,
+    /// fresh, stale, unreadable or none.
+    #[serde(deserialize_with = "nullable")]
+    pub report_state: String,
+    pub percent: Option<PinnedPercent>,
+    pub percent_note: Option<String>,
+    pub now: Option<String>,
+    pub blocked: PinnedBlocked,
+    pub looping: PinnedLooping,
+    #[serde(deserialize_with = "nullable")]
+    pub left: Vec<PinnedItem>,
+    #[serde(deserialize_with = "nullable")]
+    pub done: Vec<PinnedItem>,
+    pub updated: Option<PinnedUpdated>,
+    pub report_note: Option<String>,
+    pub stale_note: Option<String>,
+    pub unreadable_note: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedPercent {
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
+    pub done: Option<u32>,
+    pub of: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedBlocked {
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
+    pub waiting_on_you: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedLooping {
+    /// yes, no or cantTell.
+    #[serde(deserialize_with = "nullable")]
+    pub answer: String,
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedItem {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedUpdated {
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
+    #[serde(deserialize_with = "nullable")]
+    pub at: String,
+    pub age_seconds: Option<i64>,
+}
+
+/// Spend by stream: one sentence, a table of shares per account limit, and the footnote (CONTRACT-spend-bymodel.md).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendByStream {
+    #[serde(deserialize_with = "nullable")]
+    pub state: String,
+    pub unavailable: Option<String>,
+    pub default_period: Option<String>,
+    pub as_of_text: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub periods: Vec<SpendPeriodView>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendPeriodView {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub lead: Vec<Run>,
+    #[serde(deserialize_with = "nullable")]
+    pub summary: Vec<Run>,
+    #[serde(deserialize_with = "nullable")]
+    pub columns: Vec<SpendColumn>,
+    pub credits: Option<SpendCreditsColumn>,
+    #[serde(deserialize_with = "nullable")]
+    pub rows: Vec<SpendRowView>,
+    #[serde(deserialize_with = "nullable")]
+    pub key: Vec<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub foot: String,
+    pub more: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendColumn {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub account_label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub short: String,
+    #[serde(deserialize_with = "nullable")]
+    pub hue: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendCreditsColumn {
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub account_label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendRowView {
+    #[serde(deserialize_with = "nullable")]
+    pub stream: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    pub bucket: bool,
+    #[serde(deserialize_with = "nullable")]
+    pub cells: Vec<Option<SpendCell>>,
+    #[serde(deserialize_with = "nullable")]
+    pub credits: Vec<SpendCreditCell>,
+    #[serde(deserialize_with = "nullable")]
+    pub block_order: Vec<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendCell {
+    /// A share of one account's limit; missing is "not read", never 0.
+    pub share: Option<f64>,
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SpendCreditCell {
+    #[serde(deserialize_with = "nullable")]
+    pub account_label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -1865,5 +2072,49 @@ mod tests {
         // A legacy record with no kind and no choice was a note.
         let legacy = answer(serde_json::json!({"choice": null, "note": "Just a thought."}));
         assert_eq!(legacy.label(""), "Note only");
+    }
+
+    #[test]
+    fn the_design_view_reads_with_pins_and_spend() {
+        let view: StatusView =
+            serde_json::from_str(include_str!("../fixtures/status-design-view.json")).unwrap();
+        let pinned = view.pinned.clone().unwrap();
+        assert_eq!(pinned.counts.pinned, 5);
+        assert_eq!(pinned.updates.len(), 5);
+        assert_eq!(pinned.updates[0].percent.as_ref().unwrap().done, Some(14));
+        assert_eq!(pinned.updates[0].looping.answer, "yes");
+        assert_eq!(pinned.updates[4].report_state, "stale");
+        assert!(view.spend_by_stream.is_none());
+    }
+
+    #[test]
+    fn pinned_can_say_why_there_are_none() {
+        let panel: PinnedPanel =
+            serde_json::from_str(r#"{"unavailable":"Pinned threads unavailable."}"#).unwrap();
+        assert_eq!(
+            panel.unavailable.as_deref(),
+            Some("Pinned threads unavailable.")
+        );
+        assert!(panel.updates.is_empty());
+    }
+
+    #[test]
+    fn spend_by_stream_reads_and_a_missing_cell_stays_missing() {
+        let spend: SpendByStream =
+            serde_json::from_str(include_str!("../fixtures/spend-by-stream.json")).unwrap();
+        assert_eq!(spend.default_period.as_deref(), Some("week"));
+        let week = spend.periods.iter().find(|p| p.id == "week").unwrap();
+        assert_eq!(week.columns.len(), 5);
+        let first = &week.rows[0];
+        assert_eq!(first.stream, "gap-fixer");
+        assert_eq!(first.cells[1], None);
+        assert_eq!(first.cells[2].as_ref().unwrap().text, "42%");
+        assert_eq!(first.cells[3].as_ref().unwrap().text, "3.2×");
+        assert!(week.rows.last().unwrap().bucket);
+        let unavailable: SpendByStream = serde_json::from_str(
+            r#"{"state":"unavailable","unavailable":"Spend by stream is unavailable.","periods":[]}"#,
+        )
+        .unwrap();
+        assert!(unavailable.periods.is_empty());
     }
 }
