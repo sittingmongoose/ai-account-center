@@ -555,6 +555,72 @@ def _clamp(seconds, deadline):
     return max(30, min(seconds, int(deadline - time.monotonic())))
 
 
+# T3 discovers Muse models through a read-only `muse serve` host asking model/list,
+# which serves Muse's cached model catalog and never refreshes it: only a real
+# session start refreshes the catalog from the provider. An update that only
+# replaces the binary therefore leaves T3 showing the old model list until someone
+# runs Muse. The warm step below starts one tiny headless session after the
+# install so the new binary refreshes its catalog before AAC reports done.
+MUSE_WARM_PROMPT = "Reply with the word: ok"
+
+
+def muse_catalog_dir(platform):
+    """Muse's model-catalog cache directory on this computer.
+
+    Muse keeps one data root: the same home-based root the dashboard collectors
+    resolve on every platform (~/.local/share/muse/sessions, see
+    src/web-server/usage/muse-native-usage-collector.ts). The catalog verified
+    on Linux sits beside it, so the same relative path names it on the Mac and
+    on Windows as well.
+    """
+    return pathlib.Path.home() / ".local" / "share" / "muse" / "model-catalog"
+
+
+def muse_catalog_fresh(platform, started_at):
+    """True when a catalog file was (re)written at or after `started_at` (wall-clock seconds).
+
+    Scans *.json without parsing contents or hardcoding the cache filename. A
+    missing or unreadable directory proves nothing, so it reads as stale.
+    """
+    try:
+        return any(item.is_file() and item.stat().st_mtime >= started_at
+                   for item in muse_catalog_dir(platform).glob("*.json"))
+    except OSError:
+        return False
+
+
+def muse_warm_catalog(refreshed, deadline, started_at):
+    """Refresh the new binary's model catalog with one headless session; True when fresh after.
+
+    Runs `muse exec --contributor-mode off "Reply with the word: ok"` with no
+    --model (the host's configured default), in a neutral temporary working
+    directory, bounded by the update deadline. Contributor off avoids the
+    missing-contributor-deployment 404 class. Auto-update stays disabled
+    (command's own NO_AUTO_UPDATE), so the warm cannot self-update. The call is
+    synchronous and killed at its timeout, so no process lingers for a later
+    process scan to classify as a session to stop or restart. On Windows the
+    launcher script is the entry point: CreateProcess cannot run .cmd, exactly
+    as detection reaches the binary for --version.
+    """
+    binary = refreshed.path
+    if binary is None or not binary.is_file():
+        return False
+    if refreshed.platform == "windows":
+        launcher = binary.with_name(".muse-launcher.ps1")
+        if not launcher.is_file():
+            return False
+        argv = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-File", str(launcher), "exec", "--contributor-mode", "off", MUSE_WARM_PROMPT]
+    else:
+        argv = [str(binary), "exec", "--contributor-mode", "off", MUSE_WARM_PROMPT]
+    try:
+        with private_temporary() as cwd:
+            command(argv, timeout=_clamp(60, deadline), cwd=str(cwd))
+    except UpdateFailure:
+        return False
+    return muse_catalog_fresh(refreshed.platform, started_at)
+
+
 def npm_view_latest(install):
     """Read-only registry check for the npm path. None when unknowable."""
     resolved = resolve_npm(install.path.parent)
@@ -723,6 +789,7 @@ def update_cli(install, deadline, restart_managed=False):
                     return outcome(result(install.app_id, install.platform, "failed", before, before, install.manager, "restart_context", False))
                 pre_stopped = True
         attempted = True
+        install_started = time.time()
         perform_cli_update(install, deadline)
         refreshed = detect_cli(install.app_id, install.platform)
         if refreshed is None or not refreshed.version:
@@ -735,6 +802,14 @@ def update_cli(install, deadline, restart_managed=False):
         except (OSError, ValueError):
             pass
         needs_restart = marker_version == refreshed.version and marker_version != before
+        catalog_ok = True
+        if install.app_id == "muse-code" and refreshed.version != before:
+            # Changed binary: never warm while the launcher's own updater holds
+            # the lock; the gate below then refuses to claim "updated".
+            if muse_update_busy(install.path.parent):
+                catalog_ok = False
+            else:
+                catalog_ok = muse_warm_catalog(refreshed, deadline, install_started)
         if refreshed.version == before and not needs_restart:
             if install.app_id == "muse-code" and muse_update_busy(install.path.parent):
                 # The launcher's own updater holds the lock, so Meta's installer
@@ -753,6 +828,12 @@ def update_cli(install, deadline, restart_managed=False):
                 value = result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True, restarted=len(contexts))
                 value.update(restartTargets=sessions, forcedStops=pre_forced)
                 return outcome(value)
+            if install.app_id == "muse-code" and not muse_catalog_fresh(install.platform, install_started):
+                # Same version, stale or absent catalog: a previously unwarmed
+                # update heals here, without Claiming an update that never
+                # happened. A failed warm surfaces honestly, never as "current".
+                if not muse_warm_catalog(refreshed, deadline, install_started):
+                    raise UpdateFailure("model_catalog_unrefreshed")
             if marker_version == before:
                 # Stale pre-stop bookkeeping from an earlier run. Dropping it
                 # keeps a later run from reporting "updated" for a version
@@ -771,6 +852,11 @@ def update_cli(install, deadline, restart_managed=False):
         value = result(install.app_id, install.platform, "updated", before, refreshed.version, install.manager, code, attempted=True, restarted=len(contexts))
         value.update(restartTargets=sessions, forcedStops=forced)
         pending.unlink(missing_ok=True)
+        if not catalog_ok:
+            # The binary changed but the warm session did not refresh the
+            # catalog: say so, never "updated". Sessions above were still
+            # restarted; the next click heals the catalog on the current path.
+            return outcome(result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "model_catalog_unrefreshed", attempted))
         return outcome(value)
     except UpdateFailure as error:
         if changed:
