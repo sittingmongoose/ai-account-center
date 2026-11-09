@@ -378,6 +378,11 @@ export function normalizeAppUpdateRow(
         (row.updateAttempted === true) !== (code === 'runtime_paused'))) ||
     ((code === 't3_sessions_kept' || code === 'background_sessions_kept') &&
       (!CLI_APPS.includes(appId) || row.status !== 'updated')) ||
+    // Muse "updated but catalog stale" rows are never clean updated rows: the
+    // helper reports restart_failed (binary moved) or failed (already current,
+    // warm failed); both say the catalog did not refresh.
+    (code === 'model_catalog_unrefreshed' &&
+      (appId !== 'muse-code' || (row.status !== 'restart_failed' && row.status !== 'failed'))) ||
     ((code === 'codex_sessions_stopped' || code === 'codex_force_failed') &&
       (appId !== 'codex-cli' ||
         platform !== 'windows' ||

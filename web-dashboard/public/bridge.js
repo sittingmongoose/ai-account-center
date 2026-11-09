@@ -1,5 +1,5 @@
 import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_theme_ready, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, report_content_area, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
-import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel } from './view-model.mjs';
+import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel, isCatalogPending } from './view-model.mjs';
 import { needToasts } from './claude-signins.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
 import { strength, validateSetup, triesLine, limitWindowMinutes, limitedView, rememberSignIn, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason, expiredBanner, triesFrom, retryFrom, loginFailure, setupFailure, parseLoginValue, offlineView, rememberSessionHours, rememberedSessionHours } from './auth-view.mjs';
@@ -726,9 +726,10 @@ async function updateStatus() {
       const count = status => results.filter(row => row.status === status).length;
       const failed = count('failed') + count('restart_failed');
       const skippedN = count('skipped'), unknownN = count('unknown'), actionN = count('action_required'), heldN = count('held');
+      const catalogN = results.filter(isCatalogPending).length;
       const incomplete = updateJob.state === 'failed' || failed > 0 || unknownN > 0;
       const title = incomplete ? 'App updates finished with issues' : count('updated') > 0 ? 'App updates finished' : 'App checks finished';
-      toast(incomplete ? 'err' : 'ok', title, `${count('updated')} updated, ${failed} failed, ${unknownN} unknown, ${heldN} held, ${count('current')} already current, ${count('not_installed')} not installed${actionN ? `, ${actionN} need action` : ''}${skippedN ? `, ${skippedN} skipped` : ''}. Details under Accounts & Settings.`, 7000);
+      toast(incomplete ? 'err' : 'ok', title, `${count('updated')} updated${catalogN ? `, ${catalogN} model${catalogN === 1 ? '' : 's'} not yet registered` : ''}, ${failed} failed, ${unknownN} unknown, ${heldN} held, ${count('current')} already current, ${count('not_installed')} not installed${actionN ? `, ${actionN} need action` : ''}${skippedN ? `, ${skippedN} skipped` : ''}. Details under Accounts & Settings.`, 7000);
       renderUpdate(true);
       clearTimeout(updateDoneTimer);
       updateDoneTimer = setTimeout(() => renderUpdate(false), 2000);

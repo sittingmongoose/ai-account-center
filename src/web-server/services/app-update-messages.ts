@@ -56,6 +56,8 @@ export const MESSAGES = {
     'The forced Codex CLI update failed; background sessions may have stopped. Start any interrupted sessions again.',
   zcode_release_unavailable:
     'The official ZCode release could not be checked; no update was attempted. Try Update apps again.',
+  model_catalog_unrefreshed:
+    'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.',
   // Older helpers and saved rows: winget's answer, which never saw this package.
   store_no_newer:
     'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',
