@@ -13,8 +13,9 @@ first working trial. Section 2.7 lists what is mirrored and what is left out.
 **Boundary.** The store is a storage library: a small Rust crate (`native/aac-store/`) loaded by the
 TypeScript server as a native Node module (napi-rs). It appends, projects, queries and maintains, and
 nothing else. Routes, authentication, collectors, provider parsing, switching, signing and every product
-rule stay in TypeScript. The crate makes no network or provider calls. This is not a Rust backend
-rewrite; AGENTS.md's rule still holds.
+rule stay in TypeScript. The crate makes no network or provider calls. The TypeScript server
+stays; a new server piece is a native module like this one, and existing TypeScript is not ported
+unless the owner asks (AGENTS.md).
 
 ## 1. Scope
 
@@ -166,6 +167,7 @@ recovered.
 |---|---|---|
 | Invalid bytes after the durable watermark in an active segment (torn tail) | adopt every whole valid frame, truncate the rest under an intent, sync, publish the watermark | `clean`: these appends were never acknowledged |
 | Bad frame at or below the watermark in an active segment | stop, seal the segment `degraded`, resynchronise only at a fully validated frame, record `store.integrity_detected` with the byte range and the bounded sequence range | a gap |
+| Active file length differs from the acknowledged length at seal, while both ends still decode (a whole interior record removed). A sequence gap that keeps the acknowledged length is not this: a restart may jump the lease, and a failed write already resets the length to the bytes that remain | seal that segment `degraded` with the length and the acknowledged sequence bounds; do not hash it as intact | a gap; status `degraded` and the check is not OK, including after a log-only restore |
 | Sealed segment whose SHA-256 or zstd checksum fails | never modify it; mark it `degraded`; restore that file from a backup with the same name and hash if one exists; otherwise salvage the valid frames on both sides of the hole and project those | a gap with exact or bounded range |
 | Loss in the **ledger** log (answers, runs, switches) | as above, and Status answers become read-only until a backup restore or `ai-account-center dashboard store accept-loss` (later) (`store.loss_accepted`) | blocking banner |
 | Loss in the **readings** log | as above; writing continues | a history gap (shown as no reading, never as zero) |
@@ -517,7 +519,7 @@ whole and atomically:
 
 ```
 native/aac-store/
-  Cargo.toml, Cargo.lock, rust-toolchain.toml (1.98.0, the web dashboard's pin), build.rs (napi-build)
+  Cargo.toml, Cargo.lock, rust-toolchain.toml (1.99.1, the web dashboard's pin), build.rs (napi-build)
   registry.json             value registry (2.7)
   src/lib.rs                napi exports only
   src/log/                  frame, canonical msgpack, segment, manifest, writer, reader, recovery, compress
@@ -794,7 +796,7 @@ or older glibc than the VM):
 bun run store:build
 ```
 
-It needs cargo with rustup (the crate's `rust-toolchain.toml` pins 1.98.0 and installs it), a C
+It needs cargo with rustup (the crate's `rust-toolchain.toml` pins 1.99.1 and installs it), a C
 compiler for zstd (`build-essential`), and glibc no newer than the VM's. No napi CLI is needed: cargo
 builds the cdylib and the script copies it as `.node`. Copy `native/aac-store/prebuilt/` to the VM's
 checkout when built elsewhere; the next `bun run build` puts it in `dist/native/`. Until then the VM's

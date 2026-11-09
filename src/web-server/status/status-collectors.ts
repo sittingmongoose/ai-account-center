@@ -69,8 +69,7 @@ export const runCommand: CommandRunner = (file, args, options) => {
         },
         (error, stdout) => {
           const err = error as
-            | (NodeJS.ErrnoException & { killed?: boolean; code?: unknown })
-            | null;
+            (NodeJS.ErrnoException & { killed?: boolean; code?: unknown }) | null;
           resolve({
             code: err ? (typeof err.code === 'number' ? err.code : null) : 0,
             stdout: typeof stdout === 'string' ? stdout : '',

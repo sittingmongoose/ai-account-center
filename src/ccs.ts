@@ -6,9 +6,8 @@ import { prepareCliArguments } from './commands/cli-bootstrap';
 async function runCli(): Promise<void> {
   const bootstrap = await prepareCliArguments(process.argv.slice(2));
   if (bootstrap.exitNow) return;
-  const { requiresRuntimeServices, tryHandleRootCommand } = await import(
-    './commands/root-command-router'
-  );
+  const { requiresRuntimeServices, tryHandleRootCommand } =
+    await import('./commands/root-command-router');
   // Help, version and migration messages must not load or upgrade private configuration.
   if (!(await requiresRuntimeServices(bootstrap.args))) {
     await tryHandleRootCommand(bootstrap.args);

@@ -126,9 +126,9 @@ export async function listClaudeDesktopProfiles(): Promise<ClaudeDesktopProfile[
 export function canOpenClaudeMacProfile(profile: ClaudeDesktopProfile): boolean {
   return Boolean(
     profile.id &&
-      profile.mac?.sshHost &&
-      profile.mac.launcherPath?.startsWith('/') &&
-      profile.mac.launcherPath.endsWith('.app')
+    profile.mac?.sshHost &&
+    profile.mac.launcherPath?.startsWith('/') &&
+    profile.mac.launcherPath.endsWith('.app')
   );
 }
 

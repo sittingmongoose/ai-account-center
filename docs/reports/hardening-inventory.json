@@ -800,15 +800,15 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1007
-        },
-        {
-          "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
-          "loc": 995
+          "loc": 1006
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
           "loc": 993
+        },
+        {
+          "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
+          "loc": 990
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",

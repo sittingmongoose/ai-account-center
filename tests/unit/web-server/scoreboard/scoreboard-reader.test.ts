@@ -198,6 +198,9 @@ describe('runs reader', () => {
 
       // The same for a stat that works and a read that does not, on a file that changed.
       fs.writeFileSync(file, JSON.stringify(runDoc('vm.lead', 'A', { seq: 2 })));
+      // Same size as before: move the mtime on so the change shows even within one timestamp tick.
+      const later = new Date(Date.now() + 10_000);
+      fs.utimesSync(file, later, later);
       failRead = true;
       await runs.scan();
       expect(runs.snapshot().problems).toEqual([]);

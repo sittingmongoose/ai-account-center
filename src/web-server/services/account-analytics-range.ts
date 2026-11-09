@@ -31,10 +31,7 @@ const FIXED_RANGE_MS: Record<'24h' | '7d' | '30d', number> = {
 };
 
 export type AccountAnalyticsQueryErrorCode =
-  | 'invalid_query'
-  | 'invalid_range'
-  | 'invalid_tz'
-  | 'invalid_provider';
+  'invalid_query' | 'invalid_range' | 'invalid_tz' | 'invalid_provider';
 
 /** A request the client can correct; the route answers 400 with this fixed sentence and code. */
 export class AccountAnalyticsQueryError extends Error {

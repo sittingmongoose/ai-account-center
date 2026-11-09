@@ -57,10 +57,7 @@ export interface DashboardAccountWindow {
 
 /** Account lifecycle (CONTRACT-registry-lifecycle section 2). */
 export type DashboardAccountLifecycleState =
-  | 'ready'
-  | 'pending_sign_in'
-  | 'signing_in'
-  | 'verifying';
+  'ready' | 'pending_sign_in' | 'signing_in' | 'verifying';
 
 export interface DashboardAccountLifecycle {
   state: DashboardAccountLifecycleState;

@@ -16,14 +16,7 @@ export type { LoggingConfig, LoggingLevel };
  * - cleanup:   error path, abort, teardown
  */
 export type LogStage =
-  | 'intake'
-  | 'route'
-  | 'auth'
-  | 'dispatch'
-  | 'upstream'
-  | 'transform'
-  | 'respond'
-  | 'cleanup';
+  'intake' | 'route' | 'auth' | 'dispatch' | 'upstream' | 'transform' | 'respond' | 'cleanup';
 
 export const LOG_STAGES: readonly LogStage[] = [
   'intake',

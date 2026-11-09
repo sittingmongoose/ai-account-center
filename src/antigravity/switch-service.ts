@@ -26,11 +26,7 @@ const IDENTITY_MAX_AGE = 5 * 60_000;
 const RUNTIME_UNAVAILABLE = 'antigravity-runtime-unavailable';
 
 export type AntigravityRecoveryStatus =
-  | 'completed'
-  | 'aborted'
-  | 'restored-previous'
-  | 'recovery-required'
-  | 'no-recovery-pending';
+  'completed' | 'aborted' | 'restored-previous' | 'recovery-required' | 'no-recovery-pending';
 
 export interface AntigravityRecoveryResult {
   status: AntigravityRecoveryStatus;

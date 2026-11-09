@@ -26,8 +26,11 @@ beforeEach(async () => {
   app.use(express.json());
   app.use((req, _res, next) => {
     if (req.headers['x-test-remote']) {
-      Object.defineProperty(req, 'socket', {
-        value: { remoteAddress: '203.0.113.42' },
+      // Keep the real socket. Replacing it leaves the response assigned on
+      // Bun 1.4's Node 26 HTTP server, so the next request throws
+      // ERR_HTTP_SOCKET_ASSIGNED.
+      Object.defineProperty(req.socket, 'remoteAddress', {
+        value: '203.0.113.42',
         configurable: true,
       });
     }

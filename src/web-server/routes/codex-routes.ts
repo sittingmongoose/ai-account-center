@@ -146,11 +146,12 @@ router.post('/profiles/:name/activate', async (req: Request, res: Response): Pro
     return;
   }
   try {
+    const name = typeof req.params.name === 'string' ? req.params.name : '';
     const activated = req.body.confirmationToken
-      ? await activateCodexProfile(req.params.name, {
+      ? await activateCodexProfile(name, {
           confirmationToken: req.body.confirmationToken,
         })
-      : await activateCodexProfile(req.params.name);
+      : await activateCodexProfile(name);
     res.json({
       success: true,
       name: activated.name,

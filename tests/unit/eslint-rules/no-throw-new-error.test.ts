@@ -31,7 +31,7 @@ describe('ccs/no-new-throw-error rule logic', () => {
     const reports: Array<{ messageId: string }> = [];
     const context = {
       options: [{ allowlist }],
-      getFilename: () => filename,
+      filename,
       report: (r: { messageId: string }) => reports.push(r),
     };
     const visitors = rule.create(context);

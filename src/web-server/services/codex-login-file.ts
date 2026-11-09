@@ -76,9 +76,7 @@ export async function readCodexLogin(authPath: string): Promise<CodexLoginIdenti
 }
 
 export type LiveCodexEmail =
-  | { state: 'absent' }
-  | { state: 'unverified' }
-  | { state: 'email'; email: string };
+  { state: 'absent' } | { state: 'unverified' } | { state: 'email'; email: string };
 
 /**
  * The live native login's email, read fresh (no cache, no registry metadata):

@@ -153,8 +153,7 @@ export interface UsageWorkerResult {
 }
 
 export type UsageWorkerResponse =
-  | { ok: true; data: UsageWorkerResult }
-  | { ok: false; error: string };
+  { ok: true; data: UsageWorkerResult } | { ok: false; error: string };
 
 function getUsageWorkerPath(): string {
   // Bun runs source tests directly; installed Node runs the emitted neighbor.
@@ -405,7 +404,9 @@ export function loadUsageInWorker(
         );
       }
     });
-    worker.once('error', (error) => finish(error));
+    worker.once('error', (error: unknown) => {
+      finish(error instanceof Error ? error : new CCSError('Usage worker failed'));
+    });
     worker.once('exit', (code) =>
       finish(new CCSError(`Usage worker exited before returning a result (code ${code})`))
     );

@@ -624,6 +624,7 @@ impl Engine {
                 return Ok(result);
             }
             log.write(&events)?;
+            merge_findings(&mut self.findings.lock().unwrap(), log.length_loss_findings());
             for (i, cp) in &checkpoints {
                 db::write_checkpoint(&txn, &Self::checkpoint_name(self.projectors[*i].as_ref(), log_id), cp)?;
             }
@@ -635,6 +636,9 @@ impl Engine {
     pub fn status(&self) -> Result<Json> {
         let logs = self.lock_logs();
         let log_info = json!({ "readings": logs.readings.info(), "ledger": logs.ledger.info() });
+        let persisted_loss = [&logs.readings, &logs.ledger]
+            .iter()
+            .any(|log| log.manifest().segments.iter().any(|s| s.state != "sealed"));
         drop(logs);
         let db_bytes = fs::metadata(self.dir.join(REDB_FILE)).map(|m| m.len()).unwrap_or(0);
         let db_stats = self.with_db(|db| {
@@ -687,7 +691,11 @@ impl Engine {
         })?;
         let findings = self.findings.lock().unwrap().clone();
         Ok(json!({
-            "state": if findings.iter().any(|f| is_loss(&f.kind)) { "degraded" } else { "ready" },
+            "state": if persisted_loss || findings.iter().any(|f| is_loss(&f.kind)) {
+                "degraded"
+            } else {
+                "ready"
+            },
             "storeSchemaVersion": db::STORE_SCHEMA_VERSION,
             "instanceId": self.instance_id,
             "openedAt": self.opened_ms,
@@ -724,6 +732,7 @@ impl Engine {
     /// Seals segments whose day has ended, then compresses sealed segments outside the lock.
     pub fn seal_and_compress(&self, now: u64) -> Result<Json> {
         let mut candidates = Vec::new();
+        let mut noted = Vec::new();
         {
             let mut logs = self.lock_logs();
             for id in LogId::ALL {
@@ -733,11 +742,13 @@ impl Engine {
                 {
                     log.seal()?;
                 }
+                noted.extend(log.length_loss_findings());
                 for c in log.compress_candidates() {
                     candidates.push((id, c));
                 }
             }
         }
+        merge_findings(&mut self.findings.lock().unwrap(), noted);
         let mut compressed = 0;
         for (id, (start, raw, sha)) in candidates {
             match Log::compress_file(&raw, &sha) {
@@ -827,6 +838,9 @@ impl Engine {
         let mut logs = self.lock_logs();
         logs.readings.seal()?;
         logs.ledger.seal()?;
+        let mut noted = logs.readings.length_loss_findings();
+        noted.extend(logs.ledger.length_loss_findings());
+        merge_findings(&mut self.findings.lock().unwrap(), noted);
         let mut guard = self.db.write().unwrap_or_else(|p| p.into_inner());
         if let Some(db) = guard.as_ref() {
             let txn = begin(db)?;

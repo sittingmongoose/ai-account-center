@@ -58,9 +58,7 @@ export interface AccountRegistryV2 {
 }
 
 export type AccountRegistryRead =
-  | { state: 'absent' }
-  | { state: 'invalid' }
-  | { state: 'ok'; registry: AccountRegistryV2 };
+  { state: 'absent' } | { state: 'invalid' } | { state: 'ok'; registry: AccountRegistryV2 };
 
 const ENTRY_KEYS = new Set([
   'id',

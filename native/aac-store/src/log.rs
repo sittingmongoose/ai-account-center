@@ -133,8 +133,9 @@ fn walk(buf: &[u8]) -> Option<Vec<Scanned>> {
 }
 
 /// The frames of a sealed segment, only when they decode and run from its first sequence to its
-/// last. A matching hash proves only that the bytes are the ones sealed: the active log can be
-/// damaged or shortened before its seal, and the seal then hashes what is left.
+/// last. A matching hash proves only that the bytes are the ones sealed. A tail cut still seals
+/// under the acknowledged end (verify then reports it). A file whose length is not the
+/// acknowledged length while both ends remain is sealed `degraded` instead of hashed as intact.
 fn sealed_frames(entry: &SegmentEntry, bytes: &[u8]) -> Option<Vec<Scanned>> {
     let frames = walk(bytes)?;
     let ends = (frames.first().map(|f| f.seq), frames.last().map(|f| f.seq));
@@ -142,6 +143,10 @@ fn sealed_frames(entry: &SegmentEntry, bytes: &[u8]) -> Option<Vec<Scanned>> {
 }
 
 const SEALED_INCOMPLETE: &str = "sealed frames are damaged or incomplete";
+/// A seal whose file is not the acknowledged length. A sequence gap with that
+/// length is still valid: a restart may jump the lease, and a failed write
+/// already resets `active.len` to the bytes that remain.
+const ACK_LENGTH_LOSS: &str = "acknowledged length";
 
 pub fn scan(buf: &[u8]) -> Scan {
     let mut frames = Vec::new();
@@ -770,6 +775,11 @@ impl Log {
     }
 
     /// Closes the active segment: fsync, rename to its sealed name, publish the manifest.
+    ///
+    /// When the file's length is not the acknowledged `active.len` and the bytes still run from
+    /// the first sequence to the last, the segment is sealed `degraded`. Removing a whole interior
+    /// record keeps both ends, so a hash of what remains would hide the hole. A shorter tail does
+    /// not keep the last sequence; that stays a normal seal and verify reports it.
     pub fn seal(&mut self) -> Result<()> {
         let Some(active) = self.active.take() else {
             return Ok(());
@@ -782,11 +792,23 @@ impl Log {
         };
         active.file.sync_all()?;
         let mut file = active.file;
+        let file_len = file.metadata()?.len();
+        let acknowledged = active.len;
         file.seek(SeekFrom::Start(0))?;
-        let mut bytes = Vec::with_capacity(active.len as usize);
+        let mut bytes = Vec::with_capacity(file_len.max(acknowledged) as usize);
         file.read_to_end(&mut bytes)?;
         drop(file);
         let scanned = scan(&bytes);
+        let length_matches = file_len == acknowledged && bytes.len() as u64 == acknowledged;
+        let endpoints_hold = scanned.stop.is_none()
+            && scanned.frames.first().map(|f| f.seq) == Some(active.start_seq)
+            && scanned.frames.last().map(|f| f.seq) == Some(last);
+        let loss = (!length_matches && endpoints_hold).then(|| {
+            format!(
+                "{ACK_LENGTH_LOSS} {acknowledged} does not match the active file ({file_len} bytes); a record in {}..={last} was lost",
+                active.start_seq
+            )
+        });
         fs::rename(
             self.dir.join(active_name(active.start_seq)),
             self.dir.join(sealed_name(active.start_seq, last)),
@@ -802,11 +824,27 @@ impl Log {
             raw_sha256: fsx::sha256_hex(&bytes),
             zst_bytes: 0,
             compressed: false,
-            state: "sealed".into(),
-            loss: None,
+            state: if loss.is_some() { "degraded" } else { "sealed" }.into(),
+            loss,
         });
         self.manifest.active = None;
         self.write_manifest()
+    }
+
+    /// Length-mismatch seals, so a check on this process can disclose them before the next open.
+    pub fn length_loss_findings(&self) -> Vec<Finding> {
+        self.manifest
+            .segments
+            .iter()
+            .filter(|s| s.state == "degraded" && s.loss.as_deref().is_some_and(|l| l.starts_with(ACK_LENGTH_LOSS)))
+            .map(|s| {
+                Finding::new(
+                    "segment_degraded",
+                    s.loss.clone().unwrap_or_default(),
+                    Some((s.start_seq, s.end_seq)),
+                )
+            })
+            .collect()
     }
 
     /// Sealed raw segments waiting for compression: (start, raw path, expected SHA-256).
@@ -991,6 +1029,18 @@ impl Log {
                 );
             }
         };
+        if entry.state == "degraded"
+            && entry
+                .loss
+                .as_deref()
+                .is_some_and(|loss| loss.starts_with(ACK_LENGTH_LOSS))
+        {
+            // Both ends still decode, so a hash of the remaining bytes is not proof the
+            // acknowledged record is there. Disclose the seal's loss and keep the survivors.
+            let frames = salvage(&bytes).0;
+            let detail = entry.loss.clone().unwrap_or_default();
+            return (bytes, frames, Some(Finding::new("segment_degraded", detail, range)));
+        }
         if entry.state == "sealed" && fsx::sha256_hex(&bytes) == entry.raw_sha256 {
             // Frames that do not decode or do not reach the segment's ends are loss, disclosed,
             // never a silent salvage (see `sealed_frames`).

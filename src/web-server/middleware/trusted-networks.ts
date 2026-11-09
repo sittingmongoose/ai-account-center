@@ -118,7 +118,7 @@ function formatIPv6(bytes: Uint8Array): string {
   // RFC 5952: compress the longest run of two or more zero groups (the first one on a tie).
   let bestStart = -1;
   let bestLength = 0;
-  for (let start = 0; start < 8; ) {
+  for (let start = 0; start < 8;) {
     if (groups[start] !== 0) {
       start += 1;
       continue;

@@ -63,7 +63,7 @@ module.exports = {
         if (!isNewErrorExpression(node.argument)) {
           return;
         }
-        const filename = context.getFilename();
+        const filename = context.filename;
         // Normalize to a repo-root-relative path so the baseline keys (which are
         // relative, e.g. 'src/auth/profile-registry.ts') match regardless of
         // whether ESLint reports an absolute or relative filename.

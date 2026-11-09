@@ -8,13 +8,15 @@ Preserve history, original author metadata, copyright notices and LICENSE.
 
 The product owns account usage, dashboard authentication, existing profiles,
 guarded Codex activation/auto-switch, Analytics, explicit app-update jobs and
-native Mac/Windows bars. The backend remains TypeScript; the web UI is Slint
-**1.18.1** compiled to WebAssembly. Native bars remain Swift and WPF.
+native Mac/Windows bars. The TypeScript server stays; the web UI is Slint
+**1.18.1** compiled to WebAssembly. Native bars remain Swift and WPF. Every new
+server piece is written in Rust as a native module like `native/aac-store`.
+Existing TypeScript modules are not ported unless the owner asks.
 
 The primary command is `ai-account-center dashboard`; `ccs config` is compatible.
 Retired `ccsx`, `ccs-codex`, `ccsd`, `ccs-droid` and `ccsxp` bins give migration
 guidance. Do not restore the removed runtime dispatcher, React/Vite portal,
-API routing product or introduce a Rust backend rewrite.
+or API routing product.
 
 ## Working rules
 

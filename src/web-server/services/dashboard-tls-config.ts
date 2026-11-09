@@ -141,8 +141,7 @@ export interface TrustedProxyAddressOptions {
 }
 
 export type TrustedProxyAddressList =
-  | { ok: true; addresses: string[] }
-  | { ok: false; problem: TrustedProxyProblem };
+  { ok: true; addresses: string[] } | { ok: false; problem: TrustedProxyProblem };
 
 /**
  * `dashboard_tls.trusted_proxy_addresses`: 1 to 8 exact addresses of the

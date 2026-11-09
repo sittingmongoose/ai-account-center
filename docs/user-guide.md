@@ -424,7 +424,7 @@ steps are in [the Antigravity runtime guide](antigravity-runtime.md).
 
 | Component | Platform and requirements |
 | --- | --- |
-| Dashboard server / CLI | Node.js 22, matching CI, on Linux, macOS or Windows; local source builds also need Bun and the Slint toolchain below |
+| Dashboard server / CLI | Node.js 22.13+ or 26 (CI uses 26) on Linux, macOS or Windows; local source builds also need Bun and the Slint toolchain below |
 | Browser dashboard | Mac or Windows browser with WebGL2 and hardware acceleration; served by the dashboard server |
 | Mac menu bar | macOS 26+, Xcode 26+ for source installation |
 | Windows tray | Native .NET 10 WPF, Windows x64; source builds require an existing .NET 10 SDK |

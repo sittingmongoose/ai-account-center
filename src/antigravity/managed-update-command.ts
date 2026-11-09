@@ -44,10 +44,7 @@ type ManagedCoordinatorResult = ManagedUpdateResult;
  * runtime_paused_blocked - the same, but it refused before `agy update` ran.
  */
 export type ManagedFailureCode =
-  | 'update_failed'
-  | 'runtime_unavailable'
-  | 'runtime_paused'
-  | 'runtime_paused_blocked';
+  'update_failed' | 'runtime_unavailable' | 'runtime_paused' | 'runtime_paused_blocked';
 
 export interface ManagedUpdateCommandOptions extends ManagedNativeUpdateOptions {
   /** Explicit coordinator injection; importing or constructing options performs no work. */

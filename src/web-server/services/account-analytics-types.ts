@@ -97,13 +97,7 @@ export interface AccountAnalyticsModelRates {
 
 /** A tool whose CLI usage logs the server reads (a collection source, not a provider). */
 export type AccountAnalyticsActivityProvider =
-  | 'claude'
-  | 'codex'
-  | 'omp'
-  | 'muse'
-  | 'zcode'
-  | 'jsonl'
-  | 'antigravity';
+  'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl' | 'antigravity';
 
 /**
  * The dashboard provider that served a usage row: the tool's own provider for Claude Code, Codex and the Muse
@@ -145,10 +139,7 @@ export interface AccountAnalyticsSessionRow extends AccountAnalyticsActivityTota
 }
 
 export type AccountAnalyticsAnomalyType =
-  | 'cost_spike'
-  | 'high_input'
-  | 'high_io_ratio'
-  | 'high_cache_read';
+  'cost_spike' | 'high_input' | 'high_io_ratio' | 'high_cache_read';
 
 export interface AccountAnalyticsAnomalies {
   thresholds: {

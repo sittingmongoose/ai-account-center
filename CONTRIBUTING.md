@@ -7,7 +7,8 @@ authorship, copyright, license and repository history are retained.
 
 ## Source setup
 
-Use Node.js 22, matching CI, Bun, Rust 1.98.0 with
+Use Node.js 22.13 or newer, including 26 (CI installs 26; Node 22 stays
+supported), Bun 1.4.4, Rust 1.99.1 with
 `wasm32-unknown-unknown`, and wasm-pack **0.15.0**. Slint/runtime compiler are pinned to
 **1.18.1** in the dashboard manifest and lockfile.
 Install the build tool with `cargo install wasm-pack --version 0.15.0 --locked`.
@@ -59,7 +60,9 @@ Oct 20 Muse fallback).
 | Maintainer guides | [docs/README.md](docs/README.md) |
 
 The root builder produces the dashboard at `dist/ui/`. There is no React/Vite
-workspace to install or run. The backend remains TypeScript; native clients
+workspace to install or run. The TypeScript server stays. Every new server
+piece is written in Rust as a native module like `native/aac-store`. Existing
+TypeScript modules are not ported unless the owner asks. Native clients
 retain their platform toolchains.
 
 ## Preserve account state

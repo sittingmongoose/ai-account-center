@@ -9,8 +9,8 @@ FROM node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627c
 SHELL ["/bin/bash", "-lc"]
 
 # Pin bun version for reproducible builds
-ARG BUN_VERSION=1.3.9
-ARG RUST_VERSION=1.98.0
+ARG BUN_VERSION=1.4.4
+ARG RUST_VERSION=1.99.1
 ARG WASM_PACK_VERSION=0.15.0
 ENV BUN_INSTALL=/usr/local/bun
 ENV CARGO_HOME=/usr/local/cargo

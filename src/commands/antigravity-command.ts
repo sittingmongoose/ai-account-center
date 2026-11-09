@@ -74,9 +74,8 @@ export async function handleAntigravityCommand(
       writeLine('[X] Usage: ai-account-center antigravity status');
       return 1;
     }
-    const { formatAntigravityReleaseStatus, readAntigravityReleaseStatus } = await import(
-      '../antigravity/release-status'
-    );
+    const { formatAntigravityReleaseStatus, readAntigravityReleaseStatus } =
+      await import('../antigravity/release-status');
     for (const line of formatAntigravityReleaseStatus(
       readAntigravityReleaseStatus({ ccsDir: getCcsDir(), home: os.homedir() })
     ))
@@ -89,9 +88,8 @@ export async function handleAntigravityCommand(
       return 1;
     }
     // Loaded late so help and usage errors never construct a runtime.
-    const { createInstalledAntigravityRuntimeFactory } = await import(
-      '../antigravity/production-runtime'
-    );
+    const { createInstalledAntigravityRuntimeFactory } =
+      await import('../antigravity/production-runtime');
     const { PrivateStorageError } = await import('../antigravity/registry');
     const runtime = recoverRuntime
       ? recoverRuntime()

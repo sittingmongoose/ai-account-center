@@ -41,15 +41,7 @@ export type WebSearchReadiness = 'ready' | 'needs_setup' | 'unavailable';
  * WebSearch provider identifier
  */
 export type WebSearchProviderId =
-  | 'exa'
-  | 'tavily'
-  | 'brave'
-  | 'searxng'
-  | 'duckduckgo'
-  | 'agy'
-  | 'gemini'
-  | 'grok'
-  | 'opencode';
+  'exa' | 'tavily' | 'brave' | 'searxng' | 'duckduckgo' | 'agy' | 'gemini' | 'grok' | 'opencode';
 
 /**
  * Provider execution class.

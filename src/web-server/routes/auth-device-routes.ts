@@ -236,7 +236,7 @@ function listDevices(req: Request, res: Response): void {
 async function revokeOne(req: Request, res: Response): Promise<void> {
   if (!browserOnly(req, res)) return;
   if (!readOptionalEmptyBody(req, res, 'required')) return;
-  const id = req.params.id;
+  const id = typeof req.params.id === 'string' ? req.params.id : '';
   try {
     if (!DEVICE_ID.test(id) || !(await revokeDevice(id, 'dashboard'))) {
       sendAuthError(res, 404, 'unknown_device', 'That device is not paired.');

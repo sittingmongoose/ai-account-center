@@ -30,21 +30,11 @@ export type ImageAnalysisResolutionSource =
   | 'missing-model';
 
 export type ImageAnalysisStatusCode =
-  | 'active'
-  | 'mapped'
-  | 'attention'
-  | 'disabled'
-  | 'skipped'
-  | 'hook-missing';
+  'active' | 'mapped' | 'attention' | 'disabled' | 'skipped' | 'hook-missing';
 
 export type ImageAnalysisAuthReadiness = 'not-needed' | 'ready' | 'missing' | 'unknown';
 export type ImageAnalysisProxyReadiness =
-  | 'not-needed'
-  | 'ready'
-  | 'remote'
-  | 'stopped'
-  | 'unavailable'
-  | 'unknown';
+  'not-needed' | 'ready' | 'remote' | 'stopped' | 'unavailable' | 'unknown';
 export type ImageAnalysisEffectiveRuntimeMode = 'cliproxy-image-analysis' | 'native-read';
 
 export interface ImageAnalysisResolutionContext {

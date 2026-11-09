@@ -29,6 +29,11 @@ import {
 import { JOB_ID_PATTERN } from '../services/signin-jobs';
 import { antigravityTerminal } from '../services/account-lifecycle-helpers';
 
+/** Express 5 types a path segment as string or string[]. These routes name one segment. */
+function pathParam(value: string | string[] | undefined): string {
+  return typeof value === 'string' ? value : '';
+}
+
 /**
  * The account lifecycle routes (CONTRACT-registry-lifecycle section 6), under
  * /api/accounts. Every route needs a browser session (device tokens get 403
@@ -95,7 +100,7 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
   // /api/accounts, so only account-shaped segments reach it; the rest keep the
   // JSON 404.
   const accountPath = (req: Request, _res: Response, next: NextFunction) => {
-    const id = req.params.id ?? '';
+    const id = pathParam(req.params.id);
     next(id.includes(':') || id.startsWith('plan-opencode-go-console-') ? undefined : 'route');
   };
   const commandGuard = accountRouteGuard((req) => req.path === '/signin-command');
@@ -126,8 +131,9 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
       }
     };
   const jobId = (req: Request): string => {
-    if (!JOB_ID_PATTERN.test(req.params.jobId)) throw new LifecycleHttpError(404, 'unknown_job');
-    return req.params.jobId;
+    const id = pathParam(req.params.jobId);
+    if (!JOB_ID_PATTERN.test(id)) throw new LifecycleHttpError(404, 'unknown_job');
+    return id;
   };
 
   router.get(
@@ -148,12 +154,12 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
   router.post(
     '/trash/:trashId/restore',
     guard,
-    write((req, body) => restoreTrash(env(), req.params.trashId, body, context(req)))
+    write((req, body) => restoreTrash(env(), pathParam(req.params.trashId), body, context(req)))
   );
   router.post(
     '/trash/:trashId/purge',
     guard,
-    write((req, body) => purgeTrash(env(), req.params.trashId, body, context(req)))
+    write((req, body) => purgeTrash(env(), pathParam(req.params.trashId), body, context(req)))
   );
   router.get(
     '/signin-jobs/:jobId',
@@ -192,33 +198,33 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
   router.post(
     '/:id/signin-again',
     guard,
-    write((req, body) => signInAgain(env(), req.params.id, body, context(req)))
+    write((req, body) => signInAgain(env(), pathParam(req.params.id), body, context(req)))
   );
   router.put(
     '/:id/key',
     guard,
-    write((req, body) => replaceKey(env(), req.params.id, body, context(req)))
+    write((req, body) => replaceKey(env(), pathParam(req.params.id), body, context(req)))
   );
   router.post(
     '/:id/remove',
     guard,
-    write((req, body) => removeAccount(env(), req.params.id, body, context(req)))
+    write((req, body) => removeAccount(env(), pathParam(req.params.id), body, context(req)))
   );
   router.post(
     '/:id/open',
     guard,
-    write((req, body) => openApp(env(), req.params.id, body))
+    write((req, body) => openApp(env(), pathParam(req.params.id), body))
   );
   router.post(
     '/:id/recheck',
     guard,
-    write((req, body) => recheck(env(), req.params.id, body))
+    write((req, body) => recheck(env(), pathParam(req.params.id), body))
   );
   router.patch(
     '/:id',
     accountPath,
     guard,
-    write((req, body) => relabel(env(), req.params.id, body, context(req)))
+    write((req, body) => relabel(env(), pathParam(req.params.id), body, context(req)))
   );
   return router;
 }

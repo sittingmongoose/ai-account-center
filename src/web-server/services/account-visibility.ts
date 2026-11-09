@@ -88,8 +88,7 @@ export async function patchAccountVisibility(
 }
 
 export type AccountVisibilityRead =
-  | { state: 'ok'; visibility: AccountVisibility }
-  | { state: 'unavailable' };
+  { state: 'ok'; visibility: AccountVisibility } | { state: 'unavailable' };
 
 export function isPublicAccountId(value: unknown): value is string {
   return typeof value === 'string' && (ACCOUNT_ID.test(value) || WALLET_ACCOUNT_ID.test(value));
@@ -261,8 +260,7 @@ export function writeAccountVisibility(
 }
 
 export type AccountVisibilityUpdateResult =
-  | { state: 'saved'; visibility: AccountVisibility }
-  | { state: 'unavailable' };
+  { state: 'saved'; visibility: AccountVisibility } | { state: 'unavailable' };
 
 /**
  * The PUT semantics: every list the update names replaces the stored one; a

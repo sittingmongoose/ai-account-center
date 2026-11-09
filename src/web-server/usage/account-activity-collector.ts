@@ -1172,7 +1172,7 @@ const READ_CHUNK_BYTES = 1024 * 1024;
 function* plainChunks(file: string, start: number, end: number): Generator<Buffer> {
   const fd = fs.openSync(file, 'r');
   try {
-    for (let at = start; at < end; ) {
+    for (let at = start; at < end;) {
       const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, end - at));
       const read = fs.readSync(fd, buffer, 0, buffer.length, at);
       if (!read) break;

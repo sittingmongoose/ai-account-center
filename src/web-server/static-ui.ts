@@ -375,7 +375,9 @@ export function precompressedStatic(ui: StaticUi): RequestHandler {
       withoutVariantHeaders(res);
       if (STATIC_ICON_ALIASES.has(req.path)) {
         setSharedHeaders(ui, res, relative);
-        res.sendFile(path.join(ui.root, relative), (error?: Error) => {
+        // With `root`, Express 5's send checks only the path inside the UI folder for dot segments;
+        // an absolute path is checked whole, and an install under ~/.local would answer 404.
+        res.sendFile(relative, { root: ui.root }, (error?: Error) => {
           if (error && !res.headersSent) next(error);
         });
         return;
@@ -386,8 +388,7 @@ export function precompressedStatic(ui: StaticUi): RequestHandler {
 }
 
 export type PageRouteResult =
-  | { kind: 'page' }
-  | { kind: 'redirect'; status: 301 | 302; location: string };
+  { kind: 'page' } | { kind: 'redirect'; status: 301 | 302; location: string };
 
 /** Exact, case-sensitive page routes. Queries are not read here. */
 export function resolvePageRoute(
@@ -408,7 +409,7 @@ export function resolvePageRoute(
   return { kind: 'redirect', status: 302, location: '/' };
 }
 
-/** The app.get('*') fallback: page routes get index.html, the rest are redirected. */
+/** The app.get('/{*splat}') fallback: page routes get index.html, the rest are redirected. */
 export function pageRouteHandler(ui: StaticUi, providerIds: ReadonlySet<string>): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
     const appPath =
@@ -425,7 +426,7 @@ export function pageRouteHandler(ui: StaticUi, providerIds: ReadonlySet<string>)
       serveUiFile(ui, req, res, APP_ENTRY, () => {
         withoutVariantHeaders(res);
         setSharedHeaders(ui, res, APP_ENTRY);
-        res.sendFile(path.join(ui.root, APP_ENTRY), (error?: Error) => {
+        res.sendFile(APP_ENTRY, { root: ui.root }, (error?: Error) => {
           if (error && !res.headersSent) next(error);
         });
       });
@@ -439,7 +440,7 @@ export function pageRouteHandler(ui: StaticUi, providerIds: ReadonlySet<string>)
     serveUiFile(ui, req, res, 'index.html', () => {
       withoutVariantHeaders(res);
       setSharedHeaders(ui, res, 'index.html');
-      res.sendFile(path.join(ui.root, 'index.html'), (error?: Error) => {
+      res.sendFile('index.html', { root: ui.root }, (error?: Error) => {
         if (error && !res.headersSent) next(error);
       });
     });

@@ -10,8 +10,11 @@
     "target": "ES2020",
     "lib": ["ES2020"],
 
-    // Module resolution
+    // Module resolution. "node" is the Node 10 resolver. TypeScript 6 reports
+    // that resolver as deprecated until a later module setting; 6.0 keeps it
+    // working. TypeScript 7 is not used here (see the toolchain notes).
     "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,

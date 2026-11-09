@@ -8,6 +8,7 @@ const { parse } = require('smol-toml');
 const {
   assertSlintPin,
   assertLockedSlint,
+  assertLockedWasmBindgen,
   sourceFingerprint,
   leptosFingerprint,
   commandRunner,
@@ -23,7 +24,9 @@ function validateUi(options = {}) {
   const cargoBin = path.join(os.homedir(), '.cargo', 'bin');
   const env = { ...process.env, PATH: `${cargoBin}${path.delimiter}${process.env.PATH ?? ''}` };
   assertSlintPin(parse(fs.readFileSync(path.join(crate, 'Cargo.toml'), 'utf8')));
-  assertLockedSlint(parse(fs.readFileSync(path.join(crate, 'Cargo.lock'), 'utf8')));
+  const dashboardLock = parse(fs.readFileSync(path.join(crate, 'Cargo.lock'), 'utf8'));
+  assertLockedSlint(dashboardLock);
+  assertLockedWasmBindgen(dashboardLock, 'Dashboard');
   run(
     toolPath('cargo', cargoBin),
     ['fmt', '--manifest-path', path.join(crate, 'Cargo.toml'), '--check'],
@@ -63,6 +66,10 @@ function validateUi(options = {}) {
     }
   };
   if (present(leptosCrate)) {
+    assertLockedWasmBindgen(
+      parse(fs.readFileSync(path.join(leptosCrate, 'Cargo.lock'), 'utf8')),
+      'Leptos'
+    );
     run(
       toolPath('cargo', cargoBin),
       ['fmt', '--manifest-path', path.join(leptosCrate, 'Cargo.toml'), '--check'],

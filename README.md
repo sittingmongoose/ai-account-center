@@ -222,7 +222,7 @@ flowchart LR
     mac["Mac menu bar<br/>SwiftUI"]
     win["Windows tray<br/>WPF .NET 10"]
   end
-  subgraph server["Dashboard server · TypeScript on Node.js 22"]
+  subgraph server["Dashboard server · TypeScript on Node.js 22 or 26"]
     api["Authenticated API + WebSocket"]
     usage["Account usage"]
     switch["Guarded switching"]
@@ -240,7 +240,7 @@ flowchart LR
 
 | Layer | Built with |
 | --- | --- |
-| Backend | TypeScript on Node.js 22: Express, WebSocket, structured logging |
+| Backend | TypeScript on Node.js 22 or 26: Express, WebSocket, structured logging |
 | Web UI | [Slint](https://slint.dev) 1.18.1, compiled from Rust to WebAssembly and drawn with WebGL2; installable PWA |
 | Mac app | Swift and SwiftUI menu-bar app |
 | Windows app | C# and WPF on .NET 10 |
@@ -257,7 +257,7 @@ The setup it was built for: a **Linux server** runs the dashboard, and a **Mac**
 
 | For | You need |
 | --- | --- |
-| The dashboard | Node.js 22, [Bun](https://bun.sh/docs/installation) 1.3.9, [Rust](https://rust-lang.org/tools/install/) 1.98.0 with `wasm32-unknown-unknown` and [wasm-pack](https://github.com/wasm-bindgen/wasm-pack#installation) 0.15.0 |
+| The dashboard | Node.js 22.13+ or 26 (CI uses 26), [Bun](https://bun.sh/docs/installation) 1.4.4, [Rust](https://rust-lang.org/tools/install/) 1.99.1 with `wasm32-unknown-unknown` and [wasm-pack](https://github.com/wasm-bindgen/wasm-pack#installation) 0.15.0 |
 | Usage readings | Your existing provider sign-ins on the computer that owns them, and Python 3 there (`/usr/bin/python3` on Linux and Mac, `python.exe` on Windows) |
 | Mac / Windows features | SSH access from the dashboard computer, and Python 3 on the remote computer |
 | Codex / Antigravity switching | The dashboard on Linux (activation refuses other platforms) |
@@ -271,7 +271,7 @@ The setup it was built for: a **Linux server** runs the dashboard, and a **Mac**
 git clone https://github.com/sittingmongoose/ai-account-center.git
 cd ai-account-center
 bun install --frozen-lockfile
-rustup toolchain install 1.98.0 --profile minimal --target wasm32-unknown-unknown --component rustfmt
+rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown --component rustfmt
 cargo install wasm-pack --version 0.15.0 --locked
 bun run build:all
 ```

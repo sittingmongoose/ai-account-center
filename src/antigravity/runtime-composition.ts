@@ -327,30 +327,28 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
         nativeConsumerCompatible: profile.identityVerified && profile.available,
         isActive: profile.selected,
       })),
-      quotas: snapshots.map(
-        (snapshot): AntigravityAutoQuotaSnapshot => ({
-          profileId: snapshot.profileId,
-          hostId: 'ubuntu',
-          identityKey: snapshot.identityKey,
-          credentialRevision: snapshot.credentialRevision,
-          source: 'native-consumer',
-          status:
-            snapshot.status === 'fresh'
-              ? 'fresh'
-              : snapshot.status === 'cached' || snapshot.status === 'rate_limited'
-                ? snapshot.status
-                : snapshot.status === 'error'
-                  ? 'error'
-                  : 'unavailable',
-          sampledAt: snapshot.sampledAt ?? '',
-          pools:
-            snapshot.identityVerified === true &&
-            snapshot.identityValidation === 'verified' &&
-            Array.isArray(snapshot.pools)
-              ? snapshot.pools
-              : [],
-        })
-      ),
+      quotas: snapshots.map((snapshot): AntigravityAutoQuotaSnapshot => ({
+        profileId: snapshot.profileId,
+        hostId: 'ubuntu',
+        identityKey: snapshot.identityKey,
+        credentialRevision: snapshot.credentialRevision,
+        source: 'native-consumer',
+        status:
+          snapshot.status === 'fresh'
+            ? 'fresh'
+            : snapshot.status === 'cached' || snapshot.status === 'rate_limited'
+              ? snapshot.status
+              : snapshot.status === 'error'
+                ? 'error'
+                : 'unavailable',
+        sampledAt: snapshot.sampledAt ?? '',
+        pools:
+          snapshot.identityVerified === true &&
+          snapshot.identityValidation === 'verified' &&
+          Array.isArray(snapshot.pools)
+            ? snapshot.pools
+            : [],
+      })),
       hosts: [census],
     };
   };
