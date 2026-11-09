@@ -78,4 +78,34 @@ describe('reset-passed readings (review finding F6)', () => {
     expect(cleared.windows[0]).toEqual(window());
     expect('resetPassed' in cleared.windows[0]).toBe(false);
   });
+
+  it('stays generic for dynamic keys and the session release: a passed reset is history', () => {
+    const account = {
+      sampledAt: '2026-10-01T12:00:00.000Z',
+      windows: [
+        window({
+          key: 'seven_day_future_model',
+          label: 'Weekly Future usage',
+          usedPercent: 40,
+          remainingPercent: 60,
+          windowMinutes: 10080,
+        }),
+        window({
+          key: 'session_reset_allowance',
+          label: 'Weekly session reset allowance',
+          usedPercent: null,
+          remainingPercent: null,
+          windowMinutes: null,
+          kind: 'balance' as const,
+          used: 1,
+          limit: 3,
+          remaining: 2,
+          unit: 'resets',
+        }),
+      ],
+    };
+    const marked = markPassedResets(account, AT_RESET);
+    expect(marked.windows[0]).toEqual({ ...account.windows[0], resetPassed: true });
+    expect(marked.windows[1]).toEqual({ ...account.windows[1], resetPassed: true });
+  });
 });

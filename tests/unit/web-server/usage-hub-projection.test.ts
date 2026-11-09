@@ -162,7 +162,7 @@ describe('usage hub projection: Codex wham/usage body', () => {
 });
 
 describe('usage hub projection: Claude oauth/usage body', () => {
-  it('maps five_hour, seven_day and model weeklies; leaves other weeklies and extras out', () => {
+  it('maps five_hour, seven_day and every seven_day_<slug> weekly; leaves extras out', () => {
     expect(claudeUsageBody(claude())).toEqual({
       five_hour: { utilization: 10, resets_at: null },
       seven_day: { utilization: 50, resets_at: '2026-10-10T00:00:00.000Z' },
@@ -173,12 +173,134 @@ describe('usage hub projection: Claude oauth/usage body', () => {
           resets_at: null,
           scope: { model: { display_name: 'Opus' } },
         },
+        {
+          kind: 'weekly_scoped',
+          percent: 5,
+          resets_at: '2026-10-06T15:00:00.000Z',
+          scope: { model: { display_name: 'Oauth Apps' } },
+        },
       ],
     });
   });
 
+  it('emits opus, sonnet and haiku scoped entries from their labels', () => {
+    const body = claudeUsageBody(
+      claude({
+        windows: [
+          window({
+            key: 'seven_day_opus',
+            label: 'Weekly Opus usage',
+            usedPercent: 10,
+            windowMinutes: 10080,
+            kind: 'rate_limit',
+          }),
+          window({
+            key: 'seven_day_sonnet',
+            label: 'Weekly Sonnet usage',
+            usedPercent: 20,
+            windowMinutes: 10080,
+            kind: 'rate_limit',
+          }),
+          window({
+            key: 'seven_day_haiku',
+            label: 'Weekly Haiku usage',
+            usedPercent: 30,
+            windowMinutes: 10080,
+            kind: 'rate_limit',
+          }),
+        ],
+      })
+    );
+    expect(body?.limits).toEqual([
+      {
+        kind: 'weekly_scoped',
+        percent: 10,
+        resets_at: '2026-10-06T15:00:00.000Z',
+        scope: { model: { display_name: 'Opus' } },
+      },
+      {
+        kind: 'weekly_scoped',
+        percent: 20,
+        resets_at: '2026-10-06T15:00:00.000Z',
+        scope: { model: { display_name: 'Sonnet' } },
+      },
+      {
+        kind: 'weekly_scoped',
+        percent: 30,
+        resets_at: '2026-10-06T15:00:00.000Z',
+        scope: { model: { display_name: 'Haiku' } },
+      },
+    ]);
+  });
+
+  it('recovers the display name from the Weekly label and title-cases unknown slugs', () => {
+    const body = claudeUsageBody(
+      claude({
+        windows: [
+          window({
+            key: 'seven_day_future_model',
+            label: 'Weekly Future usage',
+            usedPercent: 44,
+            windowMinutes: 10080,
+            kind: 'rate_limit',
+          }),
+          window({
+            key: 'seven_day_mystery',
+            label: 'Something unlabelled',
+            usedPercent: 55,
+            windowMinutes: 10080,
+            kind: 'rate_limit',
+          }),
+        ],
+      })
+    );
+    expect(body?.limits.map((limit) => limit.scope.model.display_name)).toEqual([
+      'Future',
+      'Mystery',
+    ]);
+  });
+
   it('has no body without a usable window', () => {
     expect(claudeUsageBody(claude({ windows: [] }))).toBeNull();
+  });
+
+  it('never emits a T3-hard-reject shape: absent or percent-less windows are null, scoped entries always name a model', () => {
+    // A percent-less five_hour is null, never {utilization: null}.
+    const body = claudeUsageBody(
+      claude({
+        windows: [
+          window({ key: 'five_hour', usedPercent: null, remainingPercent: null }),
+          window({
+            key: 'seven_day',
+            usedPercent: 50,
+            resetAt: '2026-10-10T00:00:00.000Z',
+            windowMinutes: 10080,
+            kind: 'rate_limit',
+          }),
+        ],
+      })
+    );
+    expect(body).toEqual({
+      five_hour: null,
+      seven_day: { utilization: 50, resets_at: '2026-10-10T00:00:00.000Z' },
+      limits: [],
+    });
+    // An empty-slug key never becomes a scoped entry without a display_name:
+    // alone it yields no body at all, never a nameless limit.
+    const nameless = claudeUsageBody(
+      claude({
+        windows: [
+          window({
+            key: 'seven_day_',
+            label: 'Weekly usage',
+            usedPercent: 10,
+            windowMinutes: 10080,
+            kind: 'rate_limit',
+          }),
+        ],
+      })
+    );
+    expect(nameless).toBeNull();
   });
 });
 

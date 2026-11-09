@@ -205,6 +205,60 @@ describe('agent usage projection', () => {
     expect(projectAgentUsage([hidden], { now: NOW }).accounts).toHaveLength(0);
     expect(projectAgentUsage([hidden], { now: NOW, includeHidden: true }).accounts).toHaveLength(1);
   });
+
+  it('publishes dynamic keys, clears and the session release into usage.json windows', () => {
+    const row = account({
+      id: 'claude:party',
+      provider: 'claude',
+      providerLabel: 'Claude',
+      windows: [
+        window({
+          key: 'seven_day_future_model',
+          label: 'Weekly Future usage',
+          windowMinutes: 10080,
+          kind: 'rate_limit',
+        }),
+        window({
+          key: 'reset_credit_used_grant_1',
+          label: 'Used rate-limit reset grant 1',
+          usedPercent: null,
+          remainingPercent: null,
+          windowMinutes: null,
+          resetAt: null,
+          kind: 'balance',
+          used: 0,
+          limit: 1,
+          remaining: 1,
+          unit: 'resets',
+          clears: ['five_hour', 'seven_day'],
+        }),
+        window({
+          key: 'session_reset_allowance',
+          label: 'Weekly session reset allowance',
+          usedPercent: null,
+          remainingPercent: null,
+          windowMinutes: null,
+          kind: 'balance',
+          used: 1,
+          limit: 3,
+          remaining: 2,
+          unit: 'resets',
+        }),
+      ],
+    });
+    const answer = projectAgentUsage([row], { now: NOW, includeHidden: true });
+    const windows = answer.accounts[0].windows;
+    expect(windows.map((item) => item.key)).toEqual([
+      'seven_day_future_model',
+      'reset_credit_used_grant_1',
+      'session_reset_allowance',
+    ]);
+    expect(windows[0]).toMatchObject({ label: 'Weekly Future usage', windowMinutes: 10080 });
+    expect(windows[0].clears).toBeNull();
+    expect(windows[1].clears).toEqual(['five_hour', 'seven_day']);
+    expect(windows[2].clears).toBeNull();
+    expect(windows[2]).toMatchObject({ remaining: 2, unit: 'resets' });
+  });
 });
 
 describe('agent usage burn rate', () => {
@@ -1122,8 +1176,7 @@ describe('sign-in health section', () => {
       // The markdown write itself is the slow stage (a network share):
       // the deadline crosses while it is in flight.
       write: async (_directory, name, body) => {
-        if (name === SNAPSHOT_MARKDOWN)
-          await new Promise((resolve) => setTimeout(resolve, 200));
+        if (name === SNAPSHOT_MARKDOWN) await new Promise((resolve) => setTimeout(resolve, 200));
         writes.push([name, body]);
       },
       syncClient: async () => {},
@@ -1299,7 +1352,10 @@ describe('sign-in health section', () => {
       hidden: false,
       windows: [],
     } as unknown as Parameters<typeof buildSnapshotFiles>[0]['accounts'][number];
-    const { snapshot } = buildSnapshotFiles({ accounts: [accountWithClass], history: null, sampledAt: NOW }, 60);
+    const { snapshot } = buildSnapshotFiles(
+      { accounts: [accountWithClass], history: null, sampledAt: NOW },
+      60
+    );
     expect(snapshot.accounts[0]?.plan).toBe('Ultra');
     expect(snapshot.accounts[0]?.planClass).toBe('max');
   });
