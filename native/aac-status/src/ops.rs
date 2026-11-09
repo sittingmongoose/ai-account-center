@@ -16,6 +16,14 @@
 //!   machine, each row tagged with its machine.
 //! - `compose` `{ nowMs, utcOffsetMinutes, pins, machineProblems, threads, tasks, openCards,
 //!   statuses }` -> the composed `pinned` view (pinned.rs), every word decided here.
+//! - `composeSpend` `{ nowMs, utcOffsetMinutes, accountOrder, spend }` -> the composed
+//!   `spendByStream` view (spend.rs), a pure function over the SpendView the TypeScript
+//!   side builds. An input that does not read as expected rejects the call; the route then
+//!   answers the contract's unavailable shape.
+//! - `composeByModel` `{ ...scoreboard view v1 }` -> the composed `byModel` view
+//!   (scoreboard.rs), a pure function over the Scoreboard view the TypeScript side builds.
+//!   An input that does not read as expected rejects the call; the route then serves no
+//!   `byModel` field.
 //! - `parseStatus` `{ writer, contentBase64 }` -> `{ ok: true, doc, sha256 }`, or
 //!   `{ ok: false, reason }` with the reader's fixed refusal reason. Bytes travel as base64
 //!   so a NUL byte or invalid UTF-8 reaches the validator intact.
@@ -24,6 +32,8 @@ use crate::error::Result;
 use crate::fail;
 use crate::pinned;
 use crate::pins;
+use crate::scoreboard;
+use crate::spend;
 use crate::status_doc;
 use base64::Engine as _;
 use serde::Deserialize;
@@ -104,6 +114,16 @@ fn compose(args: &str) -> Result<Json> {
     serde_json::to_value(pinned::compose(&input)).map_err(|e| crate::error::Error::new("io", e.to_string()))
 }
 
+fn compose_spend(args: &str) -> Result<Json> {
+    let input: spend::SpendInput = parse(args)?;
+    serde_json::to_value(spend::compose(&input)).map_err(|e| crate::error::Error::new("io", e.to_string()))
+}
+
+fn compose_by_model(args: &str) -> Result<Json> {
+    let input: scoreboard::ViewIn = parse(args)?;
+    serde_json::to_value(scoreboard::by_model(&input)?).map_err(|e| crate::error::Error::new("io", e.to_string()))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ParseStatusArgs {
@@ -128,6 +148,8 @@ pub fn dispatch(method: &str, args: &str) -> Result<String> {
         "parseRemotePins" => parse_remote_pins(args)?,
         "mergePins" => merge_pins_method(args)?,
         "compose" => compose(args)?,
+        "composeSpend" => compose_spend(args)?,
+        "composeByModel" => compose_by_model(args)?,
         "parseStatus" => parse_status(args)?,
         _ => fail!("unknown_method", "unknown method"),
     };

@@ -183,9 +183,21 @@ tests/unit/web-server/scoreboard/scoreboard-view.test.ts`).
       "rows": [ Row ]       // ranked observed by rank, then ranked benchmark by rank, then unranked by n
     } ]
   } ],
-  "recent": [ RunSummary ]  // the latest 20 runs, newest first, scored or not
+  "recent": [ RunSummary ],  // the latest 20 runs, newest first, scored or not
+  "byModel": ByModel        // absent when the aac-status module or its input is unavailable
 }
 ```
+
+**ByModel** (`byModel`, the model-by-job matrix for the Leptos page, every word decided in
+`native/aac-status/src/scoreboard.rs` from this same view; CONTRACT-spend-bymodel.md):
+`{ defaultView: "pipeline", intro, readNote: [ Run ], readLink, bandSummary, views: [ { id:
+"pipeline" | "pm-users", label, short, meta: [ Run ], picks: [ { job, jobLabel, model: { label,
+effort, mark } | null, noneLabel, why: [ Run ] } ], jobs: [ { id, label } ], models: [ { key, model,
+label, effort, effortText, runtime, mark, runs, head, headRuns: [ Run ], sheetHead, cells: { "<job id>":
+{ verdict, word, sub: [] } | null }, report: [ { job, label, verdict, word, basis, measures: [ { label,
+value, sub, note, range: { low, high, value } | null } ], compare: [ Run ] } ] } ], foot: [ Run ] } ] }`.
+An unknown stays unknown (`effortText: "effort unknown"`, `mark: null`); when the module or its input
+cannot be had the field is absent, never a guessed verdict.
 
 **Source**, as in `docs/status-tab.md`: `{ id, label, state, asOf, ageSeconds, staleAfterSeconds, detail }`.
 `scoreboard-runs` is `missing` (no folder, or before the first scan), `error`, `stale`, `unreadable` (the detail counts

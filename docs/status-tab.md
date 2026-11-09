@@ -452,6 +452,16 @@ last good copy for 2 minutes; NUL bytes, over 512 KB, a secret, a schema other t
   version), `unreadable` (the reason, and the time of the last good copy if any), `error` (the folder could not be
   listed). Without a report the section is empty (`periods: []`).
 
+**Spend by stream** (`spendByStream`, a sibling of `pinned`): the same estimates as a per-stream table, every word
+decided in `native/aac-status/src/spend.rs` over the `spend` view above plus `nowMs`, the dashboard's UTC offset and
+the usage snapshot's account order (CONTRACT-spend-bymodel.md). One period per accepted report period: columns are the
+account meters the streams use (Claude weekly, Claude 5-hour, other providers), rows are streams by their largest
+share of a weekly limit with the bucket row ("Not tied to a stream") last, and `lead`/`summary`/`foot` word it. Cells
+are shares of one account's limit (`"42%"`, `"3.2×"` for full 5-hour windows, `"not read"` with a null share for an
+unread one, `"≥…"` where a merged bucket part was unread); credits stay per account. When there is no report, no
+native module or an input the module refuses, the field is the contract's fixed unavailable shape
+(`state: "unavailable"`, one sentence, `periods: []`), never a guessed figure.
+
 ## Answers
 
 The owner answers in a deck: one card at a time with Back and Next, a row of card labels to jump, and nothing is sent
