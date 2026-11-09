@@ -283,6 +283,9 @@ describe('quota-watch report: reading and source states', () => {
       const r = reader(root, () => now, fsOverride);
       await r.scan();
       writeQuota(root, report({ seq: 6 }));
+      // Same size as before: move the mtime on so the change shows even within one timestamp tick.
+      const later = new Date(Date.now() + 10_000);
+      fs.utimesSync(path.join(root, 'v1', 'quota', 'report.json'), later, later);
       failing = true;
       now += 60_000;
       await r.scan();
