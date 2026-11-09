@@ -221,6 +221,91 @@ export const tests = {
 		await t.check('nothing is reserved on the right', await t.page.evaluate(() => getComputedStyle(document.querySelector('.content')).width === `${innerWidth}px`));
 	},
 
+	// Fix round 1, R1: at the Duo's landscape size the deck's own Back, Next and Review row is replaced by the plate head,
+	// but the review screen's Send is the only way to send, so it has to stay.
+	async 'status review can be sent at the Duo landscape size'(t) {
+		for (const [name, query] of [['with the rail', '?safe=0,84,34,0'], ['with no insets', '?safe=0,0,0,0'], ['in the iframe', '?embed=1']]) {
+			await t.newContext({ viewport: { width: 951, height: 669 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+			const sent = await openStatus(t, { ...fixture('status-design-view.json'), spendByStream: fixture('spend-by-stream.json') }, query);
+			await t.page.waitForSelector(CARD);
+			await t.page.locator('.plate-tools.only-land .btn', { hasText: /^Next$/ }).click();
+			await t.page.waitForSelector('.opts .opt');
+			await t.page.locator(`${CARD} .opt-pick`).nth(1).click();
+			await t.page.locator('.plate-tools.only-land .primary').click();
+			await t.page.waitForSelector('.review');
+			const send = t.page.locator('.review .q-send .primary');
+			const shown = await send.isVisible();
+			await t.check(`${name}: the final Send is on screen`, shown);
+			await t.check(`${name}: Back to the questions is on screen`, await t.page.locator('.review .q-send button', { hasText: /Back to the questions/ }).isVisible());
+			await t.check(`${name}: the head has no Next or Review during the review`, !(await t.page.locator('.plate-tools.only-land .primary').isVisible()));
+			if (!shown) continue; // a click on a hidden button would only time out
+			await t.text('.review .q-send .primary', /Send 1 answer/);
+			await send.click();
+			await t.page.waitForSelector('.sent');
+			await t.text('.sent .ok', /Sent 1 at/);
+			await t.equal(`${name}: one send`, sent.length, 1);
+		}
+	},
+
+	// Fix round 1, R2: fixtures/pinned-composer-cases.json is the real output of native/aac-status's composer.
+	async 'status says when a pinned report cannot be read'(t) {
+		const cases = fixture('pinned-composer-cases.json');
+		const withPins = (pinned) => ({ ...fixture('status-design-view.json'), pinned });
+		const NOTE = /Could not be read since 8:33 PM\./;
+		const opacity = (selector) =>
+			t.page.evaluate((s) => {
+				let value = 1;
+				for (let e = document.querySelector(s); e; e = e.parentElement) value *= parseFloat(getComputedStyle(e).opacity);
+				return value;
+			}, selector);
+
+		await t.viewport(1440, 900);
+		await openStatus(t, withPins(cases.unreadableWithTasks));
+		await t.page.waitForSelector('.pin-grid .pin');
+		await t.text('.pin-grid .pin', NOTE);
+		await t.text('.pin-grid .pin', /cached/i);
+		await t.check('card: the cached figures are dimmed', (await opacity('.pin-grid .pin-pct .big')) < 0.6);
+		await t.check('card: no line says it was just updated', !/Updated 1 min ago/.test(await t.page.locator('.pin-grid .pin').textContent()));
+
+		await t.newContext(PHONE);
+		await openStatus(t, withPins(cases.unreadableWithTasks));
+		await t.page.waitForSelector('.pin-list .pin-row');
+		await t.text('.pin-list .pin-row', NOTE);
+		await t.text('.pin-list .pin-row', /cached/i);
+		await t.check('row: the cached percent is dimmed', (await opacity('.pin-list .pin-row .pr-pct')) < 0.6);
+		await t.check('row: no cached state reads as current', !/Looping|Updated|min ago/.test(await t.page.locator('.pin-list .pin-row .pr-line').textContent()));
+		await t.page.locator('.pin-list .pin-row').click();
+		await t.page.waitForSelector('.sheet .pin');
+		await t.text('.sheet .pin', NOTE);
+		await t.text('.sheet .pin', /cached/i);
+		await t.check('sheet: the cached figures are dimmed', (await opacity('.sheet .pin-pct .big')) < 0.6);
+
+		// The composer's own test case, which has no task list behind it.
+		await t.newContext(PHONE);
+		await openStatus(t, withPins(cases.unreadable));
+		await t.page.waitForSelector('.pin-list .pin-row');
+		await t.text('.pin-list .pin-row', NOTE);
+		await t.text('.pin-list .pin-row', /cached/i);
+		await t.page.locator('.pin-list .pin-row').click();
+		await t.page.waitForSelector('.sheet .pin');
+		await t.text('.sheet .pin', NOTE);
+		await t.text('.sheet .pin', /cached/i);
+	},
+
+	// Fix round 1, R3: the server doesn't say which task is looping, and a blocked task can sit ahead of it.
+	async 'status pinned row names no task the server did not'(t) {
+		const cases = fixture('pinned-composer-cases.json');
+		await t.newContext(PHONE);
+		await openStatus(t, { ...fixture('status-design-view.json'), pinned: cases.loopingBehindBlocked });
+		await t.page.waitForSelector('.pin-list .pin-row');
+		const line = await t.page.locator('.pin-list .pin-row .pr-line').textContent();
+		await t.check('row: says Looping', /^Looping\b/.test(line), line);
+		await t.check('row: names no task as the looping one', !/Looping on/.test(line), line);
+		await t.page.locator('.pin-list .pin-row').click();
+		await t.page.waitForSelector('.sheet .pin');
+		await t.text('.sheet .pin', /F-07 has gone back for fixes 3 times/);
+	},
+
 	// Data the server doesn't send yet is said so, never guessed.
 	async 'status says what it cannot show'(t) {
 		await t.viewport(1440, 900);

@@ -52,3 +52,21 @@ export const tests = Object.fromEntries(
 		)
 	)
 );
+
+// The review screen at the Duo's landscape size: its Send and Back replace the deck's navigation.
+tests['status duo-landscape review light'] = async (t) => {
+	await t.newContext({ viewport: { width: 951, height: 669 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+	await t.goto('/app/status?safe=0,84,34,0', { settleMs: 300 });
+	await openQuestions(t);
+	await t.page.locator('.plate-tools.only-land .primary').click();
+	await t.page.waitForSelector('.review .q-send .primary');
+	await t.page.evaluate(() => { document.documentElement.setAttribute('data-theme', 'light'); document.activeElement?.blur?.(); });
+	await t.page.addStyleTag({ content: UNPIN });
+	await t.page.waitForTimeout(250);
+	const out = t.args.out || path.join(process.cwd(), 'frames-out');
+	fs.mkdirSync(out, { recursive: true });
+	const file = path.join(out, 'status-duo-landscape-review-light.png');
+	await t.page.screenshot({ path: file, fullPage: true });
+	await t.check('review at Duo landscape: Send on screen', await t.page.locator('.review .q-send .primary').isVisible());
+	await t.check('review at Duo landscape: saved', fs.statSync(file).size > 5000);
+};

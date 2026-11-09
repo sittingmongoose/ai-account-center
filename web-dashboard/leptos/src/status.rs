@@ -404,11 +404,15 @@ fn looping_fact(l: &PinnedLooping) -> AnyView {
     }
 }
 
-/// The one-line state of a pinned thread in its row ("Looping on F-07 · waiting on you · 6 min ago").
+/// The one-line state of a pinned thread in its row ("Looping · waiting on you · 6 min ago").
 fn row_line(p: &PinnedUpdate) -> AnyView {
     let mut parts: Vec<AnyView> = Vec::new();
     if p.report_state == "stale" {
         return view! { <span class="q3">"Last update "{p.updated.as_ref().map(|u| u.text.clone()).unwrap_or_default().replace("Updated ", "")}</span> }.into_any();
+    }
+    if is_unreadable(p) {
+        let note = unreadable_words(p);
+        return view! { <span class="w-ink">{note}</span>" · "<span class="q3">"cached copy"</span> }.into_any();
     }
     if p.report_state == "none" {
         return view! { <span class="q3">"Doesn't report its status yet"</span> }.into_any();
@@ -416,8 +420,8 @@ fn row_line(p: &PinnedUpdate) -> AnyView {
     let looping = p.looping.answer == "yes";
     let waiting = !(p.blocked.text == "None." || p.blocked.text == "None");
     if looping {
-        let first = p.left.first().map(|i| i.id.clone()).unwrap_or_default();
-        parts.push(view! { <span><span data-tone="crit">"Looping"</span>{(!first.is_empty()).then(|| format!(" on {first}"))}</span> }.into_any());
+        // The server says that a task is looping, not which: a blocked task can sit ahead of it in `left`.
+        parts.push(view! { <span data-tone="crit">"Looping"</span> }.into_any());
     }
     if waiting {
         let words = if p.blocked.waiting_on_you {
@@ -567,11 +571,38 @@ fn is_quiet(p: &PinnedUpdate) -> bool {
     p.report_state == "stale" || p.report_state == "none"
 }
 
+/// Its report can't be read right now: what is shown is the last good copy, and everything in it is old.
+fn is_unreadable(p: &PinnedUpdate) -> bool {
+    p.report_state == "unreadable"
+}
+
+fn unreadable_words(p: &PinnedUpdate) -> String {
+    p.unreadable_note
+        .clone()
+        .unwrap_or_else(|| "Could not be read.".to_string())
+}
+
+/// The sentence over a last good copy: why it is old, then that it is cached and from when.
+fn cached_notice(p: &PinnedUpdate) -> impl IntoView + use<> {
+    let note = unreadable_words(p);
+    let from = p
+        .updated
+        .as_ref()
+        .map(|u| fmt::clock(&u.at))
+        .filter(|t| !t.is_empty())
+        .map(|t| format!(", from {t}"))
+        .unwrap_or_default();
+    view! {
+        <p class="pin-cached"><span class="w-ink">{note}</span>{format!(" Showing the cached last good copy{from}.")}</p>
+    }
+}
+
 #[component]
 fn PinCard(update: PinnedUpdate) -> impl IntoView {
     let quiet = is_quiet(&update);
+    let cached = is_unreadable(&update);
     let who = update.who.clone();
-    let foot = update.updated.as_ref().map(|u| {
+    let foot = update.updated.as_ref().filter(|_| !cached).map(|u| {
         if quiet {
             format!("Last update {}", fmt::clock(&u.at))
         } else {
@@ -580,6 +611,8 @@ fn PinCard(update: PinnedUpdate) -> impl IntoView {
     });
     let body = if quiet {
         quiet_body(&update).into_any()
+    } else if cached {
+        view! { {cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 4, 2, false)}</div> }.into_any()
     } else {
         pin_body(&update, 4, 2, false).into_any()
     };
@@ -601,9 +634,10 @@ fn PinRow(update: PinnedUpdate, on_open: Callback<PinnedUpdate>) -> impl IntoVie
         .map(|p| p.text.trim_end_matches('%').to_string());
     let bar = pct_value(&update);
     let quiet = is_quiet(&update);
+    let cached = is_unreadable(&update);
     let line = row_line(&update);
     view! {
-        <button class="pin-row" on:click=move |_| on_open.run(u.clone())>
+        <button class="pin-row" class:cached=cached on:click=move |_| on_open.run(u.clone())>
             <span class="pr-name" class:q2=quiet>{update.title.clone()}</span>
             {match pct_text {
                 Some(t) => view! { <span class="pr-pct">{t}<small>"%"</small></span> }.into_any(),
@@ -618,9 +652,12 @@ fn PinRow(update: PinnedUpdate, on_open: Callback<PinnedUpdate>) -> impl IntoVie
 #[component]
 fn PinSheet(update: PinnedUpdate, on_close: Callback<()>) -> impl IntoView {
     let quiet = is_quiet(&update);
+    let cached = is_unreadable(&update);
     let who = update.who.clone();
     let body = if quiet {
         quiet_body(&update).into_any()
+    } else if cached {
+        view! { {cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 500, 500, false)}</div> }.into_any()
     } else {
         pin_body(&update, 500, 500, true).into_any()
     };

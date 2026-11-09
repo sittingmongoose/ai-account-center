@@ -1,0 +1,153 @@
+{
+  "_source": "Real output of native/aac-status pinned::compose. unreadable is the input of tests/pinned.rs an_unreadable_report_greys_the_last_good_copy_with_a_clock_time; unreadableWithTasks is that with a task board and report fields; loopingBehindBlocked is the_full_update_from_a_reporting_thread with a blocked task ahead of the looping one.",
+  "loopingBehindBlocked": {
+    "asOfMs": 1794116000000,
+    "counts": {
+      "looping": 1,
+      "pinned": 1,
+      "waitingOnYou": 0
+    },
+    "head": "1 pinned in T3 · 1 looping",
+    "machineProblems": [],
+    "updates": [
+      {
+        "blocked": {
+          "text": "Blocked on F-00; the report does not say on what.",
+          "waitingOnYou": false
+        },
+        "done": [],
+        "id": "t1",
+        "left": [
+          {
+            "id": "F-00",
+            "title": "Pick icon"
+          },
+          {
+            "id": "F-07",
+            "title": "Tray icon sharp at 125% scale"
+          }
+        ],
+        "looping": {
+          "answer": "yes",
+          "text": "Yes. F-07 has gone back for fixes 3 times without a passing review."
+        },
+        "machine": "vm",
+        "now": "Windows 10 sweep for stream F, batch 9.",
+        "percent": {
+          "done": 0,
+          "of": 2,
+          "text": "0%"
+        },
+        "percentNote": null,
+        "reportNote": null,
+        "reportState": "fresh",
+        "staleNote": null,
+        "summary": null,
+        "title": "Thread t1",
+        "unreadableNote": null,
+        "updated": {
+          "ageSeconds": 200,
+          "at": "2026-11-08T05:30:00Z",
+          "text": "Updated 3 min ago"
+        },
+        "who": "Puppet Master · pm7-build · Opus 5.5 xhigh"
+      }
+    ]
+  },
+  "unreadable": {
+    "asOfMs": 1794116000000,
+    "counts": {
+      "looping": 0,
+      "pinned": 1,
+      "waitingOnYou": 0
+    },
+    "head": "1 pinned in T3",
+    "machineProblems": [],
+    "updates": [
+      {
+        "blocked": {
+          "text": "None.",
+          "waitingOnYou": false
+        },
+        "done": [],
+        "id": "t1",
+        "left": [],
+        "looping": {
+          "answer": "cantTell",
+          "text": "Can't tell."
+        },
+        "machine": "vm",
+        "now": null,
+        "percent": null,
+        "percentNote": "No task list.",
+        "reportNote": null,
+        "reportState": "unreadable",
+        "staleNote": null,
+        "summary": null,
+        "title": "Thread t1",
+        "unreadableNote": "Could not be read since 8:33 PM.",
+        "updated": {
+          "ageSeconds": 60,
+          "at": "2026-11-08T05:30:00Z",
+          "text": "Updated 1 min ago"
+        },
+        "who": null
+      }
+    ]
+  },
+  "unreadableWithTasks": {
+    "asOfMs": 1794116000000,
+    "counts": {
+      "looping": 1,
+      "pinned": 1,
+      "waitingOnYou": 0
+    },
+    "head": "1 pinned in T3 · 1 looping",
+    "machineProblems": [],
+    "updates": [
+      {
+        "blocked": {
+          "text": "None.",
+          "waitingOnYou": false
+        },
+        "done": [
+          {
+            "id": "F-08",
+            "title": "Sticker block landed"
+          }
+        ],
+        "id": "t1",
+        "left": [
+          {
+            "id": "F-07",
+            "title": "Tray icon sharp at 125% scale"
+          }
+        ],
+        "looping": {
+          "answer": "yes",
+          "text": "Yes. F-07 has gone back for fixes 3 times without a passing review."
+        },
+        "machine": "vm",
+        "now": "Windows 10 sweep for stream F, batch 9.",
+        "percent": {
+          "done": 1,
+          "of": 2,
+          "text": "50%"
+        },
+        "percentNote": null,
+        "reportNote": null,
+        "reportState": "unreadable",
+        "staleNote": null,
+        "summary": null,
+        "title": "Thread t1",
+        "unreadableNote": "Could not be read since 8:33 PM.",
+        "updated": {
+          "ageSeconds": 60,
+          "at": "2026-11-08T05:30:00Z",
+          "text": "Updated 1 min ago"
+        },
+        "who": "Puppet Master · pm7-build · Opus 5.5 xhigh"
+      }
+    ]
+  }
+}

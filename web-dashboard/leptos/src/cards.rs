@@ -488,11 +488,14 @@ fn Deck(
             <Show when=can_use_rec>
                 <div class="plate-tools only-d"><button class="btn sm" on:click=use_rec>"Use my recommendations"</button></div>
             </Show>
-            <div class="plate-tools only-land">
-                <button class="btn sm" disabled=back_disabled on:click=move |_| back()>"Back"</button>
-                <button class="btn sm" on:click=move |_| next()>{next_label}</button>
-                <button class="btn sm primary" on:click=move |_| go_review()>{review_label}</button>
-            </div>
+            // The deck's navigation in the head; the review screen has its own Send and Back.
+            <Show when=move || deck_view.get() == DeckView::Cards>
+                <div class="plate-tools only-land">
+                    <button class="btn sm" disabled=back_disabled on:click=move |_| back()>"Back"</button>
+                    <button class="btn sm" on:click=move |_| next()>{next_label}</button>
+                    <button class="btn sm primary" on:click=move |_| go_review()>{review_label}</button>
+                </div>
+            </Show>
         </div>
         {move || source_note(source.get(), "No reading from the agent reports yet.")}
         {move || history_problem.get().map(|m| view! { <p class="plate-note problem" role="status">{m}</p> })}
@@ -531,7 +534,7 @@ fn Deck(
             }}
         </div>
         <Show when=move || deck_view.get() == DeckView::Cards>
-            <div class="q-send">
+            <div class="q-send q-deck-nav">
                 <button class="btn" disabled=back_disabled on:click=move |_| back()>"Back"</button>
                 <span class="count">{move || format!("{} of {}", at.get() + 1, shown.with(|o| o.len()))}</span>
                 <button class="btn" on:click=move |_| next()>{next_label}</button>
@@ -958,7 +961,7 @@ fn Review(
     };
 
     view! {
-        <div class="review q-card">
+        <div class="review">
             <ul class="review-rows">
                 {move || open.get().into_iter().enumerate().map(|(i, c)| {
                     let (what, tone) = drafts.with(|d| {

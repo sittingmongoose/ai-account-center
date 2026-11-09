@@ -77,18 +77,26 @@ test('no side bars in a state colour', () => {
 	}
 });
 
+// Every background that uses a state colour outside a meter fill, each judged by the rule it is written in.
+function tintedBackgrounds(source) {
+	const hits = [];
+	for (const m of source.matchAll(/background(?:-color)?:([^;}]+)/g)) {
+		if (!/--(warn|crit|calm|good)/.test(m[1])) continue;
+		const start = source.lastIndexOf('}', m.index);
+		const selector = source.slice(start + 1, source.indexOf('{', start)).trim();
+		if (!/\.fill/.test(selector)) hits.push(selector);
+	}
+	return hits;
+}
+
 test('no tinted state backgrounds', () => {
 	assert.equal(/--(warn|crit|good|calm)-soft/.test(css), false, 'a --warn-soft style token came back');
-	const rules = [...css.matchAll(/background(?:-color)?:([^;}]+)/g)].map((m) => m[1]);
-	for (const value of rules) {
-		if (/--(warn|crit|calm|good)/.test(value)) {
-			// fills of meter tracks are the one place a state colour is a background: they sit on .fill
-			const at = css.indexOf(value);
-			const start = css.lastIndexOf('}', at);
-			const selector = css.slice(start + 1, css.indexOf('{', start));
-			assert.ok(/\.fill/.test(selector), `state colour used as a background outside a meter fill: ${selector.trim()}`);
-		}
-	}
+	assert.deepEqual(tintedBackgrounds(css), [], 'state colour used as a background outside a meter fill');
+});
+
+test('a tinted background is caught even when a meter fill uses the same colour', () => {
+	assert.deepEqual(tintedBackgrounds(`${css}\n.review-alert { background: var(--warn); }`), ['.review-alert']);
+	assert.deepEqual(tintedBackgrounds(`${css}\n.review-alert { background-color: var(--crit); }`), ['.review-alert']);
 });
 
 // ---- Rules that keep the type right ------------------------------------------------------------------------------
