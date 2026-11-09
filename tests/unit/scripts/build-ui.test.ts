@@ -102,7 +102,7 @@ function runner(calls: Array<[string, string[]]>, rust = 'rustc 1.99.1 (fixture)
     calls.push([command, args]);
     if (command.includes('rustc')) return rust;
     if (command.includes('rustup')) return 'wasm32-unknown-unknown\nx86_64-unknown-linux-gnu\n';
-    if (command.includes('wasm-pack') && args[0] === '--version') return 'wasm-pack 0.15.0\n';
+    if (command.includes('wasm-pack') && args[0] === '--version') return 'wasm-pack 0.15.1\n';
     if (args[0]?.endsWith('tail-call-compat.mjs'))
       return JSON.stringify({
         policy: 'webkit-ipint-boundaries-v1',
@@ -364,7 +364,7 @@ describe('Slint browser build integration', () => {
             ? 'wasm-pack 0.13.1\n'
             : run(command, args),
       })
-    ).toThrow('requires wasm-pack 0.15.0');
+    ).toThrow('requires wasm-pack 0.15.1');
     expect(calls.some(([, args]) => args[0] === 'build')).toBe(false);
     expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
   });

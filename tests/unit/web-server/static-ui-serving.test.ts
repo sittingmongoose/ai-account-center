@@ -79,7 +79,7 @@ function buildFixtureUi(root: string): typeof manifest {
         : command.includes('rustup')
           ? 'wasm32-unknown-unknown\n'
           : command.includes('wasm-pack')
-            ? 'wasm-pack 0.15.0\n'
+            ? 'wasm-pack 0.15.1\n'
             : args[0]?.endsWith('tail-call-compat.mjs')
               ? JSON.stringify({
                   policy: 'webkit-ipint-boundaries-v1',
