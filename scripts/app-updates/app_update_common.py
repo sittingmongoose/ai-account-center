@@ -195,9 +195,20 @@ def _posix_descendants(root_pid, table=None):
     Only processes whose whole parent chain leads to root_pid are returned, so a
     pre-existing host that is merely a sibling is never returned. The start ticks
     pin each PID at snapshot time; callers re-check them before signalling, so a
-    reused PID that happens to have the same number is never signalled.
+    reused PID that happens to have the same number is never signalled. Ticks are
+    clock-ticks-since-boot strings and compare as ints: a candidate is a true
+    descendant only if its ticks are >= its parent's along the whole chain to
+    the root, so a stale older process whose recorded parent pid was recycled as
+    the root is never selected. A missing or unparsable start never selects.
     """
     table = _posix_process_table() if table is None else table
+    root_entry = table.get(root_pid)
+    if root_entry is None:
+        return []
+    try:
+        root_start = int(root_entry[1])
+    except (ValueError, TypeError):
+        return []
     children = {}
     for pid, (ppid, _start) in table.items():
         children.setdefault(ppid, []).append(pid)
@@ -205,6 +216,7 @@ def _posix_descendants(root_pid, table=None):
 
     queue = deque((pid, 1) for pid in children.get(root_pid, []))
     seen = {root_pid}
+    validated = {root_pid: root_start}
     found = []
     while queue:
         pid, depth = queue.popleft()
@@ -212,7 +224,20 @@ def _posix_descendants(root_pid, table=None):
             continue
         seen.add(pid)
         entry = table.get(pid)
-        found.append((depth, pid, entry[1] if entry else None))
+        if entry is None:
+            continue
+        ppid, start = entry
+        try:
+            pid_start = int(start)
+        except (ValueError, TypeError):
+            continue
+        parent_start = validated.get(ppid)
+        if parent_start is None:
+            continue
+        if pid_start < parent_start:
+            continue
+        validated[pid] = pid_start
+        found.append((depth, pid, start))
         for child in children.get(pid, []):
             queue.append((child, depth + 1))
     found.sort(reverse=True)
@@ -224,12 +249,26 @@ def _kill_posix_tree(process):
 
     root = process.pid
     try:
-        descendants = _posix_descendants(root)
+        table = _posix_process_table()
+    except Exception:
+        table = {}
+    try:
+        root_entry = table.get(root)
+        root_identity = root_entry[1] if root_entry is not None else None
+    except Exception:
+        root_identity = None
+    try:
+        descendants = _posix_descendants(root, table) if root_identity is not None else []
     except Exception:
         descendants = []
     for pid, start in descendants:
         try:
-            if _posix_process_identity(pid) != start:
+            if root_identity is None or start is None:
+                continue
+            if _posix_process_identity(root) != root_identity:
+                continue
+            current = _posix_process_identity(pid)
+            if current is None or current != start:
                 continue
             os.kill(pid, signal.SIGKILL)
         except (OSError, ProcessLookupError):
@@ -323,6 +362,8 @@ def _terminate_windows_process(pid, expected=None):
     import ctypes
     from ctypes import wintypes
 
+    if expected is None:
+        return
     kernel = ctypes.windll.kernel32
     kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     kernel.OpenProcess.restype = wintypes.HANDLE
@@ -352,9 +393,24 @@ def _windows_descendants(root_pid, table=None):
 
     Same ancestry rule as the POSIX walk: only processes whose parent chain
     leads to root_pid are returned, so pre-existing muse serve hosts and other
-    unrelated processes are never touched. The filetime pins each PID.
+    unrelated processes are never touched. The filetime pins each PID. The
+    root and every candidate identity are captured in this same snapshot pass
+    before selection; filetimes compare numerically and a candidate counts
+    only if its filetime is >= its parent's along the whole chain to the root,
+    so a stale older process whose recorded parent pid was recycled as the
+    root is never selected. An unknown (None) identity never selects.
     """
     table = _windows_process_table() if table is None else table
+    try:
+        root_identity = _windows_process_identity(root_pid)
+    except Exception:
+        return []
+    if root_identity is None:
+        return []
+    try:
+        root_start = int(root_identity)
+    except (ValueError, TypeError):
+        return []
     children = {}
     for pid, ppid in table.items():
         children.setdefault(ppid, []).append(pid)
@@ -362,30 +418,60 @@ def _windows_descendants(root_pid, table=None):
 
     queue = deque((pid, 1) for pid in children.get(root_pid, []))
     seen = {root_pid}
+    validated = {root_pid: root_start}
+    identity_map = {root_pid: root_identity}
     found = []
     while queue:
         pid, depth = queue.popleft()
         if pid in seen:
             continue
         seen.add(pid)
+        try:
+            identity = _windows_process_identity(pid)
+        except Exception:
+            continue
+        if identity is None:
+            continue
+        try:
+            pid_start = int(identity)
+        except (ValueError, TypeError):
+            continue
+        ppid = table.get(pid)
+        if ppid is None:
+            continue
+        parent_start = validated.get(ppid)
+        if parent_start is None:
+            continue
+        if pid_start < parent_start:
+            continue
+        validated[pid] = pid_start
+        identity_map[pid] = identity
         found.append((depth, pid))
         for child in children.get(pid, []):
             queue.append((child, depth + 1))
     found.sort(reverse=True)
-    result = []
-    for _depth, pid in found:
-        result.append((pid, _windows_process_identity(pid)))
-    return result
+    return [(pid, identity_map[pid]) for _depth, pid in found]
 
 
 def _kill_windows_tree(process):
     try:
         root = process.pid
-        descendants = _windows_descendants(root)
+        try:
+            root_identity = _windows_process_identity(root)
+        except Exception:
+            root_identity = None
+        try:
+            descendants = _windows_descendants(root) if root_identity is not None else []
+        except Exception:
+            descendants = []
     except Exception:
-        descendants = []
+        root, root_identity, descendants = None, None, []
     for pid, identity in descendants:
         try:
+            if root_identity is None or identity is None:
+                continue
+            if _windows_process_identity(root) != root_identity:
+                continue
             _terminate_windows_process(pid, identity)
         except Exception:
             continue
@@ -395,24 +481,32 @@ def _kill_windows_tree(process):
         pass
 
 
-def _stop_group(process):
-    """Stop a timed-out child and its whole owned process tree.
+def _stop_group(process, tree=False):
+    """Stop a timed-out child, and only with tree=True its owned tree.
 
-    Every bounded command leads its own session/group on POSIX (start_new_session)
-    and is the only process in its own tree on Windows, so the entire owned tree
-    must stop. A detached app relaunch always starts its own session (systemd-run
-    escapes this cgroup, start_new_session on POSIX, its own process group on
-    Windows) and is never part of the tree this snapshot walks. Only descendants
-    of the Popp's root pid in the snapshot are stopped, so pre-existing serve
-    hosts and unrelated processes are never touched. Each descendant is pinned
-    by its creation identity (POSIX start ticks, Windows filetime) before it is
-    signalled, so a reused PID is never killed.
+    Every bounded command leads its own session/group on POSIX
+    (start_new_session) and is the only process in its own tree on Windows.
+    tree=False reproduces the pre-tree cleanup exactly: POSIX killpg of the
+    child's own session group, Windows process.kill() of the root only, so a
+    detached relaunch that preserves ppid ancestry in a new session is spared.
+    Only the muse warm opts into tree=True, which stops only validated
+    descendants of the Popen root, each creation-ordered (>= parent along the
+    whole chain) and pinned by identity before it is signalled, so pre-existing
+    serve hosts and reused PIDs are never killed. An unknown identity never
+    selects and never terminates a pid lookup; the root handle kill remains.
     """
     try:
         if os.name == "nt":
-            _kill_windows_tree(process)
+            if tree:
+                _kill_windows_tree(process)
+            else:
+                process.kill()
         else:
-            _kill_posix_tree(process)
+            if tree:
+                _kill_posix_tree(process)
+            else:
+                import signal
+                os.killpg(process.pid, signal.SIGKILL)
     except (OSError, ProcessLookupError):
         pass
     if process.stdout is not None:
@@ -429,14 +523,15 @@ def _stop_group(process):
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
-def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False, cwd=None):
+def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False, cwd=None, kill_tree=False):
     """Run one fixed command with no TTY and no stdin, killed at its timeout.
 
     A new session means the child has no controlling terminal, so a prompt that
     opens /dev/tty fails at once instead of waiting forever; stdin is empty.
-    On Windows a child gets no console window unless visible is set.
-    Returns (returncode, stdout bytes), with stderr appended when merge_errors is
-    set; raises subprocess.TimeoutExpired.
+    On Windows a child gets no console window unless visible is set. kill_tree
+    opts this one call into whole-tree cleanup; every other caller keeps the
+    pre-tree cleanup. Returns (returncode, stdout bytes), with stderr appended
+    when merge_errors is set; raises subprocess.TimeoutExpired.
     """
     if os.name == "nt":
         options = {} if visible else {"creationflags": CREATE_NO_WINDOW}
@@ -449,21 +544,22 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False,
     try:
         stdout, _ = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        _stop_group(process)
+        _stop_group(process, tree=kill_tree)
         raise
     except BaseException:
-        _stop_group(process)
+        _stop_group(process, tree=kill_tree)
         raise
     return process.returncode, stdout or b""
 
 
-def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None):
+def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None, kill_tree=False):
     """Run one fixed command; a non-zero exit raises UpdateFailure. errors keeps the run's stderr,
-    merged with its stdout, in the exception's output for in-memory classification only."""
+    merged with its stdout, in the exception's output for in-memory classification only.
+    kill_tree opts this one call into whole-tree cleanup; only the muse warm sets it."""
     try:
         returncode, data = _run_bounded(
             [str(arg) for arg in argv], timeout,
-            strip_dashboard_secrets(env) if preserve_env and env is not None else environment(env), capture, visible, errors, cwd,
+            strip_dashboard_secrets(env) if preserve_env and env is not None else environment(env), capture, visible, errors, cwd, kill_tree,
         )
     except subprocess.TimeoutExpired:
         raise UpdateFailure("timeout") from None

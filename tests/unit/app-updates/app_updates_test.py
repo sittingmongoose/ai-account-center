@@ -1111,6 +1111,14 @@ class MuseCatalogWarmTests(unittest.TestCase):
         self.assertGreater(timeout, 0)
         self.assertLessEqual(timeout, 7)
 
+    def test_warm_command_opts_into_tree_kill(self):
+        # Only the muse warm kills its whole owned tree; every other bounded
+        # command keeps the pre-tree cleanup.
+        with mock.patch.object(updater, 'command', side_effect=lambda argv, **kwargs: self._warmed()) as run:
+            self.assertTrue(updater.muse_warm_catalog(self.refreshed, time.monotonic() + 60, time.time() - 60))
+        run.assert_called_once()
+        self.assertIs(run.call_args.kwargs['kill_tree'], True)
+
     def test_changed_update_catalog_failure_keeps_restart_results(self):
         # A changed binary whose sessions restarted but whose warm/catalog
         # failed must keep the restarted count, targets and forced stops,
@@ -1194,8 +1202,8 @@ class BoundedUpdateTests(unittest.TestCase):
         root_killed = []
 
         def fake_identity(pid):
-            return {100: '100-start', 101: '101-start', 102: '102-start',
-                    99: '99-start', 77: '77-start', 50: '50-start', 1: '1-start', 4: '4-start'}[pid]
+            return {100: '1000', 101: '1001', 102: '1002',
+                    99: '900', 77: '901', 50: '800', 1: '100', 4: '50'}[pid]
 
         def fake_terminate(pid, expected=None):
             if expected != fake_identity(pid):
@@ -1211,7 +1219,7 @@ class BoundedUpdateTests(unittest.TestCase):
                 mock.patch.object(common, '_windows_process_identity', side_effect=fake_identity), \
                 mock.patch.object(common, '_terminate_windows_process', side_effect=fake_terminate), \
                 mock.patch.object(common.os, 'name', 'nt'):
-            common._stop_group(proc)
+            common._stop_group(proc, tree=True)
         # Both owned descendants died, deepest first; the pre-existing serve host and T3 did not.
         self.assertEqual(killed, [102, 101])
         self.assertEqual(root_killed, [100])
@@ -1227,11 +1235,11 @@ class BoundedUpdateTests(unittest.TestCase):
         # re-check: it kills only when the snapshot identity still matches.
         table = {100: 1, 101: 100, 102: 101}
         killed = []
-        current = {101: 'reused', 102: '102-start'}  # 101 was reused after the snapshot
+        current = {101: '9999', 102: '1002'}  # 101 was reused after the snapshot
 
         def fake_identity(pid):
             # Snapshot time for the walk; terminate re-check uses current[].
-            return {101: 'orig', 102: '102-start', 100: 'root'}[pid]
+            return {101: '1001', 102: '1002', 100: '1000'}[pid]
 
         def fake_terminate(pid, expected=None):
             if expected != current.get(pid, expected):
@@ -1246,7 +1254,7 @@ class BoundedUpdateTests(unittest.TestCase):
                 mock.patch.object(common, '_windows_process_identity', side_effect=fake_identity), \
                 mock.patch.object(common, '_terminate_windows_process', side_effect=fake_terminate), \
                 mock.patch.object(common.os, 'name', 'nt'):
-            common._stop_group(proc)
+            common._stop_group(proc, tree=True)
         self.assertEqual(killed, [102])  # 101 reused, so only 102 was terminated
         self.assertNotIn(101, killed)
 
@@ -1265,6 +1273,163 @@ class BoundedUpdateTests(unittest.TestCase):
         self.assertEqual(found, [102, 101])  # deepest first
         self.assertNotIn(77, found)
         self.assertNotIn(99, found)
+
+    def test_windows_non_warm_timeout_spares_detached_relaunch(self):
+        # A detached relaunch keeps ppid ancestry under the timed-out command
+        # (new session, same ppid chain). Non-tree cleanup must spare it: on
+        # Windows that is root kill only, never the Toolhelp walk.
+        table = {100: 1, 200: 100, 201: 200, 101: 100}
+        killed = []
+
+        def fake_identity(pid):
+            return {100: '1000', 200: '1001', 201: '1002', 101: '1003', 1: '1'}[pid]
+
+        def fake_terminate(pid, expected=None):
+            killed.append(pid)
+
+        proc = mock.Mock(pid=100)
+        proc.stdout = None
+        proc.wait = mock.Mock(return_value=0)
+        proc.kill = mock.Mock()
+        with mock.patch.object(common, '_windows_process_table', return_value=table), \
+                mock.patch.object(common, '_windows_process_identity', side_effect=fake_identity), \
+                mock.patch.object(common, '_terminate_windows_process', side_effect=fake_terminate), \
+                mock.patch.object(common.os, 'name', 'nt'):
+            common._stop_group(proc)
+        # Non-tree never walks, so no descendant terminate was attempted.
+        self.assertEqual(killed, [])
+        proc.kill.assert_called_once()
+        proc.wait.assert_called_once()
+
+    def test_posix_non_warm_timeout_spares_detached_relaunch(self):
+        # Same ppid-shaped detached relaunch on POSIX: non-tree kills only
+        # the child's own session group, never an os.kill of the descendant.
+        table = {
+            100: (1, '1000'),   # timed-out command root
+            200: (100, '1001'),  # bridge
+            201: (200, '1002'),  # detached relaunch, new session, still ppid-held
+        }
+        identities = {100: '1000', 200: '1001', 201: '1002'}
+
+        def fake_identity(pid):
+            return identities[pid]
+
+        killed = []
+        proc = mock.Mock(pid=100)
+        proc.stdout = None
+        proc.wait = mock.Mock(return_value=0)
+        with mock.patch.object(common, '_posix_process_table', return_value=table), \
+                mock.patch.object(common, '_posix_process_identity', side_effect=fake_identity), \
+                mock.patch.object(common.os, 'name', 'posix'), \
+                mock.patch.object(common.os, 'kill', side_effect=lambda pid, sig: killed.append(pid)), \
+                mock.patch.object(common.os, 'killpg') as killpg:
+            common._stop_group(proc)
+        self.assertNotIn(201, killed)
+        self.assertNotIn(200, killed)
+        self.assertEqual(killed, [])
+        killpg.assert_called_once_with(100, mock.ANY)
+        proc.wait.assert_called_once()
+
+    def test_posix_warm_timeout_kills_owned_tree_only(self):
+        # The POSIX warm's whole owned subtree dies with it on tree=True,
+        # deepest first, while the serve host and an unrelated updater stay.
+        table = {
+            100: (1, '1000'),
+            101: (100, '1001'),
+            102: (101, '1002'),
+            99: (1, '900'),
+            77: (99, '901'),
+        }
+        identities = {100: '1000', 101: '1001', 102: '1002', 99: '900', 77: '901'}
+        killed = []
+        proc = mock.Mock(pid=100)
+        proc.stdout = None
+        proc.wait = mock.Mock(return_value=0)
+        with mock.patch.object(common, '_posix_process_table', return_value=table), \
+                mock.patch.object(common, '_posix_process_identity', side_effect=lambda pid: identities[pid]), \
+                mock.patch.object(common.os, 'name', 'posix'), \
+                mock.patch.object(common.os, 'kill', side_effect=lambda pid, sig: killed.append(pid)), \
+                mock.patch.object(common.os, 'killpg') as killpg:
+            common._stop_group(proc, tree=True)
+        self.assertEqual(killed, [102, 101])
+        self.assertNotIn(77, killed)
+        self.assertNotIn(99, killed)
+        killpg.assert_called_once_with(100, mock.ANY)
+        proc.wait.assert_called_once()
+
+    def test_posix_warm_timeout_skips_reused_and_unknown(self):
+        # A reused pid (ticks changed before the signal) and an unknown
+        # identity (None) are both skipped; a known sibling still dies.
+        table = {
+            100: (1, '1000'),
+            101: (100, '1001'),
+            102: (101, '1002'),
+            103: (100, '1003'),
+        }
+        current = {100: '1000', 101: '9999', 102: '1002', 103: None}
+        killed = []
+        proc = mock.Mock(pid=100)
+        proc.stdout = None
+        proc.wait = mock.Mock(return_value=0)
+        with mock.patch.object(common, '_posix_process_table', return_value=table), \
+                mock.patch.object(common, '_posix_process_identity', side_effect=lambda pid: current[pid]), \
+                mock.patch.object(common.os, 'name', 'posix'), \
+                mock.patch.object(common.os, 'kill', side_effect=lambda pid, sig: killed.append(pid)), \
+                mock.patch.object(common.os, 'killpg'):
+            common._stop_group(proc, tree=True)
+        self.assertEqual(killed, [102])
+        self.assertNotIn(101, killed)
+        self.assertNotIn(103, killed)
+
+    def test_posix_descendants_skip_stale_older_process(self):
+        # A pre-existing serve host whose recorded parent pid was recycled
+        # as the warm root is older than the root: never selected.
+        table = {
+            100: (1, '2000'),   # warm root, started later
+            77: (100, '1000'),  # stale serve host, creation before the root
+            101: (100, '2001'),  # true muse child
+            102: (101, '2002'),  # true helper
+            78: (77, '2003'),   # child of the stale host: chain is stale too
+        }
+        found = [pid for pid, _start in common._posix_descendants(100, table)]
+        self.assertNotIn(77, found)
+        self.assertNotIn(78, found)
+        self.assertEqual(set(found), {101, 102})
+
+    def test_windows_descendants_skip_stale_older_process(self):
+        table = {100: 1, 77: 100, 101: 100, 102: 101, 78: 77}
+        identities = {100: '2000', 77: '1000', 101: '2001', 102: '2002', 78: '2003', 1: '1'}
+        with mock.patch.object(common, '_windows_process_identity', side_effect=lambda pid: identities[pid]):
+            found = [pid for pid, _id in common._windows_descendants(100, table)]
+        self.assertNotIn(77, found)
+        self.assertNotIn(78, found)
+        self.assertEqual(set(found), {101, 102})
+
+    def test_windows_descendants_skip_unknown_identity(self):
+        # An unknown (None) descendant never selects; a known sibling does.
+        table = {100: 1, 101: 100, 102: 100, 103: 101}
+        identities = {100: '1000', 101: '1001', 102: None, 103: '1002', 1: '1'}
+        with mock.patch.object(common, '_windows_process_identity', side_effect=lambda pid: identities[pid]):
+            found = [pid for pid, _id in common._windows_descendants(100, table)]
+        self.assertNotIn(102, found)
+        self.assertEqual(set(found), {101, 103})
+
+    def test_windows_tree_kill_skips_unknown_while_killing_sibling(self):
+        table = {100: 1, 101: 100, 102: 100}
+        identities = {100: '1000', 101: '1001', 102: None, 1: '1'}
+        killed = []
+        proc = mock.Mock(pid=100)
+        proc.stdout = None
+        proc.wait = mock.Mock(return_value=0)
+        proc.kill = mock.Mock()
+        with mock.patch.object(common, '_windows_process_table', return_value=table), \
+                mock.patch.object(common, '_windows_process_identity', side_effect=lambda pid: identities[pid]), \
+                mock.patch.object(common, '_terminate_windows_process', side_effect=lambda pid, expected=None: killed.append(pid)), \
+                mock.patch.object(common.os, 'name', 'nt'):
+            common._stop_group(proc, tree=True)
+        self.assertEqual(killed, [101])
+        self.assertNotIn(102, killed)
+        proc.kill.assert_called_once()
 
     def test_short_timeouts_report_timeout_not_a_generic_failure(self):
         with self.assertRaises(common.UpdateFailure) as raised:

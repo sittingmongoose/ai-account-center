@@ -254,10 +254,13 @@ run or the binary is missing) AAC runs one bounded headless session with the new
 configured default is used, in a neutral temporary directory, with the timeout as min(60s,
 the deadline's remaining time) and no 30s floor; a warm whose deadline has already passed
 never starts. On Windows the run goes through the detected `.muse-launcher.ps1`, as
-detection does for `--version`. The warm is a short-lived synchronous process whose whole
-owned process tree is killed at its timeout, so a later process scan never sees it as a session
-to stop or restart. Pre-existing `muse serve` hosts started by T3 are never part of that
-owned tree and are never touched by the warm's kill. An update that
+detection does for `--version`. The warm is a short-lived synchronous process and the
+only bounded command that opts into whole-tree cleanup (`kill_tree=True`): its whole
+owned process tree is killed at its timeout, so a later process scan never sees it as
+a session to stop or restart. Every other bounded command keeps the pre-tree cleanup
+(POSIX session-group kill, Windows root kill only), so a detached relaunch that keeps
+ppid ancestry in a new session is spared. Pre-existing `muse serve` hosts started
+by T3 are never part of that tree and are never touched by the warm's kill. An update that
 changed the binary is `updated` only when the warm succeeds and a catalog entry in
 `~/.local/share/muse/model-catalog` was rewritten at or after the install started; otherwise
 the row reports `restart_failed` with `model_catalog_unrefreshed` (the sessions were still

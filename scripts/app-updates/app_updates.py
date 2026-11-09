@@ -635,7 +635,7 @@ def muse_warm_catalog(refreshed, deadline, started_at):
                 if remaining <= 0:
                     return False
                 timeout = min(60, remaining)
-            command(argv, timeout=timeout, cwd=str(cwd))
+            command(argv, timeout=timeout, cwd=str(cwd), kill_tree=True)
     except UpdateFailure:
         return False
     return muse_catalog_fresh(refreshed.platform, started_at)
