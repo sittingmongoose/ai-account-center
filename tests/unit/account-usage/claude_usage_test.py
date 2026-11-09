@@ -588,15 +588,120 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(windows[1]["resetAt"], "2026-10-08T12:00:00.499Z")
         self.assertEqual((windows[4]["limit"], windows[4]["remaining"], windows[4]["enabled"]), (50, 50, False))
 
-    def test_fable_is_never_inferred_from_legacy_other_models_or_surface_caps(self):
-        cases = [None, [], [self.fable(kind="weekly_all")], [self.fable(group="session")],
-                 [self.fable(scope={"model": {"display_name": "Opus"}, "surface": None})],
-                 [self.fable(scope={"model": {"display_name": "Fable"}, "surface": {"id": "code"}})]]
-        for limits in cases:
-            with self.subTest(limits=limits):
-                windows = usage.normalize_windows({"seven_day": {"utilization": 42},
-                    "seven_day_opus": {"utilization": 80}, "seven_day_fable": {"utilization": 12}, "limits": limits})
-                self.assertEqual([window["key"] for window in windows], ["seven_day", "seven_day_opus"])
+    def test_scoped_limits_name_each_model_with_its_own_reset(self):
+        # Per-model weeklies live only in limits[] with self-describing
+        # display names; each model keeps its own reset time.
+        def scoped(display, percent, reset):
+            return {"kind": "weekly_scoped", "group": "weekly", "percent": percent,
+                    "resets_at": reset, "is_active": True,
+                    "scope": {"model": {"display_name": display}, "surface": None}}
+
+        windows = usage.normalize_windows({
+            "five_hour": None, "seven_day_opus": None, "seven_day_sonnet": None,
+            "limits": [scoped("Opus", 40, "2026-10-08T12:00:00Z"),
+                       scoped("Sonnet", 30, "2026-10-09T12:00:00Z"),
+                       scoped("Haiku", 20, "2026-10-10T12:00:00Z"),
+                       scoped("Fable", 0, "2026-10-11T12:00:00Z")]})
+        self.assertEqual([window["key"] for window in windows],
+                         ["seven_day_opus", "seven_day_sonnet", "seven_day_haiku", "seven_day_fable"])
+        self.assertEqual([(window["label"], window["usedPercent"], window["resetAt"], window["windowMinutes"])
+                          for window in windows],
+                         [("Weekly Opus usage", 40, "2026-10-08T12:00:00.000Z", 10080),
+                          ("Weekly Sonnet usage", 30, "2026-10-09T12:00:00.000Z", 10080),
+                          ("Weekly Haiku usage", 20, "2026-10-10T12:00:00.000Z", 10080),
+                          ("Weekly Fable usage", 0, "2026-10-11T12:00:00.000Z", 10080)])
+
+    def test_session_comes_from_limits_when_top_level_is_null(self):
+        windows = usage.normalize_windows({"five_hour": None, "limits": [
+            {"kind": "session", "group": "session", "percent": 11, "resets_at": "2026-10-01T21:20:00Z"}]})
+        self.assertEqual([(window["key"], window["label"], window["usedPercent"], window["windowMinutes"])
+                          for window in windows],
+                         [("five_hour", "Five-hour usage", 11, 300)])
+        self.assertEqual(windows[0]["resetAt"], "2026-10-01T21:20:00.000Z")
+
+    def test_no_session_invented_when_absent(self):
+        # The session window was removed upstream on many accounts: absence
+        # is correct and nothing is inferred from other windows.
+        windows = usage.normalize_windows({
+            "seven_day": {"utilization": 42},
+            "limits": [{"kind": "weekly_all", "group": "weekly", "percent": 42,
+                        "scope": None}]})
+        self.assertEqual([window["key"] for window in windows], ["seven_day"])
+
+    def test_top_level_wins_over_limits_duplicate(self):
+        windows = usage.normalize_windows({
+            "seven_day_opus": {"utilization": 80, "resets_at": "2026-10-08T00:00:00Z"},
+            "limits": [{"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+                        "resets_at": "2026-10-09T00:00:00Z",
+                        "scope": {"model": {"display_name": "Opus"}, "surface": None}}]})
+        self.assertEqual(len(windows), 1)
+        self.assertEqual((windows[0]["usedPercent"], windows[0]["resetAt"]),
+                         (80, "2026-10-08T00:00:00.000Z"))
+
+    def test_conflicting_scoped_duplicates_drop_the_key(self):
+        def entry(percent, reset="2026-10-08T00:00:00Z"):
+            return {"kind": "weekly_scoped", "group": "weekly", "percent": percent,
+                    "resets_at": reset,
+                    "scope": {"model": {"display_name": "Opus"}, "surface": None}}
+
+        # Identical duplicates collapse to one window.
+        windows = usage.normalize_windows({"limits": [entry(10), entry(10)]})
+        self.assertEqual([window["key"] for window in windows], ["seven_day_opus"])
+        # Conflicting percent (or reset) drops the key entirely rather than
+        # silently picking one account quota.
+        self.assertEqual(usage.normalize_windows({"limits": [entry(10), entry(11)]}), [])
+        self.assertEqual(usage.normalize_windows({"limits": [
+            entry(10, "2026-10-08T00:00:00Z"), entry(10, "2026-10-09T00:00:00Z")]}), [])
+
+    def test_surface_scoped_and_surface_only_windows(self):
+        windows = usage.normalize_windows({"limits": [
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+             "scope": {"model": {"display_name": "Fable"}, "surface": {"id": "code", "display_name": "Code"}}},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 20,
+             "scope": {"model": None, "surface": {"display_name": "Claude Code"}}}]})
+        self.assertEqual([(window["key"], window["label"]) for window in windows],
+                         [("seven_day_fable_code", "Weekly Fable usage (Code)"),
+                          ("seven_day_claude_code", "Weekly Claude Code usage")])
+
+    def test_unknown_kind_windows(self):
+        # With a screened model scope an unknown kind is scoped; without one
+        # it keeps its own kind as the key with the all/scoped word trimmed.
+        windows = usage.normalize_windows({"limits": [
+            {"kind": "monthly_all", "group": "monthly", "percent": 33},
+            {"kind": "custom_scoped", "group": "weekly", "percent": 44,
+             "scope": {"model": {"display_name": "Haiku"}, "surface": None}},
+            {"kind": "Weekly-All", "group": "weekly", "percent": 55},
+            {"kind": "all", "group": "weekly", "percent": 66}]})
+        self.assertEqual([(window["key"], window["label"], window["windowMinutes"]) for window in windows],
+                         [("monthly_all", "Monthly usage", None),
+                          ("seven_day_haiku", "Weekly Haiku usage", 10080)])
+
+    def test_unknown_top_level_seven_day_and_codename_exclusion(self):
+        # Unknown seven_day_<slug> top-level dicts fill in for future models
+        # (sorted); bare codename keys are never windows. A legacy seven_day
+        # value this test once ignored now carries its Fable top-level form
+        # too: the pickup is generic, so seven_day_fable top-level emits.
+        windows = usage.normalize_windows({
+            "seven_day_haiku": {"utilization": 7, "resets_at": "2026-10-08T00:00:00Z"},
+            "seven_day_fable": {"utilization": 12},
+            "nimbus_quill": {"utilization": 99}, "limits": None})
+        self.assertEqual([(window["key"], window["label"], window["usedPercent"]) for window in windows],
+                         [("seven_day_fable", "Weekly Fable usage", 12),
+                          ("seven_day_haiku", "Weekly Haiku usage", 7)])
+
+    def test_model_id_codenames_and_unsafe_names_never_name_windows(self):
+        cases = [
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+             "scope": {"model": {"id": "claude-sonnet-4-5"}, "surface": None}},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+             "scope": {"model": {"display_name": "Task_Plus"}, "surface": None}},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+             "scope": {"model": {"display_name": "!!!"}, "surface": None}},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 10, "scope": None},
+        ]
+        for entry in cases:
+            with self.subTest(entry=entry):
+                self.assertEqual(usage.normalize_windows({"limits": [entry]}), [])
 
     def test_fable_nonzero_over_limit_and_duplicate_conflicts_are_safe(self):
         for percent in (12.5, 125.5):
@@ -764,9 +869,68 @@ class WebExtraTests(unittest.TestCase):
                  {"eligible": True, "grants": [{"resets_left": 50, "paused": False}] * 2}]
         for value in cases:
             self.assertEqual(usage.normalize_reset_credits(value), [])
-        zero = usage.normalize_reset_credits({"eligible": False, "grants": []})
-        self.assertEqual(zero[0]["remaining"], 0)
-        self.assertNotIn("enabled", zero[0])
+        # eligible False withholds grant detail: grants:[] there is UNKNOWN,
+        # never a confirmed zero. This used to assert a zero summary window,
+        # which invented a count the provider never stated.
+        for value in ({"eligible": False, "grants": []},
+                      {"eligible": False, "grants": [{"resets_left": 1, "paused": False}]},
+                      {"eligible": False, "grants": None}):
+            self.assertEqual(usage.normalize_reset_credits(value), [])
+
+    def test_clears_are_carried_deduped_and_fail_closed(self):
+        now = 1780000000
+        windows = usage.normalize_reset_credits({"eligible": True, "grants": [{
+            "resets_left": 2, "resets_total": 3, "paused": False,
+            "clears": ["five_hour", "seven_day", "seven_day", "seven_day_opus"]}]}, now)
+        self.assertEqual(windows[1]["clears"], ["five_hour", "seven_day", "seven_day_opus"])
+        # Empty clears stays off the window entirely.
+        windows = usage.normalize_reset_credits({"eligible": True, "grants": [{
+            "resets_left": 1, "paused": False, "clears": []}]}, now)
+        self.assertNotIn("clears", windows[1])
+        # Any malformed clears poisons the whole inventory: unknown, never partial.
+        for clears in (["Five Hour"], ["seven_day", "token-secret"], ["x" * 41],
+                       "seven_day", None, [1], ["a"] * 9, ["valid", ""]):
+            with self.subTest(clears=clears):
+                self.assertEqual(usage.normalize_reset_credits({"eligible": True, "grants": [{
+                    "resets_left": 1, "paused": False, "clears": clears}]}, now), [])
+
+    def test_juniper_session_reset_allowance(self):
+        available = usage.normalize_session_reset_allowance({
+            "eligible": True, "available": True, "resets_per_week": 3,
+            "next_available_at": "2026-10-12T00:00:00Z"})
+        self.assertEqual(available, [{
+            "key": "session_reset_allowance", "label": "Weekly session reset", "kind": "balance",
+            "usedPercent": None, "remainingPercent": None, "resetAt": "2026-10-12T00:00:00.000Z",
+            "expiresAt": None, "windowMinutes": None, "used": 0, "limit": 3,
+            "remaining": 3, "unit": "resets"}])
+        spent = usage.normalize_session_reset_allowance({
+            "eligible": True, "available": False, "resets_per_week": 3,
+            "next_available_at": "2026-10-12T00:00:00Z"})[0]
+        self.assertEqual((spent["remaining"], spent["used"], spent["limit"]), (0, 3, 3))
+        missing_reset = usage.normalize_session_reset_allowance({
+            "eligible": True, "available": True, "resets_per_week": 1})[0]
+        self.assertIsNone(missing_reset["resetAt"])
+        for value in ({"eligible": False, "available": True, "resets_per_week": 3},
+                      {"eligible": True, "available": "yes", "resets_per_week": 3},
+                      {"eligible": True, "available": True, "resets_per_week": True},
+                      {"eligible": True, "available": True, "resets_per_week": 0},
+                      {"eligible": True, "available": True, "resets_per_week": 51},
+                      {"eligible": True, "available": True, "resets_per_week": 2.5},
+                      None, {}):
+            with self.subTest(value=value):
+                self.assertEqual(usage.normalize_session_reset_allowance(value), [])
+        self.assertIs(usage.normalize_juniper_tide, usage.normalize_session_reset_allowance)
+
+    def test_juniper_arrives_in_the_same_usage_response(self):
+        windows, _ = self.web_windows(
+            self.web_account(),
+            {"cedar_ember": {"eligible": True, "grants": []},
+             "juniper_tide": {"eligible": True, "available": True, "resets_per_week": 2,
+                              "next_available_at": "2026-10-12T00:00:00Z"}},
+            {"amount": 0, "currency": "USD"})
+        self.assertEqual([window["key"] for window in windows],
+                         ["reset_credits_available", "session_reset_allowance", "prepaid_balance"])
+        self.assertEqual(windows[1]["remaining"], 2)
 
     def test_prepaid_currency_null_and_actual_expiry_are_preserved(self):
         window = usage.normalize_prepaid({"amount": 1234, "currency": "USD",
@@ -807,8 +971,9 @@ class WebExtraTests(unittest.TestCase):
     def test_optional_failures_do_not_invent_zero_or_drop_other_balance(self):
         windows, _ = self.web_windows(self.web_account(), RuntimeError("private-error"), {"amount": 0, "currency": "USD"})
         self.assertEqual([window["key"] for window in windows], ["prepaid_balance"])
+        # eligible False is unknown inventory, never a zero summary window.
         windows, _ = self.web_windows(self.web_account(), {"cedar_ember": {"eligible": False, "grants": []}}, RuntimeError("private-error"))
-        self.assertEqual([window["key"] for window in windows], ["reset_credits_available"])
+        self.assertEqual(windows, [])
         with mock.patch.object(usage, "capsule_cookies", side_effect=RuntimeError("private-path")):
             self.assertEqual(usage.optional_web_windows("gmail", ACCOUNT, ORG, expected_email=EMAIL), [])
 
@@ -837,13 +1002,15 @@ class WebExtraTests(unittest.TestCase):
             {"amount": 0, "currency": "USD"}, availability=availability)
         self.assertEqual(availability, {"resetCredits": "unavailable", "prepaidBalance": "ok"})
         self.assertEqual(windows[0]["remaining"], 0)
+        # An eligible-False cedar_ember contributes no window (unknown, not
+        # zero); the prepaid zero still emits exactly one window.
         for reset, prepaid in (({}, {}), ({"cedar_ember": None}, {"amount": None}),
                                ({"cedar_ember": {"eligible": False, "grants": []}}, {"amount": 0})):
             with self.subTest(reset=reset, prepaid=prepaid):
                 availability = {}
                 windows, _ = self.web_windows(self.web_account(), reset, prepaid, availability=availability)
                 self.assertEqual(availability, {"resetCredits": "ok", "prepaidBalance": "ok"})
-                self.assertEqual(len(windows), 2 if prepaid.get("amount") == 0 else 0)
+                self.assertEqual(len(windows), 1 if prepaid.get("amount") == 0 else 0)
         availability = {}
         self.web_windows(self.web_account(uuid=OTHER), availability=availability)
         self.assertEqual(availability, {"resetCredits": "unavailable", "prepaidBalance": "unavailable"})
