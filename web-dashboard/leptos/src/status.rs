@@ -626,8 +626,8 @@ fn PinCard(update: PinnedUpdate) -> impl IntoView {
 }
 
 #[component]
-fn PinRow(update: PinnedUpdate, on_open: Callback<PinnedUpdate>) -> impl IntoView {
-    let u = update.clone();
+fn PinRow(update: PinnedUpdate, on_open: Callback<String>) -> impl IntoView {
+    let id = update.id.clone();
     let pct_text = update
         .percent
         .as_ref()
@@ -637,7 +637,7 @@ fn PinRow(update: PinnedUpdate, on_open: Callback<PinnedUpdate>) -> impl IntoVie
     let cached = is_unreadable(&update);
     let line = row_line(&update);
     view! {
-        <button class="pin-row" class:cached=cached on:click=move |_| on_open.run(u.clone())>
+        <button class="pin-row" class:cached=cached on:click=move |_| on_open.run(id.clone())>
             <span class="pr-name" class:q2=quiet>{update.title.clone()}</span>
             {match pct_text {
                 Some(t) => view! { <span class="pr-pct">{t}<small>"%"</small></span> }.into_any(),
@@ -649,17 +649,27 @@ fn PinRow(update: PinnedUpdate, on_open: Callback<PinnedUpdate>) -> impl IntoVie
     }
 }
 
+/// The sheet draws the pin's current update, so a sheet held open follows its report. Only the contents redraw: the
+/// sheet itself stays, and with it where it was scrolled.
 #[component]
-fn PinSheet(update: PinnedUpdate, on_close: Callback<()>) -> impl IntoView {
-    let quiet = is_quiet(&update);
-    let cached = is_unreadable(&update);
-    let who = update.who.clone();
-    let body = if quiet {
-        quiet_body(&update).into_any()
-    } else if cached {
-        view! { {cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 500, 500, false)}</div> }.into_any()
-    } else {
-        pin_body(&update, 500, 500, true).into_any()
+fn PinSheet(update: Memo<Option<PinnedUpdate>>, on_close: Callback<()>) -> impl IntoView {
+    let contents = move || {
+        update.get().map(|update| {
+            let quiet = is_quiet(&update);
+            let cached = is_unreadable(&update);
+            let who = update.who.clone();
+            let body = if quiet {
+                quiet_body(&update).into_any()
+            } else if cached {
+                view! { {cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 500, 500, false)}</div> }.into_any()
+            } else {
+                pin_body(&update, 500, 500, true).into_any()
+            };
+            view! {
+                <div><h3 class="pin-name" style="font-size:18px">{update.title.clone()}</h3>{who.map(|w| view! { <p class="pin-who">{w}</p> })}</div>
+                {body}
+            }
+        })
     };
     view! {
         <div class="sheet-host" role="dialog" aria-modal="true">
@@ -667,10 +677,7 @@ fn PinSheet(update: PinnedUpdate, on_close: Callback<()>) -> impl IntoView {
             <div class="sheet">
                 <div class="grabber"></div>
                 <button class="icon-btn bare sheet-close" aria-label="Close" on:click=move |_| on_close.run(())><Icon name="close"/></button>
-                <article class="pin">
-                    <div><h3 class="pin-name" style="font-size:18px">{update.title.clone()}</h3>{who.map(|w| view! { <p class="pin-who">{w}</p> })}</div>
-                    {body}
-                </article>
+                <article class="pin">{contents}</article>
             </div>
         </div>
     }
@@ -683,9 +690,25 @@ fn PinnedPanelView() -> impl IntoView {
         live.view
             .with(|v| v.as_ref().and_then(|v| v.pinned.clone()))
     });
-    let sheet = RwSignal::new(None::<PinnedUpdate>);
-    let open_sheet = Callback::new(move |u: PinnedUpdate| sheet.set(Some(u)));
-    let close_sheet = Callback::new(move |_: ()| sheet.set(None));
+    // Only which pin is open: what the sheet shows always comes from the current panel.
+    let sheet_id = RwSignal::new(None::<String>);
+    let open_sheet = Callback::new(move |id: String| sheet_id.set(Some(id)));
+    let close_sheet = Callback::new(move |_: ()| sheet_id.set(None));
+    let sheet_update = Memo::new(move |_| {
+        let id = sheet_id.get()?;
+        panel.with(|p| {
+            p.as_ref()
+                .filter(|p| p.unavailable.is_none())
+                .and_then(|p| p.updates.iter().find(|u| u.id == id).cloned())
+        })
+    });
+    // A pin that was removed, or a panel that became unavailable, closes the sheet for good: a later return doesn't reopen it.
+    Effect::new(move |_| {
+        if sheet_id.with(|s| s.is_some()) && sheet_update.with(|u| u.is_none()) {
+            sheet_id.set(None);
+        }
+    });
+    let sheet_open = Memo::new(move |_| sheet_id.with(|s| s.is_some()));
     view! {
         <section class="plate sec-pinned" id="pinned">
             <div class="plate-head">
@@ -720,7 +743,7 @@ fn PinnedPanelView() -> impl IntoView {
                     }.into_any()
                 }
             }}
-            {move || sheet.get().map(|u| view! { <PinSheet update=u on_close=close_sheet/> })}
+            {move || sheet_open.get().then(|| view! { <PinSheet update=sheet_update on_close=close_sheet/> })}
         </section>
     }
 }
