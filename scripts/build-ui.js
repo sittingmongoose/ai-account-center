@@ -11,7 +11,7 @@ const { parse } = require('smol-toml');
 const { runWithUiBuildLock, wasmTargetDir } = require('./ui-build-lock');
 
 const SLINT_VERSION = '1.18.1';
-const WASM_PACK_VERSION = '0.15.0';
+const WASM_PACK_VERSION = '0.15.1';
 const MINIMUM_RUST_MINOR = 99;
 /**
  * wasm-pack installs the wasm-bindgen CLI at the version in Cargo.lock. These pins are the

@@ -23,7 +23,7 @@ Plan for it, and tell the person before you start: **a source build of about 30 
 computer (most of it one Rust compile), with four toolchains.
 
 1. **Toolchains,** the versions in the README's **What you need**: Node.js 22.13+ or 26 (CI installs 26), Bun 1.4.4, Rust 1.99.1 with
-   `wasm32-unknown-unknown`, and wasm-pack 0.15.0. On a Mac, Homebrew's `node` is fine when it is 22.13 or newer.
+   `wasm32-unknown-unknown`, and wasm-pack 0.15.1. On a Mac, Homebrew's `node` is fine when it is 22.13 or newer.
    `brew install node@22` still works when you want the older end of that range. A fresh Mac needs the Command Line
    Tools first, and Homebrew asks for the person's password in a terminal: those are their steps.
 2. **Build:** the README's **Get started** step 1 (clone, `bun install`, `bun run build:all`).

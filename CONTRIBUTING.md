@@ -9,10 +9,10 @@ authorship, copyright, license and repository history are retained.
 
 Use Node.js 22.13 or newer, including 26 (CI installs 26; Node 22 stays
 supported), Bun 1.4.4, Rust 1.99.1 with
-`wasm32-unknown-unknown`, and wasm-pack **0.15.0**. Slint/runtime compiler are pinned to
+`wasm32-unknown-unknown`, and wasm-pack **0.15.1**. Slint/runtime compiler are pinned to
 **1.18.1** in the dashboard manifest and lockfile. TypeScript stays at **6.0.3**:
 the newest typescript-eslint supports TypeScript < 6.1 only.
-Install the build tool with `cargo install wasm-pack --version 0.15.0 --locked`.
+Install the build tool with `cargo install wasm-pack --version 0.15.1 --locked`.
 The dashboard's target-specific Cargo configuration enables SIMD and tail calls.
 The final build preserves internal tail calls and normalizes import/indirect
 boundaries for the iOS WebKit pointer-authentication bug;
