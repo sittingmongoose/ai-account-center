@@ -19,6 +19,9 @@
 //! cheating measure falls back to the "N runs" cell; a value outside the ±2^53 safe
 //! integer range refuses the view instead of printing a saturated number; ties order by
 //! plain Unicode code points.
+//!
+//! Fix round 2: "at the same speed and cost" is said only when both models' speed and
+//! cost are known finite numbers and each pair matches. Two unknown values are not a tie.
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -862,16 +865,24 @@ fn compare(job: &TaskIn, row: &RowIn, row_index: usize, others: &[usize], min_ru
     {
         let other = &job.rows[other_index];
         let oc = column(other).ok_or_else(|| shape("a verdict row with no column to stand on"))?;
-        // Strict number equality, as the reference's `===` between two measure values
-        // (both missing reads equal: `undefined === undefined`).
-        let measure_number = |column: &ColumnIn, id: &str| column.measures.get(id).and_then(|m| m.value.as_f64());
-        let same_speed = measure_number(oc, "speed") == measure_number(c, "speed");
-        let same_cost = measure_number(oc, "cost") == measure_number(c, "cost");
+        // All four figures must be known finite numbers, and each pair must match.
+        // Two missing reads are not a measured tie (2026-11-09, R1).
+        let known_finite = |column: &ColumnIn, id: &str| {
+            column
+                .measures
+                .get(id)
+                .and_then(|measure| measure.value.as_f64())
+                .filter(|value| value.is_finite())
+        };
+        let same_known = |id: &str| match (known_finite(oc, id), known_finite(c, id)) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        };
         runs.push(strong(name(&other.label, &other.effort)));
         runs.push(run(format!(
             " is also Recommended here, with {} runs{}.",
             oc.n,
-            if same_speed && same_cost {
+            if same_known("speed") && same_known("cost") {
                 " at the same speed and cost"
             } else {
                 ""

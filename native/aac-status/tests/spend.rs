@@ -415,6 +415,25 @@ fn equal_shares_tie_by_unicode_code_point() {
         .collect();
     assert_eq!(named.first().copied(), Some("Zebra"));
     assert!(named.contains(&"alpha"));
+
+    // The same tie past the BMP. U+E000 is one UTF-16 unit; U+10000 is a surrogate
+    // pair, so JavaScript `<` puts U+10000 first. Code points put U+E000 first. R3.
+    let supplementary = compose(&repro_input("unicode-codepoints.json"));
+    let streams: Vec<&str> = supplementary.periods[0]
+        .rows
+        .iter()
+        .map(|row| row.stream.as_str())
+        .collect();
+    assert_eq!(streams, vec!["\u{E000}", "\u{10000}"]);
+    let named: Vec<&str> = supplementary.periods[0]
+        .lead
+        .iter()
+        .filter(|run| run.strong == Some(true))
+        .map(|run| run.text.as_str())
+        .collect();
+    // The lead names the stream ids. U+E000 leads; U+10000 is next.
+    assert_eq!(named.first().copied(), Some("\u{E000}"));
+    assert!(named.contains(&"\u{10000}"));
 }
 
 #[test]

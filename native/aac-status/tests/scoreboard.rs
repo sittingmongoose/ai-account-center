@@ -357,3 +357,18 @@ fn a_per_task_speed_with_no_value_is_still_refused() {
     assert_eq!(err.code, "shape");
     assert!(err.to_string().contains("a per-task speed with no value"), "{err}");
 }
+
+#[test]
+fn unknown_speed_and_cost_are_not_called_the_same() {
+    // The review fixture builder's review runs, with wallSeconds and cost set to null.
+    // Both models stay Recommended. Unknown speed and unknown cost are not a tie. R1.
+    let parsed: ViewIn = serde_json::from_str(&fixture("repro/unknown-speed-cost.json")).unwrap();
+    let view = by_model(&parsed).expect("unknown speed and cost still compose");
+    let text = serde_json::to_string(&view).unwrap();
+    assert!(
+        !text.contains("at the same speed and cost"),
+        "an unknown speed and cost were called the same"
+    );
+    assert!(text.contains("is also Recommended here, with 15 runs."));
+    assert!(text.contains("is also Recommended here, with 8 runs."));
+}
