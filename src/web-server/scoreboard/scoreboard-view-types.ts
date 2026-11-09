@@ -194,4 +194,87 @@ export interface ScoreboardView {
   };
   uses: ScoreboardUse[];
   recent: RunSummary[];
+  /** The by-model matrix (CONTRACT-spend-bymodel.md section 2), composed in the
+   * aac-status native module and passed through; absent when it cannot be had. */
+  byModel?: ByModelView;
+}
+
+// ---------------------------------------------------------------------------------------------
+// byModel (the native composer's own output, passed through)
+
+/** One run of the sentence type `/api/status` already uses. */
+export interface ByModelRun {
+  text: string;
+  strong?: true;
+  tone?: 'warn' | 'crit' | 'good' | 'acc';
+}
+
+export interface ByModelView {
+  defaultView: 'pipeline';
+  intro: string;
+  /** The quiet sentences at the end of the page. */
+  readNote: ByModelRun[];
+  readLink: { label: string; anchor: string };
+  bandSummary: string;
+  views: ByModelViewSection[];
+}
+
+export interface ByModelViewSection {
+  id: 'pipeline' | 'pm-users';
+  label: string;
+  short: string;
+  meta: ByModelRun[];
+  picks: ByModelPick[];
+  jobs: Array<{ id: string; label: string }>;
+  models: ByModelModel[];
+  foot: ByModelRun[];
+}
+
+export interface ByModelPick {
+  job: string;
+  jobLabel: string;
+  model: { label: string; effort: string | null; mark: string | null } | null;
+  noneLabel: string | null;
+  why: ByModelRun[];
+}
+
+export interface ByModelModel {
+  key: string;
+  model: string;
+  label: string;
+  effort: string | null;
+  effortText: string;
+  runtime: string;
+  mark: string | null;
+  runs: number;
+  head: string;
+  headRuns: ByModelRun[];
+  sheetHead: string;
+  cells: Record<string, ByModelCell | null>;
+  report: ByModelReport[];
+}
+
+export interface ByModelCell {
+  verdict: 'recommended' | 'fine' | 'avoid' | 'not-enough-data';
+  word: string;
+  /** Chunks the page keeps whole: it breaks only between them, never mid-phrase. */
+  sub: string[];
+}
+
+export interface ByModelReport {
+  job: string;
+  label: string;
+  verdict: string;
+  word: string;
+  basis: string;
+  measures: ByModelMeasure[];
+  compare: ByModelRun[];
+}
+
+export interface ByModelMeasure {
+  label: string;
+  value: string;
+  sub: string;
+  note: string;
+  range: { low: number | null; high: number | null; value: number | null } | null;
 }

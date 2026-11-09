@@ -53,6 +53,77 @@ export interface UsageInput {
   staleAfterSeconds: number;
 }
 
+/** One run of the sentence type `/api/status` already uses. */
+export interface StatusRun {
+  text: string;
+  strong?: true;
+  tone?: 'warn' | 'crit' | 'good' | 'acc';
+}
+
+/** The spend-by-stream panel (CONTRACT-spend-bymodel.md section 1): the native module's
+ * own output, passed through untouched, or the contract's unavailable shape. */
+export type SpendByStreamPanel = SpendByStreamView | SpendByStreamUnavailable;
+
+/** Every way the field can be unavailable (no report, no module, an input the module
+ * refused): one fixed sentence and no periods, never a guessed figure. */
+export interface SpendByStreamUnavailable {
+  state: 'unavailable';
+  unavailable: 'Spend by stream is unavailable: quota-watch has not written a report this server can read.';
+  defaultPeriod: null;
+  asOf: null;
+  asOfText: null;
+  periods: [];
+}
+
+export interface SpendByStreamView {
+  state: 'ok';
+  unavailable: null;
+  /** "week" when present, else the first period. */
+  defaultPeriod: string | null;
+  asOf: string | null;
+  asOfText: string | null;
+  periods: SpendByStreamPeriod[];
+}
+
+export interface SpendByStreamPeriod {
+  id: string;
+  /** SpendView's own label: "Today", "This week", "Last 6 hours". */
+  label: string;
+  lead: StatusRun[];
+  summary: StatusRun[];
+  columns: SpendByStreamColumn[];
+  credits: { label: string; accountLabel: string } | null;
+  rows: SpendByStreamRow[];
+  key: string[];
+  foot: string;
+  more: string | null;
+}
+
+export interface SpendByStreamColumn {
+  /** "<account>|<meter>". */
+  id: string;
+  account: string;
+  meter: string;
+  /** "Claude weekly": the caps column head. */
+  label: string;
+  accountLabel: string;
+  /** Phone bar label; ", wk" / ", 5-h" when the account has both. */
+  short: string;
+  /** The part before the colon; chart hue only. */
+  hue: string;
+}
+
+export interface SpendByStreamRow {
+  stream: string;
+  label: string;
+  bucket: boolean;
+  /** One per column, same order; null where the stream used nothing of that limit. */
+  cells: Array<{ share: number | null; text: string } | null>;
+  credits: Array<{ account: string; accountLabel: string; text: string }>;
+  /** Phone bars: column indexes, in order. */
+  blockOrder: number[];
+}
+
 export interface StatusInputs {
   now: number;
   timeZone: string;
@@ -73,6 +144,9 @@ export interface StatusInputs {
   quota?: QuotaReportState;
   /** The pinned-threads panel (pass-through: the composer's own output, or its unavailability). */
   pinned?: PinnedPanel;
+  /** The spend-by-stream panel (pass-through: the native composer's output, or the
+   * contract's unavailable shape). */
+  spendByStream?: SpendByStreamPanel;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -368,6 +442,9 @@ export interface StatusView {
   /** The pinned threads' updates (PINNED-THREADS.md), composed in the aac-status native
    * module and passed through; absent only when the service has not provided it. */
   pinned?: PinnedPanel;
+  /** Spend by stream (CONTRACT-spend-bymodel.md), composed in the aac-status native
+   * module and passed through; the unavailable shape, never a guessed figure. */
+  spendByStream?: SpendByStreamPanel;
   projects: ProjectView[];
   /** `also`: the panel's secondary sources; their failures are shown on the panel and its rows. */
   threads: { source: 'agent-reports'; also: ['pm-mail']; rows: ThreadView[] };

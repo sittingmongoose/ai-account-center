@@ -4,7 +4,12 @@
  * same view. A missing value is null with a reason, never 0, and nothing from a stale source is
  * presented as live.
  */
-import { SEQ_WENT_BACK, type ReportProblem, type SeenReport } from './agent-reports-reader';
+import {
+  SEQ_WENT_BACK,
+  type AgentReportsState,
+  type ReportProblem,
+  type SeenReport,
+} from './agent-reports-reader';
 import { CLOSING_KINDS, deliveryView, summarySteps } from './answers';
 import {
   ITEM_STATES,
@@ -715,6 +720,8 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     cards,
     // Pass-through only: the pinned panel's own words, or its unavailability (pinned-threads.ts).
     ...(inputs.pinned ? { pinned: inputs.pinned } : {}),
+    // Pass-through only: the spend-by-stream panel's own words (spend-by-stream.ts).
+    ...(inputs.spendByStream ? { spendByStream: inputs.spendByStream } : {}),
     projects,
     threads: { source: 'agent-reports', also: ['pm-mail'], rows: threads },
     machines: { source: 'machines', also: ['browsers'], rows: machineRows },
@@ -730,9 +737,15 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
 
 /** Stream ids the agent reports name, with their labels; an id two projects label differently keeps its id. */
 function streamLabels(inputs: StatusInputs): Map<string, string> {
+  return streamLabelsOf(inputs.reports);
+}
+
+/** The same labels for a reports snapshot alone, so the spend-by-stream composer builds
+ * the very same SpendView `buildSpend` sees inside this view. */
+export function streamLabelsOf(reports: AgentReportsState): Map<string, string> {
   const labels = new Map<string, string>();
   const clash = new Set<string>();
-  for (const row of inputs.reports.tasks) {
+  for (const row of reports.tasks) {
     const label = row.doc.streamLabel ?? row.doc.stream;
     const seen = labels.get(row.doc.stream);
     if (seen !== undefined && seen !== label) clash.add(row.doc.stream);

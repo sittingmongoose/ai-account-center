@@ -49,8 +49,19 @@ import {
   type RegistryThread,
   type SimlockStatus,
 } from './status-collectors';
-import { buildStatusView, type Collected, type StatusView, type UsageInput } from './status-view';
-import { PinnedThreadsCollector } from './pinned-threads';
+import {
+  buildStatusView,
+  streamLabelsOf,
+  type Collected,
+  type StatusView,
+  type UsageInput,
+} from './status-view';
+import { PinnedThreadsCollector, zoneOffsetMinutes } from './pinned-threads';
+import { buildSpend } from './status-view-quota';
+import { SPEND_BY_STREAM_UNAVAILABLE, composeSpendByStream } from './spend-by-stream';
+import type { SpendByStreamPanel } from './status-view-types';
+import { openStatusHandle } from '../../status-native/pinned';
+import type { NativeStatusHandle } from '../../status-native/native-loader';
 
 const logger = createLogger('status-service');
 
@@ -107,6 +118,8 @@ export interface StatusServiceDeps {
   refreshSeconds?: () => number;
   /** The pinned-threads collector, built fresh when absent (tests inject one). */
   pinned?: PinnedThreadsCollector;
+  /** The aac-status handle for the spend-by-stream composer; null means no module (tests). */
+  spendNative?: NativeStatusHandle | null;
 }
 
 export class StatusService {
@@ -125,6 +138,10 @@ export class StatusService {
   private browsers: Collected<BrowserMachine[]> = empty();
   private simlock: Collected<SimlockStatus> = empty();
   private usage: UsageInput | null = null;
+  /** The aac-status handle for the spend-by-stream composer; null when there is no module. */
+  private readonly spendNative: NativeStatusHandle | null;
+  /** The last composed spend-by-stream panel; starts as the contract's unavailable shape. */
+  private spendByStream: SpendByStreamPanel = SPEND_BY_STREAM_UNAVAILABLE;
   private lastDemand = 0;
   private lastCollect = 0;
   private collecting: Promise<void> | null = null;
@@ -151,6 +168,12 @@ export class StatusService {
         timeZone: () => this.timeZone(),
         reportsRoot: () => this.reader.root,
       });
+    if (deps.spendNative !== undefined) {
+      this.spendNative = deps.spendNative;
+    } else {
+      const opened = openStatusHandle();
+      this.spendNative = 'unavailable' in opened ? null : opened;
+    }
   }
 
   private now(): number {
@@ -207,6 +230,26 @@ export class StatusService {
     } catch {
       /* The panel keeps its last composed view. */
     }
+    // The spend-by-stream panel recomposes over the quota scan's latest accepted report.
+    await this.composeSpendByStream();
+  }
+
+  /** Recompose `spendByStream` over the SpendView the latest scan state builds. A failed
+   * compose keeps the last good panel; with no module the field stays unavailable. */
+  private async composeSpendByStream(): Promise<void> {
+    if (!this.spendNative) return;
+    const now = this.now();
+    const reports = this.reader.snapshot();
+    const panel = await composeSpendByStream(
+      {
+        nowMs: now,
+        utcOffsetMinutes: zoneOffsetMinutes(this.timeZone(), now),
+        accountOrder: this.usage ? this.usage.accounts.map((account) => account.id) : [],
+        spend: buildSpend(this.quotaReader.snapshot(), streamLabelsOf(reports)),
+      },
+      { handle: this.spendNative }
+    );
+    this.spendByStream = panel;
   }
 
   private listAnswersSafe(): ReturnType<StatusAnswers['list']> {
@@ -456,6 +499,7 @@ export class StatusService {
       hiddenThreadNames: [DOORBELL_SENDER],
       quota: this.quotaReader.snapshot(),
       pinned: this.pinned.view(),
+      spendByStream: this.spendByStream,
     });
   }
 

@@ -22,7 +22,9 @@ napi-derive = { version = "3", optional = true }
 base64 = "0.22"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: numbers parse to the exact double every JavaScript engine reads (the
+# golden pairs carry 17-digit shares; the fast parser lands one ulp off them).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.11"
 
 [build-dependencies]

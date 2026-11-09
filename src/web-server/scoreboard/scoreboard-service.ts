@@ -16,6 +16,9 @@ import {
 import { CatalogReader, seedCatalog, type SeedFailure } from './catalog';
 import { RunsReader } from './runs-reader';
 import { buildScoreboardView, type ScoreboardView } from './scoreboard-view';
+import { composeByModel } from './by-model';
+import { openStatusHandle } from '../../status-native/pinned';
+import type { NativeStatusHandle } from '../../status-native/native-loader';
 
 /** A read within this long of the last view gets that view. */
 export const SCOREBOARD_CACHE_MS = 10_000;
@@ -28,11 +31,15 @@ export interface ScoreboardServiceDeps {
   timeZone?: () => string;
   fs?: ReaderFs;
   scanWaitMs?: number;
+  /** The aac-status handle for the by-model composer; null means no module (tests). */
+  native?: NativeStatusHandle | null;
 }
 
 export class ScoreboardService {
   private readonly catalog: CatalogReader;
   private readonly runs: RunsReader;
+  /** The aac-status handle for the by-model composer; null when there is no module. */
+  private readonly native: NativeStatusHandle | null;
   private cached: { at: number; view: ScoreboardView } | null = null;
   private building: Promise<ScoreboardView> | null = null;
   private seedFailures: SeedFailure[] = [];
@@ -41,6 +48,12 @@ export class ScoreboardService {
     const options = { root: () => this.root, now: () => this.now(), fs: deps.fs };
     this.catalog = new CatalogReader(options);
     this.runs = new RunsReader(options);
+    if (deps.native !== undefined) {
+      this.native = deps.native;
+    } else {
+      const opened = openStatusHandle();
+      this.native = 'unavailable' in opened ? null : opened;
+    }
   }
 
   get root(): string {
@@ -82,8 +95,12 @@ export class ScoreboardService {
       runs: this.runs.snapshot(),
       seedFailures: this.seedFailures,
     });
-    this.cached = { at: now, view };
-    return view;
+    // The by-model matrix is the native composer's own words over the view just built;
+    // when it cannot be had (no module, a refused input) the view carries no field.
+    const byModel = this.native ? await composeByModel(view, { handle: this.native }) : null;
+    const withByModel: ScoreboardView = byModel ? { ...view, byModel } : view;
+    this.cached = { at: now, view: withByModel };
+    return withByModel;
   }
 
   /** The view now, rescanning when the last one is older than the cache. Overlapping reads share one. */
