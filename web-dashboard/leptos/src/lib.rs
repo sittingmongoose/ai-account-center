@@ -13,6 +13,7 @@ mod live;
 mod media;
 mod scoreboard;
 mod status;
+mod ui;
 
 use leptos::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -118,6 +119,7 @@ pub fn start() {
     let location = window().location();
     let page = page_from_path(&location.pathname().unwrap_or_default());
     let embed = embedded(&location.search().unwrap_or_default());
+    ui::device::start(embed);
     if embed {
         listen_to_shell();
     }
