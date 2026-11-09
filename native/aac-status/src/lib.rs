@@ -5,12 +5,16 @@
 //! `agent-reports/status@1` documents agents write on the share. Routes, authentication,
 //! share scanning (list first, last good copy, `seq` ordering) and every product rule stay
 //! in the TypeScript server; this crate validates and projects, it never guesses.
+//!
+//! TypeScript checks status reports for secrets; the native module only reads reports
+//! TypeScript accepted (owner decision 2026-11-09). There is exactly one secret filter,
+//! the TypeScript one (`jsonFromBytes` in src/web-server/status/schema-helpers.ts); this
+//! crate keeps no copy of it.
 
 pub mod error;
 pub mod ops;
 pub mod pinned;
 pub mod pins;
-pub mod secret;
 pub mod status_doc;
 pub mod validate;
 

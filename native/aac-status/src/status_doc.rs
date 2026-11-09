@@ -5,10 +5,15 @@
 //! `docs/agent-reports/schemas/status.json`.
 //!
 //! A document is projected field by field from an allowlist, like every other report kind:
-//! unknown fields are ignored. The share rules applied here are the per-file ones (size cap,
-//! NUL refused, the writer must match its folder, real calendar timestamps, no secrets);
-//! listing first, keeping the last good copy and `seq` ordering belong to the reader that
-//! owns the scan, as with the other kinds.
+//! unknown fields are ignored. The share rules applied here are the per-file structural
+//! ones (size cap, NUL refused, the writer must match its folder, real calendar timestamps,
+//! `seq` a safe integer); listing first, keeping the last good copy and `seq` ordering
+//! belong to the reader that owns the scan, as with the other kinds.
+//!
+//! TypeScript checks status reports for secrets; the native module only reads reports
+//! TypeScript accepted (owner decision 2026-11-09). The reader runs `jsonFromBytes` — the
+//! one secret filter, in src/web-server/status/schema-helpers.ts — on every report before
+//! these bytes reach `parseStatus`, so this module never sees a file that filter refused.
 
 use crate::validate::{Invalid, Valid, count, fail, head, json_from_bytes, list, obj, one_of, opt_text, slug, text};
 use serde::Serialize;

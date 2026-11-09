@@ -382,7 +382,9 @@ reset", `warn` "claude main (7-day): full in 1d 11h, before its Nov 12 reset".
 "status?" (PINNED-THREADS.md section 1). Composed in the `aac-status` native module from every machine's T3 pins
 (the VM's database read locally, the Mac's, Windows' and Nas1's fetched with one short read-only `sqlite3 -json`
 command over the dashboard's ssh aliases) plus the agent reports above and the `agent-reports/status@1` documents
-(`writers/<writer>/status.json`, read with the agent-reports rules); the TypeScript side passes the module's answer
+(`writers/<writer>/status.json`, read with the agent-reports rules). TypeScript checks status reports for secrets
+(`jsonFromBytes`, the same check as every other agent report); the native module only reads reports TypeScript
+accepted — one secret filter, the TypeScript one. The TypeScript side passes the module's answer
 through. A machine that does not answer keeps its last good pins for one scan, then the panel names it in
 `machineProblems` while the other machines' pins still show. Every word is the module's; a missing piece is said in
 words ("No task list.", "Can't tell."), never invented.

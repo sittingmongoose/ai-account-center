@@ -3,8 +3,10 @@
  * optional file per reporting thread, holding what `thread@1` and `tasks.json` lack for a
  * status update (PINNED-THREADS.md section 4). This reader owns the share scan under the
  * same rules as the agent-reports reader (list first, never read an unlisted file, size cap,
- * last good copy, `seq` ordering, NUL refused by the validator); the document itself is
- * validated in the aac-status native module (`parseStatus`), not here.
+ * last good copy, `seq` ordering) and checks every report with that reader's own
+ * `jsonFromBytes` (NUL, UTF-8, JSON, secrets) before the aac-status native module
+ * (`parseStatus`) reads it: there is one secret filter, the TypeScript one, and the native
+ * module only reads reports TypeScript accepted (owner decision 2026-11-09).
  */
 import type fs from 'fs';
 import type { NativeStatusHandle } from '../../status-native/native-loader';
@@ -18,6 +20,7 @@ import {
   nodeReaderFs,
   type ReaderFs,
 } from './agent-reports-reader';
+import { jsonFromBytes } from './schema-helpers';
 import { STATUS_SIZE_CAP } from './status-size';
 
 /** The agent-reports reader's plain listing failure (the sibling of PERSISTENT_LISTING_ERROR). */
@@ -354,7 +357,12 @@ export class StatusDocsReader {
   }
 }
 
-/** The document's parse through the native module, with the bytes intact (base64). */
+/**
+ * The document's parse: the agent-reports reader's own checks (`jsonFromBytes`: size cap,
+ * NUL, UTF-8, JSON, secrets) first, then the native module's projection, with the bytes
+ * intact (base64). A report TypeScript refuses never reaches the native module; its refusal
+ * reason is the TypeScript one — the single secret filter (owner decision 2026-11-09).
+ */
 async function parseStatus(
   handle: NativeStatusHandle,
   bytes: Buffer,
@@ -369,6 +377,8 @@ async function parseStatus(
     }
   | { ok: false; reason: string }
 > {
+  const checked = jsonFromBytes(bytes, STATUS_SIZE_CAP);
+  if (!checked.ok) return { ok: false, reason: checked.reason };
   let raw: string;
   try {
     raw = await handle.call(

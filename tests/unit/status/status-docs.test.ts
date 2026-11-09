@@ -182,6 +182,77 @@ describe('StatusDocsReader', () => {
     }
   });
 
+  // The synthetic tokens of the review probes (2026-11-08/09), joined at runtime so this
+  // source file holds none whole. Each is a document the TypeScript check must refuse with
+  // its own reason before the native module is ever asked (one secret filter, owner
+  // decision 2026-11-09).
+  const SECRET_WITNESSES: Array<[string, Record<string, unknown>, string]> = [
+    // A bearer token with U+FEFF as its separator: JavaScript's `\s`, not the crate's.
+    ['a U+FEFF bearer', { summary: `Bearer\uFEFF${'i'.repeat(24)}` }, 'a bearer token'],
+    // A non-ASCII letter beside an API key: the ASCII word boundary still holds.
+    ['a non-ASCII API key', { summary: `密sk-${'A'.repeat(24)}` }, 'an API key'],
+    // Astral characters count as UTF-16 units to JavaScript's regexes (round-3 M1).
+    ['an astral URL value', { summary: `?token=${'😀'.repeat(4)}` }, 'a credential in a URL'],
+    [
+      'an astral credential value',
+      { summary: `x "password":"${'😀'.repeat(3)}" broken` },
+      'a credential field',
+    ],
+    // JavaScript's `trim()` takes U+FEFF off embedded JSON before the walk (round-3 M2).
+    [
+      'a FEFF-wrapped embedded credential',
+      { note: `\uFEFF{\"password\":123456}\uFEFF` },
+      'a credential field',
+    ],
+    // An embedded array deeper than serde's limit still parses in JavaScript (round-3 M3).
+    [
+      'a deeply embedded credential',
+      { note: `${'['.repeat(130)}{"password":123456}${']'.repeat(130)}` },
+      'a credential field',
+    ],
+    // An escaped `?token=` and a lone surrogate escape decode to an 8-unit URL value (M4).
+    [
+      'an escaped URL with a surrogate',
+      { summary: `\\u003f\\u0074\\u006f\\u006b\\u0065\\u006e\\u003d${'a'.repeat(7)}\\ud800` },
+      'a credential in a URL',
+    ],
+  ];
+
+  for (const [name, extra, kind] of SECRET_WITNESSES) {
+    it(`${name}: refused by the TypeScript check, never the native module`, async () => {
+      const { root, cleanup } = share({ 'v1/writers/vm.a/status.json': statusDoc('vm.a', 't1', 1, extra) });
+      try {
+        const { handle, calls } = fakeHandle();
+        const read = reader(root, handle, () => 1_794_116_000_000);
+        await read.scan();
+        expect(calls).toEqual([]); // the TypeScript check refused it first
+        const state = read.snapshot();
+        expect(state.docs).toEqual([]); // nothing for the composer to read
+        expect(state.problems).toHaveLength(1);
+        expect(state.problems[0]?.reason).toBe(`status.json refused: it contains what looks like ${kind}`);
+      } finally {
+        cleanup();
+      }
+    });
+  }
+
+  it('a clean report with non-ASCII text flows through unchanged', async () => {
+    const summary = `清扫 stream F，批次 9 — 😀 done, 收尾 left.`;
+    const { root, cleanup } = share({ 'v1/writers/vm.a/status.json': statusDoc('vm.a', 't1', 2, { summary }) });
+    try {
+      const { handle } = fakeHandle();
+      const read = reader(root, handle, () => 1_794_116_000_000);
+      await read.scan();
+      const state = read.snapshot();
+      expect(state.problems).toEqual([]);
+      expect(state.docs).toHaveLength(1);
+      expect(state.docs[0].doc.summary).toBe(summary);
+      expect(state.docs[0].problem).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
   it('a share root that cannot be listed marks its cached documents unreadable', async () => {
     const file = 'v1/writers/vm.a/status.json';
     const { root, cleanup } = share({ [file]: statusDoc('vm.a', 't1', 5) });

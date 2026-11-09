@@ -1,7 +1,9 @@
 //! The shared validators of the agent report documents, ported field for field from
-//! `src/web-server/status/schema-helpers.ts` so the Rust and TypeScript readers accept and
-//! refuse exactly the same files: same caps counted the same way (string lengths are UTF-16
-//! code units, as in JavaScript), same fixed refusal reasons, nothing echoing a file's text.
+//! `src/web-server/status/schema-helpers.ts`: same caps counted the same way (string lengths
+//! are UTF-16 code units, as in JavaScript), same fixed refusal reasons, nothing echoing a
+//! file's text. The secret check is deliberately not ported: TypeScript checks status
+//! reports for secrets; the native module only reads reports TypeScript accepted (owner
+//! decision 2026-11-09).
 
 use serde_json::{Map, Value as Json};
 
@@ -246,9 +248,13 @@ pub fn head(doc: &Map<String, Json>, schema: &str, writer: &str) -> Valid<DocHea
     })
 }
 
-/// Bytes of one share file -> its JSON value, under the rules every reader applies: the size
-/// cap, no NUL bytes (a damaged write), UTF-8, no secrets. Every refusal is a fixed reason,
-/// the same strings as `jsonFromBytes` in schema-helpers.ts.
+/// Bytes of one share file -> its JSON value, under the byte rules every reader applies: the
+/// size cap, no NUL bytes (a damaged write), UTF-8, valid JSON. Every refusal is a fixed
+/// reason, the same strings as `jsonFromBytes` in schema-helpers.ts.
+///
+/// The secret check is not here: TypeScript checks status reports for secrets
+/// (`jsonFromBytes` in schema-helpers.ts, the one secret filter); the native module only
+/// reads reports TypeScript accepted (owner decision 2026-11-09).
 ///
 /// One honest divergence: serde_json refuses JSON nested deeper than its limit (128) as
 /// "not valid JSON", where the TypeScript reader parses it and then refuses or projects it.
@@ -264,17 +270,5 @@ pub fn json_from_bytes(bytes: &[u8], cap_bytes: usize) -> Result<Json, String> {
         return Err("contains NUL bytes from a damaged write".to_string());
     }
     let source = std::str::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
-    let value: Json = serde_json::from_str(source).map_err(|_| "not valid JSON".to_string())?;
-    // Never let one file's shape stop a scan: a panicking check refuses the file instead.
-    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::secret::find_secret_in(source, value.clone())
-    }));
-    let secret = match checked {
-        Ok(secret) => secret,
-        Err(_) => return Err("could not be checked for secrets".to_string()),
-    };
-    if let Some(secret) = secret {
-        return Err(format!("refused: it contains what looks like {secret}"));
-    }
-    Ok(value)
+    serde_json::from_str(source).map_err(|_| "not valid JSON".to_string())
 }

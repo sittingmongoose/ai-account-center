@@ -181,105 +181,19 @@ fn damaged_bytes_are_refused_with_the_shared_reasons() {
 }
 
 #[test]
-fn anything_that_looks_like_a_secret_is_refused_whole() {
-    // Token-shaped fixtures are joined at runtime so this source file holds none whole.
-    let api_key = ["sk", "ant", "abcdefghijklmnopqrstuvwxyz0123456789"].join("-");
-    let bearer_word = ["Bear", "er"].join("");
-    let bearer = format!("Authorization: {bearer_word} abcdefghijklmnopqrstuvwxyz0123456789");
-    let jwt = [
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-        "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
-        "signaturepart",
-    ]
-    .join(".");
-    let bearer_kind = ["a ", "bear", "er token"].join("");
-    let cases: Vec<(Value, String)> = vec![
-        (
-            json!({ "summary": format!("Use {api_key} for now.") }),
-            "an API key".to_string(),
-        ),
-        (
-            json!({ "summary": "Mail agent@example.com about it." }),
-            "an email address".to_string(),
-        ),
-        (
-            json!({ "note": { "password": "hunter22" } }),
-            "a credential field".to_string(),
-        ),
-        (json!({ "note": bearer }), bearer_kind),
-        (json!({ "note": jwt }), "a JSON web token".to_string()),
-        (
-            json!({ "note": "-----BEGIN RSA PRIVATE KEY-----" }),
-            "a private key".to_string(),
-        ),
-    ];
-    for (patch, kind) in cases {
-        let mut doc = valid();
-        for (key, value) in patch.as_object().unwrap() {
-            doc[key] = value.clone();
-        }
-        assert_eq!(refused(&doc), format!("refused: it contains what looks like {kind}"));
-    }
-}
-
-#[test]
-fn a_non_ascii_letter_on_either_side_of_a_token_still_leaves_its_boundary() {
-    // The TypeScript reader's `\b` is ASCII: a non-ASCII letter is not a word character to
-    // it, so a token directly after one keeps its leading boundary (and before one, its
-    // trailing). Every boundary here is ASCII the same way, so each family is refused with
-    // a CJK letter on either side of the token. Token-shaped fixtures are joined at runtime
-    // so this source file holds none whole.
-    let cjk = "\u{5bc6}"; // a CJK letter a summary might carry
-    let jwt = [
-        "eyJhbGciOiJIUzI1NiJ5dCI6IkpXVCJ9",
-        "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
-        "signaturepart",
-    ]
-    .join(".");
-    let families: Vec<(&str, String)> = vec![
-        ("an API key", ["sk", "ant", &"a".repeat(24)].join("-")),
-        ("an API key", ["sk", &"a".repeat(24)].join("-")),
-        ("a GitHub token", format!("{}{}", ["gh", "p_"].join(""), "b".repeat(30))),
-        ("a GitHub token", format!("{}{}", "github_pat_", "b".repeat(30))),
-        ("a Slack token", format!("{}{}", "xoxa-", "c".repeat(12))),
-        ("an AWS key", format!("{}{}", "AKIA", "0DEF".repeat(4))),
-        ("a GitLab token", format!("{}{}", "glpat-", "e".repeat(22))),
-        ("an npm token", format!("{}{}", "npm_", "f".repeat(36))),
-        ("a Hugging Face token", format!("{}{}", "hf_", "g".repeat(32))),
-        ("a Google API key", format!("{}{}", "AIza", "h".repeat(35))),
-        ("a JSON web token", jwt),
-        (
-            "a bearer token",
-            format!("{}{}", ["Bear", "er "].join(""), "i".repeat(24)),
-        ),
-        ("an email address", "agent@example.co".to_string()),
-    ];
-    for (kind, token) in families {
-        for summary in [format!("{cjk}{token}"), format!("{token}{cjk}")] {
-            let mut doc = valid();
-            doc["summary"] = json!(summary);
-            assert_eq!(
-                parse(&doc).unwrap_err(),
-                format!("refused: it contains what looks like {kind}"),
-                "token family {kind} with a non-ASCII letter around it"
-            );
-        }
-    }
-}
-
-#[test]
-fn an_escaped_secret_is_still_a_secret() {
-    // The file as written hides the token behind a \\u escape; the decoded walk sees it.
-    let bytes = br#"{"schema":"agent-reports/status@1","writer":"vm.example","seq":1,"writtenAt":"2026-11-08T16:00:00Z","t3Thread":"t-1","summary":"key is \u0073k-ant-abcdefghijklmnopqrstuvwxyz0123456789 ok"}"#;
-    assert_eq!(
-        parse_status_file(bytes, WRITER).unwrap_err(),
-        "refused: it contains what looks like an API key"
-    );
-    // And JSON text inside a string is walked too.
+fn secrets_are_type_scripts_to_check_this_module_reads_what_it_is_given() {
+    // There is exactly one secret filter, the TypeScript one (`jsonFromBytes` in
+    // schema-helpers.ts); the reader runs it on every report before these bytes reach
+    // `parseStatus` (owner decision 2026-11-09). This module keeps no copy of it, so a
+    // token-shaped fixture in a field the projection ignores parses like any other text —
+    // the reader's own test suite holds the refusal. Joined at runtime so this source file
+    // holds no whole token.
+    let api_key = ["sk", "ant", &"a".repeat(24)].join("-");
     let mut doc = valid();
     doc["summary"] = json!("Working.");
-    doc["note"] = json!("{\"password\": \"hunter22\"}");
-    assert_eq!(refused(&doc), "refused: it contains what looks like a credential field");
+    doc["note"] = json!(format!("Use {api_key} for now."));
+    let parsed = parse(&doc).unwrap();
+    assert_eq!(parsed.doc.summary, "Working.");
 }
 
 #[test]
@@ -315,36 +229,5 @@ fn seq_must_be_a_safe_integer_so_ordering_never_rounds() {
     ] {
         doc["seq"] = seq;
         assert_eq!(refused(&doc), "seq is missing or not valid");
-    }
-}
-
-#[test]
-fn javascripts_whitespace_set_decides_the_bearer_separator() {
-    // The token sits in a field the projection ignores, so only the secret gate answers.
-    let document = |separator: char| {
-        let mut doc = valid();
-        doc["note"] = json!(format!("Bearer{separator}{}", "a".repeat(24)));
-        doc
-    };
-    // Every character JavaScript counts as `\s` (White_Space plus U+FEFF) separates a
-    // bearer token, where the crate's own `\s` would leave U+FEFF through.
-    for separator in [
-        '\u{9}', '\u{a}', '\u{b}', '\u{c}', '\u{d}', '\u{20}', '\u{a0}', '\u{1680}', '\u{2000}', '\u{2007}',
-        '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}', '\u{feff}',
-    ] {
-        assert_eq!(
-            refused(&document(separator)),
-            "refused: it contains what looks like a bearer token",
-            "U+{:04x} is JavaScript whitespace",
-            separator as u32
-        );
-    }
-    // The whitespace characters JavaScript does not count (and a non-ASCII letter) do not.
-    for separator in ['\u{85}', '\u{180e}', '\u{5bc6}'] {
-        assert!(
-            parse(&document(separator)).is_ok(),
-            "U+{:04x} is not JavaScript whitespace",
-            separator as u32
-        );
     }
 }

@@ -59,7 +59,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | hotpath console.error/warn files | 17 |
 | files with createLogger | 45/502 |
 | subdomains with zero createLogger | 22 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, status-native, targets, types) |
-| files > 400 LOC | 71 |
+| files > 400 LOC | 72 |
 | files > 600 LOC | 29 |
 
 ### Top Hotpath console.error/warn Files
