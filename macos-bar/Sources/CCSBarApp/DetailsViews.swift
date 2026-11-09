@@ -204,9 +204,17 @@ struct AmountRow: View {
       }
       return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
+    // Session reset allowance is an amount with "Next available <time>" from resetAt, not a meter reset.
+    if window.key == "session_reset_allowance" {
+      if !TrayFormat.nextAvailable(window.resetAt).isEmpty { parts.append(TrayFormat.nextAvailable(window.resetAt)) }
+      if !window.clearsText.isEmpty { parts.append(window.clearsText) }
+      return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
     if window.remaining != nil, let used = window.used, let limit = window.limit { parts.append("\(quantity(used)) of \(quantity(limit)) used") }
     if window.resetAt != nil { parts.append(TrayFormat.longReset(window.resetAt)) }
-    if window.expiresAt != nil || window.kind == "balance" { parts.append(AccountFormatting.expiration(window.expiresAt)) }
+    // Balances show expiration; reset-grant windows carry `clears` instead of a forced "Expiration unavailable".
+    if window.expiresAt != nil || (window.kind == "balance" && window.clearsText.isEmpty) { parts.append(AccountFormatting.expiration(window.expiresAt)) }
+    if !window.clearsText.isEmpty { parts.append(window.clearsText) }
     if window.enabled == true && window.kind == "extra_usage" { parts.append("Extra usage enabled") }
     return parts.isEmpty ? nil : parts.joined(separator: " · ")
   }
