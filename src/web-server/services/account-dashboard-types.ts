@@ -37,6 +37,8 @@ export interface DashboardAccountWindow {
   kind?: 'rate_limit' | 'balance' | 'spend' | 'extra_usage';
   remaining?: number | null;
   expiresAt?: string | null;
+  /** Reset grants only: the limit types refilled by this grant (slugs like `five_hour`, `seven_day`). */
+  clears?: string[];
   unlimited?: boolean;
   enabled?: boolean;
   /** Retained optional quota rows keep their original observation time. */

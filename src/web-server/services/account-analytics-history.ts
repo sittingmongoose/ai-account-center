@@ -62,6 +62,8 @@ function numeric(value: unknown, percent = false): number | null {
   return percent && value < 0 ? null : value;
 }
 
+const CLEAR_SLUG_PATTERN = /^[a-z0-9_]{1,40}$/;
+
 /** Whitelist data fields before persisting; raw helper bodies never enter history. */
 export function analyticsWindow(value: unknown): DashboardAccountWindow | null {
   if (!object(value) || !text(value.key, 64) || !text(value.label, 80)) return null;
@@ -69,6 +71,14 @@ export function analyticsWindow(value: unknown): DashboardAccountWindow | null {
   // A retained optional window is not a new observation of the refreshed core.
   // Without its original time, it cannot safely enter measured history.
   if (value.status === 'cached' && !cachedSampledAt) return null;
+  if (
+    value.clears !== undefined &&
+    (!Array.isArray(value.clears) ||
+      value.clears.length > 8 ||
+      value.clears.some((slug) => typeof slug !== 'string' || !CLEAR_SLUG_PATTERN.test(slug)) ||
+      new Set(value.clears).size !== value.clears.length)
+  )
+    return null;
   const kind = ['rate_limit', 'balance', 'spend', 'extra_usage'].includes(String(value.kind))
     ? (value.kind as DashboardAccountWindow['kind'])
     : undefined;
@@ -85,6 +95,7 @@ export function analyticsWindow(value: unknown): DashboardAccountWindow | null {
     ...(kind ? { kind } : {}),
     remaining: numeric(value.remaining),
     expiresAt: analyticsTimestamp(value.expiresAt),
+    ...(value.clears !== undefined ? { clears: [...(value.clears as string[])] } : {}),
     ...(typeof value.unlimited === 'boolean' ? { unlimited: value.unlimited } : {}),
     ...(typeof value.enabled === 'boolean' ? { enabled: value.enabled } : {}),
     ...(cachedSampledAt ? { status: 'cached' as const, sampledAt: cachedSampledAt } : {}),

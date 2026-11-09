@@ -26,13 +26,25 @@ export interface UsageHubAccount {
   usage: CodexUsageBody | ClaudeUsageBody | null;
 }
 
-/** Model-scoped Claude weeklies T3 can show ("Weekly · <model>"); other weeklies are left out. */
-const CLAUDE_MODEL_SCOPES: Readonly<Record<string, string>> = {
-  seven_day_opus: 'Opus',
-  seven_day_sonnet: 'Sonnet',
-  seven_day_fable: 'Fable',
-  seven_day_haiku: 'Haiku',
-};
+/** Every `seven_day_<slug>` window is a model-scoped weekly T3 can show ("Weekly · <model>"). */
+const SEVEN_DAY_PREFIX = 'seven_day_';
+const WEEKLY_LABEL = /^Weekly (.+) usage$/;
+
+function scopedDisplayName(window: DashboardAccountWindow): string | null {
+  if (!window.key.startsWith(SEVEN_DAY_PREFIX)) return null;
+  const slug = window.key.slice(SEVEN_DAY_PREFIX.length);
+  if (!slug || !/^[a-z0-9][a-z0-9_]{0,53}$/.test(slug)) return null;
+  const label = typeof window.label === 'string' ? window.label : '';
+  const match = WEEKLY_LABEL.exec(label);
+  if (match && match[1].trim()) return match[1].trim();
+  return (
+    slug
+      .split('_')
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+      .join(' ') || null
+  );
+}
 
 /** Stable and opaque: the same AAC account always gets the same index. */
 export function usageHubAuthIndex(accountId: string): string {
@@ -106,7 +118,7 @@ export function claudeUsageBody(account: DashboardAccount): ClaudeUsageBody | nu
   const seven_day = claudeWindow(find('seven_day'));
   const limits: ClaudeUsageBody['limits'] = [];
   for (const window of account.windows) {
-    const displayName = CLAUDE_MODEL_SCOPES[window.key];
+    const displayName = scopedDisplayName(window);
     if (!displayName || !usableWindow(window)) continue;
     if (limits.some((limit) => limit.scope.model.display_name === displayName)) continue;
     limits.push({

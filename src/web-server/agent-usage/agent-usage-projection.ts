@@ -31,6 +31,8 @@ export interface AgentUsageWindow {
   remaining: number | null;
   unit: string | null;
   expiresAt: string | null;
+  /** Reset grants only: the limit types refilled by this grant; null for other windows. */
+  clears: string[] | null;
   unlimited: boolean | null;
   /** The provider's shared model pool, when it names one (for example Cursor's Grok pool). */
   pool: string | null;
@@ -174,6 +176,20 @@ function planText(value: unknown): string | null {
     : null;
 }
 
+const CLEAR_SLUG = /^[a-z0-9_]{1,40}$/;
+
+function clearsOf(value: unknown): string[] | null {
+  if (value === undefined || value === null) return null;
+  if (
+    !Array.isArray(value) ||
+    value.length > 8 ||
+    value.some((slug) => typeof slug !== 'string' || !CLEAR_SLUG.test(slug)) ||
+    new Set(value).size !== value.length
+  )
+    return null;
+  return [...(value as string[])];
+}
+
 function windowOf(
   window: DashboardAccountWindow,
   now: number,
@@ -201,6 +217,7 @@ function windowOf(
     remaining: finite(window.remaining),
     unit: text(window.unit, 40),
     expiresAt: iso(window.expiresAt),
+    clears: clearsOf(window.clears),
     unlimited: typeof window.unlimited === 'boolean' ? window.unlimited : null,
     pool: text(window.poolLabel, 80),
     poolId: text(window.poolId, 160),

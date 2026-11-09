@@ -57,9 +57,24 @@ function emptyCapabilities(): DashboardAccount['capabilities'] {
   return { codexProfile: null, claudeProfileId: null, claudePlatforms: [] };
 }
 
+const CLEAR_SLUG_PATTERN = /^[a-z0-9_]{1,40}$/;
+
+function clearsOf(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length > 8 ||
+    value.some((slug) => typeof slug !== 'string' || !CLEAR_SLUG_PATTERN.test(slug)) ||
+    new Set(value).size !== value.length
+  )
+    return undefined;
+  return [...(value as string[])];
+}
+
 function quotaWindow(window: Partial<DashboardAccountWindow>): DashboardAccountWindow {
   const usedPercent = number(window.usedPercent);
   const sampledAt = window.status === 'cached' ? timestamp(window.sampledAt) : null;
+  const clears = clearsOf(window.clears);
   return {
     key: text(window.key, 64) ?? 'usage',
     label: text(window.label, 80) ?? 'Usage',
@@ -84,6 +99,7 @@ function quotaWindow(window: Partial<DashboardAccountWindow>): DashboardAccountW
         }
       : {}),
     ...(window.expiresAt !== undefined ? { expiresAt: timestamp(window.expiresAt) } : {}),
+    ...(clears ? { clears } : {}),
     ...(typeof window.unlimited === 'boolean' ? { unlimited: window.unlimited } : {}),
     ...(typeof window.enabled === 'boolean' ? { enabled: window.enabled } : {}),
     ...(sampledAt ? { status: 'cached' as const, sampledAt } : {}),

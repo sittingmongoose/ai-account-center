@@ -358,6 +358,107 @@ describe('private Claude failover optional extras', () => {
     expect(invalid).not.toHaveProperty('optionalExtrasContext');
     expect(invalid).not.toHaveProperty('optionalExtras');
   });
+
+  it('retains the session release allowance exactly like reset credits', () => {
+    const old = reading(NOW - 60_000, {
+      windows: [
+        window('five_hour'),
+        { ...window('session_reset_allowance'), remaining: 2, unit: 'resets' },
+        window('reset_credits_available', 0),
+      ],
+    });
+    const next = reading();
+    const result = retainClaudeFailoverExtras(old, next, true, NOW);
+    expect(result.windows.map((item) => item.key)).toEqual([
+      'five_hour',
+      'session_reset_allowance',
+      'reset_credits_available',
+    ]);
+    expect(result.windows[1]).toMatchObject({
+      remaining: 2,
+      status: 'cached',
+      sampledAt: old.fetchedAt,
+    });
+    // Once its original sample passes the age bound it expires like any extra.
+    const stale = reading(NOW - DAY - 1, {
+      status: 'cached',
+      windows: [
+        window('five_hour'),
+        { ...window('session_reset_allowance'), remaining: 2, unit: 'resets' },
+      ],
+    });
+    expect(projectClaudeFailoverExtras(stale, NOW).windows.map((item) => item.key)).toEqual([
+      'five_hour',
+    ]);
+  });
+
+  it('carries a dynamic key, its label and minutes through sample validation untouched', () => {
+    const sample = reading(undefined, {
+      windows: [
+        window('five_hour'),
+        {
+          key: 'seven_day_future_model',
+          label: 'Weekly Future usage',
+          usedPercent: 33,
+          remainingPercent: 67,
+          resetAt: '2026-10-20T12:00:00.000Z',
+          windowMinutes: 10080,
+          kind: 'rate_limit',
+        },
+        {
+          ...window('session_reset_allowance'),
+          remaining: 2,
+          unit: 'resets',
+          resetAt: '2026-10-20T12:00:00.000Z',
+        },
+      ],
+    });
+    const restored = parseUsageReading(JSON.parse(JSON.stringify(sample)), NOW)!;
+    expect(restored.windows.map((item) => item.key)).toEqual([
+      'five_hour',
+      'seven_day_future_model',
+      'session_reset_allowance',
+    ]);
+    expect(restored.windows[1]).toMatchObject({
+      label: 'Weekly Future usage',
+      windowMinutes: 10080,
+      usedPercent: 33,
+    });
+    expect(restored.windows[2]).toMatchObject({ remaining: 2, unit: 'resets' });
+  });
+
+  it('carries grant clears through sample validation and rejects malformed ones', () => {
+    const sample = reading(undefined, {
+      windows: [
+        window('five_hour'),
+        {
+          ...window('reset_credit_used_grant_1'),
+          remaining: 1,
+          unit: 'resets',
+          clears: ['five_hour', 'seven_day'],
+        },
+      ],
+    });
+    const restored = parseUsageReading(JSON.parse(JSON.stringify(sample)), NOW)!;
+    expect(restored.windows[1].clears).toEqual(['five_hour', 'seven_day']);
+    for (const clears of [
+      'five_hour',
+      ['five_hour', 'five_hour'],
+      ['Five_hour'],
+      ['x'.repeat(41)],
+      ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'],
+      [42],
+    ]) {
+      const bad = parseUsageReading(
+        {
+          ...sample,
+          windows: [window('five_hour'), { ...sample.windows[1], clears }],
+        },
+        NOW
+      );
+      expect(bad).toBeNull();
+    }
+  });
 });
 
 describe('the entitlement class on a reading', () => {
