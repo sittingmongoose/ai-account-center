@@ -295,3 +295,56 @@ fn the_packaged_examples_agree_with_the_validator() {
         assert!(parse_status_file(&bytes, WRITER).is_err(), "{name} must be refused");
     }
 }
+
+#[test]
+fn seq_must_be_a_safe_integer_so_ordering_never_rounds() {
+    // The safe maximum is read and kept exact; every place that compares a seq then holds a
+    // number JavaScript does too, so a newer report can never round onto an older one.
+    let mut doc = valid();
+    doc["seq"] = json!(9_007_199_254_740_991u64); // 2^53-1, Number.MAX_SAFE_INTEGER
+    let parsed = parse(&doc).unwrap();
+    assert_eq!(parsed.doc.seq, 9_007_199_254_740_991);
+    doc["seq"] = json!(4.0); // a JSON `4.0` is JavaScript's 4
+    assert_eq!(parse(&doc).unwrap().doc.seq, 4);
+    for seq in [
+        json!(9_007_199_254_740_992u64), // 2^53: first unsafe integer
+        json!(9_007_199_254_740_993u64), // 2^53+1: reads as 2^53 in JavaScript
+        json!(u64::MAX),
+        json!(-1),
+        json!(1.5),
+    ] {
+        doc["seq"] = seq;
+        assert_eq!(refused(&doc), "seq is missing or not valid");
+    }
+}
+
+#[test]
+fn javascripts_whitespace_set_decides_the_bearer_separator() {
+    // The token sits in a field the projection ignores, so only the secret gate answers.
+    let document = |separator: char| {
+        let mut doc = valid();
+        doc["note"] = json!(format!("Bearer{separator}{}", "a".repeat(24)));
+        doc
+    };
+    // Every character JavaScript counts as `\s` (White_Space plus U+FEFF) separates a
+    // bearer token, where the crate's own `\s` would leave U+FEFF through.
+    for separator in [
+        '\u{9}', '\u{a}', '\u{b}', '\u{c}', '\u{d}', '\u{20}', '\u{a0}', '\u{1680}', '\u{2000}', '\u{2007}',
+        '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}', '\u{feff}',
+    ] {
+        assert_eq!(
+            refused(&document(separator)),
+            "refused: it contains what looks like a bearer token",
+            "U+{:04x} is JavaScript whitespace",
+            separator as u32
+        );
+    }
+    // The whitespace characters JavaScript does not count (and a non-ASCII letter) do not.
+    for separator in ['\u{85}', '\u{180e}', '\u{5bc6}'] {
+        assert!(
+            parse(&document(separator)).is_ok(),
+            "U+{:04x} is not JavaScript whitespace",
+            separator as u32
+        );
+    }
+}

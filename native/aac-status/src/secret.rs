@@ -4,10 +4,22 @@
 //! string, the same embedded-JSON budget, the same unescape passes. A file that matches one
 //! is refused whole; the matched text is never shown, only the kind.
 //!
-//! Every word boundary is written `(?-u:\b)`, JavaScript's ASCII `\b` the patterns were
-//! ported from: a non-ASCII letter (say `密`) is not a word character to it, so a token
-//! directly after one still has its leading boundary and is refused the same. `\s` stays
-//! Unicode, as it is on the TypeScript side.
+//! Every pattern reproduces what a JavaScript regex without the `u` flag does, character by
+//! character. Its `\b`, `\w` and `\d` and its `/i` case folding are ASCII there, so each such
+//! piece is wrapped in `(?-u:...)`: `(?-u:\b)` is JavaScript's `\b` (a non-ASCII letter such
+//! as `密` is not a word character to it, so a token directly after one still has its leading
+//! boundary, and no byte inside a multi-byte character is an ASCII word byte, so the
+//! byte-level boundary sits exactly on the character boundary), and `(?i-u:...)` is its `/i`
+//! (which never folds a non-ASCII character onto an ASCII one, where the crate's Unicode
+//! folding would fold `ſ` onto `s`).
+//!
+//! `\s` and `\S` are the one part that is neither ASCII nor the crate's default: JavaScript
+//! without the `u` flag reads `\s` as White_Space plus U+FEFF, without U+0085 and U+180E,
+//! while the crate's Unicode `\s` is White_Space as it stands (no U+FEFF, yes U+0085). A
+//! whole-pattern `(?-u)` cannot say that set at all (in byte mode a class cannot name a code
+//! point above U+00FF), so the patterns stay compiled for `&str`, where a class names whole
+//! characters, and spell the set out with `js_ws` below; only the ASCII pieces carry
+//! `(?-u:...)`.
 
 use regex::Regex;
 use serde_json::Value as Json;
@@ -24,6 +36,16 @@ macro_rules! static_regex {
         static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new($re).expect("secret pattern"));
         &RE
     }};
+}
+
+/// JavaScript's `\s` in a regex without the `u` flag, as class members so it can also sit
+/// inside a negated class: the whitespace set shared with the crate's Unicode `\s`, plus
+/// U+FEFF (JavaScript only), without U+0085 and U+180E (the crate's set has those the other
+/// way: U+0085 yes, U+FEFF no). Spelled out so no pattern ever relies on `\s` or `\S`.
+macro_rules! js_ws {
+    () => {
+        r"\t-\r \u{a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}"
+    };
 }
 
 fn patterns() -> Vec<(&'static str, Check)> {
@@ -69,19 +91,29 @@ fn patterns() -> Vec<(&'static str, Check)> {
         ("a JSON web token", Check::Jwt),
         (
             "a bearer token",
-            Check::Pattern(static_regex!(r"(?i)(?-u:\b)Bearer\s+[A-Za-z0-9._~+/\-]{20,}")),
+            Check::Pattern(static_regex!(concat!(
+                r"(?-u:\b)(?i-u:Bearer)[",
+                js_ws!(),
+                r"]+[A-Za-z0-9._~+/\-]{20,}"
+            ))),
         ),
         (
             "a credential field",
-            Check::Pattern(static_regex!(
-                r#"(?i)"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)"\s*:\s*"[^"]{6,}""#
-            )),
+            Check::Pattern(static_regex!(concat!(
+                r#"(?i-u:"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)")["#,
+                js_ws!(),
+                r"]*:[",
+                js_ws!(),
+                r#"]*"[^"]{6,}""#
+            ))),
         ),
         (
             "a credential in a URL",
-            Check::Pattern(static_regex!(
-                r#"(?i)[?&](?:access_token|token|api_key|apikey|key|sig|signature|password|code)=[^&\s"]{8,}"#
-            )),
+            Check::Pattern(static_regex!(concat!(
+                r"(?i-u:[?&](?:access_token|token|api_key|apikey|key|sig|signature|password|code)=)[^&",
+                js_ws!(),
+                "\"]{8,}"
+            ))),
         ),
         ("an email address", Check::Email),
     ]
@@ -183,7 +215,7 @@ fn has_json_web_token(text: &str) -> bool {
 /// A key that names a credential, whose string value is refused (decoded, so `"pass\u0077ord"` counts).
 fn is_credential_key(key: &str) -> bool {
     static KEY: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)^(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)$")
+        Regex::new(r"(?i-u:^(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)$)")
             .expect("credential key")
     });
     KEY.is_match(key)
@@ -191,7 +223,7 @@ fn is_credential_key(key: &str) -> bool {
 
 fn credential_key_in_text(text: &str) -> bool {
     static KEY_TEXT: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?i)"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)""#)
+        Regex::new(r#"(?i-u:"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)")"#)
             .expect("credential key text")
     });
     KEY_TEXT.is_match(text)

@@ -137,6 +137,7 @@
     },
     "seq": {
       "description": "Increases on every write by this writer.",
+      "maximum": 9007199254740991,
       "minimum": 0,
       "type": "integer"
     },

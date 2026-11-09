@@ -68,17 +68,27 @@ pub fn slug(value: Option<&Json>, field: &str) -> Valid<String> {
     }
 }
 
-/// A non-negative safe integer. A JSON `1.0` counts, as it does in JavaScript.
+/// JavaScript's `Number.MAX_SAFE_INTEGER` (2^53-1): every count a document may carry is at
+/// most this, so the JSON number never rounds when it becomes a JavaScript number. A larger
+/// integer would (2^53+1 reads as 2^53 there), and two readers could then order the same
+/// copies differently; the float path below has always refused those.
+pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+/// A non-negative safe integer, as `count` in schema-helpers.ts counts one
+/// (`Number.isSafeInteger`): a JSON `1.0` counts, as it does in JavaScript, and an integer
+/// above `MAX_SAFE_INTEGER` does not.
 pub fn count(value: Option<&Json>, field: &str) -> Valid<u64> {
     let number = match value {
         Some(Json::Number(number)) => number,
         _ => return Err(fail(field)),
     };
-    if let Some(int) = number.as_u64() {
+    if let Some(int) = number.as_u64()
+        && int <= MAX_SAFE_INTEGER
+    {
         return Ok(int);
     }
     if let Some(float) = number.as_f64()
-        && (0.0..=9_007_199_254_740_991.0).contains(&float)
+        && (0.0..=MAX_SAFE_INTEGER as f64).contains(&float)
         && float.fract() == 0.0
     {
         return Ok(float as u64);
