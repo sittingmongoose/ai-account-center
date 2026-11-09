@@ -15,7 +15,10 @@ fn source_of(live: Live, id: &'static str) -> Signal<Option<Source>> {
     })
 }
 
-fn source_named(live: Live, id_of: impl Fn(&StatusView) -> String + Send + Sync + 'static) -> Signal<Option<Source>> {
+fn source_named(
+    live: Live,
+    id_of: impl Fn(&StatusView) -> String + Send + Sync + 'static,
+) -> Signal<Option<Source>> {
     Signal::derive(move || {
         let view = live.view.get()?;
         let id = id_of(&view);
@@ -48,13 +51,19 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
             }
         }),
         live: Signal::derive(move || live.error.with(|e| e.is_none())),
-        summary: Signal::derive(move || live.view.with(|v| v.as_ref().map(headline_runs).unwrap_or_default())),
+        summary: Signal::derive(move || {
+            live.view
+                .with(|v| v.as_ref().map(headline_runs).unwrap_or_default())
+        }),
         refresh: Callback::new(move |_| live.reload()),
     };
     let banner = move || {
         let error = live.error.get()?;
         let old = if live.view.with(|v| v.is_some()) {
-            format!(" Showing the reading from {}.", fmt::age(live.elapsed_seconds()))
+            format!(
+                " Showing the reading from {}.",
+                fmt::age(live.elapsed_seconds())
+            )
         } else {
             String::new()
         };
@@ -154,7 +163,11 @@ fn blocked_words(b: &BlockedOn) -> String {
         "quota" => "Out of quota",
         _ => "Blocked",
     };
-    if b.what.is_empty() { who.to_string() } else { format!("{who}: {}", b.what) }
+    if b.what.is_empty() {
+        who.to_string()
+    } else {
+        format!("{who}: {}", b.what)
+    }
 }
 
 /// The counts of a stream that still has work, as words: `2 blocked` first and in amber.
@@ -181,30 +194,54 @@ pub fn counts_runs(c: &Counts) -> Vec<(String, Option<&'static str>)> {
 fn ProgressPanel() -> impl IntoView {
     let live = expect_context::<Live>();
     let source = source_of(live, "agent-reports");
-    let projects = move || live.view.with(|v| v.as_ref().map(|v| v.projects.clone()).unwrap_or_default());
+    let projects = move || {
+        live.view
+            .with(|v| v.as_ref().map(|v| v.projects.clone()).unwrap_or_default())
+    };
     let totals = move || {
         let list = projects();
-        let (done, of): (u32, u32) = list.iter().filter_map(|p| p.counts.as_ref()).fold((0, 0), |(d, o), c| {
-            (d + c.landed + c.done, o + c.total.saturating_sub(c.dropped))
-        });
+        let (done, of): (u32, u32) = list
+            .iter()
+            .filter_map(|p| p.counts.as_ref())
+            .fold((0, 0), |(d, o), c| {
+                (d + c.landed + c.done, o + c.total.saturating_sub(c.dropped))
+            });
         (done, of, list.len())
     };
     let summary = move || {
         let list = projects();
-        let blocked: u32 = list.iter().filter_map(|p| p.counts.as_ref()).map(|c| c.blocked).sum();
-        let no_list = list.iter().flat_map(|p| p.streams.iter()).filter(|s| s.completion.is_none() && s.counts.is_none()).count();
+        let blocked: u32 = list
+            .iter()
+            .filter_map(|p| p.counts.as_ref())
+            .map(|c| c.blocked)
+            .sum();
+        let no_list = list
+            .iter()
+            .flat_map(|p| p.streams.iter())
+            .filter(|s| s.completion.is_none() && s.counts.is_none())
+            .count();
         let mut parts: Vec<AnyView> = Vec::new();
         if blocked > 0 {
-            parts.push(view! { <span data-tone="warn">{format!("{blocked} blocked")}</span> }.into_any());
+            parts.push(
+                view! { <span data-tone="warn">{format!("{blocked} blocked")}</span> }.into_any(),
+            );
         }
         if no_list > 0 {
-            let words = if no_list == 1 { "1 stream has no task list yet".to_string() } else { format!("{no_list} streams have no task list yet") };
+            let words = if no_list == 1 {
+                "1 stream has no task list yet".to_string()
+            } else {
+                format!("{no_list} streams have no task list yet")
+            };
             parts.push(view! { <span>{words}</span> }.into_any());
         }
         if parts.is_empty() {
             parts.push(view! { <span>"Nothing blocked"</span> }.into_any());
         }
-        parts.into_iter().enumerate().map(|(i, part)| view! { {(i > 0).then_some(" · ")}{part} }).collect_view()
+        parts
+            .into_iter()
+            .enumerate()
+            .map(|(i, part)| view! { {(i > 0).then_some(" · ")}{part} })
+            .collect_view()
     };
     view! {
         <FoldedPlate class="sec-progress">
@@ -230,7 +267,13 @@ fn ProgressPanel() -> impl IntoView {
 
 #[component]
 fn ProjectView(project: Project) -> impl IntoView {
-    let total = project.counts.as_ref().map(|c| format!("{} of {}", c.landed + c.done, c.total.saturating_sub(c.dropped)));
+    let total = project.counts.as_ref().map(|c| {
+        format!(
+            "{} of {}",
+            c.landed + c.done,
+            c.total.saturating_sub(c.dropped)
+        )
+    });
     view! {
         <div class="proj">
             <div class="proj-head"><h3>{project.label.clone()}</h3>{total.map(|t| view! { <span class="tot">{t}</span> })}</div>
@@ -244,14 +287,32 @@ fn StreamView(stream: Stream) -> impl IntoView {
     let open = RwSignal::new(false);
     let has_items = !stream.items.is_empty();
     let id = stream.id.clone();
-    let label = if stream.label.is_empty() { stream.id.clone() } else { stream.label.clone() };
+    let label = if stream.label.is_empty() {
+        stream.id.clone()
+    } else {
+        stream.label.clone()
+    };
     let items = stream.items.clone();
-    let body = match (stream.completion.as_ref().and_then(|c| Some((c.done?, c.of?))), stream.counts.as_ref()) {
+    let body = match (
+        stream
+            .completion
+            .as_ref()
+            .and_then(|c| Some((c.done?, c.of?))),
+        stream.counts.as_ref(),
+    ) {
         (Some((done, of)), Some(counts)) => {
             let finished = of > 0 && done >= of;
             let parts = counts_runs(counts);
-            let pct = if of == 0 { 0.0 } else { done as f64 / of as f64 * 100.0 };
-            let landed = stream.items.iter().filter_map(|i| i.landed.as_ref().and_then(|l| l.at.clone())).max();
+            let pct = if of == 0 {
+                0.0
+            } else {
+                done as f64 / of as f64 * 100.0
+            };
+            let landed = stream
+                .items
+                .iter()
+                .filter_map(|i| i.landed.as_ref().and_then(|l| l.at.clone()))
+                .max();
             let why = if finished {
                 view! { <span data-tone="good">"Finished"</span>{landed.map(|at| format!(" · landed {}", fmt::short_date(&at)))} }.into_any()
             } else {
@@ -265,7 +326,11 @@ fn StreamView(stream: Stream) -> impl IntoView {
             .into_any()
         }
         _ => {
-            let board_age = stream.board.as_ref().and_then(|b| b.age_seconds).map(fmt::long_age);
+            let board_age = stream
+                .board
+                .as_ref()
+                .and_then(|b| b.age_seconds)
+                .map(fmt::long_age);
             view! {
                 <span class="cnt q3">"no list"</span>
                 <span class="why">"No task list yet."{board_age.map(|a| format!(" Its board was updated {a}."))}</span>
@@ -308,7 +373,9 @@ fn StreamView(stream: Stream) -> impl IntoView {
 /// "Blocked" and "Looping" as the facts show them: the leading word in its state colour.
 fn lead_word(text: &str, word: &str, tone: &'static str) -> AnyView {
     match text.strip_prefix(word) {
-        Some(rest) => view! { <span data-tone=tone>{word.to_string()}</span>{rest.to_string()} }.into_any(),
+        Some(rest) => {
+            view! { <span data-tone=tone>{word.to_string()}</span>{rest.to_string()} }.into_any()
+        }
         None => view! { <span data-tone=tone>{text.to_string()}</span> }.into_any(),
     }
 }
@@ -354,10 +421,24 @@ fn row_line(p: &PinnedUpdate) -> AnyView {
     }
     if waiting {
         let words = if p.blocked.waiting_on_you {
-            if looping { "waiting on you".to_string() } else { "Waiting on you".to_string() }
+            if looping {
+                "waiting on you".to_string()
+            } else {
+                "Waiting on you".to_string()
+            }
         } else {
-            let short = p.blocked.text.split(':').next().unwrap_or(&p.blocked.text).trim_end_matches('.');
-            if looping { lowercase_first(short) } else { short.to_string() }
+            let short = p
+                .blocked
+                .text
+                .split(':')
+                .next()
+                .unwrap_or(&p.blocked.text)
+                .trim_end_matches('.');
+            if looping {
+                lowercase_first(short)
+            } else {
+                short.to_string()
+            }
         };
         parts.push(view! { <span data-tone="warn">{words}</span> }.into_any());
     }
@@ -371,7 +452,12 @@ fn row_line(p: &PinnedUpdate) -> AnyView {
         parts.push(view! { <span>{u.text.replace("Updated ", "")}</span> }.into_any());
     }
     let last = parts.len().saturating_sub(1);
-    parts.into_iter().enumerate().map(|(i, part)| view! { {part}{(i < last).then_some(" · ")} }).collect_view().into_any()
+    parts
+        .into_iter()
+        .enumerate()
+        .map(|(i, part)| view! { {part}{(i < last).then_some(" · ")} })
+        .collect_view()
+        .into_any()
 }
 
 fn lowercase_first(text: &str) -> String {
@@ -391,7 +477,10 @@ fn pct_value(p: &PinnedUpdate) -> Option<f64> {
 }
 
 fn item_list(items: &[PinnedItem], limit: usize) -> impl IntoView + use<> {
-    let (shown, more) = (items.iter().take(limit).cloned().collect::<Vec<_>>(), items.len().saturating_sub(limit));
+    let (shown, more) = (
+        items.iter().take(limit).cloned().collect::<Vec<_>>(),
+        items.len().saturating_sub(limit),
+    );
     view! {
         <ul>
             {shown.into_iter().map(|i| view! { <li><span class="mono">{i.id}</span>{i.title}</li> }).collect_view()}
@@ -402,17 +491,31 @@ fn item_list(items: &[PinnedItem], limit: usize) -> impl IntoView + use<> {
 
 /// The parts of an update every width shows: progress, facts and task lists. `limit` caps the task lists (cards do,
 /// the sheet doesn't). `updated_fact` adds "Updated" to the facts, as the sheet does.
-fn pin_body(p: &PinnedUpdate, left_limit: usize, done_limit: usize, updated_fact: bool) -> impl IntoView + use<> {
+fn pin_body(
+    p: &PinnedUpdate,
+    left_limit: usize,
+    done_limit: usize,
+    updated_fact: bool,
+) -> impl IntoView + use<> {
     let pct = pct_value(p);
     let percent = p.percent.clone();
-    let of_text = percent.as_ref().and_then(|x| Some(format!("{} of {} tasks done", x.done?, x.of?))).or_else(|| p.percent_note.clone());
-    let note = if percent.as_ref().is_some_and(|x| x.done.is_some()) { p.percent_note.clone() } else { None };
+    let of_text = percent
+        .as_ref()
+        .and_then(|x| Some(format!("{} of {} tasks done", x.done?, x.of?)))
+        .or_else(|| p.percent_note.clone());
+    let note = if percent.as_ref().is_some_and(|x| x.done.is_some()) {
+        p.percent_note.clone()
+    } else {
+        None
+    };
     let left = p.left.clone();
     let done = p.done.clone();
     let blocked = blocked_fact(&p.blocked);
     let looping = looping_fact(&p.looping);
     let now = p.now.clone();
-    let updated = updated_fact.then(|| p.updated.as_ref().map(|u| u.text.replace("Updated ", ""))).flatten();
+    let updated = updated_fact
+        .then(|| p.updated.as_ref().map(|u| u.text.replace("Updated ", "")))
+        .flatten();
     view! {
         {match percent {
             Some(x) => view! {
@@ -440,7 +543,12 @@ fn pin_body(p: &PinnedUpdate, left_limit: usize, done_limit: usize, updated_fact
 /// A pinned thread with no current report: says so plainly, with what it last said. The server's note reads
 /// "No status update for 25 days. If it is finished, unpin it in T3.": the second sentence goes last.
 fn quiet_body(p: &PinnedUpdate) -> impl IntoView + use<> {
-    let note = p.stale_note.clone().or_else(|| p.report_note.clone()).or_else(|| p.unreadable_note.clone()).unwrap_or_default();
+    let note = p
+        .stale_note
+        .clone()
+        .or_else(|| p.report_note.clone())
+        .or_else(|| p.unreadable_note.clone())
+        .unwrap_or_default();
     let (first, rest) = match note.split_once(". ") {
         Some((a, b)) => (format!("{a}."), Some(b.to_string())),
         None => (note.clone(), None),
@@ -464,9 +572,17 @@ fn PinCard(update: PinnedUpdate) -> impl IntoView {
     let quiet = is_quiet(&update);
     let who = update.who.clone();
     let foot = update.updated.as_ref().map(|u| {
-        if quiet { format!("Last update {}", fmt::clock(&u.at)) } else { u.text.clone() }
+        if quiet {
+            format!("Last update {}", fmt::clock(&u.at))
+        } else {
+            u.text.clone()
+        }
     });
-    let body = if quiet { quiet_body(&update).into_any() } else { pin_body(&update, 4, 2, false).into_any() };
+    let body = if quiet {
+        quiet_body(&update).into_any()
+    } else {
+        pin_body(&update, 4, 2, false).into_any()
+    };
     view! {
         <article class="pin" class:quiet=quiet>
             <div><h3 class="pin-name">{update.title.clone()}</h3>{who.map(|w| view! { <p class="pin-who">{w}</p> })}</div>
@@ -479,7 +595,10 @@ fn PinCard(update: PinnedUpdate) -> impl IntoView {
 #[component]
 fn PinRow(update: PinnedUpdate, on_open: Callback<PinnedUpdate>) -> impl IntoView {
     let u = update.clone();
-    let pct_text = update.percent.as_ref().map(|p| p.text.trim_end_matches('%').to_string());
+    let pct_text = update
+        .percent
+        .as_ref()
+        .map(|p| p.text.trim_end_matches('%').to_string());
     let bar = pct_value(&update);
     let quiet = is_quiet(&update);
     let line = row_line(&update);
@@ -500,7 +619,11 @@ fn PinRow(update: PinnedUpdate, on_open: Callback<PinnedUpdate>) -> impl IntoVie
 fn PinSheet(update: PinnedUpdate, on_close: Callback<()>) -> impl IntoView {
     let quiet = is_quiet(&update);
     let who = update.who.clone();
-    let body = if quiet { quiet_body(&update).into_any() } else { pin_body(&update, 500, 500, true).into_any() };
+    let body = if quiet {
+        quiet_body(&update).into_any()
+    } else {
+        pin_body(&update, 500, 500, true).into_any()
+    };
     view! {
         <div class="sheet-host" role="dialog" aria-modal="true">
             <button class="sheet-scrim" aria-label="Close" on:click=move |_| on_close.run(())></button>
@@ -519,7 +642,10 @@ fn PinSheet(update: PinnedUpdate, on_close: Callback<()>) -> impl IntoView {
 #[component]
 fn PinnedPanelView() -> impl IntoView {
     let live = expect_context::<Live>();
-    let panel = Memo::new(move |_| live.view.with(|v| v.as_ref().and_then(|v| v.pinned.clone())));
+    let panel = Memo::new(move |_| {
+        live.view
+            .with(|v| v.as_ref().and_then(|v| v.pinned.clone()))
+    });
     let sheet = RwSignal::new(None::<PinnedUpdate>);
     let open_sheet = Callback::new(move |u: PinnedUpdate| sheet.set(Some(u)));
     let close_sheet = Callback::new(move |_: ()| sheet.set(None));
@@ -566,16 +692,29 @@ fn PinnedPanelView() -> impl IntoView {
 fn head_runs(head: &str, counts: &PinnedCounts) -> impl IntoView + use<> {
     let parts: Vec<String> = head.split(" · ").map(str::to_string).collect();
     let pinned = counts.pinned;
-    parts.into_iter().enumerate().map(move |(i, part)| {
-        let sep = (i > 0).then_some(" · ");
-        let tone = if part.contains("looping") { Some("crit") } else if part.contains("waiting") { Some("warn") } else { None };
-        if i == 0 {
-            let text = part.strip_prefix(&format!("{pinned}")).unwrap_or(&part).to_string();
-            view! { {sep}<b>{format!("{pinned}")}</b><span>{text}</span> }.into_any()
-        } else {
-            view! { {sep}<span data-tone=tone>{part}</span> }.into_any()
-        }
-    }).collect_view()
+    parts
+        .into_iter()
+        .enumerate()
+        .map(move |(i, part)| {
+            let sep = (i > 0).then_some(" · ");
+            let tone = if part.contains("looping") {
+                Some("crit")
+            } else if part.contains("waiting") {
+                Some("warn")
+            } else {
+                None
+            };
+            if i == 0 {
+                let text = part
+                    .strip_prefix(&format!("{pinned}"))
+                    .unwrap_or(&part)
+                    .to_string();
+                view! { {sep}<b>{format!("{pinned}")}</b><span>{text}</span> }.into_any()
+            } else {
+                view! { {sep}<span data-tone=tone>{part}</span> }.into_any()
+            }
+        })
+        .collect_view()
 }
 
 // ---- Machines --------------------------------------------------------------------------------------------------
@@ -590,7 +729,10 @@ fn slots_lines(m: &Machine) -> (String, String) {
         Some((r, max)) => format!("{r} of {max} recordings"),
         None => "recordings not reported".to_string(),
     };
-    let gpu = m.gpu_pct.map(|g| format!(" · GPU {}", fmt::pct(g))).unwrap_or_default();
+    let gpu = m
+        .gpu_pct
+        .map(|g| format!(" · GPU {}", fmt::pct(g)))
+        .unwrap_or_default();
     (browsers, format!("{recordings}{gpu}"))
 }
 
@@ -631,7 +773,10 @@ fn machine_notes(m: &Machine) -> Vec<AnyView> {
     let mut out: Vec<AnyView> = m
         .warnings
         .iter()
-        .map(|w| view! { <span data-tone="warn">{format!("{}.", w.trim_end_matches('.'))}</span> }.into_any())
+        .map(|w| {
+            view! { <span data-tone="warn">{format!("{}.", w.trim_end_matches('.'))}</span> }
+                .into_any()
+        })
         .collect();
     if let Some(detail) = m.detail.clone().filter(|d| !d.is_empty()) {
         out.push(
@@ -648,8 +793,20 @@ fn machine_notes(m: &Machine) -> Vec<AnyView> {
 fn MachinesPanel() -> impl IntoView {
     let live = expect_context::<Live>();
     let source = source_named(live, |v| v.machines.source.clone());
-    let also = Memo::new(move |_| live.view.with(|v| v.as_ref().map(|v| other_problems(v, &v.machines.also)).unwrap_or_default()));
-    let rows = Memo::new(move |_| live.view.with(|v| v.as_ref().map(|v| v.machines.rows.clone()).unwrap_or_default()));
+    let also = Memo::new(move |_| {
+        live.view.with(|v| {
+            v.as_ref()
+                .map(|v| other_problems(v, &v.machines.also))
+                .unwrap_or_default()
+        })
+    });
+    let rows = Memo::new(move |_| {
+        live.view.with(|v| {
+            v.as_ref()
+                .map(|v| v.machines.rows.clone())
+                .unwrap_or_default()
+        })
+    });
     let summary = move || {
         let list = rows.get();
         let mut parts: Vec<AnyView> = Vec::new();
@@ -657,20 +814,32 @@ fn MachinesPanel() -> impl IntoView {
             if m.state != "ok" {
                 let name = m.label.clone();
                 let when = m.detail.clone().unwrap_or_default();
-                let since = when.strip_prefix("Unreachable ").map(|w| w.split('.').next().unwrap_or("").to_string());
+                let since = when
+                    .strip_prefix("Unreachable ")
+                    .map(|w| w.split('.').next().unwrap_or("").to_string());
                 parts.push(view! { <span class="nw"><span class="w-ink">{format!("{name} {}", m.state.replace('-', " "))}</span>{since.map(|s| format!(" {s}"))}</span> }.into_any());
             }
         }
         for m in list.iter().filter(|m| m.state == "ok") {
             if let Some(w) = m.warnings.first() {
-                let short = m.disk.first().and_then(|d| d.free_gb).filter(|f| *f < 50.0).map(|_| format!("{} disk under 50 GB", m.label)).unwrap_or_else(|| w.clone());
+                let short = m
+                    .disk
+                    .first()
+                    .and_then(|d| d.free_gb)
+                    .filter(|f| *f < 50.0)
+                    .map(|_| format!("{} disk under 50 GB", m.label))
+                    .unwrap_or_else(|| w.clone());
                 parts.push(view! { <span class="nw" data-tone="warn">{short}</span> }.into_any());
             }
         }
         if parts.len() < list.len() || parts.is_empty() {
             parts.push(view! { <span class="nw">{if parts.is_empty() { "All normal" } else { "the rest normal" }}</span> }.into_any());
         }
-        parts.into_iter().enumerate().map(|(i, part)| view! { {(i > 0).then_some(" · ")}{part} }).collect_view()
+        parts
+            .into_iter()
+            .enumerate()
+            .map(|(i, part)| view! { {(i > 0).then_some(" · ")}{part} })
+            .collect_view()
     };
     view! {
         <FoldedPlate class="sec-machines">
@@ -722,7 +891,9 @@ fn disk_meter(m: &Machine) -> impl IntoView + use<> {
 }
 
 fn slots_note(m: &Machine, live: Live) -> Option<String> {
-    m.slots_source.as_ref().and_then(|s| s.reading_words(live.elapsed_seconds()))
+    m.slots_source
+        .as_ref()
+        .and_then(|s| s.reading_words(live.elapsed_seconds()))
 }
 
 #[component]
@@ -795,14 +966,25 @@ fn platform_label(platform: &str) -> &'static str {
 fn PhonesPanel() -> impl IntoView {
     let live = expect_context::<Live>();
     let source = source_named(live, |v| v.simlock.source.clone());
-    let simlock = Memo::new(move |_| live.view.with(|v| v.as_ref().map(|v| v.simlock.clone()).unwrap_or_default()));
+    let simlock = Memo::new(move |_| {
+        live.view
+            .with(|v| v.as_ref().map(|v| v.simlock.clone()).unwrap_or_default())
+    });
     let summary = move || {
         let s = simlock.get();
         match s.leases.first() {
             Some(l) => {
-                let until = l.expires_at.as_deref().map(|t| format!(" until {}", fmt::clock(t))).unwrap_or_default();
+                let until = l
+                    .expires_at
+                    .as_deref()
+                    .map(|t| format!(" until {}", fmt::clock(t)))
+                    .unwrap_or_default();
                 let n = s.leases.iter().filter(|x| x.platform == l.platform).count();
-                let kind = match l.platform.as_str() { "ios" => "iPhone simulator", "android" => "Android emulator", _ => "phone" };
+                let kind = match l.platform.as_str() {
+                    "ios" => "iPhone simulator",
+                    "android" => "Android emulator",
+                    _ => "phone",
+                };
                 view! { <span>{format!("{n} {kind}{} in use{until}", if n == 1 { "" } else { "s" })}</span> }.into_any()
             }
             None => view! { <span>"No phone in use"</span> }.into_any(),
@@ -878,6 +1060,14 @@ fn spend_cell(cell: &Option<SpendCell>, hue: &str) -> impl IntoView + use<> {
     }
 }
 
+/// A label whose words each stay whole, so "Claude 5-hour" breaks at the space, never inside "5-hour".
+fn whole_words(label: &str) -> impl IntoView + use<> {
+    label
+        .split(' ')
+        .map(|word| view! { <span class="nw">{word.to_string()}</span>" " })
+        .collect_view()
+}
+
 fn fill_of(hue: &str) -> &'static str {
     match hue {
         "claude" => "claude",
@@ -935,14 +1125,21 @@ fn spend_block(row: &SpendRowView, columns: &[SpendColumn]) -> impl IntoView + u
 #[component]
 fn SpendPanel() -> impl IntoView {
     let live = expect_context::<Live>();
-    let data = Memo::new(move |_| live.view.with(|v| v.as_ref().and_then(|v| v.spend_by_stream.clone())));
+    let data = Memo::new(move |_| {
+        live.view
+            .with(|v| v.as_ref().and_then(|v| v.spend_by_stream.clone()))
+    });
     let source = source_of(live, "quota-watch");
     let period = RwSignal::new(None::<String>);
     let current_id = Signal::derive(move || {
         data.with(|d| {
             let d = d.as_ref()?;
             let want = period.get().or_else(|| d.default_period.clone());
-            d.periods.iter().find(|p| Some(&p.id) == want.as_ref()).or(d.periods.first()).map(|p| p.id.clone())
+            d.periods
+                .iter()
+                .find(|p| Some(&p.id) == want.as_ref())
+                .or(d.periods.first())
+                .map(|p| p.id.clone())
         })
         .unwrap_or_default()
     });
@@ -954,7 +1151,16 @@ fn SpendPanel() -> impl IntoView {
         })
     });
     let opts = Signal::derive(move || {
-        data.with(|d| d.as_ref().map(|d| d.periods.iter().map(|p| (p.id.clone(), p.label.clone())).collect::<Vec<_>>()).unwrap_or_default())
+        data.with(|d| {
+            d.as_ref()
+                .map(|d| {
+                    d.periods
+                        .iter()
+                        .map(|p| (p.id.clone(), p.label.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
     });
     let on_select = Callback::new(move |id: String| period.set(Some(id)));
     let show_all = RwSignal::new(false);
@@ -979,7 +1185,7 @@ fn SpendPanel() -> impl IntoView {
                 (Some(_), None) => view! { <p class="plate-note">"Spend by stream is unavailable."</p> }.into_any(),
                 (Some(d), Some(p)) => {
                     let columns = p.columns.clone();
-                    let head = columns.iter().map(|c| view! { <th><span class="cap">{c.label.clone()}</span><span class="acct">{c.account_label.clone()}</span></th> }).collect_view();
+                    let head = columns.iter().map(|c| view! { <th><span class="cap">{whole_words(&c.label)}</span><span class="acct">{c.account_label.clone()}</span></th> }).collect_view();
                     let credits_col = p.credits.clone();
                     let body = p.rows.iter().map(|r| {
                         let hues: Vec<String> = columns.iter().map(|c| c.hue.clone()).collect();

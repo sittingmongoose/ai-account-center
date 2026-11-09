@@ -72,7 +72,10 @@ pub fn restore_theme() {
         .ok()
         .flatten()
         .and_then(|s| s.get_item("aac-theme").ok().flatten());
-    if let (Some(theme), Some(root)) = (saved.as_deref().filter(|t| matches!(*t, "light" | "dark")), document().document_element()) {
+    if let (Some(theme), Some(root)) = (
+        saved.as_deref().filter(|t| matches!(*t, "light" | "dark")),
+        document().document_element(),
+    ) {
         let _ = root.set_attribute("data-theme", theme);
     }
 }
@@ -125,7 +128,8 @@ pub fn Shell(
     children: Children,
 ) -> impl IntoView {
     if embedded {
-        return view! { <div class="shell"><main class="content">{children()}</main></div> }.into_any();
+        return view! { <div class="shell"><main class="content">{children()}</main></div> }
+            .into_any();
     }
     restore_theme();
     let theme = RwSignal::new("monitor");

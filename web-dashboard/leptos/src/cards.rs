@@ -66,7 +66,9 @@ fn sentence_case(text: &str) -> String {
 /// reassurance, so it sits with the facts, not in the problem.
 fn split_calm(text: &str) -> (String, Option<String>) {
     match text.trim().rsplit_once("\n\n") {
-        Some((body, last)) if last.trim_start().starts_with("You won't see") => (body.to_string(), Some(last.trim().to_string())),
+        Some((body, last)) if last.trim_start().starts_with("You won't see") => {
+            (body.to_string(), Some(last.trim().to_string()))
+        }
         _ => (text.to_string(), None),
     }
 }
@@ -200,8 +202,10 @@ pub fn CardsPanel() -> impl IntoView {
 
     let answered_open = RwSignal::new(false);
     let history_problem = move || {
-        live.view
-            .with(|v| v.as_ref().and_then(|v| v.cards.answer_history_problem.clone()))
+        live.view.with(|v| {
+            v.as_ref()
+                .and_then(|v| v.cards.answer_history_problem.clone())
+        })
     };
     view! {
         <section class="plate sec-questions" id="cards">
@@ -414,16 +418,30 @@ fn Deck(
             view! { <span>{sentence_case(card.stream.as_deref().unwrap_or("Nothing waits on it"))}</span> }.into_any()
         };
         let second = match draft {
-            Standing::Ready if card.kind == "action" => view! { <span data-tone="good">"marked done"</span> }.into_any(),
-            Standing::Ready => view! { <span data-tone="good">"answered, not sent"</span> }.into_any(),
-            Standing::Changed | Standing::NeedsWords => view! { <span data-tone="warn">"look again"</span> }.into_any(),
-            Standing::Empty if card.blocks.as_deref().unwrap_or("").is_empty() && card.stream.is_some() => view! { <span>"nothing waits on it"</span> }.into_any(),
-            Standing::Empty => view! { <span>{fmt::age_words_since(&card.asked_at, live.now_ms.get())}</span> }.into_any(),
+            Standing::Ready if card.kind == "action" => {
+                view! { <span data-tone="good">"marked done"</span> }.into_any()
+            }
+            Standing::Ready => {
+                view! { <span data-tone="good">"answered, not sent"</span> }.into_any()
+            }
+            Standing::Changed | Standing::NeedsWords => {
+                view! { <span data-tone="warn">"look again"</span> }.into_any()
+            }
+            Standing::Empty
+                if card.blocks.as_deref().unwrap_or("").is_empty() && card.stream.is_some() =>
+            {
+                view! { <span>"nothing waits on it"</span> }.into_any()
+            }
+            Standing::Empty => {
+                view! { <span>{fmt::age_words_since(&card.asked_at, live.now_ms.get())}</span> }
+                    .into_any()
+            }
         };
         view! { {first}" · "{second} }.into_any()
     };
-    let list_items = move || {
-        shown.get().into_iter().enumerate().map(|(i, card)| {
+    let list_items =
+        move || {
+            shown.get().into_iter().enumerate().map(|(i, card)| {
             let ready = drafts.with(|d| drafts::standing(d, &card) == Standing::Ready);
             let meta = item_meta(&card);
             view! {
@@ -443,13 +461,26 @@ fn Deck(
                 </li>
             }
         }).collect_view()
-    };
+        };
     let review_label = move || format!("Review and send ({})", ready());
     let at_end = move || at.get() + 1 >= shown.with(|o| o.len());
     let next_label = move || if at_end() { "Review" } else { "Next" };
     let back_disabled = move || at.get() == 0 || deck_view.get() != DeckView::Cards;
-    let can_use_rec = move || deck_view.get() == DeckView::Cards && open.with(|cards| cards.iter().any(|c| c.recommendation.is_some() && c.can_answer() && c.is_question()));
-    let use_rec = move |_| { open.with_untracked(|cards| drafts.update(|d| { drafts::use_recommendations(d, cards); })); };
+    let can_use_rec = move || {
+        deck_view.get() == DeckView::Cards
+            && open.with(|cards| {
+                cards
+                    .iter()
+                    .any(|c| c.recommendation.is_some() && c.can_answer() && c.is_question())
+            })
+    };
+    let use_rec = move |_| {
+        open.with_untracked(|cards| {
+            drafts.update(|d| {
+                drafts::use_recommendations(d, cards);
+            })
+        });
+    };
     view! {
         <div class="plate-head">
             <h2>"Questions for you"</h2>
@@ -558,7 +589,13 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
     let place = [
         Some(c.project.clone()).filter(|p| !p.is_empty()),
         // A short stream id reads as "stream C"; a named one stands on its own ("upkeep").
-        c.stream.clone().map(|s| if s.len() <= 5 { format!("stream {s}") } else { s }),
+        c.stream.clone().map(|s| {
+            if s.len() <= 5 {
+                format!("stream {s}")
+            } else {
+                s
+            }
+        }),
     ]
     .into_iter()
     .flatten()
@@ -591,7 +628,10 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
     let mut facts: Vec<(&'static str, String)> = Vec::new();
     facts.push((
         "Waiting on it",
-        c.blocks.clone().filter(|b| !b.is_empty()).unwrap_or_else(|| "nothing".into()),
+        c.blocks
+            .clone()
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| "nothing".into()),
     ));
     if let Some(n) = c.needed_by.clone() {
         let when = n.at.as_deref().map(fmt::clock).unwrap_or_default();
@@ -616,7 +656,11 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
     }
     facts.push((
         "Rules loosened",
-        c.exception.clone().map(|e| e.rule).filter(|r| !r.is_empty()).unwrap_or_else(|| "none".into()),
+        c.exception
+            .clone()
+            .map(|e| e.rule)
+            .filter(|r| !r.is_empty())
+            .unwrap_or_else(|| "none".into()),
     ));
     if let Some(a) = c.applies_to.clone() {
         let words = match a.count {
@@ -649,7 +693,8 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
             <div class="q-kicker">
                 <span class="cap">{if place.is_empty() { c.short() } else { place.clone() }}</span>
                 <span class="when" title=fmt::clock(&c.asked_at)>
-                    {let asked_at = c.asked_at.clone(); let asker = asker.clone(); move || format!("{} · from {asker}", fmt::age_words_since(&asked_at, live.now_ms.get()))}
+                    <span class="nw">{let asked_at = c.asked_at.clone(); move || format!("{} ·", fmt::age_words_since(&asked_at, live.now_ms.get()))}</span>
+                    " "<span class="nw">{format!("from {asker}")}</span>
                 </span>
             </div>
             <h3 class="q-title">{c.title.clone()}</h3>

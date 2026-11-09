@@ -2076,7 +2076,8 @@ mod tests {
 
     #[test]
     fn the_design_view_reads_with_pins_and_spend() {
-        let view: StatusView = serde_json::from_str(include_str!("../fixtures/status-design-view.json")).unwrap();
+        let view: StatusView =
+            serde_json::from_str(include_str!("../fixtures/status-design-view.json")).unwrap();
         let pinned = view.pinned.clone().unwrap();
         assert_eq!(pinned.counts.pinned, 5);
         assert_eq!(pinned.updates.len(), 5);
@@ -2090,7 +2091,10 @@ mod tests {
     fn pinned_can_say_why_there_are_none() {
         let panel: PinnedPanel =
             serde_json::from_str(r#"{"unavailable":"Pinned threads unavailable."}"#).unwrap();
-        assert_eq!(panel.unavailable.as_deref(), Some("Pinned threads unavailable."));
+        assert_eq!(
+            panel.unavailable.as_deref(),
+            Some("Pinned threads unavailable.")
+        );
         assert!(panel.updates.is_empty());
     }
 

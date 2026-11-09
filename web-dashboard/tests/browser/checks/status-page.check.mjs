@@ -18,6 +18,7 @@ const FORMATS = [
 	{ name: 'duo-folded', w: 466, h: 678, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
 	{ name: 'duo-portrait', w: 669, h: 951, safe: '82,0,34,0', mobile: true, chrome: 'band' },
 	{ name: 'duo-landscape', w: 951, h: 669, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
+	{ name: 'open-window', w: 951, h: 669, safe: '0,0,0,0', mobile: true, chrome: 'desk' },
 ];
 
 // Every status call the page makes, answered here. Returns the answer sets the page sent.
@@ -149,7 +150,7 @@ export const tests = {
 			})
 		);
 		// The threads' card additions: a verdict filter, a judges' split, a sample that sends nothing, verbatim quotes.
-		await t.count('.q-seg .seg button', 3);
+		await t.count('.q-seg .seg button', 2); // All and Adapt, the fixture's one verdict
 		await t.page.click('.q-seg .seg button >> text=Adapt');
 		await t.count('.q-list .q-item.sel[data-label="F-Q4"]', 1);
 		await t.visible('text=The judges split', 'split judges are flagged');
@@ -175,6 +176,7 @@ export const tests = {
 			await t.audit(`${f.name} ${f.w}x${f.h}`);
 			await t.equal(`${f.name}: chrome`, await t.page.evaluate(() => document.documentElement.dataset.chrome), f.chrome);
 			await t.check(`${f.name}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+			await t.check(`${f.name}: the content is as wide as its window, not its widest child`, await t.page.evaluate(() => document.querySelector('.content').getBoundingClientRect().width <= innerWidth));
 			await t.count('#usage, #threads', 0);
 			// Line breaks: "Recommended" stays with its label, and each row's percent with its name.
 			await t.check(`${f.name}: "Recommended" is never alone on a line`, await t.page.evaluate(() => {
@@ -199,6 +201,8 @@ export const tests = {
 				}));
 			}
 			if (f.name === 'duo-landscape') {
+				await t.page.click('.plate-tools.only-land .btn >> nth=1'); // the second question has choices
+				await t.page.waitForSelector('.opts .opt');
 				await t.check('landscape: the question card lies across the screen', await t.page.evaluate(() => {
 					const opts = [...document.querySelectorAll('.opts .opt')].map((o) => o.getBoundingClientRect());
 					return opts.length === 3 && Math.abs(opts[0].top - opts[1].top) < 2 && opts[1].left > opts[0].right - 2;

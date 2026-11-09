@@ -73,7 +73,10 @@ pub fn Meter(
 /// A rate with its likely range: the band is the 90% interval, the notch is the value.
 #[component]
 pub fn RangeBar(low: f64, high: f64, value: f64) -> impl IntoView {
-    let (l, h) = ((low * 100.0).clamp(0.0, 100.0), (high * 100.0).clamp(0.0, 100.0));
+    let (l, h) = (
+        (low * 100.0).clamp(0.0, 100.0),
+        (high * 100.0).clamp(0.0, 100.0),
+    );
     let v = (value * 100.0).clamp(0.0, 100.0);
     view! {
         <div class="rangebar">
@@ -122,7 +125,11 @@ pub fn source_note(source: Option<Source>, missing: &'static str) -> Option<AnyV
     match source {
         Some(s) if s.is_ok() => None,
         Some(s) => {
-            let detail = if s.detail.is_empty() { s.label.clone() } else { s.detail.clone() };
+            let detail = if s.detail.is_empty() {
+                s.label.clone()
+            } else {
+                s.detail.clone()
+            };
             Some(view! { <p class="plate-note problem">{detail}</p> }.into_any())
         }
         None => Some(view! { <p class="plate-note problem">{missing}</p> }.into_any()),

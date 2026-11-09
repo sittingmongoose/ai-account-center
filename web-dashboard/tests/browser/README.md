@@ -27,6 +27,8 @@ browser-check run web-dashboard/tests/browser/checks --set home=/tmp/fixture-hom
 
 `checks/accounts-clicks.check.mjs` clicks every account row and header toggle at ten widths and on a phone, and asserts nothing is pushed off the page.
 
+`checks/status-page.check.mjs` and `checks/scoreboard-page.check.mjs` cover the Leptos pages: deck flows, the layout in each format (with `?safe=t,r,b,l` giving the measured Duo insets), the iframe drawing no chrome, and honest words when `spendByStream` or `byModel` are missing. `frames/` (its own config) shoots whole-page images for review: `browser-check run web-dashboard/tests/browser/frames --set out=<folder>`, needing only `web-dashboard/leptos/pkg` built.
+
 Frames that aren't listed are saved as snaps for `browser-check diff <base run> <candidate run>`.
 
 ## Recording, machines and parallel runs

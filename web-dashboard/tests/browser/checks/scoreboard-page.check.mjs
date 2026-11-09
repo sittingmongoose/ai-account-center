@@ -34,7 +34,7 @@ export const tests = {
 		await t.viewport(1440, 900);
 		await t.app.signIn();
 		await t.goto('/app/scoreboard', { settleMs: 300 });
-		await t.page.waitForSelector('.page');
+		await t.page.waitForSelector('.sb-unavail');
 		await t.text('.sb-unavail', /isn't available from this server yet/);
 		await t.count('.picks, .sb-matrix', 0);
 		await t.audit('scoreboard unavailable');
@@ -79,7 +79,7 @@ export const tests = {
 				return a.bottom > seg.top && seg.bottom > a.top;
 			}));
 			await t.check(`${f.name}: verdict notes break only between their parts`, await t.page.evaluate(() =>
-				[...document.querySelectorAll('.vsub .nw')].every((n) => n.getClientRects().length === 1)
+				[...document.querySelectorAll('.vsub .nw')].every((n) => n.getBoundingClientRect().height < 24)
 			));
 		}
 	},

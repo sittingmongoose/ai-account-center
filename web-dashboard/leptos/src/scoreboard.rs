@@ -420,7 +420,11 @@ pub async fn fetch_scoreboard() -> Result<ScoreboardView, FetchError> {
 // ---- Page --------------------------------------------------------------------------------------------------------
 
 fn stored_view() -> Option<String> {
-    window().local_storage().ok().flatten().and_then(|s| s.get_item(VIEW_KEY).ok().flatten())
+    window()
+        .local_storage()
+        .ok()
+        .flatten()
+        .and_then(|s| s.get_item(VIEW_KEY).ok().flatten())
 }
 
 fn store_view(id: &str) {
@@ -490,7 +494,11 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
             board.now_ms.set(js_sys::Date::now());
             let every = board
                 .view
-                .with_untracked(|v| v.as_ref().and_then(|v| v.refresh.as_ref()).map(|r| r.poll_seconds))
+                .with_untracked(|v| {
+                    v.as_ref()
+                        .and_then(|v| v.refresh.as_ref())
+                        .map(|r| r.poll_seconds)
+                })
                 .unwrap_or(60)
                 .max(15);
             let t = ticks.get_untracked() + 15;
@@ -512,36 +520,65 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                 board.reload();
             }
         });
-        let _ = window().add_event_listener_with_callback(event, wasm_bindgen::JsCast::unchecked_ref(again.as_ref()));
+        let _ = window().add_event_listener_with_callback(
+            event,
+            wasm_bindgen::JsCast::unchecked_ref(again.as_ref()),
+        );
         again.forget();
     }
-    let by_model = Memo::new(move |_| board.view.with(|v| v.as_ref().and_then(|v| v.by_model.clone())));
+    let by_model = Memo::new(move |_| {
+        board
+            .view
+            .with(|v| v.as_ref().and_then(|v| v.by_model.clone()))
+    });
     let chosen = RwSignal::new(stored_view());
     let current = Memo::new(move |_| {
         by_model.with(|b| {
             let b = b.as_ref()?;
             let pick = chosen.get().or_else(|| b.default_view.clone());
-            b.views.iter().find(|v| Some(&v.id) == pick.as_ref()).or(b.views.first()).cloned()
+            b.views
+                .iter()
+                .find(|v| Some(&v.id) == pick.as_ref())
+                .or(b.views.first())
+                .cloned()
         })
     });
-    let selected_id = Signal::derive(move || current.with(|c| c.as_ref().map(|v| v.id.clone()).unwrap_or_default()));
+    let selected_id = Signal::derive(move || {
+        current.with(|c| c.as_ref().map(|v| v.id.clone()).unwrap_or_default())
+    });
     let select_view = Callback::new(move |id: String| {
         store_view(&id);
         chosen.set(Some(id));
     });
     let info = ChromeInfo {
-        updated: Signal::derive(move || if board.view.with(|v| v.is_none()) { String::new() } else { fmt::age(board.elapsed_seconds()) }),
+        updated: Signal::derive(move || {
+            if board.view.with(|v| v.is_none()) {
+                String::new()
+            } else {
+                fmt::age(board.elapsed_seconds())
+            }
+        }),
         live: Signal::derive(move || board.error.with(|e| e.is_none())),
         summary: Signal::derive(move || {
-            let text = by_model.with(|b| b.as_ref().map(|b| b.band_summary.clone()).unwrap_or_default());
-            vec![Run { text, ..Default::default() }]
+            let text = by_model.with(|b| {
+                b.as_ref()
+                    .map(|b| b.band_summary.clone())
+                    .unwrap_or_default()
+            });
+            vec![Run {
+                text,
+                ..Default::default()
+            }]
         }),
         refresh: Callback::new(move |_| board.reload()),
     };
     let banner = move || {
         let error = board.error.get()?;
         let old = if board.view.with(|v| v.is_some()) {
-            format!(" Showing the reading from {}.", fmt::age(board.elapsed_seconds()))
+            format!(
+                " Showing the reading from {}.",
+                fmt::age(board.elapsed_seconds())
+            )
         } else {
             String::new()
         };
@@ -600,7 +637,11 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
 
 /// The title-line switch. Its buttons carry a long and a short label; the page shows the one that fits.
 #[component]
-fn SwitchSeg(options: Vec<(String, AnyView)>, selected: Signal<String>, on_select: Callback<String>) -> impl IntoView {
+fn SwitchSeg(
+    options: Vec<(String, AnyView)>,
+    selected: Signal<String>,
+    on_select: Callback<String>,
+) -> impl IntoView {
     view! {
         <div class="seg" role="tablist" aria-label="Whose verdicts">
             {options.into_iter().map(|(id, text)| {
@@ -654,10 +695,19 @@ fn model_name(m: &ModelRow, sub: bool, chevron: bool) -> impl IntoView + use<> {
 /// A verdict cell's note: each piece stays whole, breaks fall only between them.
 fn sub_chunks(sub: &[String]) -> impl IntoView + use<> {
     let last = sub.len().saturating_sub(1);
-    let parts: Vec<(String, bool)> = sub.iter().enumerate().map(|(i, s)| (s.clone(), i < last)).collect();
-    parts.into_iter().map(|(text, more)| view! {
-        <span class="nw">{text}{more.then_some(" ·")}</span>{more.then_some(" ")}
-    }).collect_view()
+    let parts: Vec<(String, bool)> = sub
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.clone(), i < last))
+        .collect();
+    parts
+        .into_iter()
+        .map(|(text, more)| {
+            view! {
+                <span class="nw">{text}{more.then_some(" ·")}</span>{more.then_some(" ")}
+            }
+        })
+        .collect_view()
 }
 
 #[component]
@@ -670,12 +720,30 @@ fn ModelsSections(
 ) -> impl IntoView {
     let how_open = RwSignal::new(false);
     let runs_open = RwSignal::new(false);
-    let measures = move || board.view.with(|v| v.as_ref().map(|v| v.catalog.measures.clone()).unwrap_or_default());
-    let recent = move || board.view.with(|v| v.as_ref().map(|v| v.recent.clone()).unwrap_or_default());
+    let measures = move || {
+        board.view.with(|v| {
+            v.as_ref()
+                .map(|v| v.catalog.measures.clone())
+                .unwrap_or_default()
+        })
+    };
+    let recent = move || {
+        board
+            .view
+            .with(|v| v.as_ref().map(|v| v.recent.clone()).unwrap_or_default())
+    };
     let jobs = view.jobs.clone();
     let first_key = view.models.first().map(|m| m.key.clone());
     let models = StoredValue::new(view.models.clone());
-    let selected_key = Signal::derive({ let first = first_key.clone(); move || selected.get().filter(|k| models.with_value(|list| list.iter().any(|m| &m.key == k))).or_else(|| first.clone()) });
+    let selected_key = Signal::derive({
+        let first = first_key.clone();
+        move || {
+            selected
+                .get()
+                .filter(|k| models.with_value(|list| list.iter().any(|m| &m.key == k)))
+                .or_else(|| first.clone())
+        }
+    });
     let meta = view.meta.clone();
     let foot = view.foot.clone();
     let detail = move || {
@@ -853,7 +921,10 @@ mod tests {
         assert_eq!(opus.cells["mechanical"], None);
         let cell = opus.cells["worknode-build"].clone().unwrap();
         assert_eq!(cell.word, "Recommended");
-        assert_eq!(cell.sub, vec!["7 runs".to_string(), "passed review 6 of 6".to_string()]);
+        assert_eq!(
+            cell.sub,
+            vec!["7 runs".to_string(), "passed review 6 of 6".to_string()]
+        );
     }
 
     #[test]
