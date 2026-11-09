@@ -203,6 +203,50 @@ test('Claude shows a Fable meter only for Max plans: real when reported, "Not re
   );
 });
 
+test('a surface-scoped Fable window never replaces the global Fable quota, in either order', () => {
+  const surface = window({
+    key: 'seven_day_fable_code',
+    label: 'Weekly Fable (Code) usage',
+    usedPercent: 90,
+    remainingPercent: 10,
+  });
+  const global = window({
+    key: 'seven_day_fable',
+    label: 'Weekly Fable usage',
+    usedPercent: 10,
+    remainingPercent: 90,
+  });
+  const fiveHour = window({ key: 'five_hour', label: 'Five-hour usage', windowMinutes: 300 });
+  for (const ordered of [
+    [fiveHour, window(), surface, global],
+    [fiveHour, window(), global, surface],
+  ]) {
+    const fableSection = section(dashboardViewModel(data([claude('max', 'max', ordered)]), { now }), 'claude');
+    assert.deepEqual(
+      fableSection.columns.map((c) => c.label),
+      ['5-hour', 'Weekly', 'Fable (Code)', 'Fable']
+    );
+    const row = fableSection.rows[0];
+    assert.equal(row.cells[2].valueText, '90');
+    assert.equal(row.cells[2].key, 'claude:max|seven_day_fable_code');
+    assert.equal(row.cells[3].valueText, '10');
+    assert.equal(row.cells[3].key, 'claude:max|seven_day_fable');
+  }
+  // surface window alone on a Max account: the global Fable cell stays unreported
+  const onlySurface = section(
+    dashboardViewModel(data([claude('surface-only', 'max', [window(), surface])]), { now }),
+    'claude'
+  );
+  assert.deepEqual(
+    onlySurface.columns.map((c) => c.label),
+    ['Weekly', 'Fable (Code)', 'Fable']
+  );
+  const onlyRow = onlySurface.rows[0];
+  assert.equal(onlyRow.cells[1].valueText, '90');
+  assert.equal(onlyRow.cells[2].hasValue, false);
+  assert.equal(onlyRow.cells[2].naText, 'Not reported yet');
+});
+
 test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, the notch follows auto-switch', () => {
   const chat = window({ key: 'extra_additional_1', label: 'Chat pass · weekly', usedPercent: 50 });
   const active = account({

@@ -209,7 +209,7 @@ export const usedPercent = (w) =>
       ? 100 - w.remainingPercent
       : null;
 const description = (w) => `${text(w?.key)} ${text(w?.label)}`;
-export const isFable = (w) => w?.key === 'seven_day_fable' || /\bfable\b/i.test(text(w?.label));
+export const isFable = (w) => w?.key === 'seven_day_fable';
 /** Meters are rate limits; packs, balances, credits and spend are amounts, never fake meters. */
 export const isMeterWindow = (w) =>
   !['balance', 'extra_usage', 'spend'].includes(w?.kind) && w?.unlimited !== true;
