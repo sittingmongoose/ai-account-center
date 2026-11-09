@@ -1,4 +1,4 @@
-import { visibleUsageWindows } from './visible-usage.mjs';
+import { visibleUsageWindows, isWeeklyScoped, clearsText } from './visible-usage.mjs';
 import { cursorPlanLabel } from './cursor-data.mjs';
 import { displayFormat } from './time-format.mjs';
 
@@ -62,6 +62,7 @@ export function usageView(window = {}, percentageOnly = false, includeRemaining 
     .filter(Boolean)
     .join(' · ');
   const hasPercent = p !== null && window.unlimited !== true;
+  const grant = !percentageOnly ? clearsText(window) : '';
   return {
     label: typeof window.label === 'string' ? window.label : 'Usage',
     amount: percentageOnly
@@ -69,7 +70,7 @@ export function usageView(window = {}, percentageOnly = false, includeRemaining 
         ? `${number(p)}% used`
         : 'Usage unavailable'
       : parts.length
-        ? parts.join(' · ') + (hasPercent ? ` · ${number(p)}% used` : '')
+        ? parts.join(' · ') + (hasPercent ? ` · ${number(p)}% used` : '') + (grant ? ` · ${grant}` : '')
         : hasPercent
           ? `${number(p)}% used`
           : state || 'Usage unavailable',
@@ -91,6 +92,7 @@ function primaryWindow(windows, weekly, provider) {
   return windows.find(
     (window) =>
       !fableWindow(window) &&
+      !isWeeklyScoped(window) &&
       window.kind !== 'balance' &&
       window.kind !== 'extra_usage' &&
       (weekly
