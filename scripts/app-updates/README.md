@@ -251,10 +251,13 @@ model list indefinitely, until someone happens to open the Muse CLI. So after th
 (not while the launcher's own updater holds the lock, and never when the install step did not
 run or the binary is missing) AAC runs one bounded headless session with the new binary,
 `muse exec --contributor-mode off "Reply with the word: ok"` with no `--model` so the host's
-configured default is used, in a neutral temporary directory, with the timeout clamped to the
-update deadline. On Windows the run goes through the detected `.muse-launcher.ps1`, as
-detection does for `--version`. The warm is a short-lived synchronous process, killed at its
-timeout, so a later process scan never sees it as a session to stop or restart. An update that
+configured default is used, in a neutral temporary directory, with the timeout as min(60s,
+the deadline's remaining time) and no 30s floor; a warm whose deadline has already passed
+never starts. On Windows the run goes through the detected `.muse-launcher.ps1`, as
+detection does for `--version`. The warm is a short-lived synchronous process whose whole
+owned process tree is killed at its timeout, so a later process scan never sees it as a session
+to stop or restart. Pre-existing `muse serve` hosts started by T3 are never part of that
+owned tree and are never touched by the warm's kill. An update that
 changed the binary is `updated` only when the warm succeeds and a catalog entry in
 `~/.local/share/muse/model-catalog` was rewritten at or after the install started; otherwise
 the row reports `restart_failed` with `model_catalog_unrefreshed` (the sessions were still
