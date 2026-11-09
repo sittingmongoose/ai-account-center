@@ -240,9 +240,22 @@ test('reported Fable remains distinct from total weekly quota and displays its a
   assert.equal(view.weekly.amount, '12% used');
   assert.equal(allDetailWindows({ accounts: [account] }, account.id)[0].amount, '7.13% used');
   assert.equal(account.windows[0].usedPercent, 7.1255);
-  const zero = dashboardView({ accounts: [{ ...account, windows: [{ key: 'fable', label: 'Fable usage', usedPercent: 0 }] }] }).claude[0];
+  const zero = dashboardView({ accounts: [{ ...account, windows: [{ key: 'seven_day_fable', label: 'Fable usage', usedPercent: 0 }] }] }).claude[0];
   assert.equal(zero.fable.amount, '0% used');
   assert.equal(zero.fable.hasPercent, true);
+});
+
+test('a surface Fable window never fills the compact Fable view, in either order', () => {
+  const surface = { key: 'seven_day_fable_code', label: 'Weekly Fable (Code) usage', windowMinutes: 10080, usedPercent: 90 };
+  const global = { key: 'seven_day_fable', label: 'Weekly Fable usage', windowMinutes: 10080, usedPercent: 10 };
+  for (const windows of [[surface, global], [global, surface]]) {
+    const row = dashboardView({ accounts: [{ id: 'claude:a', provider: 'claude', plan: 'max', windows }] }).claude[0];
+    assert.equal(row.fable.amount, '10% used');
+    assert.equal(row.fable.percent, 10);
+  }
+  const onlySurface = dashboardView({ accounts: [{ id: 'claude:b', provider: 'claude', plan: 'max', windows: [surface] }] }).claude[0];
+  assert.equal(onlySurface.fable.hasPercent, false);
+  assert.equal(onlySurface.fable.amount, 'Usage unavailable');
 });
 
 test('cached optional windows retain their original sample time beside fresh core and Fable quotas', () => {

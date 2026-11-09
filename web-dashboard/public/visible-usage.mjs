@@ -9,7 +9,7 @@ export const weeklyScopedKey = (key) => {
   const match = /^seven_day_(.+)$/.exec(String(key || ''));
   return match ? match[1] : null;
 };
-const fableLike = (window) => window?.key === 'seven_day_fable' || /\bfable\b/i.test(window?.label || '');
+const fableLike = (window) => window?.key === 'seven_day_fable';
 /** A weekly limit scoped to one model family (Opus, Sonnet, ...) or Fable, never the all-models `seven_day`. */
 export const isWeeklyScoped = (window) => weeklyScopedKey(window?.key) !== null || fableLike(window);
 const wordsOf = (value) => String(value || '').replace(/[_-]+/g, ' ').split(/\s+/).filter(Boolean);

@@ -82,8 +82,7 @@ export function usageView(window = {}, percentageOnly = false, includeRemaining 
     meta,
   };
 }
-const fableWindow = (window) =>
-  window?.key === 'seven_day_fable' || /\bfable\b/i.test(window?.label || '');
+const fableWindow = (window) => window?.key === 'seven_day_fable';
 function primaryWindow(windows, weekly, provider) {
   // Codex additional/model quotas can report the same duration as its core
   // quotas. Only the provider's canonical keys identify the main columns.
