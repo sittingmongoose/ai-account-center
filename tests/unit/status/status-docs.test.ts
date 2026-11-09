@@ -129,7 +129,8 @@ describe('StatusDocsReader', () => {
       const { handle } = fakeHandle();
       const read = reader(root, handle, () => 1_794_116_000_000);
       await read.scan();
-      // The writer writes a copy with a lower seq (a rolled-back writer).
+      // The writer writes a copy with a lower seq (a rolled-back writer): the newer copy
+      // stays and the rollback is said, as the agent-reports reader does.
       fs.writeFileSync(path.join(root, file), statusDoc('vm.a', 't1', 4));
       fs.utimesSync(
         path.join(root, file),
@@ -139,7 +140,47 @@ describe('StatusDocsReader', () => {
       await read.scan();
       const state = read.snapshot();
       expect(state.docs[0].seq).toBe(9);
-      expect(state.docs[0].problem).toBeNull();
+      expect(state.docs[0].problem?.reason).toContain('seq is lower');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('a lower seq after a refused read keeps the newer copy and names the rollback', async () => {
+    // 10 accepted, a refused read, then a good 9: the sequence high-water mark holds while a
+    // good copy exists, whatever problem that copy currently carries (Astra M2 / Sol L1).
+    const file = 'v1/writers/vm.a/status.json';
+    const { root, cleanup } = share({ [file]: statusDoc('vm.a', 't1', 10) });
+    try {
+      let refuse = false;
+      const { handle } = fakeHandle({
+        refuse: () => (refuse ? 'summary is missing or not valid' : null),
+      });
+      const read = reader(root, handle, () => 1_794_116_000_000);
+      await read.scan();
+      expect(read.snapshot().docs[0].seq).toBe(10);
+
+      refuse = true; // the file changes to something the module refuses
+      fs.utimesSync(
+        path.join(root, file),
+        new Date(1_794_200_000_000),
+        new Date(1_794_200_000_000)
+      );
+      await read.scan();
+      expect(read.snapshot().docs[0].seq).toBe(10); // the last good copy, problem named
+
+      refuse = false; // a good copy arrives, but an older revision
+      fs.writeFileSync(path.join(root, file), statusDoc('vm.a', 't1', 9));
+      fs.utimesSync(
+        path.join(root, file),
+        new Date(1_794_300_000_000),
+        new Date(1_794_300_000_000)
+      );
+      await read.scan();
+      const state = read.snapshot();
+      expect(state.docs[0].seq).toBe(10); // the newer copy stays
+      expect(state.docs[0].problem?.reason).toContain('seq is lower'); // and says why
+      expect(state.problems).toHaveLength(1);
     } finally {
       cleanup();
     }
@@ -163,6 +204,65 @@ describe('StatusDocsReader', () => {
       now += 130_000; // past it
       await read.scan();
       expect(read.snapshot().docs).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('a withdrawn writer folder expires after the grace, like a missing status.json', async () => {
+    // The whole writer folder disappears while the writers root still lists fine: a
+    // successful absence starts the same removal grace, and a listing failure stays distinct
+    // from it (Astra M3 / Sol M2).
+    const file = 'v1/writers/vm.a/status.json';
+    const { root, cleanup } = share({ [file]: statusDoc('vm.a', 't1', 2) });
+    try {
+      const { handle } = fakeHandle();
+      let now = 1_794_116_000_000;
+      const read = reader(root, handle, () => now);
+      await read.scan();
+      expect(read.snapshot().docs).toHaveLength(1);
+
+      fs.rmSync(path.join(root, 'v1/writers/vm.a'), { recursive: true });
+      now += 60_000; // inside the grace: the last copy stays
+      await read.scan();
+      expect(read.snapshot().docs).toHaveLength(1);
+
+      now += 130_000; // past it: the withdrawn folder's document is gone
+      await read.scan();
+      const state = read.snapshot();
+      expect(state.state).toBe('ok');
+      expect(state.docs).toEqual([]);
+      expect(state.problems).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('retained documents are bounded and the bound is named', async () => {
+    // Documents kept across scans (a writer gone from the listing, or fallen out of the
+    // scan's selection) are bounded too, and hitting the bound is a named problem, never a
+    // silent drop (Astra M3's withdrawn-writer churn).
+    const files: Record<string, string> = {};
+    for (const writer of ['vm.a', 'vm.b', 'vm.c', 'vm.d']) {
+      files[`v1/writers/${writer}/status.json`] = statusDoc(writer, 't1', 2, {
+        writtenAt: `2026-11-08T0${writer.charCodeAt(3) - 96}:00:00Z`,
+      });
+    }
+    const { root, cleanup } = share(files);
+    try {
+      const { handle } = fakeHandle();
+      const read = new StatusDocsReader({
+        root: () => root,
+        now: () => 1_794_116_000_000,
+        handle: () => handle,
+        limits: { retained: 2 },
+      });
+      await read.scan();
+      const state = read.snapshot();
+      expect(state.docs).toHaveLength(2); // the two most recently written
+      expect(state.docs.map((doc) => doc.writer)).toEqual(['vm.c', 'vm.d']);
+      expect(state.problems).toHaveLength(1);
+      expect(state.problems[0]?.reason).toContain('retained');
     } finally {
       cleanup();
     }

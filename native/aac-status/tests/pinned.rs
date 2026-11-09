@@ -135,6 +135,53 @@ fn waiting_on_you_comes_from_every_source_that_names_it() {
 }
 
 #[test]
+fn a_blocked_state_without_a_reason_stays_blocked() {
+    // `thread@1.state = "blocked"` (or a `tasks@1` item) with no `blockedOn`: the state is
+    // known, the reason is not, and the update must say both — never "None." (Sol M1).
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "state": "blocked" }))]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.blocked.text, "Blocked; the report does not say on what.");
+    assert!(!update.blocked.waiting_on_you);
+
+    // A blocked item without a reason names the item, still never "None."
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+            "project": "pm7", "stream": "f",
+            "items": [ { "id": "B-1", "title": "Fixture blocked item", "state": "blocked" } ]
+        })]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.blocked.text, "Blocked on B-1; the report does not say on what.");
+    assert!(!update.blocked.waiting_on_you);
+
+    // A blocked thread and a named blocker together: the named one reads as before, the
+    // unexplained one says so beside it.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "state": "blocked", "project": "pm7", "stream": "f",
+            "blockedOn": { "kind": "review", "what": "A reviewer for B-2", "since": null }
+        }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+            "project": "pm7", "stream": "f",
+            "items": [ { "id": "B-2", "title": "Fixture blocked item", "state": "blocked" } ]
+        })]
+    }));
+    let update = one_update(&built);
+    assert_eq!(
+        update.blocked.text,
+        "Blocked: A reviewer for B-2 (waiting on review). Blocked on B-2; the report does not say on what."
+    );
+}
+
+#[test]
 fn a_thread_with_no_report_says_so_and_stops() {
     let built = input(json!({ "pins": [pin("t1", json!("a"))] }));
     let update = one_update(&built);

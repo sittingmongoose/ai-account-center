@@ -107,7 +107,7 @@ pub struct PinIn {
 
 /// Why one machine's pins are absent this scan: a fixed code, put in words by this crate.
 /// Codes: `did_not_answer` (the ssh read or sqlite failed), `shape` (the answer was not the
-/// shape T3's state file has), `missing` / `io` (this computer's own T3 database).
+/// shape T3's state file has), `missing` / `io` / `limit` (this computer's own T3 database).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineProblemIn {
@@ -452,6 +452,9 @@ fn machine_problem_text(machine: &str, code: &str) -> String {
         "shape" => format!("Pinned threads unavailable on {label}: T3's state file changed shape."),
         "missing" => format!("Pinned threads unavailable on {label}: T3's state file is missing."),
         "io" => format!("Pinned threads unavailable on {label}: T3's state file could not be read."),
+        "limit" => {
+            format!("Pinned threads unavailable on {label}: its pin list is past this reader's limits.")
+        }
         _ => format!("Pinned threads unavailable on {label}: its pins could not be read."),
     }
 }
@@ -787,12 +790,18 @@ fn compose_update(
     // ---- Blocked / waiting on you ----------------------------------------------------------
     let mut waiting: Vec<String> = Vec::new();
     let mut blocked: Vec<String> = Vec::new();
+    // Blocked in so many words with no `blockedOn` to name: the state is known, the reason
+    // is not, and neither may be dropped — the update says blocked and that the report does
+    // not say on what, never "None.".
+    let mut unexplained: Vec<String> = Vec::new();
     if let Some(kind) = thread.and_then(|doc| doc.blocked_on.as_ref()) {
         if kind.kind == "owner" {
             waiting.push(kind.what.clone());
         } else {
             blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
         }
+    } else if thread.is_some_and(|doc| doc.state == "blocked") {
+        unexplained.push("Blocked; the report does not say on what.".to_string());
     }
     if let Some(board) = tasks {
         for item in &board.items {
@@ -806,6 +815,9 @@ fn compose_update(
                 } else {
                     blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
                 }
+            } else if item.state == "blocked" {
+                // Name the item; the reason was not reported to name.
+                unexplained.push(format!("Blocked on {}; the report does not say on what.", item.id));
             }
         }
     }
@@ -835,6 +847,7 @@ fn compose_update(
     if !blocked.is_empty() {
         parts.push(format!("Blocked: {}.", blocked.join("; ")));
     }
+    parts.extend(unexplained);
     if !parts.is_empty() {
         update.blocked = BlockedView {
             text: parts.join(" "),

@@ -29,6 +29,12 @@ const REQUIRED_COLUMNS: [&str; 5] = ["thread_id", "title", "archived_at", "delet
 /// How long a read waits behind T3's writer before giving up as unreadable.
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The local read's budget, the remote route's caps (a fixed byte allowance per answer) in
+/// local form: at most this many rows, and at most this many bytes of pin text, per read.
+/// Past either the read is refused (`limit`), never a silently truncated pin list.
+pub const MAX_PINNED_ROWS: usize = 1000;
+pub const MAX_PIN_BYTES: usize = 1024 * 1024;
+
 /// The machines whose T3 databases can hold pins: this computer's own read plus the three
 /// fixed ssh aliases. Part of the shape, not a setting.
 pub const PIN_MACHINES: [&str; 3] = ["mac", "windows", "nas1"];
@@ -97,6 +103,33 @@ fn shape() -> Error {
     Error::new("shape", "T3's state file changed shape")
 }
 
+fn limit() -> Error {
+    Error::new("limit", "T3's state file is past this reader's pin limits")
+}
+
+/// The top-level rule over the lineage's own shape facts, shared by both reads: a `lineage`
+/// that is absent or JSON null is top-level; an object is top-level when its
+/// `parentThreadId` is absent or null, a child when the parent is a thread id (text), and a
+/// changed shape when the parent is any other type; every other lineage container is a
+/// changed shape too. A wrong container cannot be walked by a path expression, so its
+/// missing parent extract proves nothing — such a row is refused, never guessed in or out.
+enum Lineage {
+    TopLevel,
+    Child,
+}
+
+fn lineage_of(lineage: Option<&str>, parent: Option<&str>) -> Result<Lineage> {
+    match lineage {
+        None | Some("null") => Ok(Lineage::TopLevel),
+        Some("object") => match parent {
+            None | Some("null") => Ok(Lineage::TopLevel),
+            Some("text") => Ok(Lineage::Child),
+            Some(_) => Err(shape()),
+        },
+        Some(_) => Err(shape()),
+    }
+}
+
 /// An SQLite failure while reading: a busy or locked file could not be read; anything else
 /// (a missing table or column, malformed JSON in a payload, a failed JSON function) means
 /// the file no longer has the shape this reader was written against.
@@ -121,8 +154,9 @@ fn scalar(value: SqlValue) -> Result<Json> {
 }
 
 /// Every pinned top-level thread in `path`, in T3's pin order. Error codes: `missing` when
-/// there is no file, `shape` when the table or a payload differs from the expected shape,
-/// `io` when the file could not be read.
+/// there is no file, `shape` when the table or a payload (including its `lineage`) differs
+/// from the expected shape, `io` when the file could not be read, `limit` when the read
+/// passes [`MAX_PINNED_ROWS`] or [`MAX_PIN_BYTES`].
 pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
     if !path.is_file() {
         return Err(missing());
@@ -155,10 +189,11 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
         return Err(shape());
     }
 
-    // `pinnedAt` is present-but-null on unpinned threads, so "set" is a non-null extract;
-    // the same extract is null when `lineage.parentThreadId` is null or missing entirely,
-    // which is exactly the top-level rule. The statement is dropped before the connection,
-    // so no read transaction outlives this call.
+    // `pinnedAt` is present-but-null on unpinned threads, so "set" is a non-null extract. The
+    // top-level rule itself is decided from the lineage's own shape facts below, in Rust: a
+    // path extract cannot tell "no parent" from "a lineage a path cannot walk", so the query
+    // returns every pinned row's lineage facts instead of filtering on the extract. The
+    // statement is dropped before the connection, so no read transaction outlives this call.
     let mut stmt = conn
         .prepare(
             "SELECT thread_id, title, \
@@ -166,11 +201,12 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
                     json_type(payload_json, '$.pinnedAt'), \
                     json_extract(payload_json, '$.pinOrderKey'), \
                     json_type(payload_json, '$.pinOrderKey'), \
-                    json_type(payload_json) \
+                    json_type(payload_json), \
+                    json_type(payload_json, '$.lineage'), \
+                    json_type(payload_json, '$.lineage.parentThreadId') \
              FROM orchestration_v2_projection_threads \
              WHERE archived_at IS NULL AND deleted_at IS NULL \
                AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL \
-               AND json_extract(payload_json, '$.lineage.parentThreadId') IS NULL \
              ORDER BY json_extract(payload_json, '$.pinOrderKey') ASC, thread_id ASC",
         )
         .map_err(map_sqlite)?;
@@ -184,29 +220,48 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
                 row.get::<_, SqlValue>(4)?,
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
             ))
         })
         .map_err(map_sqlite)?;
 
     let mut pinned = Vec::new();
+    let mut spent = 0usize;
     for row in rows {
-        let (id, title, pinned_at, pinned_type, pin_order_key, order_type, root_type) = match row {
-            Ok(values) => values,
-            // A value SQLite cannot give this reader as the column's type is not T3's shape.
-            Err(rusqlite::Error::InvalidColumnType(..)) => return Err(shape()),
-            Err(error) => return Err(map_sqlite(error)),
-        };
+        let (id, title, pinned_at, pinned_type, pin_order_key, order_type, root_type, lineage_type, parent_type) =
+            match row {
+                Ok(values) => values,
+                // A value SQLite cannot give this reader as the column's type is not T3's shape.
+                Err(rusqlite::Error::InvalidColumnType(..)) => return Err(shape()),
+                Err(error) => return Err(map_sqlite(error)),
+            };
         if root_type.as_deref() != Some("object")
             || !matches!(pinned_type.as_deref(), Some("text" | "integer" | "real"))
             || !matches!(order_type.as_deref(), Some("text" | "integer" | "real"))
         {
             return Err(shape());
         }
+        if let Lineage::Child = lineage_of(lineage_type.as_deref(), parent_type.as_deref())? {
+            continue;
+        }
+        let pinned_at = scalar(pinned_at)?;
+        let pin_order_key = scalar(pin_order_key)?;
+        // The read's own budget: refuse the whole read past either bound, never truncate.
+        spent += id.len()
+            + title.len()
+            + serde_json::to_string(&pinned_at).map(|text| text.len()).unwrap_or(0)
+            + serde_json::to_string(&pin_order_key)
+                .map(|text| text.len())
+                .unwrap_or(0);
+        if pinned.len() >= MAX_PINNED_ROWS || spent > MAX_PIN_BYTES {
+            return Err(limit());
+        }
         pinned.push(PinnedThread {
             id,
             title,
-            pinned_at: scalar(pinned_at)?,
-            pin_order_key: scalar(pin_order_key)?,
+            pinned_at,
+            pin_order_key,
         });
     }
     Ok(pinned)
@@ -214,7 +269,7 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
 
 /// The columns the remote query returns, and the only keys a row of `sqlite3 -json` output
 /// may carry: exactly the SELECT above, aliased, nothing else.
-const REMOTE_KEYS: [&str; 7] = [
+const REMOTE_KEYS: [&str; 9] = [
     "thread_id",
     "title",
     "pinnedAt",
@@ -222,6 +277,8 @@ const REMOTE_KEYS: [&str; 7] = [
     "pinOrderKey",
     "orderType",
     "rootType",
+    "lineageType",
+    "parentType",
 ];
 
 /// One value of the remote output with its `json_type` name, checked against each other the
@@ -245,14 +302,26 @@ fn remote_scalar(row: &serde_json::Map<String, Json>, value_key: &str, type_key:
     }
 }
 
+/// One remote type column as [`lineage_of`] takes it: JSON null means SQLite had no value
+/// there (the path found nothing); a string is a `json_type` name; anything else is a
+/// changed shape.
+fn remote_type_name(value: &Json) -> Result<Option<&str>> {
+    match value {
+        Json::Null => Ok(None),
+        Json::String(name) => Ok(Some(name.as_str())),
+        _ => Err(shape()),
+    }
+}
+
 /// The `sqlite3 -json` text one remote machine printed for the pinned-threads query, parsed
 /// with the same shape checks as the local read (`read_pinned_threads`): an array of row
 /// objects carrying exactly the query's aliased columns, a text/integer/real scalar for
 /// `pinnedAt` and `pinOrderKey` that matches its declared `json_type`, a payload root that
-/// is an object. The query's WHERE clause already applied the same top-level, unarchived,
-/// undeleted, pinned predicate, so no row is filtered here. Empty output means no pinned
-/// threads on that machine. `machine` is one of [`PIN_MACHINES`]; any deviation is a caller
-/// error, not a shape claim.
+/// is an object. The query's WHERE clause applied the same unarchived, undeleted, pinned
+/// predicate; the top-level rule is decided here from the lineage shape facts the query
+/// carries, by the same `lineage_of` as the local read, so a wrong-typed lineage is refused
+/// instead of read as "no parent". Empty output means no pinned threads on that machine.
+/// `machine` is one of [`PIN_MACHINES`]; any deviation is a caller error, not a shape claim.
 pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>> {
     if !PIN_MACHINES.contains(&machine) {
         return Err(Error::new("invalid", "unknown machine for remote pins"));
@@ -276,6 +345,15 @@ pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>>
         };
         if root_type != "object" {
             return Err(shape());
+        }
+        // A type column prints as JSON null when SQLite had no value there (the path found
+        // nothing); every other shape is a changed shape, as the scalar checks below are.
+        let lineage = lineage_of(
+            remote_type_name(row.get("lineageType").ok_or_else(shape)?)?,
+            remote_type_name(row.get("parentType").ok_or_else(shape)?)?,
+        )?;
+        if let Lineage::Child = lineage {
+            continue;
         }
         let (Some(Json::String(id)), Some(Json::String(title))) = (row.get("thread_id"), row.get("title")) else {
             return Err(shape());

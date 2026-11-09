@@ -13,6 +13,7 @@ import type { NativeStatusHandle } from '../../status-native/native-loader';
 import {
   MISSING_GRACE_MS,
   PERSISTENT_LISTING_ERROR,
+  SEQ_WENT_BACK,
   TransientMisses,
   folderRowProblem,
   isTransientShareError,
@@ -47,8 +48,9 @@ export interface StatusDocsState {
   problems: Array<{ file: string; reason: string; since: number }>;
 }
 
-/** As many writers as the agent-reports reader reads. */
-export const STATUS_DOCS_LIMITS = { writers: 200 };
+/** As many writers as the agent-reports reader reads, and how many documents stay retained
+ * across scans (not just this scan's selection). */
+export const STATUS_DOCS_LIMITS = { writers: 200, retained: 200 };
 
 /** A handle to the native module, or null when it is not available (the caller says so). */
 export type StatusHandle = () => NativeStatusHandle | null;
@@ -68,6 +70,8 @@ export class StatusDocsReader {
   private state: StatusDocsState['state'] = 'missing';
   private scannedAt: number | null = null;
   private scanning: Promise<boolean> | null = null;
+  /** The named problem while retained documents were dropped past the retained limit. */
+  private retainedOver: { count: number; limit: number; since: number } | null = null;
 
   constructor(
     private readonly options: {
@@ -75,6 +79,7 @@ export class StatusDocsReader {
       now?: () => number;
       fs?: ReaderFs;
       handle?: StatusHandle;
+      limits?: Partial<typeof STATUS_DOCS_LIMITS>;
     } = {}
   ) {}
 
@@ -104,25 +109,63 @@ export class StatusDocsReader {
   private async runScan(): Promise<boolean> {
     const now = this.now();
     const handle = this.options.handle?.() ?? null;
-    let writers: string[] | null;
+    let writers: string[];
     try {
       writers = await this.listWriters();
     } catch (error) {
       return this.rootListingFailed(error, handle, now);
     }
-    if (!handle || !writers) {
-      // Without the native module there is nothing to validate against; without a writers
-      // folder there are no documents. Either way this scan only stamps its time.
+    if (!handle) {
+      // Without the native module there is nothing to validate against; this scan only
+      // stamps its time.
       this.scannedAt = now;
       return false;
     }
+    const limits = { ...STATUS_DOCS_LIMITS, ...this.options.limits };
     let changed = false;
     const failedListings = new Set<string>();
-    for (const writer of writers) {
+    const scanned = await newestFolders(writers, limits.writers, (name) =>
+      this.fs.stat(`${this.root}/v1/writers/${name}`)
+    );
+    for (const writer of scanned) {
       if (await this.scanWriter(writer, handle, now, failedListings)) changed = true;
     }
     // A folder listed well this scan (or not tried) starts over.
     this.listingMisses.keepOnly(failedListings);
+    // Reconcile the retained entries against this successful complete listing: a writer
+    // folder that is no longer listed was withdrawn, which starts the same removal grace as
+    // a missing status.json and ends the same way. A failed listing never reaches here, so
+    // a failure stays distinct from a successful absence. Writers listed but past the scan's
+    // own limit were not tried, not withdrawn; their entries are left to the bound below.
+    const listed = new Set(writers);
+    for (const [rel, entry] of [...this.entries]) {
+      if (listed.has(entry.writer)) continue;
+      entry.missingSince ??= now;
+      if (now - entry.missingSince > MISSING_GRACE_MS) {
+        this.entries.delete(rel);
+        changed = true;
+      }
+    }
+    // The retained documents themselves are bounded, not just this scan's selection:
+    // documents left by writers that fell out of the scan or the listing cannot pile up
+    // without end. Past the bound the oldest-written are dropped, and that is named as a
+    // problem, never done silently.
+    const over = this.entries.size - limits.retained;
+    if (over > 0) {
+      const oldest = [...this.entries.values()]
+        .sort((a, b) => a.writtenAtMs - b.writtenAtMs || a.writer.localeCompare(b.writer))
+        .slice(0, over);
+      for (const entry of oldest) this.entries.delete(`writers/${entry.writer}/status.json`);
+      this.retainedOver = {
+        count: over,
+        limit: limits.retained,
+        since: this.retainedOver?.since ?? now,
+      };
+      changed = true;
+    } else if (this.retainedOver) {
+      this.retainedOver = null;
+      changed = true;
+    }
     this.scannedAt = now;
     this.state = 'ok';
     return changed;
@@ -269,8 +312,12 @@ export class StatusDocsReader {
     if (!parsed.ok)
       return this.recordProblem(rel, writer, held, `status.json ${parsed.reason}`, now);
 
-    // A copy older than one already read is not the document; the scan keeps the higher seq.
-    if (held && parsed.seq < held.seq && !held.problem) return false;
+    // A copy older than one already read is not the document, whatever problem the held copy
+    // currently carries (the agent-reports reader's rule, applied to its good copy): the
+    // scan keeps the newer copy and names why the lower one was not used, until a copy with
+    // a same-or-higher seq arrives and clears it.
+    if (held && held.sha256 !== '' && parsed.seq < held.seq)
+      return this.markUnreadable(held, `status.json ${SEQ_WENT_BACK}`, now);
     if (held && held.sha256 === parsed.sha256 && !held.problem) return false;
     this.entries.set(rel, {
       writer,
@@ -323,15 +370,13 @@ export class StatusDocsReader {
     return changed;
   }
 
-  /** Lists the writers root; a listing failure is thrown to `runScan`, which owns its rule. */
+  /** Lists the writers root (every valid writer name); a listing failure is thrown to
+   * `runScan`, which owns its rule. */
   private async listWriters(): Promise<string[]> {
     const names: fs.Dirent[] = await this.fs.readdir(`${this.root}/v1/writers`);
-    const writers = names
+    return names
       .filter((entry) => entry.isDirectory() && /^[a-z0-9][a-z0-9.-]*$/i.test(entry.name))
       .map((entry) => entry.name);
-    return newestFolders(writers, STATUS_DOCS_LIMITS.writers, (name) =>
-      this.fs.stat(`${this.root}/v1/writers/${name}`)
-    );
   }
 
   snapshot(): StatusDocsState {
@@ -353,6 +398,14 @@ export class StatusDocsReader {
         reason: entry.problem?.reason ?? '',
         since: entry.problem?.since ?? 0,
       }));
+    if (this.retainedOver) {
+      const { count, limit, since } = this.retainedOver;
+      problems.push({
+        file: 'limits/status-docs',
+        reason: `${count} documents past the retained limit of ${limit} were not kept (the most recently written are kept)`,
+        since,
+      });
+    }
     return { state: this.state, scannedAt: this.scannedAt, docs, problems };
   }
 }

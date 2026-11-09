@@ -5,6 +5,7 @@ use aac_status::pins::{MachinePins, PinnedThread, merge_pins, parse_remote_pins}
 use serde_json::{Value, json};
 
 fn row(id: &str, title: &str, pinned: Value, pinned_type: &str, order: Value, order_type: &str) -> Value {
+    // A top-level row: no lineage at all, so both lineage columns print null.
     json!({
         "thread_id": id,
         "title": title,
@@ -13,6 +14,8 @@ fn row(id: &str, title: &str, pinned: Value, pinned_type: &str, order: Value, or
         "pinOrderKey": order,
         "orderType": order_type,
         "rootType": "object",
+        "lineageType": null,
+        "parentType": null,
     })
 }
 
@@ -66,7 +69,7 @@ fn one_machines_rows_parse_with_the_same_fields_as_the_local_read() {
 #[test]
 fn sqlite_wraps_long_output_across_lines_and_empty_output_means_no_pins() {
     // sqlite3 -json prints one row object per line inside the array; both parse the same.
-    let wrapped = "[{\"thread_id\":\"a\",\"title\":\"A\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\"},\n{\"thread_id\":\"b\",\"title\":\"B\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\"}]";
+    let wrapped = "[{\"thread_id\":\"a\",\"title\":\"A\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null},\n{\"thread_id\":\"b\",\"title\":\"B\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null}]";
     assert_eq!(parse_remote_pins("nas1", wrapped).unwrap().len(), 2);
     // Zero rows print nothing at all; a blank answer is an empty list, not a failure.
     assert!(parse_remote_pins("nas1", "").unwrap().is_empty());
@@ -119,6 +122,58 @@ fn a_changed_shape_is_refused_never_guessed() {
         parse_remote_pins("mac", &format!("[{nulls}]")).unwrap_err().code,
         "shape"
     );
+}
+
+#[test]
+fn lineage_shape_facts_decide_top_level_and_wrong_shapes_are_refused() {
+    // The query carries the lineage's own json_type facts; the parser applies the same rule
+    // as the local read: absent, null, or an object whose parent is absent or null is
+    // top-level, an object with a thread-id parent is a child, and every other shape is a
+    // changed shape for that machine (Astra M1), never a silently included or excluded row.
+    let mut child = row("child", "Child", json!("x"), "text", json!("k"), "text");
+    child["lineageType"] = json!("object");
+    child["parentType"] = json!("text");
+    let mut object_null = row(
+        "object-null",
+        "Object null parent",
+        json!("x"),
+        "text",
+        json!("k"),
+        "text",
+    );
+    object_null["lineageType"] = json!("object");
+    object_null["parentType"] = json!("null");
+    let bare = row("bare", "No lineage", json!("x"), "text", json!("k"), "text");
+    let rows = parse_remote_pins("mac", &format!("[{child},{object_null},{bare}]")).unwrap();
+    let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+    assert_eq!(ids, ["object-null", "bare"]);
+
+    // A `lineage` that is JSON null prints "null" in its type column: top-level too.
+    let mut null_lineage = row("null-lineage", "Null lineage", json!("x"), "text", json!("k"), "text");
+    null_lineage["lineageType"] = json!("null");
+    assert_eq!(parse_remote_pins("mac", &format!("[{null_lineage}]")).unwrap().len(), 1);
+
+    // Any other lineage container, or an object whose parent is not absent/null/text, is a
+    // shape refusal.
+    for (lineage, parent) in [
+        (json!("array"), json!(null)),
+        (json!("text"), json!(null)),
+        (json!("integer"), json!(null)),
+        (json!("true"), json!(null)),
+        (json!("object"), json!("integer")),
+        (json!("object"), json!("object")),
+        (json!("object"), json!("array")),
+        (json!("object"), json!("false")),
+    ] {
+        let mut bad = row("drift", "Drift", json!("x"), "text", json!("k"), "text");
+        bad["lineageType"] = lineage.clone();
+        bad["parentType"] = parent.clone();
+        assert_eq!(
+            parse_remote_pins("mac", &format!("[{bad}]")).unwrap_err().code,
+            "shape",
+            "lineageType {lineage} parentType {parent} must be refused"
+        );
+    }
 }
 
 #[test]

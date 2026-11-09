@@ -15,7 +15,7 @@ fn unknown_method_is_refused_with_a_fixed_code() {
 fn remote_pin_answers_round_trip_through_the_dispatch() {
     let ok = answer(
         "parseRemotePins",
-        r#"{ "machine": "mac", "json": "[{\"thread_id\":\"t\",\"title\":\"T\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\"}]" }"#,
+        r#"{ "machine": "mac", "json": "[{\"thread_id\":\"t\",\"title\":\"T\",\"pinnedAt\":\"x\",\"pinnedType\":\"text\",\"pinOrderKey\":\"k\",\"orderType\":\"text\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null}]" }"#,
     );
     assert_eq!(ok["ok"], serde_json::json!(true));
     assert_eq!(ok["pinned"][0]["id"], "t");

@@ -30,6 +30,7 @@ export interface MergedPin extends PinnedThread {
 function pinsUnavailableSentence(code: unknown): string {
   if (code === 'missing') return "T3's state file is missing";
   if (code === 'shape') return "T3's state file changed shape";
+  if (code === 'limit') return "T3's state file is past this reader's pin limits";
   return "T3's state file could not be read";
 }
 

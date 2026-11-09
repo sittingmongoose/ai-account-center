@@ -113,14 +113,15 @@ describe('the sequence cap across the two readers', () => {
     expect(doc.doc.summary).toBe('Revision A');
     expect(doc.problem).toBeNull();
 
-    // A lower safe sequence is not the document: the higher seq stays, no problem named.
+    // A lower safe sequence is not the document: the higher seq stays and the rollback is
+    // said (the agent-reports reader's rule), until a same-or-higher seq arrives.
     version += 1;
     source = statusSource('4', 'Revision B');
     await read.scan();
     doc = read.snapshot().docs[0];
     expect(doc.seq).toBe(9007199254740991);
     expect(doc.doc.summary).toBe('Revision A');
-    expect(doc.problem).toBeNull();
+    expect(doc.problem?.reason).toContain('seq is lower');
 
     // 2^53 and 2^53+1 arrive: both refused by both readers, the last good copy stays and
     // the refusal is named on it.

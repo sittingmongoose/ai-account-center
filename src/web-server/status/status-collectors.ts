@@ -939,11 +939,15 @@ export async function readRemoteMachine(
 
 /**
  * The pinned-threads query, the same predicate and order the aac-status native module's local
- * read uses: top-level (no parent), unarchived, undeleted, `pinnedAt` set, in `pinOrderKey`
- * order. Only `orchestration_v2_projection_threads` is touched; a database of any size reads
- * the same one table.
+ * read uses: unarchived, undeleted, `pinnedAt` set, in `pinOrderKey` order, each row with the
+ * lineage shape facts (`lineageType`, `parentType`) the native parser needs to apply the same
+ * top-level rule as the local read — a lineage that is absent, null, or an object whose
+ * parentThreadId is absent or null; a wrong-typed lineage is the parser's `shape` refusal,
+ * because a path extract cannot tell "no parent" from "a lineage a path cannot walk". Only
+ * `orchestration_v2_projection_threads` is touched; a database of any size reads the same
+ * one table.
  */
-export const PINNED_THREADS_QUERY = `SELECT thread_id, title, json_extract(payload_json, '$.pinnedAt') AS pinnedAt, json_type(payload_json, '$.pinnedAt') AS pinnedType, json_extract(payload_json, '$.pinOrderKey') AS pinOrderKey, json_type(payload_json, '$.pinOrderKey') AS orderType, json_type(payload_json) AS rootType FROM orchestration_v2_projection_threads WHERE archived_at IS NULL AND deleted_at IS NULL AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL AND json_extract(payload_json, '$.lineage.parentThreadId') IS NULL ORDER BY json_extract(payload_json, '$.pinOrderKey') ASC, thread_id ASC`;
+export const PINNED_THREADS_QUERY = `SELECT thread_id, title, json_extract(payload_json, '$.pinnedAt') AS pinnedAt, json_type(payload_json, '$.pinnedAt') AS pinnedType, json_extract(payload_json, '$.pinOrderKey') AS pinOrderKey, json_type(payload_json, '$.pinOrderKey') AS orderType, json_type(payload_json) AS rootType, json_type(payload_json, '$.lineage') AS lineageType, json_type(payload_json, '$.lineage.parentThreadId') AS parentType FROM orchestration_v2_projection_threads WHERE archived_at IS NULL AND deleted_at IS NULL AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL ORDER BY json_extract(payload_json, '$.pinOrderKey') ASC, thread_id ASC`;
 
 /** The sqlite3 that answers the pins query on each host. Mac first on PATH is an Android SDK
  * copy, so the fixed /usr/bin one; Windows has chocolatey's, in ProgramData. */

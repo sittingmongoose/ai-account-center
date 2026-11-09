@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'bun:test';
+import * as fs from 'fs';
+import { Database } from 'bun:sqlite';
+import * as os from 'os';
+import * as path from 'path';
 import {
   PINNED_THREADS_QUERY,
   readRemotePins,
@@ -6,6 +10,17 @@ import {
   type CommandRunner,
 } from '../../../src/web-server/status/status-collectors';
 import { APP_UPDATE_SSH_HOSTS } from '../../../src/web-server/services/app-update-hosts';
+import { openStatusHandle, parseRemotePins } from '../../../src/status-native/pinned';
+import { nativeStatusModuleName } from '../../../src/status-native/native-loader';
+
+/** The module `bun run status:build` leaves behind; this check needs the real parser. */
+const PREBUILT = path.join(
+  import.meta.dir,
+  '../../../native/aac-status/prebuilt',
+  nativeStatusModuleName()
+);
+const hasModule = fs.existsSync(PREBUILT);
+const withModule = hasModule ? it : it.skip;
 
 /** A runner that records the invocation and answers a fixed result. */
 function fakeRun(result: {
@@ -90,5 +105,62 @@ describe('readRemotePins', () => {
       await readRemotePins(machine, run);
       expect(calls[0].args).toContain(alias);
     }
+  });
+});
+
+describe('PINNED_THREADS_QUERY against the real parser', () => {
+  /** A fixture database with the projection table and the rows given, as `sqlite3 -json` would print them. */
+  function remoteRows(rows: Array<{ id: string; title: string; payload: Record<string, unknown> }>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-remote-pins-'));
+    try {
+      const db = new Database(path.join(dir, 'statev2.sqlite'));
+      db.exec(
+        'CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY, title TEXT, archived_at TEXT, deleted_at TEXT, payload_json TEXT)'
+      );
+      const insert = db.prepare(
+        "INSERT INTO orchestration_v2_projection_threads VALUES (?,?,NULL,NULL,?)"
+      );
+      for (const row of rows) insert.run(row.id, row.title, JSON.stringify(row.payload));
+      const printed = JSON.stringify(db.prepare(PINNED_THREADS_QUERY).all());
+      db.close();
+      return printed;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  withModule('a wrong-typed lineage is a shape refusal, not a top-level pin', async () => {
+    const opened = openStatusHandle({ file: PREBUILT });
+    expect(!('unavailable' in opened)).toBe(true);
+    const handle = 'unavailable' in opened ? null : opened;
+    if (!handle) throw new Error('module unavailable');
+
+    // T3's lineage is an object with a parentThreadId, or absent. A pinned row whose lineage
+    // is another container once read as top-level, because the parent extract cannot walk
+    // into it; the query now carries the shape facts and the parser refuses the machine.
+    const printed = remoteRows([
+      {
+        id: 'child-after-drift',
+        title: 'Child after schema drift',
+        payload: { pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'a', lineage: [{ parentThreadId: 'parent-fixture' }] },
+      },
+    ]);
+    const refused = await parseRemotePins('mac', printed, { handle });
+    expect('unavailable' in refused && refused.unavailable).toBe('shape');
+  });
+
+  withModule('a real child and real top-level rows still parse by their lineage shape', async () => {
+    const opened = openStatusHandle({ file: PREBUILT });
+    expect(!('unavailable' in opened)).toBe(true);
+    const handle = 'unavailable' in opened ? null : opened;
+    if (!handle) throw new Error('module unavailable');
+
+    const printed = remoteRows([
+      { id: 'child', title: 'Child', payload: { pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'a', lineage: { parentThreadId: 'top' } } },
+      { id: 'top-null', title: 'Top null parent', payload: { pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'b', lineage: { parentThreadId: null } } },
+      { id: 'top-bare', title: 'Top no lineage', payload: { pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'c' } },
+    ]);
+    const parsed = await parseRemotePins('mac', printed, { handle });
+    expect('pinned' in parsed && parsed.pinned.map((pin) => pin.id)).toEqual(['top-null', 'top-bare']);
   });
 });

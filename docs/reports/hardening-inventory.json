@@ -800,7 +800,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1006
+          "loc": 1010
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",

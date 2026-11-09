@@ -200,6 +200,113 @@ fn a_missing_file_is_missing_not_an_error_to_guess_around() {
 }
 
 #[test]
+fn a_wrong_typed_lineage_is_a_shape_refusal_never_a_top_level_pin() {
+    // T3's `lineage` is an object with a `parentThreadId`, or absent. A pinned row whose
+    // lineage is another container once read as top-level, because the parent extract cannot
+    // walk into it (Astra M1); it is a changed shape, never a guessed pin.
+    for wrong in [
+        json!([{ "parentThreadId": "parent-fixture" }]),
+        json!("parent-fixture"),
+        json!(7),
+        json!(true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (file, conn) = fixture(dir.path());
+        insert(
+            &conn,
+            "drift",
+            "Drift",
+            None,
+            None,
+            &json!({
+                "id": "drift", "title": "Drift",
+                "pinnedAt": "2026-11-08T10:00:00Z", "pinOrderKey": "a",
+                "lineage": wrong
+            })
+            .to_string(),
+        );
+        drop(conn);
+        assert_eq!(
+            read_pinned_threads(&file).unwrap_err().code,
+            "shape",
+            "lineage {wrong} must be refused"
+        );
+    }
+
+    // An object whose parent is neither absent, null nor a thread-id string is a change too:
+    // the row was once silently excluded, which is just as much a guess.
+    for wrong in [json!(7), json!({}), json!([]), json!(false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let (file, conn) = fixture(dir.path());
+        insert(
+            &conn,
+            "drift",
+            "Drift",
+            None,
+            None,
+            &json!({
+                "id": "drift", "title": "Drift",
+                "pinnedAt": "2026-11-08T10:00:00Z", "pinOrderKey": "a",
+                "lineage": { "parentThreadId": wrong }
+            })
+            .to_string(),
+        );
+        drop(conn);
+        assert_eq!(
+            read_pinned_threads(&file).unwrap_err().code,
+            "shape",
+            "parentThreadId {wrong} must be refused"
+        );
+    }
+}
+
+#[test]
+fn a_local_read_past_its_budget_is_refused_never_silently_truncated() {
+    // The remote route's caps (a fixed byte budget per read) as the local read's model
+    // (Astra L1): past the budget the read is a fixed refusal, never a truncated list. The
+    // sizes here are one past this reader's `MAX_PIN_BYTES` (1 MiB) and `MAX_PINNED_ROWS`
+    // (1000), which the check in `read_pinned_threads` enforces.
+
+    // One row whose title alone passes the byte budget (the review's 2 MiB title).
+    let bytes_dir = tempfile::tempdir().unwrap();
+    let (file, conn) = fixture(bytes_dir.path());
+    insert(
+        &conn,
+        "big",
+        &"x".repeat(2 * 1024 * 1024),
+        None,
+        None,
+        &json!({
+            "id": "big", "pinnedAt": "2026-11-08T10:00:00Z", "pinOrderKey": "a",
+            "lineage": null
+        })
+        .to_string(),
+    );
+    drop(conn);
+    assert_eq!(read_pinned_threads(&file).unwrap_err().code, "limit");
+
+    // More rows than the count budget, each tiny.
+    let rows_dir = tempfile::tempdir().unwrap();
+    let (file, conn) = fixture(rows_dir.path());
+    for index in 0..=1000_u32 {
+        insert(
+            &conn,
+            &format!("row-{index}"),
+            "Row",
+            None,
+            None,
+            &json!({
+                "id": format!("row-{index}"), "pinnedAt": "2026-11-08T10:00:00Z",
+                "pinOrderKey": index, "lineage": null
+            })
+            .to_string(),
+        );
+    }
+    drop(conn);
+    assert_eq!(read_pinned_threads(&file).unwrap_err().code, "limit");
+}
+
+#[test]
 fn a_changed_shape_is_reported_never_guessed() {
     let dir = tempfile::tempdir().unwrap();
 

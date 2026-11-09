@@ -32,7 +32,7 @@ export type PinsMachine = 'vm' | 'mac' | 'windows' | 'nas1';
 export const PINS_MACHINES: readonly PinsMachine[] = ['vm', 'mac', 'windows', 'nas1'];
 
 /** Why one machine's pins are absent: a fixed code the composer puts in words. */
-export type PinsProblemCode = 'did_not_answer' | 'shape' | 'missing' | 'io';
+export type PinsProblemCode = 'did_not_answer' | 'shape' | 'missing' | 'io' | 'limit';
 
 interface MachineState {
   lastGood: PinnedThread[] | null;
@@ -173,7 +173,11 @@ export class PinnedThreadsCollector {
       return 'io';
     }
     const record = answer as Record<string, unknown>;
-    if (record.unavailable === 'missing' || record.unavailable === 'shape') {
+    if (
+      record.unavailable === 'missing' ||
+      record.unavailable === 'shape' ||
+      record.unavailable === 'limit'
+    ) {
       return record.unavailable;
     }
     if (!Array.isArray(record.pinned)) return 'io';

@@ -4,8 +4,9 @@
 //!
 //! Methods:
 //! - `pins` `{ dbPath?: string | null }` -> `{ pinned: [...] }`, or
-//!   `{ unavailable: "missing" | "shape" | "io" }` when T3's state file cannot be read as
-//!   expected. Unavailability is an answer, not a rejected call.
+//!   `{ unavailable: "missing" | "shape" | "io" | "limit" }` when T3's state file cannot be
+//!   read as expected (or is past this reader's pin limits). Unavailability is an answer,
+//!   not a rejected call.
 //! - `parseRemotePins` `{ machine, json }` -> `{ ok: true, pinned: [...] }`, or
 //!   `{ ok: false, reason: "shape" }` when a machine's `sqlite3 -json` answer is not the
 //!   shape T3's state file has. The ssh run itself is the caller's; a machine that did not
