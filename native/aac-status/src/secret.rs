@@ -3,6 +3,11 @@
 //! full): the same patterns in the same order, the same decoded walk over every key and
 //! string, the same embedded-JSON budget, the same unescape passes. A file that matches one
 //! is refused whole; the matched text is never shown, only the kind.
+//!
+//! Every word boundary is written `(?-u:\b)`, JavaScript's ASCII `\b` the patterns were
+//! ported from: a non-ASCII letter (say `密`) is not a word character to it, so a token
+//! directly after one still has its leading boundary and is refused the same. `\s` stays
+//! Unicode, as it is on the TypeScript side.
 
 use regex::Regex;
 use serde_json::Value as Json;
@@ -29,39 +34,42 @@ fn patterns() -> Vec<(&'static str, Check)> {
         ),
         (
             "an API key",
-            Check::Pattern(static_regex!(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}")),
+            Check::Pattern(static_regex!(r"(?-u:\b)sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}")),
         ),
         (
             "a GitHub token",
             Check::Pattern(static_regex!(
-                r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"
+                r"(?-u:\b)(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"
             )),
         ),
         (
             "a Slack token",
-            Check::Pattern(static_regex!(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
+            Check::Pattern(static_regex!(r"(?-u:\b)xox[abposr]-[A-Za-z0-9-]{10,}")),
         ),
-        ("an AWS key", Check::Pattern(static_regex!(r"\bAKIA[0-9A-Z]{16}\b"))),
+        (
+            "an AWS key",
+            Check::Pattern(static_regex!(r"(?-u:\b)AKIA[0-9A-Z]{16}(?-u:\b)")),
+        ),
         (
             "a GitLab token",
-            Check::Pattern(static_regex!(r"\bglpat-[A-Za-z0-9_-]{20,}")),
+            Check::Pattern(static_regex!(r"(?-u:\b)glpat-[A-Za-z0-9_-]{20,}")),
         ),
         (
             "an npm token",
-            Check::Pattern(static_regex!(r"\bnpm_[A-Za-z0-9]{36}\b")),
+            Check::Pattern(static_regex!(r"(?-u:\b)npm_[A-Za-z0-9]{36}(?-u:\b)")),
         ),
         (
             "a Hugging Face token",
-            Check::Pattern(static_regex!(r"\bhf_[A-Za-z0-9]{30,}\b")),
+            Check::Pattern(static_regex!(r"(?-u:\b)hf_[A-Za-z0-9]{30,}(?-u:\b)")),
         ),
         (
             "a Google API key",
-            Check::Pattern(static_regex!(r"\bAIza[0-9A-Za-z_-]{35}")),
+            Check::Pattern(static_regex!(r"(?-u:\b)AIza[0-9A-Za-z_-]{35}")),
         ),
         ("a JSON web token", Check::Jwt),
         (
             "a bearer token",
-            Check::Pattern(static_regex!(r"(?i)\bBearer\s+[A-Za-z0-9._~+/\-]{20,}")),
+            Check::Pattern(static_regex!(r"(?i)(?-u:\b)Bearer\s+[A-Za-z0-9._~+/\-]{20,}")),
         ),
         (
             "a credential field",
@@ -101,7 +109,7 @@ fn is_email_local(c: char) -> bool {
 /// `local@domain.tld`: one local character before an `@` and a domain after it.
 fn has_email_address(text: &str) -> bool {
     static DOMAIN: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b").expect("domain"));
+        LazyLock::new(|| Regex::new(r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?-u:\b)").expect("domain"));
     let chars: Vec<char> = text.chars().collect();
     for (at, c) in chars.iter().enumerate() {
         if *c != '@' || at == 0 || !is_email_local(chars[at - 1]) {

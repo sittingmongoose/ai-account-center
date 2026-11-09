@@ -223,6 +223,51 @@ fn anything_that_looks_like_a_secret_is_refused_whole() {
 }
 
 #[test]
+fn a_non_ascii_letter_on_either_side_of_a_token_still_leaves_its_boundary() {
+    // The TypeScript reader's `\b` is ASCII: a non-ASCII letter is not a word character to
+    // it, so a token directly after one keeps its leading boundary (and before one, its
+    // trailing). Every boundary here is ASCII the same way, so each family is refused with
+    // a CJK letter on either side of the token. Token-shaped fixtures are joined at runtime
+    // so this source file holds none whole.
+    let cjk = "\u{5bc6}"; // a CJK letter a summary might carry
+    let jwt = [
+        "eyJhbGciOiJIUzI1NiJ5dCI6IkpXVCJ9",
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+        "signaturepart",
+    ]
+    .join(".");
+    let families: Vec<(&str, String)> = vec![
+        ("an API key", ["sk", "ant", &"a".repeat(24)].join("-")),
+        ("an API key", ["sk", &"a".repeat(24)].join("-")),
+        ("a GitHub token", format!("{}{}", ["gh", "p_"].join(""), "b".repeat(30))),
+        ("a GitHub token", format!("{}{}", "github_pat_", "b".repeat(30))),
+        ("a Slack token", format!("{}{}", "xoxa-", "c".repeat(12))),
+        ("an AWS key", format!("{}{}", "AKIA", "0DEF".repeat(4))),
+        ("a GitLab token", format!("{}{}", "glpat-", "e".repeat(22))),
+        ("an npm token", format!("{}{}", "npm_", "f".repeat(36))),
+        ("a Hugging Face token", format!("{}{}", "hf_", "g".repeat(32))),
+        ("a Google API key", format!("{}{}", "AIza", "h".repeat(35))),
+        ("a JSON web token", jwt),
+        (
+            "a bearer token",
+            format!("{}{}", ["Bear", "er "].join(""), "i".repeat(24)),
+        ),
+        ("an email address", "agent@example.co".to_string()),
+    ];
+    for (kind, token) in families {
+        for summary in [format!("{cjk}{token}"), format!("{token}{cjk}")] {
+            let mut doc = valid();
+            doc["summary"] = json!(summary);
+            assert_eq!(
+                parse(&doc).unwrap_err(),
+                format!("refused: it contains what looks like {kind}"),
+                "token family {kind} with a non-ASCII letter around it"
+            );
+        }
+    }
+}
+
+#[test]
 fn an_escaped_secret_is_still_a_secret() {
     // The file as written hides the token behind a \\u escape; the decoded walk sees it.
     let bytes = br#"{"schema":"agent-reports/status@1","writer":"vm.example","seq":1,"writtenAt":"2026-11-08T16:00:00Z","t3Thread":"t-1","summary":"key is \u0073k-ant-abcdefghijklmnopqrstuvwxyz0123456789 ok"}"#;

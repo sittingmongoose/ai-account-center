@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { NativeStatusHandle } from '../../../src/status-native/native-loader';
 import type { PinnedThread } from '../../../src/status-native/pinned';
 import {
@@ -205,6 +208,79 @@ describe('PinnedThreadsCollector', () => {
     expect((composeInputs.at(-1) as Record<string, unknown>).machineProblems).toEqual([
       { machine: 'vm', code: 'missing' },
     ]);
+  });
+
+  it('a failed share listing carries into the composer as an unreadable status document', async () => {
+    // The compose input is what the native composer words ("Could not be read since ...");
+    // here the real docs reader reads a fixture share whose writers folder then cannot be
+    // listed (EACCES: an ordinary read failure, not the share's rename-over race).
+    const composeInputs: unknown[] = [];
+    const handle: NativeStatusHandle = {
+      call: async (method, args) => {
+        const parsed = JSON.parse(args) as Record<string, unknown>;
+        if (method === 'pins') return JSON.stringify({ pinned: [] });
+        if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [] });
+        if (method === 'mergePins') return JSON.stringify({ pinned: [] });
+        if (method === 'parseStatus') {
+          const doc = JSON.parse(
+            Buffer.from(String(parsed.contentBase64), 'base64').toString('utf8')
+          ) as Record<string, unknown>;
+          return JSON.stringify({ ok: true, doc, sha256: `sha:${String(doc.seq)}` });
+        }
+        if (method === 'compose') {
+          composeInputs.push(parsed);
+          return JSON.stringify({
+            asOfMs: parsed.nowMs,
+            head: 'head',
+            counts: { pinned: 0, looping: 0, waitingOnYou: 0 },
+            machineProblems: [],
+            updates: [],
+          });
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-pinned-docs-'));
+    const writer = path.join(dir, 'v1/writers/vm.a');
+    fs.mkdirSync(writer, { recursive: true });
+    fs.writeFileSync(
+      path.join(writer, 'status.json'),
+      JSON.stringify({
+        schema: 'agent-reports/status@1',
+        writer: 'vm.a',
+        seq: 5,
+        writtenAt: '2026-11-08T05:00:00Z',
+        t3Thread: 't1',
+        summary: 'Sweeping.',
+      })
+    );
+    const collector = new PinnedThreadsCollector({
+      handle,
+      run: neverRun,
+      readRemote: async () => '[]',
+      now: () => 1_794_116_000_000,
+      reportsRoot: () => dir,
+    });
+    try {
+      await collector.collect();
+      await collector.scanStatusDocs();
+      await collector.compose(noReports, []);
+      let statuses = (composeInputs.at(-1) as Record<string, unknown>)
+        .statuses as Array<Record<string, unknown>>;
+      expect(statuses).toHaveLength(1);
+      expect(statuses[0].problem).toBeNull();
+
+      fs.chmodSync(path.join(dir, 'v1/writers'), 0o000);
+      await collector.scanStatusDocs();
+      await collector.compose(noReports, []);
+      statuses = (composeInputs.at(-1) as Record<string, unknown>)
+        .statuses as Array<Record<string, unknown>>;
+      expect(statuses[0].problem).toContain('folder could not be listed');
+      expect(typeof statuses[0].problemSinceMs).toBe('number');
+    } finally {
+      fs.chmodSync(path.join(dir, 'v1/writers'), 0o755);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('without the module the panel says so with the loader reason', async () => {

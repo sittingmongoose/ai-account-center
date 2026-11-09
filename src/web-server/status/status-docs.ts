@@ -10,12 +10,18 @@ import type fs from 'fs';
 import type { NativeStatusHandle } from '../../status-native/native-loader';
 import {
   MISSING_GRACE_MS,
+  PERSISTENT_LISTING_ERROR,
+  TransientMisses,
+  folderRowProblem,
   isTransientShareError,
   newestFolders,
   nodeReaderFs,
   type ReaderFs,
 } from './agent-reports-reader';
 import { STATUS_SIZE_CAP } from './status-size';
+
+/** The agent-reports reader's plain listing failure (the sibling of PERSISTENT_LISTING_ERROR). */
+const LISTING_ERROR = 'folder could not be listed';
 
 /** One writer's status document: the last good copy, and its current problem if any. */
 export interface SeenStatus {
@@ -54,6 +60,8 @@ interface Entry extends SeenStatus {
 export class StatusDocsReader {
   private readonly entries = new Map<string, Entry>();
   private readonly misses = new Map<string, number>();
+  /** Consecutive ENOENT/ESTALE listing failures, per folder (the agent-reports reader's rule). */
+  private readonly listingMisses = new TransientMisses();
   private state: StatusDocsState['state'] = 'missing';
   private scannedAt: number | null = null;
   private scanning: Promise<boolean> | null = null;
@@ -93,7 +101,12 @@ export class StatusDocsReader {
   private async runScan(): Promise<boolean> {
     const now = this.now();
     const handle = this.options.handle?.() ?? null;
-    const writers = await this.listWriters();
+    let writers: string[] | null;
+    try {
+      writers = await this.listWriters();
+    } catch (error) {
+      return this.rootListingFailed(error, handle, now);
+    }
     if (!handle || !writers) {
       // Without the native module there is nothing to validate against; without a writers
       // folder there are no documents. Either way this scan only stamps its time.
@@ -101,26 +114,99 @@ export class StatusDocsReader {
       return false;
     }
     let changed = false;
+    const failedListings = new Set<string>();
     for (const writer of writers) {
-      if (await this.scanWriter(writer, handle, now)) changed = true;
+      if (await this.scanWriter(writer, handle, now, failedListings)) changed = true;
     }
+    // A folder listed well this scan (or not tried) starts over.
+    this.listingMisses.keepOnly(failedListings);
     this.scannedAt = now;
     this.state = 'ok';
     return changed;
+  }
+
+  /**
+   * The writers root itself could not be listed. The reader keeps its state as ever (missing
+   * when the folder is not there, error otherwise), and every cached document is marked with
+   * the agent-reports reader's two-scan rule: one ENOENT/ESTALE miss is the share's race and
+   * says nothing, a second consecutive failure or any other error is named on the document,
+   * which stays as the last good copy, unreadable since the failure began.
+   */
+  private rootListingFailed(
+    error: unknown,
+    handle: NativeStatusHandle | null,
+    now: number
+  ): boolean {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    const next: StatusDocsState['state'] =
+      code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'error';
+    const changed = this.state !== next;
+    this.state = next;
+    this.scannedAt = now;
+    // The writer folders were not tried this scan: their own miss counts start over.
+    this.listingMisses.keepOnly(new Set(['writers']));
+    let reason: string;
+    let since = now;
+    if (isTransientShareError(error)) {
+      const first = this.listingMisses.miss('writers', now);
+      if (first === null) return changed; // The share's race: keep the last good copies quiet.
+      reason = PERSISTENT_LISTING_ERROR;
+      since = first;
+    } else {
+      reason = LISTING_ERROR;
+    }
+    let marked = changed;
+    if (handle) {
+      for (const entry of [...this.entries.values()]) {
+        if (this.markUnreadable(entry, folderRowProblem(reason), since)) marked = true;
+      }
+    }
+    return marked;
   }
 
   /** One writer's `status.json`. Resolves whether anything the view shows changed. */
   private async scanWriter(
     writer: string,
     handle: NativeStatusHandle,
-    now: number
+    now: number,
+    failedListings: Set<string>
   ): Promise<boolean> {
     const rel = `writers/${writer}/status.json`;
     let listed: fs.Dirent[];
     try {
       listed = await this.fs.readdir(`${this.root}/v1/writers/${writer}`);
-    } catch {
-      return false; // A writer folder that cannot be listed: its last copy stays as it was.
+    } catch (error) {
+      // A writer folder that cannot be listed: not listed is not withdrawn, and the
+      // agent-reports reader's rule names the failure — one ENOENT/ESTALE miss is the
+      // share's race, a second consecutive failure or any other error is said on the
+      // cached document, which stays as the last good copy.
+      let reason: string;
+      let since = now;
+      if (isTransientShareError(error)) {
+        failedListings.add(`writers/${writer}`);
+        const first = this.listingMisses.miss(`writers/${writer}`, now);
+        if (first === null) return false; // The share's race: its last copy stays as it was.
+        reason = PERSISTENT_LISTING_ERROR;
+        since = first;
+      } else {
+        reason = LISTING_ERROR;
+      }
+      const held = this.entries.get(rel) ?? null;
+      if (!held) {
+        // Nothing good to keep: an unlistable folder with no last copy is a problem alone.
+        this.entries.set(rel, {
+          writer,
+          doc: {},
+          sha256: '',
+          seq: 0,
+          writtenAtMs: 0,
+          problem: { reason: folderRowProblem(reason), since },
+          statKey: null,
+          missingSince: null,
+        });
+        return true;
+      }
+      return this.markUnreadable(held, folderRowProblem(reason), since);
     }
     const held = this.entries.get(rel) ?? null;
     if (!listed.some((entry) => entry.name === 'status.json')) {
@@ -196,6 +282,16 @@ export class StatusDocsReader {
     return true;
   }
 
+  /** Mark a held document unreadable: the same reason keeps the failure's first clock. */
+  private markUnreadable(entry: Entry, reason: string, since: number): boolean {
+    const held = entry.problem;
+    const problem = held?.reason === reason ? { reason, since: held.since } : { reason, since };
+    const changed = held?.reason !== problem.reason || held?.since !== problem.since;
+    entry.problem = problem;
+    entry.statKey = null; // Retry the read next scan.
+    return changed;
+  }
+
   private recordProblem(
     rel: string,
     writer: string,
@@ -224,16 +320,9 @@ export class StatusDocsReader {
     return changed;
   }
 
-  private async listWriters(): Promise<string[] | null> {
-    let names: fs.Dirent[];
-    try {
-      names = await this.fs.readdir(`${this.root}/v1/writers`);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException | null)?.code;
-      this.state = code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'error';
-      this.scannedAt = this.now();
-      return null;
-    }
+  /** Lists the writers root; a listing failure is thrown to `runScan`, which owns its rule. */
+  private async listWriters(): Promise<string[]> {
+    const names: fs.Dirent[] = await this.fs.readdir(`${this.root}/v1/writers`);
     const writers = names
       .filter((entry) => entry.isDirectory() && /^[a-z0-9][a-z0-9.-]*$/i.test(entry.name))
       .map((entry) => entry.name);

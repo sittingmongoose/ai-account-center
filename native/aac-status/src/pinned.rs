@@ -19,15 +19,42 @@ const LOOP_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 /// heartbeat said (section 1: "past its time-to-live, or a day").
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
-/// A review verdict that passed. The published schema shows `pass`; the sibling words are
-/// accepted so a reviewer's own spelling does not read as a failing round.
+/// A review verdict that passed, by any spelling the boards show: the published schema's
+/// `pass` and its sibling words, plus every wording that starts with `pass` (`PASS WITH
+/// FOLLOW-UPS`, `PASS WITH NOTES`, `PASS WITH NONBLOCKING FOLLOW-UPS`), so a passing review
+/// with follow-ups named never reads as a failing round.
 const PASSING_VERDICTS: [&str; 8] = [
     "pass", "passed", "approve", "approved", "approval", "lgtm", "clean", "ship",
 ];
 
+/// A review verdict that failed, the spellings the boards and reviewers write.
+const FAILING_VERDICTS: [&str; 6] = ["fail", "failed", "block", "blocked", "changes requested", "rejected"];
+
+/// How one review verdict reads for the loop rule (section 3): it passed, it failed, or it
+/// is unclear. Free text a reviewer may write is classified trimmed and case-insensitive;
+/// every other wording is unclear, and an unclear verdict never counts toward a loop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Verdict {
+    Pass,
+    Fail,
+    Unknown,
+}
+
+fn classify_verdict(verdict: &str) -> Verdict {
+    let text = verdict.trim().to_lowercase();
+    if text.starts_with("pass") || PASSING_VERDICTS.contains(&text.as_str()) {
+        return Verdict::Pass;
+    }
+    if FAILING_VERDICTS.contains(&text.as_str()) {
+        return Verdict::Fail;
+    }
+    Verdict::Unknown
+}
+
 /// The loop rule's counts (section 3): 3 or more failing reviews in a row, or 4 or more
-/// failing rounds since a passing one. A pass starts the count over, so the two measure the
-/// same stretch of a board whose reviews are written in order; both are checked anyway.
+/// failing rounds since a passing one. A pass (or an unclear verdict, which never counts as
+/// a round) starts the count over, so the two measure the same stretch of a board whose
+/// reviews are written in order; both are checked anyway.
 const LOOP_ROW_MIN: usize = 3;
 const LOOP_ROUNDS_MIN: usize = 4;
 
@@ -439,10 +466,6 @@ struct ItemLoop {
     rounds: usize,
 }
 
-fn is_passing(verdict: &str) -> bool {
-    PASSING_VERDICTS.contains(&verdict.trim().to_lowercase().as_str())
-}
-
 /// The loop count for one item, over the reviews inside the loop window. A review the
 /// item's board did not date counts too — an undatable fix round must not hide a loop.
 fn item_loop(item: &ItemIn, now_ms: i64) -> ItemLoop {
@@ -455,10 +478,12 @@ fn item_loop(item: &ItemIn, now_ms: i64) -> ItemLoop {
         if !in_window {
             continue;
         }
-        if is_passing(&review.verdict) {
-            rounds = 0;
-        } else {
-            rounds += 1;
+        match classify_verdict(&review.verdict) {
+            Verdict::Pass => rounds = 0,
+            Verdict::Fail => rounds += 1,
+            // An unclear verdict is neither: it breaks the row of consecutive failures, and
+            // a loop is never guessed across it (section 3 prefers "unsure" to a guess).
+            Verdict::Unknown => rounds = 0,
         }
     }
     ItemLoop {

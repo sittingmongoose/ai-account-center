@@ -301,6 +301,64 @@ fn the_loop_rule_fires_at_three_failing_reviews_in_a_row_and_names_the_item() {
 }
 
 #[test]
+fn a_passing_or_unclear_verdict_never_counts_as_a_failing_round() {
+    let board = |reviews: Value| {
+        input(json!({
+            "pins": [pin("t1", json!("a"))],
+            "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+            "tasks": [json!({
+                "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+                "project": "pm7", "stream": "f",
+                "items": [ { "id": "F-07", "title": "Tray icon", "state": "review",
+                              "reviews": reviews } ]
+            })]
+        }))
+    };
+    // Passing with follow-ups is a pass, however it is spelled.
+    for verdict in [
+        "PASS WITH FOLLOW-UPS",
+        " pass with notes ",
+        "Pass with nonblocking follow-ups",
+        "passed",
+        "LGTM",
+    ] {
+        let follow_ups = board(json!([
+            { "atMs": NOW - 3_600_000, "verdict": "PASS WITH FOLLOW-UPS" },
+            { "atMs": NOW - 1_800_000, "verdict": "PASS WITH FOLLOW-UPS" },
+            { "atMs": NOW - 600_000, "verdict": verdict }
+        ]));
+        assert_eq!(
+            one_update(&follow_ups).looping.answer,
+            "no",
+            "verdict {verdict} must not count as a failing round"
+        );
+    }
+    // A verdict that says neither (the reviewer's own words) is unclear: it never counts
+    // toward a loop, and it breaks the row of consecutive failures.
+    let unclear = board(json!([
+        { "atMs": NOW - 3_600_000, "verdict": "fail" },
+        { "atMs": NOW - 1_800_000, "verdict": "fail" },
+        { "atMs": NOW - 1_200_000, "verdict": "inconclusive: rerun the probes" },
+        { "atMs": NOW - 600_000, "verdict": "fail" }
+    ]));
+    assert_eq!(one_update(&unclear).looping.answer, "no");
+
+    // The documented failure spellings still fail, case and trim included.
+    for verdict in ["FAIL", " Failed ", "BLOCK", "blocked", "CHANGES REQUESTED", "rejected"] {
+        let failing = board(json!([
+            { "atMs": NOW - 3_600_000, "verdict": "fail" },
+            { "atMs": NOW - 1_800_000, "verdict": "fail" },
+            { "atMs": NOW - 600_000, "verdict": verdict }
+        ]));
+        assert_eq!(
+            one_update(&failing).looping.answer,
+            "yes",
+            "verdict {verdict} must count as a failing round"
+        );
+    }
+}
+
+#[test]
 fn reviews_outside_the_last_day_do_not_loop_and_undated_ones_do() {
     let outside = input(json!({
         "pins": [pin("t1", json!("a"))],

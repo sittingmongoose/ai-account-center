@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { NativeStatusHandle } from '../../../src/status-native/native-loader';
+import { nodeReaderFs, type ReaderFs } from '../../../src/web-server/status/agent-reports-reader';
 import { StatusDocsReader, type StatusDocsState } from '../../../src/web-server/status/status-docs';
 
 /** A fixture share under a temporary folder. */
@@ -176,6 +177,156 @@ describe('StatusDocsReader', () => {
       await read.scan();
       expect(calls).toEqual([]); // never handed to the module
       expect(read.snapshot().problems[0]?.reason).toContain('size cap');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('a share root that cannot be listed marks its cached documents unreadable', async () => {
+    const file = 'v1/writers/vm.a/status.json';
+    const { root, cleanup } = share({ [file]: statusDoc('vm.a', 't1', 5) });
+    try {
+      const { handle } = fakeHandle();
+      let fail = false;
+      const failingFs: ReaderFs = {
+        readdir: async (dir) => {
+          // An EIO on the writers root: an ordinary read failure, not the share's race.
+          if (fail && dir === path.join(root, 'v1/writers')) {
+            throw Object.assign(new Error('fixture I/O failure'), { code: 'EIO' });
+          }
+          return fs.promises.readdir(dir, { withFileTypes: true });
+        },
+        stat: (at) => nodeReaderFs.stat(at),
+        readFile: (at, cap) => nodeReaderFs.readFile(at, cap),
+      };
+      let now = 1_794_116_000_000;
+      const read = new StatusDocsReader({
+        root: () => root,
+        now: () => now,
+        fs: failingFs,
+        handle: () => handle,
+      });
+      await read.scan();
+      expect(read.snapshot().docs[0].problem).toBeNull();
+
+      fail = true;
+      now += 10_000;
+      await read.scan();
+      let state: StatusDocsState = read.snapshot();
+      expect(state.state).toBe('error');
+      // The last good copy stays, marked unreadable since the failure began.
+      expect(state.docs[0].seq).toBe(5);
+      expect(state.docs[0].problem?.reason).toContain('folder could not be listed');
+      const since = state.docs[0].problem?.since;
+      expect(since).toBe(now);
+
+      now += 10_000;
+      await read.scan(); // the failure repeats: the first-failure clock is stable
+      state = read.snapshot();
+      expect(state.docs[0].problem?.since).toBe(since);
+      expect(state.problems).toHaveLength(1);
+
+      fail = false;
+      now += 10_000;
+      await read.scan(); // the share lists again: the document is re-read and clears
+      state = read.snapshot();
+      expect(state.state).toBe('ok');
+      expect(state.docs[0].problem).toBeNull();
+      expect(state.problems).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('one transient miss on the root is the share race; the second names it from the first', async () => {
+    const file = 'v1/writers/vm.a/status.json';
+    const { root, cleanup } = share({ [file]: statusDoc('vm.a', 't1', 5) });
+    try {
+      const { handle } = fakeHandle();
+      let stale = false;
+      const staleFs: ReaderFs = {
+        readdir: async (dir) => {
+          if (stale && dir === path.join(root, 'v1/writers')) {
+            throw Object.assign(new Error('stale file handle'), { code: 'ESTALE' });
+          }
+          return fs.promises.readdir(dir, { withFileTypes: true });
+        },
+        stat: (at) => nodeReaderFs.stat(at),
+        readFile: (at, cap) => nodeReaderFs.readFile(at, cap),
+      };
+      let now = 1_794_116_000_000;
+      const read = new StatusDocsReader({
+        root: () => root,
+        now: () => now,
+        fs: staleFs,
+        handle: () => handle,
+      });
+      await read.scan();
+
+      stale = true;
+      const firstMiss = now + 10_000;
+      now = firstMiss;
+      await read.scan(); // the share's rename-over race: quiet, nothing is marked
+      expect(read.snapshot().docs[0].problem).toBeNull();
+
+      now += 10_000;
+      await read.scan(); // the same miss again: named, since the first miss
+      const state = read.snapshot();
+      expect(state.docs[0].problem?.reason).toContain('two scans in a row');
+      expect(state.docs[0].problem?.since).toBe(firstMiss);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('a writer folder that cannot be listed marks its document, not the others', async () => {
+    const { root, cleanup } = share({
+      'v1/writers/vm.a/status.json': statusDoc('vm.a', 't1', 3),
+      'v1/writers/vm.b/status.json': statusDoc('vm.b', 't2', 4),
+    });
+    try {
+      const { handle } = fakeHandle();
+      let failB: NodeJS.ErrnoException['code'] | null = null;
+      const failingFs: ReaderFs = {
+        readdir: async (dir) => {
+          if (failB && dir === path.join(root, 'v1/writers/vm.b')) {
+            throw Object.assign(new Error('fixture failure'), { code: failB });
+          }
+          return fs.promises.readdir(dir, { withFileTypes: true });
+        },
+        stat: (at) => nodeReaderFs.stat(at),
+        readFile: (at, cap) => nodeReaderFs.readFile(at, cap),
+      };
+      let now = 1_794_116_000_000;
+      const read = new StatusDocsReader({
+        root: () => root,
+        now: () => now,
+        fs: failingFs,
+        handle: () => handle,
+      });
+      await read.scan();
+
+      failB = 'EIO';
+      now += 10_000;
+      await read.scan(); // an ordinary read failure is named at once
+      let state = read.snapshot();
+      expect(state.state).toBe('ok');
+      expect(state.docs[0].problem).toBeNull(); // vm.a is untouched
+      expect(state.docs[1].problem?.reason).toContain('folder could not be listed');
+      expect(state.docs[1].problem?.since).toBe(now);
+
+      failB = 'ESTALE';
+      const firstMiss = now + 10_000;
+      now = firstMiss;
+      await read.scan(); // the failure turns transient: quiet for one scan, its first miss
+      state = read.snapshot();
+      expect(state.docs[1].problem?.reason).toContain('folder could not be listed');
+
+      now += 10_000;
+      await read.scan(); // the second transient miss in a row: named, since the first of them
+      state = read.snapshot();
+      expect(state.docs[1].problem?.reason).toContain('two scans in a row');
+      expect(state.docs[1].problem?.since).toBe(firstMiss);
     } finally {
       cleanup();
     }
