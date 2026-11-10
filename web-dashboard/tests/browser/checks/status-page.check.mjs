@@ -18,7 +18,8 @@ const FORMATS = [
 	{ name: 'duo-folded', w: 466, h: 678, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
 	{ name: 'duo-portrait', w: 669, h: 951, safe: '82,0,34,0', mobile: true, chrome: 'band' },
 	{ name: 'duo-landscape', w: 951, h: 669, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
-	{ name: 'open-window', w: 951, h: 669, safe: '0,0,0,0', mobile: true, chrome: 'desk' },
+	// The Duo open on its side while iOS reports no strip (a rotated open app): still the rail (Jared, 2026-11-10).
+	{ name: 'open-window', w: 951, h: 669, safe: '0,0,0,0', mobile: true, chrome: 'rail' },
 ];
 
 // Every status call the page makes, answered here. Returns the answer sets the page sent.
