@@ -1380,7 +1380,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 /* Table rows, once the section is wide enough for its columns: one column per window, the account and the slot sized
    to their content, the heads and rows on the same tracks (subgrid). */
 @container hsec (min-width: 600px) {
-  .htable.cols-1 { grid-template-columns: fit-content(300px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
+  .htable.cols-1 { grid-template-columns: fit-content(340px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
   .htable.cols-1 > .hhead { grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: var(--hgap); }
   .htable.cols-1 > .hhead > .cap:first-child, .htable.cols-1 > .hhead > span:last-child { display: block; }
   .htable.cols-1 > .hrow { grid-column: 1 / -1; grid-template-columns: subgrid; grid-template-areas: none; column-gap: var(--hgap); row-gap: 0; min-height: var(--hrow-h); }
@@ -1388,7 +1388,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .htable.cols-1 > .hrow > .hcells { display: contents; }
   .htable.cols-1 > .hrow > .hslot { grid-area: 1 / -2; justify-self: end; }
   .htable.cols-1 > .hrow > .hconfirm, .htable.cols-1 > .hrow > .hreason { grid-column: 1 / -1; margin-top: 10px; }
-  .htable.cols-2 { grid-template-columns: fit-content(300px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
+  .htable.cols-2 { grid-template-columns: fit-content(340px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
   .htable.cols-2 > .hhead { grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: var(--hgap); }
   .htable.cols-2 > .hhead > .cap:first-child, .htable.cols-2 > .hhead > span:last-child { display: block; }
   .htable.cols-2 > .hrow { grid-column: 1 / -1; grid-template-columns: subgrid; grid-template-areas: none; column-gap: var(--hgap); row-gap: 0; min-height: var(--hrow-h); }
@@ -1398,7 +1398,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .htable.cols-2 > .hrow > .hconfirm, .htable.cols-2 > .hrow > .hreason { grid-column: 1 / -1; margin-top: 10px; }
 }
 @container hsec (min-width: 680px) {
-  .htable.cols-3 { grid-template-columns: fit-content(300px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
+  .htable.cols-3 { grid-template-columns: fit-content(340px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
   .htable.cols-3 > .hhead { grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: var(--hgap); }
   .htable.cols-3 > .hhead > .cap:first-child, .htable.cols-3 > .hhead > span:last-child { display: block; }
   .htable.cols-3 > .hrow { grid-column: 1 / -1; grid-template-columns: subgrid; grid-template-areas: none; column-gap: var(--hgap); row-gap: 0; min-height: var(--hrow-h); }
@@ -1408,7 +1408,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .htable.cols-3 > .hrow > .hconfirm, .htable.cols-3 > .hrow > .hreason { grid-column: 1 / -1; margin-top: 10px; }
 }
 @container hsec (min-width: 800px) {
-  .htable.cols-4 { grid-template-columns: fit-content(300px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
+  .htable.cols-4 { grid-template-columns: fit-content(340px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
   .htable.cols-4 > .hhead { grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: var(--hgap); }
   .htable.cols-4 > .hhead > .cap:first-child, .htable.cols-4 > .hhead > span:last-child { display: block; }
   .htable.cols-4 > .hrow { grid-column: 1 / -1; grid-template-columns: subgrid; grid-template-areas: none; column-gap: var(--hgap); row-gap: 0; min-height: var(--hrow-h); }
@@ -1418,7 +1418,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .htable.cols-4 > .hrow > .hconfirm, .htable.cols-4 > .hrow > .hreason { grid-column: 1 / -1; margin-top: 10px; }
 }
 @container hsec (min-width: 920px) {
-  .htable.cols-5 { grid-template-columns: fit-content(300px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
+  .htable.cols-5 { grid-template-columns: fit-content(340px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
   .htable.cols-5 > .hhead { grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: var(--hgap); }
   .htable.cols-5 > .hhead > .cap:first-child, .htable.cols-5 > .hhead > span:last-child { display: block; }
   .htable.cols-5 > .hrow { grid-column: 1 / -1; grid-template-columns: subgrid; grid-template-areas: none; column-gap: var(--hgap); row-gap: 0; min-height: var(--hrow-h); }
@@ -1426,7 +1426,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .htable.cols-5 > .hrow > .hcells { display: contents; }
   .htable.cols-5 > .hrow > .hslot { grid-area: 1 / -2; justify-self: end; }
   .htable.cols-5 > .hrow > .hconfirm, .htable.cols-5 > .hrow > .hreason { grid-column: 1 / -1; margin-top: 10px; }
-  .htable.cols-6 { grid-template-columns: fit-content(300px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
+  .htable.cols-6 { grid-template-columns: fit-content(340px) repeat(var(--cols), minmax(96px, 1fr)) auto; column-gap: var(--hgap); }
   .htable.cols-6 > .hhead { grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: var(--hgap); }
   .htable.cols-6 > .hhead > .cap:first-child, .htable.cols-6 > .hhead > span:last-child { display: block; }
   .htable.cols-6 > .hrow { grid-column: 1 / -1; grid-template-columns: subgrid; grid-template-areas: none; column-gap: var(--hgap); row-gap: 0; min-height: var(--hrow-h); }
