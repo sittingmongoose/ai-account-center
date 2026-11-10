@@ -13,7 +13,7 @@
   --t-fast: 140ms; --t-med: 260ms; --t-slow: 520ms;
   --r-plate: 14px; --r-card: 12px; --r-ctl: 8px; --r-sheet: 20px;
   --safe-top: 0px; --safe-right: 0px; --safe-bottom: 0px; --safe-left: 0px;
-  --rail-reserve: 0px; --band-reserve: 0px;
+  --rail-reserve: 0px; --band-reserve: 0px; --rail-w: 0px;
   --sel-fill: color-mix(in srgb, var(--accent) 7%, var(--paper));
   --sel-line: color-mix(in srgb, var(--accent) 45%, var(--rule));
   --band: color-mix(in srgb, var(--accent) 16%, transparent);
@@ -497,11 +497,13 @@ textarea.note::placeholder { color: var(--ink-4); }
 .mach-slots { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
 .row.dim .meter, .row.dim .mach-slots { opacity: .45; }
 .row-note { grid-column: 1 / -1; font-size: 12.5px; margin-top: 8px; }
+.sec-machines { container: mach / inline-size; }
+/* Two machines a row only when the Machines plate itself has room: in the two-column Status grid it is half the page. */
 .mach-cards { display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--rule-2); }
-@container content (min-width: 600px) { .mach-cards { grid-template-columns: 1fr 1fr; } }
-.mcard { padding: 12px 16px; border-bottom: 1px solid var(--rule-2); display: grid; gap: 8px; }
-@container content (min-width: 600px) { .mcard:nth-child(odd) { border-right: 1px solid var(--rule-2); } }
-.mcard .mrow { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; font-size: 13px; }
+@container mach (min-width: 560px) { .mach-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mcard { padding: 12px 16px; border-bottom: 1px solid var(--rule-2); display: grid; gap: 8px; min-width: 0; }
+@container mach (min-width: 560px) { .mcard:nth-child(odd) { border-right: 1px solid var(--rule-2); } }
+.mcard .mrow { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; }
 .mcard .mrow .k { color: var(--ink-3); }
 .mcard .mrow .v { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mcard.dim .mrow { opacity: .5; }
@@ -719,8 +721,11 @@ textarea.note::placeholder { color: var(--ink-4); }
 }
 @container content (min-width: 600px) and (max-width: 759.98px) {
   /* Duo unfolded portrait: the folded sections two to a row under the questions and pins. */
-  .status-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .status-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-flow: row dense; }
   .sec-questions, .sec-pinned { grid-column: 1 / -1; }
+  /* An expanded section takes the whole row, so a tall one never leaves an empty column beside it; the folded ones
+     pack two to a row around it. */
+  .status-grid > .collapsed-open { grid-column: 1 / -1; }
 }
 @container content (min-width: 600px) and (max-width: 1279.98px) {
   .picks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -802,6 +807,11 @@ textarea.note::placeholder { color: var(--ink-4); }
 }
 /* Duo portrait: the band already names the page and sums it up. */
 :root[data-chrome='band'] .page-head:not(.sb-head) { display: none; }
+/* Beside the rail, which shows the page, the page's name goes, as on the phone: the summary starts at the top. */
+:root[data-chrome='rail'] .page-title { display: none; }
+/* Beside the rail the page's name and its one-line summary share a line, as wider screens do: no line for a word. */
+:root[data-chrome='rail'] .page-head > div { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+:root[data-chrome='rail'] .page-head .headline { margin-top: 0; }
 
 
 /* ==========================================================================
@@ -822,7 +832,9 @@ body { min-height: 100dvh; }
 :root[data-chrome='phone'] .shell { grid-template-rows: auto minmax(0, 1fr) auto; }
 :root[data-chrome='phone'] .topbar { display: block; position: sticky; top: 0; z-index: 5; }
 :root[data-chrome='phone'] .tabbar { display: grid; position: sticky; bottom: 0; z-index: 5; }
-:root[data-chrome='rail'] .shell { grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) var(--safe-right); }
+:root[data-chrome='rail'] .shell { grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) var(--rail-w, var(--safe-right)); }
+/* Open on its side the panel's rounded corner sits at the top left: the page keeps clear of it. */
+@media (min-width: 760px) { :root[data-chrome='rail'] .content { padding-left: 16px; padding-top: 10px; } }
 :root[data-chrome='rail'] .rail { display: flex; position: sticky; top: 0; height: 100dvh; align-self: start; }
 :root[data-chrome='rail'] .content, :root[data-chrome='band'] .content { padding-bottom: var(--safe-bottom); }
 :root[data-chrome='band'] .band-head { display: block; position: sticky; top: 0; z-index: 5; }
@@ -1011,7 +1023,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 
 .toasts { position: fixed; z-index: 60; top: 72px; right: calc(16px + var(--safe-right)); width: min(380px, calc(100vw - 32px)); display: grid; gap: 8px; pointer-events: none; }
 :root[data-chrome='phone'] .toasts, :root[data-chrome='band'] .toasts { top: calc(var(--safe-top) + 56px); left: calc(12px + var(--safe-left)); right: calc(12px + var(--safe-right)); width: auto; }
-:root[data-chrome='rail'] .toasts { top: 12px; right: calc(var(--safe-right) + 12px); }
+:root[data-chrome='rail'] .toasts { top: 12px; right: calc(var(--rail-w, var(--safe-right)) + 12px); }
 .toast { pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; padding: 10px 8px 10px 14px; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font-size: 13px; }
 .toast-text { flex: 1 1 0; min-width: 0; display: grid; gap: 2px; }
 .toast-text span { color: var(--ink-2); }
@@ -1021,7 +1033,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .acct-menu { position: fixed; z-index: 41; top: 66px; right: 32px; width: min(300px, calc(100vw - 24px)); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); padding: 6px; display: grid; gap: 2px; }
 :root[data-chrome='phone'] .acct-menu { top: calc(var(--safe-top) + 52px); right: calc(12px + var(--safe-right)); }
 :root[data-chrome='band'] .acct-menu { top: calc(var(--safe-top) + 50px); right: 10px; }
-:root[data-chrome='rail'] .acct-menu { top: auto; bottom: calc(var(--safe-bottom) + 12px); right: calc(var(--safe-right) + 8px); }
+:root[data-chrome='rail'] .acct-menu { top: auto; bottom: calc(var(--safe-bottom) + 12px); right: calc(var(--rail-w, var(--safe-right)) + 8px); }
 .menu-head { padding: 8px 10px; color: var(--ink-3); font-size: 12.5px; border-bottom: 1px solid var(--rule-2); margin-bottom: 2px; }
 .menu-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; }
 .menu-row .seg button { display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; }

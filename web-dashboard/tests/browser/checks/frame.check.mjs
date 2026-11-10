@@ -138,7 +138,8 @@ export const tests = {
 						const tabs = [...document.querySelectorAll(nav)].filter(visible).map(box);
 						const main = document.querySelector('main.content');
 						// The content area ends above the home indicator in the rail and band (its bottom padding).
-						const content = { ...box(main), pad: parseFloat(getComputedStyle(main).paddingBottom) || 0 };
+						const cs = getComputedStyle(main);
+						const content = { ...box(main), pad: parseFloat(cs.paddingBottom) || 0, padL: parseFloat(cs.paddingLeft) || 0, padT: parseFloat(cs.paddingTop) || 0 };
 						const iframe = document.querySelector('.route:not([hidden]) iframe.slint-frame');
 						const railTools = [...document.querySelectorAll('.rail a, .rail button')].filter(visible).map(box);
 						const reserve = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-reserve')) || 0;
@@ -175,7 +176,7 @@ export const tests = {
 					await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
 					if (page === 'home') {
 						const c = s.content, i = s.iframe;
-						await t.check(`${label}: the dashboard fills the content area`, !!i && Math.abs(i.x - c.x) < 1 && Math.abs(i.w - c.w) < 1 && Math.abs(i.y - c.y) < 1 && Math.abs(i.b - (Math.min(c.b, s.h) - c.pad)) < 1.5,
+						await t.check(`${label}: the dashboard fills the content area`, !!i && Math.abs(i.x - (c.x + c.padL)) < 1 && Math.abs(i.w - (c.w - c.padL)) < 1 && Math.abs(i.y - (c.y + c.padT)) < 1 && Math.abs(i.b - (Math.min(c.b, s.h) - c.pad)) < 1.5,
 							i ? `iframe ${Math.round(i.x)},${Math.round(i.y)} ${Math.round(i.w)}x${Math.round(i.h)}; content ${Math.round(c.x)},${Math.round(c.y)} ${Math.round(c.w)}x${Math.round(c.h)}, ${c.pad} px kept for the home indicator` : 'no iframe shown');
 					}
 					if (f.chrome === 'rail') {
