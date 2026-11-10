@@ -66,20 +66,27 @@ fn call(method: &str, arg: Option<JsValue>) -> Option<JsValue> {
 
 /// Follows the session's view and starts it.
 pub fn start() -> RwSignal<SessionView> {
-    let view = RwSignal::new(SessionView { state: "loading".into(), ..Default::default() });
-    let handler = Closure::<dyn Fn(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| {
-        if let Some(text) = event.detail().as_string() {
-            if let Ok(next) = serde_json::from_str::<SessionView>(&text) {
-                view.set(next);
-            }
-        }
+    let view = RwSignal::new(SessionView {
+        state: "loading".into(),
+        ..Default::default()
     });
-    let _ = window().add_event_listener_with_callback("aac-session", handler.as_ref().unchecked_ref());
+    let handler =
+        Closure::<dyn Fn(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| {
+            if let Some(text) = event.detail().as_string() {
+                if let Ok(next) = serde_json::from_str::<SessionView>(&text) {
+                    view.set(next);
+                }
+            }
+        });
+    let _ =
+        window().add_event_listener_with_callback("aac-session", handler.as_ref().unchecked_ref());
     handler.forget();
     if call("start", None).is_none() {
         view.set(SessionView {
             state: "default".into(),
-            message: Some("This page could not start its sign-in. Reload it, or open the classic app.".into()),
+            message: Some(
+                "This page could not start its sign-in. Reload it, or open the classic app.".into(),
+            ),
             ..Default::default()
         });
     }
@@ -98,7 +105,12 @@ pub fn dashboard_signed_out(state: &str, reason: Option<&str>) {
         return;
     }
     if state == "expired" {
-        call("ended", reason.filter(|r| matches!(*r, "ended" | "expired" | "revoked")).map(JsValue::from));
+        call(
+            "ended",
+            reason
+                .filter(|r| matches!(*r, "ended" | "expired" | "revoked"))
+                .map(JsValue::from),
+        );
     } else {
         call("signedOutElsewhere", None);
     }
@@ -106,14 +118,39 @@ pub fn dashboard_signed_out(state: &str, reason: Option<&str>) {
 
 /// Sign out from the frame (no dashboard loaded): a failure is a toast, and this browser stays signed in.
 pub fn sign_out(ctx: FrameCtx) {
-    let Some(promise) = call("signOut", None).and_then(|p| p.dyn_into::<js_sys::Promise>().ok()) else { return };
+    sign_out_with("signOut", ctx);
+}
+
+/// Sign out after the dashboard's own Sign out never answered: the server's check decides, and only a session still
+/// signed in gets the frame's one logout (frame-session.mjs `finishSignOut`).
+pub fn finish_sign_out(ctx: FrameCtx) {
+    sign_out_with("finishSignOut", ctx);
+}
+
+fn sign_out_with(method: &str, ctx: FrameCtx) {
+    let Some(promise) = call(method, None).and_then(|p| p.dyn_into::<js_sys::Promise>().ok())
+    else {
+        return;
+    };
     leptos::task::spawn_local(async move {
-        let Ok(result) = wasm_bindgen_futures::JsFuture::from(promise).await else { return };
-        let ok = js_sys::Reflect::get(&result, &"ok".into()).ok().and_then(|v| v.as_bool()).unwrap_or(false);
+        let Ok(result) = wasm_bindgen_futures::JsFuture::from(promise).await else {
+            return;
+        };
+        let ok = js_sys::Reflect::get(&result, &"ok".into())
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if !ok {
-            let failure = js_sys::Reflect::get(&result, &"failure".into()).unwrap_or(JsValue::UNDEFINED);
-            let title = js_sys::Reflect::get(&failure, &"title".into()).ok().and_then(|v| v.as_string()).unwrap_or_else(|| "Sign out did not work".into());
-            let body = js_sys::Reflect::get(&failure, &"body".into()).ok().and_then(|v| v.as_string()).unwrap_or_default();
+            let failure =
+                js_sys::Reflect::get(&result, &"failure".into()).unwrap_or(JsValue::UNDEFINED);
+            let title = js_sys::Reflect::get(&failure, &"title".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| "Sign out did not work".into());
+            let body = js_sys::Reflect::get(&failure, &"body".into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
             ctx.toast("err", &title, &body, 6400);
         }
     });
@@ -147,10 +184,16 @@ fn countdown(view: RwSignal<SessionView>) -> RwSignal<i64> {
     });
     let tick = Closure::<dyn Fn()>::new(move || {
         // the form may be gone (signed in): its signals are then disposed, and the timer stops below
-        let Some(now) = left.try_get_untracked() else { return };
+        let Some(now) = left.try_get_untracked() else {
+            return;
+        };
         if now > 0 {
             left.set(now - 1);
-            if now - 1 == 0 && view.try_with_untracked(|v| v.state == "limited").unwrap_or(false) {
+            if now - 1 == 0
+                && view
+                    .try_with_untracked(|v| v.state == "limited")
+                    .unwrap_or(false)
+            {
                 call("limitOver", None);
             }
         }
@@ -183,7 +226,12 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
     let known_user = Memo::new(move |_| view.with(|v| v.username.clone()));
     let on_submit = move |event: web_sys::SubmitEvent| {
         event.prevent_default();
-        let Some(form) = event.target().and_then(|t| t.dyn_into::<web_sys::HtmlFormElement>().ok()) else { return };
+        let Some(form) = event
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlFormElement>().ok())
+        else {
+            return;
+        };
         let user = form_value(&form, "username");
         let password = form_value(&form, "password");
         if setup.get_untracked() {
@@ -197,8 +245,18 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
                 ])),
             );
         } else {
-            let remember = web_sys::FormData::new_with_form(&form).ok().map(|d| d.has("remember-me")).unwrap_or(true);
-            call("signIn", Some(object(&[("username", user.into()), ("password", password.into()), ("remember", remember.into())])));
+            let remember = web_sys::FormData::new_with_form(&form)
+                .ok()
+                .map(|d| d.has("remember-me"))
+                .unwrap_or(true);
+            call(
+                "signIn",
+                Some(object(&[
+                    ("username", user.into()),
+                    ("password", password.into()),
+                    ("remember", remember.into()),
+                ])),
+            );
         }
     };
     let on_typing = move |event: web_sys::Event| {
@@ -215,7 +273,13 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
         };
         let password = form_value(&form, "password");
         let confirm = form_value(&form, "password-confirm");
-        if let (Some(session), Ok(f)) = (session_object(), js_sys::Reflect::get(&session_object().unwrap_or(JsValue::UNDEFINED), &"typing".into())) {
+        if let (Some(session), Ok(f)) = (
+            session_object(),
+            js_sys::Reflect::get(
+                &session_object().unwrap_or(JsValue::UNDEFINED),
+                &"typing".into(),
+            ),
+        ) {
             if let Some(f) = f.dyn_ref::<js_sys::Function>() {
                 let _ = f.call2(&session, &password.into(), &confirm.into());
             }
@@ -227,18 +291,29 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
         if event.key() != "Enter" || event.is_composing() {
             return;
         }
-        let Some(field) = event.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        let Some(field) = event
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        else {
+            return;
+        };
         if field.get_attribute("enterkeyhint").as_deref() != Some("next") {
             return;
         }
-        let Some(form) = field.closest("form").ok().flatten() else { return };
+        let Some(form) = field.closest("form").ok().flatten() else {
+            return;
+        };
         let name = field.get_attribute("name").unwrap_or_default();
         const ORDER: [&str; 4] = ["username", "password", "password-confirm", "setup-code"];
         let next = ORDER
             .iter()
             .skip_while(|n| **n != name)
             .skip(1)
-            .find_map(|n| form.query_selector(&format!("input[name='{n}']:not([disabled])")).ok().flatten())
+            .find_map(|n| {
+                form.query_selector(&format!("input[name='{n}']:not([disabled])"))
+                    .ok()
+                    .flatten()
+            })
             .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
         if let Some(next) = next {
             event.prevent_default();

@@ -44,6 +44,8 @@ pub struct FrameCtx {
     /// Commands for the dashboard, held until it can run them and kept until it says it ran them (`done`).
     outbox: RwSignal<Vec<Command>>,
     next_command: RwSignal<u64>,
+    /// Changes each time the frame signs in or out: a sign-out fallback made in one session never acts in the next.
+    epoch: RwSignal<u64>,
 }
 
 /// One of the dashboard's own actions, waiting for it or on its way.
@@ -85,7 +87,9 @@ fn post(target: &web_sys::Window, command: &Command) {
 }
 
 fn push_history(path: &str, replace: bool) {
-    let Ok(history) = window().history() else { return };
+    let Ok(history) = window().history() else {
+        return;
+    };
     let search = window().location().search().unwrap_or_default();
     let url = format!("{path}{search}");
     let _ = if replace {
@@ -109,6 +113,7 @@ impl FrameCtx {
             authed: RwSignal::new(false),
             outbox: RwSignal::new(Vec::new()),
             next_command: RwSignal::new(0),
+            epoch: RwSignal::new(0),
         }
     }
 
@@ -119,7 +124,12 @@ impl FrameCtx {
         self.next_command.set(id);
         self.outbox.update(|all| {
             all.retain(|c| c.sent || c.action != action);
-            all.push(Command { id, action: action.into(), value: value.into(), sent: false });
+            all.push(Command {
+                id,
+                action: action.into(),
+                value: value.into(),
+                sent: false,
+            });
         });
         self.flush();
         id
@@ -133,19 +143,51 @@ impl FrameCtx {
         }
         let Some(target) = slint_window() else { return };
         self.outbox.update(|all| {
-            for command in all.iter_mut().filter(|c| !c.sent && (authed || !needs_sign_in(&c.action))) {
+            for command in all
+                .iter_mut()
+                .filter(|c| !c.sent && (authed || !needs_sign_in(&c.action)))
+            {
                 post(&target, command);
                 command.sent = true;
             }
         });
     }
 
-    /// The dashboard's page started (again): what went to an earlier page and was never answered goes again, since
-    /// that page is gone. Each command is safe to repeat (a second update-apps finds the running job).
+    /// The dashboard's page started (again). Of what went to an earlier page and was never answered, only navigate
+    /// and theme go again: a refresh or an update may already have run, and an update must never start twice. An
+    /// unanswered update is dropped with a word to check its results; an unanswered logout stays for Sign out's
+    /// own fallback, which asks the server first.
     fn dashboard_started(&self) {
         self.booted.set(true);
         self.authed.set(false);
-        self.outbox.update(|all| all.iter_mut().for_each(|c| c.sent = false));
+        let mut lost_update = false;
+        self.outbox.update(|all| {
+            all.retain_mut(|c| {
+                if !c.sent {
+                    return true;
+                }
+                match c.action.as_str() {
+                    "navigate" | "theme" => {
+                        c.sent = false;
+                        true
+                    }
+                    "logout" => true,
+                    "update-apps" => {
+                        lost_update = true;
+                        false
+                    }
+                    _ => false,
+                }
+            })
+        });
+        if lost_update {
+            self.toast(
+                "info",
+                "Update apps may not have started.",
+                "Check the Update apps results.",
+                8000,
+            );
+        }
         self.flush();
     }
 
@@ -161,7 +203,8 @@ impl FrameCtx {
     }
 
     fn command_pending(&self, id: u64) -> bool {
-        self.outbox.with_untracked(|all| all.iter().any(|c| c.id == id))
+        self.outbox
+            .with_untracked(|all| all.iter().any(|c| c.id == id))
     }
 
     /// The dashboard's page is gone (the frame signed out): nothing waits for it any more.
@@ -205,14 +248,18 @@ impl FrameCtx {
     /// The page was unmounted (Status and the Scoreboard at sign-out): its words go, as its signals have. Untracked,
     /// because the chrome that read them is being unmounted with it.
     pub fn unregister(&self, page: Page, id: u64) {
-        self.infos.try_update_untracked(|all| all.retain(|(p, i, _)| !(*p == page && *i == id)));
+        self.infos
+            .try_update_untracked(|all| all.retain(|(p, i, _)| !(*p == page && *i == id)));
     }
 
     /// What the chrome says for the tab on screen (reactive).
     pub fn info(&self) -> Option<ChromeInfo> {
         let page = self.route.get();
-        self.infos
-            .with(|all| all.iter().find(|(p, _, _)| *p == page).map(|(_, _, info)| *info))
+        self.infos.with(|all| {
+            all.iter()
+                .find(|(p, _, _)| *p == page)
+                .map(|(_, _, info)| *info)
+        })
     }
 
     pub fn refresh(&self) {
@@ -220,7 +267,9 @@ impl FrameCtx {
             self.send("refresh", "");
         } else if let Some(info) = self.infos.with_untracked(|all| {
             let page = self.route.get_untracked();
-            all.iter().find(|(p, _, _)| *p == page).map(|(_, _, info)| *info)
+            all.iter()
+                .find(|(p, _, _)| *p == page)
+                .map(|(_, _, info)| *info)
         }) {
             info.refresh.run(());
         }
@@ -249,37 +298,54 @@ impl FrameCtx {
     /// Sign out. With the dashboard signed in, its own Sign out runs: it waits while an account switch is waiting on
     /// screen, resets its state and tells the frame. Otherwise (not created, still starting, not signed in yet, so
     /// no switch can be waiting) the frame ends the session itself, and the dashboard's page goes with the
-    /// signed-in frame. If a signed-in dashboard never answers, the frame ends the session after 10 s.
+    /// signed-in frame. If a signed-in dashboard has not answered after 10 s, the frame asks the server: a session
+    /// already ended is only followed here, one still signed in gets the frame's one logout. The fallback is dropped
+    /// when the frame signs out or in meanwhile, so it never acts on a later session.
     pub fn sign_out(&self) {
-        if !(self.booted.get_untracked() && self.authed.get_untracked() && slint_window().is_some()) {
+        if !(self.booted.get_untracked() && self.authed.get_untracked() && slint_window().is_some())
+        {
             self.outbox.update(|all| all.clear());
             session::sign_out(*self);
             return;
         }
         let id = self.send("logout", "");
         let ctx = *self;
+        let epoch = self.epoch.get_untracked();
         let fallback = Closure::once_into_js(move || {
-            if ctx.command_pending(id) {
-                ctx.command_done(id);
-                session::sign_out(ctx);
+            if ctx.epoch.try_get_untracked() != Some(epoch) || !ctx.command_pending(id) {
+                return;
             }
+            ctx.command_done(id);
+            session::finish_sign_out(ctx);
         });
-        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(fallback.unchecked_ref(), 10_000);
+        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
+            fallback.unchecked_ref(),
+            10_000,
+        );
     }
 
     pub fn toast(&self, kind: &str, title: &str, body: &str, ms: i32) {
         let id = self.next_toast.get_untracked() + 1;
         self.next_toast.set(id);
         self.toasts.update(|all| {
-            all.push(Toast { id, kind: kind.into(), title: title.into(), body: body.into() });
+            all.push(Toast {
+                id,
+                kind: kind.into(),
+                title: title.into(),
+                body: body.into(),
+            });
             if all.len() > 4 {
                 all.remove(0);
             }
         });
         // A plain browser timer: Leptos cancels its own when the owner that started it is cleaned up (NOTES.md).
         let toasts = self.toasts;
-        let dismiss = Closure::once_into_js(move || toasts.update(|all| all.retain(|t| t.id != id)));
-        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(dismiss.unchecked_ref(), ms.max(2000));
+        let dismiss =
+            Closure::once_into_js(move || toasts.update(|all| all.retain(|t| t.id != id)));
+        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
+            dismiss.unchecked_ref(),
+            ms.max(2000),
+        );
     }
 }
 
@@ -299,79 +365,93 @@ struct SlintChrome {
 }
 
 fn listen_to_dashboard(ctx: FrameCtx, chrome: SlintChrome) {
-    let handler = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
-        if event.origin() != origin() {
-            return;
-        }
-        let from_dashboard = match (event.source(), slint_window()) {
-            (Some(source), Some(frame)) => {
-                let frame: &wasm_bindgen::JsValue = frame.as_ref();
-                js_sys::Object::is(&source, frame)
+    let handler =
+        Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
+            if event.origin() != origin() {
+                return;
             }
-            _ => false,
-        };
-        if !from_dashboard {
-            return;
-        }
-        let data = event.data();
-        if read_str(&data, "type") != "aac-content" {
-            return;
-        }
-        match read_str(&data, "kind").as_str() {
-            "ready" => {
-                ctx.dashboard_started();
-                ctx.send("theme", &stored_theme());
-                let page = ctx.route.get_untracked();
-                if page.slint() {
-                    ctx.send("navigate", page.id());
+            let from_dashboard = match (event.source(), slint_window()) {
+                (Some(source), Some(frame)) => {
+                    let frame: &wasm_bindgen::JsValue = frame.as_ref();
+                    js_sys::Object::is(&source, frame)
                 }
+                _ => false,
+            };
+            if !from_dashboard {
+                return;
             }
-            "done" => {
-                if let Some(id) = js_sys::Reflect::get(&data, &"id".into()).ok().and_then(|v| v.as_f64()) {
-                    ctx.command_done(id as u64);
+            let data = event.data();
+            if read_str(&data, "type") != "aac-content" {
+                return;
+            }
+            match read_str(&data, "kind").as_str() {
+                "ready" => {
+                    ctx.dashboard_started();
+                    ctx.send("theme", &stored_theme());
+                    let page = ctx.route.get_untracked();
+                    if page.slint() {
+                        ctx.send("navigate", page.id());
+                    }
                 }
-            }
-            "page" => {
-                let Some(page) = Page::from_id(&read_str(&data, "page")) else { return };
-                if page == ctx.route.get_untracked() {
-                    return;
+                "done" => {
+                    if let Some(id) = js_sys::Reflect::get(&data, &"id".into())
+                        .ok()
+                        .and_then(|v| v.as_f64())
+                    {
+                        ctx.command_done(id as u64);
+                    }
                 }
-                if page.slint() {
-                    // The dashboard moved itself (a Home link to Analytics): follow without telling it back.
-                    push_history(page.path(), true);
-                    ctx.route.set(page);
-                    crate::set_active(page);
-                } else {
-                    ctx.go(page);
+                "page" => {
+                    let Some(page) = Page::from_id(&read_str(&data, "page")) else {
+                        return;
+                    };
+                    if page == ctx.route.get_untracked() {
+                        return;
+                    }
+                    if page.slint() {
+                        // The dashboard moved itself (a Home link to Analytics): follow without telling it back.
+                        push_history(page.path(), true);
+                        ctx.route.set(page);
+                        crate::set_active(page);
+                    } else {
+                        ctx.go(page);
+                    }
                 }
-            }
-            "toast" => {
-                let ms = js_sys::Reflect::get(&data, &"ms".into())
-                    .ok()
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(4800.0) as i32;
-                ctx.toast(&read_str(&data, "toastKind"), &read_str(&data, "title"), &read_str(&data, "body"), ms);
-            }
-            "chrome" => {
-                chrome.lead.set(read_str(&data, "statusLead"));
-                chrome.strong.set(read_str(&data, "statusStrong"));
-                chrome.more.set(read_str(&data, "statusMore"));
-            }
-            "auth" => {
-                let signed_in = js_sys::Reflect::get(&data, &"signedIn".into())
-                    .ok()
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                let state = read_str(&data, "state");
-                ctx.dashboard_signed_in(signed_in);
-                if !signed_in && matches!(state.as_str(), "default" | "expired") {
-                    let reason = read_str(&data, "reason");
-                    session::dashboard_signed_out(&state, (!reason.is_empty()).then_some(reason.as_str()));
+                "toast" => {
+                    let ms = js_sys::Reflect::get(&data, &"ms".into())
+                        .ok()
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(4800.0) as i32;
+                    ctx.toast(
+                        &read_str(&data, "toastKind"),
+                        &read_str(&data, "title"),
+                        &read_str(&data, "body"),
+                        ms,
+                    );
                 }
+                "chrome" => {
+                    chrome.lead.set(read_str(&data, "statusLead"));
+                    chrome.strong.set(read_str(&data, "statusStrong"));
+                    chrome.more.set(read_str(&data, "statusMore"));
+                }
+                "auth" => {
+                    let signed_in = js_sys::Reflect::get(&data, &"signedIn".into())
+                        .ok()
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let state = read_str(&data, "state");
+                    ctx.dashboard_signed_in(signed_in);
+                    if !signed_in && matches!(state.as_str(), "default" | "expired") {
+                        let reason = read_str(&data, "reason");
+                        session::dashboard_signed_out(
+                            &state,
+                            (!reason.is_empty()).then_some(reason.as_str()),
+                        );
+                    }
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    });
+        });
     let _ = window().add_event_listener_with_callback("message", handler.as_ref().unchecked_ref());
     handler.forget();
 }
@@ -392,14 +472,19 @@ fn follow_history(ctx: FrameCtx) {
 /// frame asks for every one while online (sw-route.js keeps an /app page's own copy only).
 fn warm_offline_copies() {
     let navigator = window().navigator();
-    let workers = js_sys::Reflect::get(&navigator, &"serviceWorker".into()).unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
+    let workers = js_sys::Reflect::get(&navigator, &"serviceWorker".into())
+        .unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
     if workers.is_undefined() {
         return;
     }
     if let Ok(register) = js_sys::Reflect::get(&workers, &"register".into()) {
         if let Some(register) = register.dyn_ref::<js_sys::Function>() {
             // A refusal (no worker on this server) only costs the offline copy.
-            if let Some(promise) = register.call1(&workers, &"/sw.js".into()).ok().and_then(|p| p.dyn_into::<js_sys::Promise>().ok()) {
+            if let Some(promise) = register
+                .call1(&workers, &"/sw.js".into())
+                .ok()
+                .and_then(|p| p.dyn_into::<js_sys::Promise>().ok())
+            {
                 leptos::task::spawn_local(async move {
                     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
                 });
@@ -416,7 +501,8 @@ fn warm_offline_copies() {
             let _ = window().fetch_with_str(page.path());
         }
     });
-    let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(warm.unchecked_ref(), 4000);
+    let _ =
+        window().set_timeout_with_callback_and_timeout_and_arguments_0(warm.unchecked_ref(), 4000);
 }
 
 #[component]
@@ -432,7 +518,11 @@ pub fn Frame(initial: Page) -> impl IntoView {
         ctx.username.set(name);
     });
     // The dashboard's chrome line stands for its three tabs.
-    let chrome = SlintChrome { lead: RwSignal::new(String::new()), strong: RwSignal::new(String::new()), more: RwSignal::new(String::new()) };
+    let chrome = SlintChrome {
+        lead: RwSignal::new(String::new()),
+        strong: RwSignal::new(String::new()),
+        more: RwSignal::new(String::new()),
+    };
     let slint_info = ChromeInfo {
         updated: Signal::derive(move || chrome.strong.get()),
         live: Signal::derive(move || chrome.more.get() == "live"),
@@ -442,7 +532,11 @@ pub fn Frame(initial: Page) -> impl IntoView {
         }),
         lead: Some(Signal::derive(move || {
             let lead = chrome.lead.get();
-            if lead.is_empty() { "Updated".into() } else { lead }
+            if lead.is_empty() {
+                "Updated".into()
+            } else {
+                lead
+            }
         })),
     };
     for page in [Page::Home, Page::Analytics, Page::Accounts] {
@@ -454,6 +548,11 @@ pub fn Frame(initial: Page) -> impl IntoView {
     let close_menu = window_event_listener(leptos::ev::click, move |_| ctx.menu_open.set(false));
     on_cleanup(move || close_menu.remove());
     let signed_in = Memo::new(move |_| view_signal.with(|v: &SessionView| v.signed_in));
+    // Each sign-in and sign-out starts a new epoch (see `sign_out`).
+    Effect::new(move |_| {
+        signed_in.track();
+        ctx.epoch.update(|e| *e += 1);
+    });
     view! {
         <Show when=move || signed_in.get() fallback=move || view! { <session::SignIn view=view_signal/> }>
             <FrameShell ctx=ctx>
@@ -469,7 +568,9 @@ pub fn Frame(initial: Page) -> impl IntoView {
 /// Built the first time its tab is shown, then kept, so a tab change keeps a question's draft and the sheet's place.
 #[component]
 fn StatusRoute(ctx: FrameCtx) -> impl IntoView {
-    let seen = Memo::new(move |prev: Option<&bool>| prev.copied().unwrap_or(false) || ctx.route.get() == Page::Status);
+    let seen = Memo::new(move |prev: Option<&bool>| {
+        prev.copied().unwrap_or(false) || ctx.route.get() == Page::Status
+    });
     view! {
         <div class="route" hidden=move || ctx.route.get() != Page::Status>
             {move || seen.get().then(|| {
@@ -489,7 +590,9 @@ fn StatusRoute(ctx: FrameCtx) -> impl IntoView {
 
 #[component]
 fn ScoreboardRoute(ctx: FrameCtx) -> impl IntoView {
-    let seen = Memo::new(move |prev: Option<&bool>| prev.copied().unwrap_or(false) || ctx.route.get() == Page::Scoreboard);
+    let seen = Memo::new(move |prev: Option<&bool>| {
+        prev.copied().unwrap_or(false) || ctx.route.get() == Page::Scoreboard
+    });
     view! {
         <div class="route" hidden=move || ctx.route.get() != Page::Scoreboard>
             {move || seen.get().then(|| view! { <scoreboard::ScoreboardPage embedded=false/> })}
@@ -500,7 +603,9 @@ fn ScoreboardRoute(ctx: FrameCtx) -> impl IntoView {
 /// The Slint dashboard, content-only, for Home, Analytics and Accounts: loaded the first time one of them is shown.
 #[component]
 fn SlintHost(ctx: FrameCtx) -> impl IntoView {
-    let seen = Memo::new(move |prev: Option<&bool>| prev.copied().unwrap_or(false) || ctx.route.get().slint());
+    let seen = Memo::new(move |prev: Option<&bool>| {
+        prev.copied().unwrap_or(false) || ctx.route.get().slint()
+    });
     view! {
         <div class="route slint-host" hidden=move || !ctx.route.get().slint()>
             {move || seen.get().then(|| {
@@ -567,14 +672,21 @@ mod tests {
             .collect();
         assert_eq!(
             waiting,
-            vec![("update-apps".into(), String::new(), false), ("navigate".into(), "accounts".into(), false)]
+            vec![
+                ("update-apps".into(), String::new(), false),
+                ("navigate".into(), "accounts".into(), false)
+            ]
         );
         // The dashboard said it ran it: it leaves the outbox.
         assert!(ctx.command_pending(update));
         ctx.command_done(update);
         assert!(!ctx.command_pending(update));
         // Only navigate and theme go before the dashboard has signed in.
-        assert!(["logout", "update-apps", "refresh", "auth-recheck"].iter().all(|a| needs_sign_in(a)));
+        assert!(
+            ["logout", "update-apps", "refresh", "auth-recheck"]
+                .iter()
+                .all(|a| needs_sign_in(a))
+        );
         assert!(!needs_sign_in("navigate") && !needs_sign_in("theme"));
     }
 

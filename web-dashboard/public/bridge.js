@@ -90,6 +90,8 @@ const contentMode = (() => {
 const FRAME_ACTIONS = new Set(['navigate', 'refresh', 'update-apps', 'theme', 'logout', 'auth-recheck']);
 /** Why the last session ended (ended, expired, revoked), for the app frame's sign-in page. */
 let endedWith = '';
+/** The ids of the app frame's commands this page has run (each runs once in this page's life). */
+const frameCommandsRun = new Set();
 function tellFrame(kind, fields = {}) {
   if (!contentMode) return;
   try { globalThis.parent.postMessage({ ...fields, type: 'aac-content', kind }, origin); } catch {}
@@ -1407,8 +1409,11 @@ try {
       const message = event.data;
       if (!message || message.type !== 'aac-frame' || !FRAME_ACTIONS.has(message.action)) return;
       // The frame holds each command until this page has started and signed in, and keeps it until this answer, so a
-      // command is never lost to a page that was still loading.
+      // command is never lost to a page that was still loading. A command id this page has already run is only
+      // answered again, never run twice.
       const id = Number.isSafeInteger(message.id) ? message.id : null;
+      if (id !== null && frameCommandsRun.has(id)) { tellFrame('done', { id }); return; }
+      if (id !== null) frameCommandsRun.add(id);
       void Promise.resolve()
         .then(() => window.ccsDashboardAction(message.action, typeof message.value === 'string' ? message.value : ''))
         .catch(() => {})

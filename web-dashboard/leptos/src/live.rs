@@ -4,9 +4,9 @@
 //! failed read keeps the last good view on screen, marked as old; nothing is ever shown as live after a failure.
 
 use crate::api::{FetchError, StatusView, fetch_status};
+use crate::owned;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::owned;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;

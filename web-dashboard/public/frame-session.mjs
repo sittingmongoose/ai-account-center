@@ -286,6 +286,26 @@ export function createFrameSession({
     return { ok: true };
   }
 
+  /**
+   * Sign out when the dashboard's own Sign out never answered: the server says whether that sign-out already ended
+   * the session (then only this page follows); only a session still signed in gets this page's one logout.
+   */
+  async function finishSignOut() {
+    if (busy || !view.signedIn) return { ok: true };
+    let status;
+    try {
+      status = await send('/api/auth/check');
+    } catch (error) {
+      return { ok: false, failure: signOutFailureText(error) };
+    }
+    if (status?.authenticated !== true && status?.authRequired !== false) {
+      forgetSignIn(storage);
+      showSignedOut('default', { notice: true, message: 'Signed out.' });
+      return { ok: true };
+    }
+    return signOut();
+  }
+
   /** The dashboard's own page signed out (its Sign out): show the same signed-out page here. */
   function signedOutElsewhere() {
     forgetSignIn(storage);
@@ -304,6 +324,7 @@ export function createFrameSession({
     createSignIn,
     typing,
     signOut,
+    finishSignOut,
     signedOutElsewhere,
     ended,
     limitOver,

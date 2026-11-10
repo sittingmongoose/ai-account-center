@@ -111,4 +111,69 @@ export const tests = {
 		await t.check('the frame says how long sessions last, as the dashboard found', state.form && /^Signed out after /.test(state.banner), JSON.stringify(state));
 		await t.noConsoleErrors('console: only the refused reads', { allow: [/status of 401/] });
 	},
+
+	// Fix round 2 (recheck of 36a0b2cf): a mutation is never sent twice, and Sign out's fallback asks the server first.
+	async 'frame: a completed update is not sent again to a dashboard that restarted'(t) {
+		await open(t, 'home');
+		await t.until('the dashboard signed in', dashboardSignedIn, null, { timeout: 60000, hard: true });
+		await t.until('the dashboard has read once', () => !!document.querySelector('.chrome .status-line b')?.textContent, null, { timeout: 30000, hard: true });
+		let starts = 0;
+		let release;
+		const gate = new Promise((resolve) => { release = resolve; });
+		await t.page.route((u) => new URL(u).pathname === '/api/app-updates/start', async (route) => {
+			starts++;
+			if (starts === 1) await gate;
+			await route.fulfill({ json: { job: { id: '00000000-0000-4000-8000-000000000001', state: 'done', results: [] } } }).catch(() => {});
+		});
+		await t.page.click('.chrome .upd-btn');
+		await t.equal('the click reached the update endpoint once', await eventually(t, async () => starts, (n) => n >= 1, 4000), 1);
+		// The job has finished on the server, but its answer has not reached the page: the dashboard's page restarts first.
+		await t.page.evaluate(() => document.querySelector('iframe.slint-frame').contentWindow.location.reload());
+		release();
+		await t.until('the restarted dashboard signed in', dashboardSignedIn, null, { timeout: 60000, hard: true });
+		await t.page.waitForTimeout(2000);
+		await t.equal('one click, one start request across the restart', starts, 1);
+		const toast = await t.page.evaluate(() => document.querySelector('.toasts')?.innerText.replace(/\s+/g, ' ') || '');
+		await t.check('and the frame says to check the results', /Update apps may not have started/.test(toast) && /Check the Update apps results/.test(toast), toast);
+	},
+
+	async 'frame: a repeated command id runs once'(t) {
+		await open(t, 'home');
+		await t.until('the dashboard signed in', dashboardSignedIn, null, { timeout: 60000, hard: true });
+		let starts = 0;
+		await t.page.route((u) => new URL(u).pathname === '/api/app-updates/start', async (route) => {
+			starts++;
+			await route.fulfill({ json: { job: { state: 'done', results: [] } } });
+		});
+		const post = () => t.page.evaluate(() => document.querySelector('iframe.slint-frame').contentWindow.postMessage({ type: 'aac-frame', id: 900001, action: 'update-apps', value: '' }, location.origin));
+		await post();
+		await t.page.waitForTimeout(600);
+		await post();
+		await t.page.waitForTimeout(1000);
+		await t.equal('the same command id starts one job', starts, 1);
+	},
+
+	async 'frame: a slow logout makes one server request'(t) {
+		await open(t, 'home');
+		await t.until('the dashboard signed in', dashboardSignedIn, null, { timeout: 60000, hard: true });
+		await t.until('the dashboard has read once', () => !!document.querySelector('.chrome .status-line b')?.textContent, null, { timeout: 30000, hard: true });
+		let calls = 0;
+		let release;
+		const gate = new Promise((resolve) => { release = resolve; });
+		// The logout reaches the server (the session ends), and only its answer is held past the frame's 10 s.
+		await t.page.route((u) => new URL(u).pathname === '/api/auth/logout', async (route) => {
+			calls++;
+			const response = await route.fetch();
+			if (calls === 1) await gate;
+			await route.fulfill({ response }).catch(() => {});
+		});
+		await t.page.click(MENU);
+		await t.page.locator('.acct-menu .menu-item', { hasText: 'Sign out' }).click();
+		await t.page.waitForTimeout(11500);
+		const state = await frameState(t);
+		release();
+		await t.equal('one Sign out, one logout request', calls, 1);
+		await t.check('the frame followed the server: signed out, with its sign-in', state.signedIn === false && state.form, JSON.stringify(state));
+		await t.check('and the session is ended', !(await serverSignedIn(t)));
+	},
 };

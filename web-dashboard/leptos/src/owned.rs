@@ -48,8 +48,8 @@ pub fn listen(target: &web_sys::EventTarget, event: &'static str, f: impl Fn() +
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::rc::Rc;
     use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
     fn a_teardown_runs_once_when_its_owner_is_cleaned_up() {

@@ -9,8 +9,8 @@ pub mod api;
 mod blocks;
 mod cards;
 mod drafts;
-mod frame;
 pub mod fmt;
+mod frame;
 mod live;
 mod media;
 mod owned;
@@ -61,7 +61,13 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [Page::Home, Page::Analytics, Page::Accounts, Page::Status, Page::Scoreboard];
+    pub const ALL: [Page; 5] = [
+        Page::Home,
+        Page::Analytics,
+        Page::Accounts,
+        Page::Status,
+        Page::Scoreboard,
+    ];
 
     /// The frame's address for the page.
     pub fn path(self) -> &'static str {
@@ -220,7 +226,9 @@ pub fn start() {
         mount_to_body(move || {
             media::provide_viewer();
             let page_view = match page {
-                Page::Scoreboard => view! { <scoreboard::ScoreboardPage embedded=true/> }.into_any(),
+                Page::Scoreboard => {
+                    view! { <scoreboard::ScoreboardPage embedded=true/> }.into_any()
+                }
                 _ => {
                     provide_context(live::start());
                     view! { <status::StatusPage embedded=true/> }.into_any()

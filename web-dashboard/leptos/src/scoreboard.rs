@@ -496,7 +496,10 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
     // Inside the classic shell (`embedded`) the shell's own sign-in follows the session, as before.
     if !embedded {
         Effect::new(move |_| {
-            if board.error.with(|e| matches!(e, Some(FetchError::SignedOut))) {
+            if board
+                .error
+                .with(|e| matches!(e, Some(FetchError::SignedOut)))
+            {
                 crate::session::dashboard_signed_out("expired", None);
             }
         });

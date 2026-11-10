@@ -214,3 +214,30 @@ test('the dashboard signing out inside the frame shows the same signed-out page'
   assert.equal(last().signedIn, false);
   assert.equal(last().message, 'Signed out.');
 });
+
+test("sign out's fallback: a session the server already ended only updates this page, with no second logout", async () => {
+  let authenticated = true;
+  const { s, server, last } = session({
+    '/api/auth/check': () => ({ status: 200, body: { authenticated, username: 'labadmin' } }),
+    '/api/auth/logout': { status: 200, body: { ok: true } },
+  });
+  await s.start();
+  authenticated = false; // the dashboard's own logout reached the server; its answer is still on the way
+  const result = await s.finishSignOut();
+  assert.equal(result.ok, true);
+  assert.equal(server.calls.filter((c) => c.path === '/api/auth/logout').length, 0);
+  assert.equal(last().signedIn, false);
+  assert.equal(last().message, 'Signed out.');
+});
+
+test("sign out's fallback: a session still signed in gets exactly one logout", async () => {
+  const { s, server, last } = session({
+    '/api/auth/check': { status: 200, body: { authenticated: true, username: 'labadmin' } },
+    '/api/auth/logout': { status: 200, body: { ok: true } },
+  });
+  await s.start();
+  const result = await s.finishSignOut();
+  assert.equal(result.ok, true);
+  assert.equal(server.calls.filter((c) => c.path === '/api/auth/logout').length, 1);
+  assert.equal(last().signedIn, false);
+});
