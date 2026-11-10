@@ -31,8 +31,17 @@ async function signInPage(t, label, want = () => true) {
 	return words;
 }
 
+/** The frame is signed in, and a dashboard on screen has finished its own start. A step that ends the session
+ * right after must not race the dashboard's first read of it: that read would find the session gone, forget the
+ * time it was last seen, and the next page could no longer say why (fix round 1 triage). */
 async function framed(t, label) {
 	await t.until(`${label}: the frame is drawn`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-card'), null, { timeout: 30000, hard: true });
+	await t.until(`${label}: the dashboard on screen has started`, () => {
+		const route = [...document.querySelectorAll('.route')].find((r) => !r.hidden);
+		const iframe = route && route.querySelector('iframe.slint-frame');
+		if (!iframe) return true;
+		try { return iframe.contentWindow?.__aacLastAuth?.signedIn === true; } catch { return false; }
+	}, null, { timeout: 60000, hard: true });
 	return true;
 }
 
@@ -45,6 +54,13 @@ async function fill(t, { user = USER, password = '', confirm } = {}) {
 
 async function serverSays(t) {
 	return t.page.evaluate(async () => (await (await fetch('/api/auth/check', { credentials: 'same-origin' })).json()));
+}
+
+/** Leaves the frame for a same-origin document with no scripts, so no page that reads the session is still open
+ * when the next step ends it. An open page that found the session gone would forget when it was last seen, and
+ * the page loaded next could no longer say why (fix round 1 triage: the reviewer's empty banners). */
+async function leaveTheFrame(t) {
+	await t.goto('/manifest.webmanifest', { settleMs: 100 });
 }
 
 /** The server forgets this browser's session behind the frame's back (as a restart, a password change or the
@@ -131,6 +147,7 @@ export const tests = {
 		});
 
 		await t.step('a session that ended early', async () => {
+			await leaveTheFrame(t);
 			await endOnServer(t);
 			await page(t);
 			const w = await signInPage(t, 'ended', (x) => !!x.banner);
@@ -140,6 +157,7 @@ export const tests = {
 		});
 
 		await t.step('a session that ran out', async () => {
+			await leaveTheFrame(t);
 			await endOnServer(t);
 			// The server last accepted this session longer ago than any session lasts.
 			await t.page.evaluate(() => localStorage.setItem('aac-session-seen-at', String(Date.now() - 400 * 24 * 3600 * 1000)));

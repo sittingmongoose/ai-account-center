@@ -86,8 +86,10 @@ pub fn start() -> RwSignal<SessionView> {
     view
 }
 
-/// The dashboard (or a page's read) found the session gone: "expired" works out why; "default" is a sign-out.
-pub fn dashboard_signed_out(state: &str) {
+/// The dashboard (or a page's read) found the session gone: "expired" says why; "default" is a sign-out. `reason` is
+/// the dashboard's own finding (ended, expired, revoked): it has already forgotten the time the session was last
+/// seen, so the frame cannot work the reason out again.
+pub fn dashboard_signed_out(state: &str, reason: Option<&str>) {
     let signed_in = call("view", None)
         .and_then(|v| js_sys::Reflect::get(&v, &"signedIn".into()).ok())
         .and_then(|v| v.as_bool())
@@ -96,7 +98,7 @@ pub fn dashboard_signed_out(state: &str) {
         return;
     }
     if state == "expired" {
-        call("ended", None);
+        call("ended", reason.filter(|r| matches!(*r, "ended" | "expired" | "revoked")).map(JsValue::from));
     } else {
         call("signedOutElsewhere", None);
     }

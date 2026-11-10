@@ -88,6 +88,8 @@ const contentMode = (() => {
   } catch { return false; }
 })();
 const FRAME_ACTIONS = new Set(['navigate', 'refresh', 'update-apps', 'theme', 'logout', 'auth-recheck']);
+/** Why the last session ended (ended, expired, revoked), for the app frame's sign-in page. */
+let endedWith = '';
 function tellFrame(kind, fields = {}) {
   if (!contentMode) return;
   try { globalThis.parent.postMessage({ ...fields, type: 'aac-content', kind }, origin); } catch {}
@@ -160,7 +162,10 @@ function auth(signedIn, state, extra = {}) {
   // sign-in pauses (signin.slint forgets the typed password in the limited state).
   if (signedIn || state === 'limited') { try { loginBridge?.clearPassword(); } catch {} }
   set_auth(signedIn, JSON.stringify(view));
-  tellFrame('auth', { signedIn, state });
+  // The frame shows its own sign-in. An ended session goes with this page's reason: the time it was last seen is
+  // already forgotten (sessionEnded), so the frame could not work it out again.
+  tellFrame('auth', { signedIn, state, ...(state === 'expired' && endedWith ? { reason: endedWith } : {}) });
+  if (signedIn) endedWith = '';
   syncThemeColor();
   // the Status and Scoreboard iframes live only while signed in (shell-frame.mjs)
   shellFrames?.setSignedIn(signedIn);
@@ -814,6 +819,7 @@ function showSignedOut(state, extra) {
 }
 /** The server no longer knows this browser's session: say whether it ran out, ended early or was revoked. */
 function sessionEnded(reason = endedReason(lastSeenAt(globalThis.localStorage), sessionHours) || 'ended') {
+  endedWith = reason;
   forgetSignIn(globalThis.localStorage);
   claudeOpen.reset();
   accounts.reset();
@@ -1400,7 +1406,13 @@ try {
       if (event.origin !== origin || event.source !== globalThis.parent) return;
       const message = event.data;
       if (!message || message.type !== 'aac-frame' || !FRAME_ACTIONS.has(message.action)) return;
-      void window.ccsDashboardAction(message.action, typeof message.value === 'string' ? message.value : '');
+      // The frame holds each command until this page has started and signed in, and keeps it until this answer, so a
+      // command is never lost to a page that was still loading.
+      const id = Number.isSafeInteger(message.id) ? message.id : null;
+      void Promise.resolve()
+        .then(() => window.ccsDashboardAction(message.action, typeof message.value === 'string' ? message.value : ''))
+        .catch(() => {})
+        .finally(() => { if (id !== null) tellFrame('done', { id }); });
     });
   }
   // The login form's real HTML inputs lie over the Slint fields (login-bridge.mjs): what is typed or filled lands

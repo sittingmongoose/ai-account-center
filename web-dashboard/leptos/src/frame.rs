@@ -37,6 +37,28 @@ pub struct FrameCtx {
     pub toasts: RwSignal<Vec<Toast>>,
     pub username: RwSignal<String>,
     next_toast: RwSignal<u64>,
+    /// The dashboard's page has started and listens (its `ready`).
+    booted: RwSignal<bool>,
+    /// The dashboard has signed in (its `auth`): only then does it run refresh, update-apps and logout.
+    authed: RwSignal<bool>,
+    /// Commands for the dashboard, held until it can run them and kept until it says it ran them (`done`).
+    outbox: RwSignal<Vec<Command>>,
+    next_command: RwSignal<u64>,
+}
+
+/// One of the dashboard's own actions, waiting for it or on its way.
+#[derive(Clone, Debug, PartialEq)]
+struct Command {
+    id: u64,
+    action: String,
+    value: String,
+    sent: bool,
+}
+
+/// What the dashboard needs before it runs an action: navigate and theme work while it starts; the rest wait for
+/// its sign-in, which it would otherwise ignore (bridge.js `ccsDashboardAction`).
+fn needs_sign_in(action: &str) -> bool {
+    !matches!(action, "navigate" | "theme")
 }
 
 fn origin() -> String {
@@ -52,13 +74,13 @@ fn slint_window() -> Option<web_sys::Window> {
         .and_then(|frame| frame.content_window())
 }
 
-/// Sends the dashboard one of its own actions; nothing happens before it has loaded.
-pub fn post_slint(action: &str, value: &str) {
-    let Some(target) = slint_window() else { return };
+/// Posts one command to the dashboard's window; the dashboard answers `done` with its id once it has run it.
+fn post(target: &web_sys::Window, command: &Command) {
     let message = js_sys::Object::new();
     let _ = js_sys::Reflect::set(&message, &"type".into(), &"aac-frame".into());
-    let _ = js_sys::Reflect::set(&message, &"action".into(), &action.into());
-    let _ = js_sys::Reflect::set(&message, &"value".into(), &value.into());
+    let _ = js_sys::Reflect::set(&message, &"action".into(), &command.action.as_str().into());
+    let _ = js_sys::Reflect::set(&message, &"value".into(), &command.value.as_str().into());
+    let _ = js_sys::Reflect::set(&message, &"id".into(), &(command.id as f64).into());
     let _ = target.post_message(&message, &origin());
 }
 
@@ -83,7 +105,70 @@ impl FrameCtx {
             toasts: RwSignal::new(Vec::new()),
             username: RwSignal::new(String::new()),
             next_toast: RwSignal::new(0),
+            booted: RwSignal::new(false),
+            authed: RwSignal::new(false),
+            outbox: RwSignal::new(Vec::new()),
+            next_command: RwSignal::new(0),
         }
+    }
+
+    /// Asks the dashboard to run one of its actions. The command waits while the dashboard's page is created, starts
+    /// or signs in, and a newer one of the same kind replaces one not sent yet (the latest page, theme; one refresh).
+    pub fn send(&self, action: &str, value: &str) -> u64 {
+        let id = self.next_command.get_untracked() + 1;
+        self.next_command.set(id);
+        self.outbox.update(|all| {
+            all.retain(|c| c.sent || c.action != action);
+            all.push(Command { id, action: action.into(), value: value.into(), sent: false });
+        });
+        self.flush();
+        id
+    }
+
+    /// Sends what the dashboard can run now.
+    fn flush(&self) {
+        let (booted, authed) = (self.booted.get_untracked(), self.authed.get_untracked());
+        if !booted {
+            return;
+        }
+        let Some(target) = slint_window() else { return };
+        self.outbox.update(|all| {
+            for command in all.iter_mut().filter(|c| !c.sent && (authed || !needs_sign_in(&c.action))) {
+                post(&target, command);
+                command.sent = true;
+            }
+        });
+    }
+
+    /// The dashboard's page started (again): what went to an earlier page and was never answered goes again, since
+    /// that page is gone. Each command is safe to repeat (a second update-apps finds the running job).
+    fn dashboard_started(&self) {
+        self.booted.set(true);
+        self.authed.set(false);
+        self.outbox.update(|all| all.iter_mut().for_each(|c| c.sent = false));
+        self.flush();
+    }
+
+    fn dashboard_signed_in(&self, signed_in: bool) {
+        self.authed.set(signed_in);
+        if signed_in {
+            self.flush();
+        }
+    }
+
+    fn command_done(&self, id: u64) {
+        self.outbox.update(|all| all.retain(|c| c.id != id));
+    }
+
+    fn command_pending(&self, id: u64) -> bool {
+        self.outbox.with_untracked(|all| all.iter().any(|c| c.id == id))
+    }
+
+    /// The dashboard's page is gone (the frame signed out): nothing waits for it any more.
+    fn dashboard_gone(&self) {
+        let _ = self.booted.try_set(false);
+        let _ = self.authed.try_set(false);
+        let _ = self.outbox.try_update(|all| all.clear());
     }
 
     /// Shows a tab: the address follows, the dashboard follows for its own pages, and the page reads at once.
@@ -100,7 +185,7 @@ impl FrameCtx {
         self.route.set(page);
         crate::set_active(page);
         if page.slint() {
-            post_slint("navigate", page.id());
+            self.send("navigate", page.id());
         } else {
             window().scroll_to_with_x_and_y(0.0, 0.0);
         }
@@ -132,7 +217,7 @@ impl FrameCtx {
 
     pub fn refresh(&self) {
         if self.route.get_untracked().slint() {
-            post_slint("refresh", "");
+            self.send("refresh", "");
         } else if let Some(info) = self.infos.with_untracked(|all| {
             let page = self.route.get_untracked();
             all.iter().find(|(p, _, _)| *p == page).map(|(_, _, info)| *info)
@@ -141,15 +226,16 @@ impl FrameCtx {
         }
     }
 
-    /// Update apps runs in the dashboard, and its results are listed under Accounts & Settings.
+    /// Update apps runs in the dashboard, and its results are listed under Accounts & Settings. The command waits
+    /// while the dashboard is created and signs in, so the first click counts.
     pub fn update_apps(&self) {
         self.go(Page::Accounts);
-        post_slint("update-apps", "");
+        self.send("update-apps", "");
     }
 
     pub fn set_theme(&self, mode: &str) {
         apply_theme(mode);
-        post_slint("theme", mode);
+        self.send("theme", mode);
     }
 
     /// The way back: this device opens the classic app again until the frame is turned on.
@@ -160,14 +246,25 @@ impl FrameCtx {
         let _ = window().location().set_href("/");
     }
 
-    /// Sign out. With the dashboard loaded its own Sign out runs (it waits for a switch on screen, and resets its
-    /// state); it then tells the frame. Without it, the frame makes the same call.
+    /// Sign out. With the dashboard signed in, its own Sign out runs: it waits while an account switch is waiting on
+    /// screen, resets its state and tells the frame. Otherwise (not created, still starting, not signed in yet, so
+    /// no switch can be waiting) the frame ends the session itself, and the dashboard's page goes with the
+    /// signed-in frame. If a signed-in dashboard never answers, the frame ends the session after 10 s.
     pub fn sign_out(&self) {
-        if slint_window().is_some() {
-            post_slint("logout", "");
-        } else {
+        if !(self.booted.get_untracked() && self.authed.get_untracked() && slint_window().is_some()) {
+            self.outbox.update(|all| all.clear());
             session::sign_out(*self);
+            return;
         }
+        let id = self.send("logout", "");
+        let ctx = *self;
+        let fallback = Closure::once_into_js(move || {
+            if ctx.command_pending(id) {
+                ctx.command_done(id);
+                session::sign_out(ctx);
+            }
+        });
+        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(fallback.unchecked_ref(), 10_000);
     }
 
     pub fn toast(&self, kind: &str, title: &str, body: &str, ms: i32) {
@@ -222,10 +319,16 @@ fn listen_to_dashboard(ctx: FrameCtx, chrome: SlintChrome) {
         }
         match read_str(&data, "kind").as_str() {
             "ready" => {
-                post_slint("theme", &stored_theme());
+                ctx.dashboard_started();
+                ctx.send("theme", &stored_theme());
                 let page = ctx.route.get_untracked();
                 if page.slint() {
-                    post_slint("navigate", page.id());
+                    ctx.send("navigate", page.id());
+                }
+            }
+            "done" => {
+                if let Some(id) = js_sys::Reflect::get(&data, &"id".into()).ok().and_then(|v| v.as_f64()) {
+                    ctx.command_done(id as u64);
                 }
             }
             "page" => {
@@ -260,8 +363,10 @@ fn listen_to_dashboard(ctx: FrameCtx, chrome: SlintChrome) {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 let state = read_str(&data, "state");
+                ctx.dashboard_signed_in(signed_in);
                 if !signed_in && matches!(state.as_str(), "default" | "expired") {
-                    session::dashboard_signed_out(&state);
+                    let reason = read_str(&data, "reason");
+                    session::dashboard_signed_out(&state, (!reason.is_empty()).then_some(reason.as_str()));
                 }
             }
             _ => {}
@@ -332,7 +437,9 @@ pub fn Frame(initial: Page) -> impl IntoView {
         updated: Signal::derive(move || chrome.strong.get()),
         live: Signal::derive(move || chrome.more.get() == "live"),
         summary: Signal::derive(Vec::new),
-        refresh: Callback::new(move |_| post_slint("refresh", "")),
+        refresh: Callback::new(move |_| {
+            ctx.send("refresh", "");
+        }),
         lead: Some(Signal::derive(move || {
             let lead = chrome.lead.get();
             if lead.is_empty() { "Updated".into() } else { lead }
@@ -371,7 +478,7 @@ fn StatusRoute(ctx: FrameCtx) -> impl IntoView {
                 // The session ended under this page: the frame's sign-in says why.
                 Effect::new(move |_| {
                     if live.error.with(|e| matches!(e, Some(crate::api::FetchError::SignedOut))) {
-                        session::dashboard_signed_out("expired");
+                        session::dashboard_signed_out("expired", None);
                     }
                 });
                 view! { <status::StatusPage embedded=false/> }
@@ -397,6 +504,8 @@ fn SlintHost(ctx: FrameCtx) -> impl IntoView {
     view! {
         <div class="route slint-host" hidden=move || !ctx.route.get().slint()>
             {move || seen.get().then(|| {
+                // The page goes with the signed-in frame; commands for it go too.
+                on_cleanup(move || ctx.dashboard_gone());
                 let page = ctx.route.get_untracked();
                 // The browser kit's probes (`?e2e`) reach the dashboard too.
                 let e2e = window().location().search().unwrap_or_default().split(['?', '&']).any(|p| p == "e2e");
@@ -439,6 +548,34 @@ mod tests {
             refresh: Callback::new(|_| {}),
             lead: None,
         }
+    }
+
+    #[test]
+    fn commands_wait_for_the_dashboard_and_the_newest_of_a_kind_wins() {
+        let owner = Owner::new();
+        owner.set();
+        let ctx = FrameCtx::new(Page::Status);
+        // Nothing has started yet: every command waits, unsent.
+        ctx.send("navigate", "home");
+        let update = ctx.send("update-apps", "");
+        ctx.send("navigate", "accounts");
+        let waiting: Vec<(String, String, bool)> = ctx
+            .outbox
+            .get_untracked()
+            .into_iter()
+            .map(|c| (c.action, c.value, c.sent))
+            .collect();
+        assert_eq!(
+            waiting,
+            vec![("update-apps".into(), String::new(), false), ("navigate".into(), "accounts".into(), false)]
+        );
+        // The dashboard said it ran it: it leaves the outbox.
+        assert!(ctx.command_pending(update));
+        ctx.command_done(update);
+        assert!(!ctx.command_pending(update));
+        // Only navigate and theme go before the dashboard has signed in.
+        assert!(["logout", "update-apps", "refresh", "auth-recheck"].iter().all(|a| needs_sign_in(a)));
+        assert!(!needs_sign_in("navigate") && !needs_sign_in("theme"));
     }
 
     #[test]

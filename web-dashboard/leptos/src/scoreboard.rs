@@ -492,6 +492,15 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         loading: RwSignal::new(false),
     };
     board.reload();
+    // In the app frame a read the server refused (the session ended) brings the frame's sign-in, as Status does.
+    // Inside the classic shell (`embedded`) the shell's own sign-in follows the session, as before.
+    if !embedded {
+        Effect::new(move |_| {
+            if board.error.with(|e| matches!(e, Some(FetchError::SignedOut))) {
+                crate::session::dashboard_signed_out("expired", None);
+            }
+        });
+    }
     // The scoreboard moves slowly: re-read on its own poll while the page is visible, and keep ages running.
     let ticks = RwSignal::new(0u32);
     let _ = set_interval(
