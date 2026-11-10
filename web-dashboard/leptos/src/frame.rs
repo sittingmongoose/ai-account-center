@@ -7,9 +7,13 @@
 //! - dashboard to frame: `{type: "aac-content", kind, ...}` with kind ready, page (its own links moved it), toast,
 //!   chrome (the header's status line) or auth (it signed out, or its session ended).
 //!
+//! Native pages draw the dashboard's views (dash.rs): the iframe still loads for them and keeps the network, session
+//! and every server call, but stays hidden while a native tab shows.
+//!
 //! Sign-in is the frame's (session.rs); until it is done no tab is drawn.
 
 use crate::Page;
+use crate::dash::{self, DashCtx};
 use crate::session::{self, SessionView};
 use crate::ui::*;
 use crate::{live, scoreboard, status};
@@ -46,6 +50,10 @@ pub struct FrameCtx {
     next_command: RwSignal<u64>,
     /// Changes each time the frame signs in or out: a sign-out fallback made in one session never acts in the next.
     epoch: RwSignal<u64>,
+    /// The dashboard's views for the native pages, and their way back (dash.rs).
+    pub dash: DashCtx,
+    /// The theme setting (auto, light or dark): the header's button and Settings' Appearance show the same one.
+    pub theme: RwSignal<String>,
 }
 
 /// One of the dashboard's own actions, waiting for it or on its way.
@@ -67,7 +75,7 @@ fn origin() -> String {
     window().location().origin().unwrap_or_default()
 }
 
-fn slint_window() -> Option<web_sys::Window> {
+pub(crate) fn slint_window() -> Option<web_sys::Window> {
     document()
         .query_selector("iframe.slint-frame")
         .ok()
@@ -114,6 +122,8 @@ impl FrameCtx {
             outbox: RwSignal::new(Vec::new()),
             next_command: RwSignal::new(0),
             epoch: RwSignal::new(0),
+            dash: DashCtx::new(),
+            theme: RwSignal::new("auto".into()),
         }
     }
 
@@ -160,6 +170,7 @@ impl FrameCtx {
     fn dashboard_started(&self) {
         self.booted.set(true);
         self.authed.set(false);
+        self.dash.restarted();
         let mut lost_update = false;
         self.outbox.update(|all| {
             all.retain_mut(|c| {
@@ -193,6 +204,7 @@ impl FrameCtx {
 
     fn dashboard_signed_in(&self, signed_in: bool) {
         self.authed.set(signed_in);
+        self.dash.live.set(signed_in);
         if signed_in {
             self.flush();
         }
@@ -212,6 +224,7 @@ impl FrameCtx {
         let _ = self.booted.try_set(false);
         let _ = self.authed.try_set(false);
         let _ = self.outbox.try_update(|all| all.clear());
+        self.dash.clear();
     }
 
     /// Shows a tab: the address follows, the dashboard follows for its own pages, and the page reads at once.
@@ -227,9 +240,10 @@ impl FrameCtx {
     fn show(&self, page: Page) {
         self.route.set(page);
         crate::set_active(page);
-        if page.slint() {
+        if page.bridged() {
             self.send("navigate", page.id());
-        } else {
+        }
+        if !page.slint() {
             window().scroll_to_with_x_and_y(0.0, 0.0);
         }
     }
@@ -263,7 +277,7 @@ impl FrameCtx {
     }
 
     pub fn refresh(&self) {
-        if self.route.get_untracked().slint() {
+        if self.route.get_untracked().bridged() {
             self.send("refresh", "");
         } else if let Some(info) = self.infos.with_untracked(|all| {
             let page = self.route.get_untracked();
@@ -284,6 +298,7 @@ impl FrameCtx {
 
     pub fn set_theme(&self, mode: &str) {
         apply_theme(mode);
+        self.theme.set(mode.to_string());
         self.send("theme", mode);
     }
 
@@ -387,11 +402,19 @@ fn listen_to_dashboard(ctx: FrameCtx, chrome: SlintChrome) {
             match read_str(&data, "kind").as_str() {
                 "ready" => {
                     ctx.dashboard_started();
+                    // The native pages draw its views: ask for them (it listens from now on).
+                    if let Some(target) = slint_window() {
+                        dash::subscribe(&target);
+                    }
                     ctx.send("theme", &stored_theme());
                     let page = ctx.route.get_untracked();
-                    if page.slint() {
+                    if page.bridged() {
                         ctx.send("navigate", page.id());
                     }
+                }
+                "view" => {
+                    let json = read_str(&data, "json");
+                    ctx.dash.receive(&read_str(&data, "key"), json);
                 }
                 "done" => {
                     if let Some(id) = js_sys::Reflect::get(&data, &"id".into())
@@ -408,7 +431,7 @@ fn listen_to_dashboard(ctx: FrameCtx, chrome: SlintChrome) {
                     if page == ctx.route.get_untracked() {
                         return;
                     }
-                    if page.slint() {
+                    if page.bridged() {
                         // The dashboard moved itself (a Home link to Analytics): follow without telling it back.
                         push_history(page.path(), true);
                         ctx.route.set(page);
@@ -510,7 +533,9 @@ pub fn Frame(initial: Page) -> impl IntoView {
     let _ = js_sys::Reflect::set(&window(), &"__aacFrame".into(), &true.into());
     crate::set_theme(&stored_theme());
     let ctx = FrameCtx::new(initial);
+    ctx.theme.set(stored_theme());
     provide_context(ctx);
+    provide_context(ctx.dash);
     push_history(initial.path(), true);
     let view_signal = session::start();
     Effect::new(move |_| {
@@ -600,11 +625,12 @@ fn ScoreboardRoute(ctx: FrameCtx) -> impl IntoView {
     }
 }
 
-/// The Slint dashboard, content-only, for Home, Analytics and Accounts: loaded the first time one of them is shown.
+/// The Slint dashboard, content-only: loaded the first time a tab that takes its data is shown (Home, Analytics,
+/// Accounts), shown only while a tab it draws is current (Home, Analytics).
 #[component]
 fn SlintHost(ctx: FrameCtx) -> impl IntoView {
     let seen = Memo::new(move |prev: Option<&bool>| {
-        prev.copied().unwrap_or(false) || ctx.route.get().slint()
+        prev.copied().unwrap_or(false) || ctx.route.get().bridged()
     });
     view! {
         <div class="route slint-host" hidden=move || !ctx.route.get().slint()>

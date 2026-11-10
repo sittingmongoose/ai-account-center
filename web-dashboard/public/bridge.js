@@ -18,6 +18,7 @@ import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
 import { createShellFrames, effectiveTheme } from './shell-frame.mjs';
+import { createFrameViews, pageAction, viewsSubscription } from './frame-seam.mjs';
 import { setDisplayTimeZone, zonedMonthStart } from './time-format.mjs';
 import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen, viewportSize } from './device.mjs';
 
@@ -96,6 +97,12 @@ function tellFrame(kind, fields = {}) {
   if (!contentMode) return;
   try { globalThis.parent.postMessage({ ...fields, type: 'aac-content', kind }, origin); } catch {}
 }
+/**
+ * The frame's native pages (Accounts & Settings, Details; frame-seam.mjs and leptos/src/dash.rs) draw the same view
+ * JSON as the Slint exports: each view is kept and sent once the frame subscribes. Content mode only.
+ */
+const frameViews = createFrameViews({ post: (kind, fields) => tellFrame(kind, fields) });
+function frameView(key, json) { if (contentMode) frameViews.view(key, json); }
 /** URL state: the page routes /, /analytics and /accounts (page-route.mjs); ?view= still works as an alias. */
 function pageFromLocation() { return pageFromUrl(location.pathname, location.search); }
 let currentPage = pageFromLocation();
@@ -113,7 +120,7 @@ const platform = /Windows/i.test(navigator.userAgent) ? 'windows' : 'mac';
 const host = typeof location.host === 'string' ? location.host : '';
 
 // ---------------------------------------------------------------- feedback
-function setBusy(value) { busy = value; set_busy(value); }
+function setBusy(value) { busy = value; set_busy(value); frameView('busy', value ? 'true' : 'false'); }
 /** Results and failures appear as toasts on any page, never buried at the bottom. */
 function toast(kind, title, body = '', ms = 4800) {
   if (e2e) (globalThis.__aacToasts ||= []).push({ kind, title, body });
@@ -243,7 +250,7 @@ const accounts = createAccountsController({
     serverData = next; data = next; render();
     if (inFlight) void refresh(false, true);
   },
-  strength: view => { try { set_accounts_strength(JSON.stringify(view)); } catch {} },
+  strength: view => { try { set_accounts_strength(JSON.stringify(view)); } catch {} frameView('accounts-strength', JSON.stringify(view)); },
   copy: value => copyText(value),
   open: url => { try { globalThis.open?.(url, '_blank', 'noopener'); } catch {} },
   storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
@@ -299,7 +306,7 @@ const seenSignInNeeds = new Set();
 function render() {
   if (!data) return;
   for (const item of needToasts(data, seenSignInNeeds)) toast(item.kind, item.title, item.body, 20000);
-  pushModel('dashboard', JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))), set_dashboard);
+  pushModel('dashboard', JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))), json => { set_dashboard(json); frameView('dashboard', json); });
   if (openDetailsId) renderDetails(openDetailsId);
   renderAccounts();
   // the quota history and the agenda read the current readings too
@@ -328,7 +335,7 @@ function renderAccounts() {
     // Phase 6 feeds the Settings "Home screen app" row state; accounts-view.mjs does not compute it.
     vm.install = currentInstallRow();
     if (e2e) globalThis.__aacLastAccounts = vm;
-    pushModel('accounts', JSON.stringify(vm), set_accounts);
+    pushModel('accounts', JSON.stringify(vm), json => { set_accounts(json); frameView('accounts', json); });
   } catch (error) { console.error('Accounts & Settings could not be drawn.', error); }
 }
 function renderChrome(isRefreshing = false) {
@@ -342,9 +349,15 @@ function renderChrome(isRefreshing = false) {
 }
 function renderDetails(id) {
   const view = data ? detailsViewModel(data, id, context({ refreshing: false })) : null;
-  if (!view) { openDetailsId = ''; close_details(); return; }
+  if (!view) { openDetailsId = ''; closeDetailsView(); return; }
   openDetailsId = id;
-  show_details(JSON.stringify(view));
+  // the app frame draws Details itself once it says so (frame-seam.mjs); otherwise Slint does, as always
+  if (frameViews.owns('details')) frameView('details', JSON.stringify(view));
+  else show_details(JSON.stringify(view));
+}
+function closeDetailsView() {
+  if (frameViews.owns('details')) frameView('details', '');
+  else close_details();
 }
 function pendingActivation() { return activationConfirmation.hasPending() || antigravityConfirmation.hasPending(); }
 
@@ -356,7 +369,9 @@ function pendingActivation() { return activationConfirmation.hasPending() || ant
 // lands on Home and Back from Home leaves the app.
 let overlayDepth = 0;
 let consumingOverlayEntry = false;
-function belowD() { return innerWidth < 1280; }
+// Inside the app frame this page's own width is the iframe's (0 while it is hidden): the frame's window decides.
+function belowD() { return (contentMode ? frameWidth() : innerWidth) < 1280; }
+function frameWidth() { try { return globalThis.parent.innerWidth; } catch { return innerWidth; } }
 function pushOverlayEntry() {
   if (!belowD()) return;
   overlayDepth++;
@@ -390,7 +405,7 @@ function closeDetailsOnOutsideClicks(canvas) {
     const opens = pressed; pressed = null;
     if (opens === null) return;
     setTimeout(() => {
-      if (openDetailsId && detailsOpens === opens && !pendingActivation()) { openDetailsId = ''; close_details(); }
+      if (openDetailsId && detailsOpens === opens && !pendingActivation()) { openDetailsId = ''; closeDetailsView(); }
     }, 0);
   }, true);
 }
@@ -401,18 +416,21 @@ function showActivationDialog(confirmation) {
     // Details hands its history entry to the dialog; no asynchronous Back followed by a push.
     const replacesDetails = !!openDetailsId;
     openDetailsId = '';
-    if (replacesDetails) close_details();
+    if (replacesDetails) closeDetailsView();
     if (!replacesDetails || overlayDepth === 0) pushOverlayEntry();
     activationDialogOpen = true;
   }
-  show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
+  const json = JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` });
+  if (frameViews.owns('activation')) frameView('activation', json);
+  else show_activation_confirmation(json);
 }
 function closeActivationDialog() {
   if (activationDialogOpen) {
     activationDialogOpen = false;
     consumeOverlayEntry();
   }
-  close_activation_confirmation();
+  if (frameViews.owns('activation')) frameView('activation', '');
+  else close_activation_confirmation();
 }
 
 const activationConfirmation = createActivationConfirmation({
@@ -465,6 +483,7 @@ async function refresh(force = false, restart = false) {
     view.chrome.statusMore = 'Sign in to read account usage';
     view.sections = []; view.cards = [];
     set_dashboard(JSON.stringify(view));
+    frameView('dashboard', JSON.stringify(view));
     return;
   }
   if (refreshing && !force && !restart) return refreshing;
@@ -721,10 +740,14 @@ function applyRefreshInterval(seconds, confirmed = true) {
   if (!Number.isInteger(seconds) || seconds < 30 || seconds > 3600) return;
   refreshIntervalSeconds = seconds;
   refreshSettingsKnown = confirmed;
-  set_refresh_interval(seconds, confirmed);
+  pushRefreshInterval(seconds, confirmed);
   renderAccounts();
   if (usageTimer) clearInterval(usageTimer);
   usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(false, 'morph'); } }, seconds * 1000);
+}
+function pushRefreshInterval(seconds, confirmed) {
+  set_refresh_interval(seconds, confirmed);
+  frameView('refresh-interval', JSON.stringify({ seconds, confirmed }));
 }
 async function loadSettings() {
   if (authCheck?.accessMode === 'open') return;
@@ -736,7 +759,12 @@ async function loadSettings() {
   try { applyRefreshInterval(settings?.refreshIntervalSeconds); } catch {}
   try { if (prefs && typeof prefs.timeZone === 'string') setDisplayTimeZone(prefs.timeZone); } catch {}
 }
-function renderUpdate(done = false) { set_update_status(JSON.stringify(updateViewModel(updateJob, { done }))); renderAccounts(); }
+function renderUpdate(done = false) {
+  const json = JSON.stringify(updateViewModel(updateJob, { done }));
+  set_update_status(json);
+  frameView('update', json);
+  renderAccounts();
+}
 async function updateStatus() {
   if (!authenticated || updateStatusPending) return;
   updateStatusPending = true;
@@ -984,7 +1012,7 @@ window.ccsDashboardAction = async (action, value) => {
     // One entry per Details session: a second row tapped while it is open swaps in place (D) or
     // re-targets the sheet (below D) without stacking history entries.
     if (action === 'details') { detailsOpens++; if (!openDetailsId) pushOverlayEntry(); renderDetails(value); return; }
-    if (action === 'details-closed') { openDetailsId = ''; consumeOverlayEntry(); return; }
+    if (action === 'details-closed') { openDetailsId = ''; if (frameViews.owns('details')) frameView('details', ''); consumeOverlayEntry(); return; }
     // Sheets and popovers the Slint shell opened or closed (header menus, selects): the same
     // history contract as Details (3.9). Closing after a Back pop consumes nothing (depth 0).
     if (action === 'overlay-open') { pushOverlayEntry(); return; }
@@ -1119,7 +1147,7 @@ window.ccsDashboardAction = async (action, value) => {
     }
   } catch (error) {
     if (data && (action === 'threshold' || action === 'automatic' || action.startsWith('antigravity-'))) render();
-    if (action === 'refresh-interval') set_refresh_interval(refreshIntervalSeconds, refreshSettingsKnown);
+    if (action === 'refresh-interval') pushRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
     if (authenticated) failure(error?.message || 'Unable to complete the action.');
   }
 };
@@ -1406,6 +1434,15 @@ try {
   startSlintDashboard(() => start_dashboard(initialVp.width, initialVp.height, devicePixelRatio, THEMES[storedTheme()], startDark));
   if (contentMode) {
     set_content_only(true);
+    // The frame's native pages: their subscription (which views, which overlays it draws) and their actions, from
+    // the parent window and this origin only, for the kinds frame-seam.mjs allows. Never answered or run twice.
+    addEventListener('message', (event) => {
+      const where = { origin, parent: globalThis.parent };
+      const overlays = viewsSubscription(event, where);
+      if (overlays) { frameViews.subscribe(overlays); return; }
+      const page = pageAction(event, where);
+      if (page) void Promise.resolve().then(() => window.ccsDashboardAction(page.kind, page.value)).catch(() => {});
+    });
     addEventListener('message', (event) => {
       if (event.origin !== origin || event.source !== globalThis.parent) return;
       const message = event.data;
@@ -1463,6 +1500,9 @@ try {
     // A Back press over an open overlay closes the top-most one (dialog, Details, sheet, popover).
     if (overlayDepth > 0) {
       overlayDepth--;
+      // an overlay the app frame draws is closed here: the switch dialog is cancelled, Details closes
+      if (activationDialogOpen && frameViews.owns('activation')) { void window.ccsDashboardAction('activation-cancel', ''); return; }
+      if (openDetailsId && frameViews.owns('details')) { openDetailsId = ''; frameView('details', ''); return; }
       try { pop_overlay(); } catch {}
       return;
     }

@@ -39,6 +39,82 @@ fn path(name: &str) -> &'static str {
         "chev-right" => r#"<path d="m9 18 6-6-6-6"/>"#,
         "info" => r#"<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>"#,
         "close" => r#"<path d="M18 6 6 18"/><path d="m6 6 12 12"/>"#,
+        "alert" => {
+            r#"<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>"#
+        }
+        "alert-circle" => {
+            r#"<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>"#
+        }
+        "app-window" => {
+            r#"<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/>"#
+        }
+        "arrow-down" => r#"<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>"#,
+        "check" => r#"<path d="M20 6 9 17l-5-5"/>"#,
+        "check-circle" => r#"<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>"#,
+        "chev-up" => r#"<path d="m18 15-6-6-6 6"/>"#,
+        "code" => {
+            r#"<rect width="20" height="12" x="2" y="6" rx="2"/><path d="M12 12h.01"/><path d="M17 12h.01"/><path d="M7 12h.01"/>"#
+        }
+        "copy" => {
+            r#"<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>"#
+        }
+        "external" => {
+            r#"<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>"#
+        }
+        "eye" => {
+            r#"<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>"#
+        }
+        "eye-off" => {
+            r#"<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>"#
+        }
+        "globe" => {
+            r#"<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>"#
+        }
+        "key" => {
+            r#"<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>"#
+        }
+        "laptop" => {
+            r#"<path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/>"#
+        }
+        "link" => {
+            r#"<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>"#
+        }
+        "lock" => {
+            r#"<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#
+        }
+        "lock-open" => {
+            r#"<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>"#
+        }
+        "login" => {
+            r#"<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>"#
+        }
+        "logout" => {
+            r#"<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>"#
+        }
+        "minus" => r#"<path d="M5 12h14"/>"#,
+        "plus" => r#"<path d="M5 12h14"/><path d="M12 5v14"/>"#,
+        "rotate" => {
+            r#"<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>"#
+        }
+        "share" => {
+            r#"<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>"#
+        }
+        "swap" => {
+            r#"<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>"#
+        }
+        "terminal" => r#"<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>"#,
+        "trash" => {
+            r#"<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>"#
+        }
+        "clock" => r#"<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>"#,
+        "shield" => {
+            r#"<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>"#
+        }
+        "server" => {
+            r#"<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>"#
+        }
+        "timer" => r#"<path d="M10 2h4"/><path d="m12 14 3-3"/><circle cx="12" cy="14" r="8"/>"#,
+        "search" => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>"#,
         _ => "",
     }
 }
@@ -71,16 +147,77 @@ fn mark_svg(name: &str) -> &'static str {
         "zai" => include_str!("marks/zai.svg"),
         "zai-light" => include_str!("marks/zai-light.svg"),
         "muse" => include_str!("marks/muse.svg"),
+        "antigravity" => include_str!("marks/antigravity.svg"),
+        "cursor" => include_str!("marks/cursor.svg"),
+        "cursor-light" => include_str!("marks/cursor-light.svg"),
+        "qwen" => include_str!("marks/qwen.svg"),
+        "qwen-light" => include_str!("marks/qwen-light.svg"),
+        "opencode-go" => include_str!("marks/opencode-go.svg"),
+        "opencode-go-light" => include_str!("marks/opencode-go-light.svg"),
         _ => "",
     }
 }
 
 /// A mark as an image, so a mark with gradients still draws when another copy of it is hidden.
 fn mark_src(name: &str) -> String {
+    if name == "kimi-code" {
+        // Kimi Code's official app icon (a PNG with its own plate).
+        return format!(
+            "data:image/png;base64,{}",
+            include_str!("marks/kimi-code.png.b64").trim()
+        );
+    }
     format!(
         "data:image/svg+xml,{}",
         String::from(js_sys::encode_uri_component(mark_svg(name)))
     )
+}
+
+/// Marks with their own artwork for light surfaces (ui/marks/sources.json).
+fn has_light_art(name: &str) -> bool {
+    matches!(name, "codex" | "cursor" | "qwen" | "zai" | "opencode-go")
+}
+
+/// The optical scale of each mark (sources.json; the plated Kimi icon a further 14% smaller), as Slint's
+/// `ProviderMark` draws it.
+pub fn mark_scale(name: &str) -> f64 {
+    match name {
+        "claude" => 0.93,
+        "codex" => 0.95,
+        "antigravity" => 0.97,
+        "cursor" => 0.89,
+        "muse" => 1.0,
+        "kimi-code" => 0.97 * 0.86,
+        "qwen" => 0.93,
+        "zai" => 0.92,
+        "opencode-go" => 0.84,
+        _ => 1.0,
+    }
+}
+
+/// A provider's mark in a square box at its optical size, as on Home and Accounts (Slint `ProviderMark`). Never
+/// recoloured; light and dark artwork follow the theme.
+#[component]
+pub fn ProviderMark(provider: String, #[prop(default = 22)] size: u32) -> impl IntoView {
+    let inner = (size as f64 * mark_scale(&provider)).round() as u32;
+    let known = matches!(
+        provider.as_str(),
+        "claude"
+            | "codex"
+            | "antigravity"
+            | "cursor"
+            | "muse"
+            | "kimi-code"
+            | "qwen"
+            | "zai"
+            | "opencode-go"
+    );
+    let box_style = format!("width:{size}px;height:{size}px");
+    view! {
+        <span class="pmark" style=box_style aria-hidden="true">
+            {known.then(|| view! { <Mark name=Some(provider.clone()) size=inner/> })}
+        </span>
+    }
 }
 
 /// A provider's mark. Codex and Z.ai have a light and a dark drawing; a model with no mark draws nothing.
@@ -88,7 +225,7 @@ fn mark_src(name: &str) -> String {
 pub fn Mark(name: Option<String>, #[prop(default = 20)] size: u32) -> impl IntoView {
     let style = format!("width:{size}px;height:{size}px");
     name.map(|name| {
-        if name == "codex" || name == "zai" {
+        if has_light_art(&name) {
             let light = format!("{name}-light");
             view! {
                 <img class="mk lt" alt="" style=style.clone() src=mark_src(&light)/>

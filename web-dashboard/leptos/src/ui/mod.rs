@@ -6,5 +6,5 @@ mod icons;
 mod parts;
 
 pub use chrome::{ChromeInfo, FrameShell, PageShell, apply_theme, stored_theme};
-pub use icons::{Icon, Logo, Mark, PlatformGlyph};
+pub use icons::{Icon, Logo, Mark, PlatformGlyph, ProviderMark, mark_scale};
 pub use parts::*;
