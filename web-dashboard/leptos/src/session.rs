@@ -219,9 +219,33 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
             }
         }
     };
+    // The keyboard's Next key: iOS submits a form on return whatever the key says, so Next moves to the next field
+    // to fill, and only the last one (Go) signs in.
+    let on_key = move |event: web_sys::KeyboardEvent| {
+        if event.key() != "Enter" || event.is_composing() {
+            return;
+        }
+        let Some(field) = event.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        if field.get_attribute("enterkeyhint").as_deref() != Some("next") {
+            return;
+        }
+        let Some(form) = field.closest("form").ok().flatten() else { return };
+        let name = field.get_attribute("name").unwrap_or_default();
+        const ORDER: [&str; 4] = ["username", "password", "password-confirm", "setup-code"];
+        let next = ORDER
+            .iter()
+            .skip_while(|n| **n != name)
+            .skip(1)
+            .find_map(|n| form.query_selector(&format!("input[name='{n}']:not([disabled])")).ok().flatten())
+            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+        if let Some(next) = next {
+            event.prevent_default();
+            let _ = next.focus();
+        }
+    };
     view! {
         <div class="signin-page paper-grid">
-            <form class="signin-card plate" method="post" action="/api/auth/login" autocomplete="on" on:submit=on_submit on:input=on_typing>
+            <form class="signin-card plate" method="post" action="/api/auth/login" autocomplete="on" on:submit=on_submit on:input=on_typing on:keydown=on_key>
                 <div class="signin-brand"><Logo/><span class="brand-name">"AI Account Center"</span></div>
                 <h1 class="signin-title">{move || if setup.get() || setup_command.get() { "Set up sign-in" } else { "Sign in" }}</h1>
                 <p class="signin-host q3">{move || view.with(|v| v.host.clone())}</p>

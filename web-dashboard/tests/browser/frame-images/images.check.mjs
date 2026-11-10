@@ -63,7 +63,7 @@ export const tests = Object.fromEntries(
 					await t.app.signIn();
 					await t.app.stub('/api/accounts/dashboard', ACCOUNTS);
 					await stubPages(t);
-					await t.goto(`/app/${tab}?safe=${f.safe}`, { settleMs: 300 });
+					await t.goto(`/app/${tab}?e2e&safe=${f.safe}`, { settleMs: 300 });
 					await t.until(`${tab} shown`, ({ tab, slint, dash }) => {
 						const shown = [...document.querySelectorAll('.route')].filter((r) => !r.hidden);
 						if (shown.length !== 1) return false;

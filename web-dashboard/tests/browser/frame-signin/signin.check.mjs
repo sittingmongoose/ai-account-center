@@ -105,8 +105,17 @@ export const tests = {
 			await t.equal('the typed username stays', w.user, USER);
 		});
 
-		await t.step('the right password', async () => {
-			await fill(t, { password: PASSWORD });
+		await t.step('the right password, with the keyboard', async () => {
+			// The phone keyboard's Next on Username moves to Password (iOS would submit the half-filled form), and
+			// Go on Password signs in.
+			await t.page.fill('input[name="username"]', USER);
+			await t.page.fill('input[name="password"]', '');
+			await t.page.focus('input[name="username"]');
+			await t.page.keyboard.press('Enter');
+			const after = await t.page.evaluate(() => ({ focused: document.activeElement?.getAttribute('name'), message: document.querySelector('.signin-message')?.innerText || '' }));
+			await t.check('Next on Username moves to Password without signing in', after.focused === 'password' && !/Enter your username/.test(after.message), JSON.stringify(after));
+			await t.page.keyboard.type(PASSWORD);
+			await t.page.keyboard.press('Enter');
 			await framed(t, 'signed in');
 		});
 
