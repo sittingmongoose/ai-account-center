@@ -804,6 +804,9 @@ textarea.note::placeholder { color: var(--ink-4); }
 }
 /* Duo portrait: the band already names the page and sums it up. */
 :root[data-chrome='band'] .page-head:not(.sb-head) { display: none; }
+/* Beside the rail the page's name and its one-line summary share a line, as wider screens do: no line for a word. */
+:root[data-chrome='rail'] .page-head > div { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+:root[data-chrome='rail'] .page-head .headline { margin-top: 0; }
 
 
 /* ==========================================================================

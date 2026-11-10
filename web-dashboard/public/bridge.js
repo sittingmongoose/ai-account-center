@@ -1140,7 +1140,9 @@ function setOnline(value) {
   if (next && authenticated && data) renderChrome(false);
 }
 function pushSafeArea() {
-  const insets = readSafeArea(safeProbe, (element) => getComputedStyle(element));
+  // Inside the app frame the frame keeps clear of the status strip, the band and the home indicator; iOS still
+  // reports the screen's insets to this iframe, which drew an empty strip the width of the status strip beside Home.
+  const insets = contentMode ? { top: 0, right: 0, bottom: 0, left: 0 } : readSafeArea(safeProbe, (element) => getComputedStyle(element));
   try { set_safe_area(insets.top, insets.right, insets.bottom, insets.left); } catch {}
   askContentArea();
 }
