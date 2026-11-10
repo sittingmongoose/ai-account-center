@@ -80,6 +80,8 @@ export function createFrameSession({
   let busy = false;
   let checking = false;
   let nonce = 0;
+  // Counts every change from signed out to signed in, so a late answer never acts on a newer session.
+  let signIns = 0;
   let offlineTimer = 0;
   let view = { signedIn: false, state: 'loading' };
 
@@ -95,6 +97,7 @@ export function createFrameSession({
         if (!view.signedIn && !busy && view.state === 'offline' && !checking && visible()) void check();
       }, OFFLINE_RETRY_MS);
     }
+    if (signedIn && !view.signedIn) signIns++;
     view = {
       signedIn,
       state,
@@ -292,12 +295,15 @@ export function createFrameSession({
    */
   async function finishSignOut() {
     if (busy || !view.signedIn) return { ok: true };
+    const asked = signIns;
     let status;
     try {
       status = await send('/api/auth/check');
     } catch (error) {
       return { ok: false, failure: signOutFailureText(error) };
     }
+    // The person signed out and in again while the check was out: this fallback belongs to the old session.
+    if (asked !== signIns || !view.signedIn) return { ok: true };
     if (status?.authenticated !== true && status?.authRequired !== false) {
       forgetSignIn(storage);
       showSignedOut('default', { notice: true, message: 'Signed out.' });
