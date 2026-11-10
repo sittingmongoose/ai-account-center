@@ -12,7 +12,7 @@ use leptos::prelude::*;
 
 /// The overlays the frame draws itself; bridge.js stops drawing them in Slint once the frame says so: "details" (the
 /// Details panel and sheet) and "activation" (the switch approval dialog) join when the frame draws them.
-pub const OVERLAYS: &[&str] = &[];
+pub const OVERLAYS: &[&str] = &["activation"];
 
 /// The pages the frame draws itself (`FRAME_PAGES` in frame-seam.mjs), named in the same subscription: bridge.js
 /// then sends their views here only and takes their layout reports from here only. "analytics" joins when the native

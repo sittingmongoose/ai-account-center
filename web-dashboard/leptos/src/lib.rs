@@ -5,6 +5,7 @@
 //! dashboard content-only. With `?embed=1` today's Slint shell shows the Status or Scoreboard content in its iframe
 //! and sends the theme (`{type: "aac-theme", mode}`).
 
+mod activation;
 pub mod api;
 mod blocks;
 mod cards;
@@ -12,6 +13,7 @@ pub mod dash;
 mod drafts;
 pub mod fmt;
 mod frame;
+mod home;
 mod live;
 mod media;
 mod owned;
@@ -128,7 +130,7 @@ impl Page {
 
     /// Drawn by the Slint dashboard, inside the frame.
     pub fn slint(self) -> bool {
-        matches!(self, Page::Home | Page::Analytics | Page::Accounts)
+        matches!(self, Page::Analytics | Page::Accounts)
     }
 
     /// Its data, actions and header line come from the dashboard (bridge.js in the frame's hidden iframe, dash.rs): the
@@ -281,7 +283,8 @@ mod tests {
             assert_eq!(page_from_path(page.path()), page);
             assert_eq!(Page::from_id(page.id()), Some(page));
         }
-        assert!(Page::Home.slint() && Page::Accounts.slint() && !Page::Status.slint());
+        assert!(!Page::Home.slint() && Page::Analytics.slint() && !Page::Status.slint());
+        assert!(Page::Home.bridged());
         assert!(Page::Accounts.bridged() && Page::Analytics.bridged() && !Page::Status.bridged());
     }
 }

@@ -51,6 +51,14 @@ export const TOKENS = Object.freeze({
 	grabber: 'grabber',
 	'h-claude': 'h-claude',
 	'h-codex': 'h-codex',
+	// Home: the meter's hover track, the reading-changed flash, the number's calm and overage ink, the dialog scrim and
+	// the touch press tint.
+	'track-hover': 'track-hover',
+	flash: 'flash',
+	'calm-text': 'calm-text',
+	'over-text': 'over-text',
+	scrim: 'scrim',
+	pressed: 'pressed',
 });
 
 /** Tokens whose value is geometry around a theme colour. */

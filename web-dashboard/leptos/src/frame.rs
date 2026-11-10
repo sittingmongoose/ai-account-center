@@ -13,7 +13,9 @@
 //! Sign-in is the frame's (session.rs); until it is done no tab is drawn.
 
 use crate::Page;
+use crate::activation::ActivationDialog;
 use crate::dash::{self, DashCtx};
+use crate::home::HomePage;
 use crate::session::{self, SessionView};
 use crate::ui::*;
 use crate::{live, scoreboard, status};
@@ -581,12 +583,27 @@ pub fn Frame(initial: Page) -> impl IntoView {
     view! {
         <Show when=move || signed_in.get() fallback=move || view! { <session::SignIn view=view_signal/> }>
             <FrameShell ctx=ctx>
+                <HomeRoute ctx=ctx/>
                 <StatusRoute ctx=ctx/>
                 <ScoreboardRoute ctx=ctx/>
                 <SlintHost ctx=ctx/>
             </FrameShell>
+            <ActivationDialog/>
         </Show>
         <Toasts ctx=ctx/>
+    }
+}
+
+/// Home, drawn here from the dashboard's view (PLAN step 5). Built the first time its tab is shown, then kept.
+#[component]
+fn HomeRoute(ctx: FrameCtx) -> impl IntoView {
+    let seen = Memo::new(move |prev: Option<&bool>| {
+        prev.copied().unwrap_or(false) || ctx.route.get() == Page::Home
+    });
+    view! {
+        <div class="route" hidden=move || ctx.route.get() != Page::Home>
+            {move || seen.get().then(|| view! { <HomePage/> })}
+        </div>
     }
 }
 
@@ -626,7 +643,7 @@ fn ScoreboardRoute(ctx: FrameCtx) -> impl IntoView {
 }
 
 /// The Slint dashboard, content-only: loaded the first time a tab that takes its data is shown (Home, Analytics,
-/// Accounts), shown only while a tab it draws is current (Home, Analytics).
+/// Accounts), shown only while a tab it draws is current (Analytics, Accounts).
 #[component]
 fn SlintHost(ctx: FrameCtx) -> impl IntoView {
     let seen = Memo::new(move |prev: Option<&bool>| {
