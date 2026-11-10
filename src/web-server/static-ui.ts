@@ -266,7 +266,9 @@ export function hasParentSegment(requestPath: string): boolean {
   } catch {
     return false;
   }
-  return decoded.split('/').some((segment) => segment === '..');
+  // Both separators: on a Windows host send normalises a backslash path the same way, so a
+  // %5C-encoded '..' must be refused there too, not only the slash form (review 622ba7d0 F3).
+  return decoded.split(/[\\/]/).some((segment) => segment === '..');
 }
 
 /**

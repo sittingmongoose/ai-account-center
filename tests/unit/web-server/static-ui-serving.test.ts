@@ -263,6 +263,10 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
       '/pkg/%2E%2E/ui-build-manifest.json',
       `/index.html/../${manifest.wasm.path}.br`,
       `/index.html/../${manifest.wasm.path}.gz`,
+      // Backslash separators (review 622ba7d0 F3): send normalises them like slashes on a
+      // Windows host and would serve the file; everywhere these answer 404, never a redirect.
+      '/pkg%5C..%5Cui-build-manifest.json',
+      `/index.html%5C..%5C${manifest.wasm.path.replace(/\//g, '%5C')}.br`,
     ]) {
       const response = await raw('GET', route, { 'Accept-Encoding': 'br, gzip' });
       expect([route, response.status]).toEqual([route, 404]);
