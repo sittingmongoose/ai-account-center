@@ -65,7 +65,8 @@ export const tests = {
 		const gate = new Promise((resolve) => { release = resolve; });
 		await t.page.route((u) => new URL(u).pathname === '/bridge.js', async (route) => { await gate; await route.continue(); });
 		await t.page.click('.chrome .nav a[href="/app/home"]');
-		await t.page.waitForSelector('iframe.slint-frame');
+		// Home loads the dashboard too (it draws its view), hidden behind the native page.
+		await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
 		await t.page.click(MENU);
 		await t.page.locator('.acct-menu .menu-item', { hasText: 'Sign out' }).click();
 		const ended = await eventually(t, () => serverSignedIn(t), (signedIn) => signedIn === false);

@@ -374,7 +374,7 @@ pub fn UsageMeter(
                     <span class="um-num tnum">{number}<small>"%"</small></span>
                     <span class="um-used">"used"</span>
                     {caption}
-                    {(!v.over_text.is_empty()).then(|| view! { <span class="um-overtext tnum">{format!("+{}% over", v.over_text)}</span> })}
+                    {(!v.over_text.is_empty()).then(|| view! { <span class="um-overtext tnum">{format!("{}% over", v.over_text)}</span> })}
                 </div>
             }
             .into_any(),

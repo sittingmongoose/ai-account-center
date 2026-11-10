@@ -518,26 +518,39 @@ fn SectionHead(sec: Memo<SectionView>, pending: RwSignal<Option<i64>>) -> impl I
     let frame = use_context::<FrameCtx>();
     let id = sec.with_untracked(|s| s.id.clone());
     let is_claude = sec.with_untracked(|s| s.kind == "claude");
-    let tools = move || {
-        let s = sec.get();
-        if s.kind == "claude" {
-            return None;
-        }
-        if !s.switchable || s.rows.is_empty() {
-            return None;
-        }
-        Some(if s.auto.shown {
-            view! { <AutoSwitch sec=sec pending=pending/> }.into_any()
-        } else {
-            let tip = format!(
-                "Switching moves between {} accounts, so it starts once a second account is signed in.",
-                s.label
-            );
-            view! {
-                <div class="hauto-off" title=tip><Icon name="swap"/><span>{runs_view(s.auto.off_runs.clone())}</span></div>
+    // What the head shows on its right: rebuilt only when that changes, so the auto-switch control keeps its state
+    // (a flip waiting for the server, the switch point being picked) through the minute's refresh.
+    let mode = Memo::new(move |_| {
+        sec.with(|s| {
+            if s.kind == "claude" || !s.switchable || s.rows.is_empty() {
+                0
+            } else if s.auto.shown {
+                1
+            } else {
+                2
             }
-            .into_any()
         })
+    });
+    let tools = move || match mode.get() {
+        1 => Some(view! { <AutoSwitch sec=sec pending=pending/> }.into_any()),
+        2 => {
+            let tip = move || {
+                sec.with(|s| {
+                    format!(
+                        "Switching moves between {} accounts, so it starts once a second account is signed in.",
+                        s.label
+                    )
+                })
+            };
+            Some(
+                view! {
+                    <div class="hauto-off" title=tip><Icon name="swap"/>
+                        <span>{move || runs_view(sec.with(|s| s.auto.off_runs.clone()))}</span></div>
+                }
+                .into_any(),
+            )
+        }
+        _ => None,
     };
     view! {
         <header class="plate-head hhead-plate">
@@ -776,6 +789,8 @@ fn Row(
         }
     };
     let n_cells = Memo::new(move |_| row.with(|r| r.cells.len()));
+    let email = Memo::new(move |_| row.with(|r| r.email.clone()));
+    let meta = Memo::new(move |_| row.with(|r| r.meta.clone()));
     let owner = row.with_untracked(|r| format!("{label} · {}", r.email));
     // The notch moves with the switch point being picked.
     let notch_at = Signal::derive(move || pending.get().map(|v| v as f64));
@@ -795,67 +810,83 @@ fn Row(
             })
             .collect_view()
     };
-    let slot = move || {
-        let r = row.get();
+    // The action slot: rebuilt only when its kind changes, so a reading's refresh never replays the Active mark's
+    // draw-on or the Activate cross-fade; a switch moves them through their classes.
+    let slot_kind = Memo::new(move |_| {
         if !switchable.get() {
-            return view! { <OpenButtons row=row reason=reason/> }.into_any();
-        }
-        if r.setup {
-            return view! {
-                <button class="btn accent-line sm hbtn" on:click=move |ev| {
-                    ev.stop_propagation();
-                    if let Some(f) = frame { f.go(Page::Accounts); }
-                }><Icon name="terminal"/>"Finish setup"</button>
-            }
-            .into_any();
-        }
-        let where_ = if r.active_label.is_empty() {
-            format!("on {}", r.platform)
+            0
+        } else if row.with(|r| r.setup) {
+            1
+        } else if can_switch.get() {
+            2
         } else {
-            r.active_label.clone()
-        };
-        let show_button = can_switch.get() && !r.active;
-        let hint = r.activate_hint.clone();
-        let activate = {
-            let hint = hint.clone();
-            move |ev: web_sys::MouseEvent| {
-                ev.stop_propagation();
-                if busy.get_untracked() {
-                    return;
-                }
-                let r = row.get_untracked();
-                if r.active || !can_switch.get_untracked() {
-                    return;
-                }
-                if !r.can_activate {
-                    reason.set(hint.clone());
-                    return;
-                }
-                reason.set(String::new());
-                if r.confirm {
-                    confirm_id.set(r.id.clone());
-                } else {
-                    dash.act(&r.activate_kind, &r.profile);
-                }
+            3
+        }
+    });
+    let is_active = Memo::new(move |_| row.with(|r| r.active));
+    let show_button = Memo::new(move |_| can_switch.get() && !is_active.get());
+    let hint = Memo::new(move |_| row.with(|r| r.activate_hint.clone()));
+    let where_ = Memo::new(move |_| {
+        row.with(|r| {
+            if r.active_label.is_empty() {
+                format!("on {}", r.platform)
+            } else {
+                r.active_label.clone()
             }
-        };
+        })
+    });
+    let activate = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
+        if busy.get_untracked() {
+            return;
+        }
+        let r = row.get_untracked();
+        if r.active || !can_switch.get_untracked() {
+            return;
+        }
+        if !r.can_activate {
+            reason.set(r.activate_hint.clone());
+            return;
+        }
+        reason.set(String::new());
+        if r.confirm {
+            confirm_id.set(r.id.clone());
+        } else {
+            dash.act(&r.activate_kind, &r.profile);
+        }
+    };
+    let mark = move || {
         view! {
-            <span class="hswap">
-                {can_switch.get().then(|| view! {
-                    <button class="btn accent-line sm hbtn hact" class:on=show_button title=hint.clone()
-                        aria-hidden=(!show_button).to_string() tabindex=if show_button { "0" } else { "-1" }
-                        aria-disabled=move || (busy.get() || !row.with(|r| r.can_activate)).to_string()
-                        on:click=activate>
-                        <Icon name="swap"/>"Activate"
-                    </button>
-                })}
-                <span class="hmark" class:on=r.active aria-hidden=(!r.active).to_string()>
-                    <svg class="hcheck" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m7.6 12.4 3.1 3.1 5.7-6.2"/></svg>
-                    <span class="hmark-t"><b>"Active"</b><span>{where_}</span></span>
-                </span>
+            <span class="hmark" class:on=move || is_active.get() aria-hidden=move || (!is_active.get()).to_string()>
+                <svg class="hcheck" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m7.6 12.4 3.1 3.1 5.7-6.2"/></svg>
+                <span class="hmark-t"><b>"Active"</b><span>{move || where_.get()}</span></span>
             </span>
         }
-        .into_any()
+    };
+    let slot = move || {
+        match slot_kind.get() {
+        0 => view! { <OpenButtons row=row reason=reason/> }.into_any(),
+        1 => view! {
+            <button class="btn accent-line sm hbtn" on:click=move |ev| {
+                ev.stop_propagation();
+                if let Some(f) = frame { f.go(Page::Accounts); }
+            }><Icon name="terminal"/>"Finish setup"</button>
+        }
+        .into_any(),
+        2 => view! {
+            <span class="hswap">
+                <button class="btn accent-line sm hbtn hact" class:on=move || show_button.get() title=move || hint.get()
+                    aria-hidden=move || (!show_button.get()).to_string() tabindex=move || if show_button.get() { "0" } else { "-1" }
+                    aria-disabled=move || (busy.get() || !row.with(|r| r.can_activate)).to_string()
+                    on:click=activate>
+                    <Icon name="swap"/>"Activate"
+                </button>
+                {mark()}
+            </span>
+        }
+        .into_any(),
+        _ => view! { <span class="hswap">{mark()}</span> }.into_any(),
+    }
     };
     let confirming = Memo::new(move |_| {
         let id = confirm_id.get();
@@ -882,8 +913,8 @@ fn Row(
             <div class="hid">
                 <ProviderMark provider=row.with_untracked(|r| r.provider.clone()) size=22/>
                 <div class="hid-t">
-                    <b class="hemail">{move || breakable(&row.with(|r| r.email.clone()))}</b>
-                    <span class="hmeta">{move || row.with(|r| r.meta.clone())}</span>
+                    <b class="hemail">{move || breakable(&email.get())}</b>
+                    <span class="hmeta">{move || meta.get()}</span>
                     {move || row.with(|r| (!r.amounts_runs.is_empty()).then(|| view! {
                         <span class="hamts tnum">{runs_view(r.amounts_runs.clone())}</span>
                     }))}

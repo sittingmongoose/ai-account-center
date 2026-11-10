@@ -1,12 +1,14 @@
 // The app frame (PLAN step 4, web-dashboard/leptos/src/frame.rs): one chrome around all five tabs at /app/<page>.
-// The frame draws Status and Scoreboard itself; Home, Analytics and Accounts are the Slint dashboard, content-only, in
-// one same-origin iframe (/?content=1). These check the navigation, the chrome in each format (the Duo's strip and
+// The frame draws Home, Status and Scoreboard itself; Analytics and Accounts are the Slint dashboard, content-only, in
+// one same-origin iframe (/?content=1), which also feeds Home its view (home-page.check.mjs) and stays hidden there. These check the navigation, the chrome in each format (the Duo's strip and
 // band rules, with `?safe=t,r,b,l` giving the measured insets), the setting and the way back, and the offline copy.
 // Sign-in has its own folder (../frame-signin): its limiter step closes this server's sign-in for 15 minutes.
 // Status and Scoreboard read the kit's fixture home (scripts/status-fixture.mjs, scoreboard-fixture.mjs).
 
-const SLINT = new Set(['home', 'analytics', 'accounts']);
-const DASH_PATH = { home: '/', analytics: '/analytics', accounts: '/accounts' };
+const SLINT = new Set(['analytics', 'accounts']);
+const DASH_PATH = { analytics: '/analytics', accounts: '/accounts' };
+/** What each native tab shows once it has its data. */
+const NATIVE = { status: '.status-grid, .q-card', home: '.home .hsec', scoreboard: '.page-title' };
 /** The dashboard's own header and tab bar probes: none may report inside the frame. */
 const HEADER_PROBES = /^(nav|tab)-|^update-apps$|^status-(line|block)$/;
 const NAV = { desk: '.chrome .nav a', phone: '.tabbar a', rail: '.rail > a', band: '.band-nav a' };
@@ -25,7 +27,7 @@ async function slintFrame(t) {
 
 /** The tab is on screen: one route shown, and for the dashboard's tabs the iframe signed in on that page. */
 async function routeShown(t, page) {
-	await t.until(`${page} shown`, ({ page, slint, dash }) => {
+	await t.until(`${page} shown`, ({ slint, dash, native }) => {
 		const shown = [...document.querySelectorAll('.route')].filter((r) => !r.hidden);
 		if (shown.length !== 1) return false;
 		if (slint) {
@@ -36,8 +38,8 @@ async function routeShown(t, page) {
 				return !!(w.__aacLastAuth && w.__aacLastAuth.signedIn) && w.location.pathname === dash;
 			} catch { return false; }
 		}
-		return !!shown[0].querySelector(page === 'status' ? '.status-grid, .q-card' : '.page-title');
-	}, { page, slint: SLINT.has(page), dash: DASH_PATH[page] }, { timeout: 60000, hard: true });
+		return !!shown[0].querySelector(native);
+	}, { page, slint: SLINT.has(page), dash: DASH_PATH[page], native: NATIVE[page] }, { timeout: 60000, hard: true });
 }
 
 async function openFrame(t, page, safe = '') {
@@ -72,6 +74,8 @@ export const tests = {
 		await t.page.click(`${NAV.desk}[href="/app/home"]`);
 		await routeShown(t, 'home');
 		await t.equal('the dashboard stays loaded across tab changes', await (await slintFrame(t)).evaluate(() => window.__kitKept || 0), 1);
+		await t.check('on Home the dashboard is loaded but hidden: Home is drawn by the frame', await t.page.evaluate(() =>
+			!!document.querySelector('iframe.slint-frame') && document.querySelector('.slint-host').hidden && document.querySelectorAll('.home .hsec').length > 0));
 
 		await t.step('Back and Forward', async () => {
 			await t.page.goBack();
@@ -86,6 +90,8 @@ export const tests = {
 		});
 
 		await t.step('the dashboard draws its page only', async () => {
+			await t.page.click(`${NAV.desk}[href="/app/analytics"]`);
+			await routeShown(t, 'analytics');
 			const f = await slintFrame(t);
 			const ids = await f.evaluate(async () => {
 				window.__aacProbeNow && __aacProbeNow();
@@ -95,14 +101,14 @@ export const tests = {
 			const header = ids.filter((id) => HEADER_PROBES.test(id));
 			// (The sign-in panel's probes report even while it is hidden, as on the classic page: not a sign of it here.)
 			await t.check('no dashboard header or tab bar inside the frame', ids.length > 0 && header.length === 0, `${ids.length} probes; header ones: ${header.join(', ') || 'none'}`);
-			await t.check('the page reports its own controls', ids.includes('home-legend'), ids.slice(0, 12).join(', '));
+			await t.check('the page reports its own controls', ids.includes('analytics-provider'), ids.slice(0, 12).join(', '));
 		});
 
 		await t.step("the dashboard's own links move the frame", async () => {
 			const f = await slintFrame(t);
-			await f.evaluate(() => window.ccsDashboardAction('navigate', 'analytics'));
-			await routeShown(t, 'analytics');
-			await t.equal('a dashboard link to Analytics: the address follows', (await where(t)).path, '/app/analytics');
+			await f.evaluate(() => window.ccsDashboardAction('navigate', 'accounts'));
+			await routeShown(t, 'accounts');
+			await t.equal('a dashboard link to Accounts: the address follows', (await where(t)).path, '/app/accounts');
 			await f.evaluate(() => window.ccsDashboardAction('navigate', 'scoreboard'));
 			await routeShown(t, 'scoreboard');
 			await t.equal('a dashboard link to the Scoreboard: the frame shows it', (await where(t)).path, '/app/scoreboard');
@@ -125,7 +131,7 @@ export const tests = {
 
 	async 'frame: each format draws its own chrome, and the Duo keeps its strip and band rules'(t) {
 		for (const f of FORMATS) {
-			for (const page of ['status', 'home']) {
+			for (const page of ['status', 'home', 'analytics']) {
 				await t.step(`${f.name} ${page}`, async () => {
 					await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
 					await t.app.signIn();
@@ -174,7 +180,7 @@ export const tests = {
 						s.tabs.map((r, i) => `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.w)}x${Math.round(r.h)} (taps ${Math.round(s.reach[i])} px tall)`).join('; '));
 					await t.check(`${label}: no tab is covered`, s.covered.length === 0, s.covered.join(', '));
 					await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
-					if (page === 'home') {
+					if (page === 'analytics') {
 						const c = s.content, i = s.iframe;
 						await t.check(`${label}: the dashboard fills the content area`, !!i && Math.abs(i.x - (c.x + c.padL)) < 1 && Math.abs(i.w - (c.w - c.padL)) < 1 && Math.abs(i.y - (c.y + c.padT)) < 1 && Math.abs(i.b - (Math.min(c.b, s.h) - c.pad)) < 1.5,
 							i ? `iframe ${Math.round(i.x)},${Math.round(i.y)} ${Math.round(i.w)}x${Math.round(i.h)}; content ${Math.round(c.x)},${Math.round(c.y)} ${Math.round(c.w)}x${Math.round(c.h)}, ${c.pad} px kept for the home indicator` : 'no iframe shown');
