@@ -728,7 +728,6 @@ def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expe
         len(capsule["cookies"]) > 20):
         raise UsageUnavailable()
     cookies, seen = [], set()
-    now = time.time() * 1000000 + CHROMIUM_EPOCH
     for cookie in capsule["cookies"]:
         if (not isinstance(cookie, dict) or cookie.get("name") not in ("sessionKey", "lastActiveOrg") or
             cookie.get("host_key") not in ("claude.ai", ".claude.ai") or
@@ -738,8 +737,12 @@ def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expe
         if not isinstance(token, str) or not token or len(token) > 32768 or ";" in token or any(ord(char) < 32 for char in token):
             raise UsageUnavailable()
         if cookie.get("has_expires"):
-            expires = number(cookie.get("expires_utc"))
-            if expires is None or expires <= now:
+            # Stored expiry is migration snapshot metadata, not authoritative:
+            # Desktop keeps the live session while the capsule copy's timestamp
+            # goes stale. Identity is re-verified against /api/account before
+            # balances; a truly dead session fails there and stays unavailable.
+            # Only malformed expiry metadata is rejected here.
+            if number(cookie.get("expires_utc")) is None:
                 raise UsageUnavailable()
         if name == "sessionKey" and not (cookie.get("is_secure") == 1 and cookie.get("is_httponly") == 1):
             raise UsageUnavailable()

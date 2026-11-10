@@ -902,11 +902,11 @@ class WebExtraTests(unittest.TestCase):
             self.assertEqual([cookie["name"] for cookie in cookies], ["sessionKey", "lastActiveOrg"])
             decrypt.assert_called_once_with(b"fixture-protected", expected_length=None)
 
-    def test_capsule_scope_account_and_expired_cookie_fail_before_http(self):
+    def test_capsule_scope_account_and_cookie_flags_fail_before_http(self):
         cases = [self.capsule(profileId="party"), self.capsule(email=OTHER_EMAIL),
                  self.capsule(accountUuid=OTHER)]
         for field, value in (("host_key", ".evil.invalid"), ("path", "/other"), ("is_httponly", 0),
-                             ("expires_utc", 1), ("value", "secret;foreign=header")):
+                             ("value", "secret;foreign=header")):
             case = self.capsule(); case["cookies"][0][field] = value; cases.append(case)
         case = self.capsule(); case["cookies"][1]["value"] = OTHER; cases.append(case)
         case = self.capsule(); case["cookies"].append(dict(case["cookies"][0])); cases.append(case)
@@ -916,6 +916,48 @@ class WebExtraTests(unittest.TestCase):
             for case in cases:
                 with self.subTest(case=case), mock.patch.object(usage, "unprotect", return_value=json.dumps(case).encode()), self.assertRaises(usage.UsageUnavailable):
                     usage.capsule_cookies("gmail", ACCOUNT, ORG, home, EMAIL)
+
+    def test_past_expires_utc_session_passes_while_malformed_still_fails(self):
+        expired = self.capsule()
+        expired["cookies"][0]["expires_utc"] = 1
+        with tempfile.TemporaryDirectory() as home:
+            path = Path(home) / ".ccs/claude-session-migration/gmail-source.dpapi"
+            path.parent.mkdir(parents=True); path.write_bytes(b"fixture-protected")
+            with mock.patch.object(usage, "unprotect", return_value=json.dumps(expired).encode()):
+                cookies = usage.capsule_cookies("gmail", ACCOUNT, ORG, home, EMAIL)
+            self.assertEqual([cookie["name"] for cookie in cookies], ["sessionKey", "lastActiveOrg"])
+            for bad in ("not-a-number", True, None, -1, float("inf")):
+                case = self.capsule()
+                case["cookies"][0]["expires_utc"] = bad
+                with self.subTest(bad=repr(bad)):
+                    with mock.patch.object(usage, "unprotect", return_value=json.dumps(case).encode()), self.assertRaises(usage.UsageUnavailable):
+                        usage.capsule_cookies("gmail", ACCOUNT, ORG, home, EMAIL)
+
+    def test_expired_stored_expiry_reaches_grant_windows_but_rejected_session_stays_unavailable(self):
+        expired = self.capsule()
+        expired["cookies"][0]["expires_utc"] = 1
+        with tempfile.TemporaryDirectory() as home:
+            path = Path(home) / ".ccs/claude-session-migration/gmail-source.dpapi"
+            path.parent.mkdir(parents=True); path.write_bytes(b"fixture-protected")
+            usage_payload = {"cedar_ember": {"eligible": True, "grants": [{"resets_left": 2, "resets_total": 3, "paused": False, "clears": ["five_hour", "seven_day"]}]}}
+            client = mock.Mock()
+            client.get.side_effect = [self.web_account(), usage_payload, {"amount": 0, "currency": "USD"}]
+            availability = {}
+            with mock.patch.object(usage, "unprotect", return_value=json.dumps(expired).encode()), mock.patch.object(usage, "WebClient", return_value=client):
+                windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, home=home, availability=availability, expected_email=EMAIL)
+            self.assertEqual(availability.get("resetCredits"), "ok")
+            self.assertEqual(windows[0]["key"], "reset_credits_available")
+            self.assertEqual(windows[0]["remaining"], 2)
+            grant_windows = [w for w in windows if w["key"].startswith("reset_credit_")]
+            self.assertEqual(len(grant_windows), 1)
+            self.assertEqual(grant_windows[0].get("clears"), ["five_hour", "seven_day"])
+            denied = mock.Mock()
+            denied.get.side_effect = usage.UsageUnavailable()
+            denied_availability = {}
+            with mock.patch.object(usage, "unprotect", return_value=json.dumps(expired).encode()), mock.patch.object(usage, "WebClient", return_value=denied):
+                denied_windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, home=home, availability=denied_availability, expected_email=EMAIL)
+            self.assertEqual(denied_windows, [])
+            self.assertEqual(denied_availability, {"resetCredits": "unavailable", "prepaidBalance": "unavailable"})
 
     def test_duplicate_native_org_selectors_coalesce_only_when_identical_and_bound(self):
         value = self.capsule()
