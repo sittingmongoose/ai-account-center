@@ -830,18 +830,10 @@ def _claude_optional_windows(candidate, home, cooldown=None):
     context = digest(["claude-optional-v1", candidate["identity"], candidate["revision"],
                       identifier, before_fingerprint])
     try:
-        try:
-            windows = claude_usage.optional_web_windows(identifier, candidate["_account"],
-                                                        candidate["_organization"], home,
-                                                        availability, candidate["email"], cooldown,
-                                                        profile_root=profile_root)
-        except TypeError as error:
-            message = str(error)
-            if "profile_root" not in message and "unexpected keyword" not in message and "got an unexpected" not in message:
-                raise
-            windows = claude_usage.optional_web_windows(identifier, candidate["_account"],
-                                                        candidate["_organization"], home,
-                                                        availability, candidate["email"], cooldown)
+        windows = claude_usage.optional_web_windows(identifier, candidate["_account"],
+                                                    candidate["_organization"], home,
+                                                    availability, candidate["email"], cooldown,
+                                                    profile_root=profile_root)
     except claude_usage.UsageUnavailable as error:
         windows = []
         availability.update(resetCredits="unavailable", prepaidBalance="unavailable")

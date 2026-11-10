@@ -1344,6 +1344,13 @@ class LiveSessionCookieTests(unittest.TestCase):
     def _future_expiry(self):
         return int((time.time() + 3600) * 1_000_000 + usage.CHROMIUM_EPOCH)
 
+    def test_cookie_db_uri_uses_as_uri_and_rejects_relative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "Network" / "Cookies"
+            self.assertEqual(usage._cookie_db_uri(db), db.as_uri() + "?mode=ro&immutable=1")
+        with self.assertRaises(usage.UsageUnavailable):
+            usage._cookie_db_uri(Path("relative/Cookies"))
+
     def test_profile_key_unwraps_local_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._make_profile_root(tmp)

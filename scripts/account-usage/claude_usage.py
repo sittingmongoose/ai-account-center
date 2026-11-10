@@ -27,7 +27,6 @@ import stat
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 
 
@@ -800,12 +799,20 @@ def _cookie_db_path(profile_root):
     return None
 
 
+def _cookie_db_uri(path):
+    """Read-only immutable sqlite URI; Path.as_uri keeps Windows drive paths valid."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise UsageUnavailable()
+    return path.as_uri() + "?mode=ro&immutable=1"
+
+
 def _open_cookie_db(profile_root):
     """Open the Chromium Cookies DB read-only (immutable), never write."""
     path = _cookie_db_path(profile_root)
     if path is None:
         raise UsageUnavailable()
-    uri = f"file:{urllib.parse.quote(str(path), safe='/')}?mode=ro&immutable=1"
+    uri = _cookie_db_uri(path)
     try:
         connection = sqlite3.connect(uri, uri=True, timeout=1.0)
         try:
@@ -983,16 +990,15 @@ def live_cookie_fingerprint(profile_root):
         path = _cookie_db_path(profile_root)
         if path is None:
             return None
-        uri = f"file:{urllib.parse.quote(str(path), safe='/')}?mode=ro&immutable=1"
         try:
-            connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+            connection = sqlite3.connect(_cookie_db_uri(path), uri=True, timeout=1.0)
             row = connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
             ).fetchone()
             if row is None:
                 return None
             columns = [r[1] for r in connection.execute("PRAGMA table_info(cookies)").fetchall()]
-        except (sqlite3.Error, OSError, ValueError):
+        except (sqlite3.Error, OSError, ValueError, UsageUnavailable):
             return None
         if "name" not in columns or "host_key" not in columns:
             return None
