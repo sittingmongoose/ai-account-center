@@ -776,8 +776,23 @@ impl Engine {
                 found.append(&mut logs.get(id).verify_sealed()?);
             }
         }
-        if !found.is_empty() {
-            let events = found.clone();
+        // Log each detection once: a read-path loss already in findings must stay disclosed
+        // but must not be re-ledgered by its first verification.
+        let known: Vec<String> = self
+            .findings
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|f| is_loss(&f.kind))
+            .map(finding_key)
+            .collect();
+        let fresh: Vec<Finding> = found
+            .iter()
+            .filter(|f| !known.contains(&finding_key(f)))
+            .cloned()
+            .collect();
+        if !fresh.is_empty() {
+            let events = fresh.clone();
             self.commit(LogId::Ledger, |batch| {
                 for f in &events {
                     batch.push(Event::new(
@@ -788,7 +803,7 @@ impl Engine {
                 }
                 Ok(())
             })?;
-            self.findings.lock().unwrap().extend(found.iter().cloned());
+            merge_findings(&mut self.findings.lock().unwrap(), fresh);
         }
         self.set_meta("last_verify_ms", &now_ms().to_string())?;
         // A later check must still disclose previously detected loss.
