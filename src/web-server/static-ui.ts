@@ -247,10 +247,26 @@ function relativeUiPath(root: string, requestPath: string): string | null {
     return null;
   }
   if (decoded.includes('\0') || decoded.includes('\\')) return null;
-  if (decoded.split('/').some((segment) => segment === '..')) return null;
+  if (hasParentSegment(decoded)) return null;
   const relative = decoded.replace(/^\/+/, '');
   if (relative && !isInside(root, path.resolve(root, relative))) return null;
   return relative;
+}
+
+/**
+ * Whether a request path holds a `..` segment once decoded. `express.static` normalises
+ * such a path to whatever it points at inside the UI folder, so serving must refuse it
+ * before that: the deny rules (.br/.gz, the build manifest) would otherwise never see
+ * the normalised path they are meant to judge.
+ */
+export function hasParentSegment(requestPath: string): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(requestPath);
+  } catch {
+    return false;
+  }
+  return decoded.split('/').some((segment) => segment === '..');
 }
 
 /**
@@ -355,8 +371,9 @@ function withoutVariantHeaders(res: Response): void {
 
 /**
  * Mounted before express.static. GET and HEAD only; .br/.gz and the build
- * manifest are never addressed directly; paths with a listed variant are
- * negotiated, the rest fall through.
+ * manifest are never addressed directly, and a path with an internal `..`
+ * segment is refused here rather than left for express.static to normalise;
+ * paths with a listed variant are negotiated, the rest fall through.
  */
 export function precompressedStatic(ui: StaticUi): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -366,6 +383,13 @@ export function precompressedStatic(ui: StaticUi): RequestHandler {
     }
     const relative = relativeUiPath(ui.root, req.path);
     if (relative === null) {
+      // Only the paths express.static would normalise into a served file are
+      // refused here; the others (undecodable, outside the root) keep falling
+      // through as before.
+      if (hasParentSegment(req.path)) {
+        res.status(404).json({ error: 'Not found.' });
+        return;
+      }
       next();
       return;
     }
