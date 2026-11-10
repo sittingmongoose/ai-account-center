@@ -110,9 +110,8 @@ fn theme_icon(mode: &str) -> &'static str {
 /// The account menu: who is signed in, the theme, the way back to the classic app, and Sign out.
 #[component]
 fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
-    let theme = RwSignal::new(stored_theme());
+    let theme = ctx.theme;
     let pick = move |mode: &'static str| {
-        theme.set(mode.to_string());
         ctx.set_theme(mode);
     };
     view! {
@@ -149,14 +148,13 @@ fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
 /// shows (frame.rs).
 #[component]
 pub fn FrameShell(ctx: FrameCtx, children: Children) -> impl IntoView {
-    let theme = RwSignal::new(stored_theme());
+    let theme = ctx.theme;
     let cycle = move |_| {
         let next = match theme.get_untracked().as_str() {
             "auto" => "light",
             "light" => "dark",
             _ => "auto",
         };
-        theme.set(next.to_string());
         ctx.set_theme(next);
     };
     view! {

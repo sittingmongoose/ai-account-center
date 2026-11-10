@@ -18,6 +18,7 @@ import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
 import { createShellFrames, effectiveTheme } from './shell-frame.mjs';
+import { createFrameViews, pageAction, viewsSubscription } from './frame-seam.mjs';
 import { setDisplayTimeZone, zonedMonthStart } from './time-format.mjs';
 import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen, viewportSize } from './device.mjs';
 
@@ -96,6 +97,14 @@ function tellFrame(kind, fields = {}) {
   if (!contentMode) return;
   try { globalThis.parent.postMessage({ ...fields, type: 'aac-content', kind }, origin); } catch {}
 }
+/**
+ * The frame's native pages (Accounts & Settings, Details; frame-seam.mjs and leptos/src/dash.rs) draw the same view
+ * JSON as the Slint exports: each view is kept and sent once the frame subscribes. Content mode only.
+ */
+const frameViews = createFrameViews({ post: (kind, fields) => tellFrame(kind, fields) });
+function frameView(key, json) { if (contentMode) frameViews.view(key, json); }
+/** The app frame draws Analytics itself (frame-seam.mjs FRAME_PAGES): its views go to the frame, none to Slint. */
+function analyticsNative() { return frameViews.owns('analytics'); }
 /** URL state: the page routes /, /analytics and /accounts (page-route.mjs); ?view= still works as an alias. */
 function pageFromLocation() { return pageFromUrl(location.pathname, location.search); }
 let currentPage = pageFromLocation();
@@ -113,7 +122,7 @@ const platform = /Windows/i.test(navigator.userAgent) ? 'windows' : 'mac';
 const host = typeof location.host === 'string' ? location.host : '';
 
 // ---------------------------------------------------------------- feedback
-function setBusy(value) { busy = value; set_busy(value); }
+function setBusy(value) { busy = value; set_busy(value); frameView('busy', value ? 'true' : 'false'); }
 /** Results and failures appear as toasts on any page, never buried at the bottom. */
 function toast(kind, title, body = '', ms = 4800) {
   if (e2e) (globalThis.__aacToasts ||= []).push({ kind, title, body });
@@ -243,7 +252,7 @@ const accounts = createAccountsController({
     serverData = next; data = next; render();
     if (inFlight) void refresh(false, true);
   },
-  strength: view => { try { set_accounts_strength(JSON.stringify(view)); } catch {} },
+  strength: view => { try { set_accounts_strength(JSON.stringify(view)); } catch {} frameView('accounts-strength', JSON.stringify(view)); },
   copy: value => copyText(value),
   open: url => { try { globalThis.open?.(url, '_blank', 'noopener'); } catch {} },
   storage: (() => { try { return globalThis.localStorage; } catch { return null; } })(),
@@ -299,7 +308,7 @@ const seenSignInNeeds = new Set();
 function render() {
   if (!data) return;
   for (const item of needToasts(data, seenSignInNeeds)) toast(item.kind, item.title, item.body, 20000);
-  pushModel('dashboard', JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))), set_dashboard);
+  pushModel('dashboard', JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))), json => { set_dashboard(json); frameView('dashboard', json); });
   if (openDetailsId) renderDetails(openDetailsId);
   renderAccounts();
   // the quota history and the agenda read the current readings too
@@ -328,7 +337,7 @@ function renderAccounts() {
     // Phase 6 feeds the Settings "Home screen app" row state; accounts-view.mjs does not compute it.
     vm.install = currentInstallRow();
     if (e2e) globalThis.__aacLastAccounts = vm;
-    pushModel('accounts', JSON.stringify(vm), set_accounts);
+    pushModel('accounts', JSON.stringify(vm), json => { set_accounts(json); frameView('accounts', json); });
   } catch (error) { console.error('Accounts & Settings could not be drawn.', error); }
 }
 function renderChrome(isRefreshing = false) {
@@ -342,9 +351,15 @@ function renderChrome(isRefreshing = false) {
 }
 function renderDetails(id) {
   const view = data ? detailsViewModel(data, id, context({ refreshing: false })) : null;
-  if (!view) { openDetailsId = ''; close_details(); return; }
+  if (!view) { openDetailsId = ''; closeDetailsView(); return; }
   openDetailsId = id;
-  show_details(JSON.stringify(view));
+  // the app frame draws Details itself once it says so (frame-seam.mjs); otherwise Slint does, as always
+  if (frameViews.owns('details')) frameView('details', JSON.stringify(view));
+  else show_details(JSON.stringify(view));
+}
+function closeDetailsView() {
+  if (frameViews.owns('details')) frameView('details', '');
+  else close_details();
 }
 function pendingActivation() { return activationConfirmation.hasPending() || antigravityConfirmation.hasPending(); }
 
@@ -356,7 +371,9 @@ function pendingActivation() { return activationConfirmation.hasPending() || ant
 // lands on Home and Back from Home leaves the app.
 let overlayDepth = 0;
 let consumingOverlayEntry = false;
-function belowD() { return innerWidth < 1280; }
+// Inside the app frame this page's own width is the iframe's (0 while it is hidden): the frame's window decides.
+function belowD() { return (contentMode ? frameWidth() : innerWidth) < 1280; }
+function frameWidth() { try { return globalThis.parent.innerWidth; } catch { return innerWidth; } }
 function pushOverlayEntry() {
   if (!belowD()) return;
   overlayDepth++;
@@ -390,7 +407,7 @@ function closeDetailsOnOutsideClicks(canvas) {
     const opens = pressed; pressed = null;
     if (opens === null) return;
     setTimeout(() => {
-      if (openDetailsId && detailsOpens === opens && !pendingActivation()) { openDetailsId = ''; close_details(); }
+      if (openDetailsId && detailsOpens === opens && !pendingActivation()) { openDetailsId = ''; closeDetailsView(); }
     }, 0);
   }, true);
 }
@@ -401,18 +418,21 @@ function showActivationDialog(confirmation) {
     // Details hands its history entry to the dialog; no asynchronous Back followed by a push.
     const replacesDetails = !!openDetailsId;
     openDetailsId = '';
-    if (replacesDetails) close_details();
+    if (replacesDetails) closeDetailsView();
     if (!replacesDetails || overlayDepth === 0) pushOverlayEntry();
     activationDialogOpen = true;
   }
-  show_activation_confirmation(JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
+  const json = JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` });
+  if (frameViews.owns('activation')) frameView('activation', json);
+  else show_activation_confirmation(json);
 }
 function closeActivationDialog() {
   if (activationDialogOpen) {
     activationDialogOpen = false;
     consumeOverlayEntry();
   }
-  close_activation_confirmation();
+  if (frameViews.owns('activation')) frameView('activation', '');
+  else close_activation_confirmation();
 }
 
 const activationConfirmation = createActivationConfirmation({
@@ -465,6 +485,7 @@ async function refresh(force = false, restart = false) {
     view.chrome.statusMore = 'Sign in to read account usage';
     view.sections = []; view.cards = [];
     set_dashboard(JSON.stringify(view));
+    frameView('dashboard', JSON.stringify(view));
     return;
   }
   if (refreshing && !force && !restart) return refreshing;
@@ -556,11 +577,14 @@ function renderAnalytics(mode = 'static') {
   const from = shownGeo;
   const morph = mode === 'morph' && !motionReduced && from && shownSize === size && from.lv[0].length === next.lv[0].length;
   cancelAnimationFrame(trendRaf);
-  // Only state/usage/quota/agenda reach Slint; the legacy head/KPI/quota-group block is not built.
-  const slintView = analyticsSlintModel(null, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph ? from : next) });
+  const native = analyticsNative();
+  // Only state/usage/quota/agenda reach Slint; the legacy head/KPI/quota-group block is not built. The app frame gets
+  // the shape to end on and glides to it itself (a hidden iframe gets no animation frames).
+  const slintView = analyticsSlintModel(null, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph && !native ? from : next) });
   // e2e only (?e2e): the last Analytics view handed to Slint, so a harness can read its words
   if (e2e) globalThis.__aacLastAnalytics = slintView;
-  pushModel('analytics', JSON.stringify(slintView), set_analytics);
+  if (native) pushModel('analytics-frame', JSON.stringify(slintView), json => { frameView('analytics-motion', morph ? 'morph' : 'static'); frameView('analytics', json); });
+  else pushModel('analytics', JSON.stringify(slintView), set_analytics);
   clearTimeout(analyticsPollTimer);
   const act = analyticsPayload?.activity;
   // While the server is reading (a cold load or a refresh running) the page re-reads it every
@@ -572,7 +596,7 @@ function renderAnalytics(mode = 'static') {
   if (currentPage === 'analytics' && (busyNow || converging))
     analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(false, 'morph', { silent: true }); }, busyNow ? 10000 : 15000);
   shownSize = size;
-  if (!morph) { shownGeo = next; return; }
+  if (!morph || native) { shownGeo = next; return; }
   const t0 = performance.now();
   const frame = time => {
     const k = easeInOut(Math.min(1, (time - t0) / 520));
@@ -585,7 +609,11 @@ function renderAnalytics(mode = 'static') {
 function renderAnalyticsHead() {
   if (!analyticsPayload || currentPage !== 'analytics') return;
   // The header alone (usageHead), not the whole usage view: this runs every 15 s between refreshes.
-  try { pushModel('analyticsHead', JSON.stringify(usageHead(analyticsPayload, analyticsPage, { now: Date.now() })), set_analytics_head); } catch {}
+  try { pushModel('analyticsHead', JSON.stringify(usageHead(analyticsPayload, analyticsPage, { now: Date.now() })), json => analyticsNative() ? frameView('analytics-head', json) : set_analytics_head(json)); } catch {}
+}
+function analyticsLoading(loading, error) {
+  if (analyticsNative()) frameView('analytics-loading', JSON.stringify({ loading, error }));
+  else set_analytics_loading(loading, error);
 }
 /** True when the response in hand already holds the hours of the page range (no fetch is needed to draw it). */
 function analyticsCovers(payload, now = Date.now()) {
@@ -607,7 +635,7 @@ async function refreshAnalytics(force = false, mode = 'static', opts = {}) {
   if (!authenticated) return;
   const silent = opts.silent === true && !force;
   const generation = ++analyticsGeneration;
-  if (!silent) set_analytics_loading(true, '');
+  if (!silent) analyticsLoading(true, '');
   // the backend accepts 24h, 7d and 30d: Month, All and custom ranges read the covering window and are cut here
   const query = new URLSearchParams({ platform, range: apiRangeFor(analyticsPage, Date.now()), provider: 'all', account: 'all' });
   if (force) query.set('refresh', 'true');
@@ -616,13 +644,13 @@ async function refreshAnalytics(force = false, mode = 'static', opts = {}) {
     if (generation !== analyticsGeneration || !authenticated) return;
     if (result?.schemaVersion !== 1 || !Array.isArray(result.accounts)) throw new Error('Unsupported analytics response.');
     analyticsPayload = result; renderAnalytics(mode);
-    pollFails = 0; set_analytics_loading(false, '');
+    pollFails = 0; analyticsLoading(false, '');
   } catch (error) {
     if (generation !== analyticsGeneration) return;
     renderAnalytics();
     if (silent && ++pollFails < 2) return;
     pollFails = 0;
-    set_analytics_loading(false, error?.message || 'Unable to load account analytics.');
+    analyticsLoading(false, error?.message || 'Unable to load account analytics.');
   }
 }
 /**
@@ -644,27 +672,29 @@ async function changeAnalyticsRange() {
   if (!analyticsPayload || analyticsPayload.range?.preset !== apiRangeFor(analyticsPage, Date.now())) await refreshAnalytics(false, covered ? 'static' : 'morph');
 }
 const toggleIn = (set, value) => { if (set.has(value)) set.delete(value); else set.add(value); };
-async function analyticsAction(action, value) {
-  if (action === 'analytics-layout') {
-    const [kind, w, h] = String(value).split(',');
-    const width = Number(w), height = Number(h);
-    if (kind === 'heat-cell') {
-      const prior = analyticsPage.sizes.heat;
-      if (!Number.isFinite(width) || width <= 0 || Math.abs((prior.cellW || 0) - width) < 0.1) return;
-      analyticsPage.sizes.heat = { ...prior, cellW: width };
-      clearTimeout(layoutTimer);
-      layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
-      return;
-    }
-    if (!(kind in analyticsPage.sizes) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0) return;
-    const prior = analyticsPage.sizes[kind];
-    if (prior && Math.abs(prior.w - width) < 1 && Math.abs(prior.h - height) < 1) return;
-    analyticsPage.sizes[kind] = { ...prior, w: width, h: height };
-    // a layout report arrives while Slint lays out: draw again once it has finished
+/** A chart box's size ("kind,w,h" or "heat-cell,w"): the charts are laid out in those pixels. */
+function analyticsLayout(value) {
+  const [kind, w, h] = String(value).split(',');
+  const width = Number(w), height = Number(h);
+  if (kind === 'heat-cell') {
+    const prior = analyticsPage.sizes.heat;
+    if (!Number.isFinite(width) || width <= 0 || Math.abs((prior?.cellW || 0) - width) < 0.1) return;
+    analyticsPage.sizes.heat = { ...prior, cellW: width };
     clearTimeout(layoutTimer);
     layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
     return;
   }
+  if (!(kind in analyticsPage.sizes) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0) return;
+  const prior = analyticsPage.sizes[kind];
+  if (prior && Math.abs(prior.w - width) < 1 && Math.abs(prior.h - height) < 1) return;
+  analyticsPage.sizes[kind] = { ...prior, w: width, h: height };
+  // a layout report arrives while Slint lays out: draw again once it has finished
+  clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
+}
+async function analyticsAction(action, value) {
+  // an Analytics page the frame draws reports its own boxes (the message listener); the hidden canvas's say nothing
+  if (action === 'analytics-layout') { if (!analyticsNative()) analyticsLayout(value); return; }
   if (action === 'analytics-range') {
     if (!RANGES.some(([id]) => id === value) || (analyticsPage.range === value)) return;
     analyticsPage.range = value; analyticsPage.from = null; analyticsPage.to = null;
@@ -721,10 +751,14 @@ function applyRefreshInterval(seconds, confirmed = true) {
   if (!Number.isInteger(seconds) || seconds < 30 || seconds > 3600) return;
   refreshIntervalSeconds = seconds;
   refreshSettingsKnown = confirmed;
-  set_refresh_interval(seconds, confirmed);
+  pushRefreshInterval(seconds, confirmed);
   renderAccounts();
   if (usageTimer) clearInterval(usageTimer);
   usageTimer = setInterval(() => { if (authenticated && !busy && !pendingActivation()) { void refresh(); if (currentPage === 'analytics') void refreshAnalytics(false, 'morph'); } }, seconds * 1000);
+}
+function pushRefreshInterval(seconds, confirmed) {
+  set_refresh_interval(seconds, confirmed);
+  frameView('refresh-interval', JSON.stringify({ seconds, confirmed }));
 }
 async function loadSettings() {
   if (authCheck?.accessMode === 'open') return;
@@ -736,7 +770,12 @@ async function loadSettings() {
   try { applyRefreshInterval(settings?.refreshIntervalSeconds); } catch {}
   try { if (prefs && typeof prefs.timeZone === 'string') setDisplayTimeZone(prefs.timeZone); } catch {}
 }
-function renderUpdate(done = false) { set_update_status(JSON.stringify(updateViewModel(updateJob, { done }))); renderAccounts(); }
+function renderUpdate(done = false) {
+  const json = JSON.stringify(updateViewModel(updateJob, { done }));
+  set_update_status(json);
+  frameView('update', json);
+  renderAccounts();
+}
 async function updateStatus() {
   if (!authenticated || updateStatusPending) return;
   updateStatusPending = true;
@@ -984,7 +1023,7 @@ window.ccsDashboardAction = async (action, value) => {
     // One entry per Details session: a second row tapped while it is open swaps in place (D) or
     // re-targets the sheet (below D) without stacking history entries.
     if (action === 'details') { detailsOpens++; if (!openDetailsId) pushOverlayEntry(); renderDetails(value); return; }
-    if (action === 'details-closed') { openDetailsId = ''; consumeOverlayEntry(); return; }
+    if (action === 'details-closed') { openDetailsId = ''; if (frameViews.owns('details')) frameView('details', ''); consumeOverlayEntry(); return; }
     // Sheets and popovers the Slint shell opened or closed (header menus, selects): the same
     // history contract as Details (3.9). Closing after a Back pop consumes nothing (depth 0).
     if (action === 'overlay-open') { pushOverlayEntry(); return; }
@@ -1119,7 +1158,7 @@ window.ccsDashboardAction = async (action, value) => {
     }
   } catch (error) {
     if (data && (action === 'threshold' || action === 'automatic' || action.startsWith('antigravity-'))) render();
-    if (action === 'refresh-interval') set_refresh_interval(refreshIntervalSeconds, refreshSettingsKnown);
+    if (action === 'refresh-interval') pushRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
     if (authenticated) failure(error?.message || 'Unable to complete the action.');
   }
 };
@@ -1406,6 +1445,16 @@ try {
   startSlintDashboard(() => start_dashboard(initialVp.width, initialVp.height, devicePixelRatio, THEMES[storedTheme()], startDark));
   if (contentMode) {
     set_content_only(true);
+    // The frame's native pages: their subscription (which views, which overlays it draws) and their actions, from
+    // the parent window and this origin only, for the kinds frame-seam.mjs allows. Never answered or run twice.
+    addEventListener('message', (event) => {
+      const where = { origin, parent: globalThis.parent };
+      const overlays = viewsSubscription(event, where);
+      if (overlays) { frameViews.subscribe(overlays); return; }
+      const page = pageAction(event, where);
+      if (page?.kind === 'analytics-layout') { if (authenticated && analyticsNative()) analyticsLayout(page.value); return; }
+      if (page) void Promise.resolve().then(() => window.ccsDashboardAction(page.kind, page.value)).catch(() => {});
+    });
     addEventListener('message', (event) => {
       if (event.origin !== origin || event.source !== globalThis.parent) return;
       const message = event.data;
@@ -1463,6 +1512,9 @@ try {
     // A Back press over an open overlay closes the top-most one (dialog, Details, sheet, popover).
     if (overlayDepth > 0) {
       overlayDepth--;
+      // an overlay the app frame draws is closed here: the switch dialog is cancelled, Details closes
+      if (activationDialogOpen && frameViews.owns('activation')) { void window.ccsDashboardAction('activation-cancel', ''); return; }
+      if (openDetailsId && frameViews.owns('details')) { openDetailsId = ''; frameView('details', ''); return; }
       try { pop_overlay(); } catch {}
       return;
     }
