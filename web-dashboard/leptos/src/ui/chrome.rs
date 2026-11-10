@@ -135,6 +135,10 @@ fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
                 </div>
                 <button class="menu-item" role="menuitem" on:click=move |_| { ctx.menu_open.set(false); ctx.go(Page::Accounts); }>"Accounts & Settings"</button>
                 <button class="menu-item" role="menuitem" on:click=move |_| ctx.classic()>"Classic app"<span class="q3">" · the previous look"</span></button>
+                <button class="menu-item" role="menuitem" on:click=move |_| {
+                    ctx.menu_open.set(false);
+                    let _ = window().alert_with_message(&super::device::device_report());
+                }>"Device info"<span class="q3">" · for layout reports"</span></button>
                 <button class="menu-item" role="menuitem" on:click=move |_| { ctx.menu_open.set(false); ctx.sign_out(); }>"Sign out"</button>
             </div>
         </Show>

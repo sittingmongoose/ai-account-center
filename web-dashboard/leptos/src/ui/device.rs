@@ -5,8 +5,117 @@
 //! `?safe=t,r,b,l` overrides the measured insets for tests in a desktop browser. It is display-only.
 
 use leptos::prelude::*;
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
+
+thread_local! {
+    /// The last chrome decision: insets, chrome, Duo detected, rail reserve. For the Device info readout only.
+    static LAST: RefCell<(Insets, &'static str, bool, f64)> = RefCell::new((Insets::default(), "", false, 0.0));
+    /// The most recent chrome decisions, oldest first, so a fold or rotation sequence can be read back.
+    static LOG: RefCell<VecDeque<String>> = RefCell::new(VecDeque::new());
+}
+
+/// A plain-text readout of what this device reports and which chrome it got (the account menu's "Device info").
+/// Display-only: it changes nothing, and holds no account or usage data.
+pub fn device_report() -> String {
+    let w = window();
+    let num = |v: Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>| {
+        v.ok().and_then(|v| v.as_f64()).unwrap_or(-1.0)
+    };
+    let get = |o: &wasm_bindgen::JsValue, k: &str| js_sys::Reflect::get(o, &k.into()).ok();
+    let mut out = String::from("AAC device info\n");
+    if let Ok(s) = w.screen() {
+        out += &format!(
+            "screen {}x{}  avail {}x{}\n",
+            s.width().unwrap_or(-1),
+            s.height().unwrap_or(-1),
+            s.avail_width().unwrap_or(-1),
+            s.avail_height().unwrap_or(-1)
+        );
+        let o = get(&s, "orientation");
+        let ty = o
+            .as_ref()
+            .and_then(|o| get(o, "type"))
+            .and_then(|v| v.as_string())
+            .unwrap_or_default();
+        let angle = o
+            .as_ref()
+            .and_then(|o| get(o, "angle"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-1.0);
+        out += &format!("orientation {ty} {angle}\n");
+    }
+    out += &format!(
+        "inner {}x{}  dpr {}\n",
+        num(w.inner_width()),
+        num(w.inner_height()),
+        w.device_pixel_ratio()
+    );
+    if let Some(v) = w.visual_viewport() {
+        out += &format!(
+            "visual {:.0}x{:.0} scale {:.2} top {:.0}\n",
+            v.width(),
+            v.height(),
+            v.scale(),
+            v.offset_top()
+        );
+    }
+    let nav = w.navigator();
+    let standalone = get(&nav, "standalone").and_then(|v| v.as_bool());
+    out += &format!("standalone {standalone:?}\n");
+    LAST.with(|l| {
+        let (i, chrome, duo, reserve) = *l.borrow();
+        out += &format!(
+            "safe t{} r{} b{} l{}\nchrome {chrome}  duo {duo}  reserve {reserve}\n",
+            i.top, i.right, i.bottom, i.left
+        );
+    });
+    let ua = nav.user_agent().unwrap_or_default();
+    let model = ua.split(['(', ')']).nth(1).unwrap_or("").to_string();
+    out += &format!("ua {model}\nrecent:\n");
+    LOG.with(|log| {
+        for line in log.borrow().iter() {
+            out += line;
+            out += "\n";
+        }
+    });
+    out
+}
+
+fn remember(
+    insets: Insets,
+    chrome: &'static str,
+    duo: bool,
+    reserve: f64,
+    width: f64,
+    height: f64,
+) {
+    LAST.with(|l| *l.borrow_mut() = (insets, chrome, duo, reserve));
+    let d = js_sys::Date::new_0();
+    let line = format!(
+        "{:02}:{:02}:{:02} {:.0}x{:.0} safe {:.0}/{:.0}/{:.0}/{:.0} -> {chrome}",
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds(),
+        width,
+        height,
+        insets.top,
+        insets.right,
+        insets.bottom,
+        insets.left
+    );
+    LOG.with(|log| {
+        let mut log = log.borrow_mut();
+        if log.back() != Some(&line) {
+            log.push_back(line);
+        }
+        while log.len() > 14 {
+            log.pop_front();
+        }
+    });
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Insets {
@@ -152,19 +261,18 @@ pub fn start(embed: bool) {
         let _ = style.set_property("--safe-right", &px(insets.right));
         let _ = style.set_property("--safe-bottom", &px(insets.bottom));
         let _ = style.set_property("--safe-left", &px(insets.left));
-        let _ = style.set_property(
-            "--rail-reserve",
-            // The tall reserve clears the Duo's clock and signal ring; any other device's rail starts near the top.
-            &px(if chrome == "rail" {
-                if duo {
-                    rail_reserve(width, insets)
-                } else {
-                    12.0
-                }
+        // The tall reserve clears the Duo's clock and signal ring; any other device's rail starts near the top.
+        let reserve = if chrome == "rail" {
+            if duo {
+                rail_reserve(width, insets)
             } else {
-                0.0
-            }),
-        );
+                12.0
+            }
+        } else {
+            0.0
+        };
+        let _ = style.set_property("--rail-reserve", &px(reserve));
+        remember(insets, chrome, duo, reserve, width, height);
         let _ = style.set_property(
             "--rail-w",
             &px(if chrome == "rail" {
