@@ -154,8 +154,13 @@ pub fn start(embed: bool) {
         let _ = style.set_property("--safe-left", &px(insets.left));
         let _ = style.set_property(
             "--rail-reserve",
+            // The tall reserve clears the Duo's clock and signal ring; any other device's rail starts near the top.
             &px(if chrome == "rail" {
-                rail_reserve(width, insets)
+                if duo {
+                    rail_reserve(width, insets)
+                } else {
+                    12.0
+                }
             } else {
                 0.0
             }),
@@ -178,6 +183,14 @@ pub fn start(embed: bool) {
     // change of the window, the visual viewport or the orientation, and twice more while iOS settles.
     let settle = Closure::<dyn Fn()>::new(apply.clone());
     let on_change = Closure::<dyn Fn()>::new(move || {
+        // A pinch-zoom resizes the visual viewport too: the chrome is chosen at the page's own scale only.
+        let zoomed = window()
+            .visual_viewport()
+            .map(|v| (v.scale() - 1.0).abs() > 0.01)
+            .unwrap_or(false);
+        if zoomed {
+            return;
+        }
         apply();
         for ms in [120, 350] {
             let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(

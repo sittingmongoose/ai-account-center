@@ -834,8 +834,10 @@ body { min-height: 100dvh; }
 :root[data-chrome='phone'] .tabbar { display: grid; position: sticky; bottom: 0; z-index: 5; }
 :root[data-chrome='rail'] .shell { grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) var(--rail-w, var(--safe-right)); }
 /* Open on its side the panel's rounded corner sits at the top left: the page keeps clear of it. */
-@media (min-width: 760px) { :root[data-chrome='rail'] .content { padding-left: 16px; padding-top: 10px; } }
-:root[data-chrome='rail'] .rail { display: flex; position: sticky; top: 0; height: 100dvh; align-self: start; }
+/* The rail's page keeps clear of the left and top insets (an iPhone on its side, the Duo with its strip on the left). */
+:root[data-chrome='rail'] .content { padding-left: var(--safe-left); padding-top: var(--safe-top); }
+@media (min-width: 760px) { :root[data-chrome='rail'] .content { padding-left: max(16px, var(--safe-left)); padding-top: max(10px, var(--safe-top)); } }
+:root[data-chrome='rail'] .rail { display: flex; position: sticky; top: 0; height: 100dvh; align-self: start; overflow-y: auto; }
 :root[data-chrome='rail'] .content, :root[data-chrome='band'] .content { padding-bottom: var(--safe-bottom); }
 :root[data-chrome='band'] .band-head { display: block; position: sticky; top: 0; z-index: 5; }
 :root[data-chrome='none'] .shell { grid-template-rows: minmax(0, 1fr); background: transparent; }
