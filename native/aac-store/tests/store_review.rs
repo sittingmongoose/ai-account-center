@@ -1538,7 +1538,10 @@ fn verify_after_read_path_loss_does_not_double_log() {
     let dir = temp_dir("final-verify-no-double");
     {
         let engine = open(&dir);
-        record(&engine, vec![obs(T0, 10.0), obs(T0 + 5 * MIN, 20.0), obs(T0 + 10 * MIN, 30.0)]);
+        record(
+            &engine,
+            vec![obs(T0, 10.0), obs(T0 + 5 * MIN, 20.0), obs(T0 + 10 * MIN, 30.0)],
+        );
         engine.close().unwrap();
     }
     // Seal then corrupt the sealed copy: the next open discloses it on the read path.
@@ -1549,8 +1552,16 @@ fn verify_after_read_path_loss_does_not_double_log() {
     fs::write(&sealed, &bytes).unwrap();
     let engine = open(&dir);
     let opened = engine.status().unwrap();
-    assert_eq!(opened["state"], "degraded", "the read-path loss is disclosed at open: {opened}");
-    let opened_count = opened["findings"].as_array().unwrap().iter().filter(|f| f["kind"] == "segment_degraded").count();
+    assert_eq!(
+        opened["state"], "degraded",
+        "the read-path loss is disclosed at open: {opened}"
+    );
+    let opened_count = opened["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "segment_degraded")
+        .count();
     assert_eq!(opened_count, 1, "one degraded finding at open: {opened}");
     let (before, seqs) = {
         let (log, _) = aac_store::log::Log::open(&dir.join("log").join("ledger"), "ledger", "l").unwrap();
@@ -1560,22 +1571,45 @@ fn verify_after_read_path_loss_does_not_double_log() {
                 seqs.push(e.sequence_id);
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         (seqs.len(), seqs)
     };
     let _ = seqs;
     let result = engine.verify().unwrap();
     let verified_findings = result["findings"].as_array().unwrap();
-    let degraded_verified = verified_findings.iter().filter(|f| f["kind"] == "segment_degraded").count();
+    let degraded_verified = verified_findings
+        .iter()
+        .filter(|f| f["kind"] == "segment_degraded")
+        .count();
     assert_eq!(degraded_verified, 1, "verify reports the loss once: {result}");
     // Live status still shows it once, and the ledger has not gained a second event.
     let status = engine.status().unwrap();
-    let after_count = status["findings"].as_array().unwrap().iter().filter(|f| f["kind"] == "segment_degraded" || f["kind"] == "segment_unreadable").count();
+    let after_count = status["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "segment_degraded" || f["kind"] == "segment_unreadable")
+        .count();
     // The second verify (next check) must also stay disclosed without re-logging.
     let second = engine.verify().unwrap();
-    assert_eq!(second["findings"].as_array().unwrap().iter().filter(|f| f["kind"] == "segment_degraded" || f["kind"] == "segment_unreadable").count(), 1, "second verify still discloses once: {second}");
+    assert_eq!(
+        second["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["kind"] == "segment_degraded" || f["kind"] == "segment_unreadable")
+            .count(),
+        1,
+        "second verify still discloses once: {second}"
+    );
     let status_after = engine.status().unwrap();
-    let final_count = status_after["findings"].as_array().unwrap().iter().filter(|f| f["kind"] == "segment_degraded" || f["kind"] == "segment_unreadable").count();
+    let final_count = status_after["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "segment_degraded" || f["kind"] == "segment_unreadable")
+        .count();
     assert_eq!(final_count, 1, "no duplicate after verify: {status_after}");
     let (after, _) = {
         let (log, _) = aac_store::log::Log::open(&dir.join("log").join("ledger"), "ledger", "l").unwrap();
@@ -1585,14 +1619,21 @@ fn verify_after_read_path_loss_does_not_double_log() {
                 seqs.push(e.sequence_id);
             }
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         (seqs.len(), seqs)
     };
-    assert_eq!(after, before, "the first verification after a read-path loss re-logged a known finding: before={before} after={after}");
+    assert_eq!(
+        after, before,
+        "the first verification after a read-path loss re-logged a known finding: before={before} after={after}"
+    );
     assert!(after_count <= 2, "status does not double: {status}");
     // The loss must stay disclosed in every check.
     let later = engine.verify().unwrap();
-    assert!(!later["findings"].as_array().unwrap().is_empty(), "the loss stays disclosed: {later}");
+    assert!(
+        !later["findings"].as_array().unwrap().is_empty(),
+        "the loss stays disclosed: {later}"
+    );
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(&dir).unwrap();
