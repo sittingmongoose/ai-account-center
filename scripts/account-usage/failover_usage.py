@@ -155,6 +155,14 @@ def _window(value):
             if not isinstance(value[field], bool):
                 return None
             result[field] = value[field]
+    if "clears" in value:
+        raw = value.get("clears")
+        if (not isinstance(raw, list) or len(raw) > 8 or
+            any(not isinstance(item, str) or not re.fullmatch(r"[a-z0-9_]{1,40}", item) for item in raw) or
+            len(set(raw)) != len(raw)):
+            return None
+        if raw:
+            result["clears"] = list(raw)
     if value.get("status") == "cached":
         sampled = _timestamp(value.get("sampledAt"), observation=True)
         if sampled is None:

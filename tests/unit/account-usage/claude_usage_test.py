@@ -115,7 +115,7 @@ class IdentityTests(unittest.TestCase):
         self.assertFalse(result["windows"][2]["enabled"])
         self.assertIsNone(result["windows"][2]["used"])
         self.assertIsNone(result["windows"][2]["resetAt"])
-        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile", "/api/oauth/usage"])
+        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile", "/api/oauth/usage?cedar_ember=1"])
         for forbidden in (TOKEN, "fixture-private-refresh-token", "upstream-private", "upstream-secret", ACCOUNT, CLIENT, ORG):
             self.assertNotIn(forbidden, json.dumps(result))
 
@@ -249,7 +249,7 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["profileId"], "added-profile")
         self.assertEqual(result["email"], EMAIL)
-        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile", "/api/oauth/usage"])
+        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile", "/api/oauth/usage?cedar_ember=1"])
 
     def test_missing_invalid_email_or_unsafe_id_reads_no_credentials(self):
         with mock.patch.object(usage.sys, "platform", "win32"), \
@@ -462,7 +462,7 @@ class WindowsProfileRelocationTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["email"], EMAIL)
         self.assertEqual(result["windows"][0]["usedPercent"], 7)
-        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile", "/api/oauth/usage"])
+        self.assertEqual([call[0] for call in client.calls], ["/api/oauth/profile", "/api/oauth/usage?cedar_ember=1"])
 
     def test_current_signed_out_corrupt_or_expired_login_never_retries_legacy(self):
         self.legacy.mkdir(parents=True)
@@ -497,7 +497,7 @@ class WindowsProfileRelocationTests(unittest.TestCase):
                 original_get = client.get
 
                 def get(route, token):
-                    if route.endswith("/" + phase):
+                    if phase in route:
                         self.current.mkdir(parents=True)
                     return original_get(route, token)
 

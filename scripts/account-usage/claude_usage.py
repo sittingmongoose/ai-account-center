@@ -319,7 +319,7 @@ class Client:
         self.opener = urllib.request.build_opener(NoRedirect())
 
     def get(self, route, token):
-        if route not in ("/api/oauth/profile", "/api/oauth/usage"):
+        if route not in ("/api/oauth/profile", "/api/oauth/usage", "/api/oauth/usage?cedar_ember=1"):
             raise UsageUnavailable()
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
@@ -978,13 +978,30 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             ):
                 continue
             verify_root()
-            usage = client.get("/api/oauth/usage", token)
+            usage = client.get("/api/oauth/usage?cedar_ember=1", token)
             verify_root()
             windows = normalize_windows(usage)
+            # The OAuth usage payload with cedar_ember=1 carries the grant
+            # inventory and weekly allowance directly; parse them here so
+            # CLI and desktop both see them without a web capsule.
+            windows.extend(normalize_reset_credits(usage.get("cedar_ember")))
+            windows.extend(normalize_session_reset_allowance(usage.get("juniper_tide")))
             if not windows:
                 raise UsageUnavailable()
             optional_extras = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
-            windows.extend(optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown))
+            oauth_has_reset = any(w["key"] == "reset_credits_available" or w["key"].startswith("reset_credit_") or w["key"] == "session_reset_allowance" for w in windows)
+            web_windows = optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown)
+            # The web helper resets availability to unavailable on entry; if
+            # the OAuth payload already supplied the grants, the account is
+            # not in an unavailable web state — preserve the OAuth verdict.
+            if oauth_has_reset:
+                optional_extras["resetCredits"] = "ok"
+            # Deduplicate web grants that the OAuth payload already supplied.
+            seen_keys = {w["key"] for w in windows}
+            for w in web_windows:
+                if w["key"] not in seen_keys:
+                    windows.append(w)
+                    seen_keys.add(w["key"])
             verify_root()
             plan_name = claude_plan(
                 account, organization,
