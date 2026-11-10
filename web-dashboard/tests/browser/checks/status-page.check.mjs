@@ -213,6 +213,28 @@ export const tests = {
 		}
 	},
 
+	// The chrome follows the window, not the screen. The kit leaves the screen at the window size, so every plain
+	// 951x669 context reads as the Duo once the page tells the device from its screen: a small desktop window on a
+	// 1440x900 screen keeps the desktop header (review 9702412d F4), and an iPhone on its side draws the rail and
+	// pads its page by the 62 px left inset (review 9702412d F1).
+	async 'status chrome follows the window, not the screen'(t) {
+		const view = { ...fixture('status-design-view.json'), spendByStream: fixture('spend-by-stream.json') };
+
+		await t.newContext({ viewport: { width: 951, height: 669 }, screen: { width: 1440, height: 900 } });
+		await openStatus(t, view);
+		await t.page.waitForSelector(CARD);
+		await t.equal('a 951x669 window on a 1440x900 screen', await t.page.evaluate(() => document.documentElement.dataset.chrome), 'desk');
+		await t.check('the desktop header is drawn', await t.page.evaluate(() => !!document.querySelector('header.chrome') && getComputedStyle(document.querySelector('header.chrome')).display !== 'none'));
+		await t.count('.rail, .topbar, .tabbar, .band-head', 0);
+
+		// iPhone 17 Pro on its side: the notch insets land left and right, the rail takes the right strip.
+		await t.newContext({ viewport: { width: 874, height: 402 }, screen: { width: 874, height: 402 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+		await openStatus(t, view, '?safe=0,62,21,62');
+		await t.page.waitForSelector(CARD);
+		await t.equal('an iPhone on its side', await t.page.evaluate(() => document.documentElement.dataset.chrome), 'rail');
+		await t.check('the page pads by the 62 px left inset', await t.page.evaluate(() => Math.round(document.querySelector('.content').getBoundingClientRect().left) >= 62));
+	},
+
 	// In the shell's iframe the page draws no chrome and keeps no room for one.
 	async 'status inside the iframe keeps no chrome'(t) {
 		await t.newContext({ viewport: { width: 466, height: 678 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
