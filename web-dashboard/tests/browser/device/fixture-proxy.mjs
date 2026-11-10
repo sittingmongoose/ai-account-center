@@ -1,5 +1,5 @@
 // Realistic data for device checks (DEVICE-RECIPE.md): a proxy in front of a test dashboard that answers Home's
-// accounts, Status and the Scoreboard from made-up fixtures and forwards everything else (sign-in, the frame's pages,
+// accounts, Analytics, Status and the Scoreboard from made-up fixtures and forwards everything else (sign-in, the frame's pages,
 // the socket) to the real server unchanged. Test data only: invented names, never a real account.
 //   node web-dashboard/tests/browser/device/fixture-proxy.mjs <listen port> <dashboard port>
 import fs from 'node:fs';
@@ -7,6 +7,7 @@ import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { analyticsFixture } from './analytics-fixture.mjs';
 
 const [listen = '18860', target = '18861'] = process.argv.slice(2);
 const LEPTOS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../leptos/fixtures');
@@ -42,10 +43,13 @@ function status() {
 	return view;
 }
 const scoreboard = () => ({ ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') });
-const ANSWERS = { '/api/accounts/dashboard': accounts, '/api/status': status, '/api/scoreboard': scoreboard };
+// Analytics: made-up usage logs and quota history for the same accounts, for the range asked (24h, 7d or 30d)
+const analytics = (url) => analyticsFixture({ range: ['24h', '7d', '30d'].includes(url.searchParams.get('range')) ? url.searchParams.get('range') : '7d', accounts: accounts().accounts });
+const ANSWERS = { '/api/accounts/dashboard': accounts, '/api/accounts/analytics': analytics, '/api/status': status, '/api/scoreboard': scoreboard };
 
 const server = http.createServer((req, res) => {
-	const pathname = new URL(req.url, 'http://x').pathname;
+	const url = new URL(req.url, 'http://x');
+	const pathname = url.pathname;
 	if (req.method === 'GET' && ANSWERS[pathname]) {
 		// Only for a signed-in browser: ask the real server first, so the session rules stay the real ones.
 		const check = http.request({ host: '127.0.0.1', port: target, path: '/api/auth/check', headers: { cookie: req.headers.cookie || '', host: req.headers.host } }, (r) => {
@@ -55,7 +59,7 @@ const server = http.createServer((req, res) => {
 				try { const s = JSON.parse(body); signedIn = s.authenticated === true || s.authRequired === false; } catch {}
 				if (!signedIn) { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":"Sign in first.","code":"auth_required"}'); return; }
 				res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-				res.end(JSON.stringify(ANSWERS[pathname]()));
+				res.end(JSON.stringify(ANSWERS[pathname](url)));
 			});
 		});
 		check.on('error', () => { res.writeHead(502); res.end(); });

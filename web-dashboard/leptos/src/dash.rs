@@ -15,9 +15,8 @@ use leptos::prelude::*;
 pub const OVERLAYS: &[&str] = &[];
 
 /// The pages the frame draws itself (`FRAME_PAGES` in frame-seam.mjs), named in the same subscription: bridge.js
-/// then sends their views here only and takes their layout reports from here only. "analytics" joins when the native
-/// Analytics page exists.
-pub const PAGES: &[&str] = &[];
+/// then sends their views here only and takes their layout reports from here only.
+pub const PAGES: &[&str] = &["analytics"];
 
 /// The latest view of each key, as raw JSON (each page parses its own types). Empty until the first push.
 #[derive(Clone, Copy)]

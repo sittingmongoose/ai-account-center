@@ -65,6 +65,8 @@ export default (ctx) => {
 		// null off an ?e2e page, where nothing reports.
 		async controls(t) {
 			if (!/[?&]e2e\b/.test(t.page.url())) return null;
+			// the app frame on a tab it draws itself (Status, Scoreboard, Analytics): DOM controls, no canvas probes
+			if (await t.page.evaluate(() => !!window.__aacFrame && !document.querySelector('.shell.slint-route'))) return null;
 			const all = await t.app.probes();
 			const signedIn = await t.page.evaluate(() => !!(window.__aacLastAuth && __aacLastAuth.signedIn));
 			return Object.entries(all).filter(([id]) => CONTROL.test(id) && !(signedIn && id.startsWith('signin-'))).map(([name, r]) => ({ name, ...r }));

@@ -1,10 +1,11 @@
 // The app frame with each tab, in each format and theme: <tab>-<format>-<theme>.png in `--set out=<folder>`.
-// Status and Scoreboard are whole pages (the chrome unpinned so it sits once at its place, like the mockups' "Whole
-// page" view). Home, Analytics and Accounts are the first screen: the dashboard scrolls inside its own canvas.
+// Status, Scoreboard and Analytics are whole pages (the chrome unpinned so it sits once at its place, like the mockups'
+// "Whole page" view). Home and Accounts are the first screen: the dashboard scrolls inside its own canvas.
 // Synthetic data only: the Leptos design fixtures for Status and Scoreboard, and made-up accounts below.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { analyticsFixture } from '../device/analytics-fixture.mjs';
 
 const LEPTOS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../leptos');
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(LEPTOS, 'fixtures', name), 'utf8'));
@@ -27,7 +28,7 @@ const FORMATS = [
 	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
 ];
 const TABS = ['status', 'scoreboard', 'home', 'analytics', 'accounts'];
-const SLINT = new Set(['home', 'analytics', 'accounts']);
+const SLINT = new Set(['home', 'accounts']);
 const DASH_PATH = { home: '/', analytics: '/analytics', accounts: '/accounts' };
 const UNPIN = `html { scrollbar-width: none; }
 .rail, .tabbar, .topbar, .chrome, .band-head { position: static !important; }
@@ -63,18 +64,20 @@ export const tests = Object.fromEntries(
 					await t.app.signIn();
 					await t.app.stub('/api/accounts/dashboard', ACCOUNTS);
 					await stubPages(t);
+					// Analytics (drawn by the frame): made-up usage logs and quota history for the same accounts
+					await t.page.route((u) => new URL(u).pathname === '/api/accounts/analytics', (r) => r.fulfill({ json: analyticsFixture({ range: new URL(r.request().url()).searchParams.get('range') || '7d', accounts: ACCOUNTS.accounts }) }));
 					await t.goto(`/app/${tab}?e2e&safe=${f.safe}`, { settleMs: 300 });
 					await t.until(`${tab} shown`, ({ tab, slint, dash }) => {
 						const shown = [...document.querySelectorAll('.route')].filter((r) => !r.hidden);
 						if (shown.length !== 1) return false;
-						if (!slint) return !!shown[0].querySelector(tab === 'status' ? '.q-card' : '.picks');
+						if (!slint) return !!shown[0].querySelector(tab === 'status' ? '.q-card' : tab === 'analytics' ? '.ax-page .kpi' : '.picks');
 						try {
 							const w = shown[0].querySelector('iframe.slint-frame')?.contentWindow;
 							return !!(w && w.__aacLastAuth?.signedIn && w.location.pathname === dash && w.document.querySelector('#loading')?.hidden);
 						} catch { return false; }
 					}, { tab, slint: SLINT.has(tab), dash: DASH_PATH[tab] }, { timeout: 60000, hard: true });
 					// the dashboard draws its readings a moment after it is signed in
-					await t.page.waitForTimeout(SLINT.has(tab) ? 2500 : 400);
+					await t.page.waitForTimeout(SLINT.has(tab) || tab === 'analytics' ? 2500 : 400);
 					await t.page.evaluate(() => document.activeElement?.blur?.());
 					if (!SLINT.has(tab)) await t.page.addStyleTag({ content: UNPIN });
 					await t.page.waitForTimeout(250);

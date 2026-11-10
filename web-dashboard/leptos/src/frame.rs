@@ -16,7 +16,7 @@ use crate::Page;
 use crate::dash::{self, DashCtx};
 use crate::session::{self, SessionView};
 use crate::ui::*;
-use crate::{live, scoreboard, status};
+use crate::{analytics, live, scoreboard, status};
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
@@ -583,6 +583,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
             <FrameShell ctx=ctx>
                 <StatusRoute ctx=ctx/>
                 <ScoreboardRoute ctx=ctx/>
+                <AnalyticsRoute ctx=ctx/>
                 <SlintHost ctx=ctx/>
             </FrameShell>
         </Show>
@@ -621,6 +622,19 @@ fn ScoreboardRoute(ctx: FrameCtx) -> impl IntoView {
     view! {
         <div class="route" hidden=move || ctx.route.get() != Page::Scoreboard>
             {move || seen.get().then(|| view! { <scoreboard::ScoreboardPage embedded=false/> })}
+        </div>
+    }
+}
+
+/// Analytics, drawn here from the dashboard's views (analytics.rs); built the first time its tab is shown.
+#[component]
+fn AnalyticsRoute(ctx: FrameCtx) -> impl IntoView {
+    let seen = Memo::new(move |prev: Option<&bool>| {
+        prev.copied().unwrap_or(false) || ctx.route.get() == Page::Analytics
+    });
+    view! {
+        <div class="route" hidden=move || ctx.route.get() != Page::Analytics>
+            {move || seen.get().then(|| view! { <analytics::AnalyticsPage/> })}
         </div>
     }
 }
