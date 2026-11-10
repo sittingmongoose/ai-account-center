@@ -264,22 +264,44 @@ pub fn card_rows(n: usize, cols: usize) -> (usize, Vec<usize>) {
 
 // ---------------------------------------------------------------- small helpers
 
-/// An email or identity with break chances after `@` and each dot, so a long one wraps at a sensible place instead
-/// of being cut.
+/// Where an address may wrap, as whole chunks: before the "@", and before the final domain (its last two labels)
+/// when the domain has more. Never inside a domain label. Anything without an "@" is one chunk.
+pub fn address_chunks(text: &str) -> Vec<String> {
+    let Some(at) = text.rfind('@') else {
+        return vec![text.to_string()];
+    };
+    let (local, domain) = text.split_at(at);
+    let mut chunks = Vec::new();
+    if !local.is_empty() {
+        chunks.push(local.to_string());
+    }
+    let labels: Vec<&str> = domain[1..].split('.').collect();
+    if labels.len() > 2 {
+        let head = labels[..labels.len() - 2].join(".");
+        chunks.push(format!("@{head}."));
+        chunks.push(labels[labels.len() - 2..].join("."));
+    } else {
+        chunks.push(domain.to_string());
+    }
+    chunks
+}
+
+/// An address that wraps only between its chunks. The local part may still wrap where it must (a hyphen, or a word
+/// too long for the column); the domain chunks never do.
 fn breakable(text: &str) -> impl IntoView + use<> {
-    let mut parts: Vec<AnyView> = Vec::new();
-    let mut word = String::new();
-    for ch in text.chars() {
-        word.push(ch);
-        if ch == '@' || ch == '.' {
-            parts.push(std::mem::take(&mut word).into_any());
-            parts.push(view! { <wbr/> }.into_any());
-        }
-    }
-    if !word.is_empty() {
-        parts.push(word.into_any());
-    }
-    parts
+    let chunks = address_chunks(text);
+    let n = chunks.len();
+    chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let domain = chunk.starts_with('@') || (i > 0 && i + 1 == n);
+            view! {
+                {(i > 0).then(|| view! { <wbr/> })}
+                <span class:hdom=domain>{chunk}</span>
+            }
+        })
+        .collect_view()
 }
 
 /// Runs a closure on the next frame, outside any Leptos owner (NOTES.md: owned timers die with their branch).
@@ -800,9 +822,19 @@ fn Row(
                 let view = Signal::derive(move || row.with(|r| r.cells.get(i).cloned().unwrap_or_default()));
                 let empty = move || view.with(|v| v.key.is_empty());
                 let owner = owner.clone();
+                // The column's name over the cell, shown when a section with many windows stacks (its heads would wrap).
+                let caption = move || {
+                    sec.with(|s| {
+                        s.columns
+                            .get(i)
+                            .map(|c| if c.short_label.is_empty() { c.label.clone() } else { c.short_label.clone() })
+                            .unwrap_or_default()
+                    })
+                };
                 view! {
                     <div class="hcell" class:empty=empty>
                         {move || (!empty()).then(|| view! {
+                            <span class="cap hcell-cap">{caption}</span>
                             <UsageMeter view=view delay=delay + i as u32 * 16 owner=owner.clone() notch_at=notch_at/>
                         })}
                     </div>
@@ -1172,6 +1204,20 @@ mod tests {
                 assert_eq!(row, 0, "no row is left short ({n} cards, {c} columns)");
             }
         }
+    }
+
+    #[test]
+    fn an_address_wraps_only_before_the_at_or_the_final_domain() {
+        assert_eq!(
+            address_chunks("a.very.long.example.name@example.invalid"),
+            vec!["a.very.long.example.name", "@example.invalid"]
+        );
+        assert_eq!(
+            address_chunks("someone@mail.corp.example.com"),
+            vec!["someone", "@mail.corp.", "example.com"]
+        );
+        assert_eq!(address_chunks("Codex"), vec!["Codex"]);
+        assert_eq!(address_chunks("@x.y"), vec!["@x.y"]);
     }
 
     #[test]

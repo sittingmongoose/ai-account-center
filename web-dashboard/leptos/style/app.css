@@ -1177,6 +1177,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   background: var(--sel-fill); box-shadow: inset 0 0 0 1px var(--sel-line); }
 .hid { grid-area: id; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .hid-t { display: grid; min-width: 0; }
+.hdom { white-space: nowrap; }
 .hemail { font-size: var(--fs-body); font-weight: 600; font-variation-settings: 'wght' 600; color: var(--ink); overflow-wrap: break-word; line-height: 1.35; }
 .hrow.active .hemail { font-weight: 640; font-variation-settings: 'wght' 640; }
 .hmeta, .hamts { font-size: var(--fs-small); color: var(--ink-3); line-height: 1.4; }
@@ -1184,6 +1185,16 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .hrow.setup .pmark { opacity: .45; }
 .hcells { grid-area: cells; display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; min-width: 0; }
 .hcell { min-width: 0; }
+.hcell-cap { display: none; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A stacked section with four or more windows names each cell instead of a head band that would wrap. */
+@container hsec (max-width: 799.98px) {
+  .htable.cols-4 > .hhead { display: none; }
+  .htable.cols-4 .hcell-cap { display: block; }
+}
+@container hsec (max-width: 919.98px) {
+  .htable.cols-5 > .hhead, .htable.cols-6 > .hhead { display: none; }
+  .htable.cols-5 .hcell-cap, .htable.cols-6 .hcell-cap { display: block; }
+}
 .hslot { grid-area: slot; display: flex; align-items: center; cursor: default; }
 .hopens { display: flex; gap: 6px; }
 .hopen { width: 30px; height: 30px; border-radius: 8px; }

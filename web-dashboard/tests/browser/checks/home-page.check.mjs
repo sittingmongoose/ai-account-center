@@ -112,6 +112,20 @@ export const tests = {
 		await t.count('.hcard', 6);
 		await t.text('.hcard', /\$12\.40/);
 		await t.audit('home 1440');
+
+		// A refresh with a new reading moves the meter but rebuilds nothing else: the Active mark is the same element (no
+		// replayed draw-on), and so is the auto-switch control.
+		await t.page.evaluate(() => {
+			document.querySelector('.hrow[data-row="codex:primary"] .hmark').__kit = 1;
+			document.querySelector('.hsec[data-sec="codex"] .hauto').__kit = 1;
+		});
+		const next = homeAccounts();
+		next.accounts.find((a) => a.id === 'codex:primary').windows[0].usedPercent = 61;
+		await t.app.stub('/api/accounts/dashboard', next);
+		await t.page.click('.chrome button[aria-label="Refresh"]');
+		await t.until('the new reading lands', () => /^61%$/.test(document.querySelector('.hrow[data-row="codex:primary"] .um-num')?.textContent || ''), null, { timeout: 15000 });
+		await t.check('the Active mark and the auto-switch control are kept through a refresh', await t.page.evaluate(() =>
+			document.querySelector('.hrow[data-row="codex:primary"] .hmark').__kit === 1 && document.querySelector('.hsec[data-sec="codex"] .hauto').__kit === 1));
 		await t.noConsoleErrors('console: clean');
 	},
 
@@ -225,7 +239,7 @@ export const tests = {
 			{ name: 'iphone', width: 402, height: 874, mobile: true, safe: '62,0,34,0', table: [], side: false },
 			{ name: 'duo folded', width: 466, height: 678, mobile: true, safe: '0,84,34,0', table: [], side: false },
 			{ name: 'duo portrait', width: 669, height: 951, mobile: true, safe: '82,0,34,0', table: ['codex'], side: false },
-			{ name: 'duo landscape', width: 951, height: 669, mobile: true, safe: '0,84,34,0', table: [], side: true },
+			{ name: 'duo landscape', width: 951, height: 669, mobile: true, safe: '0,84,34,0', table: ['antigravity'], side: true },
 		];
 		for (const f of formats) {
 			await openHome(t, f);

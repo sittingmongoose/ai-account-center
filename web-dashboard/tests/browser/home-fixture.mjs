@@ -56,7 +56,7 @@ export function homeAccounts(now = Date.now()) {
 			]),
 			codex('third', 'codex.third@example.invalid', 'plus', [quota('seven_day', 'week', 31, 10080, 7000)]),
 			account('antigravity:one', 'antigravity', 'antigravity.login@example.invalid', 'pro', [
-				quota('gemini-weekly', 'Gemini Models · Weekly', 30, 10080, 5000), quota('claude-weekly', 'Claude Models · Weekly', 70, 10080, 5000),
+				quota('gemini-weekly', 'Gemini Models · Weekly', 30, 10080, 5000), quota('3p-weekly', 'Claude and GPT Models · Weekly', 70, 10080, 5000),
 			]),
 			account('cursor:one', 'cursor', 'cursor.team.seat@example.invalid', 'pro', [
 				quota('monthly', 'Monthly usage', 18, 43200, 20000),
