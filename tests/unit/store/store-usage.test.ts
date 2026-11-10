@@ -531,7 +531,7 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
           err: () => undefined,
           env: { AAC_STORE_MODULE: MODULE },
         });
-        expect(out.join('')).toContain('failed their hash');
+        expect(out.join('')).toContain('integrity finding(s)');
         expect(out.join('')).not.toContain('[OK]');
       }
     } finally {

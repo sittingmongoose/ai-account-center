@@ -132,7 +132,7 @@ export async function handleStoreCommand(
           io,
           findings === 0
             ? '[OK] Every sealed segment matches its hash.'
-            : `[!] ${findings} segment(s) failed their hash; see status.`
+            : `[!] ${findings} integrity finding(s); see status.`
         );
       }
       if (command === 'backup') {
