@@ -1,11 +1,13 @@
 // The app frame (PLAN step 4, web-dashboard/leptos/src/frame.rs): one chrome around all five tabs at /app/<page>.
-// The frame draws Status and Scoreboard itself; Home, Analytics and Accounts are the Slint dashboard, content-only, in
-// one same-origin iframe (/?content=1). These check the navigation, the chrome in each format (the Duo's strip and
+// The frame draws Status, Scoreboard and Accounts & Settings itself; Home and Analytics are the Slint dashboard,
+// content-only, in one same-origin iframe (/?content=1), which also runs Accounts & Settings while it is hidden. These check the navigation, the chrome in each format (the Duo's strip and
 // band rules, with `?safe=t,r,b,l` giving the measured insets), the setting and the way back, and the offline copy.
 // Sign-in has its own folder (../frame-signin): its limiter step closes this server's sign-in for 15 minutes.
 // Status and Scoreboard read the kit's fixture home (scripts/status-fixture.mjs, scoreboard-fixture.mjs).
 
-const SLINT = new Set(['home', 'analytics', 'accounts']);
+const SLINT = new Set(['home', 'analytics']);
+/** Tabs drawn here from the dashboard's views: the dashboard is on that page, signed in, but hidden. */
+const BRIDGED = new Set(['accounts']);
 const DASH_PATH = { home: '/', analytics: '/analytics', accounts: '/accounts' };
 /** The dashboard's own header and tab bar probes: none may report inside the frame. */
 const HEADER_PROBES = /^(nav|tab)-|^update-apps$|^status-(line|block)$/;
@@ -25,9 +27,17 @@ async function slintFrame(t) {
 
 /** The tab is on screen: one route shown, and for the dashboard's tabs the iframe signed in on that page. */
 async function routeShown(t, page) {
-	await t.until(`${page} shown`, ({ page, slint, dash }) => {
+	await t.until(`${page} shown`, ({ page, slint, bridged, dash }) => {
 		const shown = [...document.querySelectorAll('.route')].filter((r) => !r.hidden);
 		if (shown.length !== 1) return false;
+		if (bridged) {
+			const f = document.querySelector('iframe.slint-frame');
+			if (!f || shown[0].contains(f) || !shown[0].querySelector('.ac-page .prov')) return false;
+			try {
+				const w = f.contentWindow;
+				return !!(w.__aacLastAuth && w.__aacLastAuth.signedIn) && w.location.pathname === dash;
+			} catch { return false; }
+		}
 		if (slint) {
 			const f = document.querySelector('iframe.slint-frame');
 			if (!f || !shown[0].contains(f)) return false;
@@ -37,7 +47,7 @@ async function routeShown(t, page) {
 			} catch { return false; }
 		}
 		return !!shown[0].querySelector(page === 'status' ? '.status-grid, .q-card' : '.page-title');
-	}, { page, slint: SLINT.has(page), dash: DASH_PATH[page] }, { timeout: 60000, hard: true });
+	}, { page, slint: SLINT.has(page), bridged: BRIDGED.has(page), dash: DASH_PATH[page] }, { timeout: 60000, hard: true });
 }
 
 async function openFrame(t, page, safe = '') {

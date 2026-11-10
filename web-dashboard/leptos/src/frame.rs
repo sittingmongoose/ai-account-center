@@ -7,8 +7,9 @@
 //! - dashboard to frame: `{type: "aac-content", kind, ...}` with kind ready, page (its own links moved it), toast,
 //!   chrome (the header's status line) or auth (it signed out, or its session ended).
 //!
-//! Native pages draw the dashboard's views (dash.rs): the iframe still loads for them and keeps the network, session
-//! and every server call, but stays hidden while a native tab shows.
+//! Accounts & Settings is drawn here too, from the dashboard's views (dash.rs): the iframe still loads for it and keeps
+//! the network, session and every server call, but stays hidden while a native tab shows. Details is the frame's own
+//! overlay over every tab (details.rs).
 //!
 //! Sign-in is the frame's (session.rs); until it is done no tab is drawn.
 
@@ -16,7 +17,7 @@ use crate::Page;
 use crate::dash::{self, DashCtx};
 use crate::session::{self, SessionView};
 use crate::ui::*;
-use crate::{live, scoreboard, status};
+use crate::{accounts, details, live, scoreboard, status};
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
@@ -583,7 +584,9 @@ pub fn Frame(initial: Page) -> impl IntoView {
             <FrameShell ctx=ctx>
                 <StatusRoute ctx=ctx/>
                 <ScoreboardRoute ctx=ctx/>
+                <AccountsRoute ctx=ctx/>
                 <SlintHost ctx=ctx/>
+                <details::DetailsOverlay ctx=ctx/>
             </FrameShell>
         </Show>
         <Toasts ctx=ctx/>
@@ -625,6 +628,20 @@ fn ScoreboardRoute(ctx: FrameCtx) -> impl IntoView {
     }
 }
 
+/// Accounts & Settings, drawn from the dashboard's views: built the first time its tab is shown, then kept, so a flow's
+/// typed name and an open form survive a tab change.
+#[component]
+fn AccountsRoute(ctx: FrameCtx) -> impl IntoView {
+    let seen = Memo::new(move |prev: Option<&bool>| {
+        prev.copied().unwrap_or(false) || ctx.route.get() == Page::Accounts
+    });
+    view! {
+        <div class="route" hidden=move || ctx.route.get() != Page::Accounts>
+            {move || seen.get().then(|| view! { <accounts::AccountsPage ctx=ctx/> })}
+        </div>
+    }
+}
+
 /// The Slint dashboard, content-only: loaded the first time a tab that takes its data is shown (Home, Analytics,
 /// Accounts), shown only while a tab it draws is current (Home, Analytics).
 #[component]
@@ -632,8 +649,15 @@ fn SlintHost(ctx: FrameCtx) -> impl IntoView {
     let seen = Memo::new(move |prev: Option<&bool>| {
         prev.copied().unwrap_or(false) || ctx.route.get().bridged()
     });
+    // A switch confirmation the dashboard draws itself (the frame doesn't draw that dialog yet) shows the dashboard
+    // over a native tab while it is open, so it is never answered unseen.
+    let raised = Memo::new(move |_| {
+        !dash::owns("activation")
+            && !ctx.route.get().slint()
+            && ctx.dash.activation.with(|a| !a.is_empty())
+    });
     view! {
-        <div class="route slint-host" hidden=move || !ctx.route.get().slint()>
+        <div class="route slint-host" class:raised=move || raised.get() hidden=move || !ctx.route.get().slint() && !raised.get()>
             {move || seen.get().then(|| {
                 // The page goes with the signed-in frame; commands for it go too.
                 on_cleanup(move || ctx.dashboard_gone());

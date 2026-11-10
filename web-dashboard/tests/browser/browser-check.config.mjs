@@ -64,7 +64,8 @@ export default (ctx) => {
 		// this page, in CSS pixels. Signed in, the sign-in panel's probes still report while it is hidden, so they are left out.
 		// null off an ?e2e page, where nothing reports.
 		async controls(t) {
-			if (!/[?&]e2e\b/.test(t.page.url())) return null;
+			// the app frame's pages (/app/<page>) are HTML: the audit checks their controls itself
+			if (!/[?&]e2e\b/.test(t.page.url()) || new URL(t.page.url()).pathname.startsWith('/app/')) return null;
 			const all = await t.app.probes();
 			const signedIn = await t.page.evaluate(() => !!(window.__aacLastAuth && __aacLastAuth.signedIn));
 			return Object.entries(all).filter(([id]) => CONTROL.test(id) && !(signedIn && id.startsWith('signin-'))).map(([name, r]) => ({ name, ...r }));
