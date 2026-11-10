@@ -143,9 +143,9 @@ export async function parseRemotePins(
 }
 
 /**
- * Every machine's good pins in one list: ordered by pinOrderKey then machine, each row
- * tagged with its machine, de-duplicated by thread id. All lists together; empty lists are
- * allowed and mean that machine has no pinned threads.
+ * Every machine's good pins in one list: ordered by pinOrderKey then pinnedAt, then
+ * machine, each row tagged with its machine, de-duplicated by thread id. All lists
+ * together; empty lists are allowed and mean that machine has no pinned threads.
  */
 export async function mergePins(
   lists: ReadonlyArray<{ machine: string; pinned: PinnedThread[] }>,

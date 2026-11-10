@@ -410,7 +410,7 @@ pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>>
 /// text by bytes, and JSON null (a pin with no key) after every keyed row. Two keys of the
 /// same kind compare inside the kind; anything else falls back to the machine name and
 /// then the thread id, so the merged order is total. Null-vs-null is equal here; the caller
-/// breaks null ties by `pinnedAt`.
+/// breaks equal-key ties by `pinnedAt`.
 fn order_key_cmp(a: &Json, b: &Json) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     // Null sorts after every keyed row; numbers before text, as SQLite orders them.
@@ -435,10 +435,10 @@ fn order_key_cmp(a: &Json, b: &Json) -> std::cmp::Ordering {
 }
 
 /// Every machine's good pins in one list: keyed rows ordered by `pinOrderKey` (then
-/// machine, then thread id), then null-key rows by `pinnedAt` (then machine, then thread
-/// id), each row tagged with its machine, and de-duplicated by thread id — the first row
-/// in that order is the one kept, so a thread pinned on two machines keeps the copy that
-/// sorts first, never a blend of the two.
+/// `pinnedAt`, then machine, then thread id), then null-key rows by `pinnedAt` (then
+/// machine, then thread id), each row tagged with its machine, and de-duplicated by
+/// thread id — the first row in that order is the one kept, so a thread pinned on two
+/// machines keeps the copy that sorts first, never a blend of the two.
 pub fn merge_pins(machines: &[MachinePins]) -> Vec<MergedPin> {
     let mut all: Vec<MergedPin> = machines
         .iter()
@@ -453,17 +453,13 @@ pub fn merge_pins(machines: &[MachinePins]) -> Vec<MergedPin> {
         })
         .collect();
     all.sort_by(|a, b| {
-        order_key_cmp(&a.pin_order_key, &b.pin_order_key).then_with(|| {
-            // A null key sorts after every keyed row; among nulls, T3's own `pinnedAt`
-            // order is the key, then machine and id, as in the per-machine read.
-            if a.pin_order_key.is_null() && b.pin_order_key.is_null() {
-                order_key_cmp(&a.pinned_at, &b.pinned_at)
-                    .then_with(|| a.machine.cmp(&b.machine))
-                    .then_with(|| a.id.cmp(&b.id))
-            } else {
-                a.machine.cmp(&b.machine).then_with(|| a.id.cmp(&b.id))
-            }
-        })
+        order_key_cmp(&a.pin_order_key, &b.pin_order_key)
+            // Equal keys order by `pinnedAt`, the same tiebreak the per-machine SQL reads
+            // use (pinOrderKey, then pinnedAt, then thread id); machine and id only settle
+            // what `pinnedAt` cannot.
+            .then_with(|| order_key_cmp(&a.pinned_at, &b.pinned_at))
+            .then_with(|| a.machine.cmp(&b.machine))
+            .then_with(|| a.id.cmp(&b.id))
     });
     let mut seen = HashSet::new();
     all.retain(|pin| seen.insert(pin.id.clone()));

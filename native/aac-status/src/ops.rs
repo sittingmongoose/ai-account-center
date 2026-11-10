@@ -13,7 +13,7 @@
 //!   answer never reaches this method.
 //! - `mergePins` `{ lists: [{ machine, pinned: [...] }] }` -> `{ pinned: [...] }`: every
 //!   machine's good pins merged, de-duplicated by thread id and ordered by pinOrderKey then
-//!   machine, each row tagged with its machine.
+//!   pinnedAt, then machine, each row tagged with its machine.
 //! - `compose` `{ nowMs, utcOffsetMinutes, pins, machineProblems, threads, tasks, openCards,
 //!   statuses }` -> the composed `pinned` view (pinned.rs), every word decided here.
 //! - `composeSpend` `{ nowMs, utcOffsetMinutes, accountOrder, spend }` -> the composed

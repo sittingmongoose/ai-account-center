@@ -20,10 +20,14 @@ fn row(id: &str, title: &str, pinned: Value, pinned_type: &str, order: Value, or
 }
 
 fn pin(id: &str, title: &str, order: Value) -> PinnedThread {
+    pin_at(id, title, order, json!("2026-11-08T10:00:00Z"))
+}
+
+fn pin_at(id: &str, title: &str, order: Value, pinned_at: Value) -> PinnedThread {
     PinnedThread {
         id: id.to_string(),
         title: title.to_string(),
-        pinned_at: json!("2026-11-08T10:00:00Z"),
+        pinned_at,
         pin_order_key: order,
     }
 }
@@ -217,7 +221,25 @@ fn numbers_sort_before_text_as_sqlite_orders_them() {
 }
 
 #[test]
-fn equal_keys_break_the_tie_by_machine_then_id() {
+fn equal_keys_break_the_tie_by_pinned_at_as_the_sql_reads_do() {
+    // The SQL reads order equal keys by pinnedAt; the merge must not let machine order
+    // decide instead, or a later pin could jump ahead of an earlier one.
+    let merged = merge_pins(&[
+        machine(
+            "mac",
+            vec![pin_at("m-late", "Mac late", json!("k"), json!("2026-11-09T09:00:00Z"))],
+        ),
+        machine(
+            "vm",
+            vec![pin_at("v-early", "VM early", json!("k"), json!("2026-11-08T10:00:00Z"))],
+        ),
+    ]);
+    let ids: Vec<&str> = merged.iter().map(|pin| pin.id.as_str()).collect();
+    assert_eq!(ids, ["v-early", "m-late"]);
+}
+
+#[test]
+fn equal_keys_and_equal_pinned_at_fall_back_to_machine_then_id() {
     let merged = merge_pins(&[
         machine(
             "nas1",
@@ -227,6 +249,30 @@ fn equal_keys_break_the_tie_by_machine_then_id() {
     ]);
     let ids: Vec<&str> = merged.iter().map(|pin| pin.id.as_str()).collect();
     assert_eq!(ids, ["m-a", "n-a", "n-b"]);
+}
+
+#[test]
+fn null_keys_order_by_pinned_at_after_every_keyed_row() {
+    let merged = merge_pins(&[
+        machine(
+            "vm",
+            vec![
+                pin_at("v-null-late", "Null late", Value::Null, json!("2026-11-09T09:00:00Z")),
+                pin_at("v-keyed", "Keyed", json!("k"), json!("2026-11-10T10:00:00Z")),
+            ],
+        ),
+        machine(
+            "mac",
+            vec![pin_at(
+                "m-null-early",
+                "Null early",
+                Value::Null,
+                json!("2026-11-07T08:00:00Z"),
+            )],
+        ),
+    ]);
+    let ids: Vec<&str> = merged.iter().map(|pin| pin.id.as_str()).collect();
+    assert_eq!(ids, ["v-keyed", "m-null-early", "v-null-late"]);
 }
 
 #[test]
