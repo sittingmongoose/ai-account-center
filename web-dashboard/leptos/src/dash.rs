@@ -1,4 +1,4 @@
-//! The dashboard seam for the frame's native pages (Accounts & Settings, Details, and Home once it is native).
+//! The dashboard seam for the frame's native pages (Accounts & Settings, Details, Analytics, and Home once native).
 //!
 //! `bridge.js` keeps the network, the session, the timers, the accounts controller, switch approvals and every server
 //! call. It runs in the frame's hidden dashboard iframe (`/?content=1`) and, once the frame subscribes, sends each view
@@ -13,6 +13,11 @@ use leptos::prelude::*;
 /// The overlays the frame draws itself; bridge.js stops drawing them in Slint once the frame says so: "details" (the
 /// Details panel and sheet) and "activation" (the switch approval dialog) join when the frame draws them.
 pub const OVERLAYS: &[&str] = &[];
+
+/// The pages the frame draws itself (`FRAME_PAGES` in frame-seam.mjs), named in the same subscription: bridge.js
+/// then sends their views here only and takes their layout reports from here only. "analytics" joins when the native
+/// Analytics page exists.
+pub const PAGES: &[&str] = &[];
 
 /// The latest view of each key, as raw JSON (each page parses its own types). Empty until the first push.
 #[derive(Clone, Copy)]
@@ -33,6 +38,14 @@ pub struct DashCtx {
     pub busy: RwSignal<bool>,
     /// `{"seconds": 60, "confirmed": true}` (`set_refresh_interval`).
     pub refresh_interval: RwSignal<String>,
+    /// Analytics, `ANALYTICS_VIEW_VERSION` 7 (`set_analytics`); `usage.trend.paths` is the shape to end on.
+    pub analytics: RwSignal<String>,
+    /// How the trend reaches that shape: "morph" (glide) or "static". Arrives just before `analytics`.
+    pub analytics_motion: RwSignal<String>,
+    /// The Analytics header between refreshes (`set_analytics_head`).
+    pub analytics_head: RwSignal<String>,
+    /// `{"loading": bool, "error": "..."}` (`set_analytics_loading`).
+    pub analytics_loading: RwSignal<String>,
     /// The dashboard has started and signed in: only then do actions go to it.
     pub(crate) live: RwSignal<bool>,
 }
@@ -48,6 +61,10 @@ impl DashCtx {
             update: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
             refresh_interval: RwSignal::new(String::new()),
+            analytics: RwSignal::new(String::new()),
+            analytics_motion: RwSignal::new(String::new()),
+            analytics_head: RwSignal::new(String::new()),
+            analytics_loading: RwSignal::new(String::new()),
             live: RwSignal::new(false),
         }
     }
@@ -63,6 +80,10 @@ impl DashCtx {
             "update" => self.update.set(json),
             "busy" => self.busy.set(json == "true"),
             "refresh-interval" => self.refresh_interval.set(json),
+            "analytics" => self.analytics.set(json),
+            "analytics-motion" => self.analytics_motion.set(json),
+            "analytics-head" => self.analytics_head.set(json),
+            "analytics-loading" => self.analytics_loading.set(json),
             _ => {}
         }
     }
@@ -73,6 +94,7 @@ impl DashCtx {
         self.details.set(String::new());
         self.activation.set(String::new());
         self.busy.set(false);
+        self.analytics_loading.set(String::new());
     }
 
     /// The dashboard's page is gone (sign-out): nothing of that session stays on screen.
@@ -85,6 +107,10 @@ impl DashCtx {
             self.activation,
             self.update,
             self.refresh_interval,
+            self.analytics,
+            self.analytics_motion,
+            self.analytics_head,
+            self.analytics_loading,
         ] {
             let _ = signal.try_set(String::new());
         }
@@ -115,7 +141,7 @@ impl DashCtx {
 pub(crate) fn subscribe(target: &web_sys::Window) {
     let message = js_sys::Object::new();
     let overlays = js_sys::Array::new();
-    for name in OVERLAYS {
+    for name in OVERLAYS.iter().chain(PAGES) {
         overlays.push(&(*name).into());
     }
     let _ = js_sys::Reflect::set(&message, &"type".into(), &"aac-views".into());
@@ -145,14 +171,20 @@ mod tests {
         dash.receive("accounts", "{\"version\":3}".into());
         dash.receive("details", "{\"id\":\"a\"}".into());
         dash.receive("busy", "true".into());
+        dash.receive("analytics", "{\"version\":7}".into());
+        dash.receive("analytics-loading", "{\"loading\":true}".into());
         dash.receive("unknown", "x".into());
         assert_eq!(dash.accounts.get_untracked(), "{\"version\":3}");
         assert!(dash.busy.get_untracked());
+        assert_eq!(dash.analytics.get_untracked(), "{\"version\":7}");
         dash.restarted();
         assert!(dash.details.get_untracked().is_empty());
+        assert!(dash.analytics_loading.get_untracked().is_empty());
+        assert_eq!(dash.analytics.get_untracked(), "{\"version\":7}");
         assert_eq!(dash.accounts.get_untracked(), "{\"version\":3}");
         dash.clear();
         assert!(dash.accounts.get_untracked().is_empty());
+        assert!(dash.analytics.get_untracked().is_empty());
     }
 
     #[test]
