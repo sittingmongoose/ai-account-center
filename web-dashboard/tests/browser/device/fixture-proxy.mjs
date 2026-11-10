@@ -25,8 +25,30 @@ function status() {
 const scoreboard = () => ({ ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') });
 const ANSWERS = { '/api/accounts/dashboard': accounts, '/api/claude/desktop-profiles': homeProfiles, '/api/status': status, '/api/scoreboard': scoreboard };
 
+// Home's switch flow without switching anything: a Codex Activate first asks for the approval (409, the made-up
+// processes below), and the approval's one-use token then "switches". Nothing reaches the real server.
+const TOKEN = 'Abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE';
+function activate(profile, body) {
+	if (body?.confirmationToken === TOKEN) return [200, { name: profile, email: `${profile}@example.invalid` }];
+	return [409, { error: 'Codex processes are running.', code: 'confirmation_required', confirmation: {
+		token: TOKEN, targetProfile: profile, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(), warning: 'Active Codex work will stop. The listed processes will be stopped and Codex will restart with the selected account.',
+		processes: [{ label: 'codex (made-up terminal session)', pid: 4242, role: 'cli' }, { label: 'Codex app (made-up)', pid: 4311, role: 'app' }] } }];
+}
+
 const server = http.createServer((req, res) => {
 	const pathname = new URL(req.url, 'http://x').pathname;
+	const switching = req.method === 'POST' && pathname.match(/^\/api\/codex\/profiles\/([A-Za-z0-9_-]+)\/activate$/);
+	if (switching) {
+		let raw = '';
+		req.on('data', (d) => (raw += d)).on('end', () => {
+			let body = null;
+			try { body = JSON.parse(raw); } catch {}
+			const [status, json] = activate(switching[1], body);
+			res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+			res.end(JSON.stringify(json));
+		});
+		return;
+	}
 	if (req.method === 'GET' && ANSWERS[pathname]) {
 		// Only for a signed-in browser: ask the real server first, so the session rules stay the real ones.
 		const check = http.request({ host: '127.0.0.1', port: target, path: '/api/auth/check', headers: { cookie: req.headers.cookie || '', host: req.headers.host } }, (r) => {
