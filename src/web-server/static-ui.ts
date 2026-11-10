@@ -278,9 +278,10 @@ export function hasParentSegment(requestPath: string): boolean {
 export function isStaticUiFileRequest(root: string, requestPath: string): boolean {
   const relative = relativeUiPath(root, requestPath);
   if (!relative) return false;
-  const lower = relative.toLowerCase();
-  if (lower.endsWith('.br') || lower.endsWith('.gz') || UNSERVED.has(path.posix.normalize(lower)))
-    return false;
+  // The denied names are judged on the normalised path: a trailing `/.` or `/.`-in-disguise
+  // segment normalises to the refused file inside express.static, so it is refused here too.
+  const denied = path.posix.normalize(relative.toLowerCase());
+  if (denied.endsWith('.br') || denied.endsWith('.gz') || UNSERVED.has(denied)) return false;
   try {
     return fs.statSync(path.resolve(root, relative)).isFile();
   } catch {
@@ -393,13 +394,10 @@ export function precompressedStatic(ui: StaticUi): RequestHandler {
       next();
       return;
     }
-    const lower = relative.toLowerCase();
-    // `./` segments are folded first, so `/./ui-build-manifest.json` is refused too.
-    if (
-      lower.endsWith('.br') ||
-      lower.endsWith('.gz') ||
-      UNSERVED.has(path.posix.normalize(lower))
-    ) {
+    // The denied names are judged on the normalised path: `./` segments fold, and a trailing
+    // `/.` (raw or encoded) would otherwise normalise to the refused file inside express.static.
+    const denied = path.posix.normalize(relative.toLowerCase());
+    if (denied.endsWith('.br') || denied.endsWith('.gz') || UNSERVED.has(denied)) {
       res.status(404).json({ error: 'Not found.' });
       return;
     }

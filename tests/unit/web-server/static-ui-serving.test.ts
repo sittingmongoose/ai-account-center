@@ -273,6 +273,26 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     }
   });
 
+  it('refuses a trailing /. that normalises to a refused file (review 622ba7d0 F2)', async () => {
+    for (const route of [
+      // express.static folds these to the addressed .br/.gz file and serves the encoded bytes.
+      `${wasmUrl()}.br/.`,
+      `${wasmUrl()}.gz/.`,
+      `${wasmUrl()}.br%2f.`,
+      `${wasmUrl()}.gz%2F%2E`,
+      // The manifest refusal already normalised; these stay refused.
+      '/ui-build-manifest.json/.',
+      '/./ui-build-manifest.json',
+    ]) {
+      const response = await raw('GET', route, { 'Accept-Encoding': 'br, gzip' });
+      expect([route, response.status]).toEqual([route, 404]);
+      expect(response.headers['content-encoding']).toBeUndefined();
+      expect(response.body.equals(variant('br'))).toBe(false);
+      expect(response.body.equals(variant('gzip'))).toBe(false);
+      expect(response.body.toString()).not.toMatch(/8fb5e3de|buildId/);
+    }
+  });
+
   it('disables a tampered variant at startup and serves identity instead', async () => {
     await stop();
     const brFile = path.join(staticDir, `${manifest.wasm.path}.br`);
