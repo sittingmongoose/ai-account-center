@@ -253,3 +253,119 @@ fn empty_machines_merge_to_an_empty_list() {
     assert!(merge_pins(&[]).is_empty());
     assert!(merge_pins(&[machine("vm", vec![]), machine("mac", vec![])]).is_empty());
 }
+
+#[test]
+fn a_null_order_key_is_accepted_on_a_remote_machine() {
+    // The same rule as the local read: a pin with pinnedAt but pinOrderKey JSON null is
+    // still a pin, carried as JSON null. Both spellings of "no key" — orderType "null"
+    // (explicit JSON null) and orderType JSON null (path absent) — are accepted. On
+    // origin/main this is a shape refusal.
+    let mut explicit = row(
+        "no-key",
+        "No key",
+        json!("2026-11-08T10:00:00Z"),
+        "text",
+        Value::Null,
+        "null",
+    );
+    explicit["orderType"] = json!("null");
+    explicit["pinOrderKey"] = Value::Null;
+    let mut absent = row(
+        "absent-key",
+        "Absent key",
+        json!("2026-11-09T10:00:00Z"),
+        "text",
+        Value::Null,
+        "null",
+    );
+    absent["orderType"] = Value::Null;
+    absent["pinOrderKey"] = Value::Null;
+    let keyed = row(
+        "keyed",
+        "Keyed",
+        json!("2026-11-08T10:00:00Z"),
+        "text",
+        json!("a"),
+        "text",
+    );
+
+    let rows = parse_remote_pins(
+        "mac",
+        &json!([keyed.clone(), explicit.clone(), absent.clone()]).to_string(),
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].id, "keyed");
+    assert_eq!(rows[0].pin_order_key, json!("a"));
+    assert_eq!(rows[1].id, "no-key");
+    assert_eq!(rows[1].pin_order_key, Value::Null);
+    assert_eq!(rows[2].id, "absent-key");
+    assert_eq!(rows[2].pin_order_key, Value::Null);
+}
+
+#[test]
+fn a_remote_null_order_key_row_is_parsed_not_refused() {
+    // The sqlite3 -json spelling itself: pinOrderKey null with orderType "null".
+    let text = "[{\"thread_id\":\"t\",\"title\":\"T\",\"pinnedAt\":\"2026-11-08T10:00:00Z\",\"pinnedType\":\"text\",\"pinOrderKey\":null,\"orderType\":\"null\",\"rootType\":\"object\",\"lineageType\":null,\"parentType\":null}]";
+    let rows = parse_remote_pins("mac", text).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].pin_order_key, Value::Null);
+
+    // Child rows with a null key are skipped, as with the local read.
+    let mut child = row("child", "Child", json!("x"), "text", Value::Null, "null");
+    child["orderType"] = json!("null");
+    child["pinOrderKey"] = Value::Null;
+    child["lineageType"] = json!("object");
+    child["parentType"] = json!("text");
+    let top = row("top", "Top", json!("x"), "text", json!("a"), "text");
+    let rows = parse_remote_pins("mac", &json!([top, child]).to_string()).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "top");
+}
+
+#[test]
+fn null_keys_sort_after_keyed_pins_by_pinned_at_in_the_merge() {
+    let keyed = PinnedThread {
+        id: "m-keyed".to_string(),
+        title: "Keyed".to_string(),
+        pinned_at: json!("2026-11-09T00:00:00Z"),
+        pin_order_key: json!("z"),
+    };
+    let null_late = PinnedThread {
+        id: "a-null-late".to_string(),
+        title: "Null late".to_string(),
+        pinned_at: json!("2026-11-09T00:00:00Z"),
+        pin_order_key: Value::Null,
+    };
+    let null_early = PinnedThread {
+        id: "z-null-early".to_string(),
+        title: "Null early".to_string(),
+        pinned_at: json!("2026-11-07T00:00:00Z"),
+        pin_order_key: Value::Null,
+    };
+    let merged = merge_pins(&[
+        machine("vm", vec![null_late, keyed, null_early]),
+        machine("mac", vec![]),
+    ]);
+    let ids: Vec<&str> = merged.iter().map(|pin| pin.id.as_str()).collect();
+    // Keyed first, then nulls by pinnedAt: z-null-early (early) before a-null-late (late),
+    // the reverse of their id order. On origin/main nulls rank with strings, so the
+    // merged order is by id and this assertion fails.
+    assert_eq!(ids, ["m-keyed", "z-null-early", "a-null-late"]);
+}
+
+#[test]
+fn a_remote_object_order_key_is_still_a_shape_refusal() {
+    let mut bad = row("t", "T", json!("x"), "text", json!({ "k": 1 }), "object");
+    bad["orderType"] = json!("object");
+    assert_eq!(
+        parse_remote_pins("mac", &json!([bad]).to_string()).unwrap_err().code,
+        "shape"
+    );
+    let mut array = row("t", "T", json!("x"), "text", json!([1]), "array");
+    array["orderType"] = json!("array");
+    assert_eq!(
+        parse_remote_pins("mac", &json!([array]).to_string()).unwrap_err().code,
+        "shape"
+    );
+}

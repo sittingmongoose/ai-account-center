@@ -16,7 +16,8 @@ export interface PinnedThread {
   title: string;
   /** As T3 wrote it (an ISO string in practice); passed through, never reinterpreted. */
   pinnedAt: string | number;
-  pinOrderKey: string | number;
+  /** The pin's order key, or null when T3 wrote no key (the row then sorts after every keyed pin). */
+  pinOrderKey: string | number | null;
 }
 
 export type PinnedThreadsResult = { pinned: PinnedThread[] } | { unavailable: string };
@@ -39,11 +40,12 @@ function isPinnedThread(value: unknown): value is PinnedThread {
   const row = value as Record<string, unknown>;
   const scalar = (field: unknown): boolean =>
     typeof field === 'string' || (typeof field === 'number' && Number.isFinite(field));
+  const orderKey = (field: unknown): boolean => field === null || scalar(field);
   return (
     typeof row.id === 'string' &&
     typeof row.title === 'string' &&
     scalar(row.pinnedAt) &&
-    scalar(row.pinOrderKey)
+    orderKey(row.pinOrderKey)
   );
 }
 

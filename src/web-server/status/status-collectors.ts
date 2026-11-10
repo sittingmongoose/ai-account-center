@@ -947,7 +947,7 @@ export async function readRemoteMachine(
  * `orchestration_v2_projection_threads` is touched; a database of any size reads the same
  * one table.
  */
-export const PINNED_THREADS_QUERY = `SELECT thread_id, title, json_extract(payload_json, '$.pinnedAt') AS pinnedAt, json_type(payload_json, '$.pinnedAt') AS pinnedType, json_extract(payload_json, '$.pinOrderKey') AS pinOrderKey, json_type(payload_json, '$.pinOrderKey') AS orderType, json_type(payload_json) AS rootType, json_type(payload_json, '$.lineage') AS lineageType, json_type(payload_json, '$.lineage.parentThreadId') AS parentType FROM orchestration_v2_projection_threads WHERE archived_at IS NULL AND deleted_at IS NULL AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL ORDER BY json_extract(payload_json, '$.pinOrderKey') ASC, thread_id ASC`;
+export const PINNED_THREADS_QUERY = `SELECT thread_id, title, json_extract(payload_json, '$.pinnedAt') AS pinnedAt, json_type(payload_json, '$.pinnedAt') AS pinnedType, json_extract(payload_json, '$.pinOrderKey') AS pinOrderKey, json_type(payload_json, '$.pinOrderKey') AS orderType, json_type(payload_json) AS rootType, json_type(payload_json, '$.lineage') AS lineageType, json_type(payload_json, '$.lineage.parentThreadId') AS parentType FROM orchestration_v2_projection_threads WHERE archived_at IS NULL AND deleted_at IS NULL AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL ORDER BY (json_extract(payload_json, '$.pinOrderKey') IS NULL) ASC, json_extract(payload_json, '$.pinOrderKey') ASC, json_extract(payload_json, '$.pinnedAt') ASC, thread_id ASC`;
 
 /** The sqlite3 that answers the pins query on each host. Mac first on PATH is an Android SDK
  * copy, so the fixed /usr/bin one; Windows has chocolatey's, in ProgramData. */

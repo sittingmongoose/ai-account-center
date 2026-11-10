@@ -350,7 +350,8 @@ fn a_changed_shape_is_reported_never_guessed() {
     assert_eq!(read_pinned_threads(&file).unwrap().len(), 0);
     assert_eq!(read_pinned_threads(&file2).unwrap_err().code, "shape");
 
-    // A pinned row with no order key: T3 writes the pair together, so this is a new shape.
+    // A pinned row with no order key: T3 writes pinnedAt without a key as JSON null or
+    // not at all. That row is still pinned, carried as JSON null — not a changed shape.
     let file3 = dir.path().join("third.sqlite");
     let conn3 = Connection::open(&file3).unwrap();
     conn3.execute_batch(SCHEMA).unwrap();
@@ -363,7 +364,10 @@ fn a_changed_shape_is_reported_never_guessed() {
         &json!({"pinnedAt": "2026-11-08T10:00:00Z"}).to_string(),
     );
     drop(conn3);
-    assert_eq!(read_pinned_threads(&file3).unwrap_err().code, "shape");
+    let rows = read_pinned_threads(&file3).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "odd");
+    assert_eq!(rows[0].pin_order_key, Value::Null);
 }
 
 #[test]
@@ -427,6 +431,152 @@ fn reading_never_writes_to_the_file() {
     assert_eq!(read_pinned_threads(&file).unwrap().len(), 1);
     assert_eq!(std::fs::read(&file).unwrap(), before);
     assert!(!dir.path().join("statev2.sqlite-wal").exists());
+}
+
+#[test]
+fn a_top_level_null_order_key_is_listed_after_the_keyed_ones() {
+    // T3 may write pinnedAt with pinOrderKey as JSON null (or absent). The row is still
+    // pinned, ordered after every keyed row by pinnedAt then thread_id, and carries JSON
+    // null as its key. On origin/main this whole read is a shape refusal.
+    let dir = tempfile::tempdir().unwrap();
+    let (file, conn) = fixture(dir.path());
+    for (id, key) in [("second", "b"), ("first", "a")] {
+        insert(
+            &conn,
+            id,
+            id,
+            None,
+            None,
+            &payload(id, id, json!("2026-11-08T10:00:00Z"), json!(key), Value::Null),
+        );
+    }
+    // Explicit JSON null and an absent field are the same "no key".
+    insert(
+        &conn,
+        "null-late",
+        "Null late",
+        None,
+        None,
+        &payload(
+            "null-late",
+            "Null late",
+            json!("2026-11-09T10:00:00Z"),
+            Value::Null,
+            Value::Null,
+        ),
+    );
+    insert(
+        &conn,
+        "absent-early",
+        "Absent early",
+        None,
+        None,
+        &json!({
+            "id": "absent-early", "title": "Absent early",
+            "pinnedAt": "2026-11-07T10:00:00Z"
+        })
+        .to_string(),
+    );
+    // Same pinnedAt: thread_id decides.
+    insert(
+        &conn,
+        "null-b",
+        "Null B",
+        None,
+        None,
+        &payload(
+            "null-b",
+            "Null B",
+            json!("2026-11-08T09:00:00Z"),
+            Value::Null,
+            Value::Null,
+        ),
+    );
+    insert(
+        &conn,
+        "null-a",
+        "Null A",
+        None,
+        None,
+        &payload(
+            "null-a",
+            "Null A",
+            json!("2026-11-08T09:00:00Z"),
+            Value::Null,
+            Value::Null,
+        ),
+    );
+    drop(conn);
+
+    let rows = read_pinned_threads(&file).unwrap();
+    assert_eq!(
+        ids(&rows),
+        ["first", "second", "absent-early", "null-a", "null-b", "null-late"]
+    );
+    assert_eq!(rows[2].pin_order_key, Value::Null);
+    assert_eq!(rows[3].pin_order_key, Value::Null);
+    assert_eq!(rows[4].pin_order_key, Value::Null);
+    assert_eq!(rows[5].pin_order_key, Value::Null);
+}
+
+#[test]
+fn a_child_with_a_null_key_is_still_skipped_never_a_refusal() {
+    // The shape check runs before the child skip, so a child whose pinOrderKey is null
+    // once refused the whole list. It is now skipped like any child, and the list succeeds.
+    let dir = tempfile::tempdir().unwrap();
+    let (file, conn) = fixture(dir.path());
+    insert(
+        &conn,
+        "top",
+        "Top",
+        None,
+        None,
+        &payload("top", "Top", json!("2026-11-08T10:00:00Z"), json!("a"), Value::Null),
+    );
+    insert(
+        &conn,
+        "child-null",
+        "Child null key",
+        None,
+        None,
+        &payload(
+            "child-null",
+            "Child null key",
+            json!("2026-11-08T10:00:00Z"),
+            Value::Null,
+            json!("top"),
+        ),
+    );
+    drop(conn);
+
+    assert_eq!(ids(&read_pinned_threads(&file).unwrap()), ["top"]);
+}
+
+#[test]
+fn a_non_scalar_order_key_is_still_a_shape_refusal() {
+    // Only null/absent is a "no key". An object, array or bool key is still a change.
+    for wrong in [json!({ "k": 1 }), json!([1]), json!(true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let (file, conn) = fixture(dir.path());
+        insert(
+            &conn,
+            "drift",
+            "Drift",
+            None,
+            None,
+            &json!({
+                "id": "drift", "title": "Drift",
+                "pinnedAt": "2026-11-08T10:00:00Z", "pinOrderKey": wrong
+            })
+            .to_string(),
+        );
+        drop(conn);
+        assert_eq!(
+            read_pinned_threads(&file).unwrap_err().code,
+            "shape",
+            "pinOrderKey {wrong} must be refused"
+        );
+    }
 }
 
 #[test]

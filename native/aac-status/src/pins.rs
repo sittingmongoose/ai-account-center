@@ -40,8 +40,9 @@ pub const MAX_PIN_BYTES: usize = 1024 * 1024;
 pub const PIN_MACHINES: [&str; 3] = ["mac", "windows", "nas1"];
 
 /// One pinned top-level thread. `pinned_at` and `pin_order_key` pass through with the JSON
-/// type T3 wrote (text in practice); anything that is not a string or a number is a shape
-/// change, never a value to invent a meaning for.
+/// type T3 wrote (text in practice); `pin_order_key` may also carry JSON null when T3 wrote
+/// no key (see the reader), ordered after every keyed row; anything else that is not a
+/// string or a number for either field is a shape change, never a value to invent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedThread {
@@ -207,7 +208,9 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
              FROM orchestration_v2_projection_threads \
              WHERE archived_at IS NULL AND deleted_at IS NULL \
                AND json_extract(payload_json, '$.pinnedAt') IS NOT NULL \
-             ORDER BY json_extract(payload_json, '$.pinOrderKey') ASC, thread_id ASC",
+             ORDER BY (json_extract(payload_json, '$.pinOrderKey') IS NULL) ASC, \
+                    json_extract(payload_json, '$.pinOrderKey') ASC, \
+                    json_extract(payload_json, '$.pinnedAt') ASC, thread_id ASC",
         )
         .map_err(map_sqlite)?;
     let rows = stmt
@@ -238,7 +241,7 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
             };
         if root_type.as_deref() != Some("object")
             || !matches!(pinned_type.as_deref(), Some("text" | "integer" | "real"))
-            || !matches!(order_type.as_deref(), Some("text" | "integer" | "real"))
+            || !matches!(order_type.as_deref(), Some("text" | "integer" | "real" | "null") | None)
         {
             return Err(shape());
         }
@@ -246,7 +249,20 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
             continue;
         }
         let pinned_at = scalar(pinned_at)?;
-        let pin_order_key = scalar(pin_order_key)?;
+        // T3 writes no key as JSON null or not at all: the extract is SQL NULL and the type
+        // is "null" or absent. That row is still pinned, carried as JSON null. Any other
+        // declared type is a shape change; `scalar` is strict about the rest.
+        let pin_order_key = match order_type.as_deref() {
+            None | Some("null") => {
+                if matches!(pin_order_key, SqlValue::Null) {
+                    Json::Null
+                } else {
+                    return Err(shape());
+                }
+            }
+            Some("text") | Some("integer") | Some("real") => scalar(pin_order_key)?,
+            Some(_) => return Err(shape()),
+        };
         // The read's own budget: refuse the whole read past either bound, never truncate.
         spent += id.len()
             + title.len()
@@ -316,11 +332,12 @@ fn remote_type_name(value: &Json) -> Result<Option<&str>> {
 /// The `sqlite3 -json` text one remote machine printed for the pinned-threads query, parsed
 /// with the same shape checks as the local read (`read_pinned_threads`): an array of row
 /// objects carrying exactly the query's aliased columns, a text/integer/real scalar for
-/// `pinnedAt` and `pinOrderKey` that matches its declared `json_type`, a payload root that
-/// is an object. The query's WHERE clause applied the same unarchived, undeleted, pinned
-/// predicate; the top-level rule is decided here from the lineage shape facts the query
-/// carries, by the same `lineage_of` as the local read, so a wrong-typed lineage is refused
-/// instead of read as "no parent". Empty output means no pinned threads on that machine.
+/// `pinnedAt` and a text/integer/real scalar — or JSON null when T3 wrote no key — for
+/// `pinOrderKey`, each matching its declared `json_type`, a payload root that is an object.
+/// The query's WHERE clause applied the same unarchived, undeleted, pinned predicate; the
+/// top-level rule is decided here from the lineage shape facts the query carries, by the
+/// same `lineage_of` as the local read, so a wrong-typed lineage is refused instead of read
+/// as "no parent". Empty output means no pinned threads on that machine.
 /// `machine` is one of [`PIN_MACHINES`]; any deviation is a caller error, not a shape claim.
 pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>> {
     if !PIN_MACHINES.contains(&machine) {
@@ -361,38 +378,67 @@ pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>>
         if id.is_empty() || title.is_empty() {
             return Err(shape());
         }
+        let pin_order_key = match row.get("orderType") {
+            Some(Json::Null) => {
+                // No key at all: the query's extract and type are both SQL NULL, printed
+                // as JSON null. T3 pins without a key are still pinned.
+                match row.get("pinOrderKey") {
+                    Some(Json::Null) => Json::Null,
+                    _ => return Err(shape()),
+                }
+            }
+            Some(Json::String(name)) if name == "null" => {
+                // JSON null key: the extract is SQL NULL, the type is "null".
+                match row.get("pinOrderKey") {
+                    Some(Json::Null) => Json::Null,
+                    _ => return Err(shape()),
+                }
+            }
+            _ => remote_scalar(&row, "pinOrderKey", "orderType")?,
+        };
         pinned.push(PinnedThread {
             id: id.clone(),
             title: title.clone(),
             pinned_at: remote_scalar(&row, "pinnedAt", "pinnedType")?,
-            pin_order_key: remote_scalar(&row, "pinOrderKey", "orderType")?,
+            pin_order_key,
         });
     }
     Ok(pinned)
 }
 
 /// Where a pin order key sorts, as SQLite orders it: numbers before text, numbers by value,
-/// text by bytes. Two keys of the same kind compare inside the kind; anything else falls
-/// back to the machine name and then the thread id, so the merged order is total.
+/// text by bytes, and JSON null (a pin with no key) after every keyed row. Two keys of the
+/// same kind compare inside the kind; anything else falls back to the machine name and
+/// then the thread id, so the merged order is total. Null-vs-null is equal here; the caller
+/// breaks null ties by `pinnedAt`.
 fn order_key_cmp(a: &Json, b: &Json) -> std::cmp::Ordering {
     use std::cmp::Ordering;
+    // Null sorts after every keyed row; numbers before text, as SQLite orders them.
     let rank = |value: &Json| match value {
         Json::Number(_) => 0,
-        _ => 1,
+        Json::String(_) => 1,
+        Json::Null => 2,
+        _ => 3,
     };
     match (a, b) {
+        (Json::Null, Json::Null) => Ordering::Equal,
+        (Json::Null, _) => Ordering::Greater,
+        (_, Json::Null) => Ordering::Less,
         (Json::Number(left), Json::Number(right)) => {
             left.as_f64().partial_cmp(&right.as_f64()).unwrap_or(Ordering::Equal)
         }
         (Json::String(left), Json::String(right)) => left.cmp(right),
+        (Json::Number(_), Json::String(_)) => Ordering::Less,
+        (Json::String(_), Json::Number(_)) => Ordering::Greater,
         _ => rank(a).cmp(&rank(b)),
     }
 }
 
-/// Every machine's good pins in one list: ordered by `pinOrderKey` (then machine, then
-/// thread id), each row tagged with its machine, and de-duplicated by thread id — the first
-/// row in that order is the one kept, so a thread pinned on two machines keeps the copy
-/// that sorts first, never a blend of the two.
+/// Every machine's good pins in one list: keyed rows ordered by `pinOrderKey` (then
+/// machine, then thread id), then null-key rows by `pinnedAt` (then machine, then thread
+/// id), each row tagged with its machine, and de-duplicated by thread id — the first row
+/// in that order is the one kept, so a thread pinned on two machines keeps the copy that
+/// sorts first, never a blend of the two.
 pub fn merge_pins(machines: &[MachinePins]) -> Vec<MergedPin> {
     let mut all: Vec<MergedPin> = machines
         .iter()
@@ -407,9 +453,17 @@ pub fn merge_pins(machines: &[MachinePins]) -> Vec<MergedPin> {
         })
         .collect();
     all.sort_by(|a, b| {
-        order_key_cmp(&a.pin_order_key, &b.pin_order_key)
-            .then_with(|| a.machine.cmp(&b.machine))
-            .then_with(|| a.id.cmp(&b.id))
+        order_key_cmp(&a.pin_order_key, &b.pin_order_key).then_with(|| {
+            // A null key sorts after every keyed row; among nulls, T3's own `pinnedAt`
+            // order is the key, then machine and id, as in the per-machine read.
+            if a.pin_order_key.is_null() && b.pin_order_key.is_null() {
+                order_key_cmp(&a.pinned_at, &b.pinned_at)
+                    .then_with(|| a.machine.cmp(&b.machine))
+                    .then_with(|| a.id.cmp(&b.id))
+            } else {
+                a.machine.cmp(&b.machine).then_with(|| a.id.cmp(&b.id))
+            }
+        })
     });
     let mut seen = HashSet::new();
     all.retain(|pin| seen.insert(pin.id.clone()));
