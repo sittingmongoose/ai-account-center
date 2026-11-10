@@ -11,8 +11,17 @@
 use leptos::prelude::*;
 
 /// The overlays the frame draws itself; bridge.js stops drawing them in Slint once the frame says so: "details" (the
-/// Details panel and sheet) and "activation" (the switch approval dialog) join when the frame draws them.
-pub const OVERLAYS: &[&str] = &["activation"];
+/// Details panel and sheet, details.rs) and "activation" (the switch approval dialog, activation.rs).
+pub const OVERLAYS: &[&str] = &["details", "activation"];
+
+/// Whether the frame draws this overlay itself.
+pub fn owns(overlay: &str) -> bool {
+    OVERLAYS.contains(&overlay)
+}
+
+/// How many times a page asked for Details: a click outside the open panel that asked for another account swaps it
+/// instead of closing it (details.rs, as bridge.js `detailsOpens` does for the canvas).
+pub static DETAILS_ASKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The pages the frame draws itself (`FRAME_PAGES` in frame-seam.mjs), named in the same subscription: bridge.js
 /// then sends their views here only and takes their layout reports from here only. "analytics" joins when the native
@@ -123,6 +132,9 @@ impl DashCtx {
     pub fn act(&self, kind: &str, value: &str) -> bool {
         if !self.live.get_untracked() {
             return false;
+        }
+        if kind == "details" {
+            DETAILS_ASKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         let Some(target) = crate::frame::slint_window() else {
             return false;

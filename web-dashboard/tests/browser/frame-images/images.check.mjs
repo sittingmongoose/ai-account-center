@@ -1,6 +1,6 @@
 // The app frame with each tab, in each format and theme: <tab>-<format>-<theme>.png in `--set out=<folder>`.
-// Status and Scoreboard are whole pages (the chrome unpinned so it sits once at its place, like the mockups' "Whole
-// page" view). Home, Analytics and Accounts are the first screen: the dashboard scrolls inside its own canvas.
+// Status, Scoreboard and Accounts are whole pages (the chrome unpinned so it sits once at its place, like the mockups'
+// "Whole page" view). Home and Analytics are the first screen: the dashboard scrolls inside its own canvas.
 // Synthetic data only: the Leptos design fixtures for Status and Scoreboard, and made-up accounts below.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,7 +27,7 @@ const FORMATS = [
 	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
 ];
 const TABS = ['status', 'scoreboard', 'home', 'analytics', 'accounts'];
-const SLINT = new Set(['home', 'analytics', 'accounts']);
+const SLINT = new Set(['home', 'analytics']);
 const DASH_PATH = { home: '/', analytics: '/analytics', accounts: '/accounts' };
 const UNPIN = `html { scrollbar-width: none; }
 .rail, .tabbar, .topbar, .chrome, .band-head { position: static !important; }
@@ -67,7 +67,7 @@ export const tests = Object.fromEntries(
 					await t.until(`${tab} shown`, ({ tab, slint, dash }) => {
 						const shown = [...document.querySelectorAll('.route')].filter((r) => !r.hidden);
 						if (shown.length !== 1) return false;
-						if (!slint) return !!shown[0].querySelector(tab === 'status' ? '.q-card' : '.picks');
+						if (!slint) return !!shown[0].querySelector(tab === 'status' ? '.q-card' : tab === 'accounts' ? '.ac-page .prov' : '.picks');
 						try {
 							const w = shown[0].querySelector('iframe.slint-frame')?.contentWindow;
 							return !!(w && w.__aacLastAuth?.signedIn && w.location.pathname === dash && w.document.querySelector('#loading')?.hidden);

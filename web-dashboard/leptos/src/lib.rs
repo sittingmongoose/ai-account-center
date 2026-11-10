@@ -5,11 +5,13 @@
 //! dashboard content-only. With `?embed=1` today's Slint shell shows the Status or Scoreboard content in its iframe
 //! and sends the theme (`{type: "aac-theme", mode}`).
 
+mod accounts;
 mod activation;
 pub mod api;
 mod blocks;
 mod cards;
 pub mod dash;
+mod details;
 mod drafts;
 pub mod fmt;
 mod frame;
@@ -52,9 +54,9 @@ pub fn set_active(page: Page) {
 pub const SHOWN_EVENT: &str = "aac-shown";
 use wasm_bindgen::prelude::*;
 
-/// The five tabs. Home, Analytics and Accounts are the Slint dashboard's pages, shown content-only inside the frame
-/// until they are ported; Status and Scoreboard are drawn here. Home, Analytics and Accounts take their data from the
-/// dashboard (`bridged`), drawn by Slint or natively (dash.rs).
+/// The five tabs. Analytics is the Slint dashboard's page, shown content-only inside the frame until it is ported;
+/// Home, Accounts & Settings, Status and Scoreboard are drawn here. Home, Analytics and Accounts take their data from the
+/// dashboard (`bridged`, dash.rs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Page {
     Home = 0,
@@ -130,7 +132,7 @@ impl Page {
 
     /// Drawn by the Slint dashboard, inside the frame.
     pub fn slint(self) -> bool {
-        matches!(self, Page::Analytics | Page::Accounts)
+        matches!(self, Page::Analytics)
     }
 
     /// Its data, actions and header line come from the dashboard (bridge.js in the frame's hidden iframe, dash.rs): the
@@ -283,7 +285,12 @@ mod tests {
             assert_eq!(page_from_path(page.path()), page);
             assert_eq!(Page::from_id(page.id()), Some(page));
         }
-        assert!(!Page::Home.slint() && Page::Analytics.slint() && !Page::Status.slint());
+        assert!(
+            !Page::Home.slint()
+                && !Page::Accounts.slint()
+                && Page::Analytics.slint()
+                && !Page::Status.slint()
+        );
         assert!(Page::Home.bridged());
         assert!(Page::Accounts.bridged() && Page::Analytics.bridged() && !Page::Status.bridged());
     }

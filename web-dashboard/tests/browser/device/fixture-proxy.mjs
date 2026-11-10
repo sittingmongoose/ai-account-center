@@ -3,6 +3,8 @@
 // the socket) to the real server unchanged. Test data only: invented names, never a real account.
 // Home's accounts are home-fixture.mjs (Claude x4, Codex x3, Antigravity, Cursor, Kimi, Z.ai, Qwen, Muse, OpenCode Go).
 //   node web-dashboard/tests/browser/device/fixture-proxy.mjs <listen port> <dashboard port>
+// With AAC_FIXTURE_ACCOUNTS=rich, the account routes come from ../accounts-fixture.mjs instead (every provider, a trash
+// entry, paired trays, an Update apps run, and the sign-in and remove flows), for Accounts & Settings device checks.
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -35,6 +37,20 @@ function activate(profile, body) {
 		processes: [{ label: 'codex (made-up terminal session)', pid: 4242, role: 'cli' }, { label: 'Codex app (made-up)', pid: 4311, role: 'app' }] } }];
 }
 
+const { fakeServer, updateJob } = await import('../accounts-fixture.mjs');
+const rich = process.env.AAC_FIXTURE_ACCOUNTS === 'rich' ? fakeServer({ rich: true, update: updateJob() }) : null;
+/** Whether a rich account route answers this request. */
+const richMatch = (method, pathname) => !!rich && rich.routes.some(([m, re]) => m === method && re.test(pathname));
+/** The rich account routes' answer for this request, or null. */
+function richAnswer(method, pathname, body) {
+	if (!rich) return null;
+	for (const [m, re, answer] of rich.routes) {
+		const match = pathname.match(re);
+		if (m === method && match) return answer(body, match);
+	}
+	return null;
+}
+
 const server = http.createServer((req, res) => {
 	const pathname = new URL(req.url, 'http://x').pathname;
 	const switching = req.method === 'POST' && pathname.match(/^\/api\/codex\/profiles\/([A-Za-z0-9_-]+)\/activate$/);
@@ -46,6 +62,28 @@ const server = http.createServer((req, res) => {
 			const [status, json] = activate(switching[1], body);
 			res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
 			res.end(JSON.stringify(json));
+		});
+		return;
+	}
+	if (richMatch(req.method, pathname)) {
+		let raw = '';
+		req.on('data', (d) => (raw += d)).on('end', () => {
+			let body = {};
+			try { body = raw ? JSON.parse(raw) : {}; } catch {}
+			// only for a signed-in browser, as below
+			const check = http.request({ host: '127.0.0.1', port: target, path: '/api/auth/check', headers: { cookie: req.headers.cookie || '', host: req.headers.host } }, (r) => {
+				let text = '';
+				r.on('data', (d) => (text += d)).on('end', () => {
+					let signedIn = false;
+					try { const s = JSON.parse(text); signedIn = s.authenticated === true || s.authRequired === false; } catch {}
+					if (!signedIn) { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":"Sign in first.","code":"auth_required"}'); return; }
+					const a = richAnswer(req.method, pathname, body);
+					res.writeHead(a.status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+					res.end(a.body);
+				});
+			});
+			check.on('error', () => { res.writeHead(502); res.end(); });
+			check.end();
 		});
 		return;
 	}

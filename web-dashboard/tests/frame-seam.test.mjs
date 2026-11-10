@@ -105,6 +105,7 @@ function fixtureServer() {
     'GET /api/auth/devices': () => ({ payload: { devices: [] } }),
     'GET /api/auth/network': () => ({ payload: { trustLocalNetwork: true, connection: { peer: '192.168.10.20', trusted: true }, canTurnOn: false } }),
     'POST /api/auth/logout': () => ({ payload: { success: true } }),
+    'POST /api/codex/profiles/other/activate': () => ({ status: 409, payload: { code: 'confirmation_required', error: 'Confirm the switch', confirmation: { token: 'A'.repeat(43), targetProfile: 'other', expiresAt: new Date(Date.now() + 300_000).toISOString(), processes: [], warning: 'Active Codex work will stop.' } } }),
   };
   return async (method, path) => {
     if (method === 'GET' && path.startsWith('/api/accounts/analytics?')) return { payload: analyticsPayload() };
@@ -143,7 +144,7 @@ async function loadBridge({ framed }) {
     .replace(/import \{ requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard \} from '[^']+';/, 'const requireWebGL = () => {}; const WEBGL_REQUIRED_MESSAGE = "fixture"; const startSlintDashboard = fn => fn();')
     .replace(/from '(\.\/[^']+)'/g, (_match, relative) => `from '${new URL(relative, base).href}'`)
     .concat(`\n// ${key}\n`);
-  const slint = { details: [], closed: 0, accounts: 0, analytics: 0, analyticsLoading: 0, trend: 0 };
+  const slint = { details: [], closed: 0, accounts: 0, dialogs: 0, analytics: 0, analyticsLoading: 0, trend: 0 };
   const posted = [], calls = [], listeners = new Map(), historyCalls = [];
   const frameWindow = { __aacFrame: true, innerWidth: 1440, postMessage: (message, target) => posted.push({ message, target }) };
   const originals = new Map();
@@ -156,6 +157,7 @@ async function loadBridge({ framed }) {
     name === 'show_details' ? json => slint.details.push(JSON.parse(json))
       : name === 'close_details' ? () => { slint.closed++; }
         : name === 'set_accounts' ? () => { slint.accounts++; }
+          : name === 'show_activation_confirmation' ? () => { slint.dialogs++; }
           : name === 'set_analytics' ? () => { slint.analytics++; }
             : name === 'set_analytics_loading' ? () => { slint.analyticsLoading++; }
               : name === 'set_analytics_trend_paths' ? () => { slint.trend++; }
@@ -253,6 +255,21 @@ test('the classic app: no frame messages, Details drawn by Slint as before', asy
     assert.equal(b.slint.details.length, 0, 'the frame messages are not listened to');
     await b.action('details', 'codex:other');
     assert.equal(b.slint.details.at(-1).id, 'codex:other');
+  } finally { b.restore(); }
+});
+
+test('in the frame: a switch confirmation the frame does not draw stays in Slint, and the frame hears of it', async () => {
+  const b = await loadBridge({ framed: true });
+  try {
+    b.fromFrame({ type: 'aac-views', overlays: ['details'] });
+    b.fromFrame({ type: 'aac-page', kind: 'activate', value: 'other' });
+    await flush(12);
+    assert.equal(b.slint.dialogs > 0, true, 'Slint draws the dialog');
+    const shown = b.views().filter(v => v.key === 'activation');
+    assert.ok(shown.length > 0 && JSON.parse(shown.at(-1).json).targetProfile === 'other', 'the frame hears of it');
+    b.fromFrame({ type: 'aac-page', kind: 'activation-cancel', value: '' });
+    await flush();
+    assert.equal(b.views().findLast(v => v.key === 'activation').json, '', 'and of its close');
   } finally { b.restore(); }
 });
 

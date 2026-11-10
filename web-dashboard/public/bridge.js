@@ -423,16 +423,17 @@ function showActivationDialog(confirmation) {
     activationDialogOpen = true;
   }
   const json = JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` });
-  if (frameViews.owns('activation')) frameView('activation', json);
-  else show_activation_confirmation(json);
+  // the frame always hears of it: it draws the dialog itself, or shows this page over its tab while Slint draws it
+  frameView('activation', json);
+  if (!frameViews.owns('activation')) show_activation_confirmation(json);
 }
 function closeActivationDialog() {
   if (activationDialogOpen) {
     activationDialogOpen = false;
     consumeOverlayEntry();
   }
-  if (frameViews.owns('activation')) frameView('activation', '');
-  else close_activation_confirmation();
+  frameView('activation', '');
+  if (!frameViews.owns('activation')) close_activation_confirmation();
 }
 
 const activationConfirmation = createActivationConfirmation({
