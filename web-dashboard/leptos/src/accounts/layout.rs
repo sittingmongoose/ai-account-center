@@ -122,7 +122,10 @@ pub fn cards(view: &AccountsView, width: f64) -> Vec<(CardKey, f64)> {
     } else {
         86.0
     };
-    out.push((CardKey::Update, update_h));
+    // From two columns up Update apps spans the page above them (accounts/mod.rs), so its table rows stay one line.
+    if column_count(width) < 2 {
+        out.push((CardKey::Update, update_h));
+    }
     for p in view.col_a.iter().chain(view.col_b.iter()) {
         let mut h = if col >= 440.0 { 64.0 } else { 92.0 };
         h += p.rows.len() as f64 * row_h;

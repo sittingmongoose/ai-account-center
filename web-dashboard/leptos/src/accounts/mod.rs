@@ -149,6 +149,9 @@ pub fn AccountsPage(ctx: FrameCtx) -> impl IntoView {
             }}
             {move || view.with(|v| v.as_ref().map(|v| v.access_message.clone()).filter(|m| !m.is_empty()))
                 .map(|msg| view! { <p class="ac-note">{msg}</p> })}
+            <Show when={move || layout::column_count(width.get()) >= 2 && view.with(|v| v.is_some())}>
+                <div class="ac-top">{card(page, CardKey::Update)}</div>
+            </Show>
             <div class="ac-cols" style=move || format!("--ac-cols:{}", plan.with(|p| p.as_ref().map(|c| c.len()).unwrap_or(1)))>
                 <For each={move || (0..plan.with(|p| p.as_ref().map(|c| c.len()).unwrap_or(0))).collect::<Vec<usize>>()}
                     key=|i| *i

@@ -55,6 +55,52 @@ pub fn host_state(host: &UpdHost) -> Option<UpdItem> {
         .cloned()
 }
 
+/// The cell's short state for a result line (`updateResultsView` words): one line in a table cell, the full sentence
+/// stays in the cell's tip and the row's details. Unknown words keep their own text.
+pub fn short_word(result: &str) -> String {
+    let r = result.trim();
+    if let Some(version) = r.strip_prefix("Updated to ") {
+        return format!("→ {version}");
+    }
+    let short = match r {
+        "Already current" => "current",
+        "Not installed" => "not installed",
+        "Failed" => "failed",
+        "Updated, restart failed" => "restart failed",
+        "Quit to finish update" => "quit to finish",
+        "Needs action" => "needs action",
+        "Codex busy, try later" => "busy, try later",
+        "In use, try later" => "in use, try later",
+        "Update it in the app" => "update in the app",
+        "Update held" => "held",
+        "Skipped: cancelled" => "skipped",
+        "Models not registered yet" | "Updated, models not registered yet" => "models pending",
+        "Check timed out" | "Timed out" => "timed out",
+        "Unknown" | "Unknown result" => "unknown",
+        "Running" => "running",
+        _ if r.starts_with("Unknown: ") && r.ends_with("not reachable") => "not reachable",
+        _ => "",
+    };
+    if !short.is_empty() {
+        return short.to_string();
+    }
+    // "Checking · 45s", "Downloading": the same words, lower case
+    let mut chars = r.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// A cell's tip: its full result and what the computer said.
+fn full_words(item: &UpdItem) -> String {
+    [item.result.clone(), item.tip.clone()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 fn tone_class(tone: &str) -> &'static str {
     match tone {
         "good" => "w-good",
@@ -134,9 +180,10 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
                         let is_open = Memo::new(move |_| expanded.with(|e| e.contains(&app)));
                         let details: Vec<(String, String)> = r.cells.iter().enumerate().filter_map(|(i, c)| {
                             let c = c.as_ref()?;
-                            if c.tip.is_empty() { return None; }
+                            let words = full_words(c);
+                            if words.is_empty() { return None; }
                             let host = hosts.with_untracked(|h| h.get(i).map(|h| h.label.clone()).unwrap_or_default());
-                            Some((host, c.tip.clone()))
+                            Some((host, words))
                         }).collect();
                         let has_details = !details.is_empty();
                         view! {
@@ -152,8 +199,8 @@ pub fn UpdateCard(page: Page) -> impl IntoView {
                                     </span>
                                     {r.cells.into_iter().map(|c| match c {
                                         Some(c) => view! {
-                                            <span class=format!("ut-cell {}", tone_class(&c.tone)) class:running=c.running role="cell" title=(!c.tip.is_empty()).then(|| c.tip.clone())>
-                                                {c.result.clone()}
+                                            <span class=format!("ut-cell {}", tone_class(&c.tone)) class:running=c.running role="cell" title=full_words(&c)>
+                                                {short_word(&c.result)}
                                                 {c.running.then(|| view! { <span class="ut-bar"></span> })}
                                             </span>
                                         }.into_any(),
@@ -228,5 +275,24 @@ mod tests {
         assert_eq!(rows[2].cells[2].as_ref().unwrap().result, "Checking · 45s");
         assert_eq!(host_state(&hosts[1]).unwrap().app, "Waiting for its turn");
         assert!(host_state(&hosts[2]).is_none());
+    }
+
+    #[test]
+    fn cells_say_it_short_and_keep_the_sentence() {
+        assert_eq!(short_word("Updated to 2.1.3"), "→ 2.1.3");
+        assert_eq!(short_word("Already current"), "current");
+        assert_eq!(short_word("Quit to finish update"), "quit to finish");
+        assert_eq!(short_word("Unknown: Mac not reachable"), "not reachable");
+        assert_eq!(short_word("Checking · 45s"), "checking · 45s");
+        assert_eq!(
+            short_word("A word from a newer server"),
+            "a word from a newer server"
+        );
+        let item = UpdItem {
+            result: "Failed".into(),
+            tip: "The download stopped.".into(),
+            ..Default::default()
+        };
+        assert_eq!(full_words(&item), "Failed · The download stopped.");
     }
 }

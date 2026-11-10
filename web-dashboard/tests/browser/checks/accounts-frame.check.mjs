@@ -27,7 +27,7 @@ export const tests = {
 			const host = document.querySelector('.slint-host');
 			return !!document.querySelector('iframe.slint-frame') && !!host && host.hidden;
 		}));
-		await t.check('Update apps is the first card', await t.page.evaluate(() => document.querySelector('.ac-col .ac-card')?.dataset.probe === 'update-card'));
+		await t.check('Update apps spans the page above the columns', await t.page.evaluate(() => document.querySelector('.ac-page .ac-card')?.dataset.probe === 'update-card' && !!document.querySelector('.ac-top [data-probe="update-card"]')));
 		await t.check('three columns at 1440', await t.page.evaluate(() => document.querySelectorAll('.ac-col').length === 3));
 		await t.text(`${row('codex:one')} .acc-email`, 'codex.active@example.invalid');
 		await t.visible(`${row('codex:one')} .active-mark`, 'the active Codex account says Active');
