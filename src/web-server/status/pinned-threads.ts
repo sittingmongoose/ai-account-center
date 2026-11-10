@@ -270,6 +270,11 @@ export class PinnedThreadsCollector {
         problem: row.problem?.reason ?? null,
         problemSinceMs: row.problem?.since ?? null,
       })),
+      statusProblems: statuses.problems.map((problem) => ({
+        file: problem.file,
+        reason: problem.reason,
+        sinceMs: problem.since,
+      })),
     };
     const composed = await composePinned(input, { handle: this.handle });
     if ('view' in composed) this.composed = composed.view as unknown as PinnedView;

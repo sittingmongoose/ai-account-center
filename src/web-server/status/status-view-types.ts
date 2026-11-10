@@ -336,6 +336,8 @@ export interface PinnedView {
   head: string;
   counts: { pinned: number; looping: number; waitingOnYou: number };
   machineProblems: Array<{ machine: string; label: string; text: string }>;
+  /** The status@1 refusals with no good document: the writer file and the fixed reason. */
+  statusProblems?: Array<{ file: string; reason: string; sinceMs: number }>;
   updates: PinnedUpdateView[];
 }
 
@@ -361,6 +363,8 @@ export interface PinnedUpdateView {
   staleNote: string | null;
   unreadableNote: string | null;
   summary: string | null;
+  /** The status@1 refusal behind this update: the writer file and the fixed reason. */
+  refusal?: { file: string; reason: string; sinceMs: number | null } | null;
 }
 
 export interface MachineView {

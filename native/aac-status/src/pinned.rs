@@ -90,6 +90,10 @@ pub struct ComposeInput {
     pub open_cards: Vec<CardIn>,
     #[serde(default)]
     pub statuses: Vec<StatusIn>,
+    /// The reader's standalone problems (refusals with no accepted document). Carried into the
+    /// projection so a refused report says why instead of just going missing.
+    #[serde(default)]
+    pub status_problems: Vec<StatusProblemIn>,
 }
 
 /// One merged pin (`pins::merge_pins` output, in merged order).
@@ -257,6 +261,17 @@ pub struct StatusIn {
     pub problem_since_ms: Option<i64>,
 }
 
+/// One standalone refusal from the status reader: a `status.json` TypeScript refused with no
+/// accepted document to keep. The file and reason are fixed words; the refused content is never
+/// shown.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusProblemIn {
+    pub file: String,
+    pub reason: String,
+    pub since_ms: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ItemLiteIn {
     pub id: String,
@@ -289,8 +304,20 @@ pub struct ComposeOutput {
     pub counts: PinnedCounts,
     #[serde(default)]
     pub machine_problems: Vec<MachineProblemOut>,
+    /// The status@1 refusals with no good document: file and fixed reason, so a refused report
+    /// says why instead of just going missing.
+    #[serde(default)]
+    pub status_problems: Vec<StatusProblemOut>,
     #[serde(default)]
     pub updates: Vec<PinnedUpdate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusProblemOut {
+    pub file: String,
+    pub reason: String,
+    pub since_ms: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -353,6 +380,18 @@ pub struct PinnedUpdate {
     /// The status document's own summary, when there is one.
     #[serde(default)]
     pub summary: Option<String>,
+    /// The status@1 refusal behind this update, when there is one: the writer file and the fixed
+    /// reason, so the refusal says why. Never the refused content.
+    #[serde(default)]
+    pub refusal: Option<RefusalView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusalView {
+    pub file: String,
+    pub reason: String,
+    pub since_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -554,6 +593,7 @@ fn compose_update(
         stale_note: None,
         unreadable_note: None,
         summary: status.map(|doc| doc.summary.clone()),
+        refusal: None,
     };
 
     // ---- Who and Now --------------------------------------------------------------------
@@ -611,6 +651,20 @@ fn compose_update(
         });
     }
 
+    // The status@1 refusal behind this update, when the held copy carries one: the writer file
+    // and the fixed reason, so a refusal says why. Never the refused content.
+    if let Some(doc) = status.filter(|doc| doc.problem.is_some()) {
+        let file = if doc.writer.is_empty() {
+            "writers/<unknown>/status.json".to_string()
+        } else {
+            format!("writers/{}/status.json", doc.writer)
+        };
+        update.refusal = Some(RefusalView {
+            file,
+            reason: doc.problem.clone().unwrap_or_default(),
+            since_ms: doc.problem_since_ms,
+        });
+    }
     // Unreadable beats fresh and stale: the copy shown is the last good one, greyed.
     let unreadable_since = [
         thread
@@ -909,6 +963,15 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
                 machine: problem.machine.clone(),
                 label: machine_label(&problem.machine),
                 text: machine_problem_text(&problem.machine, &problem.code),
+            })
+            .collect(),
+        status_problems: input
+            .status_problems
+            .iter()
+            .map(|problem| StatusProblemOut {
+                file: problem.file.clone(),
+                reason: problem.reason.clone(),
+                since_ms: problem.since_ms,
             })
             .collect(),
         updates,
