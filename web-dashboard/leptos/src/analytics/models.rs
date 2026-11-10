@@ -226,10 +226,11 @@ pub fn DonutCard() -> impl IntoView {
     });
     let size = Memo::new(move |_| {
         let w = width.get();
+        // the share labels sit outside the ring: keep 12 px for them on each side
         if w <= 0.0 {
             0.0
         } else {
-            w.min(340.0).max(180.0).min(w)
+            (w - 24.0).clamp(180.0, 340.0).min(w)
         }
     });
     let show = Memo::new(move |_| {
@@ -325,7 +326,7 @@ pub fn DonutCard() -> impl IntoView {
                         on:pointermove=move |e: web_sys::PointerEvent| {
                             if let Some((x, y)) = local(&e) {
                                 let i = seg_at(x, y);
-                                if e.pointer_type() == "mouse" { hot.set(i) } else if e.buttons() != 0 && i >= 0 { pin.set(i) }
+                                if e.pointer_type() == "mouse" { hot.set(i) }
                             }
                         }
                         on:pointerleave=move |_| hot.set(-1)

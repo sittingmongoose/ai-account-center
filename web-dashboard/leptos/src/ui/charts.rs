@@ -312,6 +312,87 @@ pub fn animate(ms: f64, alive: impl Fn() -> bool + 'static, frame: impl Fn(f64) 
     }
 }
 
+// ---------------------------------------------------------------- touch on charts
+
+/// A touch on a chart: a tap pins a reading, a sideways drag scrubs across it, and a vertical drag stays the page's
+/// scroll (the chart sets `touch-action: pan-y`, so the browser cancels the touch once it scrolls).
+#[derive(Clone, Copy)]
+pub struct TouchScrub {
+    start: StoredValue<Option<(f64, f64)>>,
+    scrubbing: StoredValue<bool>,
+}
+
+impl Default for TouchScrub {
+    fn default() -> Self {
+        TouchScrub {
+            start: StoredValue::new(None),
+            scrubbing: StoredValue::new(false),
+        }
+    }
+}
+
+/// What a touch that ended did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TouchEnd {
+    Tap,
+    Scrub,
+}
+
+impl TouchScrub {
+    pub fn down(&self, e: &web_sys::PointerEvent) {
+        if e.pointer_type() != "mouse" {
+            self.start
+                .set_value(Some((e.client_x() as f64, e.client_y() as f64)));
+            self.scrubbing.set_value(false);
+        }
+    }
+
+    /// True while a touch drags sideways (each move then reads the chart under it).
+    pub fn moved(&self, e: &web_sys::PointerEvent) -> bool {
+        if e.pointer_type() == "mouse" {
+            return false;
+        }
+        let Some(from) = self.start.get_value() else {
+            return false;
+        };
+        if self.scrubbing.get_value() {
+            return true;
+        }
+        let sideways = sideways(from, (e.client_x() as f64, e.client_y() as f64));
+        if sideways {
+            self.scrubbing.set_value(true);
+        }
+        sideways
+    }
+
+    /// A touch ended: a tap, the end of a scrub, or None (a mouse, or a touch the page took to scroll).
+    pub fn up(&self, e: &web_sys::PointerEvent) -> Option<TouchEnd> {
+        if e.pointer_type() == "mouse" {
+            return None;
+        }
+        let from = self.start.get_value();
+        let scrubbed = self.scrubbing.get_value();
+        self.cancel();
+        let from = from?;
+        if scrubbed {
+            return Some(TouchEnd::Scrub);
+        }
+        let (dx, dy) = (e.client_x() as f64 - from.0, e.client_y() as f64 - from.1);
+        (dx.hypot(dy) < 10.0).then_some(TouchEnd::Tap)
+    }
+
+    pub fn cancel(&self) {
+        self.start.set_value(None);
+        self.scrubbing.set_value(false);
+    }
+}
+
+/// A drag that moved more than 8 px and more sideways than up or down.
+fn sideways(from: (f64, f64), to: (f64, f64)) -> bool {
+    let (dx, dy) = ((to.0 - from.0).abs(), (to.1 - from.1).abs());
+    dx > 8.0 && dx > dy * 1.2
+}
+
 // ---------------------------------------------------------------- tips
 
 /// The hover tip: one floating card for every element with `data-tip` inside `children`. A mouse shows it on hover;
@@ -555,6 +636,13 @@ mod tests {
         assert!(PathMorph::new("M0 0L1 1", "M0 0L1 1L2 2").is_none());
         assert!(PathMorph::new("M0 0L1 1", "M0 0H1").is_none());
         assert!(PathMorph::new("", "").is_none());
+    }
+
+    #[test]
+    fn only_a_sideways_drag_scrubs() {
+        assert!(sideways((0.0, 0.0), (20.0, 5.0)));
+        assert!(!sideways((0.0, 0.0), (5.0, 0.0)));
+        assert!(!sideways((0.0, 0.0), (20.0, 30.0)));
     }
 
     #[test]

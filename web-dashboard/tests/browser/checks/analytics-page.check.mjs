@@ -64,7 +64,8 @@ async function overlaps(t) {
 		for (const [name, sel] of Object.entries(groups)) {
 			const boxes = [...document.querySelectorAll(sel)]
 				.filter((el) => el.textContent.trim() && getComputedStyle(el).visibility !== 'hidden')
-				.map((el) => ({ text: el.textContent.trim(), r: el.getBoundingClientRect() }))
+				// the text's own extent, not its box (a grid cell's box spans its column)
+				.map((el) => { const range = document.createRange(); range.selectNodeContents(el); return { text: el.textContent.trim(), r: range.getBoundingClientRect() }; })
 				.filter((b) => b.r.width > 0);
 			for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
 				const a = boxes[i].r, b = boxes[j].r;

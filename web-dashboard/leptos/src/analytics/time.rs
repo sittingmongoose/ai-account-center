@@ -5,10 +5,20 @@ use super::{Ax, CardHead};
 use crate::ui::charts::*;
 use crate::ui::*;
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
 
 /// The heatmap ramp's sample points for the legend (the Slint page's).
 const RAMP: [f64; 6] = [0.055, 0.447, 0.632, 0.775, 0.894, 1.0];
+
+/// The index an element under the pointer carries in `attr` (a touch keeps its first target, so look where it is).
+fn under(e: &web_sys::PointerEvent, attr: &str) -> Option<i32> {
+    let el = document().element_from_point(e.client_x() as f32, e.client_y() as f32)?;
+    el.closest(&format!("[{attr}]"))
+        .ok()
+        .flatten()?
+        .get_attribute(attr)?
+        .parse()
+        .ok()
+}
 
 fn coarse() -> bool {
     window()
@@ -51,41 +61,25 @@ pub fn HeatCard() -> impl IntoView {
                 .flatten()
         })
     });
-    let cell_at = |e: &web_sys::PointerEvent| -> Option<i32> {
-        let el = e.target()?.dyn_into::<web_sys::Element>().ok()?;
-        el.closest("[data-cell]")
-            .ok()
-            .flatten()?
-            .get_attribute("data-cell")?
-            .parse()
-            .ok()
-    };
+    let cell_at = |e: &web_sys::PointerEvent| under(e, "data-cell");
+    let touch = TouchScrub::default();
     view! {
         <section class="plate ax-card heat-card" style="--i:8">
             <CardHead title="When you use the CLIs" sub=Signal::derive(move || heat.with(|h| h.sub.clone()))>
                 <Segmented options=vec![("cost".into(), "Cost".into()), ("tokens".into(), "Tokens".into())] selected=mode label="Heatmap by"
                     on_select=Callback::new(move |v: String| ax.act("analytics-heat", &v))/>
             </CardHead>
-            <div class="ro-bar heat-ro" data-probe="heat-ro">
-                {move || match tip.get() {
-                    Some(t) => view! {
-                        <span class="ro-l1">{t}</span>
-                        <button class="icon-btn bare ro-close" aria-label="Close the reading" hidden=move || !pinned.get()
-                            on:click=move |_| { sel.set(-1); pinned.set(false); }><Icon name="close"/></button>
-                    }.into_any(),
-                    None => view! { <span class="q3">{if coarse() { "Tap the chart for a reading" } else { "Point at the chart for a reading" }}</span> }.into_any(),
-                }}
-            </div>
             <div class="ax-body">
                 <div class="heat-grid"
+                    on:pointerdown=move |e: web_sys::PointerEvent| touch.down(&e)
+                    on:pointercancel=move |_| touch.cancel()
                     on:pointermove=move |e: web_sys::PointerEvent| {
-                        let i = cell_at(&e);
-                        if e.pointer_type() == "mouse" { if !pinned.get_untracked() { sel.set(i.unwrap_or(-1)) } }
-                        else if e.buttons() != 0 { if let Some(i) = i { sel.set(i); pinned.set(true); } }
+                        if e.pointer_type() == "mouse" { if !pinned.get_untracked() { sel.set(cell_at(&e).unwrap_or(-1)) } }
+                        else if touch.moved(&e) { if let Some(i) = cell_at(&e) { sel.set(i); pinned.set(true); } }
                     }
                     on:pointerleave=move |e: web_sys::PointerEvent| if e.pointer_type() == "mouse" && !pinned.get_untracked() { sel.set(-1) }
                     on:pointerup=move |e: web_sys::PointerEvent| {
-                        if e.pointer_type() == "mouse" { return; }
+                        if touch.up(&e) != Some(TouchEnd::Tap) { return; }
                         match cell_at(&e) {
                             Some(i) if !(pinned.get_untracked() && sel.get_untracked() == i) => { sel.set(i); pinned.set(true); }
                             _ => { sel.set(-1); pinned.set(false); }
@@ -111,15 +105,28 @@ pub fn HeatCard() -> impl IntoView {
                         }).collect_view()
                     }}
                 </div>
+                // each key keeps its swatch and its words together when the legend wraps
                 <div class="heat-legend">
-                    <span class="q3">"Less"</span>
-                    {RAMP.iter().map(|k| view! { <span class="hc key" data-state="2" style=format!("--k:{:.1}%", k * 100.0)></span> }).collect_view()}
-                    <span class="q3">"More · busiest hour"</span>
-                    <b class="tnum q2">{move || heat.with(|h| h.busiest.clone())}</b>
+                    <span class="hl-group">
+                        <span class="q3">"Less"</span>
+                        {RAMP.iter().map(|k| view! { <span class="hc key" data-state="2" style=format!("--k:{:.1}%", k * 100.0)></span> }).collect_view()}
+                        <span class="q3">"More · busiest hour"</span>
+                        <b class="tnum q2">{move || heat.with(|h| h.busiest.clone())}</b>
+                    </span>
                     <span class="hl-gap"></span>
-                    <span class="hc key" data-state="1"></span><span class="q3">"Nothing logged"</span>
-                    <span class="hc key" data-state="0"></span><span class="q3">"Outside the logs"</span>
+                    <span class="hl-group"><span class="hc key" data-state="1"></span><span class="q3">"Nothing logged"</span></span>
+                    <span class="hl-group"><span class="hc key" data-state="0"></span><span class="q3">"Outside the logs"</span></span>
                 </div>
+            </div>
+            <div class="ro-bar heat-ro" data-probe="heat-ro">
+                {move || match tip.get() {
+                    Some(t) => view! {
+                        <span class="ro-l1">{t}</span>
+                        <button class="icon-btn bare ro-close" aria-label="Close the reading" hidden=move || !pinned.get()
+                            on:click=move |_| { sel.set(-1); pinned.set(false); }><Icon name="close"/></button>
+                    }.into_any(),
+                    None => view! { <span class="q3">{if coarse() { "Tap the chart for a reading" } else { "Point at the chart for a reading" }}</span> }.into_any(),
+                }}
             </div>
         </section>
     }
@@ -174,15 +181,8 @@ pub fn DailyCard() -> impl IntoView {
         "claude" | "codex" => key_color(p),
         _ => other.get_untracked(),
     };
-    let bar_at = |e: &web_sys::PointerEvent| -> Option<i32> {
-        let el = e.target()?.dyn_into::<web_sys::Element>().ok()?;
-        el.closest("[data-bar]")
-            .ok()
-            .flatten()?
-            .get_attribute("data-bar")?
-            .parse()
-            .ok()
-    };
+    let bar_at = |e: &web_sys::PointerEvent| under(e, "data-bar");
+    let touch = TouchScrub::default();
     view! {
         <section class="plate ax-card daily-card" style="--i:9">
             <CardHead title=Signal::derive(move || daily.with(|d| d.title.clone())) sub=Signal::derive(move || daily.with(|d| d.sub.clone()))>
@@ -192,31 +192,21 @@ pub fn DailyCard() -> impl IntoView {
                     {move || daily.with(|d| d.show_other).then(|| view! { <LegendEntry color=other.get() label=daily.with_untracked(|d| d.other_label.clone())/> })}
                 </span>
             </CardHead>
-            <div class="ro-bar" data-probe="daily-ro">
-                {move || match bar.get() {
-                    Some(b) => view! {
-                        <span class="ro-l1"><span class="ro-time">{b.time.clone()}</span>{(!b.total.is_empty()).then(|| view! { <b class="tnum">{b.total.clone()}</b> })}</span>
-                        <span class="ro-l2 tnum">{b.rows.iter().map(|r| view! { <span class="ro-v"><Swatch color=row_color(&r.p)/>{format!("{} {}", r.label, r.value)}</span> }).collect_view()}</span>
-                        <button class="icon-btn bare ro-close" aria-label="Close the reading" hidden=move || !pinned.get()
-                            on:click=move |_| { sel.set(-1); pinned.set(false); }><Icon name="close"/></button>
-                    }.into_any(),
-                    None => view! { <span class="q3">{if coarse() { "Tap the chart for a reading" } else { "Point at the chart for a reading" }}</span> }.into_any(),
-                }}
-            </div>
             <div class="daily-box" node_ref=boxed>
                 <div class="daily-plot">
                     {move || daily.with(|d| d.y_ticks.clone()).into_iter().map(|t| view! {
                         <span class="dy" class:base=t.base style=format!("bottom:{:.2}%", t.y * 100.0)><span class="ax-t">{t.label}</span></span>
                     }).collect_view()}
                     <div class="daily-bars"
+                        on:pointerdown=move |e: web_sys::PointerEvent| touch.down(&e)
+                        on:pointercancel=move |_| touch.cancel()
                         on:pointermove=move |e: web_sys::PointerEvent| {
-                            let i = bar_at(&e);
-                            if e.pointer_type() == "mouse" { if !pinned.get_untracked() { sel.set(i.unwrap_or(-1)) } }
-                            else if e.buttons() != 0 { if let Some(i) = i { sel.set(i); pinned.set(true); } }
+                            if e.pointer_type() == "mouse" { if !pinned.get_untracked() { sel.set(bar_at(&e).unwrap_or(-1)) } }
+                            else if touch.moved(&e) { if let Some(i) = bar_at(&e) { sel.set(i); pinned.set(true); } }
                         }
                         on:pointerleave=move |e: web_sys::PointerEvent| if e.pointer_type() == "mouse" && !pinned.get_untracked() { sel.set(-1) }
                         on:pointerup=move |e: web_sys::PointerEvent| {
-                            if e.pointer_type() == "mouse" { return; }
+                            if touch.up(&e) != Some(TouchEnd::Tap) { return; }
                             match bar_at(&e) {
                                 Some(i) if !(pinned.get_untracked() && sel.get_untracked() == i) => { sel.set(i); pinned.set(true); }
                                 _ => { sel.set(-1); pinned.set(false); }
@@ -256,6 +246,17 @@ pub fn DailyCard() -> impl IntoView {
                         {(!b.foot.is_empty()).then(|| view! { <p class="ro-foot">{b.foot.clone()}</p> })}
                     </div>
                 })}
+            </div>
+            <div class="ro-bar" data-probe="daily-ro">
+                {move || match bar.get() {
+                    Some(b) => view! {
+                        <span class="ro-l1"><span class="ro-time">{b.time.clone()}</span>{(!b.total.is_empty()).then(|| view! { <b class="tnum">{b.total.clone()}</b> })}</span>
+                        <span class="ro-l2 tnum">{b.rows.iter().map(|r| view! { <span class="ro-v"><Swatch color=row_color(&r.p)/>{format!("{} {}", r.label, r.value)}</span> }).collect_view()}</span>
+                        <button class="icon-btn bare ro-close" aria-label="Close the reading" hidden=move || !pinned.get()
+                            on:click=move |_| { sel.set(-1); pinned.set(false); }><Icon name="close"/></button>
+                    }.into_any(),
+                    None => view! { <span class="q3">{if coarse() { "Tap the chart for a reading" } else { "Point at the chart for a reading" }}</span> }.into_any(),
+                }}
             </div>
         </section>
     }

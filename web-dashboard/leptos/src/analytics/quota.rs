@@ -185,6 +185,7 @@ fn FocusPanel(f: Focus) -> impl IntoView {
         })
     };
     let p2 = provider.clone();
+    let touch = TouchScrub::default();
     view! {
         <div class="focus">
             <div class="focus-top">
@@ -205,13 +206,15 @@ fn FocusPanel(f: Focus) -> impl IntoView {
                 })}
             </div>
             <div class="focus-box" node_ref=boxed
+                on:pointerdown=move |e: web_sys::PointerEvent| touch.down(&e)
+                on:pointercancel=move |_| touch.cancel()
                 on:pointermove=move |e: web_sys::PointerEvent| {
                     let i = locate(&e);
-                    if e.pointer_type() == "mouse" { if !pinned.get_untracked() { cur.set(i) } } else if e.buttons() != 0 && i >= 0 { cur.set(i); pinned.set(true); }
+                    if e.pointer_type() == "mouse" { if !pinned.get_untracked() { cur.set(i) } } else if touch.moved(&e) && i >= 0 { cur.set(i); pinned.set(true); }
                 }
                 on:pointerleave=move |e: web_sys::PointerEvent| if e.pointer_type() == "mouse" && !pinned.get_untracked() { cur.set(-1) }
                 on:pointerup=move |e: web_sys::PointerEvent| {
-                    if e.pointer_type() == "mouse" { return; }
+                    if touch.up(&e) != Some(TouchEnd::Tap) { return; }
                     let i = locate(&e);
                     if i < 0 || (pinned.get_untracked() && cur.get_untracked() == i) { cur.set(-1); pinned.set(false); } else { cur.set(i); pinned.set(true); }
                 }>

@@ -86,7 +86,6 @@ pub fn TrendCard() -> impl IntoView {
                     <LegendEntry color=key_color(&item.key) shape=if item.key == "cost" { "line" } else { "" } label=item.label note=item.note/>
                 }).collect_view()}
             </div>
-            <ReadoutBar bucket=bucket pinned=pinned cur=cur/>
             {e2e.then(|| view! { <p class="e2e-trace tnum" data-probe="trend-frames">{move || trace.get()}</p> })}
             <div class="trend-box" node_ref=boxed>
                 {move || {
@@ -99,6 +98,8 @@ pub fn TrendCard() -> impl IntoView {
                     })
                 }}
             </div>
+            // under the chart, so a reading that wraps never moves the chart under the finger
+            <ReadoutBar bucket=bucket pinned=pinned cur=cur/>
         </section>
     }
 }
@@ -311,39 +312,37 @@ fn TrendChart(
     let id_fill = move |k: &str| format!("url(#{}-{k})", id);
     let fill_tok = id_fill("tok");
     let band_fills: Vec<String> = TYPES.iter().map(|k| id_fill(k)).collect();
-    let move_at = move |e: web_sys::PointerEvent| {
+    let touch = TouchScrub::default();
+    let at = move |e: &web_sys::PointerEvent| -> i32 {
         let Some(target) = e
             .current_target()
             .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
         else {
-            return;
+            return -1;
         };
         let x = e.client_x() as f64 - target.get_bounding_client_rect().left();
         let (sx, _) = scale.get_untracked();
-        let i = trend.with_untracked(|t| bucket_at(t, x, sx));
+        trend.with_untracked(|t| bucket_at(t, x, sx))
+    };
+    let move_at = move |e: web_sys::PointerEvent| {
         if e.pointer_type() == "mouse" {
             if !pinned.get_untracked() {
-                cur.set(i);
+                cur.set(at(&e));
             }
-        } else if e.buttons() != 0 && i >= 0 {
-            // a horizontal drag scrubs across the buckets
-            cur.set(i);
-            pinned.set(true);
+        } else if touch.moved(&e) {
+            // a sideways drag scrubs across the buckets
+            let i = at(&e);
+            if i >= 0 {
+                cur.set(i);
+                pinned.set(true);
+            }
         }
     };
     let tap = move |e: web_sys::PointerEvent| {
-        let Some(target) = e
-            .current_target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-        else {
-            return;
-        };
-        let x = e.client_x() as f64 - target.get_bounding_client_rect().left();
-        let (sx, _) = scale.get_untracked();
-        let i = trend.with_untracked(|t| bucket_at(t, x, sx));
-        if e.pointer_type() == "mouse" {
+        if touch.up(&e) != Some(TouchEnd::Tap) {
             return;
         }
+        let i = at(&e);
         if i < 0 || (pinned.get_untracked() && cur.get_untracked() == i) {
             cur.set(-1);
             pinned.set(false);
@@ -389,7 +388,8 @@ fn TrendChart(
         <Show when=move || trend.with(|t| t.empty)>
             <p class="chart-empty">{move || trend.with(|t| t.empty_text.clone())}</p>
         </Show>
-        <div class="trend-hit" on:pointermove=move_at on:pointerdown=move_at on:pointerup=tap on:pointerleave=leave>
+        <div class="trend-hit" on:pointerdown=move |e: web_sys::PointerEvent| touch.down(&e) on:pointercancel=move |_| touch.cancel()
+            on:pointermove=move_at on:pointerup=tap on:pointerleave=leave>
             <Show when=move || bucket.with(|b| b.is_some())>
                 {move || {
                     let (_, sy) = scale.get();

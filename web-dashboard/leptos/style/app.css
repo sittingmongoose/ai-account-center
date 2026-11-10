@@ -1098,7 +1098,7 @@ body { min-height: 100dvh; }
 .ro-row.dim, .ro-row.dim b { color: var(--ink-3); font-weight: 500; font-variation-settings: 'wght' 500; }
 .ro-card hr { border: 0; border-top: 1px solid var(--rule-2); margin: 5px 0; }
 .ro-foot { margin-top: 5px; font-size: 12px; color: var(--ink-3); }
-.ro-bar { display: none; position: relative; align-items: center; flex-wrap: wrap; gap: 1px 10px; min-height: 40px; margin: 0 16px 4px; padding: 4px 40px 4px 10px;
+.ro-bar { display: none; position: relative; align-items: center; flex-wrap: wrap; gap: 1px 10px; min-height: 40px; margin: 0 16px 12px; padding: 4px 40px 4px 10px;
   border-radius: 9px; background: var(--paper-2); border: 1px solid var(--rule-2); font-size: var(--fs-small); }
 .ro-l1, .ro-l2 { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-width: 0; }
 .ro-l1 { width: 100%; }
@@ -1173,12 +1173,20 @@ body { min-height: 100dvh; }
 .md-io { padding: 10px 12px; border: 1px solid var(--rule-2); border-radius: 9px; display: grid; gap: 4px; }
 .md-io b { font-size: 18px; font-weight: 650; font-variation-settings: 'wght' 650; }
 .md-rate { margin-top: 10px; font-size: 11.5px; }
-@media (max-width: 599.98px) { .md-type { grid-template-columns: 10px 84px minmax(24px, 1fr) 48px 72px; gap: 8px; } }
+@media (max-width: 599.98px) {
+  .md-type { grid-template-columns: 10px 84px minmax(24px, 1fr) 48px 72px; gap: 8px; }
+  /* a sheet's rows are thumb-sized */
+  .pick-row { height: 44px; font-size: 15px; }
+  .cal-day { height: 44px; }
+  .cal-quick .btn { height: 36px; }
+  .cal-acts .btn { height: 44px; flex: 1; }
+  .cal-acts { flex: 1 1 100%; }
+}
 
 /* model usage (the donut) */
 .donut-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 0 20px 16px; flex: 1; align-content: center; }
 .donut-box { position: relative; display: grid; justify-items: center; min-height: 180px; }
-.donut-svg { display: block; }
+.donut-svg { display: block; overflow: visible; }
 .donut-svg .arcs { transform-origin: center; animation: donut-in 700ms cubic-bezier(.2, .8, .2, 1) 160ms both; }
 .donut-svg path { transition: opacity 140ms; }
 .donut-svg path.dim { opacity: .3; }
@@ -1215,17 +1223,18 @@ body { min-height: 100dvh; }
 .sl-row { display: grid; grid-template-columns: minmax(0, 1fr) 60px 70px 96px; gap: 10px; align-items: center; min-height: 30px; border-top: 1px solid var(--rule-2); font-size: 12.5px; }
 .sl-head { border-top: 0; min-height: 24px; align-items: end; padding-bottom: 3px; }
 .sl-models { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--ink-2); }
-.sl-models > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a model id wraps at its hyphens rather than being cut */
+.sl-models > span:last-child { min-width: 0; overflow-wrap: break-word; }
 .sl-other { font-size: 12px; }
 .sl-row b { font-weight: 600; font-variation-settings: 'wght' 600; }
 .sl-empty { padding: 10px 0; font-size: 12.5px; }
 .recent-card .ax-body { flex: 1; }
+/* narrow cards keep the tables, with tighter columns */
 @container card (max-width: 419.98px) {
-  .sp-head { display: none; }
-  .sp-row { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 2px; padding: 6px 0; }
-  .sp-name { grid-column: 1 / -1; font-weight: 600; font-variation-settings: 'wght' 600; }
-  .sp-row > span.r { justify-self: start; text-align: left; display: grid; }
-  .sp-row > span.r::before { content: attr(data-label); font-family: var(--mono); font-stretch: 87.5%; font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
+  .sp-row { grid-template-columns: minmax(0, 1fr) 60px 64px 78px; gap: 8px; }
+  .sl-row { grid-template-columns: minmax(0, 1fr) 48px 60px 86px; gap: 8px; }
+}
+@container card (max-width: 339.98px) {
   .sl-head { display: none; }
   .sl-row { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "models models when" "tok cost cost"; row-gap: 0; padding: 6px 0; }
   .sl-models { grid-area: models; } .sl-row > :nth-child(2) { grid-area: tok; justify-self: start; padding-left: 24px; }
@@ -1282,6 +1291,7 @@ body { min-height: 100dvh; }
 .heat-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 12px; font-size: 12px; }
 .hc.key { width: 16px; height: 10px; border-radius: 3px; }
 .hl-gap { flex: 1 1 12px; }
+.hl-group { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .heat-card .ax-body { flex: 1; display: grid; align-content: center; }
 @container card (max-width: 559.98px) { .hh:not(.six) { visibility: hidden; } .hc { height: 18px; } .heat-grid { gap: 2px; grid-template-columns: 32px repeat(24, minmax(3px, 1fr)); } }
 
@@ -1345,7 +1355,7 @@ button.qh-row:hover .qh-line { stroke-width: 2.2px; }
 .ag-day { display: flex; align-items: baseline; gap: 10px; min-height: 34px; padding-top: 10px; border-bottom: 1px solid var(--rule-2); font-size: 13.5px; }
 .ag-day b { font-weight: 660; font-variation-settings: 'wght' 660; }
 .ag-day span { font-size: 12px; }
-.ag-line { display: grid; grid-template-columns: 116px minmax(0, 38%) minmax(0, 1fr); gap: 12px; align-items: center; min-height: 34px; padding: 5px 0; border-bottom: 1px solid var(--rule-2); font-size: 12.5px; }
+.ag-line { display: grid; grid-template-columns: 132px minmax(0, 38%) minmax(0, 1fr); gap: 12px; align-items: center; min-height: 34px; padding: 5px 0; border-bottom: 1px solid var(--rule-2); font-size: 12.5px; }
 .ag-time { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; }
 .ag-time b { font-size: 13px; font-weight: 620; font-variation-settings: 'wght' 620; }
 .ag-time .q3 { font-size: 12px; }
@@ -1364,7 +1374,10 @@ button.qh-row:hover .qh-line { stroke-width: 2.2px; }
 }
 @container content (max-width: 899.98px) {
   .agenda { grid-template-columns: minmax(0, 1fr); }
-  .qh-row { grid-template-columns: minmax(0, 1fr) 64px 100px 22px; grid-template-areas: "acct used next chev" "spark spark spark spark"; row-gap: 4px; gap: 4px 10px; }
+}
+@container content (max-width: 759.98px) {
+  /* the account's whole name on its own line; its sparkline, use and next reset under it */
+  .qh-row { grid-template-columns: minmax(0, 1fr) 52px 96px 22px; grid-template-areas: "acct acct acct chev" "spark used next next"; gap: 4px 10px; }
   .qh-colhead { display: none; }
   .qh-acct { grid-area: acct; } .qh-spark { grid-area: spark; } .qh-used { grid-area: used; } .qh-next { grid-area: next; } .qh-row > .chev { grid-area: chev; }
   button.qh-row, .focus { padding-left: 16px; padding-right: 16px; }
@@ -1373,7 +1386,7 @@ button.qh-row:hover .qh-line { stroke-width: 2.2px; }
   .ax-grid { grid-template-areas: "cbm cbm" "donut tok" "sess sess" "recent recent" "heat heat" "daily daily"; }
   .ax-top { align-items: stretch; }
   .ax-tools-row { justify-content: flex-start; margin-left: 0; }
-  .ag-line { grid-template-columns: 96px minmax(0, 1fr); grid-template-areas: "time who" "what what"; row-gap: 2px; }
+  .ag-line { grid-template-columns: 132px minmax(0, 1fr); grid-template-areas: "time who" "what what"; row-gap: 2px; }
   .ag-time { grid-area: time; } .ag-who { grid-area: who; } .ag-what { grid-area: what; }
 }
 @container content (max-width: 599.98px) {
@@ -1400,7 +1413,7 @@ button.qh-row:hover .qh-line { stroke-width: 2.2px; }
   .kpi-val { font-size: 22px; line-height: 28px; margin-top: 4px; }
   .kpi-sub { font-size: var(--fs-small); }
   .prov-line { font-size: var(--fs-small); }
-  .ro-bar { margin: 0 12px 4px; }
+  .ro-bar { margin: 0 12px 10px; }
   .trend-box { height: 300px; margin: 2px 4px 8px; }
   .cbm-cols { padding: 6px 16px; } .cbm-rows { padding: 4px 4px 6px; }
   .donut-body { padding: 0 12px 12px; }
