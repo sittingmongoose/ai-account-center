@@ -166,9 +166,9 @@ fn DetailMeter(m: MeterView) -> impl IntoView {
             {if m.has_value {
                 view! {
                     <p class="dm-top">
-                        <span class=format!("dm-val tnum {value_tone}")>{m.value_text.clone()}</span>
+                        <span class=format!("dm-val tnum {value_tone}")>{m.value_text.clone()}<span class="dm-unit">"%"</span></span>
                         <span class="q3">" used"</span>
-                        {(!m.over_text.is_empty()).then(|| view! { <span class="w-crit">{format!(" · {} over", m.over_text)}</span> })}
+                        {(!m.over_text.is_empty()).then(|| view! { <span class="w-crit">{format!(" · {}% over", m.over_text)}</span> })}
                         <span class="dm-reset q3" class:soon=m.reset_soon>{m.reset.clone()}</span>
                     </p>
                 }.into_any()

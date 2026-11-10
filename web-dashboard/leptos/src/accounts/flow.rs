@@ -142,7 +142,30 @@ pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -
                                         </button>
                                     }.into_any()
                                 } else {
-                                    view! { <ActionControl a=a page=page/> }.into_any()
+                                    // Opening the verification page and copying the code need this tap's user activation, which a
+                                    // message to the dashboard's hidden page doesn't carry: the frame does them itself, the same
+                                    // way (an https page only; the code on screen). The terminal command is copied by the dashboard.
+                                    let (url, code) = flow.with_untracked(|f| (f.code_url.clone(), f.code_text.clone()));
+                                    if a.act == "flow-open-url" && url.starts_with("https://") {
+                                        let label = a.label.clone();
+                                        let class = format!("btn sm {}", if a.style == "primary" { "primary" } else { "" });
+                                        view! {
+                                            <button type="button" class=class data-probe=a.probe.clone()
+                                                on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); open_page(&url); }>
+                                                <Icon name="external"/><span>{label}</span>
+                                            </button>
+                                        }.into_any()
+                                    } else if a.act == "flow-copy" && !code.is_empty() {
+                                        let label = a.label.clone();
+                                        view! {
+                                            <button type="button" class="btn sm" data-probe=a.probe.clone()
+                                                on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); copy_code(page, &code); }>
+                                                <Icon name="copy"/><span>{label}</span>
+                                            </button>
+                                        }.into_any()
+                                    } else {
+                                        view! { <ActionControl a=a page=page/> }.into_any()
+                                    }
                                 }
                             }).collect_view()}
                         </div>
@@ -193,4 +216,79 @@ fn code_box(f: &Flow, provider: &str) -> AnyView {
         </div>
     }
     .into_any()
+}
+
+/// Opens the sign-in job's verification page in a new tab (accounts-controller.mjs `flow-open-url`: https only).
+fn open_page(url: &str) {
+    if url.starts_with("https://") {
+        let _ = window().open_with_url_and_target_and_features(url, "_blank", "noopener");
+    }
+}
+
+/// Copies the code on screen, with the words accounts-controller.mjs `flow-copy` uses.
+fn copy_code(page: Page, code: &str) {
+    use wasm_bindgen::JsCast;
+    let ctx = page.ctx;
+    let said = move |ok: bool| {
+        if ok {
+            ctx.toast(
+                "ok",
+                "Code copied",
+                "Paste it on the verification page.",
+                4800,
+            );
+        } else {
+            ctx.toast(
+                "info",
+                "Copy the code by hand",
+                "This browser did not allow copying.",
+                4800,
+            );
+        }
+    };
+    let navigator = window().navigator();
+    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into())
+        .unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
+    let write = js_sys::Reflect::get(&clipboard, &"writeText".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok());
+    if let Some(promise) = write
+        .and_then(|f| f.call1(&clipboard, &code.into()).ok())
+        .and_then(|p| p.dyn_into::<js_sys::Promise>().ok())
+    {
+        let fallback = code.to_string();
+        leptos::task::spawn_local(async move {
+            let ok = wasm_bindgen_futures::JsFuture::from(promise).await.is_ok();
+            said(ok || copy_by_selection(&fallback));
+        });
+    } else {
+        said(copy_by_selection(code));
+    }
+}
+
+/// The older way to copy, for browsers without the clipboard API: a hidden field, selected and copied.
+fn copy_by_selection(text: &str) -> bool {
+    use wasm_bindgen::JsCast;
+    let doc = document();
+    let Ok(area) = doc.create_element("textarea") else {
+        return false;
+    };
+    let _ = area.set_attribute("readonly", "");
+    let _ = area.set_attribute("style", "position:fixed;opacity:0");
+    area.set_text_content(Some(text));
+    let Some(body) = doc.body() else { return false };
+    let _ = body.append_child(&area);
+    if let Ok(select) =
+        js_sys::Reflect::get(&area, &"select".into()).and_then(|f| f.dyn_into::<js_sys::Function>())
+    {
+        let _ = select.call0(&area);
+    }
+    let ok = js_sys::Reflect::get(&doc, &"execCommand".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call1(&doc, &"copy".into()).ok())
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    area.remove();
+    ok
 }

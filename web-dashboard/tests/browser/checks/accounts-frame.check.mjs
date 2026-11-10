@@ -46,6 +46,15 @@ export const tests = {
 		await t.text('.prov[data-provider="codex"] .cb-url', 'https://auth.openai.com/codex/device');
 		await t.visible('.prov[data-provider="codex"] [data-probe="flow-open-url:codex"]', 'Open verification page');
 		await t.visible('.prov[data-provider="codex"] [data-probe="flow-copy:codex"]', 'Copy code');
+		// both need the tap's own user activation, so the frame does them (the dashboard's hidden page could not)
+		await t.page.context().route((u) => String(u).startsWith('https://auth.openai.com/'), (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<title>verification</title>' }));
+		const popup = t.page.waitForEvent('popup', { timeout: 10000 });
+		await t.page.click('.prov[data-provider="codex"] [data-probe="flow-open-url:codex"]');
+		const opened = await popup;
+		await t.equal('Open verification page opens it from the tap', new URL(opened.url()).origin, 'https://auth.openai.com');
+		await opened.close();
+		await t.page.click('.prov[data-provider="codex"] [data-probe="flow-copy:codex"]');
+		await t.until('Copy code says what happened', () => [...document.querySelectorAll('.toast')].some((el) => /Code copied|Copy the code by hand/.test(el.textContent)), null, { timeout: 5000 });
 		await t.until('the sign-in finishes', () => /is signed in as new\.codex@example\.invalid/.test(document.querySelector('.prov[data-provider="codex"] .flow-done')?.textContent || ''), null, { timeout: 15000 });
 		const adds = changes(server).filter((r) => r.path === '/api/accounts/add');
 		await t.equal('one add request with the typed profile name', JSON.stringify(adds.map((r) => r.body)), JSON.stringify([{ provider: 'codex', profileName: 'codex-3' }]));

@@ -641,6 +641,8 @@ textarea.note::placeholder { color: var(--ink-4); }
    two lines from 440 px, three below. State is words and weight; controls are 8 px outlines.
    ========================================================================== */
 .ac-page { display: grid; gap: 10px; }
+/* beside the Duo rail the page starts at the screen's rounded top-left corner: keep its first words 12 pt off it */
+:root[data-chrome='rail'] .ac-page { padding-top: 14px; }
 .ac-note { color: var(--ink-2); font-size: var(--fs-small); }
 .ac-note.crit { color: var(--crit-text); font-weight: 600; font-variation-settings: 'wght' 600; }
 .ac-cols { display: grid; grid-template-columns: repeat(var(--ac-cols, 1), minmax(0, 1fr)); gap: 10px; align-items: start; }
@@ -878,6 +880,8 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 .ut-hname .glyph { display: inline-flex; width: 12px; height: 12px; }
 .ut-hname .glyph svg { width: 12px; height: 12px; }
 .ut-hstate { font-size: 11px; line-height: 1.3; }
+/* narrow tables: the computer's name alone, so the four heads never touch */
+@container card (max-width: 439.98px) { .ut-hname .glyph { display: none; } .ut-hname .cap { letter-spacing: .02em; } }
 .ut-cell { position: relative; min-width: 0; overflow-wrap: break-word; }
 .ut-cell.q3 { color: var(--ink-3); }
 .ut-bar, .ut-hstate.running::after { display: block; height: 3px; border-radius: 2px; margin-top: 3px; background: linear-gradient(90deg, var(--track) 0 35%, var(--accent) 35% 65%, var(--track) 65%); background-size: 200% 100%; animation: ac-run 1.4s linear infinite; }
@@ -975,7 +979,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 /* ---------- Details: a side panel from 760 px, a bottom sheet below ---------- */
 .details-scrim { position: fixed; inset: 0; z-index: 34; background: var(--sheet-scrim); }
 .details { position: fixed; z-index: 35; background: var(--paper); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; overflow: hidden;
-  left: 0; right: 0; bottom: 0; max-height: calc(100dvh - var(--safe-top) - 24px); border-radius: var(--r-sheet) var(--r-sheet) 0 0; animation: dt-up var(--t-med) var(--ease-out); }
+  left: var(--safe-left, 0px); right: var(--rail-w, 0px); bottom: 0; max-height: calc(100dvh - var(--safe-top) - 24px); border-radius: var(--r-sheet) var(--r-sheet) 0 0; animation: dt-up var(--t-med) var(--ease-out); }
 @keyframes dt-up { from { transform: translateY(24px); opacity: 0; } }
 @keyframes dt-in { from { transform: translateX(28px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .details { animation: none; } }
@@ -993,6 +997,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 .dm { display: grid; gap: 4px; min-width: 0; }
 .dm-top { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; font-size: 12px; }
 .dm-val { font-size: 17px; font-weight: 620; font-variation-settings: 'wght' 620; letter-spacing: -.01em; line-height: 1.1; color: var(--ink); }
+.dm-unit { font-size: .88em; }
 .dm-reset { margin-left: auto; font-size: 11.5px; }
 .dm-reset.soon { color: var(--ink-2); }
 .dm-line { font-size: 11.5px; line-height: 1.35; }
