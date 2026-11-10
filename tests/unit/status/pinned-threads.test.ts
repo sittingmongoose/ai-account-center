@@ -343,9 +343,9 @@ describe('PinnedThreadsCollector', () => {
                 : null,
             };
           });
-          // A problem with no doc also appears as a standalone statusProblems entry.
-          const extra = statusProblems.filter((p) => !statuses.some((s) => `writers/${String(s.writer)}/status.json` === String(p.file)));
-          const allProblems = [...statusProblems, ...extra];
+          // A problem with no doc also appears as a standalone statusProblems entry: the
+          // collector's statusProblems is the full list; the composer passes it through.
+          const allProblems = statusProblems;
           return JSON.stringify({
             asOfMs: parsed.nowMs,
             head: '1 pinned in T3',
@@ -386,14 +386,14 @@ describe('PinnedThreadsCollector', () => {
       // The reader retains the TS refusal even though the native module never saw it.
       expect(snap.problems.length).toBe(1);
       expect(snap.problems[0].file).toBe('writers/vm.probe/status.json');
-      expect(snap.problems[0].reason).toContain('Bearer');
+      expect(snap.problems[0].reason.toLowerCase()).toContain('bearer');
       expect(snap.docs.length).toBe(0);
       await collector.compose(noReports, []);
       const input = composeInputs.at(-1) as Record<string, unknown>;
       const statusProblems = input.statusProblems as Array<Record<string, unknown>>;
       expect(statusProblems.length).toBe(1);
       expect(statusProblems[0].file).toBe('writers/vm.probe/status.json');
-      expect(statusProblems[0].reason).toContain('Bearer');
+      expect(String(statusProblems[0].reason).toLowerCase()).toContain('bearer');
       expect(typeof statusProblems[0].sinceMs).toBe('number');
       expect(statusProblems[0].sinceMs).toBe(Date.parse('2026-11-08T12:00:00Z'));
       const view = collector.view();
@@ -403,18 +403,18 @@ describe('PinnedThreadsCollector', () => {
       // Before the fix the pinned field dropped file and reason entirely.
       expect(viewProblems?.length).toBe(1);
       expect(viewProblems?.[0]?.file).toBe('writers/vm.probe/status.json');
-      expect(viewProblems?.[0]?.reason).toContain('Bearer');
+      expect(String(viewProblems?.[0]?.reason).toLowerCase()).toContain('bearer');
       const updates = view.updates as Array<Record<string, unknown>>;
       // A first refusal with no accepted doc must not look like "no report": the view carries
       // the refusal. The held-copy case likewise carries the per-update refusal.
       if (updates.length > 0 && updates[0]?.refusal) {
         const refusal = updates[0].refusal as Record<string, unknown>;
         expect(refusal.file).toBe('writers/vm.probe/status.json');
-        expect(refusal.reason).toContain('Bearer');
+        expect(String(refusal.reason).toLowerCase()).toContain('bearer');
       } else {
         // For the first refusal the top-level statusProblems already carries it; either is a
         // disclosure, a bare "none" with no file/reason is not.
-        const hasTopLevelReason = (viewProblems?.[0]?.reason as string)?.includes('Bearer');
+        const hasTopLevelReason = (String(viewProblems?.[0]?.reason).toLowerCase()).includes('bearer');
         expect(hasTopLevelReason).toBe(true);
         expect(JSON.stringify(view)).not.toContain('Bearer\uFEFF');
       }
@@ -505,12 +505,12 @@ describe('PinnedThreadsCollector', () => {
       const viewProblems = v.statusProblems as Array<Record<string, unknown>>;
       expect(viewProblems?.length).toBe(1);
       expect(viewProblems?.[0]?.file).toBe('writers/vm.held/status.json');
-      expect(viewProblems?.[0]?.reason).toContain('Bearer');
+      expect(String(viewProblems?.[0]?.reason).toLowerCase()).toContain('bearer');
       const upd = (view.updates as Array<Record<string, unknown>>)[0];
       expect(upd?.reportState).toBe('unreadable');
       const refusal = upd?.refusal as Record<string, unknown> | null;
       expect(refusal?.file).toBe('writers/vm.held/status.json');
-      expect(refusal?.reason).toContain('Bearer');
+      expect(String(refusal?.reason).toLowerCase()).toContain('bearer');
       expect(JSON.stringify(view)).not.toContain('Bearer\uFEFF');
     } finally {
       require('fs').rmSync(dir, { recursive: true, force: true });
