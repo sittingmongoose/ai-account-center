@@ -103,6 +103,8 @@ function tellFrame(kind, fields = {}) {
  */
 const frameViews = createFrameViews({ post: (kind, fields) => tellFrame(kind, fields) });
 function frameView(key, json) { if (contentMode) frameViews.view(key, json); }
+/** The app frame draws Analytics itself (frame-seam.mjs FRAME_PAGES): its views go to the frame, none to Slint. */
+function analyticsNative() { return frameViews.owns('analytics'); }
 /** URL state: the page routes /, /analytics and /accounts (page-route.mjs); ?view= still works as an alias. */
 function pageFromLocation() { return pageFromUrl(location.pathname, location.search); }
 let currentPage = pageFromLocation();
@@ -576,11 +578,14 @@ function renderAnalytics(mode = 'static') {
   const from = shownGeo;
   const morph = mode === 'morph' && !motionReduced && from && shownSize === size && from.lv[0].length === next.lv[0].length;
   cancelAnimationFrame(trendRaf);
-  // Only state/usage/quota/agenda reach Slint; the legacy head/KPI/quota-group block is not built.
-  const slintView = analyticsSlintModel(null, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph ? from : next) });
+  const native = analyticsNative();
+  // Only state/usage/quota/agenda reach Slint; the legacy head/KPI/quota-group block is not built. The app frame gets
+  // the shape to end on and glides to it itself (a hidden iframe gets no animation frames).
+  const slintView = analyticsSlintModel(null, { usage, quota, agenda, state: analyticsPage, paths: trendPaths(morph && !native ? from : next) });
   // e2e only (?e2e): the last Analytics view handed to Slint, so a harness can read its words
   if (e2e) globalThis.__aacLastAnalytics = slintView;
-  pushModel('analytics', JSON.stringify(slintView), set_analytics);
+  if (native) pushModel('analytics-frame', JSON.stringify(slintView), json => { frameView('analytics-motion', morph ? 'morph' : 'static'); frameView('analytics', json); });
+  else pushModel('analytics', JSON.stringify(slintView), set_analytics);
   clearTimeout(analyticsPollTimer);
   const act = analyticsPayload?.activity;
   // While the server is reading (a cold load or a refresh running) the page re-reads it every
@@ -592,7 +597,7 @@ function renderAnalytics(mode = 'static') {
   if (currentPage === 'analytics' && (busyNow || converging))
     analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(false, 'morph', { silent: true }); }, busyNow ? 10000 : 15000);
   shownSize = size;
-  if (!morph) { shownGeo = next; return; }
+  if (!morph || native) { shownGeo = next; return; }
   const t0 = performance.now();
   const frame = time => {
     const k = easeInOut(Math.min(1, (time - t0) / 520));
@@ -605,7 +610,11 @@ function renderAnalytics(mode = 'static') {
 function renderAnalyticsHead() {
   if (!analyticsPayload || currentPage !== 'analytics') return;
   // The header alone (usageHead), not the whole usage view: this runs every 15 s between refreshes.
-  try { pushModel('analyticsHead', JSON.stringify(usageHead(analyticsPayload, analyticsPage, { now: Date.now() })), set_analytics_head); } catch {}
+  try { pushModel('analyticsHead', JSON.stringify(usageHead(analyticsPayload, analyticsPage, { now: Date.now() })), json => analyticsNative() ? frameView('analytics-head', json) : set_analytics_head(json)); } catch {}
+}
+function analyticsLoading(loading, error) {
+  if (analyticsNative()) frameView('analytics-loading', JSON.stringify({ loading, error }));
+  else set_analytics_loading(loading, error);
 }
 /** True when the response in hand already holds the hours of the page range (no fetch is needed to draw it). */
 function analyticsCovers(payload, now = Date.now()) {
@@ -627,7 +636,7 @@ async function refreshAnalytics(force = false, mode = 'static', opts = {}) {
   if (!authenticated) return;
   const silent = opts.silent === true && !force;
   const generation = ++analyticsGeneration;
-  if (!silent) set_analytics_loading(true, '');
+  if (!silent) analyticsLoading(true, '');
   // the backend accepts 24h, 7d and 30d: Month, All and custom ranges read the covering window and are cut here
   const query = new URLSearchParams({ platform, range: apiRangeFor(analyticsPage, Date.now()), provider: 'all', account: 'all' });
   if (force) query.set('refresh', 'true');
@@ -636,13 +645,13 @@ async function refreshAnalytics(force = false, mode = 'static', opts = {}) {
     if (generation !== analyticsGeneration || !authenticated) return;
     if (result?.schemaVersion !== 1 || !Array.isArray(result.accounts)) throw new Error('Unsupported analytics response.');
     analyticsPayload = result; renderAnalytics(mode);
-    pollFails = 0; set_analytics_loading(false, '');
+    pollFails = 0; analyticsLoading(false, '');
   } catch (error) {
     if (generation !== analyticsGeneration) return;
     renderAnalytics();
     if (silent && ++pollFails < 2) return;
     pollFails = 0;
-    set_analytics_loading(false, error?.message || 'Unable to load account analytics.');
+    analyticsLoading(false, error?.message || 'Unable to load account analytics.');
   }
 }
 /**
@@ -664,27 +673,29 @@ async function changeAnalyticsRange() {
   if (!analyticsPayload || analyticsPayload.range?.preset !== apiRangeFor(analyticsPage, Date.now())) await refreshAnalytics(false, covered ? 'static' : 'morph');
 }
 const toggleIn = (set, value) => { if (set.has(value)) set.delete(value); else set.add(value); };
-async function analyticsAction(action, value) {
-  if (action === 'analytics-layout') {
-    const [kind, w, h] = String(value).split(',');
-    const width = Number(w), height = Number(h);
-    if (kind === 'heat-cell') {
-      const prior = analyticsPage.sizes.heat;
-      if (!Number.isFinite(width) || width <= 0 || Math.abs((prior.cellW || 0) - width) < 0.1) return;
-      analyticsPage.sizes.heat = { ...prior, cellW: width };
-      clearTimeout(layoutTimer);
-      layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
-      return;
-    }
-    if (!(kind in analyticsPage.sizes) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0) return;
-    const prior = analyticsPage.sizes[kind];
-    if (prior && Math.abs(prior.w - width) < 1 && Math.abs(prior.h - height) < 1) return;
-    analyticsPage.sizes[kind] = { ...prior, w: width, h: height };
-    // a layout report arrives while Slint lays out: draw again once it has finished
+/** A chart box's size ("kind,w,h" or "heat-cell,w"): the charts are laid out in those pixels. */
+function analyticsLayout(value) {
+  const [kind, w, h] = String(value).split(',');
+  const width = Number(w), height = Number(h);
+  if (kind === 'heat-cell') {
+    const prior = analyticsPage.sizes.heat;
+    if (!Number.isFinite(width) || width <= 0 || Math.abs((prior?.cellW || 0) - width) < 0.1) return;
+    analyticsPage.sizes.heat = { ...prior, cellW: width };
     clearTimeout(layoutTimer);
     layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
     return;
   }
+  if (!(kind in analyticsPage.sizes) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0) return;
+  const prior = analyticsPage.sizes[kind];
+  if (prior && Math.abs(prior.w - width) < 1 && Math.abs(prior.h - height) < 1) return;
+  analyticsPage.sizes[kind] = { ...prior, w: width, h: height };
+  // a layout report arrives while Slint lays out: draw again once it has finished
+  clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
+}
+async function analyticsAction(action, value) {
+  // an Analytics page the frame draws reports its own boxes (the message listener); the hidden canvas's say nothing
+  if (action === 'analytics-layout') { if (!analyticsNative()) analyticsLayout(value); return; }
   if (action === 'analytics-range') {
     if (!RANGES.some(([id]) => id === value) || (analyticsPage.range === value)) return;
     analyticsPage.range = value; analyticsPage.from = null; analyticsPage.to = null;
@@ -1442,6 +1453,7 @@ try {
       const overlays = viewsSubscription(event, where);
       if (overlays) { frameViews.subscribe(overlays); return; }
       const page = pageAction(event, where);
+      if (page?.kind === 'analytics-layout') { if (authenticated && analyticsNative()) analyticsLayout(page.value); return; }
       if (page) void Promise.resolve().then(() => window.ccsDashboardAction(page.kind, page.value)).catch(() => {});
     });
     addEventListener('message', (event) => {

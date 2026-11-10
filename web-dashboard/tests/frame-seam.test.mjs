@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { PAGE_ACTIONS, VIEW_KEYS, FRAME_OVERLAYS, createFrameViews, pageAction, viewsSubscription } from '../public/frame-seam.mjs';
+import { PAGE_ACTIONS, VIEW_KEYS, FRAME_OVERLAYS, FRAME_PAGES, createFrameViews, pageAction, viewsSubscription } from '../public/frame-seam.mjs';
 import { MUTATING_ACTIONS } from '../public/accounts-controller.mjs';
 
 const ORIGIN = 'http://192.0.2.10:3000';
@@ -34,14 +34,25 @@ test('the allowlist covers every Accounts & Settings change and never sign-in, t
   }
   for (const kind of ['login', 'setup', 'setup-typing', 'login-overlay', 'login-field-focus', 'login-limit-over', 'probe-rect',
     'content-rect', 'content-cover', 'overlay-open', 'overlay-close', 'navigate', 'navigate-dashboard', 'navigate-analytics',
-    'theme', 'refresh', 'update-apps', 'logout', 'auth-recheck', 'analytics-range', 'analytics-refresh']) {
+    'theme', 'refresh', 'update-apps', 'logout', 'auth-recheck', 'analytics-refresh', 'analytics-activity-interval',
+    'analytics-metric-key', 'analytics-account', 'analytics-account-id', 'analytics-metric']) {
     assert.equal(PAGE_ACTIONS.has(kind), false, `${kind} is not a page action`);
     assert.equal(pageAction(event({ type: 'aac-page', kind, value: '' }), where), null);
   }
 });
 
-test('the subscription names only known overlays and comes only from the frame', () => {
+test('the Analytics page controls are page actions; its refresh is the frame\'s own Refresh', () => {
+  for (const kind of ['analytics-range', 'analytics-custom', 'analytics-provider', 'analytics-split', 'analytics-cache', 'analytics-donut',
+    'analytics-cbm-sort', 'analytics-donut-open', 'analytics-heat', 'analytics-focus', 'analytics-compare', 'analytics-group', 'analytics-layout']) {
+    assert.deepEqual(pageAction(event({ type: 'aac-page', kind, value: 'x' }), where), { kind, value: 'x' });
+  }
+  for (const key of ['analytics', 'analytics-motion', 'analytics-head', 'analytics-loading']) assert.ok(VIEW_KEYS.includes(key), key);
+  assert.deepEqual([...FRAME_PAGES], ['analytics']);
+});
+
+test('the subscription names only known overlays and pages and comes only from the frame', () => {
   assert.deepEqual(viewsSubscription(event({ type: 'aac-views', overlays: ['details', 'bogus', 'activation'] }), where), ['details', 'activation']);
+  assert.deepEqual(viewsSubscription(event({ type: 'aac-views', overlays: ['analytics', 'home'] }), where), ['analytics']);
   assert.deepEqual(viewsSubscription(event({ type: 'aac-views' }), where), []);
   assert.equal(viewsSubscription(event({ type: 'aac-views', overlays: ['details'] }, { source: {} }), where), null);
   assert.equal(viewsSubscription(event({ type: 'aac-page', kind: 'details' }), where), null);
@@ -97,11 +108,28 @@ function fixtureServer() {
     'POST /api/codex/profiles/other/activate': () => ({ status: 409, payload: { code: 'confirmation_required', error: 'Confirm the switch', confirmation: { token: 'A'.repeat(43), targetProfile: 'other', expiresAt: new Date(Date.now() + 300_000).toISOString(), processes: [], warning: 'Active Codex work will stop.' } } }),
   };
   return async (method, path) => {
+    if (method === 'GET' && path.startsWith('/api/accounts/analytics?')) return { payload: analyticsPayload() };
     if (method === 'GET' && path.startsWith('/api/accounts/dashboard?')) {
       return { payload: { schemaVersion: 1, updatedAt: new Date().toISOString(), accounts, providers: [], settings: { refreshIntervalSeconds: 60, hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] }, codexAutoSwitch: { enabled: false, thresholdPercent: 5 } } };
     }
     const route = routes[`${method} ${path}`];
     return route ? route() : { status: 404, payload: { code: 'not_found' } };
+  };
+}
+
+function analyticsPayload() {
+  const now = Date.now(), H = 3600_000;
+  const at = ms => new Date(Math.floor(ms / H) * H).toISOString();
+  const row = (ms, provider, tokens) => ({ hour: at(ms), provider, inputTokens: tokens, outputTokens: tokens / 10, cacheCreationTokens: 0, cacheReadTokens: tokens * 4, estimatedCostUsd: tokens / 1e6 });
+  const byHour = [row(now - 30 * H, 'codex', 2e6), row(now - 5 * H, 'codex', 1e6)];
+  const totals = { inputTokens: 3e6, outputTokens: 3e5, cacheCreationTokens: 0, cacheReadTokens: 1.2e7, estimatedCostUsd: 3 };
+  return {
+    schemaVersion: 1, updatedAt: new Date(now).toISOString(),
+    range: { preset: '7d', from: new Date(now - 7 * 24 * H).toISOString(), to: new Date(now).toISOString(), bucketMinutes: 60 },
+    accounts: [],
+    activity: { status: 'ok', scope: 'ubuntu-local-cli', fetchedAt: new Date(now).toISOString(), message: '', totals, byHour,
+      providers: [{ provider: 'codex', label: 'Codex logs', totals, usageEvents: 4, sessionCount: 2, tools: ['codex'] }],
+      models: [{ model: 'gpt-5', provider: 'codex', ...totals }] },
   };
 }
 
@@ -116,7 +144,7 @@ async function loadBridge({ framed }) {
     .replace(/import \{ requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard \} from '[^']+';/, 'const requireWebGL = () => {}; const WEBGL_REQUIRED_MESSAGE = "fixture"; const startSlintDashboard = fn => fn();')
     .replace(/from '(\.\/[^']+)'/g, (_match, relative) => `from '${new URL(relative, base).href}'`)
     .concat(`\n// ${key}\n`);
-  const slint = { details: [], closed: 0, accounts: 0, dialogs: 0 };
+  const slint = { details: [], closed: 0, accounts: 0, dialogs: 0, analytics: 0, analyticsLoading: 0, trend: 0 };
   const posted = [], calls = [], listeners = new Map(), historyCalls = [];
   const frameWindow = { __aacFrame: true, innerWidth: 1440, postMessage: (message, target) => posted.push({ message, target }) };
   const originals = new Map();
@@ -130,7 +158,10 @@ async function loadBridge({ framed }) {
       : name === 'close_details' ? () => { slint.closed++; }
         : name === 'set_accounts' ? () => { slint.accounts++; }
           : name === 'show_activation_confirmation' ? () => { slint.dialogs++; }
-          : () => {}])));
+          : name === 'set_analytics' ? () => { slint.analytics++; }
+            : name === 'set_analytics_loading' ? () => { slint.analyticsLoading++; }
+              : name === 'set_analytics_trend_paths' ? () => { slint.trend++; }
+                : () => {}])));
   assign('window', {});
   assign('navigator', { userAgent: 'Mac fixture' });
   assign('location', { pathname: framed ? '/' : '/accounts', search: framed ? '?content=1' : '', protocol: 'http:', hostname: '192.0.2.10', host: '192.0.2.10:3000', origin: ORIGIN, href: '' });
@@ -142,6 +173,7 @@ async function loadBridge({ framed }) {
   const stored = new Map();
   assign('localStorage', { getItem: k => stored.has(k) ? stored.get(k) : null, setItem: (k, v) => stored.set(k, String(v)), removeItem: k => stored.delete(k) });
   assign('setInterval', () => 0); assign('clearInterval', () => {});
+  assign('requestAnimationFrame', () => 0); assign('cancelAnimationFrame', () => {});
   const server = fixtureServer();
   assign('fetch', async (path, options = {}) => {
     const method = options.method || 'GET';
@@ -238,5 +270,61 @@ test('in the frame: a switch confirmation the frame does not draw stays in Slint
     b.fromFrame({ type: 'aac-page', kind: 'activation-cancel', value: '' });
     await flush();
     assert.equal(b.views().findLast(v => v.key === 'activation').json, '', 'and of its close');
+  } finally { b.restore(); }
+});
+
+test('in the frame: an owned Analytics gets its views (motion before each), Slint gets none, layout comes from the frame', async () => {
+  const b = await loadBridge({ framed: true });
+  try {
+    b.fromFrame({ type: 'aac-views', overlays: ['details', 'analytics'] });
+    await b.action('navigate', 'analytics');
+    await flush(12);
+    assert.ok(b.calls.some(c => c.path.startsWith('/api/accounts/analytics?')), 'Analytics is read');
+    const keys = b.views().map(v => v.key);
+    const at = keys.lastIndexOf('analytics');
+    assert.ok(at > 0, 'the analytics view is forwarded');
+    assert.equal(keys[at - 1], 'analytics-motion', 'its motion comes just before it');
+    const view = JSON.parse(b.views()[at].json);
+    assert.equal(view.version, 7);
+    assert.equal(typeof view.usage.trend.paths, 'object', 'the trend paths travel with the view');
+    assert.deepEqual(JSON.parse(b.views().findLast(v => v.key === 'analytics-loading').json), { loading: false, error: '' });
+    assert.equal(b.slint.analytics + b.slint.analyticsLoading + b.slint.trend, 0, 'nothing is drawn in Slint');
+    // the hidden canvas's own box reports are ignored; the frame's are taken and the charts laid out again in them
+    const before = b.views().filter(v => v.key === 'analytics').length;
+    await b.action('analytics-layout', 'trend,333,111');
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(b.views().filter(v => v.key === 'analytics').length, before, 'a canvas report changes nothing');
+    b.fromFrame({ type: 'aac-page', kind: 'analytics-layout', value: 'trend,640,220' });
+    await new Promise(resolve => setTimeout(resolve, 60));
+    const laid = JSON.parse(b.views().findLast(v => v.key === 'analytics').json);
+    assert.equal(laid.usage.trend.pw > 0 && laid.usage.trend.pw <= 640, true, `trend laid out in the frame's width (${laid.usage.trend.pw})`);
+    // a control from the page runs as the Slint page's would
+    b.fromFrame({ type: 'aac-page', kind: 'analytics-split', value: 'true' });
+    await flush();
+    assert.equal(JSON.parse(b.views().findLast(v => v.key === 'analytics').json).state.split, true);
+    assert.equal(b.views().findLast(v => v.key === 'analytics-motion').json, 'morph', 'a toggle glides from the shape on screen');
+    assert.equal(b.slint.trend, 0, 'and no frame of it runs in the hidden canvas');
+  } finally { b.restore(); }
+});
+
+test('in the frame without an owned Analytics: Slint draws it exactly as before and nothing is forwarded', async () => {
+  const b = await loadBridge({ framed: true });
+  try {
+    b.fromFrame({ type: 'aac-views', overlays: ['details'] });
+    await b.action('navigate', 'analytics');
+    await flush(12);
+    assert.ok(b.slint.analytics > 0, 'Slint draws Analytics');
+    assert.ok(b.slint.analyticsLoading > 0);
+    assert.equal(b.views().filter(v => v.key.startsWith('analytics')).length, 0, 'no analytics view is forwarded');
+    // its canvas reports still lay the charts out
+    const before = b.slint.analytics;
+    await b.action('analytics-layout', 'trend,640,220');
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.ok(b.slint.analytics > before, 'a canvas report draws again');
+    // and a page action of the kind is refused without ownership (no layout from the frame)
+    const now = b.slint.analytics;
+    b.fromFrame({ type: 'aac-page', kind: 'analytics-layout', value: 'trend,500,200' });
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(b.slint.analytics, now);
   } finally { b.restore(); }
 });
