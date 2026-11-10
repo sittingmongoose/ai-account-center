@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  /** The wasm content hash scripts/build-ui.js stamps into the packaged sw.js. */
+  /** The shell hash scripts/build-ui.js stamps into the packaged sw.js. */
   var BUILD_ID_PATTERN = /^[a-f0-9]{12}$/;
   /** Content-addressed runtime: only pkg/<buildId>/** is immutable (6.5 correction). */
   var VERSIONED_PKG = /^\/pkg\/[a-f0-9]{12}\//;

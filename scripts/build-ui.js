@@ -27,7 +27,7 @@ const WASM_NAME = 'ccs_account_dashboard';
 /** The one import of the wasm-bindgen glue that the packaged bridge.js rewrites. */
 const BRIDGE_IMPORT = `'./pkg/${WASM_NAME}.js'`;
 const BRIDGE_IMPORT_ERROR = `bridge.js must import ./pkg/${WASM_NAME}.js exactly once.`;
-/** The service worker's build placeholder, stamped with the content build id. */
+/** The service worker's build placeholder, stamped with the shell build id. */
 const SW_BUILD_ID = '__AAC_BUILD_ID__';
 const SW_BUILD_ID_ERROR = 'sw.js must name the __AAC_BUILD_ID__ placeholder exactly once.';
 const PRECOMPRESSED_EXTENSIONS = new Set([
@@ -343,10 +343,33 @@ function versionedBridgeSource(source, buildId) {
   return `${source.slice(0, index)}'./pkg/${buildId}/${WASM_NAME}.js'${source.slice(index + BRIDGE_IMPORT.length)}`;
 }
 
-/** Stamp the content build id into the packaged sw.js only; the source keeps the placeholder. */
+/** Stamp the shell build id into the packaged sw.js only; the source keeps the placeholder. */
 function stampedSwSource(source, buildId) {
   if (countLiteral(source, SW_BUILD_ID) !== 1) throw new Error(SW_BUILD_ID_ERROR);
   return source.replace(SW_BUILD_ID, buildId);
+}
+
+/**
+ * Hash every packaged shell file under `publicDir` (path + bytes, sorted), with
+ * bridge.js taken post-rewrite. Any shell change then rolls the service worker's
+ * stamp and cache, while pkg/<buildId>/ stays content-addressed by the wasm hash.
+ * Deterministic: identical shell inputs give an identical hash.
+ */
+function shellFingerprint(publicDir, bridge) {
+  const hash = crypto.createHash('sha256');
+  let files = 0;
+  for (const relative of listFiles(publicDir)) {
+    hash.update(relative);
+    hash.update('\0');
+    hash.update(
+      relative === 'bridge.js'
+        ? Buffer.from(bridge, 'utf8')
+        : fs.readFileSync(path.join(publicDir, ...relative.split('/')))
+    );
+    hash.update('\0');
+    files++;
+  }
+  return { sha256: hash.digest('hex'), files };
 }
 
 /** Relative POSIX paths of every file below a directory, sorted for reproducible output. */
@@ -532,10 +555,16 @@ function buildUi(options = {}) {
     fs.readFileSync(path.join(publicDir, 'bridge.js'), 'utf8'),
     buildId
   );
-  // The service worker is stamped the same way; fixtures without one are left alone.
+  // The service worker is stamped with the shell id, not the wasm id: any shell
+  // change (bridge post-rewrite, index.html, sw source, sw-route, every packaged
+  // *.mjs and the other packaged files) rolls the worker and its cache, while
+  // pkg/<buildId>/ stays content-addressed by the wasm hash. Fixtures without
+  // a worker are left alone.
+  const shell = shellFingerprint(publicDir, bridge);
+  const shellBuildId = shell.sha256.slice(0, 12);
   const swPath = path.join(publicDir, 'sw.js');
   const sw = fs.existsSync(swPath)
-    ? stampedSwSource(fs.readFileSync(swPath, 'utf8'), buildId)
+    ? stampedSwSource(fs.readFileSync(swPath, 'utf8'), shellBuildId)
     : null;
   fs.rmSync(packagedUi, { recursive: true, force: true });
   fs.mkdirSync(packagedUi, { recursive: true });
@@ -558,6 +587,8 @@ function buildUi(options = {}) {
     entry: 'index.html',
     source: sourceFingerprint(crate),
     buildId,
+    shellBuildId,
+    shell,
     ...(typeof commit === 'string' && /^[a-f0-9]{7,40}$/.test(commit) ? { commit } : {}),
     wasm: {
       path: `pkg/${buildId}/${WASM_NAME}_bg.wasm`,
@@ -601,6 +632,7 @@ module.exports = {
   assertBridgeImport,
   versionedBridgeSource,
   stampedSwSource,
+  shellFingerprint,
   sourceFingerprint,
   leptosFingerprint,
   commandRunner,

@@ -99,14 +99,14 @@ function verifyPrecompressed(uiDir, manifest) {
   }
 }
 
-/** The installable shell: a stamped worker, a valid manifest and every icon it names. */
-function verifyPwaShell(uiDir, buildId) {
+/** The installable shell: a worker stamped with the shell build id, a valid manifest and every icon it names. */
+function verifyPwaShell(uiDir, shellBuildId) {
   for (const file of ['sw.js', 'sw-route.js']) {
     if (!fs.existsSync(path.join(uiDir, file))) throw new Error(`Missing browser asset: ${file}.`);
   }
   const sw = fs.readFileSync(path.join(uiDir, 'sw.js'), 'utf8');
-  if (countLiteral(sw, `'${buildId}'`) !== 1 || sw.includes('__AAC_BUILD_ID__')) {
-    throw new Error('The packaged sw.js must carry the stamped build id.');
+  if (countLiteral(sw, `'${shellBuildId}'`) !== 1 || sw.includes('__AAC_BUILD_ID__')) {
+    throw new Error('The packaged sw.js must carry the stamped shell build id.');
   }
   let webmanifest;
   try {
@@ -152,6 +152,7 @@ function verifyModes(dir) {
 function verifyBundle(uiDir = UI_DIR) {
   const manifest = JSON.parse(fs.readFileSync(path.join(uiDir, 'ui-build-manifest.json'), 'utf8'));
   const buildId = manifest.buildId;
+  const shellBuildId = manifest.shellBuildId;
   if (
     manifest.schemaVersion !== 1 ||
     manifest.framework !== 'slint' ||
@@ -163,6 +164,12 @@ function verifyBundle(uiDir = UI_DIR) {
     manifest.source.files < 1 ||
     typeof buildId !== 'string' ||
     !BUILD_ID.test(buildId) ||
+    typeof shellBuildId !== 'string' ||
+    !BUILD_ID.test(shellBuildId) ||
+    !SHA256.test(manifest.shell?.sha256 ?? '') ||
+    !Number.isSafeInteger(manifest.shell?.files) ||
+    manifest.shell.files < 1 ||
+    shellBuildId !== manifest.shell.sha256.slice(0, 12) ||
     manifest.wasm?.path !== `pkg/${buildId}/${WASM_NAME}_bg.wasm`
   ) {
     throw new Error('The packaged dashboard must be Slint 1.18.1 for WebAssembly.');
@@ -191,7 +198,7 @@ function verifyBundle(uiDir = UI_DIR) {
   ) {
     throw new Error('The packaged bridge.js must import the versioned WebAssembly runtime.');
   }
-  verifyPwaShell(uiDir, buildId);
+  verifyPwaShell(uiDir, shellBuildId);
   verifyPrecompressed(uiDir, manifest);
   verifyModes(uiDir);
   const totalSize = walkDir(uiDir);

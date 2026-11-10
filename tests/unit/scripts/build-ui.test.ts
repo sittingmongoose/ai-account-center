@@ -516,16 +516,40 @@ describe('Slint browser build integration', () => {
     expect(fs.readFileSync(path.join(output, 'index.html'), 'utf8')).toBe('existing');
   });
 
-  it('stamps the build id into the packaged sw.js and leaves the source worker unchanged', () => {
+  it('stamps the shell build id into the packaged sw.js and leaves the source worker unchanged', () => {
     const root = fixture();
     const source = path.join(root, 'web-dashboard', 'public', 'sw.js');
     const before = fs.readFileSync(source, 'utf8');
     const manifest = buildUi({ repoRoot: root, run: runner([]) });
     const packaged = fs.readFileSync(path.join(root, 'dist', 'ui', 'sw.js'), 'utf8');
     expect(packaged).toBe(
-      `importScripts('./sw-route.js');\nvar BUILD_ID = '${manifest.buildId}';\n`
+      `importScripts('./sw-route.js');\nvar BUILD_ID = '${manifest.shellBuildId}';\n`
     );
     expect(fs.readFileSync(source, 'utf8')).toBe(before);
+  });
+
+  it('rolls the service worker on any shell change while pkg/ stays wasm-addressed', () => {
+    const root = fixture();
+    const swPath = path.join(root, 'dist', 'ui', 'sw.js');
+    const first = build({ repoRoot: root, run: runner([]), readCommit: () => null });
+    const swFirst = fs.readFileSync(swPath, 'utf8');
+    expect(first.shellBuildId).toMatch(/^[a-f0-9]{12}$/);
+    expect(first.shellBuildId).toBe(first.shell.sha256.slice(0, 12));
+    // Identical inputs: identical stamp, byte-identical worker.
+    const second = build({ repoRoot: root, run: runner([]), readCommit: () => null });
+    expect(second.shellBuildId).toBe(first.shellBuildId);
+    expect(fs.readFileSync(swPath, 'utf8')).toBe(swFirst);
+    // A JS-only change rolls the worker; the wasm id does not move.
+    fs.writeFileSync(
+      path.join(root, 'web-dashboard', 'public', 'view-model.mjs'),
+      'export const a = 1;\n'
+    );
+    const third = build({ repoRoot: root, run: runner([]), readCommit: () => null });
+    expect(third.buildId).toBe(first.buildId);
+    expect(third.shellBuildId).not.toBe(first.shellBuildId);
+    expect(fs.readFileSync(swPath, 'utf8')).not.toBe(swFirst);
+    // The validator agrees the new output matches the new shell inputs.
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
   });
 
   it('fails the build on a sw.js without the placeholder and keeps the existing output', () => {
@@ -735,7 +759,7 @@ describe('Slint browser build integration', () => {
             path.join(output, 'sw.js'),
             "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\n"
           ),
-        'stamped build id',
+        'stamped shell build id',
       ],
       [
         'manifest icon removed',

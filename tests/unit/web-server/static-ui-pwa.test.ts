@@ -43,7 +43,7 @@ const FIXTURE_ENVIRONMENT = [
 
 let tempRoot = '';
 let staticDir = '';
-let manifest: { buildId: string };
+let manifest: { buildId: string; shellBuildId: string };
 let instance: Awaited<ReturnType<typeof startServer>> | undefined;
 let port = 0;
 let originalEnvironment: Record<string, string | undefined> = {};
@@ -205,7 +205,7 @@ describe('PWA shell serving while signed out', () => {
     expect(worker.status).toBe(200);
     expect(worker.headers['content-type']).toBe('text/javascript; charset=utf-8');
     expect(worker.headers['cache-control']).toBe('no-cache');
-    expect(worker.body.toString('utf8')).toContain(`'${manifest.buildId}'`);
+    expect(worker.body.toString('utf8')).toContain(`'${manifest.shellBuildId}'`);
     expect(worker.body.toString('utf8')).not.toContain('__AAC_BUILD_ID__');
     const routing = await raw('GET', '/sw-route.js');
     expect(routing.status).toBe(200);

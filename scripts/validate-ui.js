@@ -11,6 +11,8 @@ const {
   assertLockedWasmBindgen,
   sourceFingerprint,
   leptosFingerprint,
+  shellFingerprint,
+  versionedBridgeSource,
   commandRunner,
   toolPath,
 } = require('./build-ui');
@@ -52,6 +54,19 @@ function validateUi(options = {}) {
   const { manifest } = verifyBundle(path.join(repoRoot, 'dist', 'ui'));
   if (manifest.source?.sha256 !== source.sha256 || manifest.source?.files !== source.files) {
     throw new Error('Dashboard source changed after the build. Run bun run ui:build.');
+  }
+  // The recorded shell stamp must still be the stamp of the current shell inputs.
+  const bridge = versionedBridgeSource(
+    fs.readFileSync(path.join(crate, 'public', 'bridge.js'), 'utf8'),
+    manifest.buildId
+  );
+  const shell = shellFingerprint(path.join(crate, 'public'), bridge);
+  if (
+    manifest.shell?.sha256 !== shell.sha256 ||
+    manifest.shell?.files !== shell.files ||
+    manifest.shellBuildId !== manifest.shell.sha256.slice(0, 12)
+  ) {
+    throw new Error('Dashboard shell changed after the build. Run bun run ui:build.');
   }
   // The Leptos pages (Status, Scoreboard) are checked the same way when the crate is present.
   const leptosCrate = path.join(crate, 'leptos');
