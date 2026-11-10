@@ -967,7 +967,7 @@ class CollectTests(unittest.TestCase):
     def test_windows_desktop_preserves_verified_optional_balances_with_bound_context(self):
         self.capsule()
 
-        def optional(identifier, account, organization, home, availability, address, cooldown=None):
+        def optional(identifier, account, organization, home, availability, address, cooldown=None, profile_root=None):
             self.assertEqual((identifier, account, organization, home, address), ("work", ACCOUNT, ORG, self.home, EMAIL))
             availability.update(resetCredits="ok", prepaidBalance="ok")
             return [core.claude_usage.balance_window("reset_credits_available", "Rate-limit resets available", 0, "resets"),
@@ -1020,7 +1020,7 @@ class CollectTests(unittest.TestCase):
     def test_optional_rate_limit_survives_changed_capsule_without_retaining_its_balances(self):
         capsule = self.capsule()
 
-        def optional(*args):
+        def optional(*args, **kwargs):
             capsule.write_bytes(b"rotated-private-capsule")
             args[-1].update(failureCode="rate_limited", retryAfterSeconds=60)
             return [core.claude_usage.balance_window("prepaid_balance", "Prepaid balance", 10, "USD")]
@@ -1042,7 +1042,7 @@ class CollectTests(unittest.TestCase):
     def test_rotated_or_missing_optional_cookie_context_never_retains_optional_reading(self):
         capsule = self.capsule()
 
-        def rotate(*args):
+        def rotate(*args, **kwargs):
             capsule.write_bytes(b"different-private-capsule")
             return [core.claude_usage.balance_window("prepaid_balance", "Prepaid balance", 10, "USD")]
 
@@ -1056,9 +1056,101 @@ class CollectTests(unittest.TestCase):
 
     def test_optional_cookie_read_waits_for_valid_oauth_usage(self):
         self.capsule()
-        result, collected = self.desktop_optional(lambda *args: [], usage={})
+        result, collected = self.desktop_optional(lambda *args, **kwargs: [], usage={})
         self.assertEqual(result, {"sample": None, "failureCode": "invalid_response"})
         self.assertEqual(collected.call_count, 0)
+
+    def test_no_capsule_with_live_fingerprint_uses_live_session(self):
+        # No DPAPI capsule file: a live Desktop session fingerprint must
+        # still let the web read through, bound to the live fingerprint.
+        profile_root = self.home / "AppData/Roaming/Claude-work"
+        profile_root.mkdir(parents=True, exist_ok=True)
+        live_fp = "a" * 64
+        candidate = {**self.claude, "_mode": "desktop", "_profile": "work", "_profile_root": profile_root}
+        client = FakeClient(profile(), {"five_hour": {"utilization": 0}})
+
+        def optional(identifier, account, organization, home, availability, address, cooldown=None, profile_root=None):
+            availability.update(resetCredits="ok", prepaidBalance="ok")
+            return [core.claude_usage.balance_window("reset_credits_available", "Rate-limit resets available", 0, "resets")]
+
+        with mock.patch.object(core, "Client", return_value=client), \
+                mock.patch.object(core.claude_usage, "live_cookie_fingerprint", return_value=live_fp, create=True) as live_mock, \
+                mock.patch.object(core.claude_usage, "optional_web_windows", side_effect=optional) as collected:
+            result = core.collect(candidate, self.home, "windows")
+        self.assertEqual(collected.call_count, 1)
+        self.assertEqual(collected.call_args.kwargs.get("profile_root"), profile_root)
+        self.assertEqual(live_mock.call_count, 2)
+        self.assertEqual([row["key"] for row in result["sample"]["windows"]], ["five_hour", "reset_credits_available"])
+        self.assertEqual(result["sample"]["optionalExtras"], {"resetCredits": "ok", "prepaidBalance": "ok"})
+        expected = core.digest(["claude-optional-v1", candidate["identity"], candidate["revision"], "work", live_fp])
+        self.assertEqual(result["sample"]["optionalExtrasContext"], expected)
+        self.assertRegex(result["sample"]["optionalExtrasContext"], r"^[a-f0-9]{64}$")
+
+    def test_live_fingerprint_change_discards_optional_windows(self):
+        # A live fingerprint that moves during the web read discards the
+        # web windows, exactly like a rotated capsule does.
+        profile_root = self.home / "AppData/Roaming/Claude-work"
+        profile_root.mkdir(parents=True, exist_ok=True)
+        candidate = {**self.claude, "_mode": "desktop", "_profile": "work", "_profile_root": profile_root}
+        client = FakeClient(profile(), {"five_hour": {"utilization": 0}})
+
+        def optional(identifier, account, organization, home, availability, address, cooldown=None, profile_root=None):
+            availability.update(resetCredits="ok", prepaidBalance="ok")
+            return [core.claude_usage.balance_window("prepaid_balance", "Prepaid balance", 10, "USD")]
+
+        with mock.patch.object(core, "Client", return_value=client), \
+                mock.patch.object(core.claude_usage, "live_cookie_fingerprint", side_effect=["a" * 64, "b" * 64], create=True) as live_mock, \
+                mock.patch.object(core.claude_usage, "optional_web_windows", side_effect=optional) as collected:
+            result = core.collect(candidate, self.home, "windows")
+        self.assertEqual(collected.call_count, 1)
+        self.assertEqual(collected.call_args.kwargs.get("profile_root"), profile_root)
+        self.assertEqual(live_mock.call_count, 2)
+        self.assertEqual([row["key"] for row in result["sample"]["windows"]], ["five_hour"])
+        self.assertEqual(result["sample"]["optionalExtras"], {"resetCredits": "unavailable", "prepaidBalance": "unavailable"})
+        self.assertNotIn("optionalExtrasContext", result["sample"])
+
+    def test_capsule_only_without_live_uses_capsule_fingerprint(self):
+        # No live rows: the DPAPI capsule stays authoritative, and the
+        # optional read still receives the profile root.
+        capsule = self.capsule()
+        profile_root = self.home / "AppData/Roaming/Claude-work"
+        profile_root.mkdir(parents=True, exist_ok=True)
+        candidate = {**self.claude, "_mode": "desktop", "_profile": "work", "_profile_root": profile_root}
+        client = FakeClient(profile(), {"five_hour": {"utilization": 0}})
+
+        def optional(identifier, account, organization, home, availability, address, cooldown=None, profile_root=None):
+            availability.update(resetCredits="ok", prepaidBalance="ok")
+            return [core.claude_usage.balance_window("reset_credits_available", "Rate-limit resets available", 0, "resets")]
+
+        with mock.patch.object(core, "Client", return_value=client), \
+                mock.patch.object(core.claude_usage, "live_cookie_fingerprint", return_value=None, create=True), \
+                mock.patch.object(core.claude_usage, "optional_web_windows", side_effect=optional) as collected:
+            result = core.collect(candidate, self.home, "windows")
+        self.assertEqual(collected.call_count, 1)
+        self.assertEqual(collected.call_args.kwargs.get("profile_root"), profile_root)
+        self.assertEqual([row["key"] for row in result["sample"]["windows"]], ["five_hour", "reset_credits_available"])
+        capsule_fp = core.hashlib.sha256(capsule.read_bytes()).hexdigest()
+        expected = core.digest(["claude-optional-v1", candidate["identity"], candidate["revision"], "work", capsule_fp])
+        self.assertEqual(result["sample"]["optionalExtrasContext"], expected)
+
+    def test_allowance_only_oauth_does_not_mark_reset_credits_ok(self):
+        # A bare weekly session-reset allowance is not a reset-credit
+        # grant: the allowance window flows, the verdict stays unavailable.
+        usage = {"five_hour": {"utilization": 0},
+                 "juniper_tide": {"eligible": True, "available": True, "resets_per_week": 2,
+                                  "next_available_at": "2026-10-12T00:00:00Z"}}
+        result, _ = self.collect(self.claude, [profile(), usage])
+        self.assertIn("session_reset_allowance", [window["key"] for window in result["sample"]["windows"]])
+        self.assertEqual(result["sample"]["optionalExtras"]["resetCredits"], "unavailable")
+
+    def test_grant_oauth_marks_reset_credits_ok(self):
+        # A real reset-credit grant still marks the verdict ok.
+        usage = {"five_hour": {"utilization": 0},
+                 "cedar_ember": {"eligible": True, "grants": [{"resets_left": 2, "resets_total": 3, "paused": False,
+                 "clears": ["five_hour", "seven_day"]}]}}
+        result, _ = self.collect(self.claude, [profile(), usage])
+        self.assertIn("reset_credits_available", [window["key"] for window in result["sample"]["windows"]])
+        self.assertEqual(result["sample"]["optionalExtras"]["resetCredits"], "ok")
 
     def test_codex_weekly_primary_and_zero_credit_balance(self):
         result, client = self.collect(self.codex, [{"plan_type": "pro", "rate_limit": {
