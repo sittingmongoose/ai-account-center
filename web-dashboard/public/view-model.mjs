@@ -231,6 +231,7 @@ export const isMaxPlan = (account) =>
       ));
 const PERIOD_LABEL = { '5h': '5-hour', week: 'Weekly', month: 'Monthly' };
 export function windowLabel(provider, w) {
+  if (!w) return 'Usage';
   if (isFable(w)) return 'Fable';
   if (isWeeklyScoped(w)) return scopedModelLabel(w);
   const p = period(w);
@@ -241,13 +242,13 @@ export function windowLabel(provider, w) {
         'plan-reported': 'Included',
         autoPercentUsed: 'Cursor models',
         apiPercentUsed: 'Other models',
-      }[w.key] || text(w.label)
+      }[w?.key] || text(w?.label) || 'Usage'
     );
   if (provider === 'zai')
     return (
       { 'usage-1': '5h tokens', 'usage-2': 'Weekly tokens', 'usage-3': 'Monthly requests' }[
-        w.key
-      ] || text(w.label)
+        w?.key
+      ] || text(w?.label) || 'Usage'
     );
   if (
     provider === 'codex' ||
@@ -257,8 +258,8 @@ export function windowLabel(provider, w) {
     provider === 'muse' ||
     provider === 'qwen'
   )
-    return PERIOD_LABEL[p] || text(w.label) || 'Usage';
-  return text(w.label) || 'Usage';
+    return PERIOD_LABEL[p] || text(w?.label) || 'Usage';
+  return text(w?.label) || 'Usage';
 }
 /**
  * H3: single-line column heads for the stacked Antigravity grid. Only Antigravity
@@ -277,15 +278,16 @@ export function shortWindowLabel(provider, w) {
   );
 }
 export function fullWindowLabel(provider, w) {
+  if (!w) return 'Usage';
   if (isFable(w)) return 'Fable weekly';
-  if (provider === 'antigravity' && w.key === 'google-ai-credits') return antigravityWindowLabel(w);
+  if (provider === 'antigravity' && w?.key === 'google-ai-credits') return antigravityWindowLabel(w);
   if (provider === 'codex')
     return (
-      { week: 'Weekly', '5h': '5-hour' }[text(w.label)] || text(w.label) || windowLabel(provider, w)
+      { week: 'Weekly', '5h': '5-hour' }[text(w?.label)] || text(w?.label) || windowLabel(provider, w)
     );
   if (provider === 'claude')
-    return { 'Five-hour usage': '5-hour usage' }[text(w.label)] || text(w.label) || 'Usage';
-  return text(w.label) || 'Usage';
+    return { 'Five-hour usage': '5-hour usage' }[text(w?.label)] || text(w?.label) || 'Usage';
+  return text(w?.label) || 'Usage';
 }
 /**
  * Claude only: the computers the server says need a sign-in before Open (`accounts[].signInNeeded`), as
@@ -431,12 +433,12 @@ const emptyCell = (account, key) => ({
 
 /** A Z.ai row that counts all reset packs of one kind (the collector's roll-up). */
 const rolledUpPacks = (account, w) =>
-  account?.provider === 'zai' && /^reset-packs-(?:5h|weekly)$/.test(text(w.key));
+  account?.provider === 'zai' && /^reset-packs-(?:5h|weekly)$/.test(text(w?.key));
 
 // Only an amount kept from an earlier reading says so: a whole cached account already says it on its row.
 const cacheProvenance = (account, w, now) => {
-  if (w.status !== 'cached') return '';
-  const at = validDate(w.sampledAt) ? w.sampledAt : account?.sampledAt;
+  if (w?.status !== 'cached') return '';
+  const at = validDate(w?.sampledAt) ? w.sampledAt : account?.sampledAt;
   return validDate(at) ? `cached, sampled ${relative(at, now)}` : 'cached';
 };
 const expiryText = (value, now, prefix = 'Expires ') =>
@@ -444,83 +446,84 @@ const expiryText = (value, now, prefix = 'Expires ') =>
 
 /** Packs, balances, credits and spend as an AmountView. */
 export function amountView(account, w, now = Date.now(), { noExpiry = false } = {}) {
-  const unit = text(w.unit);
-  const label = text(w.label)
+  if (!w || typeof w !== 'object') return { key: `${account?.id || ''}|missing`, label: 'Balance', value: 'Unavailable', unit: '', sub: '', icon: 'wallet', spent: false };
+  const unit = text(w?.unit);
+  const label = text(w?.label)
     .replace(/^Additional credit pack/i, 'Credit pack')
     .replace(/^Listed active credit packs/i, 'Active packs listed')
     .replace(/^Rate-limit resets available/i, 'Rate-limit resets left');
-  const expires = noExpiry ? '' : expiryText(w.expiresAt, now);
+  const expires = noExpiry ? '' : expiryText(w?.expiresAt, now);
   let value = '',
     suffix = '',
     sub = '',
     icon = 'wallet',
     spent = false;
-  if (rolledUpPacks(account, w) && finite(w.limit)) {
+  if (rolledUpPacks(account, w) && finite(w?.limit)) {
     // Every Z.ai reset pack of one kind on one line: how many are left, how many were used and
     // the soonest expiry among those left.
     icon = 'pack';
-    value = unitAmount(w.remaining, null) || 'Unavailable';
-    suffix = `of ${unitAmount(w.limit, unit)} left`;
-    spent = w.remaining === 0;
+    value = unitAmount(w?.remaining, null) || 'Unavailable';
+    suffix = `of ${unitAmount(w?.limit, unit)} left`;
+    spent = w?.remaining === 0;
     sub = [
-      finite(w.used) && w.used > 0 ? `${nf2.format(w.used)} used` : '',
-      noExpiry ? '' : expiryText(w.expiresAt, now, w.remaining > 1 ? 'Next expires ' : 'Expires '),
+      finite(w?.used) && w.used > 0 ? `${nf2.format(w.used)} used` : '',
+      noExpiry ? '' : expiryText(w?.expiresAt, now, w?.remaining > 1 ? 'Next expires ' : 'Expires '),
     ]
       .filter(Boolean)
       .join(' · ');
-  } else if (/pack/i.test(text(w.label)) && finite(w.limit)) {
+  } else if (/pack/i.test(text(w?.label)) && finite(w?.limit)) {
     icon = 'pack';
-    value = unitAmount(w.remaining, null) || 'Unavailable';
-    suffix = `of ${unitAmount(w.limit, unit)} left`;
-    spent = w.remaining === 0;
+    value = unitAmount(w?.remaining, null) || 'Unavailable';
+    suffix = `of ${unitAmount(w?.limit, unit)} left`;
+    spent = w?.remaining === 0;
     sub = [spent ? 'Used up' : '', expires].filter(Boolean).join(' · ');
-  } else if (w.kind === 'spend') {
-    value = unitAmount(w.used, unit) || 'Unavailable';
-    suffix = finite(w.limit) ? `of ${unitAmount(w.limit, unit)} spent` : 'spent';
-    sub = exact(w.resetAt, 'Resets ');
-  } else if (w.kind === 'extra_usage') {
+  } else if (w?.kind === 'spend') {
+    value = unitAmount(w?.used, unit) || 'Unavailable';
+    suffix = finite(w?.limit) ? `of ${unitAmount(w?.limit, unit)} spent` : 'spent';
+    sub = exact(w?.resetAt, 'Resets ');
+  } else if (w?.kind === 'extra_usage') {
     icon = 'zap';
-    if (w.enabled === false) {
+    if (w?.enabled === false) {
       value = 'Off';
-      sub = finite(w.limit)
-        ? `Limit ${unitAmount(w.limit, unit)}`
-        : finite(w.used) && unit
-          ? `${unitAmount(w.used, unit)} used`
+      sub = finite(w?.limit)
+        ? `Limit ${unitAmount(w?.limit, unit)}`
+        : finite(w?.used) && unit
+          ? `${unitAmount(w?.used, unit)} used`
           : '';
     } else {
-      value = finite(w.used) ? unitAmount(w.used, unit) : 'Unavailable';
-      suffix = finite(w.used) ? 'used' : '';
-      sub = finite(w.limit) ? `of ${unitAmount(w.limit, unit)}` : '';
+      value = finite(w?.used) ? unitAmount(w?.used, unit) : 'Unavailable';
+      suffix = finite(w?.used) ? 'used' : '';
+      sub = finite(w?.limit) ? `of ${unitAmount(w?.limit, unit)}` : '';
     }
   } else if (unit === 'resets') {
     icon = 'rotate';
-    if (finite(w.used) && finite(w.limit)) {
+    if (finite(w?.used) && finite(w?.limit)) {
       value = nf2.format(w.used);
-      suffix = `of ${unitAmount(w.limit, 'resets')} used`;
-    } else value = unitAmount(w.remaining, 'resets') || 'Unavailable';
+      suffix = `of ${unitAmount(w?.limit, 'resets')} used`;
+    } else value = unitAmount(w?.remaining, 'resets') || 'Unavailable';
     // The summary (value + suffix) stays; refill targets and the next-available time ride in `sub`.
     sub = [
       expires,
       clearsText(w),
-      w.key === 'session_reset_allowance' ? exact(w.resetAt, 'Next available ') : '',
+      w?.key === 'session_reset_allowance' ? exact(w?.resetAt, 'Next available ') : '',
     ]
       .filter(Boolean)
       .join(' · ');
   } else if (unit === 'packs') {
     icon = 'pack';
-    value = unitAmount(w.remaining, 'packs') || 'Unavailable';
+    value = unitAmount(w?.remaining, 'packs') || 'Unavailable';
   } else {
-    value = finite(w.remaining)
-      ? unitAmount(w.remaining, unit)
-      : finite(w.used)
-        ? `${unitAmount(w.used, unit)} used`
+    value = finite(w?.remaining)
+      ? unitAmount(w?.remaining, unit)
+      : finite(w?.used)
+        ? `${unitAmount(w?.used, unit)} used`
         : 'Unavailable';
-    sub = [w.enabled === false ? 'Off' : '', expires].filter(Boolean).join(' · ');
+    sub = [w?.enabled === false ? 'Off' : '', expires].filter(Boolean).join(' · ');
   }
   return {
-    key: `${account.id}|${text(w.key)}`,
+    key: `${account?.id || ''}|${text(w?.key)}`,
     label:
-      account.provider === 'antigravity' && w.key === 'google-ai-credits'
+      account?.provider === 'antigravity' && w?.key === 'google-ai-credits'
         ? antigravityWindowLabel(w)
         : label || 'Balance',
     value,
@@ -722,32 +725,32 @@ function openLine(openProgress, profileId) {
 }
 function claudeSection(accounts, profiles, platform, now, openProgress, data = null) {
   const anyMax = accounts.some(isMaxPlan);
-  const byAccount = accounts.map((account) => visibleMeters(account));
+  const byAccount = accounts.map((account) => visibleMeters(account).filter((w) => w && typeof w === 'object'));
   const hasFive = accounts.some((_, index) =>
-    byAccount[index].some((w) => !isFable(w) && !isWeeklyScoped(w) && period(w) === '5h')
+    byAccount[index].some((w) => w && !isFable(w) && !isWeeklyScoped(w) && period(w) === '5h')
   );
   const hasWeekly = accounts.some((_, index) =>
-    byAccount[index].some((w) => w.key === 'seven_day')
+    byAccount[index].some((w) => w?.key === 'seven_day')
   );
   // Weekly-scoped models (Opus, Sonnet, ...) in first-seen order, Fable apart: Fable's column
   // follows anyMax and is never shown on Pro rows, like before.
   const scopedKeys = [];
   for (const meters of byAccount)
     for (const w of meters)
-      if (isWeeklyScoped(w) && !isFable(w) && !scopedKeys.includes(w.key)) scopedKeys.push(w.key);
+      if (w && isWeeklyScoped(w) && !isFable(w) && !scopedKeys.includes(w?.key)) scopedKeys.push(w.key);
   const columns = [
     ...(hasFive ? [{ key: 'five', label: '5-hour' }] : []),
     ...(hasWeekly ? [{ key: 'weekly', label: 'Weekly' }] : []),
     ...scopedKeys.map((key) => {
-      const sample = byAccount.flat().find((w) => w.key === key);
+      const sample = byAccount.flat().find((w) => w?.key === key);
       return { key, label: scopedModelLabel(sample) };
     }),
     ...(anyMax ? [{ key: 'seven_day_fable', label: 'Fable' }] : []),
   ].slice(0, 6);
   const rows = accounts.map((account, index) => {
     const meters = byAccount[index];
-    const five = meters.find((w) => !isFable(w) && !isWeeklyScoped(w) && period(w) === '5h');
-    const weekly = meters.find((w) => w.key === 'seven_day');
+    const five = meters.find((w) => w && !isFable(w) && !isWeeklyScoped(w) && period(w) === '5h');
+    const weekly = meters.find((w) => w?.key === 'seven_day');
     const fable = meters.find(isFable);
     const launcher = (Array.isArray(profiles) ? profiles : []).find(
       (profile) => profile.id === account.capabilities?.claudeProfileId
@@ -1270,12 +1273,12 @@ export function dashboardViewModel(data, ctx = {}) {
   const hiddenIds = new Set(
     Array.isArray(data?.settings?.hiddenAccountIds) ? data.settings.hiddenAccountIds : []
   );
-  const everyAccount = Array.isArray(data?.accounts) ? data.accounts : [];
+  const everyAccount = Array.isArray(data?.accounts) ? data.accounts.filter((a) => a && typeof a === 'object') : [];
   const accounts = ctx.includeHidden
     ? everyAccount
     : everyAccount.filter((account) => !hiddenIds.has(account?.id) && account?.hidden !== true);
   const hidden = ctx.includeHidden ? new Set() : hiddenProviders(data);
-  const of = (provider) => accounts.filter((account) => account.provider === provider);
+  const of = (provider) => accounts.filter((account) => account?.provider === provider);
   const countOf = (provider) =>
     everyAccount.filter((account) => account?.provider === provider).length;
   const sections = [];
@@ -1429,7 +1432,7 @@ export function detailsViewModel(data, id, ctx = {}) {
 
 /** "Ubuntu", "Ubuntu and Mac", "Ubuntu, Mac, Windows and Nas1". */
 const listWords = (words) =>
-  words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
+  words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 
 /** The computers Update all runs on, in the order the header names them. */
 export const UPDATE_HOST_IDS = ['ubuntu', 'mac', 'windows', 'nas1'];

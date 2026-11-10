@@ -41,7 +41,7 @@ const MAIN_WINDOW = { codex: 'seven_day', claude: 'seven_day', antigravity: 'gem
  *  else the first rate limit with a reading, else the first rate limit; never a weekly-scoped
  *  (Fable/Opus/...) window and never an amount, so a scoped weekly is never mistaken for the account weekly. */
 export function mainWindow(account) {
-  const windows = (Array.isArray(account?.windows) ? account.windows : []).filter(window => window && !['balance', 'extra_usage', 'spend'].includes(window.kind) && !isWeeklyScoped(window));
+  const windows = (Array.isArray(account?.windows) ? account.windows : []).filter(window => window && typeof window === 'object' && !['balance', 'extra_usage', 'spend'].includes(window?.kind) && !isWeeklyScoped(window));
   return windows.find(window => window.key === MAIN_WINDOW[account?.provider])
     || windows.find(window => period(window) === 'week' && usedPercent(window) !== null)
     || windows.find(window => usedPercent(window) !== null)
@@ -51,7 +51,7 @@ export function mainWindow(account) {
  *  window and every weekly-scoped window (Fable, Opus, ...), so a scoped limit is never lost
  *  behind the aggregate. Pace math itself stays per-window by key. */
 export function bindingWeekly(account) {
-  const windows = (Array.isArray(account?.windows) ? account.windows : []).filter(window => window && !['balance', 'extra_usage', 'spend'].includes(window.kind) && period(window) === 'week' && usedPercent(window) !== null);
+  const windows = (Array.isArray(account?.windows) ? account.windows : []).filter(window => window && typeof window === 'object' && !['balance', 'extra_usage', 'spend'].includes(window?.kind) && period(window) === 'week' && usedPercent(window) !== null);
   let best = null;
   for (const window of windows) if (!best || usedPercent(window) > usedPercent(best)) best = window;
   return best;
@@ -80,8 +80,8 @@ export function historyOf(analyticsAccount, key) {
 /** The quota accounts: the current dashboard readings (when given) joined to their analytics history by id. */
 export function quotaAccounts(payload, ctx = {}) {
   const hidden = ctx.hidden instanceof Set ? ctx.hidden : hiddenProviders(ctx.dashboard);
-  const history = new Map((Array.isArray(payload?.accounts) ? payload.accounts : []).filter(a => text(a?.id)).map(a => [a.id, a]));
-  const current = Array.isArray(ctx.dashboard?.accounts) ? ctx.dashboard.accounts.filter(a => text(a?.id)) : [...history.values()];
+  const history = new Map((Array.isArray(payload?.accounts) ? payload.accounts.filter(a => a && typeof a === 'object') : []).filter(a => text(a?.id)).map(a => [a.id, a]));
+  const current = Array.isArray(ctx.dashboard?.accounts) ? ctx.dashboard.accounts.filter(a => a && typeof a === 'object' && text(a?.id)) : [...history.values()];
   const known = new Set(QUOTA_PROVIDERS.map(([id]) => id));
   const now = Number.isFinite(ctx.now) ? ctx.now : Date.now();
   // Accounts hidden from the dashboard one by one leave Analytics as they leave Home (`accounts[].hidden`,
@@ -116,9 +116,9 @@ export function project(acc, w, now, history = null) {
   if (w.resetAt && w.resetAt <= now) return { kind: 'due', rank: 1, text: 'Reset due; awaiting a current reading' };
   if (!w.resetAt) return { kind: 'noreset', rank: 1, text: 'No reset reported' };
   const h = (history ?? historyOf(acc.analytics, w.key)).filter(p => p.v !== null && p.reset && Math.abs(p.reset - w.resetAt) < 10 * 60e3);
-  const span = h.length ? h.at(-1).t - h[0].t : 0;
+  const span = h.length ? h[h.length - 1].t - h[0].t : 0;
   if (h.length < 3 || span < 2 * H) return { kind: 'thin', rank: 2, text: 'Too little data to project' };
-  const rate = (h.at(-1).v - h[0].v) / (span / H);
+  const rate = (h[h.length - 1].v - h[0].v) / (span / H);
   const hoursLeft = (w.resetAt - now) / H;
   if (rate <= 0.005) return { kind: 'flat', rank: 3, text: `About ${Math.round(100 - w.used)}% left at reset`, rate: 0 };
   const toFull = (100 - w.used) / rate;
@@ -140,7 +140,7 @@ export function sparkRuns(acc, w, t0, now) {
   const y = v => Hv - 2 - v / ymax * (Hv - 4);
   const runs = [];
   let prev = null;
-  const close = x1 => { const r = runs.at(-1); if (r && r.x1 === undefined) r.x1 = x1; };
+  const close = x1 => { const r = runs[runs.length - 1]; if (r && r.x1 === undefined) r.x1 = x1; };
   for (const p of pts) {
     if (p.v === null) { if (prev) close(x(prev.reset ? Math.max(prev.t, Math.min(p.t, prev.reset)) : p.t)); prev = null; continue; }
     const brk = prev && prev.reset && p.reset && Math.abs(prev.reset - p.reset) > 10 * 60e3 && prev.reset <= p.t;
@@ -390,7 +390,7 @@ export function focusChart(acc, payload, ctx) {
     const lo = PLOT.y1 - 3, hi = PLOT.y0 + 10;
     ys[0] = Math.max(ys[0], hi);
     for (let n = 1; n < ys.length; n++) ys[n] = Math.max(ys[n], ys[n - 1] + LH);
-    ys[ys.length - 1] = Math.min(ys.at(-1), lo);
+    ys[ys.length - 1] = Math.min(ys[ys.length - 1], lo);
     for (let n = ys.length - 2; n >= 0; n--) ys[n] = Math.min(ys[n], ys[n + 1] - LH);
     ends.forEach((e, n) => {
       const txt = `${e.s.tag} ${valueText(e.cur)}%`;
@@ -446,7 +446,7 @@ export function focusChart(acc, payload, ctx) {
       const v = valueAt(s, t, inF);
       return { name: s.name, value: v === 'reset' ? 'after reset' : v === 'nodata' ? 'too little data' : finite(v) ? `${valueText(v)}%` : 'no reading', shade: s.shade };
     });
-    const pv = valueAt(series.at(-1), t, inF);
+    const pv = valueAt(series[series.length - 1], t, inF);
     return { x: pt(x), time: `${inF ? 'Projected · ' : ''}${timeTxt(t)}`.toUpperCase(), proj: inF, rows, dotY: finite(pv) ? pt(Y(pv)) : -1 };
   };
   for (const t of times) stops.push(stopFor(t, xo(t), false));
@@ -538,7 +538,7 @@ function resetWhat(a, wins) {
     return ({ '5h': '5-hour limit resets', week: 'Weekly limit resets', month: 'Monthly limit resets' }[w.period]) || `${w.label} resets`;
   }
   const names = wins.map((w, i) => resetName(a, w, i === 0));
-  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)} limits reset`;
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} limits reset`;
 }
 export function agendaEvents(accounts, now) {
   const ev = [];
@@ -583,7 +583,7 @@ export function agendaView(payload, ctx = {}) {
   const ev = agendaEvents(quotaAccounts(payload, ctx), now);
   const today = dayStart(now), tomorrow = addDays(today, 1);
   const groups = [];
-  for (const e of ev) { const d = dayStart(e.t); let g = groups.at(-1); if (!g || g.d !== d) { g = { d, items: [] }; groups.push(g); } g.items.push(e); }
+  for (const e of ev) { const d = dayStart(e.t); let g = groups[groups.length - 1]; if (!g || g.d !== d) { g = { d, items: [] }; groups.push(g); } g.items.push(e); }
   const wt = g => 1.4 + g.items.length;
   const total = groups.reduce((s, g) => s + wt(g), 0);
   let cut = groups.length, best = Infinity, acc = 0;

@@ -59,7 +59,7 @@ export function logSourceProblem(tool, host, location, mapping) {
   if (!hosts) return 'Pick a tool for the extra location.';
   if (!hosts.includes(host)) {
     const labels = hosts.map(platformLabel);
-    const names = labels.length < 2 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
+    const names = labels.length < 2 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
     return `${LOG_SOURCE_TOOL_LABEL[tool]} usage is only scanned on ${names}.`;
   }
   const hint = LOG_SOURCE_PATH_HINT[tool];

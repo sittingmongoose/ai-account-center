@@ -33,6 +33,18 @@ function compactResetLabel(value) {
 const number = (value) =>
   new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
 export function usageView(window = {}, percentageOnly = false, includeRemaining = true) {
+  if (!window || typeof window !== 'object') {
+    return {
+      label: 'Usage',
+      amount: 'Usage unavailable',
+      percent: 0,
+      hasPercent: false,
+      reset: '',
+      resetCompact: '',
+      expiration: '',
+      meta: '',
+    };
+  }
   const p = finite(window.usedPercent)
     ? window.usedPercent
     : percent(window.remainingPercent)
@@ -87,18 +99,19 @@ function primaryWindow(windows, weekly, provider) {
   // Codex additional/model quotas can report the same duration as its core
   // quotas. Only the provider's canonical keys identify the main columns.
   if (provider === 'codex')
-    return windows.find((window) => window.key === (weekly ? 'seven_day' : 'five_hour'));
+    return windows.find((window) => window?.key === (weekly ? 'seven_day' : 'five_hour'));
   return windows.find(
     (window) =>
+      window &&
       !fableWindow(window) &&
       !isWeeklyScoped(window) &&
-      window.kind !== 'balance' &&
-      window.kind !== 'extra_usage' &&
+      window?.kind !== 'balance' &&
+      window?.kind !== 'extra_usage' &&
       (weekly
-        ? window.windowMinutes === 10080 ||
-          /seven.?day|weekly|week|7.?day/i.test(`${window.key} ${window.label}`)
-        : window.windowMinutes === 300 ||
-          /five.?hour|5.?hour|5h/i.test(`${window.key} ${window.label}`))
+        ? window?.windowMinutes === 10080 ||
+          /seven.?day|weekly|week|7.?day/i.test(`${window?.key || ''} ${window?.label || ''}`)
+        : window?.windowMinutes === 300 ||
+          /five.?hour|5.?hour|5h/i.test(`${window?.key || ''} ${window?.label || ''}`))
   );
 }
 export function statusLabel(account) {
@@ -148,7 +161,7 @@ export function accountView(account, inventory = [], clientPlatform = 'mac') {
   };
 }
 export function dashboardView(data, inventory = [], clientPlatform = 'mac') {
-  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+  const accounts = Array.isArray(data?.accounts) ? data.accounts.filter((a) => a && typeof a === 'object') : [];
   const auto = data?.codexAutoSwitch;
   const providers = PROVIDERS.map(([id, name, glyph]) => {
     const rows = accounts.filter((account) => account.provider === id);
