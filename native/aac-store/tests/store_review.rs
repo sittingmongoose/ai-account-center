@@ -69,6 +69,24 @@ fn kinds(engine: &Engine) -> Vec<String> {
         .collect()
 }
 
+/// The ledger's `store.integrity_detected` events as (log, kind) pairs.
+fn integrity_events(dir: &Path) -> Vec<(String, String)> {
+    let (log, _) = aac_store::log::Log::open(&dir.join("log/ledger"), "ledger", "l").unwrap();
+    let mut out = Vec::new();
+    log.read_after(None, |e| {
+        if e.event_type == "store.integrity_detected" {
+            let payload = aac_store::msgpack::to_json(&e.payload);
+            out.push((
+                payload["log"].as_str().unwrap_or("").to_string(),
+                payload["kind"].as_str().unwrap_or("").to_string(),
+            ));
+        }
+        Ok(())
+    })
+    .unwrap();
+    out
+}
+
 /// A sealed segment loses its last (acknowledged) frame: the projection must not keep it.
 #[test]
 fn projections_follow_the_log_when_acknowledged_frames_are_lost() {
@@ -1526,6 +1544,128 @@ fn final_review_unreadable_rebuild_and_repeated_check_disclose_loss() {
     );
     engine.verify().unwrap();
     assert!(!engine.verify().unwrap()["findings"].as_array().unwrap().is_empty());
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Row 35: a read-path loss already in findings must not be re-logged by its first verification.
+/// The loss stays disclosed, once in the live status and once in the ledger.
+#[test]
+fn verify_after_a_read_path_loss_does_not_double_log() {
+    let dir = temp_dir("review-verify-once");
+    {
+        let engine = open(&dir);
+        record(
+            &engine,
+            vec![obs(T0, 10.0), obs(T0 + 5 * MIN, 20.0), obs(T0 + 10 * MIN, 30.0)],
+        );
+        engine.close().unwrap();
+    }
+    // Corrupt the sealed copy: the next open discloses the loss on the read path.
+    let sealed = find(&dir.join("log/readings"), ".seglog").pop().unwrap();
+    let mut bytes = fs::read(&sealed).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x01;
+    fs::write(&sealed, &bytes).unwrap();
+    let engine = open(&dir);
+    let opened = engine.status().unwrap();
+    assert_eq!(
+        opened["state"], "degraded",
+        "the read-path loss is disclosed at open: {opened}"
+    );
+    let before = integrity_events(&dir);
+    assert!(
+        before
+            .iter()
+            .any(|(log, kind)| log == "readings" && kind == "segment_degraded"),
+        "the readings loss is ledgered at open: {before:?}"
+    );
+    // The first and later checks report the loss but do not ledger it again.
+    for _ in 0..2 {
+        let check = engine.verify().unwrap();
+        assert!(
+            check["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["log"] == "readings" && f["kind"] == "segment_degraded"),
+            "the loss stays disclosed: {check}"
+        );
+    }
+    let after = integrity_events(&dir);
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "verify re-ledgered a known finding: before={before:?} after={after:?}"
+    );
+    let status = engine.status().unwrap();
+    assert_eq!(status["state"], "degraded", "{status}");
+    let degraded_readings = status["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["log"] == "readings" && f["kind"] == "segment_degraded")
+        .count();
+    assert_eq!(degraded_readings, 1, "the live status shows the loss once: {status}");
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Row 35, reviewer's two-log case: readings and ledger number their sequences independently,
+/// so a ledger corruption with the same bounds as a known readings loss is a distinct detection
+/// and must get its own integrity event (2 -> 3 events, not 2 -> 2 or 2 -> 4).
+#[test]
+fn distinct_log_corruptions_at_the_same_bounds_log_separately() {
+    let dir = temp_dir("review-distinct-logs");
+    {
+        let engine = open(&dir);
+        record(&engine, vec![obs(T0, 10.0)]);
+        engine.close().unwrap();
+    }
+    // One recorded observation seals a 1..1 segment in each log.
+    let reading = find(&dir.join("log/readings"), ".seglog").pop().unwrap();
+    let ledger = find(&dir.join("log/ledger"), ".seglog").pop().unwrap();
+    let corrupt = |p: &Path| {
+        let mut b = fs::read(p).unwrap();
+        let n = b.len();
+        b[n - 1] ^= 1;
+        fs::write(p, b).unwrap();
+    };
+    corrupt(&reading);
+    let engine = open(&dir);
+    let before = integrity_events(&dir);
+    assert!(
+        before
+            .iter()
+            .any(|(log, kind)| log == "readings" && kind == "segment_degraded"),
+        "the readings loss is disclosed and ledgered: {before:?}"
+    );
+    corrupt(&ledger);
+    let check = engine.verify().unwrap();
+    let after = integrity_events(&dir);
+    let by_log = |v: &[(String, String)], log: &str| v.iter().filter(|(l, _)| l == log).count();
+    assert_eq!(
+        by_log(&after, "readings"),
+        by_log(&before, "readings"),
+        "the known readings loss is not re-logged: before={before:?} after={after:?}"
+    );
+    assert_eq!(
+        by_log(&after, "ledger"),
+        by_log(&before, "ledger") + 1,
+        "the ledger corruption at the same bounds is logged exactly once: before={before:?} after={after:?} check={check}"
+    );
+    let status = engine.status().unwrap();
+    assert_eq!(status["state"], "degraded", "{status}");
+    assert!(
+        status["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["log"] == "ledger" && f["kind"] == "segment_degraded"),
+        "the ledger loss stays disclosed: {status}"
+    );
     engine.close().unwrap();
     drop(engine);
     fs::remove_dir_all(dir).unwrap();

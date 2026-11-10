@@ -61,6 +61,10 @@ pub struct Manifest {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct Finding {
+    /// The log the finding belongs to (`readings` or `ledger`). Empty for engine-level findings
+    /// and for findings persisted before the identity was kept: those stay distinct from every
+    /// named log, so a legacy loss never suppresses a fresh one.
+    pub log: String,
     pub kind: String,
     pub detail: String,
     pub start_seq: Option<u64>,
@@ -68,8 +72,9 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn new(kind: &str, detail: impl Into<String>, range: Option<(u64, u64)>) -> Finding {
+    fn new(log: &str, kind: &str, detail: impl Into<String>, range: Option<(u64, u64)>) -> Finding {
         Finding {
+            log: log.into(),
             kind: kind.into(),
             detail: detail.into(),
             start_seq: range.map(|r| r.0),
@@ -374,6 +379,7 @@ impl Log {
             Err(e) if e.code == "newer_store" => return Err(e),
             Err(e) => {
                 findings.push(Finding::new(
+                    name,
                     "manifest_rebuilt",
                     format!("manifest unreadable: {}", e.message),
                     None,
@@ -427,6 +433,7 @@ impl Log {
                 if !exists(&zst) {
                     entry.state = "missing".into();
                     findings.push(Finding::new(
+                        &self.name,
                         "segment_missing",
                         zst.clone(),
                         Some((entry.start_seq, entry.end_seq)),
@@ -452,6 +459,7 @@ impl Log {
                         _ => {
                             entry.state = "missing".into();
                             findings.push(Finding::new(
+                                &self.name,
                                 "segment_missing",
                                 raw.clone(),
                                 Some((entry.start_seq, entry.end_seq)),
@@ -461,6 +469,7 @@ impl Log {
                 } else {
                     entry.state = "missing".into();
                     findings.push(Finding::new(
+                        &self.name,
                         "segment_missing",
                         raw.clone(),
                         Some((entry.start_seq, entry.end_seq)),
@@ -511,6 +520,7 @@ impl Log {
                 self.manifest.active = None;
             } else {
                 findings.push(Finding::new(
+                    &self.name,
                     "segment_adopted",
                     name.clone(),
                     Some((entry.start_seq, entry.end_seq)),
@@ -532,6 +542,7 @@ impl Log {
                     && a.watermark_offset > 0
                 {
                     findings.push(Finding::new(
+                        &self.name,
                         "active_missing",
                         "the active segment is gone",
                         Some((a.start_seq, a.watermark_seq)),
@@ -583,6 +594,7 @@ impl Log {
                 format!("{} hole(s), first at byte {}", holes.len(), holes[0].0)
             });
             findings.push(Finding::new(
+                &self.name,
                 "segment_degraded",
                 entry.loss.clone().unwrap(),
                 Some((start, end_seq)),
@@ -611,6 +623,7 @@ impl Log {
                 file.set_len(*offset as u64)?;
                 file.sync_all()?;
                 findings.push(Finding::new(
+                    &self.name,
                     "torn_tail_truncated",
                     format!(
                         "{} bytes after the last valid frame ({problem:?})",
@@ -647,6 +660,7 @@ impl Log {
                     entry.loss = Some(format!("{problem:?} at byte {offset}"));
                 }
                 findings.push(Finding::new(
+                    &self.name,
                     "active_degraded",
                     entry.loss.clone().unwrap(),
                     Some((start, end)),
@@ -839,6 +853,7 @@ impl Log {
             .filter(|s| s.state == "degraded" && s.loss.as_deref().is_some_and(|l| l.starts_with(ACK_LENGTH_LOSS)))
             .map(|s| {
                 Finding::new(
+                    &self.name,
                     "segment_degraded",
                     s.loss.clone().unwrap_or_default(),
                     Some((s.start_seq, s.end_seq)),
@@ -977,6 +992,7 @@ impl Log {
                 self.manifest.segments[i].state = "degraded".into();
                 self.manifest.segments[i].loss = Some(problem.into());
                 findings.push(Finding::new(
+                    &self.name,
                     "segment_degraded",
                     problem,
                     Some((entry.start_seq, entry.end_seq)),
@@ -1016,7 +1032,7 @@ impl Log {
             return (
                 Vec::new(),
                 Vec::new(),
-                Some(Finding::new("segment_missing", "skipped", range)),
+                Some(Finding::new(&self.name, "segment_missing", "skipped", range)),
             );
         }
         let bytes = match read_segment_bytes(&self.dir, entry) {
@@ -1025,7 +1041,7 @@ impl Log {
                 return (
                     Vec::new(),
                     Vec::new(),
-                    Some(Finding::new("segment_unreadable", e.message, range)),
+                    Some(Finding::new(&self.name, "segment_unreadable", e.message, range)),
                 );
             }
         };
@@ -1039,7 +1055,11 @@ impl Log {
             // acknowledged record is there. Disclose the seal's loss and keep the survivors.
             let frames = salvage(&bytes).0;
             let detail = entry.loss.clone().unwrap_or_default();
-            return (bytes, frames, Some(Finding::new("segment_degraded", detail, range)));
+            return (
+                bytes,
+                frames,
+                Some(Finding::new(&self.name, "segment_degraded", detail, range)),
+            );
         }
         if entry.state == "sealed" && fsx::sha256_hex(&bytes) == entry.raw_sha256 {
             // Frames that do not decode or do not reach the segment's ends are loss, disclosed,
@@ -1048,13 +1068,13 @@ impl Log {
                 Some(frames) => (bytes, frames, None),
                 None => {
                     let frames = salvage(&bytes).0;
-                    let finding = Finding::new("segment_degraded", SEALED_INCOMPLETE, range);
+                    let finding = Finding::new(&self.name, "segment_degraded", SEALED_INCOMPLETE, range);
                     (bytes, frames, Some(finding))
                 }
             };
         }
-        let finding =
-            (entry.state == "sealed").then(|| Finding::new("segment_degraded", "hash mismatch on read", range));
+        let finding = (entry.state == "sealed")
+            .then(|| Finding::new(&self.name, "segment_degraded", "hash mismatch on read", range));
         let frames = salvage(&bytes).0;
         (bytes, frames, finding)
     }
