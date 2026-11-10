@@ -1,5 +1,6 @@
 //! The design system of the redesign (DESIGN-SYSTEM.md section 5) as Leptos components, and the page shell.
 
+pub mod charts;
 pub mod chrome;
 mod controls;
 pub mod device;

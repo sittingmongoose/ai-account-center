@@ -1,17 +1,17 @@
 // The app frame (PLAN step 4, web-dashboard/leptos/src/frame.rs): one chrome around all five tabs at /app/<page>.
-// The frame draws Home, Status, Scoreboard and Accounts & Settings itself; Analytics is the Slint dashboard,
-// content-only, in one same-origin iframe (/?content=1), which also feeds Home and Accounts their views
-// (home-page.check.mjs, accounts-frame.check.mjs) and stays hidden there. These check the navigation, the chrome in each format (the Duo's strip and
+// The frame draws all five tabs itself. The Slint dashboard stays loaded, content-only and hidden, in one same-origin
+// iframe (/?content=1) for its bridge: it feeds Home, Analytics and Accounts their views (home-page.check.mjs,
+// analytics-page.check.mjs, accounts-frame.check.mjs). These check the navigation, the chrome in each format (the Duo's strip and
 // band rules, with `?safe=t,r,b,l` giving the measured insets), the setting and the way back, and the offline copy.
 // Sign-in has its own folder (../frame-signin): its limiter step closes this server's sign-in for 15 minutes.
 // Status and Scoreboard read the kit's fixture home (scripts/status-fixture.mjs, scoreboard-fixture.mjs).
 
-const SLINT = new Set(['analytics']);
+const SLINT = new Set();
 /** Tabs drawn here from the dashboard's views: the dashboard is on that page, signed in, but hidden. */
-const BRIDGED = new Set(['home', 'accounts']);
+const BRIDGED = new Set(['home', 'analytics', 'accounts']);
 const DASH_PATH = { home: '/', analytics: '/analytics', accounts: '/accounts' };
 /** What each native tab shows once it has its data. */
-const NATIVE = { status: '.status-grid, .q-card', home: '.home .hsec', scoreboard: '.page-title', accounts: '.ac-page .prov' };
+const NATIVE = { status: '.status-grid, .q-card', home: '.home .hsec', scoreboard: '.page-title', accounts: '.ac-page .prov', analytics: '.ax-page' };
 /** The dashboard's own header and tab bar probes: none may report inside the frame. */
 const HEADER_PROBES = /^(nav|tab)-|^update-apps$|^status-(line|block)$/;
 const NAV = { desk: '.chrome .nav a', phone: '.tabbar a', rail: '.rail > a', band: '.band-nav a' };
@@ -112,7 +112,8 @@ export const tests = {
 			const header = ids.filter((id) => HEADER_PROBES.test(id));
 			// (The sign-in panel's probes report even while it is hidden, as on the classic page: not a sign of it here.)
 			await t.check('no dashboard header or tab bar inside the frame', ids.length > 0 && header.length === 0, `${ids.length} probes; header ones: ${header.join(', ') || 'none'}`);
-			await t.check('the page reports its own controls', ids.includes('analytics-provider'), ids.slice(0, 12).join(', '));
+			// every tab is drawn here now: the dashboard only feeds them, hidden
+			await t.check('the dashboard is never on screen', await t.page.evaluate(() => document.querySelector('.slint-host')?.hidden === true));
 		});
 
 		await t.step("the dashboard's own links move the frame", async () => {

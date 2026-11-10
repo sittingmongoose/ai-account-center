@@ -7,6 +7,7 @@
 
 mod accounts;
 mod activation;
+mod analytics;
 pub mod api;
 mod blocks;
 mod cards;
@@ -54,9 +55,8 @@ pub fn set_active(page: Page) {
 pub const SHOWN_EVENT: &str = "aac-shown";
 use wasm_bindgen::prelude::*;
 
-/// The five tabs. Analytics is the Slint dashboard's page, shown content-only inside the frame until it is ported;
-/// Home, Accounts & Settings, Status and Scoreboard are drawn here. Home, Analytics and Accounts take their data from the
-/// dashboard (`bridged`, dash.rs).
+/// The five tabs, all drawn here. Home, Analytics and Accounts take their data from the dashboard (`bridged`, dash.rs),
+/// which stays loaded in a hidden iframe for its bridge; no tab shows the Slint canvas any more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Page {
     Home = 0,
@@ -130,9 +130,11 @@ impl Page {
         }
     }
 
-    /// Drawn by the Slint dashboard, inside the frame.
+    /// Drawn by the Slint dashboard, inside the frame: none any more. Every tab is drawn here; the dashboard's iframe stays
+    /// loaded, hidden, for its bridge (`bridged`).
     pub fn slint(self) -> bool {
-        matches!(self, Page::Analytics)
+        let _ = self;
+        false
     }
 
     /// Its data, actions and header line come from the dashboard (bridge.js in the frame's hidden iframe, dash.rs): the
@@ -285,12 +287,8 @@ mod tests {
             assert_eq!(page_from_path(page.path()), page);
             assert_eq!(Page::from_id(page.id()), Some(page));
         }
-        assert!(
-            !Page::Home.slint()
-                && !Page::Accounts.slint()
-                && Page::Analytics.slint()
-                && !Page::Status.slint()
-        );
+        // no tab is drawn by Slint: the dashboard stays loaded for its bridge only
+        assert!(Page::ALL.iter().all(|p| !p.slint()));
         assert!(Page::Home.bridged());
         assert!(Page::Accounts.bridged() && Page::Analytics.bridged() && !Page::Status.bridged());
     }

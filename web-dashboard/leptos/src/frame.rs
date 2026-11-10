@@ -1,15 +1,14 @@
-//! The app frame (PLAN step 4): one chrome around all five tabs. Home, Accounts & Settings, Status and Scoreboard are
-//! drawn here; Analytics is the Slint dashboard shown content-only in one same-origin iframe (`/?content=1`), kept
-//! loaded while the tabs change. The two talk by postMessage:
+//! The app frame (PLAN step 4): one chrome around all five tabs, every one drawn here. The Slint dashboard stays loaded,
+//! content-only and hidden, in one same-origin iframe (`/?content=1`) for its bridge: it keeps the network, the session
+//! and every server call for Home, Analytics and Accounts. The two talk by postMessage:
 //!
 //! - frame to dashboard: `{type: "aac-frame", action, value}` with action navigate, refresh, update-apps, theme,
 //!   logout or auth-recheck (bridge.js runs them as its own actions);
 //! - dashboard to frame: `{type: "aac-content", kind, ...}` with kind ready, page (its own links moved it), toast,
 //!   chrome (the header's status line) or auth (it signed out, or its session ended).
 //!
-//! Home and Accounts & Settings draw the dashboard's views (dash.rs): the iframe still loads for them and keeps the
-//! network, session and every server call, but stays hidden while a native tab shows. Details (details.rs) and the
-//! switch confirmation (activation.rs) are the frame's own overlays over every tab.
+//! Home, Analytics and Accounts & Settings draw the dashboard's views (dash.rs). Details (details.rs) and the switch
+//! confirmation (activation.rs) are the frame's own overlays over every tab.
 //!
 //! Sign-in is the frame's (session.rs); until it is done no tab is drawn.
 
@@ -19,7 +18,7 @@ use crate::dash::{self, DashCtx};
 use crate::home::HomePage;
 use crate::session::{self, SessionView};
 use crate::ui::*;
-use crate::{accounts, details, live, scoreboard, status};
+use crate::{accounts, analytics, details, live, scoreboard, status};
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
@@ -587,6 +586,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
                 <HomeRoute ctx=ctx/>
                 <StatusRoute ctx=ctx/>
                 <ScoreboardRoute ctx=ctx/>
+                <AnalyticsRoute ctx=ctx/>
                 <AccountsRoute ctx=ctx/>
                 <SlintHost ctx=ctx/>
                 <details::DetailsOverlay ctx=ctx/>
@@ -659,8 +659,21 @@ fn AccountsRoute(ctx: FrameCtx) -> impl IntoView {
     }
 }
 
+/// Analytics, drawn here from the dashboard's views (analytics.rs); built the first time its tab is shown.
+#[component]
+fn AnalyticsRoute(ctx: FrameCtx) -> impl IntoView {
+    let seen = Memo::new(move |prev: Option<&bool>| {
+        prev.copied().unwrap_or(false) || ctx.route.get() == Page::Analytics
+    });
+    view! {
+        <div class="route" hidden=move || ctx.route.get() != Page::Analytics>
+            {move || seen.get().then(|| view! { <analytics::AnalyticsPage/> })}
+        </div>
+    }
+}
+
 /// The Slint dashboard, content-only: loaded the first time a tab that takes its data is shown (Home, Analytics,
-/// Accounts), shown only while a tab it draws is current (Analytics, Accounts).
+/// Accounts) and kept hidden for its bridge; no tab draws it (`Page::slint`).
 #[component]
 fn SlintHost(ctx: FrameCtx) -> impl IntoView {
     let seen = Memo::new(move |prev: Option<&bool>| {

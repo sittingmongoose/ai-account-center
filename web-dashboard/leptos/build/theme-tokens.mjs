@@ -59,10 +59,33 @@ export const TOKENS = Object.freeze({
 	'over-text': 'over-text',
 	scrim: 'scrim',
 	pressed: 'pressed',
+	// charts (Analytics): grid lines, the heatmap ramp, the hover tip, every provider hue and the token-type colours
+	grid: 'grid',
+	'grid-strong': 'grid-strong',
+	'tip-bg': 'tip-bg',
+	'tip-fg': 'tip-fg',
+	'heat-0': 'heat-0',
+	'heat-1': 'heat-1',
+	'h-codex-2': 'h-codex-2',
+	'h-codex-3': 'h-codex-3',
+	'h-antigravity': 'h-antigravity',
+	'h-cursor': 'h-cursor',
+	'h-muse': 'h-muse',
+	'h-kimi-code': 'h-kimi-code',
+	'h-qwen': 'h-qwen',
+	'h-zai': 'h-zai',
+	'h-opencode-go': 'h-opencode-go',
+	'h-model': 'h-model',
+	'chart-tokens': 'chart-tokens',
+	'chart-input': 'chart-input',
+	'chart-output': 'chart-output',
+	'chart-cache-write': 'chart-cache-write',
+	'chart-cache-read': 'chart-cache-read',
+	'chart-cost': 'chart-cost',
 });
 
 /** Tokens whose value is geometry around a theme colour. */
-const SHADOWS = Object.freeze({ 'shadow-1': ['shadow-1', '0 1px 3px'], 'shadow-pop': ['shadow-pop', '0 16px 40px'] });
+const SHADOWS = Object.freeze({ 'shadow-1': ['shadow-1', '0 1px 3px'], 'shadow-2': ['shadow-2', '0 8px 24px'], 'shadow-pop': ['shadow-pop', '0 16px 40px'] });
 
 /** Every `pick(#light, #dark)` in theme.slint, by property name. */
 export function readTheme(source) {
