@@ -225,14 +225,17 @@ export const tests = {
 		await t.page.waitForSelector(CARD);
 		await t.equal('a 951x669 window on a 1440x900 screen', await t.page.evaluate(() => document.documentElement.dataset.chrome), 'desk');
 		await t.check('the desktop header is drawn', await t.page.evaluate(() => !!document.querySelector('header.chrome') && getComputedStyle(document.querySelector('header.chrome')).display !== 'none'));
-		await t.count('.rail, .topbar, .tabbar, .band-head', 0);
+		// The app frame always renders all four nav bars and hides the unused ones with display:none,
+		// so the assertion is that they are hidden, not that they are absent (review 622ba7d0 F1).
+		await t.check('no other chrome is drawn', await t.page.evaluate(() => [...document.querySelectorAll('.rail, .topbar, .tabbar, .band-head')].every((e) => getComputedStyle(e).display === 'none')));
 
 		// iPhone 17 Pro on its side: the notch insets land left and right, the rail takes the right strip.
 		await t.newContext({ viewport: { width: 874, height: 402 }, screen: { width: 874, height: 402 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
 		await openStatus(t, view, '?safe=0,62,21,62');
 		await t.page.waitForSelector(CARD);
 		await t.equal('an iPhone on its side', await t.page.evaluate(() => document.documentElement.dataset.chrome), 'rail');
-		await t.check('the page pads by the 62 px left inset', await t.page.evaluate(() => Math.round(document.querySelector('.content').getBoundingClientRect().left) >= 62));
+		// The inset is padding on main.content itself, so its own edge sits at 0; the first child is what moves.
+		await t.check('the page pads by the 62 px left inset', await t.page.evaluate(() => Math.round(document.querySelector('.content > *').getBoundingClientRect().left) >= 62));
 	},
 
 	// In the shell's iframe the page draws no chrome and keeps no room for one.
