@@ -1,8 +1,9 @@
 import Foundation
 
 extension DashboardAccount {
-  /// The compact Claude Max row gives a genuinely reported Fable window its
-  /// own place; other model-scoped quotas remain in the complete details.
+  /// The compact Claude row: core exact windows first, then scoped/other meters in reported order,
+  /// Fable (exact `seven_day_fable`, Max only) in its existing slot. Surface windows `seven_day_fable_*`
+  /// are ordinary scoped meters. Compact sizes stay documented: up to 3 for Claude, 2 exact for Codex.
   public var compactWindows: [AccountQuotaWindow] {
     if provider == "codex" {
       // Only the canonical account limits belong in the compact Codex row.
@@ -14,14 +15,23 @@ extension DashboardAccount {
     }
     let primary = visibleWindows.filter { $0.kind != "balance" && $0.kind != "extra_usage" }
     let candidates = primary.isEmpty ? visibleWindows : primary
-    guard provider == "claude", isMaxPlan,
-      let fable = candidates.first(where: { $0.key == "seven_day_fable" })
-    else { return Array(candidates.prefix(3)) }
-    let core = ["five_hour", "seven_day"].compactMap { key in candidates.first { $0.key == key } }
-    let others = candidates.filter { candidate in
-      candidate.key != fable.key && !core.contains { $0.key == candidate.key }
+    if provider == "claude" {
+      let core = ["five_hour", "seven_day"].compactMap { key in candidates.first { $0.key == key } }
+      if isMaxPlan, let fable = candidates.first(where: { $0.key == "seven_day_fable" }) {
+        let others = candidates.filter { candidate in
+          candidate.key != fable.key && !core.contains { $0.key == candidate.key }
+        }
+        return Array((core + others).prefix(2)) + [fable]
+      } else {
+        // Pro or no exact Fable: exclude the exact Fable window from compact (Max-gated cell only);
+        // surface windows remain ordinary scoped meters in reported order.
+        let others = candidates.filter { candidate in
+          candidate.key != "seven_day_fable" && !core.contains { $0.key == candidate.key }
+        }
+        return Array((core + others).prefix(3))
+      }
     }
-    return Array((core + others).prefix(2)) + [fable]
+    return Array(candidates.prefix(3))
   }
 
   /// Presentation-only windows. Raw provider data remains available in `windows`.

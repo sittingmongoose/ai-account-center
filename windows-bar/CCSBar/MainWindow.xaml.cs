@@ -622,21 +622,24 @@ public partial class MainWindow : Window
     // ---------------- account sections: Claude, Codex, Antigravity
 
     private static QuotaWindow[] Meters(DashboardAccount account) => Formatting.VisibleWindows(account)
-        .Where(window => window.Kind is not ("balance" or "extra_usage" or "spend"))
+        .Where(window => window.Kind is not ("balance" or "extra_usage" or "spend") && window.Key != "session_reset_allowance")
         .Where(window => account.Provider != "qwen" || !Formatting.IsQwenDuplicateMetadata(window) && !window.Key.StartsWith("addon-", StringComparison.Ordinal))
         .ToArray();
 
-    private static QuotaWindow? ClaudeWindow(DashboardAccount account, string key, double minutes)
+    // Internal so the check suite can prove the compact cells never borrow a scoped meter.
+    internal static QuotaWindow? ClaudeWindow(DashboardAccount account, string key)
     {
-        var candidates = Meters(account).Where(window => !Formatting.IsFable(window)).ToArray();
-        return candidates.FirstOrDefault(window => window.Key == key) ?? candidates.FirstOrDefault(window => window.WindowMinutes == minutes);
+        // The 5-hour and Weekly compact cells bind the aggregate windows by exact key only: a weekly-scoped
+        // meter (seven_day_opus and friends) shares the week duration but is a separate meter in Details,
+        // never the core cell, in either report order.
+        return Meters(account).FirstOrDefault(window => window.Key == key);
     }
 
     private List<Column> Columns(string provider, DashboardAccount[] accounts)
     {
         if (provider == "claude")
         {
-            var columns = new List<Column> { new("5h", "5-hour", a => ClaudeWindow(a, "five_hour", 300)), new("week", "Weekly", a => ClaudeWindow(a, "seven_day", 10080)) };
+            var columns = new List<Column> { new("5h", "5-hour", a => ClaudeWindow(a, "five_hour")), new("week", "Weekly", a => ClaudeWindow(a, "seven_day")) };
             if (accounts.Any(account => account.IsMaxPlanAccount))
                 columns.Add(new("fable", "Fable", a => Formatting.VisibleWindows(a).FirstOrDefault(Formatting.IsFable)));
             return columns;
@@ -1168,6 +1171,7 @@ public partial class MainWindow : Window
     {
         var period = Period(window);
         if (Formatting.IsFable(window)) return "Fable";
+        if (Formatting.IsWeeklyScoped(window)) return Formatting.ScopedModelLabel(window);
         if (provider == "antigravity") return (window.Key.StartsWith("gemini", StringComparison.OrdinalIgnoreCase) ? "Gemini " : "Claude & GPT ") + (period == "5h" ? "5-hour" : "weekly");
         if (provider == "cursor") return window.Key switch { "plan-reported" => "Included", "autoPercentUsed" => "Cursor models", "apiPercentUsed" => "Other models", _ => window.Label };
         if (provider == "zai") return window.Key switch { "usage-1" => "5-hour tokens", "usage-2" => "Weekly tokens", "usage-3" => "Monthly requests", _ => window.Label };
@@ -1407,7 +1411,7 @@ public partial class MainWindow : Window
     private FrameworkElement DetailWindows(DashboardAccount account)
     {
         var all = Formatting.VisibleWindows(account).Where(window => account.Provider != "qwen" || !Formatting.IsQwenDuplicateMetadata(window)).ToArray();
-        var meterWindows = all.Where(window => window.Kind is not ("balance" or "extra_usage" or "spend") && !(account.Provider == "qwen" && window.Key.StartsWith("addon-", StringComparison.Ordinal))).ToArray();
+        var meterWindows = all.Where(window => window.Kind is not ("balance" or "extra_usage" or "spend") && window.Key != "session_reset_allowance" && !(account.Provider == "qwen" && window.Key.StartsWith("addon-", StringComparison.Ordinal))).ToArray();
         // Antigravity: each pool's 5-hour before its weekly, Gemini pool first, as the row columns order them.
         if (account.Provider == "antigravity") meterWindows = meterWindows.OrderBy(AntigravityWindowOrder).ToArray();
         var amounts = all.Except(meterWindows).ToArray();
@@ -1457,9 +1461,15 @@ public partial class MainWindow : Window
                 var rollup = Formatting.IsResetPackRollup(account, window);
                 var value = Ui.Text((rollup ? Formatting.ResetPackRollupValue(window) : null) ?? AmountValue(window), 12.5, "Ink", FontWeights.SemiBold); Grid.SetColumn(value, 3); row.Children.Add(value);
                 var subParts = new List<string>();
+                // Reset grants name what they refill in the dashboard's words; the allowance names when the
+                // next reset is available from its ResetAt. It is an amount, never a meter reset.
+                var allowance = window.Key == "session_reset_allowance";
+                var refill = Formatting.ClearsText(window);
                 if (credits) subParts.Add(agPlan!.CreditsOverage == false ? "Not usable for Antigravity on this plan." : "Used only after the plan quota runs out, when AI Credit Overages is on.");
                 else if (rollup) { var packs = Formatting.ResetPackRollupDetail(window); if (packs.Length > 0) subParts.Add(packs); }
-                else if (window.ExpiresAt is not null || window.Kind is "balance") subParts.Add(Formatting.Expiration(window.ExpiresAt));
+                else if (window.ExpiresAt is not null || (window.Kind is "balance" && !allowance)) subParts.Add(Formatting.Expiration(window.ExpiresAt));
+                if (refill.Length > 0) subParts.Add(refill);
+                if (allowance && Formatting.NextAvailable(window.ResetAt) is { Length: > 0 } next) subParts.Add(next);
                 if (window.Status == "cached") subParts.Add("Cached · " + Formatting.WindowSample(window.SampledAt));
                 if (subParts.Count > 0) { var sub = Ui.Text(string.Join(" · ", subParts), 11.5, "Ink3", trim: true); Grid.SetRow(sub, 1); Grid.SetColumn(sub, 2); Grid.SetColumnSpan(sub, 2); row.Children.Add(sub); }
                 var line = new Border { Child = row, Padding = new Thickness(0, 6, 0, 6), BorderBrush = Theme.Brush("Rule"), BorderThickness = new Thickness(0, i == 0 ? 0 : 1, 0, 0) };

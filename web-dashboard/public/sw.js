@@ -1,8 +1,9 @@
 // The app shell's service worker (DESIGN-MOBILE.md 6.5): offline and fast start.
-// scripts/build-ui.js stamps BUILD_ID into the packaged copy; each deploy then
-// installs a new worker, which activates on the next launch (no skipWaiting, no
-// update prompt) and drops the previous build's caches. Routing rules live in
-// the pure sw-route.js (tested); this file only runs them against fetch/cache.
+// scripts/build-ui.js stamps BUILD_ID (a hash of the shell inputs) into the
+// packaged copy; any shell change then installs a new worker, which activates
+// on the next launch (no skipWaiting, no update prompt) and drops the previous
+// build's caches. Routing rules live in the pure sw-route.js (tested); this
+// file only runs them against fetch/cache.
 importScripts('./sw-route.js');
 
 var BUILD_ID = '__AAC_BUILD_ID__';

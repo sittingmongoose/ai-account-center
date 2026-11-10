@@ -243,6 +243,32 @@ a live holder keeps the lock, Meta's installer skips the update, so the row fail
 code instead of reporting `current`. The Mac and Linux launchers keep the same lock beside
 `~/.local/bin/muse`, and the same check applies there.
 
+After a Muse install runs, AAC warms the new binary's model catalog before it claims the
+update. T3 discovers models by spawning a read-only `muse serve` host and asking `model/list`,
+which serves Muse's cached catalog and never refreshes it: only a real session start refreshes
+the catalog from the provider. Replacing the binary alone therefore leaves T3 showing the old
+model list indefinitely, until someone happens to open the Muse CLI. So after the install step
+(not while the launcher's own updater holds the lock, and never when the install step did not
+run or the binary is missing) AAC runs one bounded headless session with the new binary,
+`muse exec --contributor-mode off "Reply with the word: ok"` with no `--model` so the host's
+configured default is used, in a neutral temporary directory, with the timeout as min(60s,
+the deadline's remaining time) and no 30s floor; a warm whose deadline has already passed
+never starts. On Windows the run goes through the detected `.muse-launcher.ps1`, as
+detection does for `--version`. The warm is a short-lived synchronous process and the
+only bounded command that opts into whole-tree cleanup (`kill_tree=True`): its whole
+owned process tree is killed at its timeout, so a later process scan never sees it as
+a session to stop or restart. Every other bounded command keeps the pre-tree cleanup
+(POSIX session-group kill, Windows root kill only), so a detached relaunch that keeps
+ppid ancestry in a new session is spared. Pre-existing `muse serve` hosts started
+by T3 are never part of that tree and are never touched by the warm's kill. An update that
+changed the binary is `updated` only when the warm succeeds and a catalog entry in
+`~/.local/share/muse/model-catalog` was rewritten at or after the install started; otherwise
+the row reports `restart_failed` with `model_catalog_unrefreshed` (the sessions were still
+restarted, the next click heals the catalog). An unchanged version with a stale or absent
+catalog still warms, so a previously unwarmed update heals on the next click and stays
+`current`; a failed warm there reports `failed` with `model_catalog_unrefreshed` instead of a
+clean `current`.
+
 ### Live verification after deployment
 
 Only the owner's explicitly authorized Update apps click should exercise real

@@ -71,9 +71,14 @@ const FAILURE_BACKOFF_MS = 30_000;
 const PROCESS_TIMEOUT_MS = 20_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_CACHE_ENTRIES = 16;
-const MAX_RESET_GRANTS = 20;
 const RESET_GRANT_KEY = /^reset_credit_(available|saved|used|expired)_grant_([1-9]|1[0-9]|20)$/;
 const SOURCE = 'Claude Desktop live quota on Windows' as const;
+/** Upstream windows are self-describing, so a sample may carry any safe key. */
+const MAX_WINDOWS = 96;
+const WINDOW_KEY_PATTERN = /^[a-z0-9][a-z0-9_]{0,63}$/;
+const MAX_WINDOW_MINUTES = 44_640;
+const MAX_CLEAR_TARGETS = 8;
+const CLEAR_SLUG_PATTERN = /^[a-z0-9_]{1,40}$/;
 const WINDOW_FIELDS = {
   five_hour: { label: 'Five-hour usage', minutes: 300 },
   seven_day: { label: 'Weekly usage', minutes: 10_080 },
@@ -165,7 +170,7 @@ function normalizeSample(
     result.platform !== 'windows' ||
     result.email !== expectedEmail ||
     !Array.isArray(result.windows) ||
-    result.windows.length > Object.keys(WINDOW_FIELDS).length + MAX_RESET_GRANTS + 3
+    result.windows.length > MAX_WINDOWS
   ) {
     return null;
   }
@@ -185,8 +190,9 @@ function normalizeSample(
       (item.key !== 'extra_usage' &&
         item.key !== 'reset_credits_available' &&
         item.key !== 'prepaid_balance' &&
+        item.key !== 'session_reset_allowance' &&
         !RESET_GRANT_KEY.test(item.key) &&
-        !Object.prototype.hasOwnProperty.call(WINDOW_FIELDS, item.key)) ||
+        !WINDOW_KEY_PATTERN.test(item.key)) ||
       seen.has(item.key)
     ) {
       return null;
@@ -218,6 +224,42 @@ function normalizeSample(
         ? item.usedPercent
         : null;
     const grant = RESET_GRANT_KEY.exec(item.key);
+    if (item.key === 'session_reset_allowance') {
+      const remaining = nonnegative(item.remaining);
+      const used = nonnegative(item.used);
+      const limit = nonnegative(item.limit);
+      if (
+        item.kind !== 'balance' ||
+        remaining === null ||
+        !Number.isInteger(remaining) ||
+        remaining > 50 ||
+        item.unit !== 'resets' ||
+        isPresent(item.usedPercent) ||
+        isPresent(item.remainingPercent) ||
+        (isPresent(item.used) && (used === null || !Number.isInteger(used) || used > 50)) ||
+        (isPresent(item.limit) && (limit === null || !Number.isInteger(limit) || limit > 50)) ||
+        (isPresent(item.enabled) && typeof item.enabled !== 'boolean')
+      ) {
+        return null;
+      }
+      windows.push({
+        key: 'session_reset_allowance',
+        label: 'Weekly session reset',
+        kind: 'balance',
+        usedPercent: null,
+        remainingPercent: null,
+        resetAt,
+        expiresAt,
+        windowMinutes: null,
+        used,
+        limit,
+        remaining,
+        unit: 'resets',
+        ...(typeof item.enabled === 'boolean' ? { enabled: item.enabled } : {}),
+        ...retainedMetadata,
+      });
+      continue;
+    }
     if (item.key === 'reset_credits_available' || item.key === 'prepaid_balance' || grant) {
       const remaining = nonnegative(item.remaining);
       const used = nonnegative(item.used);
@@ -230,6 +272,18 @@ function normalizeSample(
         : item.unit === 'credits' || (typeof item.unit === 'string' && /^[A-Z]{3}$/.test(item.unit))
           ? item.unit
           : null;
+      let clears: string[] | undefined;
+      if (grant && item.clears !== undefined) {
+        if (
+          !Array.isArray(item.clears) ||
+          item.clears.length > MAX_CLEAR_TARGETS ||
+          item.clears.some((slug) => typeof slug !== 'string' || !CLEAR_SLUG_PATTERN.test(slug)) ||
+          new Set(item.clears).size !== item.clears.length
+        ) {
+          return null;
+        }
+        clears = [...(item.clears as string[])];
+      }
       if (
         item.kind !== 'balance' ||
         remaining === null ||
@@ -271,6 +325,7 @@ function normalizeSample(
         limit,
         remaining,
         unit,
+        ...(clears ? { clears } : {}),
         ...(typeof item.enabled === 'boolean' ? { enabled: item.enabled } : {}),
         ...retainedMetadata,
       });
@@ -313,16 +368,39 @@ function normalizeSample(
       continue;
     }
     if (usedPercent === null) return null;
-    const fields = WINDOW_FIELDS[item.key as keyof typeof WINDOW_FIELDS];
+    const known = (WINDOW_FIELDS as Record<string, { label: string; minutes: number }>)[item.key];
+    let label: string;
+    let windowMinutes: number | null;
+    if (known) {
+      label = known.label;
+      windowMinutes = known.minutes;
+    } else {
+      const dynamicLabel = livePlan(item.label);
+      if (dynamicLabel === null) return null;
+      label = dynamicLabel;
+      const rawMinutes = item.windowMinutes;
+      if (rawMinutes === undefined || rawMinutes === null) {
+        windowMinutes = null;
+      } else if (
+        typeof rawMinutes === 'number' &&
+        Number.isInteger(rawMinutes) &&
+        rawMinutes >= 1 &&
+        rawMinutes <= MAX_WINDOW_MINUTES
+      ) {
+        windowMinutes = rawMinutes;
+      } else {
+        return null;
+      }
+    }
     windows.push({
       key: item.key,
-      label: fields.label,
+      label,
       kind: 'rate_limit',
       usedPercent,
       remainingPercent: Math.max(0, 100 - usedPercent),
       resetAt,
       expiresAt,
-      windowMinutes: fields.minutes,
+      windowMinutes,
       used: null,
       limit: null,
       unit: null,
@@ -361,7 +439,12 @@ function normalizeSample(
 
 function optionalWindowGroup(key: string): 'resets' | 'prepaid' | null {
   if (key === 'prepaid_balance') return 'prepaid';
-  if (key === 'reset_credits_available' || RESET_GRANT_KEY.test(key)) return 'resets';
+  if (
+    key === 'reset_credits_available' ||
+    key === 'session_reset_allowance' ||
+    RESET_GRANT_KEY.test(key)
+  )
+    return 'resets';
   return null;
 }
 

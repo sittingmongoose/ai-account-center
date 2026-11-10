@@ -240,9 +240,22 @@ test('reported Fable remains distinct from total weekly quota and displays its a
   assert.equal(view.weekly.amount, '12% used');
   assert.equal(allDetailWindows({ accounts: [account] }, account.id)[0].amount, '7.13% used');
   assert.equal(account.windows[0].usedPercent, 7.1255);
-  const zero = dashboardView({ accounts: [{ ...account, windows: [{ key: 'fable', label: 'Fable usage', usedPercent: 0 }] }] }).claude[0];
+  const zero = dashboardView({ accounts: [{ ...account, windows: [{ key: 'seven_day_fable', label: 'Fable usage', usedPercent: 0 }] }] }).claude[0];
   assert.equal(zero.fable.amount, '0% used');
   assert.equal(zero.fable.hasPercent, true);
+});
+
+test('a surface Fable window never fills the compact Fable view, in either order', () => {
+  const surface = { key: 'seven_day_fable_code', label: 'Weekly Fable (Code) usage', windowMinutes: 10080, usedPercent: 90 };
+  const global = { key: 'seven_day_fable', label: 'Weekly Fable usage', windowMinutes: 10080, usedPercent: 10 };
+  for (const windows of [[surface, global], [global, surface]]) {
+    const row = dashboardView({ accounts: [{ id: 'claude:a', provider: 'claude', plan: 'max', windows }] }).claude[0];
+    assert.equal(row.fable.amount, '10% used');
+    assert.equal(row.fable.percent, 10);
+  }
+  const onlySurface = dashboardView({ accounts: [{ id: 'claude:b', provider: 'claude', plan: 'max', windows: [surface] }] }).claude[0];
+  assert.equal(onlySurface.fable.hasPercent, false);
+  assert.equal(onlySurface.fable.amount, 'Usage unavailable');
 });
 
 test('cached optional windows retain their original sample time beside fresh core and Fable quotas', () => {
@@ -280,4 +293,19 @@ test('cache provenance neither fabricates dates nor replaces an unknown usage va
   const live = usageView({ usedPercent: 8, status: 'ok', sampledAt: '2026-10-02T11:00:00Z' });
   assert.equal(live.meta, '');
   assert.equal(usageView({ remaining: 0, unit: 'credits', enabled: false, status: 'cached' }).meta, 'Disabled · Cached');
+});
+test('reset grant clears refill targets survive in usage views; weekly never borrows a scoped window', () => {
+  const grant = usageView({ key: 'reset_credit_session_grant_1', label: 'Session reset grant 1', kind: 'balance', unit: 'resets', used: 1, limit: 2, remaining: 1, clears: ['five_hour', 'seven_day'] });
+  assert.match(grant.amount, /refills session \+ weekly/);
+  const opus = usageView({ key: 'reset_credit_opus_grant_1', label: 'Opus reset grant 1', kind: 'balance', unit: 'resets', remaining: 1, unit: 'resets' });
+  assert.equal(opus.hasPercent, false);
+  // a scoped window listed first must not stand in for the aggregate weekly
+  const account = { id: 'claude:scoped', provider: 'claude', plan: 'pro', windows: [
+    { key: 'seven_day_opus', label: 'Weekly Opus usage', kind: 'rate_limit', windowMinutes: 10080, usedPercent: 75 },
+    { key: 'seven_day', label: 'Weekly usage', kind: 'rate_limit', windowMinutes: 10080, usedPercent: 24 },
+  ] };
+  const row = dashboardView({ accounts: [account] }).claude[0];
+  assert.equal(row.weekly.amount, '24% used');
+  const scoped = usageView({ key: 'reset_credit_opus_grant_1', label: 'Opus reset grant 1', kind: 'balance', unit: 'resets', remaining: 1, clears: ['seven_day_opus', 'seven_day_overage_included'] });
+  assert.match(scoped.amount, /refills Opus weekly \+ Fable included usage/);
 });

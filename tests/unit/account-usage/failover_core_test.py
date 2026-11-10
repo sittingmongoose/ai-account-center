@@ -819,7 +819,7 @@ class WindowsProfileRelocationTests(unittest.TestCase):
                 original_get = client.get
 
                 def get(route, token):
-                    if route.endswith("/" + phase):
+                    if phase in route:
                         self.current.mkdir(parents=True)
                     return original_get(route, token)
 

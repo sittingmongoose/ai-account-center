@@ -1042,69 +1042,311 @@ describe('identity-bound Claude Desktop live usage', () => {
       fs.readFileSync(path.join(process.env.CCS_DIR!, 'claude-desktop-live-cache'), 'utf8')
     ).toBe('blocked');
   });
+
+  it('accepts a dynamic scoped window end to end with its own label and minutes', async () => {
+    output = payload({
+      windows: [
+        { key: 'seven_day', usedPercent: 12, resetAt: null },
+        {
+          key: 'seven_day_future_model',
+          label: 'Weekly Future usage',
+          windowMinutes: 10080,
+          usedPercent: 33,
+          resetAt: '2026-10-08T12:00:00Z',
+        },
+        {
+          key: 'seven_day_opus_cowork',
+          label: 'Weekly Opus Cowork usage',
+          windowMinutes: 10080,
+          usedPercent: 21,
+          resetAt: null,
+        },
+      ],
+    });
+    const result = await getLiveClaudeDesktopUsage('gmail');
+    expect(result?.windows).toHaveLength(3);
+    expect(result?.windows[1]).toMatchObject({
+      key: 'seven_day_future_model',
+      label: 'Weekly Future usage',
+      kind: 'rate_limit',
+      usedPercent: 33,
+      remainingPercent: 67,
+      resetAt: '2026-10-08T12:00:00.000Z',
+      windowMinutes: 10080,
+    });
+    expect(result?.windows[2]).toMatchObject({
+      key: 'seven_day_opus_cowork',
+      label: 'Weekly Opus Cowork usage',
+      windowMinutes: 10080,
+    });
+    // End to end through the dashboard projection: keys, labels and minutes survive.
+    const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), result!);
+    expect(applied.windows.map((window) => window.key)).toEqual([
+      'seven_day',
+      'seven_day_future_model',
+      'seven_day_opus_cowork',
+    ]);
+    expect(applied.windows[1]).toMatchObject({
+      label: 'Weekly Future usage',
+      windowMinutes: 10080,
+      usedPercent: 33,
+    });
+    invalidateClaudeDesktopLiveUsageCache();
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toEqual(result);
+  });
+
+  it('accepts an unknown-kind window with a null window length', async () => {
+    output = payload({
+      windows: [
+        {
+          key: 'seven_day_mystery',
+          label: 'Weekly Mystery usage',
+          windowMinutes: null,
+          usedPercent: 7,
+          resetAt: null,
+        },
+      ],
+    });
+    const result = await getLiveClaudeDesktopUsage('gmail');
+    expect(result?.windows).toEqual([
+      {
+        key: 'seven_day_mystery',
+        label: 'Weekly Mystery usage',
+        kind: 'rate_limit',
+        usedPercent: 7,
+        remainingPercent: 93,
+        resetAt: null,
+        expiresAt: null,
+        windowMinutes: null,
+        used: null,
+        limit: null,
+        unit: null,
+      },
+    ]);
+  });
+
+  it.each([
+    { key: 'Seven_Day_Opus', label: 'Weekly Opus usage', windowMinutes: 10080 },
+    { key: 'seven-day-opus', label: 'Weekly Opus usage', windowMinutes: 10080 },
+    { key: 'seven_day_opus!', label: 'Weekly Opus usage', windowMinutes: 10080 },
+    { key: 'x'.repeat(65), label: 'Weekly usage', windowMinutes: 10080 },
+    { key: 'seven_day_fresh', label: 'Bearer secret-value', windowMinutes: 10080 },
+    { key: 'seven_day_fresh', label: 'Weekly\x07 usage', windowMinutes: 10080 },
+    { key: 'seven_day_fresh', label: 'Weekly ' + 'x'.repeat(80) + ' usage', windowMinutes: 10080 },
+    { key: 'seven_day_fresh', windowMinutes: 10080 },
+    { key: 'seven_day_fresh', label: 'Weekly Fresh usage', windowMinutes: 0 },
+    { key: 'seven_day_fresh', label: 'Weekly Fresh usage', windowMinutes: 44641 },
+    { key: 'seven_day_fresh', label: 'Weekly Fresh usage', windowMinutes: 10080.5 },
+    { key: 'seven_day_fresh', label: 'Weekly Fresh usage', windowMinutes: '10080' },
+  ])('rejects an unsafe dynamic key, label or window length (%j)', async (window) => {
+    output = payload({ windows: [{ ...window, usedPercent: 10 }] });
+    expect(await getLiveClaudeDesktopUsage('gmail')).toBeNull();
+  });
+
+  it('carries clears on a grant and never on the summary', async () => {
+    output = payload({
+      windows: [
+        {
+          key: 'reset_credit_used_grant_1',
+          kind: 'balance',
+          remaining: 1,
+          used: 0,
+          limit: 1,
+          unit: 'resets',
+          clears: ['five_hour', 'seven_day', 'seven_day_opus'],
+          expiresAt: '2026-10-22T16:00:00Z',
+        },
+        {
+          key: 'reset_credits_available',
+          kind: 'balance',
+          remaining: 1,
+          unit: 'resets',
+          clears: ['seven_day'],
+        },
+      ],
+    });
+    const result = await getLiveClaudeDesktopUsage('gmail');
+    expect(result?.windows[0]).toMatchObject({
+      key: 'reset_credit_used_grant_1',
+      clears: ['five_hour', 'seven_day', 'seven_day_opus'],
+    });
+    expect(result?.windows[1]).toMatchObject({ key: 'reset_credits_available' });
+    expect(result?.windows[1]).not.toHaveProperty('clears');
+    // End to end: the dashboard shape carries clears untouched.
+    const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), result!);
+    expect(applied.windows[0].clears).toEqual(['five_hour', 'seven_day', 'seven_day_opus']);
+    invalidateClaudeDesktopLiveUsageCache();
+    expect((await getCachedClaudeDesktopLiveUsage('gmail'))?.windows[0].clears).toEqual([
+      'five_hour',
+      'seven_day',
+      'seven_day_opus',
+    ]);
+  });
+
+  it.each([
+    ['not-an-array'],
+    'five_hour',
+    ['five_hour', 'five_hour'],
+    ['Five_hour'],
+    ['seven day'],
+    ['x'.repeat(41)],
+    ['five_hour', 'seven_day', 'a', 'b', 'c', 'd', 'e', 'f', 'g'],
+    [42],
+  ])('rejects malformed clears instead of guessing (%j)', async (clears) => {
+    output = payload({
+      windows: [
+        {
+          key: 'reset_credit_available_grant_1',
+          kind: 'balance',
+          remaining: 1,
+          unit: 'resets',
+          clears,
+        },
+      ],
+    });
+    expect(await getLiveClaudeDesktopUsage('gmail')).toBeNull();
+  });
+
+  it('accepts the session release allowance and retains it when reset credits are unavailable', async () => {
+    let now = Date.now();
+    spyOn(Date, 'now').mockImplementation(() => now);
+    const originalTime = new Date(now).toISOString();
+    output = payload({
+      windows: [
+        { key: 'five_hour', usedPercent: 5 },
+        {
+          key: 'session_reset_allowance',
+          kind: 'balance',
+          remaining: 2,
+          used: 1,
+          limit: 3,
+          unit: 'resets',
+          resetAt: '2026-10-09T12:00:00Z',
+        },
+        { key: 'reset_credits_available', kind: 'balance', remaining: 1, unit: 'resets' },
+      ],
+    });
+    const first = await getLiveClaudeDesktopUsage('gmail');
+    expect(first?.windows[1]).toMatchObject({
+      key: 'session_reset_allowance',
+      label: 'Weekly session reset',
+      kind: 'balance',
+      remaining: 2,
+      used: 1,
+      limit: 3,
+      unit: 'resets',
+      resetAt: '2026-10-09T12:00:00.000Z',
+      usedPercent: null,
+      remainingPercent: null,
+      windowMinutes: null,
+    });
+    now += 300_000;
+    output = payload({
+      optionalExtras: { resetCredits: 'unavailable', prepaidBalance: 'unavailable' },
+      windows: [{ key: 'seven_day', usedPercent: 10, resetAt: null }],
+    });
+    const second = await getLiveClaudeDesktopUsage('gmail');
+    expect(second?.windows.map((window) => window.key)).toEqual([
+      'seven_day',
+      'session_reset_allowance',
+      'reset_credits_available',
+    ]);
+    expect(second?.windows[1]).toMatchObject({
+      remaining: 2,
+      resetAt: '2026-10-09T12:00:00.000Z',
+      status: 'cached',
+      sampledAt: originalTime,
+    });
+    invalidateClaudeDesktopLiveUsageCache();
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toEqual(second);
+  });
+
+  it('old cache fixtures without clears or a session release still parse', async () => {
+    output = payload({
+      windows: [
+        { key: 'five_hour', usedPercent: 3 },
+        { key: 'reset_credits_available', kind: 'balance', remaining: 1, unit: 'resets' },
+        { key: 'prepaid_balance', kind: 'balance', remaining: 4, unit: 'USD' },
+      ],
+    });
+    const live = await getLiveClaudeDesktopUsage('gmail');
+    expect(live?.windows.some((window) => 'clears' in window)).toBe(false);
+    expect(live?.windows.some((window) => window.key === 'session_reset_allowance')).toBe(false);
+    invalidateClaudeDesktopLiveUsageCache();
+    expect(await getCachedClaudeDesktopLiveUsage('gmail')).toEqual(live);
+  });
 });
 
 describe('renamed plan names through the live projection', () => {
-	const live = (plan: string): ClaudeDesktopLiveUsage => ({
-		profileId: 'gmail',
-		email: profile.email,
-		platform: 'windows',
-		source: 'Claude Desktop live quota on Windows',
-		plan,
-		fetchedAt: '2026-10-01T12:00:00Z',
-		windows: [{ key: 'five_hour', usedPercent: 0, remainingPercent: 100, resetAt: null }],
-	});
-	it('carries a renamed plan through the projection', () => {
-		const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('max flex'));
-		expect(applied.plan).toBe('max flex');
-	});
-	it('carries a 64-code-point plan and falls back past the 80-code-point bound', () => {
-		const atLimit = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + 'x'.repeat(60)));
-		expect([...(atLimit.plan ?? '')].length).toBe(64);
-		const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + 'x'.repeat(81)));
-		expect(over.plan).toBeNull();
-	});
-	it('falls back to the stored plan for text that fails the plan checks', () => {
-		const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('bearer fixture'));
-		expect(applied.plan).toBeNull();
-	});
+  const live = (plan: string): ClaudeDesktopLiveUsage => ({
+    profileId: 'gmail',
+    email: profile.email,
+    platform: 'windows',
+    source: 'Claude Desktop live quota on Windows',
+    plan,
+    fetchedAt: '2026-10-01T12:00:00Z',
+    windows: [{ key: 'five_hour', usedPercent: 0, remainingPercent: 100, resetAt: null }],
+  });
+  it('carries a renamed plan through the projection', () => {
+    const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('max flex'));
+    expect(applied.plan).toBe('max flex');
+  });
+  it('carries a 64-code-point plan and falls back past the 80-code-point bound', () => {
+    const atLimit = applyClaudeLiveUsage(
+      claudeAccount(profile, 'mac'),
+      live('Max ' + 'x'.repeat(60))
+    );
+    expect([...(atLimit.plan ?? '')].length).toBe(64);
+    const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + 'x'.repeat(81)));
+    expect(over.plan).toBeNull();
+  });
+  it('falls back to the stored plan for text that fails the plan checks', () => {
+    const applied = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('bearer fixture'));
+    expect(applied.plan).toBeNull();
+  });
 });
 
 describe('astral and stored-plan cases through the live projection', () => {
-	const live = (plan: string): ClaudeDesktopLiveUsage => ({
-		profileId: 'gmail',
-		email: profile.email,
-		platform: 'windows',
-		source: 'Claude Desktop live quota on Windows',
-		plan,
-		fetchedAt: '2026-10-01T12:00:00Z',
-		windows: [{ key: 'five_hour', usedPercent: 0, remainingPercent: 100, resetAt: null }],
-	});
-	it('counts astral characters as one code point each at the 80/81 boundary', () => {
-		const name = 'Max ' + '\u{1F680}'.repeat(76);
-		const at = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live(name));
-		expect(at.plan).toBe(name);
-		expect([...(at.plan ?? '')].length).toBe(80);
-		const over = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live('Max ' + '\u{1F680}'.repeat(77)));
-		expect(over.plan).toBeNull();
-	});
-	it('carries the entitlement class through the projection and clears a stale one', () => {
-		const carried = applyClaudeLiveUsage(
-			{ ...claudeAccount(profile, 'mac'), planClass: 'pro' },
-			{ ...live('Ultra'), planClass: 'max' }
-		);
-		expect(carried.planClass).toBe('max');
-		const cleared = applyClaudeLiveUsage({ ...claudeAccount(profile, 'mac'), planClass: 'max' }, live('Ultra'));
-		expect(cleared.planClass).toBeUndefined();
-	});
-	it('rejects a live plan name carrying a bidi mark', () => {
-		const account = { ...claudeAccount(profile, 'mac'), plan: 'Max 20x' };
-		const applied = applyClaudeLiveUsage(account, live('Pro\u200fMax'));
-		expect(applied.plan).toBe('Max 20x');
-	});
-	it('preserves a non-null stored plan when the live name fails the checks', () => {
-		const account = { ...claudeAccount(profile, 'mac'), plan: 'Max 20x' };
-		const applied = applyClaudeLiveUsage(account, live('bearer fixture'));
-		expect(applied.plan).toBe('Max 20x');
-	});
+  const live = (plan: string): ClaudeDesktopLiveUsage => ({
+    profileId: 'gmail',
+    email: profile.email,
+    platform: 'windows',
+    source: 'Claude Desktop live quota on Windows',
+    plan,
+    fetchedAt: '2026-10-01T12:00:00Z',
+    windows: [{ key: 'five_hour', usedPercent: 0, remainingPercent: 100, resetAt: null }],
+  });
+  it('counts astral characters as one code point each at the 80/81 boundary', () => {
+    const name = 'Max ' + '\u{1F680}'.repeat(76);
+    const at = applyClaudeLiveUsage(claudeAccount(profile, 'mac'), live(name));
+    expect(at.plan).toBe(name);
+    expect([...(at.plan ?? '')].length).toBe(80);
+    const over = applyClaudeLiveUsage(
+      claudeAccount(profile, 'mac'),
+      live('Max ' + '\u{1F680}'.repeat(77))
+    );
+    expect(over.plan).toBeNull();
+  });
+  it('carries the entitlement class through the projection and clears a stale one', () => {
+    const carried = applyClaudeLiveUsage(
+      { ...claudeAccount(profile, 'mac'), planClass: 'pro' },
+      { ...live('Ultra'), planClass: 'max' }
+    );
+    expect(carried.planClass).toBe('max');
+    const cleared = applyClaudeLiveUsage(
+      { ...claudeAccount(profile, 'mac'), planClass: 'max' },
+      live('Ultra')
+    );
+    expect(cleared.planClass).toBeUndefined();
+  });
+  it('rejects a live plan name carrying a bidi mark', () => {
+    const account = { ...claudeAccount(profile, 'mac'), plan: 'Max 20x' };
+    const applied = applyClaudeLiveUsage(account, live('Pro\u200fMax'));
+    expect(applied.plan).toBe('Max 20x');
+  });
+  it('preserves a non-null stored plan when the live name fails the checks', () => {
+    const account = { ...claudeAccount(profile, 'mac'), plan: 'Max 20x' };
+    const applied = applyClaudeLiveUsage(account, live('bearer fixture'));
+    expect(applied.plan).toBe('Max 20x');
+  });
 });

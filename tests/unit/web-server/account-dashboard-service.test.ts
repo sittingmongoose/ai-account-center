@@ -863,6 +863,81 @@ describe('consolidated account dashboard', () => {
     expect(JSON.stringify(result)).not.toContain('someone-else');
   });
 
+  it('carries dynamic keys, labels, minutes, clears and the session release untouched', async () => {
+    const result = await new AccountDashboardService(
+      deps({
+        getLiveClaudeUsage: async (profileId) => ({
+          profileId,
+          email: `${profileId}@example.com`,
+          platform: 'windows',
+          plan: 'max',
+          source: 'ignored helper source',
+          fetchedAt: '2026-10-01T12:00:00Z',
+          windows: [
+            {
+              key: 'seven_day_future_model',
+              label: 'Weekly Future usage',
+              usedPercent: 33,
+              remainingPercent: 67,
+              resetAt: '2026-10-08T12:00:00Z',
+              windowMinutes: 10080,
+              kind: 'rate_limit',
+              used: null,
+              limit: null,
+              unit: null,
+            },
+            {
+              key: 'reset_credit_used_grant_1',
+              label: 'Used rate-limit reset grant 1',
+              usedPercent: null,
+              remainingPercent: null,
+              resetAt: null,
+              windowMinutes: null,
+              used: 0,
+              limit: 1,
+              unit: 'resets',
+              kind: 'balance',
+              remaining: 1,
+              expiresAt: '2026-10-22T16:00:00Z',
+              clears: ['five_hour', 'seven_day'],
+            },
+            {
+              key: 'session_reset_allowance',
+              label: 'Weekly session reset',
+              usedPercent: null,
+              remainingPercent: null,
+              resetAt: '2026-10-09T12:00:00Z',
+              windowMinutes: null,
+              used: 1,
+              limit: 3,
+              unit: 'resets',
+              kind: 'balance',
+              remaining: 2,
+            },
+          ],
+        }),
+      })
+    ).get('mac');
+    const gmail = result.accounts.find((account) => account.id === 'claude:gmail');
+    expect(gmail?.status).toBe('ok');
+    expect(gmail?.windows.map((window) => window.key)).toEqual([
+      'seven_day_future_model',
+      'reset_credit_used_grant_1',
+      'session_reset_allowance',
+    ]);
+    expect(gmail?.windows[0]).toMatchObject({
+      label: 'Weekly Future usage',
+      windowMinutes: 10080,
+      usedPercent: 33,
+    });
+    expect(gmail?.windows[1].clears).toEqual(['five_hour', 'seven_day']);
+    expect(gmail?.windows[2]).toMatchObject({
+      remaining: 2,
+      unit: 'resets',
+      resetAt: '2026-10-09T12:00:00.000Z',
+    });
+  });
+
   it('serves cached Claude usage during a slow live lookup and retains the verified result', async () => {
     let release: (value: null) => void = () => {};
     const pending = new Promise<null>((resolve) => {

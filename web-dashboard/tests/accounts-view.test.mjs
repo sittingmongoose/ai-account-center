@@ -1146,6 +1146,45 @@ test('Update apps results are grouped by computer, never invented', () => {
   assert.equal(running.hosts[1].items[0].app, 'Waiting for its turn');
 });
 
+test('Update apps Muse catalog-pending row reads as updated-but-not-clean', () => {
+  const catalogMessage =
+    'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.';
+  const job = {
+    state: 'failed',
+    startedAt: at(-30),
+    finishedAt: at(-20),
+    activePlatform: null,
+    results: [
+      {
+        appId: 'muse-code', appLabel: 'Muse Code', platform: 'ubuntu', status: 'restart_failed',
+        previousVersion: '1.2.3', version: '1.2.4', message: catalogMessage,
+      },
+      {
+        appId: 'muse-code', appLabel: 'Muse Code', platform: 'mac', status: 'failed',
+        previousVersion: '1.2.3', version: '1.2.3', message: catalogMessage,
+      },
+      {
+        appId: 'codex-cli', appLabel: 'Codex CLI', platform: 'ubuntu', status: 'updated',
+        previousVersion: '1.0.0', version: '1.1.0', message: 'Updated and restarted running instances.',
+      },
+    ],
+  };
+  const view = updateResultsView(job, now);
+  const museMoved = view.hosts.find((h) => h.id === 'ubuntu').items.find((i) => i.app === 'Muse Code');
+  assert.deepEqual([museMoved.result, museMoved.tone], ['Updated, models not registered yet', 'warn']);
+  assert.match(museMoved.tip, /not registered yet/);
+  assert.match(museMoved.tip, /Open Muse once/);
+  assert.match(museMoved.tip, /1\.2\.3 to 1\.2\.4/);
+  // the stale-catalog row that never moved: honest, and never "Updated"
+  const museStale = view.hosts.find((h) => h.id === 'mac').items.find((i) => i.app === 'Muse Code');
+  assert.deepEqual([museStale.result, museStale.tone], ['Models not registered yet', 'warn']);
+  // a clean updated row keeps its version label and good tone
+  const codex = view.hosts.find((h) => h.id === 'ubuntu').items.find((i) => i.app === 'Codex CLI');
+  assert.deepEqual([codex.result, codex.tone], ['Updated to 1.1.0', 'good']);
+  // the headline names the pending catalogs alongside the failure count
+  assert.match(view.headRuns.map((r) => r.text).join(''), /2 failed, 2 models not yet registered/);
+});
+
 test('Update apps cancel and readiness states read as plain text', () => {
   const result = (platform, appLabel, status, extra = {}) => ({
     appId: appLabel.toLowerCase().replace(/ /g, '-'),

@@ -28,10 +28,76 @@ extension AccountQuotaWindow {
     return nil
   }
 
-  /// Balances, extra usage and spend are amounts, not meters.
-  public var isMeter: Bool { !["balance", "extra_usage", "spend"].contains(kind ?? "rate_limit") }
+  /// Balances, extra usage and spend are amounts, not meters. The session reset allowance is an amount even if
+  /// its legacy `kind` were absent.
+  public var isMeter: Bool { key != "session_reset_allowance" && !["balance", "extra_usage", "spend"].contains(kind ?? "rate_limit") }
 
-  public var isFable: Bool { "\(key) \(label)".lowercased().contains("fable") }
+  /// Global Fable is the exact `seven_day_fable` window only. Surface windows `seven_day_fable_*`
+  /// are ordinary scoped meters, never the Fable cell (substring "fable" must not misclassify them).
+  public var isFable: Bool { key == "seven_day_fable" }
+
+  /// Weekly-scoped meter slug: `seven_day_opus` -> `opus`, `seven_day_fable_monthly` -> `fable_monthly`, nil else.
+  /// The exact `seven_day_fable` also yields `fable`, but callers handle isFable before scoped handling.
+  public var weeklyScopedKey: String? {
+    guard key.hasPrefix("seven_day_") else { return nil }
+    let slug = String(key.dropFirst("seven_day_".count))
+    return slug.isEmpty ? nil : slug
+  }
+
+  /// Weekly-scoped (model-family) meter, including the exact Fable window; callers check isFable first.
+  public var isWeeklyScoped: Bool { weeklyScopedKey != nil }
+
+  /// Scoped meter excluding the exact global Fable, for borrowed-window guards.
+  public var isWeeklyScopedMeter: Bool { weeklyScopedKey != nil && !isFable }
+
+  private static func wordsOf(_ value: String) -> [String] {
+    value.replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+      .split(whereSeparator: { $0.isWhitespace })
+      .map(String.init)
+      .filter { !$0.isEmpty }
+  }
+
+  private static func titleWord(_ word: String) -> String {
+    guard !word.isEmpty else { return word }
+    return word.prefix(1).uppercased() + word.dropFirst()
+  }
+
+  /// The short model name of a scoped window, label-derived like the dashboard's `scopedModelLabel`:
+  /// "Weekly Opus usage" -> "Opus", surface suffix preserved; else from the key slug.
+  public var scopedModelLabel: String {
+    let trimmed = label.trimmingCharacters(in: .whitespaces)
+    if let match = trimmed.range(of: "^weekly\\s+(.+?)\\s+usage$", options: [.regularExpression, .caseInsensitive]) {
+      let middle = String(trimmed[match].dropFirst(6).dropLast(6))
+      let words = Self.wordsOf(middle).map(Self.titleWord)
+      if !words.isEmpty { return words.joined(separator: " ") }
+    }
+    let slug = weeklyScopedKey ?? key
+    let words = Self.wordsOf(slug).map(Self.titleWord)
+    if !words.isEmpty { return words.joined(separator: " ") }
+    let fallback = trimmed.isEmpty ? "Usage" : trimmed
+    return fallback
+  }
+
+  /// Dashboard clear-word mapping for refill targets; `seven_day_fable` never refills Fable itself.
+  public static func clearWord(_ target: String) -> String {
+    if target == "five_hour" { return "session" }
+    if target == "seven_day" { return "weekly" }
+    if target == "seven_day_overage_included" { return "Fable included usage" }
+    if target == "seven_day_fable" { return "" }
+    if let slug = target.hasPrefix("seven_day_") ? String(target.dropFirst("seven_day_".count)) : nil,
+      !slug.isEmpty {
+      let words = Self.wordsOf(slug).map(Self.titleWord)
+      return "\(words.joined(separator: " ")) weekly"
+    }
+    return Self.wordsOf(target).joined(separator: " ")
+  }
+
+  /// "refills session + weekly", "" without valid `clears`.
+  public var clearsText: String {
+    let words = (clears ?? []).map(AccountQuotaWindow.clearWord).filter { !$0.isEmpty }
+    return words.isEmpty ? "" : "refills \(words.joined(separator: " + "))"
+  }
 
   public var period: QuotaPeriod {
     if windowMinutes == 300 { return .fiveHour }
@@ -49,11 +115,12 @@ extension AccountQuotaWindow {
 public enum TrayReset {
   /// The reset time when `resetAt` is in the past and the reading was sampled before it (the window's own
   /// `sampledAt`, else the account's), or when its sample time is unknown. Nil when the reading stands. Amounts,
-  /// unlimited and disabled windows are left alone.
+  /// unlimited and disabled windows are left alone. The session reset allowance is an amount ("Next available"),
+  /// never a passed-reset meter.
   /// The dashboard's own `resetPassed: true` counts as well, so a Mac clock running behind the server never shows a
   /// reading the dashboard has already marked as from before its reset.
   public static func pending(_ window: AccountQuotaWindow, accountSampledAt: String?, now: Date = TrayFormat.now) -> Date? {
-    guard window.isMeter, window.unlimited != true, window.enabled != false,
+    guard window.key != "session_reset_allowance", window.isMeter, window.unlimited != true, window.enabled != false,
       let reset = AccountFormatting.date(window.resetAt) else { return nil }
     if window.resetPassed == true { return reset }
     guard reset <= now else { return nil }
@@ -121,20 +188,23 @@ extension DashboardAccount {
 
   private var meterWindows: [AccountQuotaWindow] { visibleWindows.filter(\.isMeter) }
 
-  /// The 5-hour column: the exact `five_hour` window, else the first non-Fable 5-hour meter.
+  /// The 5-hour column: Claude returns the exact `five_hour` window or nil; never borrows a
+  /// weekly-scoped meter via period inference. Codex returns its compact exact core; Antigravity its pool.
   public var fiveHourWindow: AccountQuotaWindow? {
     if provider == "codex" { return compactWindows.first { $0.key == "five_hour" } }
     if provider == "antigravity" { return poolWindow(fiveHour: true) }
+    if provider == "claude" { return meterWindows.first { $0.key == "five_hour" } }
     return meterWindows.first { $0.key == "five_hour" }
-      ?? meterWindows.first { !$0.isFable && $0.period == .fiveHour }
+      ?? meterWindows.first { !$0.isFable && !$0.isWeeklyScopedMeter && $0.period == .fiveHour }
   }
 
-  /// The weekly column: the exact `seven_day` window, else the first non-Fable weekly meter.
+  /// The weekly column: Claude returns the exact `seven_day` window or nil; never borrows a scoped meter.
   public var weeklyWindow: AccountQuotaWindow? {
     if provider == "codex" { return compactWindows.first { $0.key == "seven_day" } }
     if provider == "antigravity" { return poolWindow(fiveHour: false) }
+    if provider == "claude" { return meterWindows.first { $0.key == "seven_day" } }
     return meterWindows.first { $0.key == "seven_day" }
-      ?? meterWindows.first { !$0.isFable && $0.period == .week }
+      ?? meterWindows.first { !$0.isFable && !$0.isWeeklyScopedMeter && $0.period == .week }
   }
 
   /// Antigravity's headline window for the menu bar and the compact row, by the spec's pool
@@ -146,7 +216,7 @@ extension DashboardAccount {
       if let window = meterWindows.first(where: { $0.key == key }) { return window }
     }
     let period: QuotaPeriod = fiveHour ? .fiveHour : .week
-    return meterWindows.first { !$0.isFable && $0.period == period }
+    return meterWindows.first { !$0.isFable && !$0.isWeeklyScopedMeter && $0.period == period }
   }
 
   /// The menu-bar headline window: the spec's pool order across both periods
@@ -161,10 +231,11 @@ extension DashboardAccount {
     return meterWindows.first
   }
 
-  /// Fable appears only on Claude Max rows, read from the provider-reported `seven_day_fable` window.
+  /// Fable appears only on Claude Max rows, read from the provider-reported exact `seven_day_fable` window.
+  /// Surface windows `seven_day_fable_*` are ordinary scoped meters and never fill this cell.
   public var fableCell: FableCell {
     guard provider == "claude", isMaxPlan else { return .notApplicable }
-    if let window = visibleWindows.first(where: { $0.key == "seven_day_fable" }) ?? visibleWindows.first(where: \.isFable) {
+    if let window = visibleWindows.first(where: { $0.key == "seven_day_fable" }) {
       return .window(window)
     }
     return .notReported
@@ -219,8 +290,11 @@ public enum TrayColumns {
   }
 
   /// Full window names for Details: the provider's label, with the terse Codex and Claude ones spelled out.
+  /// Weekly-scoped meters show their short model label (dashboard `scopedModelLabel`); exact Fable keeps its
+  /// own line; surface windows `seven_day_fable_*` show the scoped model label, never "Fable".
   public static func fullLabel(provider: String, _ window: AccountQuotaWindow) -> String {
     if window.isFable { return window.label.isEmpty ? "Weekly Fable usage" : window.label }
+    if window.isWeeklyScoped { return window.scopedModelLabel }
     if provider == "codex" { return ["week": "Weekly", "5h": "5-hour"][window.label] ?? window.label }
     if provider == "claude" { return ["Five-hour usage": "5-hour usage"][window.label] ?? window.label }
     return window.label.isEmpty ? "Usage" : window.label
@@ -251,9 +325,11 @@ public enum TrayColumns {
     return (title, subtitle)
   }
 
-  /// Short meter captions, as in the concept.
+  /// Short meter captions, as in the concept. Weekly-scoped meters show the short model label; exact
+  /// Fable shows "Fable" and surface windows never do.
   public static func shortLabel(provider: String, _ window: AccountQuotaWindow) -> String {
     if window.isFable { return "Fable" }
+    if window.isWeeklyScoped { return window.scopedModelLabel }
     let periodLabel: String? = [.fiveHour: "5-hour", .week: "Weekly", .month: "Monthly"][window.period]
     switch provider {
     case "antigravity":
@@ -537,6 +613,12 @@ public enum TrayFormat {
     let remaining = date.timeIntervalSince(now)
     let stamp = date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
     return "Resets \(stamp) · \(remaining <= 0 ? "due" : duration(remaining))"
+  }
+
+  /// Session reset allowance: "Next available <time>" from `resetAt` (dashboard `exact` prefix), "" when unreported.
+  public static func nextAvailable(_ iso: String?) -> String {
+    guard let date = AccountFormatting.date(iso) else { return "" }
+    return "Next available \(date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
   }
 
   public static func isSoon(_ iso: String?, now: Date = TrayFormat.now) -> Bool {

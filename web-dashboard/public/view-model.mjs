@@ -3,7 +3,7 @@
 // lives here or in the modules it builds on: a missing reading is unavailable, never zero; nothing is
 // added or averaged across accounts or windows; at most two decimals; the product visibility rules of
 // visible-usage.mjs; Fable only for Claude Max plans, from the seven_day_fable window.
-import { visibleUsageWindows } from './visible-usage.mjs';
+import { visibleUsageWindows, isWeeklyScoped, scopedModelLabel, clearsText } from './visible-usage.mjs';
 import { claudeSignInFacts, claudeSignInLine, claudeSignInNote, needsFor } from './claude-signins.mjs';
 import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
@@ -209,12 +209,14 @@ export const usedPercent = (w) =>
       ? 100 - w.remainingPercent
       : null;
 const description = (w) => `${text(w?.key)} ${text(w?.label)}`;
-export const isFable = (w) => w?.key === 'seven_day_fable' || /\bfable\b/i.test(text(w?.label));
+export const isFable = (w) => w?.key === 'seven_day_fable';
 /** Meters are rate limits; packs, balances, credits and spend are amounts, never fake meters. */
 export const isMeterWindow = (w) =>
   !['balance', 'extra_usage', 'spend'].includes(w?.kind) && w?.unlimited !== true;
 export function period(w) {
-  const d = description(w);
+  // An explicit null duration degrades honestly: only the window key (which names its
+  // cadence) can settle the period, never the free-text label.
+  const d = w?.windowMinutes === null ? text(w?.key) : description(w);
   if (w?.windowMinutes === 300 || /five.?hour|5.?hour|\b5h\b|5 hours|rolling/i.test(d)) return '5h';
   if (w?.windowMinutes === 10080 || /seven.?day|weekly|\bweek\b|7.?day/i.test(d)) return 'week';
   if (/month/i.test(d)) return 'month';
@@ -229,7 +231,9 @@ export const isMaxPlan = (account) =>
       ));
 const PERIOD_LABEL = { '5h': '5-hour', week: 'Weekly', month: 'Monthly' };
 export function windowLabel(provider, w) {
+  if (!w) return 'Usage';
   if (isFable(w)) return 'Fable';
+  if (isWeeklyScoped(w)) return scopedModelLabel(w);
   const p = period(w);
   if (provider === 'antigravity') return antigravityWindowLabel(w);
   if (provider === 'cursor')
@@ -238,13 +242,13 @@ export function windowLabel(provider, w) {
         'plan-reported': 'Included',
         autoPercentUsed: 'Cursor models',
         apiPercentUsed: 'Other models',
-      }[w.key] || text(w.label)
+      }[w?.key] || text(w?.label) || 'Usage'
     );
   if (provider === 'zai')
     return (
       { 'usage-1': '5h tokens', 'usage-2': 'Weekly tokens', 'usage-3': 'Monthly requests' }[
-        w.key
-      ] || text(w.label)
+        w?.key
+      ] || text(w?.label) || 'Usage'
     );
   if (
     provider === 'codex' ||
@@ -254,8 +258,8 @@ export function windowLabel(provider, w) {
     provider === 'muse' ||
     provider === 'qwen'
   )
-    return PERIOD_LABEL[p] || text(w.label) || 'Usage';
-  return text(w.label) || 'Usage';
+    return PERIOD_LABEL[p] || text(w?.label) || 'Usage';
+  return text(w?.label) || 'Usage';
 }
 /**
  * H3: single-line column heads for the stacked Antigravity grid. Only Antigravity
@@ -274,15 +278,16 @@ export function shortWindowLabel(provider, w) {
   );
 }
 export function fullWindowLabel(provider, w) {
+  if (!w) return 'Usage';
   if (isFable(w)) return 'Fable weekly';
-  if (provider === 'antigravity' && w.key === 'google-ai-credits') return antigravityWindowLabel(w);
+  if (provider === 'antigravity' && w?.key === 'google-ai-credits') return antigravityWindowLabel(w);
   if (provider === 'codex')
     return (
-      { week: 'Weekly', '5h': '5-hour' }[text(w.label)] || text(w.label) || windowLabel(provider, w)
+      { week: 'Weekly', '5h': '5-hour' }[text(w?.label)] || text(w?.label) || windowLabel(provider, w)
     );
   if (provider === 'claude')
-    return { 'Five-hour usage': '5-hour usage' }[text(w.label)] || text(w.label) || 'Usage';
-  return text(w.label) || 'Usage';
+    return { 'Five-hour usage': '5-hour usage' }[text(w?.label)] || text(w?.label) || 'Usage';
+  return text(w?.label) || 'Usage';
 }
 /**
  * Claude only: the computers the server says need a sign-in before Open (`accounts[].signInNeeded`), as
@@ -428,12 +433,12 @@ const emptyCell = (account, key) => ({
 
 /** A Z.ai row that counts all reset packs of one kind (the collector's roll-up). */
 const rolledUpPacks = (account, w) =>
-  account?.provider === 'zai' && /^reset-packs-(?:5h|weekly)$/.test(text(w.key));
+  account?.provider === 'zai' && /^reset-packs-(?:5h|weekly)$/.test(text(w?.key));
 
 // Only an amount kept from an earlier reading says so: a whole cached account already says it on its row.
 const cacheProvenance = (account, w, now) => {
-  if (w.status !== 'cached') return '';
-  const at = validDate(w.sampledAt) ? w.sampledAt : account?.sampledAt;
+  if (w?.status !== 'cached') return '';
+  const at = validDate(w?.sampledAt) ? w.sampledAt : account?.sampledAt;
   return validDate(at) ? `cached, sampled ${relative(at, now)}` : 'cached';
 };
 const expiryText = (value, now, prefix = 'Expires ') =>
@@ -441,76 +446,84 @@ const expiryText = (value, now, prefix = 'Expires ') =>
 
 /** Packs, balances, credits and spend as an AmountView. */
 export function amountView(account, w, now = Date.now(), { noExpiry = false } = {}) {
-  const unit = text(w.unit);
-  const label = text(w.label)
+  if (!w || typeof w !== 'object') return { key: `${account?.id || ''}|missing`, label: 'Balance', value: 'Unavailable', unit: '', sub: '', icon: 'wallet', spent: false };
+  const unit = text(w?.unit);
+  const label = text(w?.label)
     .replace(/^Additional credit pack/i, 'Credit pack')
     .replace(/^Listed active credit packs/i, 'Active packs listed')
     .replace(/^Rate-limit resets available/i, 'Rate-limit resets left');
-  const expires = noExpiry ? '' : expiryText(w.expiresAt, now);
+  const expires = noExpiry ? '' : expiryText(w?.expiresAt, now);
   let value = '',
     suffix = '',
     sub = '',
     icon = 'wallet',
     spent = false;
-  if (rolledUpPacks(account, w) && finite(w.limit)) {
+  if (rolledUpPacks(account, w) && finite(w?.limit)) {
     // Every Z.ai reset pack of one kind on one line: how many are left, how many were used and
     // the soonest expiry among those left.
     icon = 'pack';
-    value = unitAmount(w.remaining, null) || 'Unavailable';
-    suffix = `of ${unitAmount(w.limit, unit)} left`;
-    spent = w.remaining === 0;
+    value = unitAmount(w?.remaining, null) || 'Unavailable';
+    suffix = `of ${unitAmount(w?.limit, unit)} left`;
+    spent = w?.remaining === 0;
     sub = [
-      finite(w.used) && w.used > 0 ? `${nf2.format(w.used)} used` : '',
-      noExpiry ? '' : expiryText(w.expiresAt, now, w.remaining > 1 ? 'Next expires ' : 'Expires '),
+      finite(w?.used) && w.used > 0 ? `${nf2.format(w.used)} used` : '',
+      noExpiry ? '' : expiryText(w?.expiresAt, now, w?.remaining > 1 ? 'Next expires ' : 'Expires '),
     ]
       .filter(Boolean)
       .join(' · ');
-  } else if (/pack/i.test(text(w.label)) && finite(w.limit)) {
+  } else if (/pack/i.test(text(w?.label)) && finite(w?.limit)) {
     icon = 'pack';
-    value = unitAmount(w.remaining, null) || 'Unavailable';
-    suffix = `of ${unitAmount(w.limit, unit)} left`;
-    spent = w.remaining === 0;
+    value = unitAmount(w?.remaining, null) || 'Unavailable';
+    suffix = `of ${unitAmount(w?.limit, unit)} left`;
+    spent = w?.remaining === 0;
     sub = [spent ? 'Used up' : '', expires].filter(Boolean).join(' · ');
-  } else if (w.kind === 'spend') {
-    value = unitAmount(w.used, unit) || 'Unavailable';
-    suffix = finite(w.limit) ? `of ${unitAmount(w.limit, unit)} spent` : 'spent';
-    sub = exact(w.resetAt, 'Resets ');
-  } else if (w.kind === 'extra_usage') {
+  } else if (w?.kind === 'spend') {
+    value = unitAmount(w?.used, unit) || 'Unavailable';
+    suffix = finite(w?.limit) ? `of ${unitAmount(w?.limit, unit)} spent` : 'spent';
+    sub = exact(w?.resetAt, 'Resets ');
+  } else if (w?.kind === 'extra_usage') {
     icon = 'zap';
-    if (w.enabled === false) {
+    if (w?.enabled === false) {
       value = 'Off';
-      sub = finite(w.limit)
-        ? `Limit ${unitAmount(w.limit, unit)}`
-        : finite(w.used) && unit
-          ? `${unitAmount(w.used, unit)} used`
+      sub = finite(w?.limit)
+        ? `Limit ${unitAmount(w?.limit, unit)}`
+        : finite(w?.used) && unit
+          ? `${unitAmount(w?.used, unit)} used`
           : '';
     } else {
-      value = finite(w.used) ? unitAmount(w.used, unit) : 'Unavailable';
-      suffix = finite(w.used) ? 'used' : '';
-      sub = finite(w.limit) ? `of ${unitAmount(w.limit, unit)}` : '';
+      value = finite(w?.used) ? unitAmount(w?.used, unit) : 'Unavailable';
+      suffix = finite(w?.used) ? 'used' : '';
+      sub = finite(w?.limit) ? `of ${unitAmount(w?.limit, unit)}` : '';
     }
   } else if (unit === 'resets') {
     icon = 'rotate';
-    if (finite(w.used) && finite(w.limit)) {
+    if (finite(w?.used) && finite(w?.limit)) {
       value = nf2.format(w.used);
-      suffix = `of ${unitAmount(w.limit, 'resets')} used`;
-    } else value = unitAmount(w.remaining, 'resets') || 'Unavailable';
-    sub = expires;
+      suffix = `of ${unitAmount(w?.limit, 'resets')} used`;
+    } else value = unitAmount(w?.remaining, 'resets') || 'Unavailable';
+    // The summary (value + suffix) stays; refill targets and the next-available time ride in `sub`.
+    sub = [
+      expires,
+      clearsText(w),
+      w?.key === 'session_reset_allowance' ? exact(w?.resetAt, 'Next available ') : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
   } else if (unit === 'packs') {
     icon = 'pack';
-    value = unitAmount(w.remaining, 'packs') || 'Unavailable';
+    value = unitAmount(w?.remaining, 'packs') || 'Unavailable';
   } else {
-    value = finite(w.remaining)
-      ? unitAmount(w.remaining, unit)
-      : finite(w.used)
-        ? `${unitAmount(w.used, unit)} used`
+    value = finite(w?.remaining)
+      ? unitAmount(w?.remaining, unit)
+      : finite(w?.used)
+        ? `${unitAmount(w?.used, unit)} used`
         : 'Unavailable';
-    sub = [w.enabled === false ? 'Off' : '', expires].filter(Boolean).join(' · ');
+    sub = [w?.enabled === false ? 'Off' : '', expires].filter(Boolean).join(' · ');
   }
   return {
-    key: `${account.id}|${text(w.key)}`,
+    key: `${account?.id || ''}|${text(w?.key)}`,
     label:
-      account.provider === 'antigravity' && w.key === 'google-ai-credits'
+      account?.provider === 'antigravity' && w?.key === 'google-ai-credits'
         ? antigravityWindowLabel(w)
         : label || 'Balance',
     value,
@@ -712,32 +725,48 @@ function openLine(openProgress, profileId) {
 }
 function claudeSection(accounts, profiles, platform, now, openProgress, data = null) {
   const anyMax = accounts.some(isMaxPlan);
+  const byAccount = accounts.map((account) => visibleMeters(account).filter((w) => w && typeof w === 'object'));
+  const hasFive = accounts.some((_, index) =>
+    byAccount[index].some((w) => w && !isFable(w) && !isWeeklyScoped(w) && period(w) === '5h')
+  );
+  const hasWeekly = accounts.some((_, index) =>
+    byAccount[index].some((w) => w?.key === 'seven_day')
+  );
+  // Weekly-scoped models (Opus, Sonnet, ...) in first-seen order, Fable apart: Fable's column
+  // follows anyMax and is never shown on Pro rows, like before.
+  const scopedKeys = [];
+  for (const meters of byAccount)
+    for (const w of meters)
+      if (w && isWeeklyScoped(w) && !isFable(w) && !scopedKeys.includes(w?.key)) scopedKeys.push(w.key);
   const columns = [
-    { key: 'five', label: '5-hour' },
-    { key: 'weekly', label: 'Weekly' },
-    ...(anyMax ? [{ key: 'fable', label: 'Fable' }] : []),
-  ];
-  const rows = accounts.map((account) => {
-    const meters = visibleMeters(account);
-    const five = meters.find((w) => !isFable(w) && period(w) === '5h');
-    const weekly = meters.find((w) => w.key === 'seven_day');
+    ...(hasFive ? [{ key: 'five', label: '5-hour' }] : []),
+    ...(hasWeekly ? [{ key: 'weekly', label: 'Weekly' }] : []),
+    ...scopedKeys.map((key) => {
+      const sample = byAccount.flat().find((w) => w?.key === key);
+      return { key, label: scopedModelLabel(sample) };
+    }),
+    ...(anyMax ? [{ key: 'seven_day_fable', label: 'Fable' }] : []),
+  ].slice(0, 6);
+  const rows = accounts.map((account, index) => {
+    const meters = byAccount[index];
+    const five = meters.find((w) => w && !isFable(w) && !isWeeklyScoped(w) && period(w) === '5h');
+    const weekly = meters.find((w) => w?.key === 'seven_day');
     const fable = meters.find(isFable);
     const launcher = (Array.isArray(profiles) ? profiles : []).find(
       (profile) => profile.id === account.capabilities?.claudeProfileId
     );
-    const cells = [
-      meterView(account, five, { now, label: '5-hour' }),
-      meterView(account, weekly, { now, label: 'Weekly' }),
-    ];
-    if (anyMax)
-      cells.push(
-        isMaxPlan(account)
+    const cells = columns.map((col) => {
+      if (col.key === 'five')
+        return five ? meterView(account, five, { now, label: '5-hour' }) : emptyCell(account, 'five_hour');
+      if (col.key === 'weekly')
+        return weekly ? meterView(account, weekly, { now, label: 'Weekly' }) : emptyCell(account, 'seven_day');
+      if (col.key === 'seven_day_fable')
+        return isMaxPlan(account)
           ? meterView(account, fable, { now, label: 'Fable', naText: 'Not reported yet' })
-          : emptyCell(account, 'fable')
-      );
-    if (!five) cells[0].key = `${account.id}|five_hour`;
-    if (!weekly) cells[1].key = `${account.id}|seven_day`;
-    if (anyMax && isMaxPlan(account) && !fable) cells[2].key = `${account.id}|seven_day_fable`;
+          : emptyCell(account, 'seven_day_fable');
+      const scoped = meters.find((w) => w.key === col.key);
+      return scoped ? meterView(account, scoped, { now, label: col.label }) : emptyCell(account, col.key);
+    });
     const opening = openLine(openProgress, account.capabilities?.claudeProfileId);
     const signIn = claudeSignInNeeded(account);
     const renewal = claudeSignInLine(data, account.email, now);
@@ -1244,12 +1273,12 @@ export function dashboardViewModel(data, ctx = {}) {
   const hiddenIds = new Set(
     Array.isArray(data?.settings?.hiddenAccountIds) ? data.settings.hiddenAccountIds : []
   );
-  const everyAccount = Array.isArray(data?.accounts) ? data.accounts : [];
+  const everyAccount = Array.isArray(data?.accounts) ? data.accounts.filter((a) => a && typeof a === 'object') : [];
   const accounts = ctx.includeHidden
     ? everyAccount
     : everyAccount.filter((account) => !hiddenIds.has(account?.id) && account?.hidden !== true);
   const hidden = ctx.includeHidden ? new Set() : hiddenProviders(data);
-  const of = (provider) => accounts.filter((account) => account.provider === provider);
+  const of = (provider) => accounts.filter((account) => account?.provider === provider);
   const countOf = (provider) =>
     everyAccount.filter((account) => account?.provider === provider).length;
   const sections = [];
@@ -1403,7 +1432,7 @@ export function detailsViewModel(data, id, ctx = {}) {
 
 /** "Ubuntu", "Ubuntu and Mac", "Ubuntu, Mac, Windows and Nas1". */
 const listWords = (words) =>
-  words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
+  words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 
 /** The computers Update all runs on, in the order the header names them. */
 export const UPDATE_HOST_IDS = ['ubuntu', 'mac', 'windows', 'nas1'];
@@ -1429,6 +1458,21 @@ export function updateRunningHosts(job) {
   return job.activePlatform ? [job.activePlatform] : [];
 }
 
+/**
+ * A Muse row whose model catalog did not refresh: the helper reports
+ * restart_failed (binary moved, sessions restarted) or failed (already
+ * current, warm failed), never a clean updated/current. The DTO carries words,
+ * never a message code, so the words are the signal, the same way unknown and
+ * action-required rows are read in accounts-view.mjs.
+ */
+export function isCatalogPending(row) {
+  return (
+    (row?.status === 'restart_failed' || row?.status === 'failed') &&
+    typeof row?.message === 'string' &&
+    row.message.includes('not registered yet')
+  );
+}
+
 /** Update apps button state from /api/app-updates/status. */
 export function updateViewModel(job, { done = false } = {}) {
   const results = Array.isArray(job?.results) ? job.results : [];
@@ -1437,12 +1481,14 @@ export function updateViewModel(job, { done = false } = {}) {
   ).length;
   const action = results.filter((row) => row.status === 'action_required').length;
   const held = results.filter((row) => row.status === 'held').length;
+  const catalog = results.filter(isCatalogPending).length;
+  const catalogWords = catalog ? `${catalog} model${catalog === 1 ? '' : 's'} not yet registered` : '';
   const running = job?.state === 'running';
   const where = listWords(updateRunningHosts(job).map((id) => platformLabel(id)));
   const tip = running
     ? `Updating apps on ${where || 'your computers'} · running apps may restart`
     : job
-      ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}${held ? `, ${held} held` : ''}. Details under Accounts & Settings.`
+      ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}${held ? `, ${held} held` : ''}${catalogWords ? `, ${catalogWords}` : ''}. Details under Accounts & Settings.`
       : 'Update the Claude and Codex apps and CLIs on Mac, Windows, Ubuntu and Nas1';
   return {
     running,
@@ -1451,7 +1497,7 @@ export function updateViewModel(job, { done = false } = {}) {
     total: updateTotal(job),
     tip,
     summary: job
-      ? `${results.length} results${failed ? ` · ${failed} failed` : ''}${action ? ` · ${action} need action` : ''}${held ? ` · ${held} held` : ''}`
+      ? `${results.length} results${failed ? ` · ${failed} failed` : ''}${action ? ` · ${action} need action` : ''}${held ? ` · ${held} held` : ''}${catalogWords ? ` · ${catalogWords}` : ''}`
       : '',
   };
 }

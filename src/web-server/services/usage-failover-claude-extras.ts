@@ -5,7 +5,11 @@ const RESET_GRANT_KEY = /^reset_credit_(available|saved|used|expired)_grant_([1-
 
 function group(key: string): 'resetCredits' | 'prepaidBalance' | null {
   if (key === 'prepaid_balance') return 'prepaidBalance';
-  return key === 'reset_credits_available' || RESET_GRANT_KEY.test(key) ? 'resetCredits' : null;
+  return key === 'reset_credits_available' ||
+    key === 'session_reset_allowance' ||
+    RESET_GRANT_KEY.test(key)
+    ? 'resetCredits'
+    : null;
 }
 
 /** Optional browser data is invalid after native credential renewal. */

@@ -133,6 +133,7 @@ export async function writeClaudeDesktopLiveSnapshot(
         kind: window.kind,
         remaining: window.remaining,
         expiresAt: window.expiresAt,
+        ...(window.clears !== undefined ? { clears: [...window.clears] } : {}),
         unlimited: window.unlimited,
         enabled: window.enabled,
         ...(window.status === 'cached' &&

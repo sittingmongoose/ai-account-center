@@ -38,7 +38,7 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 UUID = re.compile(claude_usage.UUID)
 CODEX_URL = "https://chatgpt.com/backend-api/wham/usage"
 CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
-CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
 
 
 class Failure(Exception):
@@ -870,13 +870,30 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
             payload = client.get(CLAUDE_USAGE_URL, candidate["_token"])
             verify_root()
             windows = claude_usage.normalize_windows(payload)
+            # OAuth usage with cedar_ember=1 carries grants and the weekly
+            # allowance directly; parse them here so CLI and desktop both see
+            # them without depending on the web capsule.
+            windows.extend(claude_usage.normalize_reset_credits(payload.get("cedar_ember")))
+            windows.extend(claude_usage.normalize_session_reset_allowance(payload.get("juniper_tide")))
             if not windows:
                 raise Failure("invalid_response")
             plan = claude_usage.claude_plan(account, org, candidate["plan"])
             plan_class = claude_usage.claude_plan_class(account, org, plan)
+            extras = {"optionalExtras": {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}}
+            if any(w["key"] == "reset_credits_available" or w["key"].startswith("reset_credit_") or w["key"] == "session_reset_allowance" for w in windows):
+                extras["optionalExtras"]["resetCredits"] = "ok"
             if platform == "windows" and candidate.get("_mode") == "desktop":
-                optional_windows, extras = _claude_optional_windows(candidate, home, cooldown)
-                windows.extend(optional_windows)
+                optional_windows, opt_extras = _claude_optional_windows(candidate, home, cooldown)
+                # Deduplicate web grants already supplied by OAuth.
+                seen = {w["key"] for w in windows}
+                for w in optional_windows:
+                    if w["key"] not in seen:
+                        windows.append(w)
+                        seen.add(w["key"])
+                # Preserve OAuth verdict if web failed.
+                if extras["optionalExtras"]["resetCredits"] == "ok":
+                    opt_extras["optionalExtras"]["resetCredits"] = "ok"
+                extras.update(opt_extras)
             verify_root()
         else:
             raise Failure()

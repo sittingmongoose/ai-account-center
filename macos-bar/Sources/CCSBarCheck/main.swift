@@ -3560,6 +3560,204 @@ private func checkPlanClassGate() throws {
     "A Max display name on another provider's row never counts as Max either")
 }
 
+/// Dynamic Claude windows: exact Fable, scoped meters, reset-grant `clears`, and session allowance.
+/// Global Fable is the exact `seven_day_fable` key only; surface windows `seven_day_fable_*` are ordinary
+/// scoped meters. Aggregate windows never borrow a scoped meter; details show short model labels; grants
+/// append dashboard refill words; the allowance is an amount with "Next available" and never a pending-reset meter.
+private func checkDynamicClaudeWindows() throws {
+  func window(_ key: String, _ label: String, _ values: [String: Any] = [:]) throws -> AccountQuotaWindow {
+    var object: [String: Any] = ["key": key, "label": label]
+    for (name, value) in values { object[name] = value }
+    return try JSONDecoder().decode(AccountQuotaWindow.self, from: JSONSerialization.data(withJSONObject: object))
+  }
+  func account(_ id: String, _ provider: String, plan: String?, windows: [[String: Any]],
+               planClass: Any? = nil) throws -> DashboardAccount {
+    let base: [String: Any] = [
+      "id": id, "provider": provider, "providerLabel": provider, "label": id, "email": NSNull(),
+      "plan": plan.map { $0 as Any } ?? NSNull(), "platform": "mac", "source": "Fixture", "status": "ok",
+      "message": NSNull(), "fetchedAt": NSNull(), "sampledAt": "2026-10-01T10:00:00Z", "isActive": false,
+      "windows": windows, "capabilities": ["codexProfile": NSNull(), "claudeProfileId": NSNull(), "claudePlatforms": []],
+    ]
+    var value = base
+    value["planClass"] = planClass ?? NSNull()
+    return try JSONDecoder().decode(DashboardAccount.self, from: JSONSerialization.data(withJSONObject: value))
+  }
+  func rawWindow(_ key: String, _ label: String, _ values: [String: Any] = [:]) -> [String: Any] {
+    var result: [String: Any] = ["key": key, "label": label]
+    for (k, v) in values { result[k] = v }
+    return result
+  }
+
+  // 1. Exact Fable vs surface
+  let exactFable = try window("seven_day_fable", "Weekly Fable usage", ["usedPercent": 10])
+  let surfaceMonthly = try window("seven_day_fable_monthly", "Weekly Fable Monthly usage", ["usedPercent": 15])
+  let surfaceIncluded = try window("seven_day_fable_included", "Weekly Fable Included usage", ["usedPercent": 7])
+  let opusScoped = try window("seven_day_opus", "Weekly Opus usage", ["usedPercent": 20, "windowMinutes": 10080])
+  let sonnetScoped = try window("seven_day_sonnet", "Weekly Sonnet usage", ["usedPercent": 30, "windowMinutes": 10080])
+  try expect(exactFable.isFable == true, "Exact seven_day_fable is global Fable")
+  try expect(surfaceMonthly.isFable == false && surfaceIncluded.isFable == false && opusScoped.isFable == false,
+    "Surface seven_day_fable_* and other scoped keys are not global Fable (substring bug)")
+  try expect(exactFable.weeklyScopedKey == "fable" && opusScoped.weeklyScopedKey == "opus"
+    && surfaceMonthly.weeklyScopedKey == "fable_monthly",
+    "Weekly-scoped keys report their slug")
+  try expect(opusScoped.isWeeklyScoped && surfaceMonthly.isWeeklyScoped && !exactFable.isWeeklyScopedMeter
+    && opusScoped.isWeeklyScopedMeter == true,
+    "Scoped meter classification excludes exact Fable via isWeeklyScopedMeter")
+
+  // Scoped short labels: label-derived, surface suffix preserved
+  try expect(opusScoped.scopedModelLabel == "Opus", "Weekly Opus usage -> Opus")
+  try expect(sonnetScoped.scopedModelLabel == "Sonnet", "Weekly Sonnet usage -> Sonnet")
+  try expect(surfaceMonthly.scopedModelLabel == "Fable Monthly", "Surface label suffix preserved")
+  let oauthScoped = try window("seven_day_oauth_apps", "Weekly OAuth Apps usage", ["windowMinutes": 10080])
+  try expect(oauthScoped.scopedModelLabel == "OAuth Apps", "OAuth Apps label preserved")
+  let fallbackScoped = try window("seven_day_cowork", "Some other label", ["windowMinutes": 10080])
+  try expect(fallbackScoped.scopedModelLabel == "Cowork", "Non-matching label falls back to key slug")
+  try expect(TrayColumns.shortLabel(provider: "claude", opusScoped) == "Opus"
+    && TrayColumns.shortLabel(provider: "claude", exactFable) == "Fable"
+    && TrayColumns.shortLabel(provider: "claude", surfaceMonthly) == "Fable Monthly",
+    "Short captions: scoped shows model, exact Fable shows Fable, surface never shows bare Fable")
+  try expect(TrayColumns.fullLabel(provider: "claude", opusScoped) == "Opus"
+    && TrayColumns.fullLabel(provider: "claude", exactFable) == "Weekly Fable usage",
+    "Details titles: scoped shows short model label")
+
+  // 2. No scoped substitution for missing aggregate windows (Claude)
+  let onlyScoped = try account("claude-only-scoped", "claude", plan: "Max", windows: [
+    rawWindow("seven_day_opus", "Weekly Opus usage", ["usedPercent": 44, "windowMinutes": 10080]),
+  ])
+  try expect(onlyScoped.weeklyWindow == nil, "Claude weekly must be nil when only a scoped meter is reported")
+  try expect(onlyScoped.fiveHourWindow == nil, "Claude 5-hour must be nil when absent")
+  let fiveAndScoped = try account("claude-five-scoped", "claude", plan: "Max", windows: [
+    rawWindow("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    rawWindow("seven_day_opus", "Weekly Opus usage", ["usedPercent": 55, "windowMinutes": 10080]),
+  ])
+  try expect(fiveAndScoped.fiveHourWindow?.key == "five_hour" && fiveAndScoped.weeklyWindow == nil,
+    "Missing seven_day must not be filled by a scoped weekly meter")
+  let weeklyAndScoped = try account("claude-week-scoped", "claude", plan: "Max", windows: [
+    rawWindow("seven_day", "Weekly usage", ["usedPercent": 34]),
+    rawWindow("seven_day_sonnet", "Weekly Sonnet usage", ["usedPercent": 61, "windowMinutes": 10080]),
+  ])
+  try expect(weeklyAndScoped.fiveHourWindow == nil && weeklyAndScoped.weeklyWindow?.key == "seven_day",
+    "Missing five_hour must not be filled by a scoped meter")
+
+  // 3. fableCell exact gating
+  let maxWithExact = try account("claude-max-exact", "claude", plan: "Max", windows: [
+    rawWindow("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    rawWindow("seven_day", "Weekly usage", ["usedPercent": 34]),
+    rawWindow("seven_day_fable", "Weekly Fable usage", ["usedPercent": 0]),
+  ])
+  guard case .window(let fw) = maxWithExact.fableCell, fw.key == "seven_day_fable" else {
+    throw CheckFailure(description: "Max with exact Fable shows the Fable cell")
+  }
+  let maxSurfaceOnly = try account("claude-max-surface", "claude", plan: "Max", windows: [
+    rawWindow("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    rawWindow("seven_day", "Weekly usage", ["usedPercent": 34]),
+    rawWindow("seven_day_fable_monthly", "Weekly Fable Monthly usage", ["usedPercent": 9, "windowMinutes": 10080]),
+  ])
+  guard case .notReported = maxSurfaceOnly.fableCell else {
+    throw CheckFailure(description: "Max with only a surface window must read Not reported yet")
+  }
+  let maxBothOrders = try account("claude-max-both", "claude", plan: "Max", windows: [
+    rawWindow("seven_day_fable_monthly", "Weekly Fable Monthly usage", ["usedPercent": 9, "windowMinutes": 10080]),
+    rawWindow("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    rawWindow("seven_day", "Weekly usage", ["usedPercent": 34]),
+    rawWindow("seven_day_fable", "Weekly Fable usage", ["usedPercent": 0]),
+  ])
+  guard case .window(let bw) = maxBothOrders.fableCell, bw.key == "seven_day_fable" else {
+    throw CheckFailure(description: "Surface before exact still selects the exact Fable window")
+  }
+  let maxBothReversed = try account("claude-max-rev", "claude", plan: "Max", windows: [
+    rawWindow("seven_day_fable", "Weekly Fable usage", ["usedPercent": 0]),
+    rawWindow("seven_day_fable_monthly", "Weekly Fable Monthly usage", ["usedPercent": 9, "windowMinutes": 10080]),
+  ])
+  guard case .window(let rw) = maxBothReversed.fableCell, rw.key == "seven_day_fable" else {
+    throw CheckFailure(description: "Exact first still selects exact Fable, not surface")
+  }
+  let proWithFable = try account("claude-pro-fable", "claude", plan: "Pro", windows: [
+    rawWindow("seven_day_fable", "Weekly Fable usage", ["usedPercent": 5]),
+  ])
+  guard case .notApplicable = proWithFable.fableCell else {
+    throw CheckFailure(description: "Pro never has a Fable cell, even with exact window")
+  }
+
+  // 4. compactWindows ordering: core first, scoped in reported order, Fable last; surface is ordinary
+  let compactScrambled = try account("claude-compact", "claude", plan: "Max", windows: [
+    rawWindow("seven_day_opus", "Weekly Opus usage", ["usedPercent": 56, "windowMinutes": 10080]),
+    rawWindow("seven_day", "Weekly usage", ["usedPercent": 34]),
+    rawWindow("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    rawWindow("seven_day_fable", "Weekly Fable usage", ["usedPercent": 0]),
+  ])
+  try expect(compactScrambled.compactWindows.map(\.key) == ["five_hour", "seven_day", "seven_day_fable"],
+    "Compact core-first with Fable last, scoped spill goes to details (Max 3)")
+  let compactSurface = try account("claude-compact-surface", "claude", plan: "Max", windows: [
+    rawWindow("seven_day_fable_monthly", "Weekly Fable Monthly usage", ["usedPercent": 9, "windowMinutes": 10080]),
+    rawWindow("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    rawWindow("seven_day", "Weekly usage", ["usedPercent": 34]),
+  ])
+  // Max without exact: core + surface (surface is ordinary scoped, not Fable)
+  try expect(compactSurface.compactWindows.map(\.key) == ["five_hour", "seven_day", "seven_day_fable_monthly"]
+    && !compactSurface.compactWindows.contains { $0.key == "seven_day_fable" },
+    "Surface-only Max compact shows the surface meter as ordinary, never the Fable cell")
+  try expect(compactSurface.fiveHourWindow?.key == "five_hour" && compactSurface.weeklyWindow?.key == "seven_day",
+    "Core columns stay exact even when surface is present")
+  let compactPro = try account("claude-pro-compact", "claude", plan: "Pro", windows: [
+    rawWindow("seven_day_opus", "Weekly Opus usage", ["usedPercent": 56, "windowMinutes": 10080]),
+    rawWindow("seven_day", "Weekly usage", ["usedPercent": 34]),
+    rawWindow("five_hour", "Five-hour usage", ["usedPercent": 12]),
+    rawWindow("seven_day_fable", "Weekly Fable usage", ["usedPercent": 5]),
+  ])
+  try expect(compactPro.compactWindows.map(\.key) == ["five_hour", "seven_day", "seven_day_opus"]
+    && !compactPro.compactWindows.contains { $0.key == "seven_day_fable" },
+    "Pro compact is core-first and excludes exact Fable")
+
+  // 5. clears decode + refill text
+  let withClears = try window("rate_limit_resets", "Rate-limit resets", ["used": 2, "limit": 5, "unit": "resets", "kind": "balance",
+    "clears": ["five_hour", "seven_day"]])
+  try expect(withClears.clears == ["five_hour", "seven_day"], "clears decodes as an array")
+  try expect(withClears.clearsText == "refills session + weekly", "Refill text joins session + weekly")
+  let overageGrant = try window("rgr","Grants",["kind":"balance","clears":["seven_day_overage_included"]])
+  try expect(overageGrant.clearsText == "refills Fable included usage", "Overage target shows Fable included usage")
+  let scopedGrant = try window("rgr2","Grants",["kind":"balance","clears":["seven_day_opus","seven_day_sonnet"]])
+  try expect(scopedGrant.clearsText == "refills Opus weekly + Sonnet weekly", "Scoped targets show Model weekly")
+  let coworkGrant = try window("rgr3","Grants",["kind":"balance","clears":["seven_day_cowork"]])
+  try expect(coworkGrant.clearsText == "refills Cowork weekly", "Cowork target")
+  let omeletteGrant = try window("rgr4","Grants",["kind":"balance","clears":["seven_day_omelette"]])
+  try expect(omeletteGrant.clearsText == "refills Omelette weekly", "Omelette target")
+  let oauthGrant = try window("rgr5","Grants",["kind":"balance","clears":["seven_day_oauth_apps"]])
+  try expect(oauthGrant.clearsText == "refills Oauth Apps weekly", "OAuth apps target")
+  let fableIgnored = try window("rgr6","Grants",["kind":"balance","clears":["seven_day_fable"]])
+  try expect(fableIgnored.clearsText == "", "A grant never refills Fable itself")
+  let mixed = try window("rgr7","Grants",["kind":"balance","clears":["seven_day_opus","five_hour","seven_day_fable","seven_day_future"]])
+  try expect(mixed.clearsText == "refills Opus weekly + session + Future weekly",
+    "Mixed clears keep reported order, Fable filtered, unknown humanized")
+  let noClears = try window("five_hour","Five-hour usage",["usedPercent":10])
+  try expect(noClears.clears == nil && noClears.clearsText == "", "Missing clears is nil, not an error")
+  let malformedClears = try JSONDecoder().decode(AccountQuotaWindow.self, from: Data("""
+    {"key":"g","label":"Grant","kind":"balance","clears":["five_hour",123,null]}
+    """.utf8))
+  try expect(malformedClears.clears == ["five_hour"], "Malformed clears items are skipped")
+  let malformedClears2 = try JSONDecoder().decode(AccountQuotaWindow.self, from: Data("""
+    {"key":"g","label":"Grant","kind":"balance","clears":42}
+    """.utf8))
+  try expect(malformedClears2.clears == nil || malformedClears2.clears == [],
+    "Non-array clears is nil/empty, dashboard still decodes")
+
+  // 6. Session reset allowance: amount, Next available, never pending
+  let allowance = try window("session_reset_allowance","Session reset allowance",
+    ["used": 2, "limit": 5, "remaining": 3, "unit": "resets", "kind": "balance", "resetAt": "2026-10-09T09:43:00Z"])
+  try expect(allowance.isMeter == false, "Session allowance is an amount, not a meter")
+  try expect(TrayFormat.nextAvailable(allowance.resetAt).hasPrefix("Next available "), "Allowance shows Next available for details")
+  try expect(TrayFormat.nextAvailable(nil) == "", "Missing resetAt yields no Next available text")
+  let past = "2026-10-01T10:00:00Z", future = "2026-10-09T09:43:00Z"
+  let pastAllowance = try window("session_reset_allowance","Allowance",["resetAt": past, "kind": "balance"])
+  let now = AccountFormatting.date("2026-10-02T12:00:00Z")!
+  try expect(TrayReset.pending(pastAllowance, accountSampledAt: "2026-10-01T09:00:00Z", now: now) == nil,
+    "Session allowance never treats a passed resetAt as pending")
+  // Legacy kind absent still not pending
+  let noKindAllowance = try window("session_reset_allowance","Allowance",["resetAt": past])
+  try expect(noKindAllowance.isMeter == false && TrayReset.pending(noKindAllowance, accountSampledAt: nil, now: now) == nil,
+    "Allowance without kind is still an amount")
+}
+
 /// "Opened · copied 3 of 18" when a bounded copy opened Claude before every record was across.
 private func checkClaudeOpenPartialCopy() throws {
   func operation(_ state: String, _ confirmed: Int?, _ total: Int?) throws -> ClaudeOpenOperation {
@@ -3781,6 +3979,8 @@ do {
   print("PASS dashboard resetPassed mark honoured with the tray's own F6 rule")
   try checkPlanClassGate()
   print("PASS plan class gate: Max-class Ultra shows Fable, Pro class beats a Max name, absent class falls back to the name, malformed class degrades")
+  try checkDynamicClaudeWindows()
+  print("PASS dynamic Claude windows: exact Fable vs surface, no scoped substitution, clears refill text, session allowance amount")
   print("AI Account Center core checks passed (offline; no real credentials or network)")
 } catch {
   fputs("AI Account Center core check failed: \(error)\n", stderr)
