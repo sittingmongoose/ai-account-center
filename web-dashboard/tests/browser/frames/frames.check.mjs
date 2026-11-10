@@ -10,6 +10,9 @@ const FORMATS = [
 	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true },
 	{ name: 'duo-portrait', width: 669, height: 951, safe: '82,0,34,0', mobile: true },
 	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
+	// Open and upright as the installed app gets it today: iOS keeps its band outside the page (the start page's
+	// status-bar style is "default"), so the frame shows its top and tab bars below it.
+	{ name: 'duo-portrait-below-band', width: 669, height: 869, safe: '0,0,34,0', mobile: true },
 ];
 const THEMES = ['light', 'dark'];
 const UNPIN = `html { scrollbar-width: none; }

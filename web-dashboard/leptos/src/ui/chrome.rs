@@ -1,98 +1,44 @@
-//! The page's own chrome, drawn only when it is opened standalone (`/app/status`, no `?embed=1`): a header, the phone's
-//! top and tab bars, the Duo's status-strip rail, or its status-band head. Inside the Slint shell's iframe the shell
-//! draws the chrome and this draws just the content. Which one shows is `html[data-chrome]` (device.rs).
+//! The app frame's chrome (PLAN step 4): the desktop header, the phone's top and tab bars, the Duo's status-strip rail,
+//! or its status-band head with a tab row. Which one shows is `html[data-chrome]` (device.rs). Inside today's Slint
+//! shell (`?embed=1`) the shell draws the chrome and a page is the content only (`PageShell`).
 
 use super::icons::{Icon, Logo};
 use super::parts::runs_view;
+use crate::Page;
 use crate::api::Run;
+use crate::frame::FrameCtx;
 use leptos::prelude::*;
 
-/// What the chrome says about the page: its age and health, and a one-line summary for the status band.
+/// What the chrome says about the page on screen: its age and health, and a one-line summary for the status band.
 #[derive(Clone, Copy)]
 pub struct ChromeInfo {
     /// "1m ago"; empty until the first reading.
     pub updated: Signal<String>,
-    /// False while the last read failed.
+    /// False while the last read failed (or the readings are cached).
     pub live: Signal<bool>,
     pub summary: Signal<Vec<Run>>,
     pub refresh: Callback<()>,
+    /// The status line's first word when it isn't "Updated" ("Refreshing", "Account data unavailable").
+    pub lead: Option<Signal<String>>,
 }
 
-const NAV: [(&str, &str, &str); 5] = [
-    ("home", "Home", "/"),
-    ("chart", "Analytics", "/analytics"),
-    ("users", "Accounts", "/accounts"),
-    ("activity", "Status", "/app/status"),
-    ("trophy", "Scoreboard", "/app/scoreboard"),
-];
-
-fn nav_links(current: &'static str, with_icon_labels: bool) -> impl IntoView + use<> {
-    let _ = with_icon_labels;
-    NAV.into_iter()
-        .map(|(icon, label, href)| {
-            view! {
-                <a href=href class:on=label == current aria-current=(label == current).then_some("page")>
-                    <Icon name=icon/>{label}
-                </a>
-            }
-        })
-        .collect_view()
-}
-
-/// The theme switch for a page opened on its own (the shell drives the theme inside its iframe). Shares the shell's
-/// `aac-theme` setting.
-fn cycle_theme() -> &'static str {
-    let storage = window().local_storage().ok().flatten();
-    let now = storage
-        .as_ref()
-        .and_then(|s| s.get_item("aac-theme").ok().flatten())
-        .unwrap_or_else(|| "auto".into());
-    let next = match now.as_str() {
-        "auto" => "light",
-        "light" => "dark",
-        _ => "auto",
-    };
-    if let Some(s) = storage.as_ref() {
-        let _ = s.set_item("aac-theme", next);
-    }
-    if let Some(root) = document().document_element() {
-        if next == "auto" {
-            let _ = root.remove_attribute("data-theme");
-        } else {
-            let _ = root.set_attribute("data-theme", next);
-        }
-    }
-    next
-}
-
-/// Applies the saved theme to a page opened on its own.
-pub fn restore_theme() {
-    let saved = window()
+/// The theme setting the frame and the dashboard share (`aac-theme`: auto, light or dark).
+pub fn stored_theme() -> String {
+    window()
         .local_storage()
         .ok()
         .flatten()
-        .and_then(|s| s.get_item("aac-theme").ok().flatten());
-    if let (Some(theme), Some(root)) = (
-        saved.as_deref().filter(|t| matches!(*t, "light" | "dark")),
-        document().document_element(),
-    ) {
-        let _ = root.set_attribute("data-theme", theme);
-    }
+        .and_then(|s| s.get_item("aac-theme").ok().flatten())
+        .filter(|t| matches!(t.as_str(), "light" | "dark"))
+        .unwrap_or_else(|| "auto".into())
 }
 
-fn status_words(info: ChromeInfo) -> impl IntoView {
-    view! {
-        <span class="status-line">
-            {move || {
-                let updated = info.updated.get();
-                if updated.is_empty() {
-                    view! { "Reading..." }.into_any()
-                } else {
-                    view! { "Updated "<b>{updated}</b>{if info.live.get() { " · live" } else { " · old reading" }} }.into_any()
-                }
-            }}
-        </span>
+/// Saves and applies a theme; the frame tells the dashboard's iframe too.
+pub fn apply_theme(mode: &str) {
+    if let Some(s) = window().local_storage().ok().flatten() {
+        let _ = s.set_item("aac-theme", mode);
     }
+    crate::set_theme(mode);
 }
 
 #[component]
@@ -102,84 +48,179 @@ fn IconButton(icon: &'static str, label: &'static str, on_click: Callback<()>) -
     }
 }
 
-/// Refresh, Update apps and account, as the phone bar, rail and band show them.
-fn tools(info: ChromeInfo) -> impl IntoView {
-    let refresh = info.refresh;
-    let open_home = Callback::new(|_| {
-        let _ = window().location().set_href("/");
-    });
-    let open_accounts = Callback::new(|_| {
-        let _ = window().location().set_href("/accounts");
-    });
+fn status_words(ctx: FrameCtx) -> impl IntoView {
     view! {
-        <IconButton icon="refresh" label="Refresh" on_click=refresh/>
-        <IconButton icon="download" label="Update apps" on_click=open_home/>
-        <IconButton icon="user" label="Account" on_click=open_accounts/>
+        <span class="status-line">
+            {move || {
+                let Some(info) = ctx.info() else { return view! { "Reading..." }.into_any() };
+                let updated = info.updated.get();
+                let lead = info.lead.map(|l| l.get()).unwrap_or_else(|| "Updated".into());
+                if updated.is_empty() {
+                    view! { {if lead == "Updated" { "Reading...".to_string() } else { lead }} }.into_any()
+                } else {
+                    view! { {lead}" "<b>{updated}</b>{if info.live.get() { " · live" } else { " · old reading" }} }.into_any()
+                }
+            }}
+        </span>
     }
 }
 
-/// `page` is the nav label ("Status", "Scoreboard"); `title` is the page's name in the band ("Model Scoreboard").
-#[component]
-pub fn Shell(
-    embedded: bool,
-    page: &'static str,
-    title: &'static str,
-    info: ChromeInfo,
-    children: Children,
-) -> impl IntoView {
-    if embedded {
-        return view! { <div class="shell"><main class="content">{children()}</main></div> }
-            .into_any();
-    }
-    restore_theme();
-    let theme = RwSignal::new("monitor");
-    let refresh = info.refresh;
+/// The five tabs as links: a plain click changes the tab in place; a modified click opens the page's own address.
+fn tab_links(ctx: FrameCtx) -> impl IntoView {
+    Page::ALL
+        .into_iter()
+        .map(|page| {
+            view! {
+                <a href=page.path() class:on=move || ctx.route.get() == page
+                    aria-current=move || (ctx.route.get() == page).then_some("page")
+                    on:click=move |e: web_sys::MouseEvent| {
+                        if e.button() == 0 && !e.meta_key() && !e.ctrl_key() && !e.shift_key() && !e.alt_key() {
+                            e.prevent_default();
+                            ctx.go(page);
+                        }
+                    }>
+                    <Icon name=page.icon()/>{page.label()}
+                </a>
+            }
+        })
+        .collect_view()
+}
+
+/// Refresh, Update apps and the account menu, as the phone bar, rail and band show them.
+fn tools(ctx: FrameCtx) -> impl IntoView {
     view! {
-        <div class="shell">
+        <IconButton icon="refresh" label="Refresh" on_click=Callback::new(move |_| ctx.refresh())/>
+        <IconButton icon="download" label="Update apps" on_click=Callback::new(move |_| ctx.update_apps())/>
+        <button class="icon-btn" aria-label="Account" title="Account" aria-haspopup="menu"
+            aria-expanded=move || ctx.menu_open.get().to_string()
+            on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); ctx.menu_open.update(|o| *o = !*o); }>
+            <Icon name="user"/>
+        </button>
+    }
+}
+
+fn theme_icon(mode: &str) -> &'static str {
+    match mode {
+        "light" => "sun",
+        "dark" => "moon",
+        _ => "monitor",
+    }
+}
+
+/// The account menu: who is signed in, the theme, the way back to the classic app, and Sign out.
+#[component]
+fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
+    let theme = RwSignal::new(stored_theme());
+    let pick = move |mode: &'static str| {
+        theme.set(mode.to_string());
+        ctx.set_theme(mode);
+    };
+    view! {
+        <Show when=move || ctx.menu_open.get()>
+            <div class="menu-scrim" on:click=move |_| ctx.menu_open.set(false)></div>
+            <div class="acct-menu" role="menu" on:click=|e: web_sys::MouseEvent| e.stop_propagation()>
+                <p class="menu-head">{move || {
+                    let name = ctx.username.get();
+                    if name.is_empty() { "Signed in".to_string() } else { format!("Signed in as {name}") }
+                }}</p>
+                <div class="menu-row">
+                    <span class="q3">"Theme"</span>
+                    <div class="seg">
+                        {["auto", "light", "dark"].into_iter().map(|mode| view! {
+                            <button class:on=move || theme.get() == mode aria-pressed=move || (theme.get() == mode).to_string() on:click=move |_| pick(mode)>
+                                <Icon name=theme_icon(mode)/>{match mode { "light" => "Light", "dark" => "Dark", _ => "Auto" }}
+                            </button>
+                        }).collect_view()}
+                    </div>
+                </div>
+                <button class="menu-item" role="menuitem" on:click=move |_| { ctx.menu_open.set(false); ctx.go(Page::Accounts); }>"Accounts & Settings"</button>
+                <button class="menu-item" role="menuitem" on:click=move |_| ctx.classic()>"Classic app"<span class="q3">" · the previous look"</span></button>
+                <button class="menu-item" role="menuitem" on:click=move |_| { ctx.menu_open.set(false); ctx.sign_out(); }>"Sign out"</button>
+            </div>
+        </Show>
+    }
+}
+
+/// The frame: chrome around the current tab's content. `children` holds every tab's content; only the current one
+/// shows (frame.rs).
+#[component]
+pub fn FrameShell(ctx: FrameCtx, children: Children) -> impl IntoView {
+    let theme = RwSignal::new(stored_theme());
+    let cycle = move |_| {
+        let next = match theme.get_untracked().as_str() {
+            "auto" => "light",
+            "light" => "dark",
+            _ => "auto",
+        };
+        theme.set(next.to_string());
+        ctx.set_theme(next);
+    };
+    view! {
+        <div class="shell" class:slint-route=move || ctx.route.get().slint()>
             <header class="chrome">
                 <div class="chrome-in">
-                    <a class="brand" href="/"><Logo/><span class="brand-name">"AI Account Center"</span></a>
-                    <nav class="nav">{nav_links(page, false)}</nav>
+                    <a class="brand" href=Page::Home.path() on:click=move |e: web_sys::MouseEvent| { e.prevent_default(); ctx.go(Page::Home); }>
+                        <Logo/><span class="brand-name">"AI Account Center"</span>
+                    </a>
+                    <nav class="nav">{tab_links(ctx)}</nav>
                     <div class="chrome-right">
-                        {status_words(info)}
-                        <IconButton icon="refresh" label="Refresh" on_click=refresh/>
-                        <a class="upd-btn" href="/"><Icon name="download"/>"Update apps"</a>
+                        {status_words(ctx)}
+                        <IconButton icon="refresh" label="Refresh" on_click=Callback::new(move |_| ctx.refresh())/>
+                        <button class="upd-btn" on:click=move |_| ctx.update_apps()><Icon name="download"/>"Update apps"</button>
                         <span class="chrome-sep"></span>
-                        <button class="select-btn" aria-label="Theme"
-                            on:click=move |_| theme.set(match cycle_theme() { "light" => "sun", "dark" => "moon", _ => "monitor" })>
-                            {move || view! { <Icon name=theme.get()/> }}<Icon name="chev-down" class="chev"/>
+                        <button class="select-btn" aria-label="Theme" on:click=cycle>
+                            {move || view! { <Icon name=theme_icon(&theme.get())/> }}<Icon name="chev-down" class="chev"/>
                         </button>
-                        <a class="select-btn" aria-label="Account" href="/accounts"><Icon name="user"/><Icon name="chev-down" class="chev"/></a>
+                        <button class="select-btn" aria-label="Account" aria-haspopup="menu"
+                            on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); ctx.menu_open.update(|o| *o = !*o); }>
+                            <Icon name="user"/><Icon name="chev-down" class="chev"/>
+                        </button>
                     </div>
                 </div>
             </header>
             <header class="topbar">
                 <div class="topbar-in">
                     <Logo/>
-                    <div><div class="t-title">{page}</div><div class="t-sub">{status_words(info)}</div></div>
-                    <div class="tools">{tools(info)}</div>
+                    <div><div class="t-title">{move || ctx.route.get().label()}</div><div class="t-sub">{status_words(ctx)}</div></div>
+                    <div class="tools">{tools(ctx)}</div>
                 </div>
             </header>
             <header class="band-head">
+                // The band takes no taps (DUO-MEASURED.md): it shows the page line and a summary only.
                 <div class="band-info">
-                    <div class="bi1"><b>{title}</b>" · "{move || {
+                    <div class="bi1"><b>{move || ctx.route.get().title()}</b>" · "{move || {
+                        let Some(info) = ctx.info() else { return "reading".to_string() };
                         let updated = info.updated.get();
                         if updated.is_empty() { "reading".to_string() } else { format!("updated {updated}{}", if info.live.get() { " · live" } else { " · old reading" }) }
                     }}</div>
-                    <div class="bi2">{move || runs_view(info.summary.get())}</div>
+                    <div class="bi2">{move || ctx.info().map(|i| runs_view(i.summary.get()))}</div>
                 </div>
                 <div class="band-tabs">
-                    <nav class="band-nav">{nav_links(page, true)}</nav>
-                    <div class="band-tools">{tools(info)}</div>
+                    <nav class="band-nav">{tab_links(ctx)}</nav>
+                    <div class="band-tools">{tools(ctx)}</div>
                 </div>
             </header>
             <main class="content paper-grid">{children()}</main>
-            <nav class="tabbar">{nav_links(page, true)}</nav>
+            <nav class="tabbar">{tab_links(ctx)}</nav>
             <nav class="rail">
-                {nav_links(page, true)}
-                <div class="rail-tools">{tools(info)}</div>
+                {tab_links(ctx)}
+                <div class="rail-tools">{tools(ctx)}</div>
             </nav>
+            <AccountMenu ctx=ctx/>
         </div>
     }
-    .into_any()
+}
+
+/// A page's own wrapper. Inside today's Slint shell (`embedded`) it is the content box; in the app frame the page
+/// tells the frame what its chrome should say and draws its content only.
+#[component]
+pub fn PageShell(page: Page, embedded: bool, info: ChromeInfo, children: Children) -> impl IntoView {
+    if embedded {
+        return view! { <div class="shell"><main class="content">{children()}</main></div> }.into_any();
+    }
+    if let Some(ctx) = use_context::<FrameCtx>() {
+        let id = ctx.register(page, info);
+        on_cleanup(move || ctx.unregister(page, id));
+    }
+    children().into_any()
 }

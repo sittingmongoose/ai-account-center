@@ -56,6 +56,7 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
                 .with(|v| v.as_ref().map(headline_runs).unwrap_or_default())
         }),
         refresh: Callback::new(move |_| live.reload()),
+        lead: None,
     };
     let banner = move || {
         let error = live.error.get()?;
@@ -70,7 +71,7 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
         Some(view! { <p class="banner" role="status">{error.sentence()}{old}</p> })
     };
     view! {
-        <Shell embedded=embedded page="Status" title="Status" info=info>
+        <PageShell page=crate::Page::Status embedded=embedded info=info>
             <div class="page" data-stale=move || live.error.with(|e| e.is_some()).then_some("1")>
                 <div class="page-head">
                     <div>
@@ -93,9 +94,29 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
                         <PhonesPanel/>
                         <SpendPanel/>
                     </div>
+                    {embedded.then(frame_offer)}
                 </Show>
             </div>
-        </Shell>
+        </PageShell>
+    }
+}
+
+/// The way into the new app frame from today's app (PLAN step 4): off until this device turns it on here. The installed
+/// app keeps its own storage on iOS, so it is turned on from inside the installed app.
+fn frame_offer() -> impl IntoView {
+    let turn_on = move |_| {
+        if let Some(s) = window().local_storage().ok().flatten() {
+            let _ = s.set_item("aac-frame", "new");
+        }
+        let target = window().top().ok().flatten().unwrap_or_else(window);
+        let _ = target.location().set_href("/app/status");
+    };
+    view! {
+        <p class="frame-offer">
+            <b>"New app frame (preview)"</b>
+            <span>"Every tab in the new layout, with the Duo strip and band. Classic app in its account menu brings this one back."</span>
+            <button class="link" on:click=turn_on>"Try it"</button>
+        </p>
     }
 }
 

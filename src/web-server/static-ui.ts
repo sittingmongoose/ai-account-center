@@ -7,8 +7,10 @@
  *   the fly; /api JSON is encoded per request (api-compression.ts).
  * - Cache-Control by path: pkg/<buildId>/** is immutable; everything else revalidates.
  * - Page routes: /, /login, /analytics, /accounts, /accounts/<provider>, /status and
- *   /scoreboard answer with index.html; /app/status and /app/scoreboard answer with the
- *   Leptos pages' app/index.html (the page reads which one from its path); a few aliases redirect; anything else goes back to /.
+ *   /scoreboard answer with index.html; /app/home, /app/analytics, /app/accounts, /app/status and
+ *   /app/scoreboard answer with the Leptos app's app/index.html (the app frame, or with ?embed=1 the Status or
+ *   Scoreboard page inside today's shell; the page reads which one from its path); a few aliases redirect;
+ *   anything else goes back to /.
  */
 
 import crypto from 'crypto';
@@ -75,8 +77,14 @@ const STATIC_ICON_ALIASES: ReadonlyMap<string, string> = new Map<string, string>
 ]);
 
 const PAGES = new Set(['/', '/login', '/analytics', '/accounts', '/status', '/scoreboard']);
-/** The Leptos pages (shown in the shell's iframe, or opened directly). */
-const APP_PAGES = new Set(['/app/status', '/app/scoreboard']);
+/** The Leptos app: the app frame's five tabs (Status and Scoreboard also show in today's shell's iframe). */
+const APP_PAGES = new Set([
+  '/app/home',
+  '/app/analytics',
+  '/app/accounts',
+  '/app/status',
+  '/app/scoreboard',
+]);
 const APP_ENTRY = 'app/index.html';
 const PAGE_ALIASES = new Map([
   ['/settings', '/accounts'],

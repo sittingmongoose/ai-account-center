@@ -1,49 +1,135 @@
 //! AI Account Center pages drawn with Leptos (client-side rendered, served by the TypeScript server).
 //!
-//! `/app/status` is the Status page; `/app/scoreboard` the Model Scoreboard. `?embed=1` hides the page's own
-//! header when the Slint shell shows the page in its iframe. In the iframe the shell sends the theme
-//! (`{type: "aac-theme", mode}`); standalone, the page follows the system setting.
+//! Opened on its own, `/app/<page>` is the app frame (PLAN step 4): the header, tab bar, Duo strip and band, sign-in,
+//! and all five tabs, with Status and Scoreboard drawn here and Home, Analytics and Accounts shown from the Slint
+//! dashboard content-only. With `?embed=1` today's Slint shell shows the Status or Scoreboard content in its iframe
+//! and sends the theme (`{type: "aac-theme", mode}`).
 
 pub mod api;
 mod blocks;
 mod cards;
 mod drafts;
+mod frame;
 pub mod fmt;
 mod live;
 mod media;
+mod owned;
 mod scoreboard;
+mod session;
 mod status;
 mod ui;
 
 use leptos::prelude::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use wasm_bindgen::JsCast;
 
 /// True while the shell shows another tab: a hidden iframe's document still reports itself visible.
 static HIDDEN_BY_SHELL: AtomicBool = AtomicBool::new(false);
+/// The page on screen: in the shell's iframe it is the page itself; in the app frame it follows the tabs.
+static ACTIVE: AtomicU8 = AtomicU8::new(Page::Status as u8);
 
-/// Whether the page is on screen: the tab is visible and, inside the shell, this page is the current tab.
-pub fn on_screen() -> bool {
+/// Whether `page` is on screen: the tab is visible, the shell shows this page, and the frame's tab is this page.
+pub fn page_on_screen(page: Page) -> bool {
     document().visibility_state() == web_sys::VisibilityState::Visible
         && !HIDDEN_BY_SHELL.load(Ordering::Relaxed)
+        && ACTIVE.load(Ordering::Relaxed) == page as u8
+}
+
+/// The frame shows `page`: readers of a page that comes back on screen read at once (`SHOWN_EVENT`).
+pub fn set_active(page: Page) {
+    let was = ACTIVE.swap(page as u8, Ordering::Relaxed);
+    if was != page as u8 {
+        if let Ok(shown) = web_sys::Event::new(SHOWN_EVENT) {
+            let _ = window().dispatch_event(&shown);
+        }
+    }
 }
 
 /// Fired on the window when the shell shows this page again, so readers refresh at once.
 pub const SHOWN_EVENT: &str = "aac-shown";
 use wasm_bindgen::prelude::*;
 
-#[derive(Clone, Copy, PartialEq)]
-enum Page {
-    Status,
-    Scoreboard,
+/// The five tabs. Home, Analytics and Accounts are the Slint dashboard's pages, shown content-only inside the frame
+/// until they are ported; Status and Scoreboard are drawn here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Page {
+    Home = 0,
+    Analytics = 1,
+    Accounts = 2,
+    Status = 3,
+    Scoreboard = 4,
 }
 
-fn page_from_path(path: &str) -> Page {
-    if path.trim_end_matches('/').ends_with("/scoreboard") {
-        Page::Scoreboard
-    } else {
-        Page::Status
+impl Page {
+    pub const ALL: [Page; 5] = [Page::Home, Page::Analytics, Page::Accounts, Page::Status, Page::Scoreboard];
+
+    /// The frame's address for the page.
+    pub fn path(self) -> &'static str {
+        match self {
+            Page::Home => "/app/home",
+            Page::Analytics => "/app/analytics",
+            Page::Accounts => "/app/accounts",
+            Page::Status => "/app/status",
+            Page::Scoreboard => "/app/scoreboard",
+        }
     }
+
+    /// The page's id in the Slint dashboard (bridge.js `navigate`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Page::Home => "home",
+            Page::Analytics => "analytics",
+            Page::Accounts => "accounts",
+            Page::Status => "status",
+            Page::Scoreboard => "scoreboard",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Page> {
+        Page::ALL.into_iter().find(|p| p.id() == id)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Page::Home => "Home",
+            Page::Analytics => "Analytics",
+            Page::Accounts => "Accounts",
+            Page::Status => "Status",
+            Page::Scoreboard => "Scoreboard",
+        }
+    }
+
+    /// The page's name where the chrome has room for it (the Duo band).
+    pub fn title(self) -> &'static str {
+        match self {
+            Page::Accounts => "Accounts & Settings",
+            Page::Scoreboard => "Model Scoreboard",
+            other => other.label(),
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Page::Home => "home",
+            Page::Analytics => "chart",
+            Page::Accounts => "users",
+            Page::Status => "activity",
+            Page::Scoreboard => "trophy",
+        }
+    }
+
+    /// Drawn by the Slint dashboard, inside the frame.
+    pub fn slint(self) -> bool {
+        matches!(self, Page::Home | Page::Analytics | Page::Accounts)
+    }
+}
+
+pub(crate) fn page_from_path(path: &str) -> Page {
+    let path = path.trim_end_matches('/');
+    Page::ALL
+        .into_iter()
+        .find(|p| path.ends_with(&format!("/{}", p.id())))
+        .unwrap_or(Page::Status)
 }
 
 fn embedded(search: &str) -> bool {
@@ -54,9 +140,16 @@ fn embedded(search: &str) -> bool {
         == Some("1")
 }
 
-fn set_theme(mode: &str) {
+pub(crate) fn set_theme(mode: &str) {
     if let Some(root) = document().document_element() {
-        let _ = root.set_attribute("data-theme", if mode == "dark" { "dark" } else { "light" });
+        match mode {
+            "dark" | "light" => {
+                let _ = root.set_attribute("data-theme", mode);
+            }
+            _ => {
+                let _ = root.remove_attribute("data-theme");
+            }
+        }
     }
 }
 
@@ -121,20 +214,31 @@ pub fn start() {
     let embed = embedded(&location.search().unwrap_or_default());
     ui::device::start(embed);
     if embed {
+        // Today's Slint shell shows this page in its iframe: the content only.
+        ACTIVE.store(page as u8, Ordering::Relaxed);
         listen_to_shell();
+        mount_to_body(move || {
+            media::provide_viewer();
+            let page_view = match page {
+                Page::Scoreboard => view! { <scoreboard::ScoreboardPage embedded=true/> }.into_any(),
+                _ => {
+                    provide_context(live::start());
+                    view! { <status::StatusPage embedded=true/> }.into_any()
+                }
+            };
+            view! {
+                {page_view}
+                <media::ViewerOverlay/>
+            }
+        });
+        return;
     }
+    // Opened on its own: the app frame, with every tab in it.
+    ACTIVE.store(page as u8, Ordering::Relaxed);
     mount_to_body(move || {
         media::provide_viewer();
-        let page_view = match page {
-            Page::Status => {
-                // Only the Status page reads /api/status.
-                provide_context(live::start());
-                view! { <status::StatusPage embedded=embed/> }.into_any()
-            }
-            Page::Scoreboard => view! { <scoreboard::ScoreboardPage embedded=embed/> }.into_any(),
-        };
         view! {
-            {page_view}
+            <frame::Frame initial=page/>
             <media::ViewerOverlay/>
         }
     });
@@ -149,6 +253,18 @@ mod tests {
         assert!(page_from_path("/app/status") == Page::Status);
         assert!(page_from_path("/app/scoreboard") == Page::Scoreboard);
         assert!(page_from_path("/app/scoreboard/") == Page::Scoreboard);
+        assert!(page_from_path("/app/home") == Page::Home);
+        assert!(page_from_path("/app/analytics") == Page::Analytics);
+        assert!(page_from_path("/app/accounts") == Page::Accounts);
         assert!(page_from_path("/app/") == Page::Status);
+    }
+
+    #[test]
+    fn each_page_has_its_own_address_and_dashboard_id() {
+        for page in Page::ALL {
+            assert_eq!(page_from_path(page.path()), page);
+            assert_eq!(Page::from_id(page.id()), Some(page));
+        }
+        assert!(Page::Home.slint() && Page::Accounts.slint() && !Page::Status.slint());
     }
 }

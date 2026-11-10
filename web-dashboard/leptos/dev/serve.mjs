@@ -12,7 +12,7 @@ const port = Number(process.argv[2] || 8790);
 const fixture = process.argv[3] || path.join(crate, 'fixtures/status-design-view.json');
 const fixtureJson = (name) => JSON.parse(fs.readFileSync(path.join(crate, 'fixtures', name), 'utf8'));
 let view = JSON.parse(fs.readFileSync(fixture, 'utf8'));
-const types = { '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.png': 'image/png', '.js': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.html': 'text/html; charset=utf-8', '.json': 'application/json' };
+const types = { '.mjs': 'text/javascript', '.webmanifest': 'application/manifest+json', '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.png': 'image/png', '.js': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.html': 'text/html; charset=utf-8', '.json': 'application/json' };
 
 function file(res, p) {
   fs.readFile(p, (err, body) => {
@@ -60,9 +60,23 @@ http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   if (p === '/__reset') { view = JSON.parse(fs.readFileSync(fixture, 'utf8')); json(res, 200, { ok: true }); return; }
-  if (p === '/app/status' || p === '/app/scoreboard') {
+  if (/^\/app\/(home|analytics|accounts|status|scoreboard)$/.test(p)) {
     const html = fs.readFileSync(path.join(crate, 'index.html'), 'utf8').replaceAll('{{PKG}}', '/app/pkg').replaceAll('{{CSS}}', '/app/app.css');
     res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
+  } else if (/^\/[a-z-]+\.mjs$/.test(p)) file(res, path.join(dashboard, 'public', path.basename(p)));
+  else if (p === '/manifest.webmanifest') file(res, path.join(dashboard, 'public', 'manifest.webmanifest'));
+  else if (p === '/api/auth/check') json(res, 200, { authenticated: true, authRequired: true, username: 'fixture', accessMode: 'password' });
+  else if (p === '/api/auth/setup') json(res, 200, { configured: true, sessionTimeoutHours: 720 });
+  else if (p === '/' && url.searchParams.get('content') === '1') {
+    // No Slint build here: a stand-in that speaks the frame's message contract, for layout work on the frame itself.
+    res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(`<!doctype html><html><body style="margin:0;font:15px system-ui;background:#ECF0F3;color:#63717F;display:grid;place-items:center;height:100vh">
+<p id="t"></p><script>
+const say = (page) => { document.getElementById('t').textContent = 'The ' + page + ' page of the Slint dashboard shows here.'; };
+say(new URLSearchParams(location.search).get('view') || 'home');
+addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.type === 'aac-frame' && e.data.action === 'navigate') say(e.data.value); });
+parent.postMessage({ type: 'aac-content', kind: 'ready' }, location.origin);
+parent.postMessage({ type: 'aac-content', kind: 'chrome', statusLead: 'Updated', statusStrong: 'just now', statusMore: 'live' }, location.origin);
+</script></body></html>`);
   } else if (p.startsWith('/app/marks/')) file(res, path.join(crate, 'src/ui/marks', path.basename(p)));
   else if (p.startsWith('/app/pkg/')) file(res, path.join(crate, 'pkg', path.basename(p)));
   else if (p === '/app/app.css') file(res, path.join(crate, 'style/app.css'));

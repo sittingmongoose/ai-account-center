@@ -904,7 +904,12 @@ fn Review(
         sending.set(true);
         problem.set(None);
         spawn_local(async move {
-            match post_answers(&entries).await {
+            let outcome = post_answers(&entries).await;
+            // Signed out while it was on its way: the frame unmounted this page, and the drafts stay stored.
+            if sending.try_get_untracked().is_none() {
+                return;
+            }
+            match outcome {
                 SendOutcome::Results(results) => {
                     let label_of = |id: &str| {
                         cards

@@ -1364,6 +1364,13 @@ pub fn report_content_area() {
     with_ui(|ui| ui.invoke_report_content());
 }
 
+/// The app frame (PLAN step 4) shows this dashboard in its iframe for Home, Analytics and Accounts: the frame draws
+/// the header, tab bar and sign-in, so the dashboard draws its pages only (`content-only`).
+#[wasm_bindgen]
+pub fn set_content_only(content_only: bool) {
+    with_ui(|ui| ui.set_content_only(content_only));
+}
+
 /// "home" | "analytics" | "accounts" | "status" | "scoreboard"; the shell animates the change.
 #[wasm_bindgen]
 pub fn set_current_page(page: &str) {
