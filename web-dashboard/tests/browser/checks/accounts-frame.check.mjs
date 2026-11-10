@@ -126,13 +126,13 @@ export const tests = {
 		await t.equal('no change was sent', changes(server).length, 0);
 	},
 
-	async 'accounts: a pending switch holds changes, shows its dialog, and cancels'(t) {
+	async 'accounts: a pending switch holds changes, shows the frame\'s approval, and cancels'(t) {
 		const server = fakeServer();
 		await open(t, server);
 		await t.page.click(`${row('codex:two')} [data-probe="activate:codex:two"]`);
-		await t.until('the dashboard shows its switch dialog over the tab', () => {
+		await t.until('the frame shows its switch approval (activation.rs), the dashboard stays hidden', () => {
 			const host = document.querySelector('.slint-host');
-			return !!host && !host.hidden && host.classList.contains('raised');
+			return !!document.querySelector('.adialog') && !!host && host.hidden && !host.classList.contains('raised');
 		}, null, { timeout: 15000 });
 		const before = changes(server).length;
 		const toasts = await t.page.evaluate(() => document.querySelectorAll('.toast').length);
@@ -144,8 +144,8 @@ export const tests = {
 		await t.until('a toast says to finish the switch first', () => [...document.querySelectorAll('.toast')].some((el) => /Finish the account switch first/.test(el.textContent)), null, { timeout: 10000 });
 		await t.equal('the remove was not sent', changes(server).length, before);
 		await t.check('one toast more', (await t.page.evaluate(() => document.querySelectorAll('.toast').length)) > toasts);
-		await t.page.evaluate(() => document.querySelector('iframe.slint-frame').contentWindow.ccsDashboardAction('activation-cancel', ''));
-		await t.until('the dialog goes and the tab is back', () => document.querySelector('.slint-host')?.hidden === true, null, { timeout: 10000 });
+		await t.page.locator('.adialog .a-btns .btn', { hasText: 'Cancel' }).click();
+		await t.until('Cancel closes the approval', () => !document.querySelector('.adialog') && document.querySelector('.slint-host')?.hidden === true, null, { timeout: 10000 });
 		const activations = changes(server).filter((r) => r.path.startsWith('/api/codex/profiles/'));
 		await t.equal('one activation ask, no confirmation sent', JSON.stringify(activations.map((r) => r.body)), JSON.stringify([{}]));
 		await t.noConsoleErrors('console: only the switch that asked for a confirmation', { allow: [/status of 409/] });
