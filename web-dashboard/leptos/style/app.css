@@ -721,8 +721,11 @@ textarea.note::placeholder { color: var(--ink-4); }
 }
 @container content (min-width: 600px) and (max-width: 759.98px) {
   /* Duo unfolded portrait: the folded sections two to a row under the questions and pins. */
-  .status-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .status-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-flow: row dense; }
   .sec-questions, .sec-pinned { grid-column: 1 / -1; }
+  /* An expanded section takes the whole row, so a tall one never leaves an empty column beside it; the folded ones
+     pack two to a row around it. */
+  .status-grid > .collapsed-open { grid-column: 1 / -1; }
 }
 @container content (min-width: 600px) and (max-width: 1279.98px) {
   .picks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -804,6 +807,8 @@ textarea.note::placeholder { color: var(--ink-4); }
 }
 /* Duo portrait: the band already names the page and sums it up. */
 :root[data-chrome='band'] .page-head:not(.sb-head) { display: none; }
+/* Beside the rail, which shows the page, the page's name goes, as on the phone: the summary starts at the top. */
+:root[data-chrome='rail'] .page-title { display: none; }
 /* Beside the rail the page's name and its one-line summary share a line, as wider screens do: no line for a word. */
 :root[data-chrome='rail'] .page-head > div { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
 :root[data-chrome='rail'] .page-head .headline { margin-top: 0; }
