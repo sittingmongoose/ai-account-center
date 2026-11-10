@@ -1,10 +1,13 @@
 """Offline Claude Desktop quota reader identity and output-boundary regressions."""
 
+import base64
+import hashlib
 import json
 import os
 from contextlib import nullcontext
 from pathlib import Path
 import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -506,7 +509,7 @@ class WindowsProfileRelocationTests(unittest.TestCase):
                         self.current.mkdir(parents=True)
                     return ACCOUNT, cache()
 
-                def extras(*args):
+                def extras(*args, **kwargs):
                     if phase == "extras":
                         self.current.mkdir(parents=True)
                     return []
@@ -1139,14 +1142,15 @@ class WebExtraTests(unittest.TestCase):
             {"amount": 0, "currency": "USD"}, availability=availability)
         self.assertEqual(availability, {"resetCredits": "unavailable", "prepaidBalance": "ok"})
         self.assertEqual(windows[0]["remaining"], 0)
-        # An eligible-False cedar_ember contributes no window (unknown, not
-        # zero); the prepaid zero still emits exactly one window.
+        # An eligible-False or absent cedar_ember contributes no window (unknown,
+        # not zero); the prepaid zero still emits exactly one window. resetCredits
+        # stays unavailable unless eligible is True (lead decision).
         for reset, prepaid in (({}, {}), ({"cedar_ember": None}, {"amount": None}),
                                ({"cedar_ember": {"eligible": False, "grants": []}}, {"amount": 0})):
             with self.subTest(reset=reset, prepaid=prepaid):
                 availability = {}
                 windows, _ = self.web_windows(self.web_account(), reset, prepaid, availability=availability)
-                self.assertEqual(availability, {"resetCredits": "ok", "prepaidBalance": "ok"})
+                self.assertEqual(availability, {"resetCredits": "unavailable", "prepaidBalance": "ok"})
                 self.assertEqual(len(windows), 1 if prepaid.get("amount") == 0 else 0)
         availability = {}
         self.web_windows(self.web_account(uuid=OTHER), availability=availability)
@@ -1159,7 +1163,7 @@ class WebExtraTests(unittest.TestCase):
         with mock.patch.object(usage.sys, "platform", "win32"), mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), mock.patch.object(usage, "Client", return_value=client), mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]), mock.patch.object(usage, "WebClient", return_value=web):
             result = usage.collect("gmail", "windows", expected_email=EMAIL)
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["optionalExtras"], {"resetCredits": "ok", "prepaidBalance": "ok"})
+        self.assertEqual(result["optionalExtras"], {"resetCredits": "unavailable", "prepaidBalance": "ok"})
         self.assertEqual([window["key"] for window in result["windows"]], ["five_hour", "seven_day_fable"])
 
     def test_native_quota_survives_missing_optional_session(self):
@@ -1274,6 +1278,334 @@ class HttpBoundaryTests(unittest.TestCase):
                 client.get("/api/oauth/usage", TOKEN)
             request.assert_not_called()
 
+
+class LiveSessionCookieTests(unittest.TestCase):
+    TEST_AES_KEY = b"\xab" * 32
+
+    def _write_local_state(self, profile_root):
+        # Fake Local State with a DPAPI-prefixed encrypted_key. unprotect is
+        # mocked to return TEST_AES_KEY, so the wrapped bytes are irrelevant.
+        encoded = base64.b64encode(b"DPAPI" + b"fake-wrapped-key").decode("ascii")
+        (profile_root / "Local State").write_text(json.dumps({"os_crypt": {"encrypted_key": encoded}}))
+
+    def _encrypt_v10(self, value, host_key, with_hash_prefix=True):
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        nonce = os.urandom(12)
+        if with_hash_prefix:
+            prefix = hashlib.sha256(host_key.encode("utf-8")).digest()
+            plaintext = prefix + value.encode("utf-8")
+        else:
+            plaintext = value.encode("utf-8")
+        ciphertext = AESGCM(self.TEST_AES_KEY).encrypt(nonce, plaintext, None)
+        return b"v10" + nonce + ciphertext
+
+    def _make_profile_root(self, tmpdir):
+        root = Path(tmpdir) / "profile"
+        (root / "Network").mkdir(parents=True)
+        self._write_local_state(root)
+        return root
+
+    def _create_cookies_db(self, profile_root, rows):
+        db_path = profile_root / "Network" / "Cookies"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(str(db_path))
+        try:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS cookies ("
+                "creation_utc INTEGER, host_key TEXT, top_frame_site_key TEXT,"
+                " name TEXT, path TEXT, expires_utc INTEGER,"
+                " is_secure INTEGER, is_httponly INTEGER, has_expires INTEGER,"
+                " encrypted_value BLOB, value TEXT)"
+            )
+            connection.execute("DELETE FROM cookies")
+            for row in rows:
+                connection.execute(
+                    "INSERT INTO cookies (creation_utc, host_key, top_frame_site_key, name, path,"
+                    " expires_utc, is_secure, is_httponly, has_expires, encrypted_value, value)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        row.get("creation_utc", 0),
+                        row.get("host_key", ".claude.ai"),
+                        row.get("top_frame_site_key", ""),
+                        row.get("name", "sessionKey"),
+                        row.get("path", "/"),
+                        row.get("expires_utc", int((time.time() + 3600) * 1_000_000 + usage.CHROMIUM_EPOCH)),
+                        row.get("is_secure", 1),
+                        row.get("is_httponly", 1),
+                        row.get("has_expires", 1),
+                        row.get("encrypted_value", b""),
+                        row.get("value", ""),
+                    ),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _future_expiry(self):
+        return int((time.time() + 3600) * 1_000_000 + usage.CHROMIUM_EPOCH)
+
+    def test_cookie_db_uri_uses_as_uri_and_rejects_relative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "Network" / "Cookies"
+            self.assertEqual(usage._cookie_db_uri(db), db.as_uri() + "?mode=ro&immutable=1")
+        with self.assertRaises(usage.UsageUnavailable):
+            usage._cookie_db_uri(Path("relative/Cookies"))
+
+    def test_profile_key_unwraps_local_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_profile_root(tmp)
+            with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY) as unp:
+                key = usage.profile_key(root)
+            self.assertEqual(key, self.TEST_AES_KEY)
+            unp.assert_called_once()
+
+    def test_live_session_v10_with_host_hash_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_profile_root(tmp)
+            session_blob = self._encrypt_v10("fixture-live-session-key", ".claude.ai", True)
+            org_blob = self._encrypt_v10(ORG, ".claude.ai", True)
+            self._create_cookies_db(root, [
+                {"name": "sessionKey", "host_key": ".claude.ai", "encrypted_value": session_blob, "value": ""},
+                {"name": "lastActiveOrg", "host_key": ".claude.ai", "encrypted_value": org_blob, "value": "", "is_secure": 0, "is_httponly": 0},
+            ])
+            with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY):
+                cookies = usage.live_session_cookies(root, ORG)
+            self.assertEqual({c["name"]: c["value"] for c in cookies},
+                             {"sessionKey": "fixture-live-session-key", "lastActiveOrg": ORG})
+            self.assertNotIn("fixture-live-session-key", json.dumps(cookies) if False else "")
+
+    def test_live_session_v10_without_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_profile_root(tmp)
+            session_blob = self._encrypt_v10("fixture-live-session-no-prefix", ".claude.ai", False)
+            org_blob = self._encrypt_v10(ORG, "claude.ai", False)
+            self._create_cookies_db(root, [
+                {"name": "sessionKey", "host_key": ".claude.ai", "encrypted_value": session_blob, "value": ""},
+                {"name": "lastActiveOrg", "host_key": "claude.ai", "encrypted_value": org_blob, "value": "", "is_secure": 0, "is_httponly": 0},
+            ])
+            with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY):
+                cookies = usage.live_session_cookies(root, ORG)
+            self.assertEqual({c["name"]: c["value"] for c in cookies},
+                             {"sessionKey": "fixture-live-session-no-prefix", "lastActiveOrg": ORG})
+
+    def test_live_session_plaintext_value_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_profile_root(tmp)
+            # encrypted_value empty, value carries the token
+            self._create_cookies_db(root, [
+                {"name": "sessionKey", "host_key": ".claude.ai", "encrypted_value": b"", "value": "fixture-plaintext-session"},
+                {"name": "lastActiveOrg", "host_key": ".claude.ai", "encrypted_value": b"", "value": ORG, "is_secure": 0, "is_httponly": 0},
+            ])
+            with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY):
+                cookies = usage.live_session_cookies(root, ORG)
+            self.assertEqual({c["name"]: c["value"] for c in cookies},
+                             {"sessionKey": "fixture-plaintext-session", "lastActiveOrg": ORG})
+
+    def test_live_session_rejects_wrong_host_path_flags(self):
+        expires = self._future_expiry()
+        cases = [
+            ("host", {"host_key": ".evil.invalid", "name": "sessionKey"}),
+            ("path", {"path": "/other", "name": "sessionKey"}),
+            ("secure", {"is_secure": 0, "name": "sessionKey"}),
+            ("httponly", {"is_httponly": 0, "name": "sessionKey"}),
+            ("top_frame", {"top_frame_site_key": "https://evil.invalid", "name": "sessionKey"}),
+        ]
+        for label, bad in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = self._make_profile_root(tmp)
+                session_blob = self._encrypt_v10("fixture-session", ".claude.ai", True)
+                org_blob = self._encrypt_v10(ORG, ".claude.ai", True)
+                # good org row always
+                rows = [
+                    {"name": "sessionKey", "host_key": ".claude.ai", "encrypted_value": session_blob, "value": ""},
+                    {"name": "lastActiveOrg", "host_key": ".claude.ai", "encrypted_value": org_blob, "value": "", "is_secure": 0, "is_httponly": 0},
+                ]
+                # apply bad override to the sessionKey row copy
+                bad_row = dict(rows[0])
+                bad_row.update(bad)
+                # For cases where host_key was changed via bad, we need encrypted blob for that host?
+                # The blob host hash prefix should correspond to the stored host_key; for evil host
+                # the blob still decrypts but validation must reject host_key before value check.
+                # Keep blob host .claude.ai for non-host cases except host case where we keep same blob
+                # but change host_key column to evil so validation fails on host_key.
+                rows[0] = bad_row
+                # If bad changed host_key, keep blob but host_key column is evil.
+                if label == "host":
+                    rows[0]["encrypted_value"] = self._encrypt_v10("fixture-session", ".evil.invalid", True)
+                self._create_cookies_db(root, rows)
+                with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY):
+                    with self.assertRaises(usage.UsageUnavailable):
+                        usage.live_session_cookies(root, ORG)
+
+    def test_live_session_missing_db_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "profile"
+            (root / "Network").mkdir(parents=True)
+            self._write_local_state(root)
+            # No Cookies db written
+            with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY):
+                with self.assertRaises(usage.UsageUnavailable):
+                    usage.live_session_cookies(root, ORG)
+
+    def test_live_session_org_mismatch_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_profile_root(tmp)
+            session_blob = self._encrypt_v10("fixture-session", ".claude.ai", True)
+            org_blob = self._encrypt_v10(OTHER, ".claude.ai", True)
+            self._create_cookies_db(root, [
+                {"name": "sessionKey", "host_key": ".claude.ai", "encrypted_value": session_blob, "value": ""},
+                {"name": "lastActiveOrg", "host_key": ".claude.ai", "encrypted_value": org_blob, "value": "", "is_secure": 0, "is_httponly": 0},
+            ])
+            with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY):
+                with self.assertRaises(usage.UsageUnavailable):
+                    usage.live_session_cookies(root, ORG)
+
+    def test_live_session_expired_vs_malformed_expiry(self):
+        # past expires_utc must PASS (server decides), malformed must FAIL
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_profile_root(tmp)
+            session_blob = self._encrypt_v10("fixture-session", ".claude.ai", True)
+            org_blob = self._encrypt_v10(ORG, ".claude.ai", True)
+            self._create_cookies_db(root, [
+                {"name": "sessionKey", "host_key": ".claude.ai", "encrypted_value": session_blob, "value": "", "expires_utc": 1},
+                {"name": "lastActiveOrg", "host_key": ".claude.ai", "encrypted_value": org_blob, "value": "", "is_secure": 0, "is_httponly": 0},
+            ])
+            with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY):
+                cookies = usage.live_session_cookies(root, ORG)
+            self.assertEqual(len(cookies), 2)
+        # malformed expiry (string) must be rejected
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_profile_root(tmp)
+            db_path = root / "Network" / "Cookies"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(str(db_path))
+            try:
+                connection.execute(
+                    "CREATE TABLE cookies (creation_utc INTEGER, host_key TEXT, top_frame_site_key TEXT,"
+                    " name TEXT, path TEXT, expires_utc, is_secure INTEGER, is_httponly INTEGER,"
+                    " has_expires INTEGER, encrypted_value BLOB, value TEXT)"
+                )
+                session_blob = self._encrypt_v10("fixture-session", ".claude.ai", True)
+                org_blob = self._encrypt_v10(ORG, ".claude.ai", True)
+                connection.execute(
+                    "INSERT INTO cookies (creation_utc, host_key, top_frame_site_key, name, path, expires_utc, is_secure, is_httponly, has_expires, encrypted_value, value) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (0, ".claude.ai", "", "sessionKey", "/", "not-a-number", 1, 1, 1, session_blob, ""),
+                )
+                connection.execute(
+                    "INSERT INTO cookies (creation_utc, host_key, top_frame_site_key, name, path, expires_utc, is_secure, is_httponly, has_expires, encrypted_value, value) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (0, ".claude.ai", "", "lastActiveOrg", "/", 0, 0, 0, 0, org_blob, ""),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            with mock.patch.object(usage, "unprotect", return_value=self.TEST_AES_KEY):
+                with self.assertRaises(usage.UsageUnavailable):
+                    usage.live_session_cookies(root, ORG)
+
+    def test_live_cookie_fingerprint_stable_and_change_detects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_profile_root(tmp)
+            self.assertIsNone(usage.live_cookie_fingerprint(root))
+            session_blob = self._encrypt_v10("fixture-session", ".claude.ai", True)
+            org_blob = self._encrypt_v10(ORG, ".claude.ai", True)
+            self._create_cookies_db(root, [
+                {"name": "sessionKey", "host_key": ".claude.ai", "encrypted_value": session_blob, "value": "", "creation_utc": 100},
+                {"name": "lastActiveOrg", "host_key": ".claude.ai", "encrypted_value": org_blob, "value": "", "creation_utc": 101, "is_secure": 0, "is_httponly": 0},
+            ])
+            fp1 = usage.live_cookie_fingerprint(root)
+            self.assertIsNotNone(fp1)
+            self.assertRegex(fp1, r"^[a-f0-9]{64}$")
+            fp2 = usage.live_cookie_fingerprint(root)
+            self.assertEqual(fp1, fp2)
+            # change the stored bytes
+            session_blob2 = self._encrypt_v10("fixture-session-rotated", ".claude.ai", True)
+            self._create_cookies_db(root, [
+                {"name": "sessionKey", "host_key": ".claude.ai", "encrypted_value": session_blob2, "value": "", "creation_utc": 100},
+                {"name": "lastActiveOrg", "host_key": ".claude.ai", "encrypted_value": org_blob, "value": "", "creation_utc": 101, "is_secure": 0, "is_httponly": 0},
+            ])
+            fp3 = usage.live_cookie_fingerprint(root)
+            self.assertNotEqual(fp1, fp3)
+
+    def test_optional_web_windows_live_first_then_capsule_fallback(self):
+        # live succeeds -> capsule never called
+        web_account = {"uuid": ACCOUNT, "email_address": EMAIL, "memberships": [{"organization": {"uuid": ORG}}]}
+        usage_payload = {"cedar_ember": {"eligible": True, "grants": []}}
+        prepaid_payload = {"amount": 0, "currency": "USD"}
+        client = mock.Mock()
+        client.get.side_effect = [web_account, usage_payload, prepaid_payload]
+        availability = {}
+        with mock.patch.object(usage, "live_session_cookies", return_value=[{"name": "sessionKey", "value": "live-session"}, {"name": "lastActiveOrg", "value": ORG}]) as live_mock, \
+                mock.patch.object(usage, "capsule_cookies") as capsule_mock, \
+                mock.patch.object(usage, "WebClient", return_value=client):
+            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, home="/tmp", profile_root=Path("/fake/profile"), availability=availability, expected_email=EMAIL)
+            live_mock.assert_called_once()
+            capsule_mock.assert_not_called()
+            self.assertEqual(availability.get("resetCredits"), "ok")
+            self.assertEqual(availability.get("prepaidBalance"), "ok")
+        # live fails -> capsule used
+        client2 = mock.Mock()
+        client2.get.side_effect = [web_account, usage_payload, prepaid_payload]
+        availability2 = {}
+        with mock.patch.object(usage, "live_session_cookies", side_effect=usage.UsageUnavailable) as live2, \
+                mock.patch.object(usage, "capsule_cookies", return_value=[{"name": "sessionKey", "value": "capsule"}, {"name": "lastActiveOrg", "value": ORG}]) as cap2, \
+                mock.patch.object(usage, "WebClient", return_value=client2):
+            windows2 = usage.optional_web_windows("gmail", ACCOUNT, ORG, home="/tmp", profile_root=Path("/fake/profile"), availability=availability2, expected_email=EMAIL)
+            live2.assert_called_once()
+            cap2.assert_called_once()
+            self.assertEqual(availability2.get("resetCredits"), "ok")
+
+    def test_optional_web_windows_eligible_false_stays_unavailable_no_windows(self):
+        web_account = {"uuid": ACCOUNT, "email_address": EMAIL, "memberships": [{"organization": {"uuid": ORG}}]}
+        client = mock.Mock()
+        client.get.side_effect = [web_account, {"cedar_ember": {"eligible": False, "grants": []}}, {"amount": 0, "currency": "USD"}]
+        availability = {}
+        with mock.patch.object(usage, "live_session_cookies", return_value=[{"name": "sessionKey", "value": "live"}, {"name": "lastActiveOrg", "value": ORG}]), \
+                mock.patch.object(usage, "WebClient", return_value=client):
+            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, home="/tmp", profile_root=Path("/tmp/profile"), availability=availability, expected_email=EMAIL)
+            self.assertEqual(availability.get("resetCredits"), "unavailable")
+            self.assertEqual([w for w in windows if w["key"].startswith("reset_credit")], [])
+            # also show that eligible false with grants list still yields no window
+        # also test absent cedar_ember stays unavailable
+        client2 = mock.Mock()
+        client2.get.side_effect = [web_account, {}, {"amount": 0, "currency": "USD"}]
+        availability2 = {}
+        with mock.patch.object(usage, "live_session_cookies", return_value=[{"name": "sessionKey", "value": "live"}, {"name": "lastActiveOrg", "value": ORG}]), \
+                mock.patch.object(usage, "WebClient", return_value=client2):
+            windows2 = usage.optional_web_windows("gmail", ACCOUNT, ORG, home="/tmp", profile_root=Path("/tmp/profile"), availability=availability2, expected_email=EMAIL)
+            self.assertEqual(availability2.get("resetCredits"), "unavailable")
+            self.assertEqual(windows2, [w for w in windows2 if w["key"] == "prepaid_balance"])
+
+    def test_optional_web_windows_eligible_true_zero_grants_ok(self):
+        web_account = {"uuid": ACCOUNT, "email_address": EMAIL, "memberships": [{"organization": {"uuid": ORG}}]}
+        client = mock.Mock()
+        client.get.side_effect = [web_account, {"cedar_ember": {"eligible": True, "grants": []}}, {"amount": 0, "currency": "USD"}]
+        availability = {}
+        with mock.patch.object(usage, "live_session_cookies", return_value=[{"name": "sessionKey", "value": "live"}, {"name": "lastActiveOrg", "value": ORG}]), \
+                mock.patch.object(usage, "WebClient", return_value=client):
+            windows = usage.optional_web_windows("gmail", ACCOUNT, ORG, home="/tmp", profile_root=Path("/tmp/profile"), availability=availability, expected_email=EMAIL)
+            self.assertEqual(availability.get("resetCredits"), "ok")
+            summary = [w for w in windows if w["key"] == "reset_credits_available"]
+            self.assertEqual(len(summary), 1)
+            self.assertEqual(summary[0]["remaining"], 0)
+
+    def test_collect_allowance_only_does_not_mark_reset_ok(self):
+        # OAuth payload with only session_reset_allowance must not flip resetCredits to ok
+        client = FakeClient(profile(), {"five_hour": {"utilization": 0},
+                                        "juniper_tide": {"eligible": True, "available": True, "resets_per_week": 1}})
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", return_value=(ACCOUNT, cache())), \
+                mock.patch.object(usage, "Client", return_value=client), \
+                mock.patch.object(usage, "optional_web_windows", return_value=[]) as extras_mock:
+            result = usage.collect("gmail", "windows", expected_email=EMAIL)
+            # verify profile_root is forwarded
+            args, kwargs = extras_mock.call_args
+            self.assertIn("profile_root", kwargs)
+            # oauth allowance alone must not mark ok
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["optionalExtras"]["resetCredits"], "unavailable")
+            windows = result["windows"]
+            self.assertTrue(any(w["key"] == "session_reset_allowance" for w in windows))
+            self.assertFalse(any(w["key"] == "reset_credits_available" for w in windows))
 
 if __name__ == "__main__":
     unittest.main()

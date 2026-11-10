@@ -1,10 +1,13 @@
 """Read-only, identity-bound Claude Desktop quota and reset timestamps.
 
 Windows decrypts its existing OAuth cache as the same signed-in OS user. Tokens
-stay in memory; this helper never refreshes, writes auth, reads Cookies, follows
-HTTP redirects, or emits upstream response bodies or exception text.
-Optional web extras use the existing same-user DPAPI session capsule, verified
-again against this native account and organization before any balance request.
+stay in memory; this helper never refreshes, writes auth, follows HTTP
+redirects, or emits upstream response bodies or exception text.
+Optional web extras read the Desktop profile's own live web session cookie in
+memory (same user, read-only, identity re-verified) and fall back to the legacy
+same-user DPAPI session capsule, verified again against this native account
+and organization before any balance request. Credential values are never
+persisted or emitted.
 """
 
 import argparse
@@ -19,6 +22,7 @@ import ntpath
 import os
 from pathlib import Path
 import re
+import sqlite3
 import stat
 import sys
 import time
@@ -247,23 +251,28 @@ def unprotect(blob, expected_length=32):
         kernel.LocalFree(destination.pbData)
 
 
-def decrypt_cache(profile_path):
-    # cryptography is already installed on the user's Windows machine. No
-    # packages are downloaded by the collector.
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-    config = read_json(profile_path / "config.json")
-    state = read_json(profile_path / "Local State")
-    account_uuid = config.get("lastKnownAccountUuid")
-    if not isinstance(account_uuid, str) or not re.fullmatch(UUID, account_uuid):
-        raise UsageUnavailable("needs_sign_in")
+def profile_key(profile_root):
+    """Unwrap the Local State os_crypt key as the same signed-in OS user."""
+    state = read_json(profile_root / "Local State")
     crypto_state = state.get("os_crypt")
     if not isinstance(crypto_state, dict):
         raise UsageUnavailable()
     wrapped = decode_base64(crypto_state.get("encrypted_key"))
     if not wrapped.startswith(b"DPAPI") or len(wrapped) <= 5:
         raise UsageUnavailable()
-    key = unprotect(wrapped[5:])
+    return unprotect(wrapped[5:])
+
+
+def decrypt_cache(profile_path):
+    # cryptography is already installed on the user's Windows machine. No
+    # packages are downloaded by the collector.
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    config = read_json(profile_path / "config.json")
+    account_uuid = config.get("lastKnownAccountUuid")
+    if not isinstance(account_uuid, str) or not re.fullmatch(UUID, account_uuid):
+        raise UsageUnavailable("needs_sign_in")
+    key = profile_key(profile_path)
     blob = decode_base64(config.get("oauth:tokenCacheV2"))
     if not blob.startswith(b"v10") or len(blob) < 31:
         raise UsageUnavailable()
@@ -709,26 +718,16 @@ def normalize_prepaid(value):
         amount / 100 if currency else amount, currency or "credits", expires=reset_at(value.get("next_expires_at")))]
 
 
-def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expected_email=None):
-    expected = resolve_expected_email(expected_email)
-    if not valid_profile_id(profile_id) or expected is None:
-        raise UsageUnavailable()
-    home = Path.home() if home is None else Path(home)
-    path = home / ".ccs/claude-session-migration" / (profile_id + "-source.dpapi")
-    if path.is_symlink():
-        raise UsageUnavailable()
-    with path.open("rb") as handle:
-        raw = handle.read(MAX_CAPSULE_BYTES + 1)
-    if len(raw) > MAX_CAPSULE_BYTES:
-        raise UsageUnavailable()
-    capsule = json.loads(unprotect(raw, expected_length=None))
-    if (not isinstance(capsule, dict) or capsule.get("schemaVersion") != 1 or
-        capsule.get("profileId") != profile_id or capsule.get("email") != expected or
-        capsule.get("accountUuid") != account_uuid or not isinstance(capsule.get("cookies"), list) or
-        len(capsule["cookies"]) > 20):
-        raise UsageUnavailable()
+def _validate_cookie_rows(rows, organization_uuid):
+    """Shared session-cookie validation for capsule and live Chromium rows.
+
+    Operates on decrypted row dicts carrying name, host_key, path,
+    top_frame_site_key, value, is_secure, is_httponly, expires_utc and an
+    optional has_expires flag. Raises UsageUnavailable on any mismatch;
+    cookie values never leave memory.
+    """
     cookies, seen = [], set()
-    for cookie in capsule["cookies"]:
+    for cookie in rows:
         if (not isinstance(cookie, dict) or cookie.get("name") not in ("sessionKey", "lastActiveOrg") or
             cookie.get("host_key") not in ("claude.ai", ".claude.ai") or
             cookie.get("path") != "/" or cookie.get("top_frame_site_key", "") != ""):
@@ -742,6 +741,12 @@ def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expe
             # goes stale. Identity is re-verified against /api/account before
             # balances; a truly dead session fails there and stays unavailable.
             # Only malformed expiry metadata is rejected here.
+            if number(cookie.get("expires_utc")) is None:
+                raise UsageUnavailable()
+        elif "expires_utc" in cookie:
+            # Live Chromium rows carry expires_utc even when the has_expires
+            # column is absent: a present but non-numeric expiry is malformed.
+            # Past timestamps are not rejected; the server decides liveness.
             if number(cookie.get("expires_utc")) is None:
                 raise UsageUnavailable()
         if name == "sessionKey" and not (cookie.get("is_secure") == 1 and cookie.get("is_httponly") == 1):
@@ -760,6 +765,302 @@ def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expe
     if "sessionKey" not in seen or len(cookies) > 2:
         raise UsageUnavailable()
     return cookies
+
+
+def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expected_email=None):
+    expected = resolve_expected_email(expected_email)
+    if not valid_profile_id(profile_id) or expected is None:
+        raise UsageUnavailable()
+    home = Path.home() if home is None else Path(home)
+    path = home / ".ccs/claude-session-migration" / (profile_id + "-source.dpapi")
+    if path.is_symlink():
+        raise UsageUnavailable()
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_CAPSULE_BYTES + 1)
+    if len(raw) > MAX_CAPSULE_BYTES:
+        raise UsageUnavailable()
+    capsule = json.loads(unprotect(raw, expected_length=None))
+    if (not isinstance(capsule, dict) or capsule.get("schemaVersion") != 1 or
+        capsule.get("profileId") != profile_id or capsule.get("email") != expected or
+        capsule.get("accountUuid") != account_uuid or not isinstance(capsule.get("cookies"), list) or
+        len(capsule["cookies"]) > 20):
+        raise UsageUnavailable()
+    return _validate_cookie_rows(capsule["cookies"], organization_uuid)
+
+
+def _cookie_db_path(profile_root):
+    """First existing Chromium Cookies file, Network/Cookies preferred."""
+    for candidate in (Path(profile_root) / "Network" / "Cookies", Path(profile_root) / "Cookies"):
+        try:
+            if candidate.is_file():
+                return candidate
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _cookie_db_uri(path):
+    """Read-only immutable sqlite URI; Path.as_uri keeps Windows drive paths valid."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise UsageUnavailable()
+    return path.as_uri() + "?mode=ro&immutable=1"
+
+
+def _open_cookie_db(profile_root):
+    """Open the Chromium Cookies DB read-only (immutable), never write."""
+    path = _cookie_db_path(profile_root)
+    if path is None:
+        raise UsageUnavailable()
+    uri = _cookie_db_uri(path)
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+        try:
+            row = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
+            ).fetchone()
+            if row is None:
+                connection.close()
+                raise UsageUnavailable()
+            return connection
+        except sqlite3.Error:
+            try:
+                connection.close()
+            except Exception:
+                pass
+            raise UsageUnavailable()
+    except (sqlite3.Error, OSError, ValueError):
+        raise UsageUnavailable()
+
+
+def _cookie_columns(connection):
+    try:
+        rows = connection.execute("PRAGMA table_info(cookies)").fetchall()
+    except sqlite3.Error:
+        raise UsageUnavailable()
+    return [row[1] for row in rows]
+
+
+def live_session_cookies(profile_root, organization_uuid):
+    """Read the Desktop profile's live web session cookies in memory.
+
+    Only the bounded sessionKey/lastActiveOrg rows for claude.ai are
+    selected, decrypted with the same os_crypt key as decrypt_cache, and
+    validated with the capsule's shared row validator. Cookie values stay
+    in memory: never logged, persisted, or included in exceptions.
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except Exception:
+        raise UsageUnavailable()
+
+    key = profile_key(profile_root)
+    connection = _open_cookie_db(profile_root)
+    try:
+        columns = _cookie_columns(connection)
+        required = ["name", "host_key", "path", "value", "encrypted_value",
+                    "expires_utc", "is_secure", "is_httponly"]
+        missing = [col for col in required if col not in columns]
+        if missing:
+            raise UsageUnavailable()
+        optional = ["top_frame_site_key", "creation_utc", "has_expires"]
+        selected = required + [col for col in optional if col in columns]
+        sql = f"SELECT {','.join(selected)} FROM cookies WHERE name IN (?,?) AND host_key IN (?,?) LIMIT 20"
+        try:
+            raw_rows = connection.execute(
+                sql, ("sessionKey", "lastActiveOrg", "claude.ai", ".claude.ai")
+            ).fetchall()
+        except sqlite3.Error:
+            raise UsageUnavailable()
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            pass
+
+    has_top_frame = "top_frame_site_key" in columns
+    has_has_expires = "has_expires" in columns
+
+    rows = []
+    for raw in raw_rows:
+        record = dict(zip(selected, raw))
+        name = record.get("name")
+        host_key = record.get("host_key")
+        path_val = record.get("path")
+        encrypted = record.get("encrypted_value")
+        plaintext_col = record.get("value")
+        expires_utc = record.get("expires_utc")
+        is_secure = record.get("is_secure")
+        is_httponly = record.get("is_httponly")
+        top_frame = record.get("top_frame_site_key", "") if has_top_frame else ""
+        if top_frame is None:
+            top_frame = ""
+        # Decrypt v10 blobs; plain value is used only when encrypted is empty.
+        if encrypted is not None and not (isinstance(encrypted, (bytes, bytearray)) and len(encrypted) == 0):
+            # Normalize memoryview/other buffer types to bytes.
+            if isinstance(encrypted, memoryview):
+                encrypted = bytes(encrypted)
+            if not isinstance(encrypted, (bytes, bytearray)):
+                raise UsageUnavailable()
+            blob = bytes(encrypted)
+            if not blob.startswith(b"v10") or len(blob) < 31:
+                raise UsageUnavailable()
+            try:
+                plaintext = AESGCM(key).decrypt(blob[3:15], blob[15:], None)
+            except Exception:
+                raise UsageUnavailable()
+            # Newer Chromium prefixes plaintext with the 32-byte SHA-256 of
+            # the cookie host. Strip only on an exact hash match; otherwise
+            # accept the plaintext only as direct UTF-8.
+            if not isinstance(host_key, str):
+                raise UsageUnavailable()
+            try:
+                host_hash = hashlib.sha256(host_key.encode("utf-8")).digest()
+                stripped_host = host_key[1:] if host_key.startswith(".") else host_key
+                stripped_hash = hashlib.sha256(stripped_host.encode("utf-8")).digest()
+                candidates = [host_hash, stripped_hash] if stripped_host != host_key else [host_hash]
+            except Exception:
+                raise UsageUnavailable()
+            value_bytes = plaintext
+            if len(plaintext) >= 32:
+                prefix = plaintext[:32]
+                for candidate in candidates:
+                    if prefix == candidate:
+                        value_bytes = plaintext[32:]
+                        break
+                # Also handle the degenerate case where host_key itself is
+                # queried both ways: already covered by candidates.
+            try:
+                token = value_bytes.decode("utf-8")
+            except (UnicodeError, ValueError):
+                raise UsageUnavailable()
+        elif encrypted is not None and isinstance(encrypted, (bytes, bytearray)) and len(encrypted) == 0:
+            # Encrypted column present but empty: fall back to the plain column.
+            if isinstance(plaintext_col, bytes):
+                try:
+                    token = plaintext_col.decode("utf-8")
+                except (UnicodeError, ValueError):
+                    raise UsageUnavailable()
+            elif isinstance(plaintext_col, str):
+                token = plaintext_col
+            elif plaintext_col is None:
+                token = ""
+            else:
+                raise UsageUnavailable()
+        else:
+            # encrypted_value is NULL/None: plain column only.
+            if isinstance(plaintext_col, bytes):
+                try:
+                    token = plaintext_col.decode("utf-8")
+                except (UnicodeError, ValueError):
+                    raise UsageUnavailable()
+            elif isinstance(plaintext_col, str):
+                token = plaintext_col
+            elif plaintext_col is None:
+                token = ""
+            else:
+                raise UsageUnavailable()
+
+        entry = {
+            "name": name,
+            "host_key": host_key,
+            "path": path_val,
+            "top_frame_site_key": top_frame,
+            "value": token,
+            "is_secure": is_secure,
+            "is_httponly": is_httponly,
+            "expires_utc": expires_utc,
+        }
+        if has_has_expires:
+            entry["has_expires"] = record.get("has_expires")
+        rows.append(entry)
+
+    return _validate_cookie_rows(rows, organization_uuid)
+
+
+def live_cookie_fingerprint(profile_root):
+    """SHA-256 hex over the live cookie rows, or None when no DB/rows.
+
+    Covers each selected row's (name, host_key, creation_utc,
+    encrypted_value-or-value bytes) in stable order. Never logs cookie
+    material; used by failover for before/after change detection.
+    """
+    connection = None
+    try:
+        path = _cookie_db_path(profile_root)
+        if path is None:
+            return None
+        try:
+            connection = sqlite3.connect(_cookie_db_uri(path), uri=True, timeout=1.0)
+            row = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
+            ).fetchone()
+            if row is None:
+                return None
+            columns = [r[1] for r in connection.execute("PRAGMA table_info(cookies)").fetchall()]
+        except (sqlite3.Error, OSError, ValueError, UsageUnavailable):
+            return None
+        if "name" not in columns or "host_key" not in columns:
+            return None
+        selected = ["name", "host_key"]
+        if "creation_utc" in columns:
+            selected.append("creation_utc")
+        if "encrypted_value" in columns:
+            selected.append("encrypted_value")
+        if "value" in columns:
+            selected.append("value")
+        sql = f"SELECT {','.join(selected)} FROM cookies WHERE name IN (?,?) AND host_key IN (?,?) LIMIT 20"
+        try:
+            raw_rows = connection.execute(
+                sql, ("sessionKey", "lastActiveOrg", "claude.ai", ".claude.ai")
+            ).fetchall()
+        except sqlite3.Error:
+            return None
+        if not raw_rows:
+            return None
+        entries = []
+        for raw in raw_rows:
+            record = dict(zip(selected, raw))
+            name = record.get("name")
+            host_key = record.get("host_key")
+            creation = record.get("creation_utc", 0)
+            if creation is None:
+                creation = 0
+            encrypted = record.get("encrypted_value")
+            value_col = record.get("value")
+            if encrypted is not None and not (isinstance(encrypted, (bytes, bytearray)) and len(encrypted) == 0):
+                if isinstance(encrypted, memoryview):
+                    raw_bytes = bytes(encrypted)
+                elif isinstance(encrypted, (bytes, bytearray)):
+                    raw_bytes = bytes(encrypted)
+                elif isinstance(encrypted, str):
+                    raw_bytes = encrypted.encode("utf-8")
+                else:
+                    raw_bytes = b""
+            elif value_col is not None:
+                if isinstance(value_col, bytes):
+                    raw_bytes = value_col
+                elif isinstance(value_col, str):
+                    raw_bytes = value_col.encode("utf-8")
+                else:
+                    raw_bytes = b""
+            else:
+                raw_bytes = b""
+            entries.append((str(name), str(host_key), creation, raw_bytes))
+        entries.sort(key=lambda item: (item[0], item[1], item[2] if isinstance(item[2], int) else str(item[2])))
+        hasher = hashlib.sha256()
+        for name, host_key, creation, raw_bytes in entries:
+            hasher.update(name.encode("utf-8") + b"\x00")
+            hasher.update(host_key.encode("utf-8") + b"\x00")
+            hasher.update(str(creation).encode("utf-8") + b"\x00")
+            hasher.update(raw_bytes + b"\x00")
+        return hasher.hexdigest()
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
 
 
 class WebClient:
@@ -803,7 +1104,7 @@ class WebClient:
                 pass
 
 
-def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None, cooldown=None):
+def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None, cooldown=None, profile_root=None):
     # Optional balances never turn valid native OAuth quota into a sign-in
     # request or an unreadable balance into zero. Existing callers keep a list;
     # the optional output parameter carries only a bounded provider cooldown.
@@ -823,7 +1124,14 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
     if expected is None:
         return []
     try:
-        cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
+        cookies = None
+        if profile_root is not None:
+            try:
+                cookies = live_session_cookies(profile_root, organization_uuid)
+            except UsageUnavailable:
+                cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
+        else:
+            cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
         client = WebClient(cookies, organization_uuid)
         account = client.get("/api/account")
         if account.get("uuid") != account_uuid or account.get("email_address") != expected:
@@ -841,9 +1149,10 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
     windows = []
     try:
         usage = client.get("/api/organizations/" + organization_uuid + "/usage?cedar_ember=1")
-        if availability is not None:
+        cedar = usage.get("cedar_ember")
+        if availability is not None and isinstance(cedar, dict) and cedar.get("eligible") is True:
             availability["resetCredits"] = "ok"
-        windows.extend(normalize_reset_credits(usage.get("cedar_ember")))
+        windows.extend(normalize_reset_credits(cedar))
         windows.extend(normalize_session_reset_allowance(usage.get("juniper_tide")))
     except Exception as error:
         if rate_limited(error):
@@ -992,8 +1301,8 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             if not windows:
                 raise UsageUnavailable()
             optional_extras = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
-            oauth_has_reset = any(w["key"] == "reset_credits_available" or w["key"].startswith("reset_credit_") or w["key"] == "session_reset_allowance" for w in windows)
-            web_windows = optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown)
+            oauth_has_reset = any(w["key"] == "reset_credits_available" or w["key"].startswith("reset_credit_") for w in windows)
+            web_windows = optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown, profile_root=profile_root)
             # The web helper resets availability to unavailable on entry; if
             # the OAuth payload already supplied the grants, the account is
             # not in an unavailable web state — preserve the OAuth verdict.

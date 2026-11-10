@@ -808,16 +808,32 @@ def _claude_optional_windows(candidate, home, cooldown=None):
     identifier = candidate.get("_profile")
     if not isinstance(identifier, str) or not SAFE_NAME.fullmatch(identifier):
         return [], extras
+    profile_root = candidate.get("_profile_root")
     capsule = Path(home) / ".ccs/claude-session-migration" / (identifier + "-source.dpapi")
-    before = _read_bytes(home, capsule, claude_usage.MAX_CAPSULE_BYTES)
-    if before is None:
-        return [], extras
+    live_fn = getattr(claude_usage, "live_cookie_fingerprint", None)
+    live_before = None
+    if profile_root is not None and callable(live_fn):
+        try:
+            live_before = live_fn(profile_root)
+        except Exception:
+            live_before = None
+    if live_before is not None:
+        before_fingerprint = live_before
+        capsule_before = None
+        use_live = True
+    else:
+        capsule_before = _read_bytes(home, capsule, claude_usage.MAX_CAPSULE_BYTES)
+        if capsule_before is None:
+            return [], extras
+        before_fingerprint = hashlib.sha256(capsule_before).hexdigest()
+        use_live = False
     context = digest(["claude-optional-v1", candidate["identity"], candidate["revision"],
-                      identifier, hashlib.sha256(before).hexdigest()])
+                      identifier, before_fingerprint])
     try:
         windows = claude_usage.optional_web_windows(identifier, candidate["_account"],
                                                     candidate["_organization"], home,
-                                                    availability, candidate["email"], cooldown)
+                                                    availability, candidate["email"], cooldown,
+                                                    profile_root=profile_root)
     except claude_usage.UsageUnavailable as error:
         windows = []
         availability.update(resetCredits="unavailable", prepaidBalance="unavailable")
@@ -828,7 +844,14 @@ def _claude_optional_windows(candidate, home, cooldown=None):
     except Exception:
         windows = []
         availability.update(resetCredits="unavailable", prepaidBalance="unavailable")
-    if before != _read_bytes(home, capsule, claude_usage.MAX_CAPSULE_BYTES):
+    if use_live:
+        try:
+            live_after = live_fn(profile_root) if callable(live_fn) else None
+        except Exception:
+            live_after = None
+        if live_after != live_before:
+            return [], {"optionalExtras": {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}}
+    elif capsule_before != _read_bytes(home, capsule, claude_usage.MAX_CAPSULE_BYTES):
         return [], {"optionalExtras": {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}}
     extras["optionalExtrasContext"] = context
     return windows, extras
@@ -880,7 +903,7 @@ def collect(candidate, home, platform, ccs_dir=None, claude_profile=None):
             plan = claude_usage.claude_plan(account, org, candidate["plan"])
             plan_class = claude_usage.claude_plan_class(account, org, plan)
             extras = {"optionalExtras": {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}}
-            if any(w["key"] == "reset_credits_available" or w["key"].startswith("reset_credit_") or w["key"] == "session_reset_allowance" for w in windows):
+            if any(w["key"] == "reset_credits_available" or w["key"].startswith("reset_credit_") for w in windows):
                 extras["optionalExtras"]["resetCredits"] = "ok"
             if platform == "windows" and candidate.get("_mode") == "desktop":
                 optional_windows, opt_extras = _claude_optional_windows(candidate, home, cooldown)
