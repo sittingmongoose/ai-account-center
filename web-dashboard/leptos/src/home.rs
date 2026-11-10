@@ -493,6 +493,10 @@ fn place_glide(
                 })
                 .flatten();
             let style = glider.style();
+            // A hidden tab has no layout (every row is 0 px tall): keep the last place until Home is shown again.
+            if glider.offset_parent().is_none() {
+                return;
+            }
             match row {
                 Some(row) => {
                     let top = row.offset_top() as f64;
@@ -527,12 +531,21 @@ fn place_glide(
             next_frame(move || place(id, glide));
         });
     }
-    let handle = window_event_listener(leptos::ev::resize, move |_| {
+    let handle = {
+        let place = place.clone();
+        window_event_listener(leptos::ev::resize, move |_| {
+            let id = active.get_untracked();
+            let place = place.clone();
+            next_frame(move || place(id, false));
+        })
+    };
+    on_cleanup(move || handle.remove());
+    // Home shown again (a tab change): readings that came while it was hidden are placed now.
+    crate::owned::listen(&window(), crate::SHOWN_EVENT, move || {
         let id = active.get_untracked();
         let place = place.clone();
         next_frame(move || place(id, false));
     });
-    on_cleanup(move || handle.remove());
 }
 
 #[component]

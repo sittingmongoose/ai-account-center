@@ -198,6 +198,23 @@ export const tests = {
 			const w = [...document.querySelectorAll('.hsec[data-sec="codex"] .hslot')].map((s) => Math.round(s.getBoundingClientRect().width));
 			return new Set(w).size === 1;
 		}));
+
+		// A switch reported while Home's tab is hidden: the highlight is on the new row as soon as Home shows again.
+		await t.page.click('.chrome .nav a[href="/app/status"]');
+		await t.until('Home is hidden behind Status', () => document.querySelector('.home').closest('.route').hidden, null, { timeout: 8000 });
+		const back = homeAccounts();
+		for (const a of back.accounts) if (a.provider === 'codex') a.isActive = a.capabilities.codexProfile === 'second';
+		await t.app.stub('/api/accounts/dashboard', back);
+		const dash = await (await t.page.$('iframe.slint-frame')).contentFrame();
+		await dash.evaluate(() => window.ccsDashboardAction('refresh', ''));
+		await t.until('the hidden Home has the new active row', () => !!document.querySelector('.hrow[data-row="codex:second"] .hmark.on'), null, { timeout: 15000 });
+		await t.page.click('.chrome .nav a[href="/app/home"]');
+		await t.page.waitForTimeout(400);
+		await t.check('shown again, the highlight sits on that row', await t.page.evaluate(() => {
+			const g = document.querySelector('.hsec[data-sec="codex"] .hglide').getBoundingClientRect();
+			const r = document.querySelector('.hrow[data-row="codex:second"]').getBoundingClientRect();
+			return Math.abs(g.top - r.top - 3) < 2 && Math.abs(g.height - (r.height - 6)) < 2;
+		}));
 	},
 
 	async 'home: auto-switch and its switch point go to the server as before'(t) {
