@@ -301,4 +301,219 @@ describe('PinnedThreadsCollector', () => {
     expect(zoneOffsetMinutes('America/New_York', november)).toBe(-300);
     expect(zoneOffsetMinutes('Asia/Kolkata', november)).toBe(330);
   });
+
+  it('a status@1 refusal is carried into the pinned view with its file and reason', async () => {
+    // Item 38: the reader retains the TS refusal file/reason/since; the pinned field must
+    // project them instead of showing a bare "doesn't report its status yet".
+    const composeInputs: unknown[] = [];
+    const handle: NativeStatusHandle = {
+      call: async (method, args) => {
+        const parsed = JSON.parse(args) as Record<string, unknown>;
+        if (method === 'pins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }] });
+        if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [] });
+        if (method === 'mergePins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a', machine: 'vm' }] });
+        if (method === 'parseStatus') throw new Error('must not reach native: TypeScript refuses first');
+        if (method === 'compose') {
+          composeInputs.push(parsed);
+          const statusProblems = (parsed.statusProblems ?? []) as Array<Record<string, unknown>>;
+          const statuses = (parsed.statuses ?? []) as Array<Record<string, unknown>>;
+          const updates = statuses.map((status) => {
+            const problem = status.problem as string | null;
+            const hasRefusal = typeof problem === 'string' && problem.length > 0;
+            return {
+              id: String(status.t3Thread ?? 'fixture-thread'),
+              title: 'Fixture',
+              machine: 'vm',
+              who: null,
+              reportState: hasRefusal ? 'unreadable' : 'none',
+              percent: null,
+              percentNote: hasRefusal ? null : 'No task list.',
+              now: hasRefusal ? null : 'Fixture clean',
+              blocked: { text: 'None.', waitingOnYou: false },
+              looping: { answer: 'cantTell', text: "Can't tell." },
+              left: [],
+              done: [],
+              updated: null,
+              reportNote: hasRefusal ? null : "This thread doesn't report its status yet.",
+              staleNote: null,
+              unreadableNote: hasRefusal ? 'Could not be read since 12:00 PM.' : null,
+              summary: null,
+              refusal: hasRefusal
+                ? { file: `writers/${String(status.writer)}/status.json`, reason: problem, sinceMs: status.problemSinceMs as number | null }
+                : null,
+            };
+          });
+          // A problem with no doc also appears as a standalone statusProblems entry.
+          const extra = statusProblems.filter((p) => !statuses.some((s) => `writers/${String(s.writer)}/status.json` === String(p.file)));
+          const allProblems = [...statusProblems, ...extra];
+          return JSON.stringify({
+            asOfMs: parsed.nowMs,
+            head: '1 pinned in T3',
+            counts: { pinned: 1, looping: 0, waitingOnYou: 0 },
+            machineProblems: [],
+            statusProblems: allProblems,
+            updates: updates.length > 0 ? updates : (statusProblems.length > 0 ? [{ id: 'fixture-thread', title: 'Fixture', machine: 'vm', who: null, reportState: 'none', percent: null, percentNote: 'No task list.', now: null, blocked: { text: 'Not reported.', waitingOnYou: false }, looping: { answer: 'cantTell', text: "Can't tell." }, left: [], done: [], updated: null, reportNote: "This thread doesn't report its status yet.", staleNote: null, unreadableNote: null, summary: null, refusal: statusProblems.length > 0 ? { file: String(statusProblems[0].file), reason: String(statusProblems[0].reason), sinceMs: statusProblems[0].sinceMs as number | null } : null }] : []),
+          });
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    };
+    const dir = fs.mkdtempSync(require('os').tmpdir() + '/aac-pinned-refusal-');
+    const writerDir = require('path').join(dir, 'v1/writers/vm.probe');
+    require('fs').mkdirSync(writerDir, { recursive: true });
+    require('fs').writeFileSync(
+      require('path').join(writerDir, 'status.json'),
+      JSON.stringify({
+        schema: 'agent-reports/status@1',
+        writer: 'vm.probe',
+        seq: 9,
+        writtenAt: '2026-11-08T12:00:00Z',
+        t3Thread: 'fixture-thread',
+        summary: 'Bearer\uFEFF' + 'i'.repeat(24),
+      })
+    );
+    try {
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        now: () => Date.parse('2026-11-08T12:00:00Z'),
+        reportsRoot: () => dir,
+      });
+      await collector.collect();
+      await collector.scanStatusDocs();
+      const snap = collector.docs.snapshot();
+      // The reader retains the TS refusal even though the native module never saw it.
+      expect(snap.problems.length).toBe(1);
+      expect(snap.problems[0].file).toBe('writers/vm.probe/status.json');
+      expect(snap.problems[0].reason).toContain('Bearer');
+      expect(snap.docs.length).toBe(0);
+      await collector.compose(noReports, []);
+      const input = composeInputs.at(-1) as Record<string, unknown>;
+      const statusProblems = input.statusProblems as Array<Record<string, unknown>>;
+      expect(statusProblems.length).toBe(1);
+      expect(statusProblems[0].file).toBe('writers/vm.probe/status.json');
+      expect(statusProblems[0].reason).toContain('Bearer');
+      expect(typeof statusProblems[0].sinceMs).toBe('number');
+      expect(statusProblems[0].sinceMs).toBe(Date.parse('2026-11-08T12:00:00Z'));
+      const view = collector.view();
+      if ('unavailable' in view) throw new Error('expected a composed view');
+      const v = view as Record<string, unknown>;
+      const viewProblems = v.statusProblems as Array<Record<string, unknown>> | undefined;
+      // Before the fix the pinned field dropped file and reason entirely.
+      expect(viewProblems?.length).toBe(1);
+      expect(viewProblems?.[0]?.file).toBe('writers/vm.probe/status.json');
+      expect(viewProblems?.[0]?.reason).toContain('Bearer');
+      const updates = view.updates as Array<Record<string, unknown>>;
+      // A first refusal with no accepted doc must not look like "no report": the view carries
+      // the refusal. The held-copy case likewise carries the per-update refusal.
+      if (updates.length > 0 && updates[0]?.refusal) {
+        const refusal = updates[0].refusal as Record<string, unknown>;
+        expect(refusal.file).toBe('writers/vm.probe/status.json');
+        expect(refusal.reason).toContain('Bearer');
+      } else {
+        // For the first refusal the top-level statusProblems already carries it; either is a
+        // disclosure, a bare "none" with no file/reason is not.
+        const hasTopLevelReason = (viewProblems?.[0]?.reason as string)?.includes('Bearer');
+        expect(hasTopLevelReason).toBe(true);
+        expect(JSON.stringify(view)).not.toContain('Bearer\uFEFF');
+      }
+    } finally {
+      require('fs').rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a held status document keeps its refusal file and reason on its own update', async () => {
+    const composeInputs: unknown[] = [];
+    const handle: NativeStatusHandle = {
+      call: async (method, args) => {
+        const parsed = JSON.parse(args) as Record<string, unknown>;
+        if (method === 'pins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }] });
+        if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [] });
+        if (method === 'mergePins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a', machine: 'vm' }] });
+        if (method === 'parseStatus') {
+          const doc = JSON.parse(Buffer.from(String(parsed.contentBase64), 'base64').toString('utf8')) as Record<string, unknown>;
+          return JSON.stringify({ ok: true, doc, sha256: 'sha1' });
+        }
+        if (method === 'compose') {
+          composeInputs.push(parsed);
+          const statuses = (parsed.statuses ?? []) as Array<Record<string, unknown>>;
+          const problems = (parsed.statusProblems ?? []) as Array<Record<string, unknown>>;
+          const s = statuses[0] ?? {};
+          const hasProblem = typeof s.problem === 'string' && (s.problem as string).length > 0;
+          return JSON.stringify({
+            asOfMs: parsed.nowMs,
+            head: '1 pinned in T3',
+            counts: { pinned: 1, looping: 0, waitingOnYou: 0 },
+            machineProblems: [],
+            statusProblems: problems,
+            updates: [{
+              id: 'fixture-thread',
+              title: 'Fixture',
+              machine: 'vm',
+              who: null,
+              reportState: hasProblem ? 'unreadable' : 'fresh',
+              percent: null,
+              percentNote: 'No task list.',
+              now: 'Fixture clean',
+              blocked: { text: 'None.', waitingOnYou: false },
+              looping: { answer: 'cantTell', text: "Can't tell." },
+              left: [], done: [], updated: null,
+              reportNote: null, staleNote: null,
+              unreadableNote: hasProblem ? 'Could not be read since 12:00 PM.' : null,
+              summary: 'Fixture clean',
+              refusal: hasProblem ? { file: `writers/${String(s.writer)}/status.json`, reason: s.problem, sinceMs: s.problemSinceMs as number | null } : null,
+            }],
+          });
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    };
+    const dir = fs.mkdtempSync(require('os').tmpdir() + '/aac-pinned-held-');
+    const writerDir = require('path').join(dir, 'v1/writers/vm.held');
+    require('fs').mkdirSync(writerDir, { recursive: true });
+    const good = {
+      schema: 'agent-reports/status@1',
+      writer: 'vm.held',
+      seq: 5,
+      writtenAt: '2026-11-08T05:00:00Z',
+      t3Thread: 'fixture-thread',
+      summary: 'Fixture clean',
+    };
+    require('fs').writeFileSync(require('path').join(writerDir, 'status.json'), JSON.stringify(good));
+    try {
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        now: () => Date.parse('2026-11-08T12:00:00Z'),
+        reportsRoot: () => dir,
+      });
+      await collector.collect();
+      await collector.scanStatusDocs();
+      await collector.compose(noReports, []);
+      // Refuse with a secret: the held copy stays unreadable and this scan's problem is carried.
+      require('fs').writeFileSync(
+        require('path').join(writerDir, 'status.json'),
+        JSON.stringify({ ...good, seq: 6, summary: 'Bearer\uFEFF' + 'x'.repeat(24) })
+      );
+      await collector.scanStatusDocs();
+      await collector.compose(noReports, []);
+      const view = collector.view();
+      if ('unavailable' in view) throw new Error('expected a view');
+      const v = view as Record<string, unknown>;
+      const viewProblems = v.statusProblems as Array<Record<string, unknown>>;
+      expect(viewProblems?.length).toBe(1);
+      expect(viewProblems?.[0]?.file).toBe('writers/vm.held/status.json');
+      expect(viewProblems?.[0]?.reason).toContain('Bearer');
+      const upd = (view.updates as Array<Record<string, unknown>>)[0];
+      expect(upd?.reportState).toBe('unreadable');
+      const refusal = upd?.refusal as Record<string, unknown> | null;
+      expect(refusal?.file).toBe('writers/vm.held/status.json');
+      expect(refusal?.reason).toContain('Bearer');
+      expect(JSON.stringify(view)).not.toContain('Bearer\uFEFF');
+    } finally {
+      require('fs').rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
