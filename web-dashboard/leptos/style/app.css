@@ -1231,8 +1231,8 @@ body { min-height: 100dvh; }
 .recent-card .ax-body { flex: 1; }
 /* narrow cards keep the tables, with tighter columns */
 @container card (max-width: 419.98px) {
-  .sp-row { grid-template-columns: minmax(0, 1fr) 60px 64px 78px; gap: 8px; }
-  .sl-row { grid-template-columns: minmax(0, 1fr) 48px 60px 86px; gap: 8px; }
+  .sp-row { grid-template-columns: minmax(0, 1fr) 58px 66px 88px; gap: 8px; }
+  .sl-row { grid-template-columns: minmax(0, 1fr) 48px 60px 92px; gap: 8px; }
 }
 @container card (max-width: 339.98px) {
   .sl-head { display: none; }
