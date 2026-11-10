@@ -373,7 +373,7 @@ export function activityData(payload, now = Date.now()) {
   const rows = activityRows(payload);
   const { apiFrom, fetched, hours } = rows;
   const win0 = Math.min(finite(apiFrom) ? Math.ceil(apiFrom / H) * H : Infinity, hours.length ? hours[0].t : Infinity, finite(apiFrom) ? Infinity : now - 7 * D);
-  const win1 = finite(fetched) ? Math.min(fetched, now) : hours.length ? Math.min(now, hours.at(-1).t + H) : now;
+  const win1 = finite(fetched) ? Math.min(fetched, now) : hours.length ? Math.min(now, hours[hours.length - 1].t + H) : now;
   return { ...rows, win0, win1 };
 }
 
@@ -548,7 +548,7 @@ export function trendView(A, R, state, size) {
   const Y = v => ph - v / ts.top * ph, YC = v => ph - v / cs.top * ph;
   let xs = B.map(b => X(b.mid)), Bn = B;
   if (B.length === 1) { Bn = [B[0], B[0]]; xs = [X(B[0].lo), X(B[0].hi)]; }
-  const x0 = xs.length ? xs[0] : 0, x1 = xs.length ? xs.at(-1) : pw;
+  const x0 = xs.length ? xs[0] : 0, x1 = xs.length ? xs[xs.length - 1] : pw;
   const fns = Object.fromEntries(TYPES.map(t => [t.k, xs.length ? monoFn(xs, Bn.map(b => b[t.k])) : () => 0]));
   const fc = xs.length ? monoFn(xs, Bn.map(b => b.cost)) : () => 0;
   const lv = [[], [], [], [], []], cost = [];
@@ -1076,7 +1076,7 @@ export function calendarView(A, R, now, apiAll) {
 // ---------------------------------------------------------------- included usage (activity.sources)
 const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
 const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage'];
-const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
 const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
 /**

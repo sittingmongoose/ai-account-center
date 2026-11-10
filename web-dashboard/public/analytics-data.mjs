@@ -116,7 +116,7 @@ export function buildQuotaPlot(metric, range, now = Date.now(), percentMaximum =
     ].filter(Boolean);
     return { x: (time - from) / (to - from), percent: Math.max(0, Math.min(100, (value - minimum) / span * 100)), label: `${dateLabel(point.sampledAt, 'Sampled ')} · ${valueLabel(value)}${extra.length ? ` · ${extra.join(' · ')}` : ''}` };
   });
-  const sampledAt = raw.at(-1)?.time;
+  const sampledAt = raw[raw.length - 1]?.time;
   return {
     points, axisMaximum: maximum, metricPercent: kind === 'percent', chartHasPoints: points.length > 0,
     chartTop: `${axisNumber(maximum)}${unit}`, chartMiddle: `${axisNumber((minimum + maximum) / 2)}${unit}`, chartBottom: `${axisNumber(minimum)}${unit}`,
@@ -167,7 +167,7 @@ export function activityView(activity = {}, range = {}, interval = 'Daily') {
   const step = interval === 'Hourly' ? 3_600_000 : 86_400_000;
   const parsedFrom = timestamp(range.from), parsedTo = timestamp(range.to);
   const from = Number.isFinite(parsedFrom) ? Math.floor(parsedFrom / step) * step : rows[0]?.[0];
-  const to = Number.isFinite(parsedTo) ? parsedTo : rows.at(-1)?.[0];
+  const to = Number.isFinite(parsedTo) ? parsedTo : rows[rows.length - 1]?.[0];
   const position = time => from === to ? 0.5 : (time - from) / (to - from);
   const bucketLabel = time => new Date(time).toISOString().slice(0, interval === 'Hourly' ? 16 : 10).replace('T', ' ') + ' UTC';
   const label = (time, row) => `${bucketLabel(time)} · ${number(tokenTotal(row))} actual tokens · ${number(row.inputTokens)} input · ${number(row.outputTokens)} output · ${number(row.cacheCreationTokens)} cache created · ${number(row.cacheReadTokens)} cache read · ${row.hasCost ? dollars(row.cost) : 'Unavailable'} estimated API-equivalent cost · ${[...row.providers].join(' + ')}`;
